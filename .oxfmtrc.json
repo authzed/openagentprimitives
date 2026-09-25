@@ -1,0 +1,13 @@
+{
+  "proseWrap": "always",
+  "printWidth": 80,
+  "ignorePatterns": [
+    "CLAUDE.md",
+    "**/*.mdx",
+    "**/testdata/**",
+    "toolkits/**",
+    "**/SKILL.md",
+    "pkg/web/webui/webassets/dist/**",
+    "third_party/**"
+  ]
+}

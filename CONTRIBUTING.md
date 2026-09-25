@@ -101,6 +101,22 @@ mage test:e2e          # -tags=e2e + envtest + a containerized SpiceDB
 Run `mage -l` for the full list of targets, including narrower suites
 (`test:bronze`, `test:steel`, `test:toolspec`, …).
 
+### Formatting
+
+Markdown and TypeScript are formatted by [oxfmt](https://github.com/oxc-project/oxc),
+pinned in `magefiles/fmt.go` and configured in `.oxfmtrc.json` (prose wrapped at
+80 columns). CI runs the check, so run the formatter before opening a pull
+request:
+
+```sh
+mage fmt:all      # rewrite in place
+mage fmt:check    # report unformatted files, exits non-zero (what CI runs)
+```
+
+Go is formatted by `gofmt` as usual. Generated MDX reference pages, the skill
+definitions under `toolkits/`, `**/SKILL.md`, and the built frontend bundles are
+deliberately excluded; see `ignorePatterns` in `.oxfmtrc.json`.
+
 ### Adding dependencies
 
 This project does not use anything other than the standard [Go modules] toolchain for managing dependencies.
