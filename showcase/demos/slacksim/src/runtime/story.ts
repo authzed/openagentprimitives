@@ -41,12 +41,6 @@ export interface StoryRuntime {
   playTo: (index: number) => void;
 }
 
-declare global {
-  interface Window {
-    __showcaseStory?: StoryRuntime;
-  }
-}
-
 export function bindStory(story: Story, control: ShowcaseControl): void {
   const beats = story.beats ?? [];
   window.__showcaseStory = {

@@ -23,8 +23,8 @@ document.documentElement.dataset.theme = theme;
 
 const store = new SimStore(story.scenario);
 const control = installOverlay();
-bindControl(store, control);
-bindStory(story, window.__showcase!);
+const showcase = bindControl(store, control);
+bindStory(story, showcase);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

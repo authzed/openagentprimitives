@@ -74,9 +74,4 @@ export function installOverlay(): OverlayControl {
 // consolesim binds the OverlayControl as window.__showcase so the shared capture
 // engine (clip.mjs / still.mjs) can set captions and move the pointer — the same
 // handle slacksim exposes (there via its store control). Only caption/pointer are
-// used by the engine.
-declare global {
-  interface Window {
-    __showcase?: OverlayControl;
-  }
-}
+// used by the engine. The global itself is declared in demos/showcase-globals.d.ts.

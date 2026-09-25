@@ -185,14 +185,11 @@ export interface ShowcaseControl extends OverlayControl {
   typing: SimStore["typing"];
 }
 
-declare global {
-  interface Window {
-    __showcase?: ShowcaseControl;
-  }
-}
-
-export function bindControl(store: SimStore, overlay: OverlayControl): void {
-  window.__showcase = {
+export function bindControl(
+  store: SimStore,
+  overlay: OverlayControl,
+): ShowcaseControl {
+  const control: ShowcaseControl = {
     postMessage: store.postMessage.bind(store),
     postReply: store.postReply.bind(store),
     editMessage: store.editMessage.bind(store),
@@ -204,4 +201,6 @@ export function bindControl(store: SimStore, overlay: OverlayControl): void {
     typing: store.typing.bind(store),
     ...overlay,
   };
+  window.__showcase = control;
+  return control;
 }

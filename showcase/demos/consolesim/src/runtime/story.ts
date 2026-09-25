@@ -58,12 +58,6 @@ export interface StoryRuntime {
   playTo: (index: number) => Promise<void>;
 }
 
-declare global {
-  interface Window {
-    __showcaseStory?: StoryRuntime;
-  }
-}
-
 export function bindStory(story: TermStory, control: TermControl): void {
   const beats = story.beats;
   window.__showcaseStory = {
