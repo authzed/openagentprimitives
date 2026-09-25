@@ -1,0 +1,68 @@
+[
+  {
+    "type": "container",
+    "rich_text_title": {
+      "type": "rich_text",
+      "elements": [
+        {
+          "type": "rich_text_section",
+          "elements": [
+            {
+              "type": "emoji",
+              "name": "large_blue_circle"
+            },
+            {
+              "type": "text",
+              "text": "  "
+            },
+            {
+              "type": "text",
+              "text": "codebot wants approval to open a pull request on acme/widget.",
+              "style": {
+                "bold": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "child_blocks": [
+      {
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": "\n*What*:\n• Phase 1 — Clone the repository and read it\n    • _read:_ read files and history in the checkout\n    • _read:_ read the repository on GitHub\n    • reaches GitHub repository (acme/widget)\n• Phase 2 — Make the change and commit locally\n    • _write:_ write files in the checkout and commit\n    • reaches GitHub repository (acme/widget)\n• Phase 3 — Push the branch and open a pull request\n    • _write:_ push the branch to GitHub\n    • *external:* open a pull request on GitHub (leaves this session)\n    • reaches GitHub repository (acme/widget)\n• Approving covers every phase above.\n• *Why (the agent's words)*: Fixing the flaky test in the payments suite and opening a PR for review.\n• *When*: Now, for as long as this session runs.\n• *Who can approve*: An owner of this session."
+        }
+      },
+      {
+        "type": "actions",
+        "block_id": "interaction_actions",
+        "elements": [
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Approve",
+              "emoji": false
+            },
+            "action_id": "approve",
+            "value": "{\"v\":\"interaction\",\"r\":\"plan-1\",\"d\":\"approve\",\"s\":\"default/demo-sess\",\"c\":\"plan_phase\"}",
+            "style": "primary"
+          },
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Deny",
+              "emoji": false
+            },
+            "action_id": "deny",
+            "value": "{\"v\":\"interaction\",\"r\":\"plan-1\",\"d\":\"deny\",\"s\":\"default/demo-sess\",\"c\":\"plan_phase\"}",
+            "style": "danger"
+          }
+        ]
+      }
+    ],
+    "has_header_divider": true
+  }
+]

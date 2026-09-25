@@ -1,0 +1,3 @@
+flow  read_permitted           tool=ledger_read_entry
+flow  respond_no_leak
+tag   kind=leaf untrusted=false readers=1 sources=1

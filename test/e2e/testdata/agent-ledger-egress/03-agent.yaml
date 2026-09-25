@@ -1,0 +1,66 @@
+# AgentClass + Channel for the ledger-EGRESS fixture.
+#
+# Like ledger-records but grants the fine_grained_info_leakage CAPABILITY, which
+# is what turns on the per-datum EGRESS gate (evalPreToolCall): measuring a
+# posted datum's tag audience against the destination's readers. Without it,
+# minting still happens on a read but a tool-call egress is never gated per-datum.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ledger-egress
+  namespace: default
+spec:
+  displayName: LedgerEgressBot
+  description: "E2E fixture agent (per-datum egress). Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: ledger-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      You read ledger entries and post them to shared boards. Tools:
+        - ledger_read_entry(id): fetch one ledger entry
+        - ledger_post_to_board(board_id, text): post to a shared board
+
+      When you post an entry's content, copy the returned text VERBATIM,
+      including any <pt-untrusted ...>...</pt-untrusted> markup.
+
+      # The "ledger_" prefix comes from mcpServers[0].name below; the
+      # runner synthesizes LLM-facing names as <prefix>_<tool>.
+  agentIdentity: ledger-identity
+  mcpServers:
+    - name: ledger
+      ref: ledger-egress
+  # Turns on the per-datum egress gate. See the file header.
+  capabilities:
+    fine_grained_info_leakage: {}
+  authz:
+    informationLeakage:
+      mode: enforcing
+      approvalTTL: 1m
+      onUnsupportedChannel: blockBinding
+      singleUserBypass: false
+      loggingNoticeToRequester: false
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ledger-egress-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ledger-egress
+  credentialsRef:
+    secretName: ledger-fake-creds
+  fake:
+    echo: false

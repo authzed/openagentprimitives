@@ -1,0 +1,26 @@
+# AgentIdentity for the agent-interruptible-tool fixture. Single static
+# credential; the harness's fake MCP server ignores the bearer entirely.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: interruptible-mcp-token
+  namespace: default
+type: Opaque
+stringData:
+  access_token: "unused-by-the-fake-mcp-server"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: interruptible-identity
+  namespace: default
+spec:
+  description: "Agent-interruptible-tool fixture: static MCP bearer token."
+  credentials:
+    - name: interruptible-mcp-bearer
+      type: static
+      static:
+        secretRef:
+          name: interruptible-mcp-token
+          key: access_token

@@ -1,0 +1,18 @@
+id: tailscale-authkey
+description: Tailscale auth key (tagged + ephemeral) for per-session tailnet nodes
+docsURL: https://tailscale.com/kb/1085/auth-keys
+shape: bearer
+builtin: tailscale-authkey
+
+prompt: |
+  Walk the user through creating a Tailscale auth key at
+  https://login.tailscale.com/admin/settings/keys. The key MUST be
+  Reusable and Ephemeral, SHOULD be Pre-authorized when the tailnet
+  requires device approval, and MUST carry an ACL tag (e.g. tag:sre-bot)
+  so tailnet ACLs can scope what the agent's nodes may reach. The
+  tailnet policy must declare the tag under tagOwners. After the user
+  pastes the key, validate the shape and call store_credential.
+
+tokenShape:
+  pattern: '^tskey-auth-[A-Za-z0-9]+-[A-Za-z0-9_-]+$'
+  description: "Starts with tskey-auth-"

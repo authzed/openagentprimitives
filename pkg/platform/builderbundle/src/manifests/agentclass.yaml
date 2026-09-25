@@ -1,0 +1,119 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: agent-builder
+spec:
+  displayName: "Agent Builder"
+  description: "Builds other OAP agents through a guided conversation."
+  # model omitted — inherits the cluster default (ClusterAgentSettings.spec.modelCatalog default).
+  # An explicit budget, NOT inherited: a class with no spec.budget on a
+  # cluster whose settings tiers default none resolves an all-zero effective
+  # budget, and the status stamp then fails the CRD floors — every status
+  # write rejected, the class wedged (found live 2026-09-11; pinned by
+  # TestBuilderClass_DeclaresItsOwnBudget). Values sized for a long guided
+  # build conversation; sessionExpiration tracks the workshop namespace's own
+  # 7-day maxAge default (design spec §12) — the workshop dies at 7d, so a
+  # builder session outliving it could only fail.
+  budget:
+    maxTurns: 300
+    maxTokens: 5000000
+    maxDuration: 8h
+    sessionExpiration: 168h
+  systemPrompt:
+    inline: |
+      You help a person build a new agent by talking to them, one question at a
+      time. You never expose implementation vocabulary — never say YAML, CR,
+      namespace, slot, SpiceDB, or kubectl; describe everything in the person's
+      own terms (what the agent will do, who may use it, what it may touch).
+      Offer the workshop page once, early, with show_agent_ui; if they decline,
+      stay in chat. Work the phases in order — Intake, Assess, Tools,
+      Permissions, Agent, Test, Deliver — loading the matching skill with
+      load_skill before each. Phases run back to back: when one phase's exit
+      condition is met, load the next skill and keep working in the same turn
+      — do not pause between phases. End a turn for exactly two reasons: you
+      need something from the person (say it with respond_to_user and wait
+      with await_user_message, or ask on the page), or the Deliver phase has
+      finished — that is the only time you call agent_work_complete, because
+      to the person a pause with no question looks like the builder died.
+      Never ask the person for a key, token, password, or account, on the
+      page or in the conversation: the platform connects accounts itself —
+      the person's own accounts page for their access, or the secure card
+      workshop_request_credential sends for a shared account. If
+      instead the person is asking you to redo
+      something that already happened earlier in this same conversation, load
+      Reproduce before Assess — it reads what happened and drafts the brief
+      for you, rather than starting the interview from scratch. The
+      workshop's CRs are the draft; this prompt is not. On restart, call
+      workshop_list first to recover what exists.
+  capabilities:
+    agent_builder: {}
+    # The workshop page is repainted by the builder itself: update_view fills
+    # or clears a hook, read_view shows it the page first. Both are opt-in
+    # (agentui_views.go), so they are granted here — the 6b skills call
+    # update_view by name and would otherwise name a tool the model lacks.
+    update_view: {}
+    read_view: {}
+    # artifacts is opt-in: without it artifact_await is never offered, so the
+    # exported draft is never finalized into this session's memory and neither
+    # the chat's download chip nor the page's ap:attachment can resolve it.
+    # The grant also brings artifact_prepare, artifact_offer_view and
+    # artifact_history — accepted: a builder that can render a report for the
+    # person is fine.
+    artifacts: {}
+  authz:
+    session:
+      allowedStarters: []          # filled by the required install question
+      platformAdminsMayStart: false
+      onlyStartersInteract: true
+      # no interactPermission — starters are the only participants
+    planGate:
+      mode: enforcing              # the seven loops are declared plan phases
+      requirePlan: true
+    # The draft this workshop is building, as an instance an approval can name.
+    # The workshop sidecar's apply/delete/watch_test/project_agent are
+    # `external` — "an approval naming the instance" — and each keys the
+    # CONSTANT id `draft` (its spicedbSchema declares the type, standing
+    # session-only). Without a slot for that type the runner's
+    # SlotResourceTypes guard denies every one of those calls to a card, and a
+    # card's grant is one-shot: a card per apply, per re-armed watch, per
+    # delete. Declared here, a plan phase that names perm:change:workshop_draft
+    # binds the instance once and covers every apply in that phase.
+    #
+    # permissions[] is the CEILING an approval may bind within, not a grant:
+    # each one gets a slot_grant_<permission> relation in the composed schema,
+    # which is what makes a grant for it writable at all. `change` alone would
+    # leave a phase that needs `remove` with nowhere to bind it, escalating
+    # forever. membership is deliberately absent: `oap install` completes it to
+    # the CRD's own default before applying, and a second copy here would make
+    # a re-apply of the same bundle stop being a no-op.
+    #
+    # Two fields this slot must NOT grow, for the same reason: `draft` is a
+    # session-only CONSTANT, so an id written ahead of time resolves for
+    # whichever session happens to hold a grant on it rather than for one the
+    # author had in mind.
+    #   - no `defaults`: a default binds an instance with nobody deciding, and
+    #     here the instance is every session's draft at once.
+    #   - no promoted extraction source (autoGrantFrom / a fill candidate): a
+    #     fill candidate makes a cross-session bind reachable from text, and
+    #     there is nothing in a conversation to extract anyway — the id comes
+    #     from the tool's own check, not from anything a person typed.
+    slots:
+      - resourceType: workshop_draft
+        description: "The agent draft this workshop is building."
+        permission: change
+        permissions: [change, remove, test, project]
+  sidecarToolboxes:
+    - name: workshop               # LLM tool-name prefix -> workshop_<verb>
+      ref: workshop                # the SidecarToolbox CR name (== builderClasses[].sidecarToolbox)
+  skills:
+    - {name: builder_assess,      ref: "local//builder-assess",      target: agent}
+    - {name: builder_tools,       ref: "local//builder-tools",       target: agent}
+    - {name: builder_permissions, ref: "local//builder-permissions", target: agent}
+    - {name: builder_agent,       ref: "local//builder-agent",       target: agent}
+    - {name: builder_test,        ref: "local//builder-test",        target: agent}
+    - {name: builder_deliver,     ref: "local//builder-deliver",     target: agent}
+    - {name: builder_handoff,     ref: "local//builder-handoff",     target: agent}
+    - {name: builder_reproduce,   ref: "local//builder-reproduce",   target: agent}
+  agentUI:
+    ref: agent-builder-workshop
+    grantedTools: []               # prompt-backed page — grants no tools

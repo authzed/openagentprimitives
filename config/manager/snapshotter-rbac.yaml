@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ap-snapshotter
+  labels:
+    app.kubernetes.io/component: workspace-snapshot
+---
+# No additional perms required. The Jobs run cp + rm against mounted
+# PVCs; they don't talk to the K8s API. The SA exists only to give
+# us a name to namespace pod security policies / NetworkPolicies
+# against in tighter installs.

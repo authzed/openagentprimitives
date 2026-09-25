@@ -1,0 +1,225 @@
+# Fixture agent for the fork-precondition bundles (gated + approved share this
+# shape; only the transcript and the auto-decide direction differ).
+#
+# A signed pull_request webhook whose head lives on a FORK opens the session.
+# The github kind records an ENVELOPE fact — head_is_fork=true, keyed to the
+# head commit's OID — via RecordEnvelopeFacts on first delivery. The AgentClass
+# declares a git_commit slot gated on `!facts.envelope.head_is_fork`, so a
+# checkout of that OID is REFUSED before it dispatches, and the refusal raises a
+# precondition_waiver card a human may consent past.
+#
+# Fixtures-only: the git toolkit here is a SpiceboxToolkit CR named `forkgit`
+# that declares its OWN git_commit resource type and a `checkout` subcommand
+# keyed on it. It does NOT touch toolkits/git.yaml (which keys git_repo on the
+# workspace sentinel and declares no git_commit). guardian composes a CR
+# toolkit's spicedbSchema into the cluster schema, so git_commit is defined; no
+# builtin toolkit declares git_commit, so there is no collision.
+apiVersion: v1
+kind: Secret
+metadata: {name: forkbot-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+# The github App credentials. app-id and installation-id are the fixture's own;
+# private-key and webhook-secret are PLACEHOLDERS the harness patches over with
+# a generated key and the harness signing secret (Harness.WireGitHubCredentials)
+# before it signs the payload and posts it to the production webhook route.
+apiVersion: v1
+kind: Secret
+metadata: {name: forkbot-gh-creds, namespace: default}
+type: Opaque
+stringData:
+  app-id: "1"
+  installation-id: "1"
+  private-key: "patched-by-the-harness"
+  webhook-secret: "patched-by-the-harness"
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: forkbot-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: forkbot-token-secret, namespace: default}
+type: Opaque
+stringData: {token: "ghp_unusedTheSandboxNeverAuthenticates"}
+---
+# The fixture git toolkit. Its ONE point of difference from toolkits/git.yaml is
+# the checkout subcommand: the positional is renamed `commitish` (the real one,
+# `branch-or-tree-ish`, has hyphens CEL's has() cannot address), and the check
+# keys git_commit on that argument's raw value — a 40-hex OID, already a valid
+# SpiceDB object id, so no transform runs and the decision key is the SHA
+# verbatim. stateImpact is external so the check consults the slot-grant leg
+# alone: an allow means a human waived THIS commit for THIS session, which is
+# exactly what the precondition_waiver writes.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolkit
+metadata: {name: forkgit, namespace: default}
+spec:
+  name: forkgit
+  version: "1"
+  toolkitRevision: "2026-09-02"
+  target: {binary: git}
+  parser: {kind: declarative}
+  env:
+    allowed:
+      - {name: GIT_TOKEN, title: "Git host", description: "An HTTPS token so the agent can fetch and check out as you.", sensitive: true, credential: git-token}
+  permission:
+    stateImpact: passthrough
+  spicedbSchema:
+    resources:
+      - name: git_commit
+        # session-only: nothing local governs who may waive reaching a commit on
+        # a fork, so the session's own approvers decide. With the precondition's
+        # approvers left UNSET, the waiver defaults to this standing — the empty
+        # resource-owner set — so the card routes to the session approve-set and
+        # the click folds to CheckApprove(agentsession#approve).
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          # ComposeSlots rewrites this to slot_grant_checkout->interact + owner
+          # because the AgentClass declares git_commit as an authz slot.
+          - {name: checkout, expr: owner, title: "Check out this commit's code"}
+  subcommands:
+    - path: [checkout]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: git_commit
+          permission: checkout
+          # The raw commitish IS the OID. has() guards absence (an empty id is a
+          # denial); no transforms, so the decision key is the SHA verbatim.
+          resourceIDExpr: 'has(args.commitish) && args.commitish != "" ? args.commitish : ""'
+          resourceIDHint: "give the commit as its full 40-character OID (the pull request's head SHA)"
+      description: "Check out a commit by its OID. The head of a fork PR is untrusted code, so a checkout of a fork's head is refused until a human waives it."
+      positional:
+        - {name: commitish, type: string, required: false}
+        - {name: pathspec,  type: stringList, required: false, afterDashDash: true}
+      flags:
+        - {long: force,  short: f, type: bool}
+        - {long: detach, short: d, type: bool}
+      effects:
+        destructive: true
+        reads:  [filesystem]
+        writes: [filesystem]
+        network: {destinations: []}
+        filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+        creds: {required: [], writes: []}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata: {name: ts-forkgit, namespace: default}
+spec:
+  name: ts-forkgit
+  version: "1"
+  toolkit: {name: forkgit, revision: "2026-09-02"}
+  allowSubcommands: ["checkout"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata: {name: cls-forkgit, namespace: default}
+spec:
+  image: registry.example.com/git-toolbelt:latest
+  resources: {cpu: "100m", memory: "64Mi", ephemeralStorage: "16Mi"}
+  tools:
+    # The class tool NAME must equal the toolspec's toolkit name (forkgit), or
+    # the AgentClass tool-catalog check refuses the bundle: "toolkit forkgit not
+    # in class cls-forkgit's tool catalog" (controller.go:1785, ct.Name ==
+    # ts.Spec.Toolkit.Name). The runtime tool is then <toolBundle>_forkgit.
+    - {name: forkgit, command: ["/usr/bin/git"]}
+  toolspecs:
+    - {name: ts-forkgit}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: forkbot-identity, namespace: default}
+spec:
+  description: "Fixture identity for the fork-precondition bundles."
+  credentials:
+    # The toolkit declares a sensitive GIT_TOKEN, so the class is not Valid until
+    # a credential of this name backs it. Never read: nothing executes.
+    - name: git-token
+      type: static
+      static: {secretRef: {name: forkbot-token-secret, key: token}}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: forkbot, namespace: default}
+spec:
+  displayName: ForkGateBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: forkbot-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You review a pull request. To read its code you check out the head
+      commit with forkgit_git (args: ["checkout", "<head OID>"]).
+  agentIdentity: forkbot-identity
+  authz:
+    # A denial must be ENFORCED, not logged-and-proceed: the whole claim is that
+    # a fork head is not checked out.
+    toolCalls: {mode: enforcing}
+    session:
+      # github's input Channel is UserAttributable=false, so the AgentClass
+      # controller requires this: without it agentsession#interact resolves to
+      # nothing for every session this class spawns.
+      interactPermission: "group:demo-fork-reviewers#member"
+    slots:
+      - resourceType: git_commit
+        description: "the commit a checkout may land on"
+        permission: checkout
+        # A gated slot must NOT admit channel_thread (which binds without running
+        # the gate), and an empty fillFrom admits every source — so observed,
+        # which runs the gate, is named explicitly. The scenario binds through the
+        # waiver, not through an observation, but the fillFrom is what admits the
+        # gated slot at all.
+        fillFrom: [observed]
+        requires:
+          # `has()` is not available over facts by design; the head_is_fork
+          # envelope fact is written by the github kind on first delivery, so it
+          # is Refused (not Undetermined) for a fork PR.
+          - cel: "!facts.envelope.head_is_fork"
+            undeterminedHint: "Read the pull request's fork status before checking out its head — the github event records whether the head is on a fork."
+            refusalMessage: "This pull request's head branch lives on a fork; checking out its code would run untrusted code in this session."
+  budget: {maxTurns: 20, maxTokens: 100000, maxDuration: "1h"}
+  toolBundles:
+    - {name: "forkgit", class: "cls-forkgit", toolspecs: ["ts-forkgit"]}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: forkbot-gh, namespace: default}
+spec:
+  kind: github
+  role: input
+  agentClass: forkbot
+  sessionScope: thread
+  authzSubject: "service:forkbot"
+  owner:
+    # The session OWNER is the harness DefaultUser's canonical id
+    # (base64url("user@example.com")). approve = owner, so the auto-approver —
+    # which clicks as the DefaultUser — is the one subject that may waive (or
+    # refuse) the fork card. github attributes the webhook to no AP user, so the
+    # owner cannot come from a starter and must be declared here.
+    explicit: "user:dXNlckBleGFtcGxlLmNvbQ"
+  credentialsRef:
+    secretName: forkbot-gh-creds
+  github:
+    appSlug: forkbot
+    events: ["opened"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: forkbot-out, namespace: default}
+spec:
+  kind: fake
+  role: output
+  agentClass: forkbot
+  credentialsRef: {secretName: forkbot-fake-creds}
+  fake: {echo: false}

@@ -1,0 +1,36 @@
+# The sandbox class the workshop SidecarToolbox runs under
+# (sidecartoolbox.yaml's `sandbox.class`). The bundle ships its own
+# dependency: nothing else installs this class, and a SidecarToolbox whose
+# class is missing is Valid=False (ClassMissing), which makes the builder
+# AgentClass Valid=False and unstartable — found live on oap-desktop
+# 2026-09-11 after every suite was green.
+#
+# SHAPE-ONLY for the sidecar: SidecarToolboxSandbox.Class inherits resources,
+# runtimeClassName, network mode and pidsLimit — nothing else. The sidecar
+# brings its own image (sidecartoolbox.yaml's source.image) and declares its
+# own tools, so image and tools here are inert for the workshop; both exist
+# because the SpiceboxClass validator requires them of every class
+# (pkg/controllers/spiceboxclass validateSpec — and
+# TestBuilderBundle_ShipsAValidWorkshopSandboxClass runs this file through
+# that real validator).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: workshop-sandbox
+spec:
+  # The platform's own default sandbox image tag. Inert here (see the header)
+  # but validated non-empty; on remote clusters the install path
+  # registry-qualifies first-party images, and this value follows the same
+  # convention it uses everywhere else.
+  image: spicebox-sandbox:dev
+  tools:
+    - name: noop
+      command: ["/bin/sh", "-c", "true"]
+      expectedDuration: short
+  resources:
+    cpu: "500m"
+    memory: "512Mi"
+    ephemeralStorage: "256Mi"
+  network:
+    mode: allowlist
+    allowedHosts: []

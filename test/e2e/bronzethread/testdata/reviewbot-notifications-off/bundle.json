@@ -1,0 +1,118 @@
+{
+  "name": "reviewbot-notifications-off",
+  "description": "A pull request author who opted OUT of review-delivery mentions (notifications=never, saved before this session ever started). The trigger owner annotation names the author as github_user:99#user, which the AgentSession reconciler's owner_resolve links into agentsession#owner through the sole_user edge this bundle seeds directly (the harness runs no useridentity reconciler to derive it from session membership). Once claimed, the agent calls get_preferences with `user: \"trigger-author\"` — reading a NAMED user's preferences rather than the current turn's own author, which for a webhook-opened session has no human turn at all — and the resolved value comes back `never`, `source: user`, proving the read went through subjectresolve's sole_user resolution and the seeded user layer rather than the class default (`on_problems`). The agent honors it: the delivered review opens with the author's plain login, never a mention token.\n\nThe SAME read also proves the disclosure filter is live, not merely untested: the fixture class declares a second preference, `language`, with no visibility override (defaults to self-only) — seeded with a value for this SAME user — and it never appears in the get_preferences result at all, because a `?user-ref=` read is filtered to `visibility: class` keys BEFORE any user value is even looked up. A regression that widened the disclosure to every declared key, not just the class-visible ones, would leak `language` here and nowhere else in this bundle would catch it.",
+
+  "agentDir": "testdata/agent-reviewbot",
+  "agentClass": "demo-reviewbot",
+
+  "seedRelationships": [
+    {"resource": "github_user:99", "relation": "sole_user", "subject": "user:dev-author@example.com"}
+  ],
+  "seedUserPreferences": [
+    {"subject": "email:dev-author@example.com", "key": "notifications", "value": "never"},
+    {"subject": "email:dev-author@example.com", "key": "language", "value": "fr"}
+  ],
+
+  "trigger": {
+    "channel": "demo-reviewbot-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#4",
+    "headSHA": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+    "statusName": "demo-reviewbot"
+  },
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Pull request demo-org/demo-repo#4 was opened",
+        "toolOffered": "claim_trigger_status"
+      },
+      "reply": [{ "toolUse": { "name": "claim_trigger_status", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "claim_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"already_concluded\":false",
+        "toolOffered": "get_preferences"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "get_preferences",
+            "args": { "user": "trigger-author" }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "get_preferences",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"value\": \"never\",\n        \"source\": \"user\"",
+        "lastToolResultNotContains": "language"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Reviewed PR #4 \"Update README.md\" (demo-org/demo-repo) for demo-contributor.\n\nDocumentation-only change (+3/-1 lines in README.md); no code, config, or tests touched. No security, correctness, or logic issues. Safe to merge as-is.\n\n(demo-contributor has review-delivery mentions turned off, so this note names them by login rather than pinging them.)"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "conclude_trigger_status",
+            "args": {
+              "outcome": "clean",
+              "summary": "Docs-only change to README.md (+3/-1), no code/config/tests touched. No security or correctness issues. Safe to merge."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "conclude_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "recorded on the GitHub check run on demo-org/demo-repo#4: clean"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Reviewed demo-org/demo-repo#4 (docs-only README.md change). No issues found. Delivered the summary without a mention (author opted out of notifications); concluded the check run as clean."
+            }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "toolsCalled": ["get_preferences"],
+    "approvalPrompts": 0,
+    "triggerStatus": {
+      "status": "completed",
+      "conclusion": "success",
+      "externalID": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+      "creates": 1,
+      "updates": 1
+    },
+    "channel": {
+      "postCount": 2,
+      "postsContain": [
+        "Picked up pull request demo-org/demo-repo#4",
+        "demo-contributor"
+      ]
+    }
+  }
+}

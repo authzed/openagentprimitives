@@ -1,0 +1,61 @@
+# .dockerignore — trims the `docker build` context sent to the daemon.
+#
+# The first-party image Dockerfiles (built by `oap build` and `mage
+# desktop:images`) do `COPY . .` from the repo root, so anything NOT excluded
+# here is uploaded as build context on every image build. The desktop bundle's
+# build outputs alone are ~13GB (a 10GB rootfs.img, a 10GB oap.app, a ~200MB
+# image tarball) plus a ~766MB download cache. None of the entries below are
+# needed to compile the Go binaries or embed webd's (already built + committed)
+# frontend dist.
+#
+# NOTE: source, go.mod/go.sum, and go:embed'd assets (e.g.
+# pkg/web/webui/webassets/dist, the embedded install.yaml) live under pkg/,
+# internal/ (the cluster-component binaries the service images build) and cmd/
+# (the oap CLI), and are deliberately NOT excluded.
+
+# --- Git ---
+.git
+.gitignore
+.gitattributes
+
+# --- Dev tooling / agent worktrees + plugin cache (the multi-GB offender) ---
+.claude/
+.superpowers/
+.worktrees/
+
+# --- Desktop bundle build artifacts + upstream download cache (multi-GB) ---
+# rootfs.img, oap.app, images-minimal.tar.zst, the ed25519 guest key, the Ubuntu
+# cloud image + k3s downloads — never part of an image build.
+build/desktop/out/
+build/desktop/cache/
+
+# --- Frontend dependency trees (webd embeds the committed dist under pkg/) ---
+**/node_modules/
+
+# --- Narrative docs — not needed to build any binary ---
+docs/
+.github/
+
+# --- Stray compiled binaries occasionally left at the repo root (~100MB each) ---
+/oap
+/apguest
+/operator
+/channelsd
+/webd
+/runner
+/identityd
+/authzd
+/toolspec
+/claudeshim
+/bin/
+
+# --- OS / editor / test junk ---
+**/.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*.log
+*.out
+*.test
+coverage.txt

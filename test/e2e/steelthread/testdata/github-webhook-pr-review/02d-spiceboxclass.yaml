@@ -1,0 +1,77 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: demo-reviewbot-codelike
+  namespace: default
+spec:
+  envDefaults:
+    HOME: /tmp
+  network:
+    allowedHosts:
+    - api.anthropic.com
+    - proxy.golang.org
+    - sum.golang.org
+    - registry.npmjs.org
+    - registry.yarnpkg.com
+    - github.com
+    - api.github.com
+    - codeload.github.com
+    - objects.githubusercontent.com
+    - raw.githubusercontent.com
+    mode: allowlist
+  resources:
+    cpu: "1"
+    ephemeralStorage: 1Gi
+    memory: 1792Mi
+    pidsLimit: 64
+    tmpSize: 512Mi
+    workSize: 256Mi
+  sandbox: {}
+  sessionDefaults:
+    idleTTL: 30m0s
+    maxDuration: 1h0m0s
+  toolchains:
+  - claude
+  - go
+  - node
+  tools:
+  - command:
+    - /opt/ap-toolchains/claude/bin/claude
+    - --dangerously-skip-permissions
+    expectedDuration: long
+    name: claude
+  toolspecs:
+  - name: demo-reviewbot-claude
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: demo-reviewbot-gitlike
+  namespace: default
+spec:
+  network:
+    allowedHosts:
+    - api.github.com
+    - github.com
+    mode: allowlist
+  resources:
+    cpu: 500m
+    ephemeralStorage: 500Mi
+    memory: 256Mi
+    pidsLimit: 64
+  sandbox: {}
+  sessionDefaults:
+    idleTTL: 30m0s
+    maxDuration: 1h0m0s
+  tools:
+  - command:
+    - /usr/bin/git
+    expectedDuration: short
+    name: git
+  - command:
+    - /usr/bin/gh
+    expectedDuration: short
+    name: gh
+  toolspecs:
+  - name: demo-reviewbot-git-ro
+  - name: demo-reviewbot-gh-review

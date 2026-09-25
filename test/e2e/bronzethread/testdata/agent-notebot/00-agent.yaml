@@ -1,0 +1,53 @@
+# Fixture agent for the attachment-notice bundles.
+#
+# The load-bearing property is an ABSENCE: spec.capabilities does not grant
+# `attachments`, so the ingestion gate is closed on its AgentClass leg. That is
+# the exact configuration a user hits when they drop a file on an agent nobody
+# turned attachment support on for, and it is the case whose notice used to
+# open with "try sending the file again".
+#
+# The Channel DOES opt in (spec.attachments.enabled), so the closed leg is
+# unambiguously the capability rather than the channel — a bundle where both
+# legs were closed would pass identically with either one fixed.
+apiVersion: v1
+kind: Secret
+metadata: {name: notebot-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: notebot-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: notebot, namespace: default}
+spec:
+  displayName: NoteBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: notebot-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You answer briefly.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  # NO `attachments` grant, deliberately. See the header.
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: notebot-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: notebot
+  credentialsRef: {secretName: notebot-fake-creds}
+  fake: {echo: false}
+  # Opted IN on this leg, so the closed gate can only be the capability.
+  attachments:
+    enabled: true

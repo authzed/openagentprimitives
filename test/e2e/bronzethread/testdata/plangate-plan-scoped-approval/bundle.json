@@ -1,0 +1,94 @@
+{
+  "name": "plangate-plan-scoped-approval",
+  "description": "The plan is the approval surface. Two phases, each naming a DIFFERENT company, so each carries its own authority and each would have cost its own decision — and the human is asked exactly ONCE, on a card that shows both phases and both targets. approvalPrompts:1 is the whole assertion: per-phase cards made the same run cost two clicks, and the first of them said nothing about the second phase's target.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-enforcing"],
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["check on Northwind and then on Fabrikam"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "check on Northwind", "toolOffered": "select_phase" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "check Northwind", "status": "pending", "phase": "northwind" },
+                { "id": "s2", "label": "check Fabrikam", "status": "pending", "phase": "fabrikam" }
+              ],
+              "phases": [
+                {
+                  "id": "northwind",
+                  "label": "Look up Northwind",
+                  "why": "the user named it first",
+                  "permissions": [
+                    { "handle": "perm:list:crm_company", "why": "to find the company" }
+                  ],
+                  "slots": [
+                    { "type": "crm_company", "id": "4210", "why": "Northwind Trading is company 4210" }
+                  ]
+                },
+                {
+                  "id": "fabrikam",
+                  "label": "Look up Fabrikam",
+                  "why": "the user asked about it too",
+                  "permissions": [
+                    { "handle": "perm:list:crm_company", "why": "to find the company" }
+                  ],
+                  "slots": [
+                    { "type": "crm_company", "id": "4299", "why": "Fabrikam Logistics is company 4299" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-northwind", "_reason": "looking up Northwind", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "select_phase", "args": { "index": 1 } } }]
+    },
+    {
+      "expect": { "lastToolResult": "select_phase", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-fabrikam", "_reason": "looking up Fabrikam", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [{ "text": "neither company is in the list" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["neither company is in the list"],
+    "planGate": {
+      "frozenPhases": 2,
+      "onePlanDigest": true,
+      "rebuildableFromLog": true,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 1,
+      "cardWhatContains": ["Phase 1", "Phase 2", "4210", "4299"],
+      "cardWhatOmits": ["Look up Northwind", "Look up Fabrikam"]
+    }
+  }
+}

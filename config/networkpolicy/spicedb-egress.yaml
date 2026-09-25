@@ -1,0 +1,31 @@
+# spicedb-egress: lets everything under the spicedb-operator's ownership —
+# serving pods, the migration Job, and our own createdb Job, all stamped with
+# authzed.com/cluster=spicebox-spicedb — reach the shared Postgres. The
+# dispatch peer (50053) stays scoped to authzed.com/cluster-component=spicedb
+# (serving pods only) since the migration/createdb Jobs are not dispatch
+# peers. Harmless on the local memory install (no Postgres, no dispatch — the
+# rules simply go unused). DNS is covered by allow-dns, which reaches every
+# pod in the namespace except extractord.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spicedb-egress
+spec:
+  podSelector:
+    matchLabels:
+      authzed.com/cluster: spicebox-spicedb
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: agentprimitives-system }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: spicebox-postgres }
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - podSelector:
+            matchLabels: { authzed.com/cluster-component: spicedb }
+      ports:
+        - { protocol: TCP, port: 50053 }

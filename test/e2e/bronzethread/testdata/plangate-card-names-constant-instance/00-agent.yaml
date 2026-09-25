@@ -1,0 +1,191 @@
+# Fixture agent for the constant-instance card scenario.
+#
+# wsrepo_repo carries TWO permissions that key on DIFFERENT id-spaces, exactly
+# as the real git toolkit does:
+#
+#   push  -> the remote URL, supplied per call (resourceIDExpr over args)
+#   read  -> the literal "workspace", fixed by the toolkit (resourceIDTemplate)
+#
+# A phase can therefore declare a slot naming the remote URL while its ceiling
+# also reaches a second, different object of the same type — one the agent never
+# declared and, before this fix, one the approval card never named.
+#
+# Observed live 2026-08-21: a card read "reaches acme/internal" for a phase
+# whose ceiling included "Read the checked-out files and history", and the
+# runner then logged `does not have read on git_repo:workspace`. The human
+# approved a card that showed one target and a ceiling that reached two.
+#
+# The `inspect` tool exists to put a constant-id check in the surface. The
+# scenario deliberately does NOT call it: the claim under test is about what the
+# CARD names, and a phase's ceiling is what it MAY do, not what it did. Calling
+# it would additionally exercise the open question of whether approving a phase
+# should bind its constant instances too, which is a separate decision and not
+# what this bundle pins.
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: wsrepo-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: wsrepo-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: wsrepo-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: wsrepo-identity, namespace: default}
+spec:
+  description: "Session-only-standing e2e fixture: static MCP bearer token."
+  credentials:
+    - name: wsrepo-mcp-bearer
+      type: static
+      static: {secretRef: {name: wsrepo-mcp-token, key: access_token}}
+---
+# Self-contained MCP fixture exposing one tool, "push", gated on
+# wsrepo_repo#push.
+#
+# wsrepo_repo declares NO `standing` — the field this whole feature adds —
+# so it resolves to StandingSessionOnly, the CRD default. Nothing else in this
+# file (or anywhere in this bundle) writes a tuple granting `owner` on
+# wsrepo_repo to anybody, which is the condition this scenario exists to
+# prove works.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: wsrepo-fixture, namespace: default}
+spec:
+  name: wsrepo-fixture
+  version: v1
+  intent: "Self-contained git-push-shaped fixture for the e2e harness."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: wsrepo-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: wsrepo_repo
+        # Stated explicitly: nothing local governs who may approve.
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          # ComposeSlots rewrites this to slot_grant_push->interact + owner
+          # because the AgentClass below declares wsrepo_repo as an authz
+          # slot.
+          #
+          # title is the human phrase the approval card shows instead of the
+          # wire handle (`perm:push:wsrepo_repo`) — the fragment→controller
+          # →status→runner→card chain this whole bundle exists to prove.
+          - {name: push, expr: owner, title: "Push commits to the repository"}
+          # read keys on the LITERAL "workspace" (see the inspect tool
+          # below), the session's own checked-out copy — a different
+          # instance of the same type than the remote URL push keys on.
+          - {name: read, expr: owner, title: "Read the checked-out files"}
+  tools:
+    - name: status
+      intent: "Report whether the push tool is ready to use. Stateless — no SpiceDB check."
+      args:
+        allowedFields: []
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: inspect
+      intent: "Inspect the checked-out copy in this session."
+      args:
+        allowedFields: []
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: wsrepo_repo
+          # A CONSTANT id: no {placeholder}, no CEL. It names the same
+          # object on every call, so it is knowable at PLAN time and the
+          # approval card can name it — which is the point of this bundle.
+          resourceIDTemplate: "workspace"
+          permission: read
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: push
+      intent: "Push locally committed changes to a remote repository."
+      args:
+        allowedFields: [repoUrl]
+      permission:
+        stateImpact: readwrite
+        check:
+          resourceType: wsrepo_repo
+          resourceIDExpr: '"" + args.repoUrl'
+          # The same [normalize_url, spicedb_escape] chain the real git
+          # toolkit keys git_repo with — this is the exact chain the live bug
+          # (raw URL reaching SpiceDB unescaped) bypassed, so exercising it
+          # here is the point, not incidental.
+          resourceIDTransforms: [normalize_url, spicedb_escape]
+          resourceIDHint: "give the repository as a full https:// URL"
+          permission: push
+      effects:
+        readOnly: false
+        idempotent: false
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: wsrepo-fixture, namespace: default}
+spec:
+  displayName: WsRepoBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: wsrepo-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You push local changes to remote repositories. Available tools:
+        - wsrepo_status(): check whether the push tool is ready
+        - wsrepo_push(repoUrl): push committed changes to the named repository
+
+      When the user asks you to push, call update_plan first to declare a
+      phase naming the repository, then call wsrepo_status, then call
+      wsrepo_push.
+  agentIdentity: wsrepo-identity
+  mcpServers:
+    - name: wsrepo
+      ref: wsrepo-fixture
+  authz:
+    slots:
+      - resourceType: wsrepo_repo
+        description: "A remote repository, reached by its URL"
+        permission: push
+        # read is in the phase ceiling and keys on the CONSTANT "workspace".
+        # Without it in the declared set the binding filters read out, the
+        # constant instance gets no grant, and the first inspect raises an
+        # amendment for a resource the card already promised to cover.
+        permissions: [read]
+    planGate:
+      mode: enforcing
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: wsrepo-fixture-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: wsrepo-fixture
+  credentialsRef: {secretName: wsrepo-fake-creds}
+  fake: {echo: false}

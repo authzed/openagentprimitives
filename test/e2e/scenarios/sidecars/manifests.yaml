@@ -1,0 +1,164 @@
+# Fixtures for the in-process sidecar-toolbox synthesis e2e scenario.
+#
+# Apply order (the harness applies a single multi-doc blob top to bottom):
+#   1. Secrets — model apiKey placeholder + fake-channel creds placeholder.
+#   2. AgentIdentity — no sidecar credential (echo-tb has no upstreamAuth.provider).
+#   3. SpiceboxClass — sandbox class the SidecarToolbox references. The
+#      harness does NOT run the SpiceboxClass controller, so this never
+#      reaches Valid=True; the AgentSession sidecar-resolution path tolerates
+#      a non-Valid / missing SpiceboxClass (mergeNetwork falls back).
+#   4. SidecarToolbox echo-tb — allowlists ONLY `echo` (the stub also serves
+#      `secret_tool`, which is deliberately omitted to prove allowlist
+#      enforcement). upstreamAuth.provider is empty → no creds → empty
+#      per-session Secret. The harness does NOT run the SidecarToolbox
+#      controller, so the test stamps Valid=True on this CR's status before
+#      waiting on the AgentClass (the AgentClass controller requires the
+#      referenced SidecarToolbox to be Valid=True).
+#   5. AgentClass — model.provider=test (admitted only by the harness's
+#      AllowTestProvider reconciler), authz.toolCalls.mode=disabled (skip
+#      SpiceDB checks / approval so the scenario focuses on synthesis +
+#      circuit-breaking), sidecarToolboxes: [{name: echo, ref: echo-tb}], and
+#      a toolGuard rule giving the sidecar origin a fast 3-strike origin
+#      breaker (the origin-breaker e2e scenario relies on this).
+#   6. Channel kind=fake — the in-process transport SendUserMessage drives.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sidecar-placeholder
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-test-provider"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sidecar-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: sidecar-identity
+  namespace: default
+spec:
+  description: "Sidecar-toolbox e2e fixture: no credentials (echo needs none)."
+  credentials: []
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: sidecar-sandbox-default
+spec:
+  image: ""
+  resources:
+    cpu: "200m"
+    memory: "256Mi"
+    ephemeralStorage: "128Mi"
+    pidsLimit: 32
+  network:
+    mode: allowlist
+    allowedHosts: []
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SidecarToolbox
+metadata:
+  name: echo-tb
+  namespace: default
+spec:
+  name: echo
+  version: "1"
+  intent: "Echoes its input verbatim. e2e fixture for sidecar synthesis."
+  source:
+    inline:
+      baseImage: python:3.12-slim
+      script:
+        configMapRef:
+          name: echo-mcp-src
+          key: server.py
+      entrypoint: ["python", "/app/server.py"]
+  sandbox:
+    class: sidecar-sandbox-default
+  transport:
+    port: 8080
+    healthcheck:
+      path: /healthz
+      timeoutSeconds: 30
+  upstreamAuth:
+    # "none" is the sentinel for exactly this case — the echo sidecar needs no
+    # upstream credential, so the AgentSession reconciler writes an (empty)
+    # per-session Secret. It is NOT the same as an empty provider: the field
+    # must always state explicit intent, and the real sidecartoolbox controller
+    # (now wired into this harness) refuses "" as an accidental omission.
+    provider: none
+  tools:
+    # Allowlist exposes ONLY echo. secret_tool (also served by the stub) is
+    # deliberately omitted — synthesis must NOT produce a tool for it.
+    - name: echo
+      intent: "Echoes its input verbatim."
+      args:
+        allowedFields: [text]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: sidecar-echo
+  namespace: default
+spec:
+  displayName: SidecarEchoBot
+  description: "E2E fixture agent for sidecar-toolbox synthesis. Do not deploy."
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: sidecar-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      You have an `echo` sidecar toolbox. The tool is exposed as
+      `echo_echo(text)` (the AgentClass declares sidecarToolboxes[0].name:
+      echo, so the runner synthesizes LLM-facing names as <prefix>_<tool>).
+  agentIdentity: sidecar-identity
+  authz:
+    toolCalls:
+      # Skip per-tool SpiceDB checks + approval so the scenario isolates
+      # sidecar synthesis + degradation, not the authz round-trip.
+      mode: disabled
+  sidecarToolboxes:
+    - name: echo
+      ref: echo-tb
+  # ToolGuard: a fast origin-breaker trip for the sidecar so the
+  # origin-breaker e2e scenario opens after exactly 3 consecutive transport
+  # failures (vs. the builtin origin threshold of 10). Sidecar-toolbox tools
+  # report kind "mcp" and origin "sidecartoolbox/<ref>"; match by origin.
+  toolGuard:
+    rules:
+      - match:
+          origin: "sidecartoolbox/*"
+        breaker:
+          originFailureThreshold: 3
+          failureThreshold: 5
+          action: deny
+  budget:
+    maxTurns: 20
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: sidecar-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: sidecar-echo
+  credentialsRef:
+    secretName: sidecar-fake-creds
+  fake:
+    echo: false

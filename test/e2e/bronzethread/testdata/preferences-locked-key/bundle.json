@@ -1,0 +1,35 @@
+{
+  "name": "preferences-locked-key",
+  "description": "Admin policy has locked prefdemo's language preference to \"en\" (extraManifests/preferences-locked.yaml). The user asks for German anyway; set_preference refuses before ever publishing a confirm — a locked key is refused at the tool, not asked about — so no card is ever raised and no auto-approver is needed.",
+
+  "agentDir": "testdata/agent-prefdemo",
+  "agentClass": "prefdemo",
+  "extraManifests": ["preferences-locked"],
+
+  "userTurns": ["please reply in German from now on"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "German", "toolOffered": "set_preference" },
+      "reply": [{ "toolUse": { "name": "set_preference", "args": { "key": "language", "value": "de" } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "set_preference",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "is locked by admin policy"
+      },
+      "reply": [{ "text": "I can't change that — the language preference is locked by admin policy." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "declined a locked preference change" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["locked by admin policy"],
+    "approvalPrompts": 0,
+    "toolsCalled": ["set_preference"]
+  }
+}

@@ -1,0 +1,38 @@
+# Turns the plan gate on at logging for the centerdot fixture.
+#
+# The WHOLE spec is restated: ExtraManifests REPLACES the object rather than
+# patching it, so a partial spec drops systemPrompt and the class fails Valid
+# with "exactly one of inline or configMapRef must be set".
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: centerdot-companies
+  namespace: default
+spec:
+  displayName: CenterdotBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: centerdot-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster.
+
+      You operate on companies and contacts. Available tools:
+        - centerdot_list_companies(sinceDays): list companies created recently
+        - centerdot_list_contacts_for_company(companyId): list contacts
+  agentIdentity: centerdot-identity
+  mcpServers:
+    - name: centerdot
+      ref: centerdot-companies
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+  authz:
+    planGate:
+      mode: enforcing

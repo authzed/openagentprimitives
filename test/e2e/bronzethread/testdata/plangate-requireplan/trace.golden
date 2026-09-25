@@ -1,0 +1,1 @@
+gate  gate_denied     phase=0 handle=perm:list:crm_company tool=centerdot_list_companies outcome=denied

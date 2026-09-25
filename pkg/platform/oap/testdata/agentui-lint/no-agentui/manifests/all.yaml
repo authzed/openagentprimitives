@@ -1,0 +1,34 @@
+# An ordinary bundle with no AgentUI at all: LintAgentUIs has nothing to
+# check and must lint clean, not error.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: demo-crm
+spec:
+  name: demo-crm
+  version: v1
+  intent: "Fixture CRM MCP server for oap.LintAgentUIs's own test suite."
+  server:
+    url: "http://127.0.0.1:1"
+    transport: streamable-http
+  tools:
+    - name: list_rows
+      intent: "List demo rows."
+      args:
+        allowedFields: [stage]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: demo-console
+spec:
+  description: "Fixture AgentClass for oap.LintAgentUIs's own test suite."
+  systemPrompt:
+    inline: "You are a fixture agent used only by oap.LintAgentUIs's own test suite."
+  mcpServers:
+    - name: demo
+      ref: demo-crm

@@ -1,0 +1,49 @@
+[
+  {
+    "type": "container",
+    "rich_text_title": {
+      "type": "rich_text",
+      "elements": [
+        {
+          "type": "rich_text_section",
+          "elements": [
+            {
+              "type": "emoji",
+              "name": "large_blue_circle"
+            },
+            {
+              "type": "text",
+              "text": "  "
+            },
+            {
+              "type": "text",
+              "text": "You messaged while I'm working — your message is queued.",
+              "style": {
+                "bold": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "child_blocks": [
+      {
+        "type": "actions",
+        "block_id": "interaction_actions",
+        "elements": [
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Interrupt \u0026 Send Now",
+              "emoji": false
+            },
+            "action_id": "interrupt",
+            "value": "{\"v\":\"interaction\",\"r\":\"q-1\",\"d\":\"interrupt\",\"s\":\"default/demo-sess\",\"c\":\"queued_messages\"}"
+          }
+        ]
+      }
+    ],
+    "has_header_divider": true
+  }
+]

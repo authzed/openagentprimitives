@@ -1,0 +1,91 @@
+# Fixture agents for the subagent-chat bronzethread bundle.
+#
+# demo-lead grants the subagents capability, names ONE class on its roster
+# (demo-helper), and raises that member's ceiling to `chat` in
+# spec.subagentModes. Both declarations are load-bearing and neither implies
+# the other: roster membership alone permits single_turn only, so without the
+# subagentModes entry the bundle's chat delegation is refused before any child
+# runs; and subagentModes confers no membership, so the roster entry cannot be
+# dropped in favour of it.
+#
+# demo-helper carries no roster and no subagents capability -- delegation is
+# not transitive here. It is offered ask_parent not because it asked for it but
+# because it IS a conversational child: the subagent_conversation capability is
+# default-on and activates on a delegated session bound to a channel whose
+# counterparty is another session, which is the `agent` Channel the
+# SubagentRequest controller creates for a chat delegation.
+#
+# The two inline system prompts are deliberately distinguishable, and that is a
+# requirement rather than a flourish: the bundle scopes its LLM steps per
+# session (LLMStep.AgentClass) and the driver derives the scope from
+# spec.systemPrompt.inline, which runner.ComposeSystem writes verbatim into the
+# prompt each session is actually sent. Two prompts where one contains the other
+# would make a request match both scopes, and resolveTranscriptScopes refuses
+# that rather than routing a turn to the wrong side.
+#
+# Both classes are otherwise toolless: no mcpServers, no agentIdentity, no
+# boundEntities. maxDelegatedAgents is deliberately unset -- this scenario is
+# about a delegation CONVERSING, not about the tree ceiling (that is
+# subagent-ceiling's), so it runs under the operator's built-in default.
+apiVersion: v1
+kind: Secret
+metadata: {name: subchat-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: subchat-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-lead, namespace: default}
+spec:
+  displayName: DemoLead
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: subchat-placeholder, key: api-key}
+  capabilities:
+    subagents: {}
+  subagents: ["demo-helper"]
+  subagentModes:
+    demo-helper: ["chat"]
+  systemPrompt:
+    inline: |
+      You are the DELEGATING fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You hand bounded work to other agents and answer them when they come back
+      with a question.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-helper, namespace: default}
+spec:
+  displayName: DemoHelper
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: subchat-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are the DELEGATED fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You receive one task from the agent that delegated it, ask that agent
+      when the task is ambiguous, and report what you did.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: demo-lead-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: demo-lead
+  credentialsRef: {secretName: subchat-fake-creds}
+  fake: {echo: false}

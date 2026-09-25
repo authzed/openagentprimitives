@@ -1,0 +1,9 @@
+name: bad-cel
+version: "1"
+server: { url: http://x, transport: streamable-http }
+tools:
+  - name: t
+    args:
+      constraints:
+        - cel: 'args.title.size( == 5'   # syntax error
+          message: "broken"

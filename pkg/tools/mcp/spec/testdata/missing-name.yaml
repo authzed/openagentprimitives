@@ -1,0 +1,4 @@
+version: "1"
+server: { url: http://x, transport: streamable-http }
+tools:
+  - name: t

@@ -1,0 +1,16 @@
+[Match]
+Name=en* eth*
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+# Identify to macOS's vmnet DHCP server by the interface MAC, not a
+# per-boot-generated DUID. The host pins a FIXED MAC (fixedGuestMAC in
+# cmd/oap/internal/desktop/vz/provider_darwin.go), so a MAC-based client id
+# makes the guest present a STABLE DHCP identity every boot and get the same
+# 192.168.64.x lease each time. The default DUID client id changed per boot,
+# churning the guest's IP, piling up stale leases, and leaving host ARP
+# pointing a reused IP at a dead guest (GuestIP then SSH'd an unreachable
+# address). Keep in sync with fixedGuestMAC.
+ClientIdentifier=mac

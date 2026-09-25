@@ -1,0 +1,159 @@
+/*
+ * Slack design tokens. Two themes: light (default "Aubergine" workspace) and
+ * dark. Values are seeded from real Slack screenshots + Slack's published brand
+ * palette; the deep-research spec is the reconciliation source for any exact
+ * value still marked approximate. Every surface color, border, and dimension is
+ * a custom property so matching Slack more precisely is a one-file edit.
+ *
+ * Slack brand anchors: aubergine #4A154B, green #2EB67D, blue #36C5F0,
+ * red #E01E5A, yellow #ECB22E.
+ */
+
+:root {
+  /* Layout dimensions (px) — consistent across themes. */
+  --sk-rail-w: 68px;
+  --sk-sidebar-w: 260px;
+  --sk-thread-w: 420px;
+  --sk-header-h: 49px;
+  --sk-msg-gutter: 36px; /* avatar column width */
+  --sk-msg-avatar: 36px;
+  --sk-msg-avatar-radius: 8px;
+  --sk-msg-pad-x: 20px;
+  --sk-msg-pad-y: 8px;
+  --sk-radius: 8px;
+  --sk-radius-sm: 4px;
+
+  /* Typography */
+  --sk-font: 'Lato', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --sk-font-mono: 'Monaco', 'Menlo', 'Consolas', 'Courier New', monospace;
+  --sk-fs-msg: 15px;
+  --sk-lh-msg: 1.46668;
+  --sk-fs-small: 13px;
+  --sk-fs-sidebar: 15px;
+  --sk-fs-header: 18px;
+  --sk-fw-normal: 400;
+  --sk-fw-medium: 500;
+  --sk-fw-bold: 700;
+  --sk-fw-black: 900;
+}
+
+/* ---- Light (Aubergine) --------------------------------------------------- */
+:root,
+:root[data-theme='light'] {
+  --sk-rail-bg: #3f0e40;
+  --sk-rail-fg: #cbabcb;
+  --sk-rail-fg-active: #ffffff;
+  --sk-rail-active-bg: rgba(255, 255, 255, 0.18);
+
+  --sk-sidebar-bg: #3f0e40;
+  --sk-sidebar-fg: #cfc3cf;
+  --sk-sidebar-fg-muted: #bca6bc;
+  --sk-sidebar-fg-strong: #ffffff;
+  --sk-sidebar-hover-bg: #350d36;
+  --sk-sidebar-active-bg: #1164a3;
+  --sk-sidebar-active-fg: #ffffff;
+  --sk-sidebar-badge-bg: #cd2553;
+  --sk-sidebar-badge-fg: #ffffff;
+
+  --sk-pane-bg: #ffffff;
+  --sk-header-bg: #ffffff;
+  --sk-text: #1d1c1d;
+  --sk-text-muted: #616061;
+  --sk-text-strong: #1d1c1d;
+  --sk-timestamp: #616061;
+
+  --sk-link: #1264a3;
+  --sk-mention-fg: #1264a3;
+  --sk-mention-bg: rgba(29, 155, 209, 0.1);
+
+  --sk-border: #e2e2e2;
+  --sk-divider: #e8e8e8;
+  --sk-hover-bg: #f8f8f8;
+
+  --sk-container-bg: #f8f8f8;
+
+  --sk-code-bg: #f6f6f6;
+  --sk-code-border: #e2e2e2;
+  --sk-code-fg: #1d1c1d;
+  --sk-inline-code-fg: #e01e5a;
+  --sk-inline-code-bg: rgba(224, 30, 90, 0.1);
+  --sk-inline-code-border: rgba(29, 28, 29, 0.13);
+
+  --sk-btn-bg: #ffffff;
+  --sk-btn-border: #bdbdbd;
+  --sk-btn-fg: #1d1c1d;
+  --sk-btn-hover-bg: #f8f8f8;
+  --sk-btn-primary-bg: #007a5a;
+  --sk-btn-primary-fg: #ffffff;
+  --sk-btn-danger-fg: #e01e5a;
+  --sk-btn-danger-border: #e01e5a;
+
+  --sk-badge-bg: #e8e8e8;
+  --sk-badge-fg: #616061;
+
+  --sk-composer-bg: #ffffff;
+  --sk-composer-border: #8d8d8d;
+
+  --sk-quote-bar: #ddd;
+  --sk-scrollbar: rgba(0, 0, 0, 0.2);
+}
+
+/* ---- Dark ---------------------------------------------------------------- */
+:root[data-theme='dark'] {
+  --sk-rail-bg: #121016;
+  --sk-rail-fg: #b9babd;
+  --sk-rail-fg-active: #ffffff;
+  --sk-rail-active-bg: rgba(255, 255, 255, 0.1);
+
+  --sk-sidebar-bg: #19171d;
+  --sk-sidebar-fg: #cfd0d1;
+  --sk-sidebar-fg-muted: #969698;
+  --sk-sidebar-fg-strong: #ffffff;
+  --sk-sidebar-hover-bg: #27242c;
+  --sk-sidebar-active-bg: #1164a3;
+  --sk-sidebar-active-fg: #ffffff;
+  --sk-sidebar-badge-bg: #cd2553;
+  --sk-sidebar-badge-fg: #ffffff;
+
+  --sk-pane-bg: #1a1d21;
+  --sk-header-bg: #1a1d21;
+  --sk-text: #d1d2d3;
+  --sk-text-muted: #9a9b9e;
+  --sk-text-strong: #e8e8e8;
+  --sk-timestamp: #9a9b9e;
+
+  --sk-link: #1d9bd1;
+  --sk-mention-fg: #1d9bd1;
+  --sk-mention-bg: rgba(29, 155, 209, 0.12);
+
+  --sk-border: #35373b;
+  --sk-divider: #35373b;
+  --sk-hover-bg: #222529;
+
+  --sk-container-bg: #1e2125;
+
+  --sk-code-bg: #232427;
+  --sk-code-border: #35373b;
+  --sk-code-fg: #d1d2d3;
+  --sk-inline-code-fg: #e88497;
+  --sk-inline-code-bg: rgba(232, 132, 151, 0.1);
+  --sk-inline-code-border: rgba(210, 210, 210, 0.12);
+
+  --sk-btn-bg: transparent;
+  --sk-btn-border: #565856;
+  --sk-btn-fg: #d1d2d3;
+  --sk-btn-hover-bg: #2a2d31;
+  --sk-btn-primary-bg: #007a5a;
+  --sk-btn-primary-fg: #ffffff;
+  --sk-btn-danger-fg: #e8879b;
+  --sk-btn-danger-border: #a4293f;
+
+  --sk-badge-bg: #35373b;
+  --sk-badge-fg: #b9babd;
+
+  --sk-composer-bg: #222529;
+  --sk-composer-border: #565856;
+
+  --sk-quote-bar: #565856;
+  --sk-scrollbar: rgba(255, 255, 255, 0.2);
+}

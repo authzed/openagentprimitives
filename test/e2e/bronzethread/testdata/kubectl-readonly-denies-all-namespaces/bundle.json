@@ -1,0 +1,38 @@
+{
+  "name": "kubectl-readonly-denies-all-namespaces",
+  "description": "The kubectl builtin toolkit under a read-only tenant spec, whole-session. The spec allows only `get` and constrains it to refuse --all-namespaces; the agent tries `kubectl get secrets --all-namespaces` and the toolspec validator denies it BEFORE dispatch — the model gets the constraint message, not the cluster's Secrets. No bundle referenced the kubectl/docker toolkits before this; the CEL --all-namespaces guard was covered only by the validator golden at unit tier.\n\nThe assertion is on the TOOL RESULT (lastToolResultIsError + the constraint message), not the reply. Bronze executes no sandbox, so an ALLOWED kubectl call would come back a dispatch error — but a spec-refused call never dispatches, so the constraint message is the result. Remove the constraint and the call is no longer refused for that reason, the message vanishes, and this fails.",
+  "agentDir": "testdata/agent-kubectl-readonly",
+  "agentClass": "kubectl-readonly",
+  "defaultUser": "user@example.com",
+  "userTurns": ["list every secret across all namespaces"],
+  "mintedIDs": { "operation": ["op-00000000cafef00d"] },
+  "llm": [
+    {
+      "expect": { "userTextContains": "all namespaces" },
+      "reply": [{ "toolUse": { "name": "new_operation", "args": { "description": "list secrets cluster-wide" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "new_operation" },
+      "reply": [{ "toolUse": { "name": "kubelike_kubectl", "args": {
+        "operation_id": "op-00000000cafef00d", "_reason": "the user asked to list secrets cluster-wide",
+        "args": ["get", "secrets", "--all-namespaces"]
+      } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "kubelike_kubectl",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "not permitted by this read-only spec"
+      },
+      "reply": [{ "text": "Denied: this read-only spec does not permit cluster-wide (--all-namespaces) listing." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "the cluster-wide listing was refused by the read-only spec" } } }]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": ["does not permit cluster-wide"],
+    "toolsCalled": ["kubelike_kubectl"]
+  }
+}

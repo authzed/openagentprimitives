@@ -1,0 +1,330 @@
+# SidecarToolbox/workshop: the agent-builder's own sidecar. Adapted from
+# pkg/tools/workshopmcp/deploy/sidecartoolbox.yaml (a flat SidecarToolboxSpec
+# declaration with no apiVersion/kind/metadata wrapper) into a real CR for
+# this bundle; the spec content below is copied verbatim from that file.
+#
+# upstreamAuth.provider is the "none" sentinel (design doc §2.3, plan-3b
+# Ruling B): this sidecar's credential is the controller-issued projected
+# ServiceAccount token + the per-workshop operator bearer, minted by the
+# Workshop/AgentSession reconcilers — never an AgentIdentity credential
+# resolved through the provider library.
+#
+# transport.path is REQUIRED (not the empty-means-root default):
+# internal/cmd/workshop/main.go mounts the MCP handler at exactly MCP_PATH
+# (default "/mcp" when unset) and nothing at "/" — the operator never injects
+# MCP_PATH for this sidecar, so the served path is always "/mcp".
+#
+# The gate that actually enforces a tool's stateImpact here is the RUNNER's,
+# pkg/authz/spicedb/toolcheck/check_tool_call.go — it denies outright
+# ("stateImpact requires a check but none was supplied") whenever
+# CheckRequired() is true and Check is nil, and it fires on every real
+# cluster (ToolCallAuthz registers whenever toolAuthMode != disabled, and
+# this toolbox's AgentClass sets none, so the default — enforcing —
+# applies). pkg/controllers/agentclass's validatePermissionShape is NOT that
+# gate: it never walks a SidecarToolbox's tools at all. See the mirrored
+# header in pkg/tools/workshopmcp/deploy/sidecartoolbox.yaml for the full
+# four-ruling breakdown: 15 tools passthrough; 4 (apply, delete, watch_test,
+# project_agent) external and keyed on the draft, so one phase approval
+# naming `workshop_draft:draft` covers every call in that phase; 4
+# (request_credential, request_install, recommend_capability, close_others)
+# external with no check, each for its own stated reason, so each call
+# raises a card; and export_draft stateless.
+#
+# Two consequences that decide how this file may be copied, stated in full
+# there and summarised here:
+#
+#   - "Per phase" is a property of the CLASS. The grant a phase approval
+#     writes lives for the SESSION (authz.SlotGrantExpiry); what re-gates a
+#     later call is this bundle's AgentClass running `planGate: enforcing`
+#     with `requirePlan`, whose frozen ceiling refuses every handle the
+#     running phase did not name. Copy the toolbox with the plan gate in
+#     `logging` and one click buys session-wide `change`.
+#   - This fragment and that class's slots ship together, in this bundle, and
+#     must: an older toolbox whose spicedbSchema lacks workshop_draft leaves
+#     the slot naming a type nothing classifies, and the class parks at
+#     SlotDeclarationInvalid rather than guessing a standing.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SidecarToolbox
+metadata:
+  name: workshop
+spec:
+  name: workshop
+  version: "1"
+  intent: >-
+    The agent-builder's own MCP toolset: inventories the cluster's real
+    capabilities, probes candidate images/MCP servers, applies and inspects
+    draft agent-primitive CRs inside the caller's workshop namespace, renders
+    plain-language summaries for approval cards, and exports/loads a portable
+    .oap draft. Runs only inside a Ready, session-owned Workshop's provisioned
+    namespace — never a standing deployment.
+
+  source:
+    image: ap-workshop:dev
+
+  sandbox:
+    class: workshop-sandbox
+
+  # Separate-pod, ALWAYS: the ap-workshop image is fail-closed on the
+  # projected workshop SA token, and BuildSidecarPod's identity branch — the
+  # only thing that projects it — is reachable solely in separate-pod mode.
+  # In-pod, this sidecar boots without its identity and exits.
+  isolation: isolated
+
+  transport:
+    port: 8080
+    path: /mcp
+    healthcheck:
+      path: /healthz
+      timeoutSeconds: 30
+
+  upstreamAuth:
+    provider: none
+
+  tools:
+    - name: inventory
+      intent: "Snapshot of this cluster's real capabilities, channel kinds, renderers, sandbox classes, MCP catalog, and the caller's effective settings ceilings, and the first-party sidecar images this cluster admits (with the reference to use), and the sign-in flows (providers) an account can be connected with."
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: probe_mcp
+      intent: "List the tools a candidate MCP server exposes (tools/list), through the SSRF-guarded client."
+      args:
+        allowedFields: ["url"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: probe_image
+      intent: "Run a candidate container image and discover the MCP tool surface it declares."
+      args:
+        allowedFields: ["image", "timeout_seconds"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: cli_help
+      intent: "Run a candidate container image's CLI binary with --help to discover its interface."
+      args:
+        allowedFields: ["image", "binary", "args", "timeout_seconds"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: validate_spec
+      intent: "Round-trip a candidate resource's spec content through the real toolspec/MCP/sidecar validators and CEL compile."
+      args:
+        allowedFields: ["kind", "manifest"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: apply
+      intent: "Server-side-apply a candidate custom resource into the workshop, under this sidecar's field manager."
+      args:
+        allowedFields: ["manifest"]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: workshop_draft
+          resourceIDTemplate: "draft"
+          permission: change
+
+    - name: get
+      intent: "Read one custom resource, by kind and name, from the workshop."
+      args:
+        allowedFields: ["kind", "name"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: list
+      intent: "List every custom resource of one kind in the workshop."
+      args:
+        allowedFields: ["kind"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: delete
+      intent: "Delete one custom resource, by kind and name, from the workshop."
+      args:
+        allowedFields: ["kind", "name"]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: workshop_draft
+          resourceIDTemplate: "draft"
+          permission: remove
+
+    - name: render_summary
+      intent: "Plain-language rendering of a custom resource, for approval cards and the running build summary."
+      args:
+        allowedFields: ["manifest", "kind", "name"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: export_draft
+      intent: "Bundle the agent this workshop's builder has authored into a portable .oap draft, stored as a builder-session artifact."
+      permission:
+        stateImpact: stateless
+
+    - name: load_draft
+      intent: "Re-apply a previously exported draft's bundle into this workshop, one apply per object, resuming a build."
+      args:
+        allowedFields: ["oap"]
+      permission:
+        stateImpact: passthrough
+
+    - name: test_tool
+      intent: "Run the agent under construction as a one-shot tester against a representative request and return its tool-results (never its prose). Read-only: use it automatically for read-only tools; get the person's OK before testing a side-effecting one."
+      args:
+        allowedFields: ["class", "request"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: test_link
+      intent: "The ap:agentlink props that send the person to try the agent under construction themselves, in the browser chat."
+      args:
+        allowedFields: ["class", "prompt"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: watch_test
+      intent: "Ask to be told when the person's own test of the agent starts, pauses, ends, or times out."
+      args:
+        allowedFields: ["class", "timeoutMinutes"]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: workshop_draft
+          resourceIDTemplate: "draft"
+          permission: test
+
+    - name: test_sessions
+      intent: "The person's own test sessions of an agent in this workshop, by name and phase."
+      args:
+        allowedFields: ["class"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: read_test_log
+      intent: "Read the current test session's tool-results and tool-errors."
+      args:
+        allowedFields: ["session"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: stop_test
+      intent: "Stop the person's test session; the conversation returns to the builder. Stopping deletes the test conversation and its log, so read the log first."
+      args:
+        allowedFields: ["session"]
+      permission:
+        stateImpact: passthrough
+
+    - name: request_credential
+      intent: "Ask the person to connect a bot/shared credential (an API key, PAT, or static secret to paste, or a shared OAuth-MCP account to authorize) for an AgentIdentity you authored in this workshop. A card with a secure link goes to the person; they enter or authorize it and it lands in the workshop."
+      args:
+        allowedFields: ["identity", "credential", "authKind"]
+      permission:
+        stateImpact: external
+
+    - name: request_install
+      intent: "Ask a platform admin to install the agent this workshop has built. Records the request on the workshop; an admin card (delivered by a later plan) is what the person sees. Once-only: a second call after an install has already been requested is refused, not overwritten."
+      args:
+        allowedFields: ["suggestedName", "bundleDigest"]
+      permission:
+        stateImpact: external
+
+    - name: recommend_capability
+      intent: "Recommend a platform capability this build surfaced a need for — something no existing tool or toolbox covers. Records the recommendation on the workshop for a platform admin to review. Once-only: a second call after one has already been recorded is refused, not overwritten. This tool does not end the session by itself — call agent_work_complete afterward to do that."
+      args:
+        allowedFields: ["summary", "artifactRef", "draftRef"]
+      permission:
+        stateImpact: external
+
+    - name: close_others
+      intent: "Close the person's other open builder workshops (all, or the ones named, by the name shown on the page or the workshop name). A platform admin may name anyone's. Never closes this one. Answers with what was closed, what was refused and why, and anything still being decided."
+      args:
+        allowedFields: ["workshops"]
+      permission:
+        stateImpact: external
+
+    - name: agents_in_thread
+      intent: "List the other agents that have already worked this conversation thread — participants and their own delegated subagents — so a builder picking up mid-thread knows who was here already."
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: project_agent
+      intent: "Project a credential-free practice double of another agent's class — one reachable from this conversation thread — into the workshop, so a hand-off to it can be rehearsed without ever running the real agent."
+      args:
+        allowedFields: ["namespace", "name"]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: workshop_draft
+          resourceIDTemplate: "draft"
+          permission: project
+
+  # The instance the four checks above name. `draft` is a CONSTANT id, which is
+  # what lets a phase approval bind it; see the mirrored header in
+  # pkg/tools/workshopmcp/deploy/sidecartoolbox.yaml for the full ruling.
+  # session-only standing: nothing local governs who may approve a change to a
+  # draft, so the session's own approvers decide. The four permissions carry
+  # `title` (what a card shows in place of the wire handle) and `planningNote`
+  # (what the builder reads while declaring the phase); their `expr` is inert,
+  # because schema.ComposeSlots replaces the expression of every permission a
+  # class slots — the composer owns the EXPR, the prose is published as
+  # declared.
+  spicedbSchema:
+    resources:
+      - name: workshop_draft
+        standing: session-only
+        display: {name: "the draft in this workshop"}
+        relations:
+          - {name: session, subjectType: agentsession}
+        permissions:
+          - name: change
+            expr: session
+            title: "Change this workshop's draft (any of its definitions)"
+            planningNote: >-
+              A phase that changes the draft lists this handle AND declares the
+              workshop_draft slot on the phase (no id needed); the handle alone is
+              refused, and the slot alone would quietly bind change.
+          - name: remove
+            expr: session
+            title: "Remove a definition from this workshop's draft"
+            planningNote: >-
+              List it beside change when a definition will be replaced; a remove
+              without it raises a card.
+          - name: test
+            expr: session
+            title: "Watch a test of this workshop's draft"
+            planningNote: >-
+              The test phase lists it with the slot declared; re-arming the watch
+              then needs no card.
+          - name: project
+            expr: session
+            title: "Project a practice double of another agent into this workshop"
+            planningNote: >-
+              One approval covers every projection in the phase; the platform
+              refuses any agent not already part of this conversation.

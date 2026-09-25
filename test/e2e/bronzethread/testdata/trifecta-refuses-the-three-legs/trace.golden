@@ -1,0 +1,3 @@
+flow  read_unchecked           tool=notes_read_flagged_note
+flow  respond_no_leak
+tag   kind=leaf untrusted=true readers=1 sources=1

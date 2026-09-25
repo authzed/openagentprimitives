@@ -1,0 +1,259 @@
+# Three SpiceboxToolspecs for the reviewbot AgentClass:
+#
+#   demo-reviewbot-git-ro     — clone/fetch/checkout/diff/log/status/show
+#                only. No push, commit, add, reset, tag or remote: reviewbot
+#                reads code, it never changes a repository.
+#   demo-reviewbot-gh-review  — read the PR and this agent's own Check Run
+#                history, read-only (uses gh toolkit → GITHUB_TOKEN →
+#                githubApp, minted ~hourly). The Check Run itself is written
+#                by the framework's trigger-status seam, not by this tool.
+#   demo-reviewbot-claude     — the inner Claude Code that actually performs
+#                the review (uses claude toolkit → ANTHROPIC_API_KEY →
+#                anthropic-api-key, the agent-owned static key in
+#                agentidentity.yaml). This is NOT codebot's claude-oauth:
+#                codebot drives Claude Code with a human's Claude subscription
+#                token (userPassthrough); reviewbot is agent-owned and has no
+#                human session to borrow from, so it uses its own static API
+#                key instead.
+#
+# All three names are prefixed with the agent name: SpiceboxToolspec is
+# CLUSTER-scoped (+kubebuilder:resource:scope=Cluster, same as
+# SpiceboxClass — see spiceboxclasses.yaml's header), so an unprefixed name
+# like `claude` collides with any other bundle that also declares a
+# SpiceboxToolspec/claude. The prefix changes only
+# the toolspec CR's own name (metadata.name / spec.name) — it does NOT
+# change the LLM-facing tool name. That name is
+# "<toolBundle.name>_<class-tool-name>" (e.g. codelike_claude), built from
+# the AgentClass's toolBundles[].name and the SpiceboxClass's spec.tools[]
+# catalog (pkg/agent/tool/sandbox/synthesize.go) — neither field is this
+# CR's own name, so renaming it here does not touch the AgentClass prompt.
+# reviewbot must be structurally unable to comment on a pull request or write to
+# a repository, and must only ever touch repositories the operator approved.
+# That is enforced by THREE independent rings, and every constraint below says
+# which ring it is:
+#
+#   - The OUTER, ENFORCED ring is the GitHub App's permission set —
+#     contents:read, pull_requests:read, metadata:read, checks:write — built
+#     in pkg/channels/channelkinds/github/appprovision/manifest.go and pinned
+#     there by an exact-equality test. A token without issues:write cannot
+#     POST a PR comment no matter what any tool below allows.
+#   - The WRITE-BOUNDARY ring is this file's subcommand allowlists plus the CEL
+#     constraint on `gh api` below. `gh api` will POST anything the token
+#     permits, so the subcommand allowlist alone is not a boundary — the CEL
+#     endpoint constraint is defense in depth behind the App's permission
+#     set, not a second independent guarantee of the same strength.
+#   - The REPOSITORY-ALLOWLIST ring is the config.allowedRepos CEL constraint on
+#     both toolspecs. It bounds WHICH repositories reviewbot may clone/read at
+#     all — the operator sets it at install (spec.config.allowedRepos on the
+#     AgentClass), it is enforced whatever the authz mode, and it is what stops a
+#     Slack-requested review from naming an arbitrary repository. Fail-closed:
+#     an empty allowlist refuses every repository.
+#
+# SpiceboxToolspec is cluster-scoped (no metadata.namespace).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: demo-reviewbot-git-ro
+spec:
+  name: demo-reviewbot-git-ro
+  version: "1"
+  intent: "git, read-only: clone a repo and inspect a pull request's diff"
+  toolkit:
+    name: git
+    revision: "2026-04-24"
+  # No push, commit, add, reset, tag or remote. reviewbot reads code; it never
+  # changes any. The App also grants only contents:read, so this is the inner
+  # of two independent rings.
+  allowSubcommands: [clone, fetch, checkout, diff, log, status, show]
+  constraints:
+    - cel: "call.subcommand != 'clone' || !call.positional['repository'].contains('@')"
+      message: "Do not embed credentials in the clone URL. Auth is supplied automatically via GIT_TOKEN — clone with a plain URL such as https://github.com/owner/repo."
+    - cel: "!call.hasFlag('c') || call.flags['c'].all(v, v.startsWith('user.name=') || v.startsWith('user.email='))"
+      message: "git -c may only set user.name= or user.email=. Any other -c key — core.sshCommand, url.*.insteadOf, http.*.extraHeader, credential.helper, alias.*, include.path — is rejected."
+    # The repository allowlist RING (third of three — see the file header). Every
+    # call that names a repository (clone/fetch resolve call.resourceId to the
+    # canonical https://github.com/OWNER/REPO via the toolkit's github_repo_id
+    # transform) must match an entry in config.allowedRepos, bound by the
+    # operator at install (spec.config.allowedRepos on the AgentClass). A
+    # local/workspace op (status/diff/log/show) resolves call.resourceId to ""
+    # and is not gated. A non-github or off-allowlist remote matches nothing and
+    # is refused — closing the "clone any public URL" hole. Empty allowlist ⇒
+    # exists() over [] is false ⇒ every repo refused (fail-closed).
+    - cel: "call.resourceId == '' || config.allowedRepos.exists(r, glob.match('https://github.com/' + r, call.resourceId))"
+      message: "This repository is not in reviewbot's allowlist (spec.config.allowedRepos, set by the operator at install). reviewbot may only clone and read repositories that were approved."
+  sensitive:
+    env: [GIT_TOKEN]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: demo-reviewbot-gh-review
+spec:
+  name: demo-reviewbot-gh-review
+  version: "1"
+  intent: "gh, for reading a pull request and this agent's check-run history"
+  toolkit:
+    name: gh
+    revision: "2026-05-01"
+  # No "pr diff": the builtin `gh` toolkit does not declare it as a subcommand,
+  # and a toolspec naming one it does not know makes this CR Valid=False —
+  # which takes every AgentClass binding it down with it. The diff comes from
+  # `gitlike_git diff` against the cloned workspace instead, which is the
+  # better source anyway: it is the whole repository at the reviewed SHA, not
+  # the API's rendering of a range.
+  allowSubcommands: ["api", "pr view", "pr checks", "auth status"]
+  constraints:
+    # `api` has to be allowed (reading Check Run history needs it) and, left
+    # unconstrained, will POST anything the token permits, so the subcommand
+    # allowlist is NOT a boundary on its own. Constrain the endpoint — and the
+    # method/body/hostname flags below — too: two independent rings, neither
+    # trusting the other. The App's permission set (see the file header) is the outer,
+    # ENFORCED ring — a token without issues:write cannot post a PR comment no
+    # matter what this expression allows. This CEL is the inner ring: defense
+    # in depth behind that permission set, not a standalone guarantee.
+    #
+    # This expression is a hand-maintained PARALLEL COPY of ghReviewEndpointCEL
+    # in pkg/tools/toolspec/reviewbot_constraints_test.go. That Go test exists
+    # because no test in this repo may reference anything under examples/ (see
+    # CLAUDE.md) — so it pins the CEL expression's semantics as a Go constant
+    # rather than reading this file. The two copies are kept in sync BY HAND;
+    # nothing derives one from the other, so an edit here that isn't mirrored
+    # there (or vice versa) will not be caught by that test, or by anything
+    # else. This file is user-facing demo material (examples/), not something
+    # any test exercises directly.
+    #
+    # CEL's matches() is an unanchored substring search, not a full match:
+    # only the trailing `$` after the alternation group anchors the END of
+    # every branch (the leading `^` anchors the start). Without it, an
+    # endpoint like "repos/o/r/check-runs/../../../repos/o/r/issues/1/comments"
+    # satisfies "^repos/[^/]+/[^/]+/check-runs" as a mere PREFIX and passes —
+    # this is the inner ring only (the App's permission set is what actually
+    # refuses the write), but the inner ring should hold on its own too. The
+    # explicit `..` rejection is defense in depth on top of the anchor, not a
+    # substitute for it.
+    #
+    # It is now READ-ONLY: no method/body/hostname flags, and no POST-only
+    # endpoint. gh defaults to GET; `-X`/`--method` chooses any verb; `-f`/`-F`
+    # (`--raw-field`/`--field`) add a body and silently flip the method to
+    # POST; `--input` supplies a body file; `--hostname` reroutes the request.
+    # The gh toolkit normalizes short flags onto long names (toolkits/gh.yaml
+    # declares `{long: method, short: X}` etc.), so `hasFlag('method')` covers
+    # `-X` too. The bare `repos/*/*/check-runs` endpoint (POST-create only on
+    # GitHub's API) is dropped; `check-runs/[0-9]+` (single-run read) is
+    # added. Check-run WRITES go exclusively through the framework's
+    # trigger-status seam, which the App's checks:write exists for.
+    #
+    # pulls/N/commits is in the read set for the Slack mention: it is the one
+    # endpoint that maps the PR author's login to a commit email server-side
+    # (GitHub itself attributes each commit to an account), which
+    # lookup_user_for_mention then resolves to a Slack user. Read-only, same
+    # repos/ family, still behind the repo allowlist below.
+    - cel: "call.subcommand != 'api' || (!call.hasFlag('method') && !call.hasFlag('field') && !call.hasFlag('raw-field') && !call.hasFlag('input') && !call.hasFlag('hostname') && !call.positional['endpoint'].contains('..') && call.positional['endpoint'].matches('^repos/[^/]+/[^/]+/(check-runs/[0-9]+|pulls/[0-9]+|pulls/[0-9]+/files|pulls/[0-9]+/commits|commits/[0-9a-f]+/check-runs)$'))"
+      message: "gh api is read-only here: GET, on check-run and PR read endpoints only. reviewbot never writes to GitHub through gh — the check run is written by the framework's trigger-status seam, and reviewbot does not comment on pull requests or modify repositories."
+    # `pr view` / `pr checks` name their repository ONLY through --repo (the
+    # {repo} template the check reads); a positional PR selector or the
+    # working-directory remote is invisible to authorization, so without --repo
+    # call.resourceId resolves to "" and the allowlist below would treat the
+    # call as a local op and let it through — reading a pull request in a repo
+    # nobody allowlisted. Require --repo on both so the repository is always
+    # named and always gated. (gh api names its repo in the endpoint, so it does
+    # not need this; auth status names none.)
+    - cel: "(call.subcommand != 'pr view' && call.subcommand != 'pr checks') || call.hasFlag('repo')"
+      message: "Pass --repo OWNER/NAME to `gh pr view` / `gh pr checks`. reviewbot authorizes the repository from --repo; a positional selector or the working-directory remote is not visible to the allowlist and is refused."
+    # `pr view`'s stdout must be the forge's own answer, verbatim. `--jq EXPR`
+    # and `--template EXPR` each run that response through a filter program
+    # and REPLACE stdout with whatever it prints — the model's own choice of
+    # text, not the forge's. The two writesRelationships blocks below (end of
+    # this spec) read result.stdoutJSON on exactly that assumption: the
+    # author/repo identity tuples are minted from `gh pr view`'s own JSON,
+    # unfiltered. --template is refused ahead of need: `gh pr view` does not
+    # declare it today (pinned by toolkits/gh_pr_view_flags_test.go), so this
+    # half of the clause is inert until it does — a live stop the day it is.
+    # This expression is a hand-maintained PARALLEL COPY of ghPRViewNoJqCEL in
+    # pkg/tools/toolspec/reviewbot_pr_relwrites_test.go, and of the identical
+    # constraint on the e2e fixture toolspec
+    # (test/e2e/testdata/agent-pr-identity-e2e/02-toolspec.yaml) — same
+    # reasoning as ghReviewEndpointCEL above for why that Go constant exists
+    # (no test may reference examples/); all three copies are kept in sync BY
+    # HAND.
+    - cel: "call.subcommand != 'pr view' || (!call.hasFlag('jq') && !call.hasFlag('template'))"
+      message: "gh pr view may not use --jq or --template here: either would let the model reshape the forge's own JSON response before any block reads it."
+    # The repository allowlist RING (third of three — see the file header), the
+    # SAME constraint the git-ro toolspec carries. gh api / pr view / pr checks
+    # resolve call.resourceId to the canonical https://github.com/OWNER/REPO
+    # (the endpoint's or --repo's OWNER/NAME, via github_repo_id — one id shared
+    # with git-ro), which must match config.allowedRepos. `auth status` names no
+    # repository (call.resourceId == "") and is not gated. Empty allowlist ⇒
+    # every repo refused (fail-closed).
+    - cel: "call.resourceId == '' || config.allowedRepos.exists(r, glob.match('https://github.com/' + r, call.resourceId))"
+      message: "This repository is not in reviewbot's allowlist (spec.config.allowedRepos, set by the operator at install). reviewbot may only clone and read repositories that were approved."
+  sensitive:
+    env: [GITHUB_TOKEN, GH_TOKEN]
+  # The two blocks below are a hand-maintained PARALLEL COPY of the fixture
+  # SpiceboxToolspec's own blocks
+  # (test/e2e/testdata/agent-pr-identity-e2e/02-toolspec.yaml) and of the
+  # pinned CEL in pkg/tools/toolspec/reviewbot_pr_relwrites_test.go
+  # (ghPRAuthorWhenCEL/ghPRAuthorResourceCEL/ghPRAuthorSubjectCEL and their
+  # ghPRRepo* siblings) — three copies, kept in sync BY HAND, because no test
+  # in this repo may reference examples/ (see CLAUDE.md). The fixture is
+  # where the write path is proven end to end against a real SpiceDB, by
+  # test/e2e/scenarios/resourcepool/pr_identity_write_test.go and
+  # trigger_slot_binding_test.go.
+  #
+  # Both blocks declare requireSlotBound: true — github_user is a reserved
+  # scaffold subject type (pkg/authz/relwrites/reserved_types.go), and
+  # ValidateSlotBoundSubject refuses a github_user subject from any block
+  # that doesn't. What satisfies the gate is agentclass.yaml's own
+  # authz.slots entry on github_pull_request/write_memory (fillFrom
+  # trigger): the pipeline binds the triggering pull request into that slot
+  # at session mint, before either block below ever runs — there is no
+  # approval step and no human in this loop, only the verified webhook
+  # delivery itself.
+  #
+  # The repo tuple's subject is headRepository, which is the FORK on a
+  # cross-repository pull request — so its own `when` clause only fires
+  # when `!isCrossRepository`, and a fork pull request writes the author
+  # tuple alone. See ghPRRepoWhenCEL's comment in the Go test file above for
+  # why (no baseRepository field in this toolkit's pinned gh revision).
+  #
+  # Both `when` clauses need `id` on every call, and the repo block also
+  # needs `isCrossRepository` and `headRepository`. The system prompt
+  # (agentclass.yaml)'s gate 0b is the FIRST `gh pr view` this class issues
+  # in the triggered flow, and its instructed selection is
+  # `--json id,author,isCrossRepository,headRepository` for exactly this
+  # reason: narrowing that selection to omit any of these fields would make
+  # the model's own PR read satisfy neither block's `when` clause on any
+  # real review, silently dropping the write path this file exists to carry.
+  writesRelationships:
+    - when: 'size(args.argv) > 1 && args.argv[0] == "pr" && args.argv[1] == "view" && has(result.stdoutJSON) && has(result.stdoutJSON.id) && has(result.stdoutJSON.author)'
+      requireSlotBound: true
+      tuple:
+        resource: '"github_pull_request:" + result.stdoutJSON.id'
+        relation: '"author"'
+        subject: '"github_user:" + result.stdoutJSON.author.id'
+    - when: 'size(args.argv) > 1 && args.argv[0] == "pr" && args.argv[1] == "view" && has(result.stdoutJSON) && has(result.stdoutJSON.id) && has(result.stdoutJSON.isCrossRepository) && !result.stdoutJSON.isCrossRepository && has(result.stdoutJSON.headRepository) && has(result.stdoutJSON.headRepository.id)'
+      requireSlotBound: true
+      tuple:
+        resource: '"github_pull_request:" + result.stdoutJSON.id'
+        relation: '"repo"'
+        subject: '"github_repo:" + result.stdoutJSON.headRepository.id'
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: demo-reviewbot-claude
+spec:
+  name: demo-reviewbot-claude
+  version: "1"
+  intent: "the inner Claude Code that performs the review, loading the review-pr and/or differential-review skill"
+  toolkit:
+    name: claude
+    revision: "2026-05-19"
+  # claude's only subcommand has path: [] (the bare binary); the validator
+  # joins an empty path to the empty string, so "" is the allow-list key that
+  # admits it.
+  allowSubcommands:
+    - ""
+  sensitive:
+    env:
+      - ANTHROPIC_API_KEY

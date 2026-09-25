@@ -1,0 +1,662 @@
+name: docker
+version: "1"
+toolkitRevision: "2026-09-09"
+target:
+  binary: docker
+  versionRange: ">=20.0.0"
+  versionProbe:
+    args: ["version", "--format", "{{.Client.Version}}"]
+    extract:
+      kind: line1
+parser:
+  kind: declarative
+
+env:
+  allowed:
+    - {name: DOCKER_HOST,          description: "Daemon socket to connect to"}
+    - {name: DOCKER_TLS_VERIFY,    description: "Enable TLS verification"}
+    - {name: DOCKER_CERT_PATH,     description: "Path to TLS certificates"}
+    - {name: DOCKER_BUILDKIT,      description: "Enable BuildKit for image builds"}
+    - {name: COMPOSE_PROJECT_NAME, description: "Default project name for Compose"}
+    - {name: HTTPS_PROXY,          description: "HTTP proxy for network operations"}
+
+globalFlags:
+  - {long: help,               short: h, type: bool}
+  - {long: config,                       type: path}
+  - {long: context,            short: c, type: string}
+  - {long: debug,              short: D, type: bool}
+  - {long: host,               short: H, type: string}
+  - {long: log-level,          short: l, type: string}
+  - {long: tls,                          type: bool}
+  - {long: tlscacert,                    type: path}
+  - {long: tlscert,                      type: path}
+  - {long: tlskey,                       type: path}
+  - {long: tlsverify,                    type: bool}
+  - {long: version,            short: v, type: bool}
+
+permission:
+  stateImpact: passthrough
+
+# The SpiceDB resource type the checks below name. `owner` is the only relation
+# and every permission resolves to it -- the minimum that makes the checks
+# answerable, not a recommendation.
+#
+# It is no longer the shape gh.yaml's types have, and this comment used to say
+# it was: both github types there now carry forge-synced role relations
+# (github_repo's admin/maintain/write/triage/reader, github_repo_url's repo
+# join), and github_repo's own `owner` is an inert compatibility shim nothing
+# writes. Read gh.yaml before reaching for it as a model.
+#
+# The id is CONSTANT, and that is the honest answer here rather than a
+# limitation worked around. A sandbox reaches exactly one Docker daemon; which
+# one is decided by DOCKER_HOST or -H, neither of which is a reliable argv
+# value, and there is no per-container or per-image axis that would mean
+# anything to an approver anyway -- approving "remove container X" and "remove
+# container Y" are the same decision about the same daemon. One instance, so
+# one grant, cleared by a person and scoped to this session.
+spicedbSchema:
+  resources:
+    - name: docker_daemon
+      # The daemon governs itself; SpiceDB does not, so there is no local
+      # permission to consult for who may approve.
+      standing: session-only
+      relations:
+        - {name: owner, subjectType: user}
+      display: {name: "Docker daemon"}
+      permissions:
+        - {name: write, expr: owner, title: "Run, change and remove containers and images on the Docker daemon"}
+
+subcommands:
+  - path: [ps]
+    description: "List containers"
+    flags:
+      - {long: all,             short: a, type: bool}
+      - {long: filter,          short: f, type: string}
+      - {long: format,                    type: string}
+      - {long: last,            short: "n", type: int}
+      - {long: latest,          short: l, type: bool}
+      - {long: no-trunc,                  type: bool}
+      - {long: quiet,           short: q, type: bool}
+      - {long: size,            short: s, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [images]
+    description: "List images"
+    positional:
+      - {name: repository, type: string, required: false}
+    flags:
+      - {long: all,     short: a, type: bool}
+      - {long: digests,           type: bool}
+      - {long: filter,  short: f, type: string}
+      - {long: format,            type: string}
+      - {long: no-trunc,          type: bool}
+      - {long: quiet,   short: q, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [inspect]
+    description: "Return low-level information on Docker objects"
+    positional:
+      - {name: name, type: string, required: true}
+    flags:
+      - {long: format, short: f, type: string}
+      - {long: size,   short: s, type: bool}
+      - {long: type,             type: string}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [logs]
+    description: "Fetch the logs of a container"
+    positional:
+      - {name: container, type: string, required: true}
+    flags:
+      - {long: details,             type: bool}
+      - {long: follow,   short: f,  type: bool}
+      - {long: since,               type: string}
+      - {long: until,               type: string}
+      - {long: tail,     short: "n",  type: string}
+      - {long: timestamps, short: t, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [stats]
+    description: "Display a live stream of container resource usage statistics"
+    positional:
+      - {name: container, type: string, required: false}
+    flags:
+      - {long: all,              short: a, type: bool}
+      - {long: format,                     type: string}
+      - {long: no-stream,                  type: bool}
+      - {long: no-trunc,                   type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [build]
+    description: "Build an image from a Dockerfile"
+    positional:
+      - {name: path, type: path, required: true}
+    flags:
+      - {long: tag,              short: t, type: string}
+      - {long: file,             short: f, type: path}
+      - {long: build-arg,                  type: string}
+      - {long: no-cache,                   type: bool}
+      - {long: pull,                       type: bool}
+      - {long: quiet,            short: q, type: bool}
+      - {long: target,                     type: string}
+      - {long: platform,                   type: string}
+      - {long: label,                      type: string}
+      - {long: network,                    type: string}
+      - {long: progress,                   type: string}
+      - {long: rm,                         type: bool}
+      - {long: force-rm,                   type: bool}
+    effects:
+      destructive: false
+      reads:  [filesystem, network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [run]
+    description: "Run a command in a new container. Destructive: true because --rm can remove the container; containers may modify host volumes."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    positional:
+      - {name: image,   type: string, required: true}
+      - {name: command, type: string, required: false}
+    flags:
+      - {long: rm,                   type: bool}
+      - {long: detach,   short: d,   type: bool}
+      - {long: interactive, short: i, type: bool}
+      - {long: tty,      short: t,   type: bool}
+      - {long: name,                 type: string}
+      - {long: env,      short: e,   type: string}
+      - {long: env-file,             type: path}
+      - {long: volume,   short: v,   type: string}
+      - {long: mount,                type: string}
+      - {long: publish,  short: p,   type: string}
+      - {long: network,              type: string}
+      - {long: platform,             type: string}
+      - {long: user,     short: u,   type: string}
+      - {long: workdir,  short: w,   type: path}
+      - {long: entrypoint,           type: string}
+      - {long: label,    short: l,   type: string}
+      - {long: restart,              type: string}
+      - {long: memory,   short: m,   type: string}
+      - {long: cpus,                 type: string}
+      - {long: pull,                 type: string}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [create]
+    description: "Create a new container"
+    positional:
+      - {name: image,   type: string, required: true}
+      - {name: command, type: string, required: false}
+    flags:
+      - {long: name,                 type: string}
+      - {long: env,      short: e,   type: string}
+      - {long: env-file,             type: path}
+      - {long: volume,   short: v,   type: string}
+      - {long: mount,                type: string}
+      - {long: publish,  short: p,   type: string}
+      - {long: network,              type: string}
+      - {long: platform,             type: string}
+      - {long: user,     short: u,   type: string}
+      - {long: workdir,  short: w,   type: path}
+      - {long: entrypoint,           type: string}
+      - {long: label,    short: l,   type: string}
+      - {long: restart,              type: string}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [start]
+    description: "Start one or more stopped containers"
+    positional:
+      - {name: container, type: string, required: true}
+    flags:
+      - {long: attach,       short: a, type: bool}
+      - {long: interactive,  short: i, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [stop]
+    description: "Stop one or more running containers. Destructive: true because it terminates container processes."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    positional:
+      - {name: container, type: string, required: true}
+    flags:
+      - {long: time, short: t, type: int}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [restart]
+    description: "Restart one or more containers. Destructive: true because it interrupts running processes."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    positional:
+      - {name: container, type: string, required: true}
+    flags:
+      - {long: time, short: t, type: int}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [kill]
+    description: "Kill one or more running containers by sending a signal. Destructive: true because it forcibly terminates container processes."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    positional:
+      - {name: container, type: string, required: true}
+    flags:
+      - {long: signal, short: s, type: string}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [rm]
+    description: "Remove one or more containers. Destructive: true because it permanently deletes container data."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    positional:
+      - {name: container, type: string, required: true}
+    flags:
+      - {long: force,    short: f, type: bool}
+      - {long: link,     short: l, type: bool}
+      - {long: volumes,  short: v, type: bool}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [pull]
+    description: "Pull an image or a repository from a registry"
+    positional:
+      - {name: name, type: string, required: true}
+    flags:
+      - {long: all-tags,    short: a, type: bool}
+      - {long: disable-content-trust, type: bool}
+      - {long: platform,              type: string}
+      - {long: quiet,       short: q, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [push]
+    description: "Push an image or a repository to a registry. Destructive: true because it can overwrite remote tags."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    positional:
+      - {name: name, type: string, required: true}
+    flags:
+      - {long: all-tags,    short: a, type: bool}
+      - {long: disable-content-trust, type: bool}
+      - {long: quiet,       short: q, type: bool}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [tag]
+    description: "Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE"
+    positional:
+      - {name: source-image, type: string, required: true}
+      - {name: target-image, type: string, required: true}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [rmi]
+    description: "Remove one or more images. Destructive: true because it permanently deletes image layers from local storage."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    positional:
+      - {name: image, type: string, required: true}
+    flags:
+      - {long: force,     short: f, type: bool}
+      - {long: no-prune,            type: bool}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [save]
+    description: "Save one or more images to a tar archive (streamed to STDOUT by default)"
+    positional:
+      - {name: image, type: string, required: true}
+    flags:
+      - {long: output, short: o, type: path}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [load]
+    description: "Load an image from a tar archive or STDIN. Destructive: true because it can overwrite existing local image tags."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    flags:
+      - {long: input,   short: i, type: path}
+      - {long: quiet,   short: q, type: bool}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [network, ls]
+    description: "List networks"
+    flags:
+      - {long: filter, short: f, type: string}
+      - {long: format,           type: string}
+      - {long: no-trunc,         type: bool}
+      - {long: quiet,  short: q, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [volume, ls]
+    description: "List volumes"
+    flags:
+      - {long: filter, short: f, type: string}
+      - {long: format,           type: string}
+      - {long: quiet,  short: q, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [compose, up]
+    description: "Create and start containers defined in a Compose file. Destructive: true because it modifies container and network state."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    positional:
+      - {name: service, type: string, required: false}
+    flags:
+      - {long: detach,          short: d,  type: bool}
+      - {long: build,                      type: bool}
+      - {long: no-build,                   type: bool}
+      - {long: pull,                       type: string}
+      - {long: force-recreate,             type: bool}
+      - {long: no-recreate,                type: bool}
+      - {long: remove-orphans,             type: bool}
+      - {long: scale,                      type: string}
+      - {long: timeout,         short: t,  type: int}
+      - {long: wait,                       type: bool}
+      - {long: file,            short: f,  type: path}
+      - {long: project-name,    short: p,  type: string}
+    effects:
+      destructive: true
+      reads:  [filesystem, network]
+      writes: [filesystem, network]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [compose, down]
+    description: "Stop and remove containers, networks, volumes, and images. Destructive: true because it permanently removes resources."
+    # Destructive by this file's own declaration, so it cannot inherit the
+    # toolkit-wide passthrough: that is a terminal allow at every gate — no
+    # authorization check, no handle, invisible to the plan gate and to every
+    # approval card. With no SpiceDB resource model for the Docker daemon there
+    # is no instance axis to check against, so external is the honest answer:
+    # it denies with "human approval required" and routes the call to a card.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: docker_daemon
+        resourceIDTemplate: "local"
+        permission: write
+    positional:
+      - {name: service, type: string, required: false}
+    flags:
+      - {long: volumes,         short: v,  type: bool}
+      - {long: rmi,                        type: string}
+      - {long: remove-orphans,             type: bool}
+      - {long: timeout,         short: t,  type: int}
+      - {long: file,            short: f,  type: path}
+      - {long: project-name,    short: p,  type: string}
+    effects:
+      destructive: true
+      reads:  [filesystem, network]
+      writes: [filesystem, network]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [compose, build]
+    description: "Build or rebuild services"
+    positional:
+      - {name: service, type: string, required: false}
+    flags:
+      - {long: build-arg,               type: string}
+      - {long: no-cache,                type: bool}
+      - {long: pull,                    type: bool}
+      - {long: push,                    type: bool}
+      - {long: quiet,       short: q,   type: bool}
+      - {long: file,        short: f,   type: path}
+      - {long: project-name, short: p,  type: string}
+    effects:
+      destructive: false
+      reads:  [filesystem, network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [compose, logs]
+    description: "View output from containers"
+    positional:
+      - {name: service, type: string, required: false}
+    flags:
+      - {long: follow,      short: f,   type: bool}
+      - {long: tail,                    type: string}
+      - {long: timestamps,  short: t,   type: bool}
+      - {long: no-color,                type: bool}
+      - {long: no-log-prefix,           type: bool}
+      - {long: since,                   type: string}
+      - {long: until,                   type: string}
+      - {long: file,        short: f,   type: path}
+      - {long: project-name, short: p,  type: string}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [compose, ps]
+    description: "List containers for a Compose project"
+    positional:
+      - {name: service, type: string, required: false}
+    flags:
+      - {long: all,           short: a, type: bool}
+      - {long: filter,                  type: string}
+      - {long: format,                  type: string}
+      - {long: quiet,         short: q, type: bool}
+      - {long: services,                type: bool}
+      - {long: status,                  type: string}
+      - {long: file,          short: f, type: path}
+      - {long: project-name,  short: p, type: string}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}

@@ -1,0 +1,42 @@
+# graphiti: the knowledge-graph entity-extraction API (OPTIONAL component).
+#
+# Ingress on 8000 from the operator (KG search + ingest). Egress to neo4j 7687
+# (its graph backend) and to external HTTPS 443 (the LLM it calls for entity
+# extraction); DNS is supplied by the cluster-wide allow-dns policy. graphiti is
+# NOT in egress-external's selector, so it needs its own egress rules here.
+#
+# The core memory stack runs without graphiti; these allows simply let it
+# function on an enforcing CNI instead of silently failing under default-deny.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: graphiti
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-graphiti
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-operator
+      ports:
+        - { protocol: TCP, port: 8000 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentprimitives-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-neo4j
+      ports:
+        - { protocol: TCP, port: 7687 }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { protocol: TCP, port: 443 }

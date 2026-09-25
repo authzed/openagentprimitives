@@ -1,0 +1,67 @@
+{
+  "name": "plangate-enforcing-denies",
+  "description": "Enforcing mode refuses a call outside the approved ceiling. Phase 0 declares only `tool:apply_workspace`, which is dropped as not on this session permission surface, so the ceiling is empty and list_companies falls outside it; the gate records a denied outcome and asks for a plan amendment.\n\nThis bundle was previously GREEN FOR THE WRONG REASON and then PARKED, and both are worth remembering. Green: every MCP call in the suite was failing arg validation (`operation_id` and `_reason` are required, with the real args nested under `args`), so the tool never dispatched and the gate never reached its amendment path — invisible because no bundle asserted on tool result CONTENT. Parked: with the args fixed the session hung, which looked like harness trouble but was a product bug — the runner resumed only a hardcoded list of interaction categories, so an applied plan_phase or plan_amendment decision was dropped and the gate blocked until timeout.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-enforcing"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "userTurns": ["list the companies"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "write the summary", "status": "pending", "phase": "writeup" }
+              ],
+              "phases": [
+                {
+                  "id": "writeup",
+                  "label": "Write up findings",
+                  "why": "I thought I only needed to write a summary",
+                  "permissions": [
+                    { "handle": "tool:apply_workspace", "why": "to write the summary file" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies" },
+      "reply": [{ "text": "I could not list the companies: that reach is not in my approved plan." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "blocked" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["not in my approved plan"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "outcomes": { "centerdot_list_companies": "denied" }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "preferences-readback-after-tool",
+  "description": "Regression for the mid-tool-loop preference-read bug. Within a SINGLE turn the agent reads preferences (get_preferences) BEFORE saving, so by the time set_preference runs there is already a tool_result turn in the transcript — stored role \"user\" (the LLM protocol models a tool result as a user-role message) with an EMPTY Author. set_preference's own readback then re-resolves the current user, and it must key off the human message turn, not that later tool_result, so it reports the value it just saved (source: user) rather than falling through to the class default.\n\nresolvePreferencesTurnAuthor once took the highest-index user-role turn's Author unconditionally; a tool_result is role \"user\" with no Author, so mid-loop it resolved an empty author, skipped the user-scope read, and every preference read returned the default. In production the agent then believed the save had failed and re-prompted (the user approved the same save twice). preferences-save-and-recall never caught this: it recalls on a SEPARATE turn, where the latest user turn IS the human message (authored). This bundle keeps the read in the same turn as a prior tool call, which is the only shape that exercises the empty-author path.\n\nEach user turn is more than one LLM step: after respond_to_user the runner makes one more model call carrying that tool's result, and only agent_work_complete ends the turn.",
+
+  "agentDir": "testdata/agent-prefdemo",
+  "agentClass": "prefdemo",
+  "autoApprove": ["user_preference_confirm"],
+
+  "userTurns": ["check my current language setting, then set it to German"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "German", "toolOffered": "get_preferences" },
+      "reply": [{ "toolUse": { "name": "get_preferences", "args": {} } }]
+    },
+    {
+      "expect": { "lastToolResult": "get_preferences", "lastToolResultContains": "\"source\": \"default\"" },
+      "reply": [{ "toolUse": { "name": "set_preference", "args": { "key": "language", "value": "de" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "set_preference", "lastToolResultContains": "(source: user)" },
+      "reply": [{ "text": "Gespeichert — language is set to de." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "read current language, then saved German" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["language is set to de"],
+    "approvalPrompts": 1,
+    "toolsCalled": ["get_preferences", "set_preference"]
+  }
+}

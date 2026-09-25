@@ -1,0 +1,67 @@
+export const meta = {
+  title: 'AgentUI',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3060,
+  description: 'AgentUI is a bundle-authored DECLARATION of an agent-defined view: a page',
+}
+
+# AgentUI
+
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `aui`
+
+AgentUI is a bundle-authored DECLARATION of an agent-defined view: a page
+tree in which generative hooks are the agent's regions, plus the tools and
+actions the view asks the browser be allowed to fire. It is a declaration,
+not a web app.
+
+Namespaced. Reconciled by pkg/controllers/agentui, which validates the whole
+page against the platform component vocabulary and observes both its hook
+table and an eligibility ceiling onto status. Naming a tool here authorizes
+nothing: the deployment half of the grant lives on AgentClass.spec.agentUI, a
+separate object with a separate writer, and the runner still re-authorizes
+every click.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.actions` | `[]object` | Actions is the bundle-authored action table this UI's controls may fire — see AgentUIAction's doc comment for why the tool and args template live here, server-side, rather than in a control's own props. Like Tools, naming a tool here is a REQUEST: it authorizes nothing by itself, and both the deployment grant and the runner's per-click, viewer-bound re-authorization still run. |
+| `spec.actions[].args` | `object (free-form)` | Args is the args template, held as raw JSON for the same reason AgentUISlot.Default is: CRD types must not depend on pkg/web/uicomponents. |
+| `spec.actions[].inputs` | `[]string` | Inputs names the values a CONTROL may supply at invoke time — a server-side allowlist enforced by pkg/web/uicomponents' validateActions (unique names, disjoint from every binding parameter name). |
+| `spec.actions[].name` \* | `string` | Name is how a control refers to this action; unique within the UI. |
+| `spec.actions[].prompt` | `string` | Prompt makes this action ASK THE AGENT instead of calling a tool: the control sends this text to the session as a message from the viewer. It covers "summarize this" or "tell me about this row", which are not tool calls, and grants nothing new — the message is one the viewer could have typed themselves, on the same route under the same authorization and attributed to them. &#123;key&#125; placeholders name a binding parameter or one of this action's Inputs, so a row's values can reach the sentence. The length cap is generous but real: a prompt long enough to be a document belongs in spec.systemPrompt, where standing instructions live. |
+| `spec.actions[].tool` | `string` | Tool carries the same normalize alphabet as AgentUISpec.Tools, for the same reason. Optional because an action may declare a Prompt instead: exactly one of Tool and Prompt is set, enforced by pkg/web/uicomponents' validateActions rather than the apiserver, since "exactly one of these two" in CEL buys a worse message than the validator's own. |
+| `spec.chrome` | `object` | Chrome carries presentation requests for the surrounding session shell. |
+| `spec.chrome.initialState` | `string` | InitialState is how the session shell should first appear; the user's own toggle overrides it thereafter. _(enum: expanded \| collapsed)_ |
+| `spec.displayName` | `string` | DisplayName is the human label for this view; empty falls back to the CR name. |
+| `spec.slots` | `[]object` | Slots is the page's LEGACY flat shape — named regions in a row. Still accepted: the controller compiles each agentWritable slot into a hook (allowedComponents ["*"]) inside a root ap:stack and validates the result exactly as it would a View. New pages declare View. |
+| `spec.slots[].agentWritable` | `boolean` | AgentWritable permits the agent to overwrite this slot at runtime. Default false: a slot is author-owned unless it opts in. |
+| `spec.slots[].default` | `object (free-form)` | Default is the Tier-0 declaration node rendered with NO agent turn involved — which is what lets a brand-new session paint a complete UI on first load. Held as raw JSON because CRD types must not depend on pkg/web/uicomponents; the controller validates it against the vocabulary at reconcile time. |
+| `spec.slots[].name` \* | `string` | Name is the slot identifier a declaration node targets; unique per UI. |
+| `spec.tools` | `[]string` | Tools is what this UI REQUESTS the browser be able to call directly — one of three conditions (see pkg/web/uigrant). A tool named here is callable only if its origin also permits app-visible calls AND the deployment granted it. The item pattern is exactly the output alphabet of synthesize.NormalizeName, the transform every synthesized tool name passes through to become a Loop.AppTools key, and is the same pattern AgentClass.spec.agentUI.grantedTools carries. Pinning both vocabularies to it makes them identical by construction: a camelCase "widgets_createIssue" is rejected loudly at write time instead of validating clean, matching clean against an equally-unnormalized grantedTools, and dying as a dead button with no denial log anywhere. A CRD pattern is not retroactive: objects persisted before it can still carry non-conforming names until next written, so the runner's normalize step MUST NOT be deleted as redundant. |
+| `spec.view` | `object (free-form)` | View is the page: one component tree in which every oap:generative node is a region the agent may fill (its name, intent, and the components the AGENT may put there). Held as raw JSON for the same reason AgentUISlot.Default is — CRD types must not depend on pkg/web/uicomponents; the controller validates it at reconcile time. Exactly one of View and Slots is set; the controller (not CEL) enforces it, for the same "better message" reason AgentUIAction's tool/prompt exclusivity is checked there. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` | Conditions carries Valid and ToolsGranted; see their type constants. |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.eligibleTools` | `[]string` | EligibleTools is a CEILING, not a grant: spec.tools intersected with the UNION of GrantedTools across every AgentClass naming this AgentUI. It stops there and does NOT filter by per-origin app-visibility, because which origins resolve at all is SESSION-scoped — a property of the AgentSession, unknowable to this namespaced CR. The union is SOUND IN THE REJECT DIRECTION for this field's one purpose, gating which tool names a Tier-0 slot default may bind to: a tool outside it is one NO referencing class could ever grant, so rejecting the binding is never a false negative. Deliberately not called "fail-closed" — that describes the ACCEPT direction, where the union is the LOOSEST choice among referencing classes, and carrying that framing elsewhere would be false. One AgentUI may be deployed by several classes with different grants, so there is no single "the grant" to observe here in principle. OPERATOR-FACING OBSERVATION ONLY — an admin UI showing "tools a bundle could ever bind to". It MUST NOT be read as, or fed into, an authorization decision: the narrower per-session EFFECTIVE set the runner computes against live-resolved origins is what gates a real tool call. Status-subresource only; a client applying spec must never send it. |
+| `status.hooks` | `[]object` | Hooks lists the page's generative regions after the spec.slots shim, so an operator can see what the agent may write without compiling the page themselves. A pure function of spec: written only when the page was validated, and cleared whenever it is not; preserved across a transient grant-resolve failure (Valid=Unknown), the same as EligibleTools, since that failure means this reconcile never re-validated the page at all. |
+| `status.hooks[].allowedComponents` | `[]string` | AllowedComponents is the component vocabulary this hook accepts; "*" permits any registered component. |
+| `status.hooks[].intent` | `string` | Intent is the author's guidance for what the agent should put here. |
+| `status.hooks[].name` \* | `string` | Name is the hook's identifier, unique within the page. |
+
+<small>\* required</small>
+

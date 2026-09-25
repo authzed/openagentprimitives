@@ -1,0 +1,11 @@
+{
+  "request": {
+    "action": "advance",
+    "params": { "lead": "l-1" },
+    "inputs": { "why": "ready" }
+  },
+  "response": {
+    "state": "submitted",
+    "message": "Advancing the lead."
+  }
+}

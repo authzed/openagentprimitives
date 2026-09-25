@@ -1,0 +1,78 @@
+{
+  "name": "precondition-fork-approved",
+  "description": "The APPROVED half of the fork gate: same fixture as precondition-fork-gated, but the waiver is auto-APPROVED, and the checkout is called TWICE to prove the grant the waiver writes PERSISTS. A pull_request webhook opens the session; its head is on a fork, so the github kind records envelope fact head_is_fork=true keyed to the head OID. The FIRST checkout of that OID is Refused by the git_commit slot's `requires: [!facts.envelope.head_is_fork]` and raises a precondition_waiver card (recorded decision: denied). A human with session-approve standing approves it; BindApproved(PreconditionsWaived) writes the slot grant for that commit and the call proceeds. The SECOND checkout of the same OID finds the persisted grant and records `allowed` — no second card.\n\nWhy TWO calls. The waiver path proceeds-on-approved rather than re-dispatching (Task 5), so the first call records only its pre-card `denied`; the `allowed` decision is produced by a later call that finds the bound grant — the same durability shape plangate-external-covered-by-approved-slot uses to prove a grant persists rather than being consumed once. The final outcome on git_commit:<head OID>#checkout is `allowed`, reachable ONLY through the waiver: the slot starts empty (fillFrom is observed and nothing observed this commit) and the precondition is Refused, so nothing but a human's consent can produce it. The decision transition across the pair — denied in the gated twin, [denied, allowed] here — is what proves the card is real, not just that a call was refused. It is read from the decision log, not the tool result, because bronze runs no ToolCall controller: an allowed sandbox call STILL returns an error (nothing executes), exactly as git-repo-url-allows-granted notes: each checkout step asserts only that its last tool result was the checkout call, and the `allowed` final decision carries the whole claim.\n\nThe auto-approver clicks as the harness DefaultUser, who is the session owner (Channel.owner.explicit) and so holds approve on the session; the precondition declares no approvers of its own, so the waiver routes to the slot's session-only standing and the click folds to CheckApprove(agentsession#approve). The fixture is self-contained: its own AgentClass and a fixture SpiceboxToolkit (forkgit) declaring git_commit; toolkits/git.yaml is untouched.",
+
+  "agentDir": "testdata/precondition-fork-approved",
+  "agentClass": "forkbot",
+
+  "trigger": {
+    "channel": "forkbot-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#7",
+    "headSHA": "feed1234feed1234feed1234feed1234feed1234",
+    "statusName": "forkbot"
+  },
+
+  "autoApprove": ["precondition_waiver"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "Pull request demo-org/demo-repo#7 was opened" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "forkgit_forkgit",
+            "args": {
+              "operation_id": "op-checkout-1",
+              "_reason": "check out the pull request head to read its code",
+              "args": ["checkout", "feed1234feed1234feed1234feed1234feed1234"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "forkgit_forkgit"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "forkgit_forkgit",
+            "args": {
+              "operation_id": "op-checkout-2",
+              "_reason": "re-check out the same head commit; the waiver already cleared it",
+              "args": ["checkout", "feed1234feed1234feed1234feed1234feed1234"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "forkgit_forkgit"
+      },
+      "reply": [
+        { "text": "The fork checkout was approved and the grant persisted; I reviewed the head commit." }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": { "summary": "Checked out the approved fork PR head and reviewed it." }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "authz": {
+      "decisions": { "git_commit:feed1234feed1234feed1234feed1234feed1234#checkout": "allowed" }
+    }
+  }
+}

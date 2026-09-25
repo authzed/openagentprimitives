@@ -1,0 +1,12 @@
+# The short form is the one an operator actually types, and it binds the same
+# flag -- so a fix that only matched the long name would leave the hole open.
+name: deny-all-namespaces-short
+toolkit: toolkit.yaml
+spec: spec.yaml
+invocation:
+  command: kubectl
+  argv: [get, secrets, -n, tenant-foo, -A]
+  binaryVersion: "1.30.0"
+expect:
+  allow: false
+  failedOn: {path: "constraints[1]"}

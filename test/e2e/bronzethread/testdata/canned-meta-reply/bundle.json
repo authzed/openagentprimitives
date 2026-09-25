@@ -1,0 +1,49 @@
+{
+  "name": "canned-meta-reply",
+  "description": "A bundle may serve a recorded reply for a META tool instead of running it — the last of the three answers a replay has, and an admission of lost coverage rather than a feature. This is the scenario that proves the whole path is wired: the canner reaches the capability assembly, the recorded bytes reach the MODEL rather than the empty fixture the real query_memory would answer from, the tool's declared permission is untouched so the gate still sees the tool the session was offered, and assert.toolsCalled carries the claim without which Bundle.Validate refuses the file. Authored rather than captured on purpose: a capture cans a reply only when a real session called a tool whose state a fixture cannot hold, and the replay half must be covered before such a session turns up rather than after.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["memory-capability"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "metaToolReplies": {
+    "query_memory": {
+      "content": "{\"entries\":[{\"id\":\"mem-rollout-1\",\"content\":\"the widget rollout shipped on the 14th\",\"tags\":[\"rollout\"]}]}"
+    }
+  },
+
+  "userTurns": ["what do you already know about the widget rollout?"],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "what do you already know",
+        "toolOffered": "query_memory"
+      },
+      "reply": [{ "toolUse": { "name": "query_memory", "args": { "tags": ["rollout"] } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "query_memory",
+        "lastToolResultContains": "the widget rollout shipped on the 14th",
+        "lastToolResultIsError": false
+      },
+      "reply": [{ "text": "I already have a note: the widget rollout shipped on the 14th." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "recalled the rollout note" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["the widget rollout shipped on the 14th"],
+    "toolsCalled": ["query_memory"],
+    "planGate": { "noRecords": true }
+  }
+}

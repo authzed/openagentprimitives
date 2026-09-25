@@ -1,0 +1,64 @@
+{
+  "name": "handoff-data-slot-reaches-the-child",
+  "description": "The typed handoff, end to end. demo-analyst reads a ledger entry — which mints a pt-tag and stores the result behind it — then delegates to demo-auditor, handing that datum over BY REFERENCE by naming the tool call that produced it, never by pasting it into the task text. The operator attenuates (the parent can read the tag), grades (the child's audience is already among the tag's readers, so it auto-grants), and binds the slot. The child's runner then resolves the slot and places the content in its opening context. The child's own step asserts on that content: it expects to see the entry's memo in the turn it was started with, which it can only have if the whole chain ran, since the task text never contains it. Every link here was unreachable until recently — spec.dataSlots had no producer, no tag carried content, and nothing resolved a bound slot.",
+
+  "agentDir": "testdata/agent-handoff-ledger",
+  "agentClass": "demo-analyst",
+
+  "defaultUser": "analyst-1@example.com",
+
+  "toolOutputs": {
+    "read_entry": {
+      "id": "entry-77",
+      "memo": "quarterly variance narrative",
+      "amount": "8815.00"
+    }
+  },
+
+  "userTurns": [
+    "read entry-77 and have the auditor summarize it"
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "entry-77" },
+      "reply": [{ "toolUse": { "name": "ledger_read_entry", "args": { "operation_id": "op-read", "_reason": "the auditor needs this entry", "args": { "id": "entry-77" } } } }]
+    },
+    {
+      "expect": { "lastToolResult": "ledger_read_entry" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": {
+        "agent": "demo-auditor",
+        "task": "Summarize the ledger entry in your ledger input slot.",
+        "inputs": { "ledger": { "tool_use_id": "toolu_0" } }
+      } } }]
+    },
+
+    {
+      "expect": { "userTextContains": "quarterly variance narrative" },
+      "reply": [{ "toolUse": { "name": "return_result", "args": { "result": "The entry records a quarterly variance narrative for 8815.00." } } }]
+    },
+
+    {
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "quarterly variance narrative"
+      },
+      "reply": [{ "text": "The auditor read entry-77 and summarized it." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "delegated and reported" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["The auditor read entry-77"],
+    "toolsCalled": ["ledger_read_entry", "delegate"],
+    "ptTags": {
+      "minted": 1,
+      "readersInclude": ["analyst-1@example.com"],
+      "carriesUntrusted": false
+    }
+  }
+}

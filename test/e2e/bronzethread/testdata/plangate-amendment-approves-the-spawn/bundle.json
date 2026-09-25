@@ -1,0 +1,71 @@
+{
+  "name": "plangate-amendment-approves-the-spawn",
+  "description": "The APPROVE half of a governed spawn, and the first end-to-end run of a plan-gated child. Companion to plangate-governs-unplanned-delegation, which proves the DENY half: there pgd-lead's delegate is refused when the amendment is denied. Here the human APPROVES the plan_amendment for tool:delegate, so the escape valve completes — the gate raised the amendment, a person said yes, and the spawn proceeds. The delegated child pgd-coder then RUNS with the projected plan-gate root Task 5 wrote into its scope (DeriveForChild), which no other bundle exercises: if that root folded to a broken state, or a plan-gated child could not reach its own terminal tool, this is where it surfaces. pgd-coder returns its result and the child's answer reaches pgd-lead's delegate call as a real, non-error tool result — the proof the amendment let the spawn through AND the child ran cleanly under an inherited ceiling. Asserts on the delegate TOOL RESULT (the child's returned text) and on planGate.outcomes, not the reply, because a scripted transcript says the same words whether the spawn happened or not. agentReplyContains is the blocking assertion. Same self-contained enforcing agent dir as its companion.",
+
+  "agentDir": "testdata/agent-plangate-delegation",
+  "agentClass": "pgd-lead",
+
+  "defaultUser": "user@example.com",
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "userTurns": ["have the coder fix the failing auth middleware test"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "coder" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "hand the fix to the coder", "status": "pending", "phase": "handoff" }
+              ],
+              "phases": [
+                {
+                  "id": "handoff",
+                  "label": "Hand off the fix",
+                  "why": "I planned to write the fix myself, then decided to delegate",
+                  "permissions": [
+                    { "handle": "tool:apply_workspace", "why": "to write the fix file myself" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": { "agent": "pgd-coder", "task": "fix the failing auth middleware test", "_reason": "the coder owns this subsystem" } } }]
+    },
+    {
+      "expect": { "userTextContains": "fix the failing auth middleware test" },
+      "reply": [{ "toolUse": { "name": "return_result", "args": { "result": "Fixed the failing auth middleware test." } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "Fixed the failing auth middleware test."
+      },
+      "reply": [{ "toolUse": { "name": "respond_to_user", "args": { "text": "The coder handled it after I got the delegation approved." } } }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "coder fixed it" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["coder handled it"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "outcomes": { "delegate": "denied" }
+    }
+  }
+}

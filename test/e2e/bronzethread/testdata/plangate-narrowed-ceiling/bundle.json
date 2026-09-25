@@ -1,0 +1,66 @@
+{
+  "name": "plangate-narrowed-ceiling",
+  "description": "The ceiling MUST actually bite. The agent declares a phase 0 that does NOT include the company-read reach, then calls the tool anyway. Under logging nothing blocks, but the record must say enforcing would have denied it. If this records `allow`, the gate is holding a wider ceiling than the agent declared — which is exactly the bug where the gate kept using the whole-surface fallback.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-logging"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["list the companies"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "write up the findings", "status": "pending", "phase": "writeup" }
+              ],
+              "phases": [
+                {
+                  "id": "writeup",
+                  "label": "Write up findings",
+                  "why": "the user wants a summary file, not raw data",
+                  "permissions": [
+                    { "handle": "tool:apply_workspace", "why": "to write the summary" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies" },
+      "reply": [{ "text": "no companies found" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["no companies found"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "outcomes": { "centerdot_list_companies": "would_deny" },
+      "publishedNothing": true
+    }
+  }
+}

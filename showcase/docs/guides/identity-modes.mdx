@@ -1,0 +1,43 @@
+export const meta = {
+  title: 'Identity modes',
+  section: 'Reference',
+  group: 'Identity',
+  order: 2210,
+  description: 'The four ways an agent sources its tool credentials — agent, userPassthrough, ask, and dynamic.',
+}
+
+# Identity modes
+
+<p className="doc-lede">
+  Every tool an agent calls authenticates as <em>someone</em>. An AgentClass's <code>identityMode</code> decides
+  who: the agent's own credentials, the initiating user's, or an interactive choice at session start.
+</p>
+
+## The four modes
+
+- **`agent`** (the default) — tools use the credentials bound to the agent's own `AgentIdentity`. This is an
+  agent with its own operator account.
+- **`userPassthrough`** — tools use the credentials of the person who started the session. The agent acts *as*
+  that user; if they haven't linked the accounts the agent needs, the session pauses (it doesn't fail) until
+  they do.
+- **`ask`** — interactive. At session start the initiating user is asked to choose between running as the agent
+  or as themselves. The session pauses on the choice.
+- **`dynamic`** — interactive, with help. An isolated recommender LLM *suggests* one of the two options, but the
+  user always confirms. The recommendation is advisory only.
+
+There is no autonomous "selected" mode. `ask` and `dynamic` both end in the same human choice — `ask` presents
+it blank, `dynamic` pre-highlights a suggestion.
+
+## Static vs. resolved
+
+For `agent` and `userPassthrough`, the mode *is* the answer. For `ask` and `dynamic`, the class's
+`identityMode` only says "ask a human" — the *resolved* answer (always `agent` or `userPassthrough`) lands on
+the session's `effectiveIdentityMode` once the choice is made.
+
+<Callout kind="warning" title="Runtime reads the resolved mode, not the spec">
+  Every runtime identity decision reads `effectiveIdentityMode`, never `spec.identityMode`. For an `ask`/`dynamic`
+  class the spec value is not an answer — it's a question, and until a human answers it, the session is parked.
+</Callout>
+
+Next: **User-passthrough vs. agent-identity** unpacks what the two resolved modes actually do, and
+**Choosing identity per session** shows how `ask` and `dynamic` present the choice.

@@ -1,0 +1,120 @@
+# Fixture agent for the git per-repository scoping bundles.
+#
+# `git fetch origin` cannot be authorized: the repository lives in .git/config,
+# which argv cannot see, so the check has no instance to scope on. git accepts a
+# URL wherever a remote name goes, and the builtin git toolkit's fetch/pull/
+# push/clone checks require that form — the guard expression yields "" for
+# anything else, and an empty resource id is a denial.
+#
+# Three bundles share this fixture: the denial (no URL), the allow (the granted
+# URL), and the mix (granted URL allowed, a different repo denied in the same
+# session). They differ only in transcript, which is the point — one fixture,
+# one grant, and the URL in argv is the only thing that moves.
+apiVersion: v1
+kind: Secret
+metadata: {name: git-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: git-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: git-token-secret, namespace: default}
+type: Opaque
+stringData: {token: "ghp_unusedTheSandboxNeverExecutes"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata: {name: ts-git, namespace: default}
+spec:
+  name: ts-git
+  version: "1"
+  toolkit: {name: git, revision: "2026-04-24"}
+  # fetch alone. One subcommand keeps the three bundles differing only in the
+  # URL they pass, so a decision that changes can only be the repository.
+  allowSubcommands: ["fetch"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata: {name: cls-git, namespace: default}
+spec:
+  image: registry.example.com/git-toolbelt:latest
+  resources: {cpu: "100m", memory: "64Mi", ephemeralStorage: "16Mi"}
+  tools:
+    - {name: git, command: ["/usr/bin/git"]}
+  toolspecs:
+    - {name: ts-git}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: git-identity, namespace: default}
+spec:
+  description: "Fixture identity for the git scoping bundles."
+  credentials:
+    # The git toolkit declares a sensitive GIT_TOKEN, so the class is not Valid
+    # until a credential of this name backs it. Never read: nothing executes.
+    - name: git-token
+      type: static
+      static: {secretRef: {name: git-token-secret, key: token}}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: git-fetcher, namespace: default}
+spec:
+  displayName: GitFetcher
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: git-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You fetch from git repositories with the gitlike_git tool.
+  agentIdentity: git-identity
+  authz:
+    # toolCalls mode is left at the default (enforcing) deliberately. The
+    # discriminator these bundles rest on is the authz decision, and a
+    # permissive session records the same decision while running the call
+    # anyway — the denial would never reach the model as a tool result, so the
+    # hint assertion could not see it.
+    planGate:
+      mode: logging
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  toolBundles:
+    - {name: "gitlike", class: "cls-git", toolspecs: ["ts-git"]}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: git-fetcher-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: git-fetcher
+  credentialsRef: {secretName: git-fake-creds}
+  fake: {echo: false}
+---
+# Relationships only. The git_repo DEFINITION now ships with the git toolkit
+# (toolkits/git.yaml `spicedbSchema`), which the guardian composes — so this
+# fixture declares only the grant, exactly as a real deployment would.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata: {name: git-repo-schema, namespace: default}
+spec:
+  relationships:
+    # The object id is what [normalize_url, spicedb_object_id] produces for
+    # https://github.com/demo-org/demo-repo. Written out rather than computed
+    # because a grant IS written by hand in production too, and a bundle that
+    # derived it could not catch the transforms changing under it.
+    #
+    # Note what is NOT granted: the `.git` suffix and the scp-style spelling
+    # normalize to DIFFERENT ids, so they would not match this tuple.
+    - resource: {type: git_repo, id: "https=3A//github=2Ecom/demo-org/demo-repo"}
+      relation: owner
+      subject: {type: user, id: "user@example.com", canonicalize: true}

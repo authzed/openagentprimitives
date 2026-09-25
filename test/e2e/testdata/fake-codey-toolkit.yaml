@@ -1,0 +1,32 @@
+name: codey
+version: "0.1.0"
+toolkitRevision: "2026-05-18"
+target:
+  binary: codey
+parser:
+  kind: declarative
+env:
+  allowed: []
+permission:
+  stateImpact: external
+  check:
+    resourceType: codey_session
+    permission: run
+subcommands:
+  - path: [run]
+    description: "Run an interactive codey session"
+    positional: []
+    flags: []
+    mode: interactive
+    effects:
+      destructive: false
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: codey_session
+        permission: run

@@ -1,0 +1,131 @@
+{
+  "name": "git-repo-url-scopes-per-repo",
+  "description": "The point of forcing a URL: the grant is per REPOSITORY, not per tool. One session, one tool, one subcommand, one phase — and two calls that differ only in which repository they name. The granted one runs unremarked; the other is refused and escalated to a human.\n\nThis is the scenario the old shape could not express at all. `git fetch origin` resolves the repository from .git/config, so every repo looked identical to the check: one grant on the tool authorized fetching from ANY remote the workspace happened to have configured. Both calls here would have taken the same decision.\n\nautoDeny on tool_approval rather than autoApprove, deliberately. Approving would show that the escalation path works but would leave `denied then allowed` and `never allowed` with the same final outcome — and a permission boundary is worth asserting the strong way. neverAllowed is the airtight form.\n\nThat the granted call raises NO prompt is pinned by the same autoDeny: it refuses every tool_approval this session publishes, so had the granted repo escalated too, its decision would read denied and the assertion would fail. Standing the human already has must not be re-litigated per call, or approval volume tracks what the agent does rather than what it adds.",
+  "agentDir": "testdata/agent-gitscope",
+  "agentClass": "git-fetcher",
+  "autoDeny": [
+    "tool_approval"
+  ],
+  "userTurns": [
+    "fetch from the demo repo and from the other-org one"
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "fetch from the demo repo"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "s1",
+                  "label": "fetch",
+                  "status": "pending",
+                  "phase": "sync"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "sync",
+                  "label": "Fetch from both remotes",
+                  "why": "the user asked for both",
+                  "permissions": [
+                    {
+                      "handle": "perm:fetch:git_repo",
+                      "why": "to read the remotes"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_git",
+            "args": {
+              "operation_id": "op-1",
+              "_reason": "fetch the granted repo",
+              "args": [
+                "fetch",
+                "https://github.com/demo-org/demo-repo"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "gitlike_git",
+        "lastToolResultNotContains": "did not identify"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_git",
+            "args": {
+              "operation_id": "op-2",
+              "_reason": "fetch the other-org repo",
+              "args": [
+                "fetch",
+                "https://github.com/other-org/secret-repo"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "gitlike_git",
+        "lastToolResultIsError": true
+      },
+      "reply": [
+        {
+          "text": "fetched the demo repo; the other-org repo was refused"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "done"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "the other-org repo was refused"
+    ],
+    "authz": {
+      "decisions": {
+        "git_repo:https=3A//github=2Ecom/demo-org/demo-repo#fetch": "allowed",
+        "git_repo:https=3A//github=2Ecom/other-org/secret-repo#fetch": "denied"
+      },
+      "neverAllowed": [
+        "git_repo:https=3A//github=2Ecom/other-org/secret-repo#fetch"
+      ]
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "name": "credential-halt-stops-the-session",
+  "description": "A dead credential must not burn a whole session. The scripted codey toolkit streams a claude-stream-json `result` event that is BOTH a non-success and metered at $0 — the shape of a run the provider turned away at its auth layer, as opposed to work that ran and then failed. The first one is handed back to the model as an ordinary tool error and the transcript continues; the SECOND ends the session, and status.phase goes Failed rather than the run grinding on to maxTurns.\n\nWhat this bundle catches that a unit test cannot: the whole carriage. The signal is read from the toolkit's structured terminal event by the stream parser, carried on tool.Result out of composeStreamResult, threaded onto pipeline.ToolCallInfo by the runner's dispatch, counted per origin by the tool guard at PostToolCall, and turned into a Halt the runner terminalizes. Any link dropping the field leaves every unit test green and this bundle red.\n\nThe two assertions divide the work. Step 3's `expect` pins the TOOL RESULT the model was handed after the first failure — isError, and a status line reporting a failed run that cost $0.00, which is the parser having actually read the billing tally the classifier keys on. The session phase pins the second one. Note the halt does NOT read that text: it reads the structured carrier. The text is asserted because it is evidence the parser worked, never because it is the signal.\n\nDo NOT weaken this to the phase alone. A session can reach Failed for many reasons, and one that halted on the FIRST failure — or on a billed one — would satisfy a phase-only claim while breaking the property the threshold of 2 exists to protect: an operator rotating a credential under a live session makes it take exactly one refusal.",
+  "agentDir": "testdata/credential-halt-stops-the-session/manifests",
+  "agentClass": "codey-runner",
+  "userTurns": [
+    "run the codey session on this repo"
+  ],
+  "mintedIDs": { "operation": ["op-c0de1a11c0de1a11"] },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "run the codey session"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "new_operation",
+            "args": {
+              "description": "drive a codey session"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "new_operation"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "codey_codey-credhalt",
+            "args": {
+              "operation_id": "op-c0de1a11c0de1a11",
+              "_reason": "drive a codey session over the repo",
+              "args": ["run"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "codey_codey-credhalt",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "status: failed (812ms, $0.00)"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "codey_codey-credhalt",
+            "args": {
+              "operation_id": "op-c0de1a11c0de1a11",
+              "_reason": "retry the codey session; the first attempt failed",
+              "args": ["run"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {}
+}

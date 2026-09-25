@@ -1,0 +1,63 @@
+{
+  "name": "slot-permission-isolation",
+  "description": "Holding one permission on a resource type must not confer another on the same instance. The session lists companies freely — crm_company `list`, satisfied by the wildcard on the sentinel crm_company:any — and is then refused contacts on a company it does not own, which needs crm_company `contact_access`. Standing to enumerate is not standing to read.\n\nThis is the property that lets a slot grant stop being bound to an exact argument hash: a slot is an (instance, permission) pair, so a grant shaped for one permission can never be spent on another against the same id — the git-CLI case, where the same tool and the same repo id mean read or write depending on the arguments.\n\nFabrikam's owner is deliberately not seeded, so no one has standing to approve and the refusal is final rather than a pause for a human. The approval path itself is covered by the slot-approval-* bundles.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+
+  "defaultUser": "user@example.com",
+
+  "toolOutputs": {
+    "list_companies": {
+      "results": [
+        { "id": "4210", "name": "Northwind Trading", "ownerId": "owner-1", "createdAt": "2026-07-02T09:14:00Z" },
+        { "id": "4299", "name": "Fabrikam Logistics", "ownerId": "owner-9", "createdAt": "2026-07-05T11:02:00Z" }
+      ]
+    },
+    "list_contacts_for_company": {
+      "results": [
+        { "id": "c-88", "firstName": "Jane", "lastName": "Smith", "email": "jane.smith@northwind.example", "title": "Ops Lead" }
+      ]
+    }
+  },
+
+  "userTurns": ["list the companies and then show me who works at Fabrikam"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": { "sinceDays": 30 } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultContains": "Fabrikam Logistics",
+        "lastToolResultIsError": false
+      },
+      "reply": [{ "toolUse": { "name": "centerdot_list_contacts_for_company", "args": { "operation_id": "op-contacts-4299", "_reason": "user asked who works at that company", "args": { "companyId": "4299" } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_contacts_for_company",
+        "lastToolResultNotContains": "jane.smith@northwind.example",
+        "lastToolResultIsError": true
+      },
+      "reply": [{ "text": "I listed the companies but could not read contacts for Fabrikam Logistics" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["could not read contacts"],
+    "authz": {
+      "decisions": {
+        "crm_company:any#list": "allowed",
+        "crm_company:4299#contact_access": "denied"
+      },
+      "neverAllowed": ["crm_company:4299#contact_access"]
+    }
+  }
+}

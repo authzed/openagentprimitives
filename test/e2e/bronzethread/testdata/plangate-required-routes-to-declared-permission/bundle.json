@@ -1,0 +1,92 @@
+{
+  "name": "plangate-required-routes-to-declared-permission",
+  "description": "A `required` type routes approval to the permission it DECLARES, not to a hardcoded relation name.\n\nmaintrepo_repo declares standing: required with approverPermission: maintainer, and NOTHING is seeded anywhere — no bootstrap, no tuple on maintainer_ref, none on owner. The approval therefore fails closed, and the assertion is on WHICH subject-set the refusal names: it must be \"#maintainer\". A router still building \"<type>:<id>#owner\", as four call sites did, names \"#owner\" and this bundle fails.\n\nProving the routing through a SUCCESSFUL approval would need a seeded tuple and a click, and would then pass for the wrong reason if anything downstream went permissive. The refusal names the set directly and cannot.\n\nThe hardcode was why two very different types looked identical to the router: crm_company's `owner` is a real computed permission backed by seeded tuples, while git_repo's `owner` is a bare relation declared only so the checks are answerable and never populated. The router could not tell governance from schema shape, and a push to a git remote became permanently unapprovable (observed live 2026-08-21). `maintainer` here is both differently named AND a computed permission, so it covers that distinction too.\n\nThe push tool is stateImpact:external so it re-approves per call and reaches the approval builder rather than being satisfied by a plan-gate grant. Asserted on the TOOL RESULT, never the reply — a scripted transcript says the same words whether the call pushed or refused.",
+  "agentDir": "testdata/plangate-required-routes-to-declared-permission",
+  "agentClass": "maintrepo-fixture",
+  "autoApprove": ["plan_phase", "plan_amendment"],
+  "userTurns": [
+    "I need to push my committed changes to https://github.com/fictional-forge/beacon-service — check things are ready first, then go ahead and push it"
+  ],
+  "toolOutputs": {
+    "status": { "ready": true },
+    "push": { "status": "pushed", "commitSha": "f00dfeed01cafe" }
+  },
+  "llm": [
+    {
+      "expect": { "userTextContains": "check things are ready first" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "push to the repository", "status": "pending", "phase": "push_phase" }
+              ],
+              "phases": [
+                {
+                  "id": "push_phase",
+                  "label": "Push to the repository",
+                  "why": "the user asked me to push their committed changes",
+                  "permissions": [
+                    { "handle": "perm:push:maintrepo_repo", "why": "pushing requires write access to the repository" }
+                  ],
+                  "slots": [
+                    {
+                      "type": "maintrepo_repo",
+                      "id": "https://github.com/fictional-forge/beacon-service",
+                      "why": "the user named this repository"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "maintrepo_status",
+            "args": { "operation_id": "op-status", "_reason": "checking the push tool is ready", "args": {} }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "maintrepo_status", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "maintrepo_push",
+            "args": {
+              "operation_id": "op-push-1",
+              "_reason": "pushing the user's committed changes",
+              "args": { "repoUrl": "https://github.com/fictional-forge/beacon-service" }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "maintrepo_push",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "#maintainer",
+        "lastToolResultNotContains": "#owner"
+      },
+      "reply": [{ "text": "nobody holds maintainer on that repository, so the push could not be approved" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "could not push" } } }]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": ["nobody holds maintainer on that repository"],
+    "planGate": { "frozenPhases": 1, "gatedAgainstFrozenPlan": true, "approvalPrompts": 1 }
+  }
+}

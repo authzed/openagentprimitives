@@ -1,0 +1,4 @@
+{
+  "badges": ["kind", "credential", "endpoint"],
+  "counts": ["scopes", "written", "pruned", "joinMisses", "errors"]
+}

@@ -1,0 +1,72 @@
+{
+  "name": "sandbox-readonly-phase-autoapproves",
+  "description": "Captured from a live desktop session (2026-08-02) that produced exactly this record sequence: plan_approved tier=1, then plan_approved tier=0 with ceiling=[perm:read:github_repo_url], phase_approved tier=0, gate_allowed on the gh tool.\n\nThe shape worth pinning: a phase that declares ONE readonly handle clears itself at tier 0 — no card, no human — and the call it covers then runs against that frozen ceiling. That is the 'narrow is the fast path' incentive paying off, and on SANDBOX tools, where the permission is resolved per subcommand from one CLI-wide tool rather than declared per tool.\n\nWhat it does NOT show, deliberately: instance scoping. perm:read:github_repo_url is a class handle — permission plus resourceType, no repo id — so this ceiling admits reading ANY github_repo_url. Narrowing to one repo is the slot axis, which this bundle does not exercise; see the slot-* bundles.",
+
+  "agentDir": "testdata/sandbox-readonly-phase-autoapproves/manifests",
+  "agentClass": "gh-reviewer",
+
+  "userTurns": ["look at the open PRs"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "look at the open PRs" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "review the PRs", "status": "pending", "phase": "review" }
+              ],
+              "phases": [
+                {
+                  "id": "review",
+                  "label": "Read pull requests",
+                  "why": "the user asked what is open",
+                  "permissions": [
+                    { "handle": "perm:read:github_repo_url", "why": "to read the open PRs" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_gh",
+            "args": {
+              "operation_id": "op-1",
+              "_reason": "reading the open pull requests the user asked about",
+              "args": ["pr", "view", "123", "--repo", "demo-org/demo-repo"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "gitlike_gh" },
+      "reply": [{ "text": "no open PRs" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["no open PRs"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "gatedAgainstFrozenPlan": true,
+      "publishedNothing": true,
+      "outcomes": { "gitlike_gh": "allow" }
+    }
+  }
+}

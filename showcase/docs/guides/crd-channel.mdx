@@ -1,0 +1,93 @@
+export const meta = {
+  title: 'Channel',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3080,
+  description: 'Channel binds one transport conversation -- a Slack channel, a scheduled',
+}
+
+# Channel
+
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `apch`
+
+Channel binds one transport conversation -- a Slack channel, a scheduled
+Bento feed, a terminal, a browser view -- to one AgentClass, and declares
+how inbound messages correlate to AgentSessions via spec.sessionScope.
+
+Namespaced. Reconciled by pkg/controllers/channel, which validates the
+referenced Secret, AgentClass and AgentIdentity and owns the Valid
+condition. Transport is deliberately not the operator's: channelsd owns the
+Connected condition and patches it through the status subresource.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.agentClass` | `string` | AgentClass names the AgentClass in the same namespace this Channel is bound to. 1:1 invariant — multi-agent routing is the future meta-agent's job, not Channel's. Immutable post-bind. Required for every role except "monitoring" (a monitoring Channel is a framework-event sink, not bound to an agent); the Channel controller enforces presence for non-monitoring roles. |
+| `spec.agentIdentity` | `string` | AgentIdentity overrides AgentClass.spec.agentIdentity at session creation. Frozen onto the AgentSession at bind time. |
+| `spec.attachments` | `object` | Attachments opts this Channel's bound agent into ingesting files users attach to messages. Requires the channel kind to implement AttachmentFetcher and the bound AgentClass to grant the "attachments" capability; all three must agree before any byte is fetched. Absent/nil means disabled — the agent still learns a file was attached and says it cannot read it. |
+| `spec.attachments.enabled` \* | `boolean` | Enabled turns ingestion on. Must be true for bytes to move. |
+| `spec.attachments.maxPerMessage` | `integer (int32)` | MaxPerMessage caps how many attachments are ingested from one message. Zero means the kind's default. Files past the cap get the oversize-style notice rather than silent omission. |
+| `spec.attachments.maxSizeBytes` | `integer (int64)` | MaxSizeBytes caps a single attachment. Zero means the kind's default. |
+| `spec.authzSubject` | `string` | AuthzSubject is the non-human SpiceDB subject this Channel carries. Format: "service:&lt;id&gt;" or "agentsession:&lt;namespace&gt;/&lt;name&gt;". A "user:"/"group:" value is forbidden: on the kinds that assert it the value becomes the identity the session ACTS AS, so an unconstrained one would let channel config impersonate a person or a group. What it MEANS is per-kind, and the two are not variations of one thing: "service:" is the ACTING SUBJECT asserted for an inbound with no human to attribute to. Required for any kind that cannot attribute an inbound message to a human — bento (cron-spawned) and github (a pull request's author has no AP identity) today; the Channel controller refuses such a Channel without it, off the kind's own UserAttributable() declaration rather than a per-kind list. Optional for slack, which falls back to its existing per-user subject resolution. "agentsession:" names the COUNTERPARTY END of a session-to-session conversation. It is a pair-resolution input and never the acting subject: channelsd resolves an agent message's Channel by requiring this to name the other end of the (target, sender) pair, and attributes the message to the session that SENT it — which on a child-to-parent message is the end this field does not name. Required when kind=agent; an inbound asserting an agentsession subject over a Channel of any other kind is refused by the channelsd pipeline. It does NOT become the session's started_by, on either kind. That relation is user-typed in the SpiceDB schema, so a non-human acting subject suppresses both the started_by write and the started-by annotation rather than writing this value into them. Enforced by the Pattern below (apiserver) AND re-checked fail-closed, per-kind, in the channelsd pipeline via authz.ValidateSubject. Examples: "service:hubspot-digest-bot", "agentsession:demo-ns/lead-1". |
+| `spec.bento` | `object` | Bento carries kind-specific config for kind="bento". Empty/nil for other kinds. |
+| `spec.bento.generate` | `object` | Generate is a Bento `generate` input config. Exactly one input-shape sub-block is allowed per Channel. |
+| `spec.bento.generate.count` | `integer (int64)` | Count caps total emissions; 0 (default) = unbounded. _(default: 0)_ |
+| `spec.bento.generate.interval` \* | `string` | Interval is a Bento interval string: a duration ("168h") or a cron expression ("@every 24h", "0 9 * * MON"). |
+| `spec.bento.generate.mapping` \* | `string` | Mapping is the bloblang script Bento evaluates per tick. Assign a string to `root` (e.g. `root = "send the weekly digest"`); that string becomes the inbound user prompt. Avoid `root.message = "..."` — the forward output passes the whole `root` value through as bytes, which means a struct- shaped root becomes JSON and confuses the LLM. Optionally set metadata key `routing_key` to force a specific channelKey (default is `cron:&lt;channel-name&gt;:&lt;ts-nanos&gt;`, one new session per firing). |
+| `spec.channelHistory` | `object` | ChannelHistory opts this Channel's bound agent into reading the whole channel's prior history (not just its own thread) via the read_channel_history tool. Requires the channel kind to implement ChannelHistoryReader (slack does; the channel controller rejects enabled=true on kinds that don't). Absent/nil ⇒ disabled. |
+| `spec.channelHistory.enabled` \* | `boolean` | Enabled turns the capability on. Must be true to inject the tool. |
+| `spec.channelHistory.maxLookback` | `string` | MaxLookback optionally caps how far back reads may reach. Zero/nil ⇒ the kind's default window. |
+| `spec.channelHistory.maxMessages` | `integer (int32)` | MaxMessages optionally caps messages returned per read. Zero/nil ⇒ the kind's default. |
+| `spec.credentialsRef` \* | `object` | CredentialsRef points at a Secret in the same namespace holding the kind-specific tokens. Required keys depend on kind. |
+| `spec.credentialsRef.secretName` \* | `string` | SecretName is the Secret name in the same namespace as the Channel. |
+| `spec.fake` | `object` | Fake carries kind-specific config for kind="fake". Empty/nil for other kinds; test-only, never appropriate in production. |
+| `spec.fake.echo` | `boolean` | Echo makes the fake re-deliver each outbound message as an inbound one, giving tests a pure round-trip. |
+| `spec.fake.orgScoped` | `boolean` | OrgScoped makes the fake kind attribute org membership on this channel, so a scenario can exercise the session-start gate: injected identities carry their OrgMembership stamp verbatim, and an unstamped one reads as guest at the pipeline (fail-closed). |
+| `spec.github` | `object` | GitHub carries kind-specific config for kind="github". |
+| `spec.github.appSlug` \* | `string` | AppSlug is the GitHub App's slug, recorded so the wizard and the drift check can build install and settings URLs. The App's identity and keys live in the credentialsRef Secret, never in spec. |
+| `spec.github.events` | `[]string` | Events are the pull_request actions that become a review. _(default: ["opened","synchronize","reopened","ready_for_review"])_ |
+| `spec.github.repositories` | `[]string` | Repositories optionally narrows which repos produce reviews. Empty means every repository the App installation grants. |
+| `spec.github.skipDrafts` | `boolean` | SkipDrafts drops draft pull requests. Nil means true: drafts are skipped unless the Channel opts in with an explicit `skipDrafts: false`. A *bool with no default marker, NOT a bool with +kubebuilder:default=true. That combination is unsettable: `false` is the zero value, omitempty elides it, the API server sees an absent field and the defaulter restores true - so the one value a user reaches for when they DO want draft PRs reviewed is the one value the field cannot hold. Same shape as ChannelMetaagentSpec.Enabled in this file. |
+| `spec.kind` \* | `string` | Kind selects the kind impl. "fake" is an in-process test kind; "slack" and "bento" are channelsd-hosted; "local" is the client-hosted TUI kind driven by `oap agent chat`; "browser" is the client-hosted kind for a session a browser is looking at; "github" is received by webhook at webd rather than relayed by channelsd; "agent" is the channelsd-hosted kind whose counterparty is another AgentSession in this cluster, not an external surface. _(enum: fake \| slack \| bento \| local \| browser \| github \| agent)_ |
+| `spec.metaagent` | `object` | Metaagent overrides scope-management behavior for this channel. When the bound AgentClass has spec.authz.scope.enabled=true, the AgentSession controller auto-invites the metaagent bot to this channel unless this override sets Enabled=false. Pointer-bool so the absence of the field is distinguishable from explicit false. |
+| `spec.metaagent.enabled` | `boolean` | Enabled forces metaagent membership on (true) or off (false). When nil, the AgentSession controller follows the AgentClass's scope.enabled flag. |
+| `spec.owner` | `object` | Owner declares how sessions spawned via this Channel get their agentsession#owner. Optional. Absent ⇒ owner is the channel kind's starting user (slack/local/cli); a kind that provides no starter (bento) then requires Owner.Ownerless or it is rejected at validation. |
+| `spec.owner.explicit` | `string` | Explicit overrides the starting user for every session of this channel (agent identityMode only; forbidden under userPassthrough). A SpiceDB subject or subject-set ref, e.g. "user:abc" or "group:sec#member". |
+| `spec.owner.ownerless` | `object` | Ownerless is consulted only when the channel kind provides no starting user (e.g. bento). |
+| `spec.owner.ownerless.fromOutputChannel` | `boolean` | FromOutputChannel links the owner to the output channel's membership group (e.g. slack_channel:&lt;id&gt;#member), resolved via the output channel kind's OwnerGroupRef capability. |
+| `spec.owner.ownerless.permission` | `string` | Permission is a SpiceDB subject-set ref whose members become the owners, e.g. "resourcetype:id#relation". |
+| `spec.role` | `string` | Role declares whether this Channel handles inbound messages, outbound responses, or both; `monitoring` is a framework-event sink bound to no agent. `output` names this Channel's DELIVERY obligation, not deafness. On a kind that has a listener (slack, bento, …) a role=output Channel still runs an inbound listener — only `monitoring` is listener-less — and an inbound message on it routes to a same-channel-reply session (it is not treated as a split-channel input, which only role=input triggers). reviewbot relies on this: its slack Channel is role=output — the webhook flow's delivery target, resolved by outputbind, which refuses role=both — AND the surface a human uses to REQUEST a review. See pkg/channels/channelsd listener reconcile (monitoring is the only skip) and the inbound pipeline's role=input special-case. _(enum: input \| output \| both \| monitoring; default: both)_ |
+| `spec.sessionScope` | `string` | SessionScope governs how channelsd correlates inbound messages to AgentSessions. _(enum: auto \| thread \| user \| singleton; default: auto)_ |
+| `spec.slack` | `object` | Slack carries kind-specific config for kind="slack": the connection mode, the resolved bot user, and the app this Channel's credentials belong to. Empty/nil for other kinds. |
+| `spec.slack.appId` | `string` | AppID is the Slack app this Channel's credentials belong to, recorded when `oap channel create` provisioned the app itself. Empty for a Channel whose tokens were pasted: nothing in the run knew which app they came from, and no Slack API can be asked. Stable desired state, not an observation: it is written once from what the run created, nothing recomputes it, and a byte-identical re-apply is a no-op. |
+| `spec.slack.botUserId` | `string` | BotUserID is auto-resolved by channelsd from auth.test on first connect when empty. |
+| `spec.slack.mode` | `string` | Mode is how channelsd connects to Slack. _(enum: socket; default: socket)_ |
+| `spec.slack.outputDefaults` | `object` | OutputDefaults govern where the FIRST outbound message of a session lands when the session was not triggered by an inbound Slack message. |
+| `spec.slack.outputDefaults.channelId` \* | `string` | ChannelID is the Slack channel to post into (e.g. C0123ABC). |
+| `spec.slack.outputDefaults.staticThreadTs` | `string` | StaticThreadTS is required when ThreadStrategy=static-thread. |
+| `spec.slack.outputDefaults.threadStrategy` | `string` | ThreadStrategy controls whether each session gets its own thread, appends to a fixed digest thread, or posts directly without a thread anchor. _(enum: new-thread-per-session \| direct \| static-thread; default: new-thread-per-session)_ |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` | Conditions carries Valid (operator-owned) and Connected/ScopesValid (channelsd-owned). |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.derivedSessionOwner` | `string` | DerivedSessionOwner is the subject-set that will own sessions inbound on this Channel because nothing else supplies an owner: the kind provides no starting user, spec.owner declares no source, and the Channel this agent's output lands in yields a membership subject-set (slack_channel:&lt;id&gt;#member for a Slack destination). Present only when the derivation actually fired. A Channel that declared spec.owner.explicit or spec.owner.ownerless keeps what it declared and leaves this empty, as does one whose kind names a starting user — so a non-empty value always reads as "nobody wrote this owner; it was derived, and here is from what". It is published because of what an owner CARRIES. `owner` is not merely interact: manage_scope, fork, approve, manage_budget and manage_model all resolve through it, so a derived channel-membership owner hands every member of that Slack channel the approve button on this agent's tool calls. That is the same population the agent posts every one of its messages to, and it is what an operator configuring this by hand chose — but it must be visible on the object rather than inferable only from the absence of a field. |
+| `status.observedGeneration` | `integer (int64)` | ObservedGeneration is the spec generation this status reflects. |
+| `status.repointedWebhookURL` | `string` | RepointedWebhookURL is the webhook URL the channel controller last SUCCESSFULLY wrote to this Channel's third-party provider (a GitHub App's hook_attributes.url), for a Channel carrying the provenance marker that says this tool registered that application. Absent means no such write has ever landed — including for every Channel whose application a human registered by hand, which this controller never writes to at all. It is a controller-owned OBSERVATION, and it is what makes the repoint event-driven instead of a poll: the controller compares this against the URL it derives LOCALLY (the PublicEndpoint's status.url plus channelevents.WebhookPathFor) and calls the provider only when the two disagree. Without it, "is the registration already correct?" could be answered only by reading the provider on every reconcile — against a rate limit this cluster does not control, and whose exhaustion also breaks the token-minting path. A write that FAILS is deliberately not recorded, so the next reconcile retries rather than believing a URL landed that never did. Losing this value (a status wipe, a restore from an older object) costs one redundant write of the value the provider most likely already has, not correctness. |
+| `status.resolvedAgentClassUID` | `string` | ResolvedAgentClassUID is frozen at first successful Valid=True reconcile. Protects against same-name AgentClass re-create silently re-routing in-flight sessions. |
+| `status.webhookURLDriftCheckedAt` | `string (date-time)` | WebhookURLDriftCheckedAt is when the channel controller last actually called out to a WebhookURLDriftChecker kind's provider (github today) to compare its registered webhook URL against this cluster's — set regardless of whether that call found drift, matched, or errored. A controller-owned observation, not a per-check trigger: the controller throttles the outbound call to at most once per interval per Channel using this timestamp, so an unbounded per-reconcile call against a rate limit this cluster does not control (and whose exhaustion would also break the token-minting path the drift check is meant to be monitoring) cannot happen. Absent means "never checked". |
+
+<small>\* required</small>
+

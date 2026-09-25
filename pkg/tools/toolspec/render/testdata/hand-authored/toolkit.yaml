@@ -1,0 +1,16 @@
+name: tool
+version: "1"
+toolkitRevision: "r"
+target: {binary: tool}
+parser: {kind: declarative}
+env: {allowed: []}
+subcommands:
+  - path: [say]
+    description: "Say something"
+    effects:
+      destructive: false
+      reads: [network]
+      writes: []
+      network: {destinations: [example.com]}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}

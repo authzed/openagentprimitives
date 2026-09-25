@@ -1,0 +1,28 @@
+{
+  "action": "opened",
+  "number": 44,
+  "pull_request": {
+    "title": "Split the scheduler loop (still in progress)",
+    "html_url": "https://github.com/demo-org/platform/pull/44",
+    "draft": true,
+    "user": {
+      "login": "demo-user"
+    },
+    "head": {
+      "ref": "scheduler-split",
+      "sha": "c3d4e5f60718293a4b5c6d7e8f90123456789012",
+      "repo": {
+        "full_name": "demo-org/platform",
+        "fork": false
+      }
+    },
+    "base": {
+      "ref": "main",
+      "sha": "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567"
+    },
+    "changed_files": 11
+  },
+  "repository": {
+    "full_name": "demo-org/platform"
+  }
+}

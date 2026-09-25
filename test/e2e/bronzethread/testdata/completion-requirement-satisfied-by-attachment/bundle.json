@@ -1,0 +1,82 @@
+{
+  "name": "completion-requirement-satisfied-by-attachment",
+  "description": "The other half of completion-requirement-refuses-undelivered-artifact, and the reason that one is a refusal rather than a wedge: the SAME fixture class, the SAME declared requirement, and a round that actually hands the artifact over finishes on its FIRST agent_work_complete — no bypass_reason, no refusal, nothing for a human to be told about. An agent that delivered its work is not asked to justify anything.\n\nThe round delivers both ways, which is the flow the reviewbot bundle now instructs: the report is named in respond_to_user's `attached` array, and the same artifact is then offered as a live view. The attachment is what satisfies the requirement; the offer is an addition, and the transcript pins that it neither substitutes for the attachment nor interferes with it.\n\nThis bundle opts into fakeDeliverySurfaces. The fake kind ships with NEITHER delivery surface, because a channel kind's capabilities decide which meta tools every class is offered, and widening them globally would move the tool list under every other bundle here — off by default is what protects them. This scenario turns both on for its own run and the driver restores them after. Without the opt-in, `attached` is not in respond_to_user's schema at all, so the requirement could not be satisfied on this transport no matter what the agent did; that gap is exactly the blind spot that let an offer-only round pass for a delivery.\n\nWhat this catches that the refusal bundle cannot: that the requirement is SATISFIABLE. A gate that refused every round would pass the refusal test just as convincingly, and would be indistinguishable from a correct one right up until it wedged a real agent that had done nothing wrong.",
+
+  "agentDir": "testdata/agent-reportbot",
+  "agentClass": "reportbot",
+  "fakeDeliverySurfaces": true,
+
+  "userTurns": ["review the pull request and send me the report"],
+
+  "mintedIDs": { "artifact": ["artifact-c0111e7ed0000001"] },
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "review the pull request",
+        "toolOffered": "artifact_prepare"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "artifact_prepare",
+            "args": {
+              "kind": "html",
+              "payload": "<h1>Review</h1><p>Two findings.</p>",
+              "filename": "review.html",
+              "name": "PR review",
+              "description": "The full review report."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "artifact_prepare",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Done — full report attached.",
+              "attached": ["artifact-c0111e7ed0000001"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "artifact_offer_view",
+            "args": { "artifact_id": "artifact-c0111e7ed0000001" }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "artifact_offer_view",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "live-view offer published to the fake channel"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": { "summary": "Delivered the report to the user, both ways" }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["full report attached"]
+  }
+}

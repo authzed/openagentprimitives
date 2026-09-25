@@ -1,0 +1,9 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ap-workspace-rwx
+  labels:
+    agentprimitives.authzed.com/install-tier: workspace-provisioner-rwx
+provisioner: cluster.local/ap-workspace-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete

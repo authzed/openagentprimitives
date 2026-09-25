@@ -1,0 +1,51 @@
+{
+  "name": "pttag-audience-derived-from-source",
+  "description": "Per-datum provenance: reading a ledger entry mints a pt_tag whose audience is DERIVED from that entry's viewers, not named by the session. The session runs as auditor-1@example.com, who can see entry-100; auditor-9@example.com can see only entry-900. After one read of entry-100 exactly one tag exists, auditor-1 resolves as a reader of it and auditor-9 does not, and the tag carries no untrusted origin. The exclusion is the load-bearing half: `direct_reader` GRANTS disclosure, so a mint path that let the session author its own audience — or that defaulted to a wildcard — would satisfy every other assertion here while handing a datum to someone its source never disclosed it to.",
+
+  "agentDir": "../testdata/agent-ledger-records",
+  "agentClass": "ledger-records",
+
+  "defaultUser": "auditor-1@example.com",
+
+  "toolOutputs": {
+    "read_entry": {
+      "id": "entry-100",
+      "memo": "Q3 reconciliation",
+      "amount": "4120.00"
+    },
+    "read_public_note": {
+      "id": "entry-100",
+      "note": "unused by this scenario"
+    }
+  },
+
+  "userTurns": [
+    "open ledger entry entry-100"
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "entry-100" },
+      "reply": [{ "toolUse": { "name": "ledger_read_entry", "args": { "operation_id": "op-read-100", "_reason": "user asked to open a specific ledger entry", "args": { "id": "entry-100" } } } }]
+    },
+    {
+      "expect": { "lastToolResult": "ledger_read_entry" },
+      "reply": [{ "text": "Entry entry-100 is the Q3 reconciliation for 4120.00" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "read one entry" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["Q3 reconciliation"],
+    "toolsCalled": ["ledger_read_entry"],
+    "ptTags": {
+      "minted": 1,
+      "readersInclude": ["auditor-1@example.com"],
+      "readersExclude": ["auditor-9@example.com"],
+      "carriesUntrusted": false
+    }
+  }
+}

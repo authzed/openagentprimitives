@@ -1,0 +1,47 @@
+# The centerdot fixture with the memory capability granted, so the session is
+# offered query_memory.
+#
+# The capability is opt-in (capability.memoryCapability.DefaultOn is false) and
+# the harness wires MemoryAvailable=true, so this one line is the difference
+# between a session that has the tool and one that does not. Nothing else about
+# the class changes.
+#
+# The WHOLE spec is restated: ExtraManifests REPLACES the object rather than
+# patching it, so a partial spec drops systemPrompt and the class fails Valid
+# with "exactly one of inline or configMapRef must be set".
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: centerdot-companies
+  namespace: default
+spec:
+  displayName: CenterdotBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: centerdot-placeholder
+      key: api-key
+  capabilities:
+    memory: {}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster.
+
+      You operate on companies and contacts, and you can recall what this
+      session already knows with query_memory.
+  agentIdentity: centerdot-identity
+  mcpServers:
+    - name: centerdot
+      ref: centerdot-companies
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+  authz:
+    slots:
+      - resourceType: crm_company
+        description: "A CRM company record"
+        permission: contact_access

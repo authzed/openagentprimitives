@@ -1,0 +1,36 @@
+id: anthropic-oauth
+title: Claude
+description: Your Claude Code subscription token, so the agent can run Claude Code as you.
+docsURL: https://code.claude.com/docs/en/authentication
+shape: bearer
+builtin: anthropic-oauth
+
+# Shown verbatim in every enter-token UI.
+instructions: |
+  This agent runs Claude Code as you, using your Claude subscription.
+  Generate a long-lived token on your own machine:
+
+    1. Install Claude Code, then run:  claude setup-token
+    2. Complete the browser sign-in (requires a Claude Pro, Max, Team,
+       or Enterprise subscription).
+    3. Copy the printed token (starts with "sk-ant-") and paste it here.
+
+  The token is NOT stored by `setup-token` — copy it when shown. It is
+  used only to run Claude Code on your behalf inside a sandbox.
+
+# Format gate — enforced at every entry point (paste forms, put-token CLI,
+# setup flow) via ValidateToken. Claude Code OAuth tokens from
+# `claude setup-token` begin with sk-ant-oat; this prefix distinguishes them
+# from API keys (sk-ant-api…), so a wrong-token paste is rejected loudly at
+# entry instead of failing later as an opaque 401 when the agent runs. Kept
+# prefix-only (not length-anchored) so a valid token is never rejected.
+tokenShape:
+  pattern: '^sk-ant-oat'
+  description: 'a Claude Code OAuth token starting with sk-ant-oat… (from `claude setup-token`)'
+
+prompt: |
+  The user must supply a Claude Code OAuth token they generate themselves
+  with `claude setup-token`. Do NOT attempt to drive an OAuth flow — Claude
+  Code's OAuth client is loopback-only and audience-bound; AP cannot mint
+  the token. Instruct the user to run `claude setup-token` and paste the
+  result.

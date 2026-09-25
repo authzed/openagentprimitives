@@ -1,0 +1,88 @@
+{
+  "name": "plangate-completion-discipline",
+  "description": "Leaving a phase unfinished is fine — only a DEPENDENCY blocks. Phase 1 declares requires:[recon], so selecting it before recon is finished is refused; completing recon releases it. The refusal must reach the agent as a tool ERROR naming the phase holding it up, not as a silent no-op that leaves it believing it switched.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-enforcing"],
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["list the companies then summarise them"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies", "toolOffered": "complete_phase" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "list companies", "status": "pending", "phase": "recon" }
+              ],
+              "phases": [
+                {
+                  "id": "recon",
+                  "label": "List the companies",
+                  "why": "I need the list before I can summarise it",
+                  "permissions": [
+                    { "handle": "perm:list:crm_company", "why": "to list companies" }
+                  ]
+                },
+                {
+                  "id": "summarise",
+                  "label": "Write the summary",
+                  "why": "the user asked for a summary",
+                  "requires": [{ "phase": "recon", "why": "there is nothing to summarise until the list exists" }],
+                  "permissions": [
+                    { "handle": "tool:apply_workspace", "why": "to write the summary file" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "select_phase", "args": { "index": 1 } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "select_phase",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "List the companies"
+      },
+      "reply": [{ "toolUse": { "name": "complete_phase", "args": { "index": 0, "outcome": "listed the companies" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "complete_phase", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "select_phase", "args": { "index": 1 } } }]
+    },
+    {
+      "expect": { "lastToolResult": "select_phase", "lastToolResultIsError": false },
+      "reply": [{ "text": "recon is done and I am now in the summary phase" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["summary phase"],
+    "planGate": {
+      "frozenPhases": 2,
+      "onePlanDigest": true,
+      "rebuildableFromLog": true
+    }
+  }
+}

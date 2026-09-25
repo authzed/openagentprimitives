@@ -1,0 +1,29 @@
+{
+  "action": "opened",
+  "number": 43,
+  "pull_request": {
+    "title": "Fix a typo in the install guide",
+    "html_url": "https://github.com/demo-org/platform/pull/43",
+    "draft": false,
+    "user": {
+      "login": "demo-contributor",
+      "id": 9906581
+    },
+    "head": {
+      "ref": "typo-fix",
+      "sha": "d4e5f60718293a4b5c6d7e8f9012345678901234",
+      "repo": {
+        "full_name": "demo-contributor/platform",
+        "fork": true
+      }
+    },
+    "base": {
+      "ref": "main",
+      "sha": "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567"
+    },
+    "changed_files": 1
+  },
+  "repository": {
+    "full_name": "demo-org/platform"
+  }
+}

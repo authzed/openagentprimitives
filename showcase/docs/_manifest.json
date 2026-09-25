@@ -1,0 +1,323 @@
+{
+  "multiplayer-approval": {
+    "kind": "clip",
+    "webm": "/media/multiplayer-approval.webm",
+    "mp4": "/media/multiplayer-approval.mp4",
+    "poster": "/media/multiplayer-approval.png",
+    "caption": "A multiplayer session with two owner gates: approving Alex to take part, then approving the production deploy."
+  },
+  "mp-join": {
+    "kind": "screenshot",
+    "src": "/media/mp-join.png",
+    "caption": "A new participant is gated: srebot waits for an owner to approve Alex before acting on his message."
+  },
+  "mp-dm": {
+    "kind": "screenshot",
+    "src": "/media/mp-dm.png",
+    "caption": "The production-deploy approval, DMed to an owner so they can approve without opening the channel."
+  },
+  "mp-complete": {
+    "kind": "screenshot",
+    "src": "/media/mp-complete.png",
+    "caption": "Once an owner approves, the card resolves in place and srebot completes the rollout."
+  },
+  "codebot-plangate": {
+    "kind": "clip",
+    "webm": "/media/codebot-plangate.webm",
+    "mp4": "/media/codebot-plangate.mp4",
+    "poster": "/media/codebot-plangate.png",
+    "caption": "codebot proposes a plan to open a PR on acme/widget; one approval covers the plan and slots that repo."
+  },
+  "cb-plan": {
+    "kind": "screenshot",
+    "src": "/media/cb-plan.png",
+    "caption": "The plan-gate approval card: each phase and the blast radius of its permissions — read, write, and the external step that opens the PR."
+  },
+  "cb-run": {
+    "kind": "screenshot",
+    "src": "/media/cb-run.png",
+    "caption": "Approved in one click; the steps inside the plan then run without prompting again, ending in an opened PR."
+  },
+  "cb-scope": {
+    "kind": "screenshot",
+    "src": "/media/cb-scope.png",
+    "caption": "The approval was slotted to acme/widget — a different repo needs a fresh one."
+  },
+  "shared-permissions": {
+    "kind": "clip",
+    "webm": "/media/shared-permissions.webm",
+    "mp4": "/media/shared-permissions.mp4",
+    "poster": "/media/shared-permissions.png",
+    "caption": "Sam asks for Circldot's contacts; the approval routes to Circldot's owner (Jordan), who approves before the data is shared."
+  },
+  "sp-dm": {
+    "kind": "screenshot",
+    "src": "/media/sp-dm.png",
+    "caption": "The approval is DMed to the company's owner — not to whoever asked — with what's being shared, why, and the permission it grants."
+  },
+  "sp-return": {
+    "kind": "screenshot",
+    "src": "/media/sp-return.png",
+    "caption": "Only after the owner approves does the agent return the contacts to the requester."
+  },
+  "identity-choice": {
+    "kind": "clip",
+    "webm": "/media/identity-choice.webm",
+    "mp4": "/media/identity-choice.mp4",
+    "poster": "/media/identity-choice.png",
+    "caption": "codebot asks whose identity to use; a recommender suggests \"Run as me\", Jordan confirms, and the work runs under Jordan's account."
+  },
+  "id-badges": {
+    "kind": "screenshot",
+    "src": "/media/id-badges.png",
+    "caption": "Every agent shows which identity it uses: \"Uses YOUR account\" (passthrough) vs. \"Uses an operator account\" (agent identity)."
+  },
+  "id-prompt": {
+    "kind": "screenshot",
+    "src": "/media/id-prompt.png",
+    "caption": "The per-session identity choice: run as the agent, run as me, or cancel — with dynamic's advisory suggestion highlighted."
+  },
+  "id-chosen": {
+    "kind": "screenshot",
+    "src": "/media/id-chosen.png",
+    "caption": "Once you choose, the session resolves and the agent proceeds under that identity."
+  },
+  "web-signin": {
+    "kind": "screenshot",
+    "src": "/media/web-signin.png",
+    "caption": "The local web UI is gated by the admin password you set at install."
+  },
+  "web-newsession": {
+    "kind": "screenshot",
+    "src": "/media/web-newsession.png",
+    "caption": "Starting a session from the browser: pick an agent, say what you need."
+  },
+  "web-chat": {
+    "kind": "screenshot",
+    "src": "/media/web-chat.png",
+    "caption": "A pirate-speak agent answering in the browser chat — the same session surface the Desktop “New chat…” opens."
+  },
+  "agent-definition-demo": {
+    "kind": "clip",
+    "webm": "/media/agent-definition-demo.webm",
+    "mp4": "/media/agent-definition-demo.mp4",
+    "poster": "/media/agent-definition-demo.png",
+    "caption": "One reviewable class, two independent sessions — each with its own scope, budget, and audit trail."
+  },
+  "agent-definition-sessions": {
+    "kind": "screenshot",
+    "src": "/media/agent-definition-demo.png",
+    "caption": "The same class running as two separate sessions, one per thread."
+  },
+  "safe-tools-demo": {
+    "kind": "clip",
+    "webm": "/media/safe-tools-demo.webm",
+    "mp4": "/media/safe-tools-demo.mp4",
+    "poster": "/media/safe-tools-demo.png",
+    "caption": "Read-only steps run freely; the external deploy asks for approval first, then runs in a locked-down sandbox."
+  },
+  "safe-tools-approval": {
+    "kind": "screenshot",
+    "src": "/media/safe-tools-demo.png",
+    "caption": "An external tool call, approved — the card is computed from the call: the exact deploy and its blast radius."
+  },
+  "channels-demo": {
+    "kind": "clip",
+    "webm": "/media/channels-demo.webm",
+    "mp4": "/media/channels-demo.mp4",
+    "poster": "/media/channels-demo.png",
+    "caption": "Reached with an @mention in a real thread; the App Home tab is the agent's at-a-glance hub."
+  },
+  "channels-apphome": {
+    "kind": "screenshot",
+    "src": "/media/channels-demo.png",
+    "caption": "The App Home hub: what the agent is, whose account it acts as, and which services it's connected to."
+  },
+  "memory-demo": {
+    "kind": "clip",
+    "webm": "/media/memory-demo.webm",
+    "mp4": "/media/memory-demo.mp4",
+    "poster": "/media/memory-demo.png",
+    "caption": "The agent recalls from an authorized store, then produces and delivers a durable, versioned artifact."
+  },
+  "memory-artifact": {
+    "kind": "screenshot",
+    "src": "/media/memory-demo.png",
+    "caption": "A durable, versioned artifact delivered in-thread — attached to the reply, and rendered inert."
+  },
+  "egress-leakage": {
+    "kind": "screenshot",
+    "src": "/media/info-leakage.png",
+    "caption": "The information-leakage gate: a reply would reach a guest who can't see the data, so the data owner is asked to approve the share."
+  },
+  "mid-turn-queue": {
+    "kind": "screenshot",
+    "src": "/media/queued-messages.png",
+    "caption": "A message sent mid-turn is queued, not dropped — with a one-click “Interrupt & Send Now”."
+  },
+  "artifacts-demo": {
+    "kind": "clip",
+    "webm": "/media/artifacts-demo.webm",
+    "mp4": "/media/artifacts-demo.mp4",
+    "poster": "/media/artifacts-demo.png",
+    "caption": "A durable artifact is delivered, then revised in place — a new immutable revision advances `latest` while the link keeps pointing at the report."
+  },
+  "artifact-viewer": {
+    "kind": "screenshot",
+    "src": "/media/artifact-viewer.png",
+    "caption": "Annotating the rendered artifact in the viewer: mark up an element, leave a note, and send the batch back to the agent to revise."
+  },
+  "thread-adoption": {
+    "kind": "screenshot",
+    "src": "/media/thread-adoption.png",
+    "caption": "@-mentioned into an existing thread, the bot adopts it — the prior discussion is now its context, and the people in it (sam, riley) are participants who can talk to it and approve what it does."
+  },
+  "console-init": {
+    "kind": "clip",
+    "webm": "/media/console-init.webm",
+    "mp4": "/media/console-init.mp4",
+    "poster": "/media/console-init.png",
+    "caption": "`oap init --local`, scripted end to end: resolve the kind → build → install (live checklist) → seed authorization → health-check → first-run setup."
+  },
+  "console-check": {
+    "kind": "clip",
+    "webm": "/media/console-check.webm",
+    "mp4": "/media/console-check.mp4",
+    "poster": "/media/console-check.png",
+    "caption": "`oap check` — each component reports for itself: ✓ healthy, ⚠ degraded, ✗ down."
+  },
+  "admin-tour": {
+    "kind": "clip",
+    "webm": "/media/admin-tour.webm",
+    "mp4": "/media/admin-tour.mp4",
+    "poster": "/media/admin-overview.png",
+    "caption": "A walkthrough of the real admin dashboard — Overview, live sessions, approvals, the agent config, tiered settings, and the audit log."
+  },
+  "admin-agents": {
+    "kind": "screenshot",
+    "src": "/media/admin-agents.png",
+    "caption": "Config › Agents — every AgentClass and its readiness; installing an agent from here is a permissioned action too."
+  },
+  "admin-settings": {
+    "kind": "screenshot",
+    "src": "/media/admin-settings.png",
+    "caption": "Config › Settings — the tiered defaults and ceilings, resolved and shown per setting."
+  },
+  "desktop-settings": {
+    "kind": "screenshot",
+    "src": "/media/desktop-settings.png",
+    "caption": "Desktop → Settings → Cluster — the model catalog, limits and defaults as sub-tabs, validated against the live cluster before you save."
+  },
+  "admin-logs": {
+    "kind": "screenshot",
+    "src": "/media/admin-logs.png",
+    "caption": "Audit › Logs — the cross-session, tamper-evident record: lifecycle events, tool calls, and authorization decisions."
+  },
+  "admin-sessions": {
+    "kind": "screenshot",
+    "src": "/media/admin-sessions.png",
+    "caption": "Sessions — every agent session, current and historical, with status and estimated tokens."
+  },
+  "admin-toolcalls": {
+    "kind": "screenshot",
+    "src": "/media/admin-toolcalls.png",
+    "caption": "Live tool calls — tool invocations as they happen, across every session."
+  },
+  "admin-approvals": {
+    "kind": "screenshot",
+    "src": "/media/admin-approvals.png",
+    "caption": "Approvals — tool calls and leakage gates awaiting a human decision."
+  },
+  "admin-channels": {
+    "kind": "screenshot",
+    "src": "/media/admin-channels.png",
+    "caption": "Channels — where agents are reachable, and each binding's connection status."
+  },
+  "admin-directory": {
+    "kind": "screenshot",
+    "src": "/media/admin-directory.png",
+    "caption": "Directory — the directory syncs feeding SpiceDB (Slack, GitHub, 1Password memberships)."
+  },
+  "admin-identity": {
+    "kind": "screenshot",
+    "src": "/media/admin-identity.png",
+    "caption": "Identity — agent identities, their credentials, and the login providers people sign in through."
+  },
+  "admin-memory": {
+    "kind": "screenshot",
+    "src": "/media/admin-memory.png",
+    "caption": "Memory — the searchable, authorized memory store: kinds, entry counts, and scopes."
+  },
+  "admin-artifacts": {
+    "kind": "screenshot",
+    "src": "/media/admin-artifacts.png",
+    "caption": "Artifacts — the durable, versioned outputs agents have produced."
+  },
+  "admin-budget": {
+    "kind": "screenshot",
+    "src": "/media/admin-budget.png",
+    "caption": "Budget — estimated spend by model, agent, session, and user."
+  },
+  "builder-first-agent": {
+    "kind": "clip",
+    "webm": "/media/builder-first-agent.webm",
+    "mp4": "/media/builder-first-agent.mp4",
+    "poster": "/media/builder-first-agent.png",
+    "caption": "One build, end to end: describe the agent, answer its questions, approve the stage once, test it live on the page, and keep the draft."
+  },
+  "builder-newsession": {
+    "kind": "screenshot",
+    "src": "/media/builder-newsession.png",
+    "caption": "The session picker lists Agent Builder for the people named at install; the message can stay empty."
+  },
+  "builder-intake": {
+    "kind": "screenshot",
+    "src": "/media/builder-intake.png",
+    "caption": "The workshop page opens on Intake with one form: what should this agent do?"
+  },
+  "builder-questions": {
+    "kind": "screenshot",
+    "src": "/media/builder-questions.png",
+    "caption": "The builder restates what it understood, lists what is settled, and asks one question at a time."
+  },
+  "builder-approve-card": {
+    "kind": "screenshot",
+    "src": "/media/builder-approve-card.png",
+    "caption": "The stage card in the conversation view: approve it once and every change in that stage runs without another card."
+  },
+  "builder-test": {
+    "kind": "screenshot",
+    "src": "/media/builder-test.png",
+    "caption": "Test: a real session of the new agent embedded on the page, with the builder watching what it does."
+  },
+  "builder-deliver": {
+    "kind": "screenshot",
+    "src": "/media/builder-deliver.png",
+    "caption": "Deliver: a saved copy of exactly what was tested, and three choices — install for real, hand the draft to someone, test again."
+  },
+  "builder-install-requested": {
+    "kind": "screenshot",
+    "src": "/media/builder-install-requested.png",
+    "caption": "Install for real records a request for a platform admin; nothing runs until they approve it."
+  },
+  "admin-workshops": {
+    "kind": "screenshot",
+    "src": "/media/admin-workshops.png",
+    "caption": "The admin console lists every open workshop — who started it, its phase, and any install request waiting on it."
+  },
+  "admin-workshops-install": {
+    "kind": "screenshot",
+    "src": "/media/admin-workshops-install.png",
+    "caption": "Install asks for the namespace the agent should land in, plus any install-time questions the draft declares."
+  },
+  "admin-workshops-installed": {
+    "kind": "screenshot",
+    "src": "/media/admin-workshops-installed.png",
+    "caption": "Installed: the row records where the agent landed; the person who asked is told."
+  },
+  "builder-permissions": {
+    "kind": "screenshot",
+    "src": "/media/builder-permissions.png",
+    "caption": "Permissions, in the person's words: what the agent will do on its own, what it will ask about first, and what it will never do."
+  }
+}

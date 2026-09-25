@@ -1,0 +1,879 @@
+name: git
+version: "1"
+toolkitRevision: "2026-04-24"
+target:
+  binary: git
+  versionRange: ">=2.30.0 <3.0.0"
+  versionProbe:
+    args: ["--version"]
+    extract:
+      kind: regex
+      pattern: 'git version ([0-9]+\.[0-9]+\.[0-9]+)'
+parser:
+  kind: declarative
+
+env:
+  allowed:
+    - {name: GIT_DIR,              description: "Override path to .git directory"}
+    - {name: GIT_WORK_TREE,        description: "Override path to working tree"}
+    - {name: GIT_AUTHOR_NAME,      description: "Author name for commits"}
+    - {name: GIT_AUTHOR_EMAIL,     description: "Author email for commits"}
+    - {name: GIT_COMMITTER_NAME,   description: "Committer name for commits"}
+    - {name: GIT_COMMITTER_EMAIL,  description: "Committer email for commits"}
+    - {name: SSH_AUTH_SOCK,        description: "Path to the SSH agent socket. Path itself is not a credential; sandboxed pods would need SSH-agent forwarding to actually use it (not currently supported)."}
+    - {name: HTTPS_PROXY,          description: "HTTP proxy for network operations"}
+    - {name: GIT_CONFIG_GLOBAL,    description: "Path to the global git config. Set to /dev/null to disable user-config-driven code execution (core.sshCommand, url=ext::sh -c, etc.)."}
+    - {name: GIT_CONFIG_NOSYSTEM,  description: "When set to 1, ignore the system-wide /etc/gitconfig — defense-in-depth hardening alongside GIT_CONFIG_GLOBAL."}
+    - {name: GIT_TERMINAL_PROMPT,  description: "When set to 0, never prompt on the terminal — fail instead of hanging if creds are missing."}
+    - {name: GIT_TOKEN,            title: "Git host", description: "An HTTPS token (e.g. a GitHub/GitLab PAT) so the agent can clone, fetch, and push as you.", sensitive: true, credential: git-token}
+    - {name: GIT_ASKPASS,          description: "Path to the askpass helper that serves GIT_TOKEN. Set by the sandbox image; operators do not configure this."}
+
+globalFlags:
+  - {long: help,    short: h, type: bool}
+  - {long: version,            type: bool}
+  - {long: no-pager,           type: bool}
+  - {long: git-dir,            type: path}
+  - {long: work-tree,          type: path}
+  - {long: no-replace-objects, type: bool}
+  - {long: bare,               type: bool}
+  # git's -C <path> ("run as if started in <path>") has no long form;
+  # short-only flag. Must precede the subcommand: `git -C <dir> <cmd>`.
+  - {short: C,                 type: path}
+  # git's -c <key>=<value> sets a one-shot config override for this single
+  # invocation. Short-only (no long form) and repeatable — declared as a
+  # stringList so each `-c` occurrence accumulates a value; the next token is
+  # consumed whole (no splitOn) so `-c user.name=Ada Lovelace` stays intact.
+  # Must precede the subcommand: `git -c <k>=<v> <cmd>`. This flag is
+  # dangerous unscoped (core.sshCommand=, url.<base>.insteadOf=ext::sh, etc.)
+  # and it OVERRIDES the GIT_CONFIG_COUNT/KEY/VALUE pinning Dockerfile.sandbox
+  # applies — verified on git 2.55.0, where `-c core.fsmonitor=<script> status`
+  # runs the script despite the env pin. So a spec admitting it unconstrained
+  # yields arbitrary command execution no matter how narrow its
+  # allowSubcommands list is.
+  #
+  # requiresConstraint makes that obligation machine-checkable rather than a
+  # note here: spec.ValidateRequiredFlagConstraints refuses a spec that admits
+  # subcommands and does not constrain this flag's values. It is declared
+  # because the comment alone did not hold — two of the four shipped git
+  # toolspecs admitted `-c` unconstrained, one of them advertised as read-only.
+  - {short: c,                 type: stringList, requiresConstraint: true}
+
+permission:
+  stateImpact: passthrough
+
+# The SpiceDB resource types this toolkit's checks name. Shipped WITH the
+# toolkit so a git-tooled agent works on a fresh cluster: a check names a
+# resourceType and a permission, and without a definition the Check resolves an
+# id and then has nowhere to ask (`object definition "git_repo" not found`).
+#
+# `owner` is the only relation, and every permission resolves to it. That is the
+# minimum that makes the checks answerable, NOT a recommendation: a real
+# deployment is expected to redefine git_repo with its own relations (a team, a
+# read-only role, a per-branch rule) and richer expressions. The permission NAMES
+# are the contract the toolkit depends on; the expressions behind them are the
+# operator's.
+#
+# Four permissions, matching the four tiers the subcommands are sorted into —
+# read (status/log/diff/...), write (commit/merge/...), fetch (fetch/pull/clone),
+# push. They are separate so a grant can be, too: read access to a repository
+# should not imply the ability to push to it, and one permission for all of git
+# would make that distinction unrepresentable.
+spicedbSchema:
+  resources:
+    - name: git_repo
+      # No local permission governs who may approve reaching a git remote: a
+      # repository's permissions live at the forge, and nothing writes a SpiceDB
+      # tuple per remote. The session's own approvers decide, and their decision
+      # IS the authority. Stated explicitly because there is no default.
+      standing: session-only
+      relations:
+        - {name: owner, subjectType: user}
+      # git_repo is host-agnostic — the same type names a checkout of GitHub,
+      # GitLab, a self-hosted forge, or a bare local remote. `icon` therefore
+      # names a GENERIC mark, never "github": claiming the GitHub brand would
+      # lie the moment an instance points somewhere else. `label: url_path`
+      # shortens the instance's remote URL to its path (demo-org/demo-repo) so
+      # an approval card shows which repository, not just that it is one.
+      display: {name: "Git repository", icon: repository, label: url_path}
+      permissions:
+        # `title` is the phrase a human reads on an approval card instead of the
+        # handle (`perm:push:git_repo`). Keep each one honest about SCOPE: read
+        # and write key on `workspace` — the checked-out copy in this session —
+        # while fetch and push key on the remote URL and reach the world.
+        # Saying "the repository" for all four would blur exactly the line an
+        # approver is deciding on.
+        #
+        # `planningNote` is the other audience: what the AGENT reads while
+        # declaring a plan. It shapes what gets DECLARED, never what gets
+        # granted.
+        - name: read
+          expr: owner
+          title: "Read the checked-out files and history"
+          planningNote: >-
+            Keys on the checked-out copy, not the remote. Declare it in every
+            phase that inspects files — including one that commits, since
+            staging re-reads what changed.
+        - name: write
+          expr: owner
+          title: "Change the checked-out files"
+          planningNote: >-
+            Keys on the checked-out copy, not the remote. Declare perm:read:git_repo
+            alongside it: a phase that may change files but not read them stops to
+            ask a human the first time it looks at a diff.
+        - name: fetch
+          expr: owner
+          title: "Clone or fetch from the remote repository"
+          planningNote: >-
+            Keys on the REMOTE URL, so the phase declaring it must also name the
+            repository as a slot — otherwise it is approved against nothing and
+            re-asks per call.
+        - name: push
+          expr: owner
+          title: "Push commits to the remote repository"
+          planningNote: >-
+            Keys on the REMOTE URL and leaves this session. Name the repository
+            as a slot in the same phase, and declare it up front rather than
+            discovering it after the commit — a push added later is a second
+            interruption for work already done.
+
+subcommands:
+  - path: [status]
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: git_repo
+        permission: read
+        resourceIDTemplate: "workspace"
+    description: "Show the working tree status"
+    # Fast, local read — fail quickly rather than hang for the 5m sync default.
+    timeout: 30s
+    positional:
+      - {name: pathspec, type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: short,   short: s, type: bool}
+      - {long: branch,  short: b, type: bool}
+      - {long: porcelain,         type: bool}
+      - {long: long,              type: bool}
+      # -u[<mode>] / --untracked-files[=<mode>]: the value is OPTIONAL, so git
+      # does not consume the next token for it.
+      - {long: untracked-files, short: u, type: string, optionalValue: true}
+    effects:
+      destructive: false
+      reads:  [filesystem]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [log]
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: git_repo
+        permission: read
+        resourceIDTemplate: "workspace"
+    description: "Show commit logs"
+    positional:
+      - {name: revision-range, type: string, required: false}
+      # `git log [<rev>] [[--] <path>…]`: git overloads `--` as the
+      # revision/pathspec separator, so post-`--` args bind HERE and never to
+      # revision-range — matching what git itself does with them.
+      - {name: paths,          type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: oneline,              type: bool}
+      - {long: graph,                type: bool}
+      # --decorate[=<mode>] / --pretty[=<format>] / --format=<format>: git takes
+      # a value only in the attached `=` form and never consumes the following
+      # token, so `git log --decorate <rev>` leaves <rev> a positional.
+      - {long: decorate,             type: string, optionalValue: true}
+      - {long: all,                  type: bool}
+      - {long: follow,               type: bool}
+      - {long: format,               type: string, optionalValue: true}
+      - {long: pretty,               type: string, optionalValue: true}
+      - {long: stat,                 type: bool}
+      - {long: patch,    short: p,   type: bool}
+      - {long: author,               type: string}
+      - {long: since,                type: string}
+      - {long: until,                type: string}
+      - {long: grep,                 type: string}
+      - {long: max-count, short: "n",  type: int}
+      - {long: skip,                 type: int}
+      - {long: reverse,              type: bool}
+      - {long: no-walk,              type: bool}
+    effects:
+      destructive: false
+      reads:  [filesystem]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [diff]
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: git_repo
+        permission: read
+        resourceIDTemplate: "workspace"
+    description: "Show changes between commits, commit and working tree, etc."
+    positional:
+      - {name: commit, type: string, required: false}
+      - {name: paths,  type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: cached,           type: bool}
+      - {long: staged,           type: bool}
+      - {long: stat,             type: bool}
+      - {long: name-only,        type: bool}
+      - {long: name-status,      type: bool}
+      - {long: patch,  short: p, type: bool}
+      - {long: no-patch,         type: bool}
+      # -U[<n>] and --word-diff[=<mode>] both take an OPTIONAL value.
+      - {long: unified, short: U, type: int, optionalValue: true}
+      - {long: diff-filter,      type: string}
+      - {long: ignore-space-change, short: b, type: bool}
+      - {long: word-diff,        type: string, optionalValue: true}
+    effects:
+      destructive: false
+      reads:  [filesystem]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [show]
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: git_repo
+        permission: read
+        resourceIDTemplate: "workspace"
+    description: "Show various types of objects (commits, tags, trees, blobs)"
+    positional:
+      - {name: object, type: string, required: false}
+      - {name: paths,  type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: stat,             type: bool}
+      - {long: name-only,        type: bool}
+      - {long: format,           type: string, optionalValue: true}
+      - {long: pretty,           type: string, optionalValue: true}
+      - {long: no-patch,         type: bool}
+    effects:
+      destructive: false
+      reads:  [filesystem]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [branch]
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: git_repo
+        permission: read
+        resourceIDTemplate: "workspace"
+    description: "List, create, or delete branches. Destructive: true because --delete/-D and rename options exist; spec authors should restrict flags to constrain risk."
+    positional:
+      - {name: branchname, type: string, required: false}
+      - {name: start-point, type: string, required: false}
+    flags:
+      - {long: list,           short: l, type: bool}
+      - {long: all,            short: a, type: bool}
+      - {long: remotes,        short: r, type: bool}
+      - {long: delete,         short: d, type: bool}
+      - {long: force,          short: f, type: bool}
+      - {long: move,           short: m, type: bool}
+      - {long: copy,           short: c, type: bool}
+      - {long: set-upstream-to, short: u, type: string}
+      - {long: unset-upstream,  type: bool}
+      - {long: show-current,    type: bool}
+      - {long: verbose,        short: v, type: bool}
+      # --merged/--no-merged/--contains all take an OPTIONAL <commit>.
+      - {long: no-merged,       type: string, optionalValue: true}
+      - {long: merged,          type: string, optionalValue: true}
+      - {long: contains,        type: string, optionalValue: true}
+      - {long: track,          short: t, type: bool}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [tag]
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: git_repo
+        permission: read
+        resourceIDTemplate: "workspace"
+    description: "Create, list, delete or verify a tag. Destructive: true because --delete exists."
+    positional:
+      - {name: tagname, type: string, required: false}
+      - {name: commit,  type: string, required: false}
+    flags:
+      - {long: annotate,  short: a, type: bool}
+      - {long: message,   short: m, type: string}
+      - {long: delete,    short: d, type: bool}
+      - {long: force,     short: f, type: bool}
+      - {long: list,      short: l, type: bool}
+      - {long: sign,      short: s, type: bool}
+      - {long: verify,    short: v, type: bool}
+      - {long: sort,               type: string}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [remote]
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: git_repo
+        permission: read
+        resourceIDTemplate: "workspace"
+    description: "Manage set of tracked repositories. Destructive: true because remove/rename/set-url modify config."
+    positional:
+      - {name: subcommand, type: string, required: false}
+      - {name: name,       type: string, required: false}
+      - {name: url,        type: string, required: false}
+    flags:
+      - {long: verbose, short: v, type: bool}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [blame]
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: git_repo
+        permission: read
+        resourceIDTemplate: "workspace"
+    description: "Show what revision and author last modified each line of a file"
+    positional:
+      # `git blame [<rev>] [--] <file>`. Not marked required: git accepts the
+      # file either as this slot or after `--` (see paths), and git itself
+      # errors when neither supplies one.
+      - {name: file,  type: path, required: false}
+      - {name: paths, type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: line-porcelain,        type: bool}
+      - {long: porcelain,  short: p,  type: bool}
+      - {long: show-name,  short: f,  type: bool}
+      - {long: show-email, short: e,  type: bool}
+      # A bit flag, not a value-taking option: the <rev>..<rev> range it acts
+      # on is supplied as a positional, so git never consumes a value here.
+      - {long: reverse,               type: bool}
+      - {long: since,                 type: string}
+      - {long: contents,              type: path}
+      - {long: ignore-rev,            type: string}
+    effects:
+      destructive: false
+      reads:  [filesystem]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [add]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: write
+        resourceIDTemplate: "workspace"
+    description: "Add file contents to the index"
+    positional:
+      - {name: pathspec, type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: all,         short: A, type: bool}
+      - {long: update,      short: u, type: bool}
+      - {long: patch,       short: p, type: bool}
+      - {long: force,       short: f, type: bool}
+      - {long: dry-run,     short: "n", type: bool}
+      - {long: interactive, short: i, type: bool}
+      - {long: no-all,               type: bool}
+    effects:
+      destructive: false
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}/.git", "{cwd}"]}
+      creds: {required: [], writes: []}
+
+  - path: [commit]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: write
+        resourceIDTemplate: "workspace"
+    description: "Record changes to the repository"
+    positional:
+      - {name: pathspec, type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: message,          short: m, type: string}
+      - {long: all,              short: a, type: bool}
+      - {long: patch,            short: p, type: bool}
+      - {long: amend,                      type: bool}
+      - {long: no-edit,                    type: bool}
+      - {long: allow-empty,                type: bool}
+      - {long: allow-empty-message,        type: bool}
+      - {long: file,             short: F, type: path}
+      - {long: author,                     type: string}
+      - {long: date,                       type: string}
+      - {long: signoff,          short: s, type: bool}
+      - {long: dry-run,                    type: bool}
+      - {long: verbose,          short: v, type: bool}
+    effects:
+      destructive: false
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [reset]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: write
+        resourceIDTemplate: "workspace"
+    description: "Reset current HEAD to specified state. Destructive: true because --hard permanently discards uncommitted changes; worst-case semantics apply even when flag is omitted."
+    positional:
+      - {name: tree-ish,  type: string, required: false}
+      - {name: pathspec,  type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: soft,       type: bool}
+      - {long: mixed,      type: bool}
+      - {long: hard,       type: bool}
+      - {long: merge,      type: bool}
+      - {long: keep,       type: bool}
+      - {long: patch,      type: bool}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [stash]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: write
+        resourceIDTemplate: "workspace"
+    description: "Stash the changes in a dirty working directory. Destructive: true because stash drop/clear permanently removes stash entries."
+    positional:
+      - {name: subcommand, type: string, required: false}
+      - {name: stash-ref,  type: string, required: false}
+      - {name: pathspec,   type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: include-untracked, short: u, type: bool}
+      - {long: all,               short: a, type: bool}
+      - {long: patch,             short: p, type: bool}
+      - {long: keep-index,                  type: bool}
+      - {long: message,           short: m, type: string}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [checkout]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: write
+        resourceIDTemplate: "workspace"
+    description: "Switch branches or restore working tree files. Destructive: true because checkout of a path discards local changes."
+    positional:
+      - {name: branch-or-tree-ish, type: string, required: false}
+      - {name: pathspec,           type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: branch,          short: b, type: string}
+      - {long: force,           short: f, type: bool}
+      - {long: track,           short: t, type: bool}
+      - {long: no-track,                  type: bool}
+      - {long: detach,          short: d, type: bool}
+      - {long: orphan,                    type: string}
+      - {long: merge,           short: m, type: bool}
+      - {long: patch,           short: p, type: bool}
+      - {long: ours,                      type: bool}
+      - {long: theirs,                    type: bool}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [switch]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: write
+        resourceIDTemplate: "workspace"
+    description: "Switch branches"
+    positional:
+      - {name: branch, type: string, required: false}
+    flags:
+      - {long: create,         short: c, type: string}
+      - {long: force-create,   short: C, type: string}
+      - {long: detach,         short: d, type: bool}
+      - {long: force,          short: f, type: bool}
+      - {long: track,          short: t, type: bool}
+      - {long: no-track,                 type: bool}
+      - {long: merge,          short: m, type: bool}
+      - {long: orphan,                   type: string}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [merge]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: write
+        resourceIDTemplate: "workspace"
+    description: "Join two or more development histories. Destructive: true because it rewrites HEAD and may discard working changes with --overwrite-ignore or when conflicts arise."
+    positional:
+      - {name: commit, type: string, required: false}
+    flags:
+      - {long: commit,           type: bool}
+      - {long: no-commit,        type: bool}
+      - {long: edit,    short: e, type: bool}
+      - {long: no-edit,          type: bool}
+      - {long: ff,               type: bool}
+      - {long: no-ff,            type: bool}
+      - {long: ff-only,          type: bool}
+      - {long: squash,           type: bool}
+      - {long: strategy, short: s, type: string}
+      - {long: strategy-option, short: X, type: string}
+      - {long: abort,            type: bool}
+      - {long: continue,         type: bool}
+      - {long: quit,             type: bool}
+      - {long: message, short: m, type: string}
+      - {long: stat,             type: bool}
+      - {long: verbose, short: v, type: bool}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [rebase]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: write
+        resourceIDTemplate: "workspace"
+    description: "Reapply commits on top of another base tip. Destructive: true because it rewrites commit history."
+    positional:
+      - {name: upstream, type: string, required: false}
+      - {name: branch,   type: string, required: false}
+    flags:
+      - {long: interactive,   short: i, type: bool}
+      - {long: onto,                    type: string}
+      - {long: abort,                   type: bool}
+      - {long: continue,                type: bool}
+      - {long: skip,                    type: bool}
+      - {long: quit,                    type: bool}
+      - {long: autosquash,              type: bool}
+      - {long: autostash,               type: bool}
+      - {long: no-autostash,            type: bool}
+      - {long: strategy,      short: s, type: string}
+      - {long: strategy-option, short: X, type: string}
+      - {long: exec,          short: x, type: string}
+      - {long: rebase-merges,           type: bool}
+      - {long: no-ff,                   type: bool}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [cherry-pick]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: write
+        resourceIDTemplate: "workspace"
+    description: "Apply the changes introduced by some existing commits. Destructive: true because it rewrites the index and can abort partially applied commits."
+    positional:
+      - {name: commit, type: string, required: false}
+    flags:
+      - {long: edit,             short: e, type: bool}
+      - {long: no-commit,        short: "n", type: bool}
+      - {long: mainline,         short: m, type: int}
+      - {long: signoff,          short: s, type: bool}
+      - {long: ff,                         type: bool}
+      - {long: allow-empty,                type: bool}
+      - {long: allow-empty-message,        type: bool}
+      - {long: keep-redundant-commits,     type: bool}
+      - {long: strategy,         short: s, type: string}
+      - {long: strategy-option,  short: X, type: string}
+      - {long: abort,                      type: bool}
+      - {long: continue,                   type: bool}
+      - {long: quit,                       type: bool}
+      - {long: skip,                       type: bool}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [fetch]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: fetch
+        # The remote must be a URL. A shorthand like `origin` resolves from
+        # .git/config, which argv cannot see — the repository would be
+        # invisible to authorization. This guard yields "" for anything
+        # else, and an empty id is a denial, so it fails CLOSED rather
+        # than authorizing against an unnamed repo.
+        resourceIDExpr: 'has(args.remote) && (args.remote.startsWith("https://") || args.remote.startsWith("git@")) ? args.remote : ""'
+        # github_repo_id runs FIRST and only bites on github.com: it folds the
+        # scp form, a trailing `.git`, a trailing slash and case onto one
+        # canonical https id. gh.yaml runs the same transform, so a phase that
+        # clones with `.git` and pushes without it — or reaches the repository
+        # through `gh` as well as `git` — is ONE target and ONE grant. Every
+        # other host passes through it untouched.
+        #
+        # normalize_url then folds what is pure URL spelling for any host —
+        # scheme and host case, a default port, dot segments. It is INJECTIVE:
+        # two DIFFERENT repositories can never collide into a single grant.
+        resourceIDTransforms: [github_repo_id, normalize_url, spicedb_escape]
+        resourceIDHint: "give the remote as a full URL (https://host/org/repo or git@host:org/repo), not a shorthand like `origin` — the URL is how the repository is identified for authorization"
+    description: "Download objects and refs from a remote. The remote MUST be a full URL (e.g. https://github.com/org/repo), not `origin` — the URL identifies which repository is being read."
+    positional:
+      - {name: remote, type: url, required: true}
+      - {name: refspec, type: string, required: false}
+    flags:
+      - {long: all,              type: bool}
+      - {long: prune,  short: p, type: bool}
+      - {long: tags,   short: t, type: bool}
+      - {long: no-tags,          type: bool}
+      - {long: force,  short: f, type: bool}
+      - {long: depth,            type: int}
+      - {long: unshallow,        type: bool}
+      # --recurse-submodules[=yes|on-demand|no]: OPTIONAL value.
+      - {long: recurse-submodules, type: string, optionalValue: true}
+      - {long: dry-run,          type: bool}
+      - {long: verbose, short: v, type: bool}
+      - {long: quiet,   short: q, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [pull]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: fetch
+        # The remote must be a URL. A shorthand like `origin` resolves from
+        # .git/config, which argv cannot see — the repository would be
+        # invisible to authorization. This guard yields "" for anything
+        # else, and an empty id is a denial, so it fails CLOSED rather
+        # than authorizing against an unnamed repo.
+        resourceIDExpr: 'has(args.remote) && (args.remote.startsWith("https://") || args.remote.startsWith("git@")) ? args.remote : ""'
+        # github_repo_id runs FIRST and only bites on github.com: it folds the
+        # scp form, a trailing `.git`, a trailing slash and case onto one
+        # canonical https id. gh.yaml runs the same transform, so a phase that
+        # clones with `.git` and pushes without it — or reaches the repository
+        # through `gh` as well as `git` — is ONE target and ONE grant. Every
+        # other host passes through it untouched.
+        #
+        # normalize_url then folds what is pure URL spelling for any host —
+        # scheme and host case, a default port, dot segments. It is INJECTIVE:
+        # two DIFFERENT repositories can never collide into a single grant.
+        resourceIDTransforms: [github_repo_id, normalize_url, spicedb_escape]
+        resourceIDHint: "give the remote as a full URL (https://host/org/repo or git@host:org/repo), not a shorthand like `origin` — the URL is how the repository is identified for authorization"
+    description: "Fetch from a remote and integrate. The remote MUST be a full URL (e.g. https://github.com/org/repo), not `origin` — the URL identifies which repository is being read."
+    positional:
+      - {name: remote,  type: url, required: true}
+      - {name: refspec, type: string, required: false}
+    flags:
+      # --rebase[=false|true|merges|interactive]: OPTIONAL value, so
+      # `git pull --rebase origin main` leaves origin/main as positionals.
+      - {long: rebase,           type: string, optionalValue: true}
+      - {long: no-rebase,        type: bool}
+      - {long: ff-only,          type: bool}
+      - {long: no-ff,            type: bool}
+      - {long: squash,           type: bool}
+      - {long: force,  short: f, type: bool}
+      - {long: prune,  short: p, type: bool}
+      - {long: tags,             type: bool}
+      - {long: depth,            type: int}
+      - {long: unshallow,        type: bool}
+      - {long: verbose, short: v, type: bool}
+      - {long: quiet,   short: q, type: bool}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [push]
+    permission:
+      stateImpact: external
+      check:
+        resourceType: git_repo
+        permission: push
+        # The remote must be a URL. A shorthand like `origin` resolves from
+        # .git/config, which argv cannot see — the repository would be
+        # invisible to authorization. This guard yields "" for anything
+        # else, and an empty id is a denial, so it fails CLOSED rather
+        # than authorizing against an unnamed repo.
+        resourceIDExpr: 'has(args.remote) && (args.remote.startsWith("https://") || args.remote.startsWith("git@")) ? args.remote : ""'
+        # github_repo_id runs FIRST and only bites on github.com: it folds the
+        # scp form, a trailing `.git`, a trailing slash and case onto one
+        # canonical https id. gh.yaml runs the same transform, so a phase that
+        # clones with `.git` and pushes without it — or reaches the repository
+        # through `gh` as well as `git` — is ONE target and ONE grant. Every
+        # other host passes through it untouched.
+        #
+        # normalize_url then folds what is pure URL spelling for any host —
+        # scheme and host case, a default port, dot segments. It is INJECTIVE:
+        # two DIFFERENT repositories can never collide into a single grant.
+        resourceIDTransforms: [github_repo_id, normalize_url, spicedb_escape]
+        resourceIDHint: "give the remote as a full URL (https://host/org/repo or git@host:org/repo), not a shorthand like `origin` — the URL is how the repository is identified for authorization"
+    description: "Update remote refs along with associated objects. The remote MUST be a full URL (e.g. https://github.com/org/repo), never a shorthand like `origin`: the URL is what identifies the repository being written to, and a push that does not name it cannot be authorized. Destructive: force-push can overwrite remote history."
+    positional:
+      - {name: remote,  type: url, required: true}
+      - {name: refspec, type: string, required: false}
+    flags:
+      - {long: all,                type: bool}
+      - {long: tags,               type: bool}
+      - {long: follow-tags,        type: bool}
+      - {long: force,    short: f, type: bool}
+      # --force-with-lease[=<refname>[:<expect>]]: OPTIONAL value, so
+      # `git push --force-with-lease origin main` leaves origin/main as
+      # positionals — where a refspec constraint can still see them.
+      - {long: force-with-lease,   type: string, optionalValue: true}
+      - {long: delete,   short: d, type: bool}
+      - {long: set-upstream, short: u, type: bool}
+      - {long: dry-run,      short: "n", type: bool}
+      - {long: mirror,               type: bool}
+      - {long: prune,                type: bool}
+      - {long: atomic,               type: bool}
+      - {long: verbose,  short: v,   type: bool}
+      - {long: quiet,    short: q,   type: bool}
+      - {long: no-verify,            type: bool}
+    effects:
+      destructive: true
+      reads:  [filesystem]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}/.git"]}
+      creds: {required: [], writes: []}
+
+  - path: [clone]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: fetch
+        # clone already names the repository in argv, so it keys on the same
+        # identity as push/fetch/pull rather than the workspace sentinel —
+        # one repo means one grant, whichever subcommand reaches it.
+        resourceIDExpr: 'has(args.repository) && (args.repository.startsWith("https://") || args.repository.startsWith("git@")) ? args.repository : ""'
+        resourceIDTransforms: [github_repo_id, normalize_url, spicedb_escape]
+        resourceIDHint: "clone from a full URL (https://host/org/repo or git@host:org/repo) — the URL is how the repository is identified for authorization"
+    description: "Clone a repository into a new directory. The repository MUST be a full URL (e.g. https://github.com/org/repo) — the URL identifies which repository is being read."
+    # Cloning a large repo over a cloud node's egress routinely exceeds the 5m
+    # sync default; give it a 10m budget so big clones don't get cut off.
+    timeout: 10m
+    positional:
+      - {name: repository, type: url,    required: true}
+      - {name: directory,  type: path,   required: false}
+    flags:
+      - {long: branch,      short: b, type: string}
+      - {long: depth,                 type: int}
+      - {long: single-branch,         type: bool}
+      - {long: no-single-branch,      type: bool}
+      - {long: bare,                  type: bool}
+      - {long: mirror,                type: bool}
+      - {long: origin,    short: o,   type: string}
+      # --recurse-submodules[=<pathspec>]: OPTIONAL value.
+      - {long: recurse-submodules,    type: string, optionalValue: true}
+      - {long: shallow-since,         type: string}
+      - {long: no-checkout, short: "n", type: bool}
+      - {long: filter,                type: string}
+      - {long: verbose,   short: v,   type: bool}
+      - {long: quiet,     short: q,   type: bool}
+      - {long: separate-git-dir,      type: path}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{flag:separate-git-dir}"]}
+      creds: {required: [], writes: []}
+
+  - path: [submodule]
+    permission:
+      stateImpact: readwrite
+      check:
+        resourceType: git_repo
+        permission: fetch
+        resourceIDTemplate: "workspace"
+    description: "Initialize, update or inspect submodules. Destructive: true because update/deinit can remove or alter submodule working trees."
+    positional:
+      - {name: subcommand, type: string, required: false}
+      - {name: path,       type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: init,              type: bool}
+      - {long: recursive,         type: bool}
+      - {long: force,             type: bool}
+      - {long: remote,            type: bool}
+      - {long: rebase,  short: r, type: bool}
+      - {long: merge,   short: m, type: bool}
+      - {long: depth,             type: int}
+      - {long: quiet,   short: q, type: bool}
+    effects:
+      destructive: true
+      reads:  [network, filesystem]
+      writes: [filesystem]
+      network: {destinations: []}
+      filesystem: {paths: ["{cwd}", "{cwd}/.git"]}
+      creds: {required: [], writes: []}

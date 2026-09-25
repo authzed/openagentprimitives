@@ -1,0 +1,24 @@
+# default-deny: the foundation of the allowlist model for the
+# agentprimitives-system namespace.
+#
+# An empty podSelector ({}) selects EVERY pod in the namespace. With both
+# Ingress and Egress in policyTypes and no ingress/egress rules, this denies
+# all traffic in both directions for every pod here. The sibling policies in
+# this directory (allow-dns, nats, spicedb, operator, egress-external) are
+# purely ADDITIVE — NetworkPolicy rules union together, so a flow is allowed
+# if ANY policy permits it. Default-deny therefore makes the namespace
+# closed-by-default; everything reachable is something a sibling policy
+# explicitly opened.
+#
+# This also covers ports that are intentionally never allowlisted, e.g. the
+# NATS monitor port 8222 and the SpiceDB dispatch/metrics ports — no allow
+# rule names them, so default-deny keeps them unreachable.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

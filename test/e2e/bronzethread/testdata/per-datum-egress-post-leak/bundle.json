@@ -1,0 +1,61 @@
+{
+  "name": "per-datum-egress-post-leak",
+  "description": "Per-datum EGRESS, LEAK path. The session (auditor-1) reads entry-100 — audience {auditor-1} — then posts it VERBATIM to board-team, which auditor-9 can also read. auditor-9 is not in the datum's reader set, so the egress gate detects a PER-DATUM leak (tool_call_leak_per_datum), raises an info_leakage approval rather than hard-denying, and the post proceeds only once approved. This is the same board a real model might post any entry to; what makes THIS post a leak is the datum, resolved per-datum — the coarse floor could not tell entry-100 from a shareable entry. autoApprove clears the info_leakage card as auditor-1 (the session's approver), so the run completes. approvalPrompts pins that exactly one card was raised — the leak was detected, not silently allowed. The post reuses the wrapped read result via Expect.Capture, exactly as a real model copies a tool result.",
+  "agentDir": "../testdata/agent-ledger-egress",
+  "agentClass": "ledger-egress",
+  "defaultUser": "auditor-1@example.com",
+  "autoApprove": ["info_leakage"],
+  "autoApproveAs": "auditor-1@example.com",
+  "toolOutputs": {
+    "read_entry": { "id": "entry-100", "memo": "Q3 reconciliation", "amount": "4120.00" },
+    "post_to_board": { "board_id": "board-team", "posted": true }
+  },
+  "userTurns": [
+    "read ledger entry entry-100 and post it to board-team"
+  ],
+  "llm": [
+    {
+      "expect": { "userTextContains": "entry-100" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "ledger_read_entry",
+            "args": { "operation_id": "op-read-100", "_reason": "user asked to read a ledger entry before posting it", "args": { "id": "entry-100" } }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "ledger_read_entry",
+        "capture": { "wrapped": "(<pt-untrusted nonce=\"[^\"]+\" id=\"[^\"]+\">[\\s\\S]*</pt-untrusted nonce=\"[^\"]+\">)" }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "ledger_post_to_board",
+            "args": { "operation_id": "op-post-team", "_reason": "user asked to post the entry's content to board-team", "args": { "board_id": "board-team", "text": "{{wrapped}}" } }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "ledger_post_to_board" },
+      "reply": [
+        { "text": "Posted entry-100 (Q3 reconciliation) to board-team." }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [
+        { "toolUse": { "name": "agent_work_complete", "args": { "summary": "read entry-100 and posted it to board-team after approval" } } }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": ["Posted entry-100"],
+    "toolsCalled": ["ledger_read_entry", "ledger_post_to_board"],
+    "noticesPublished": ["info_leakage"],
+    "noticeCounts": { "info_leakage": 1 }
+  }
+}

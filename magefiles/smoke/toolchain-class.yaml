@@ -1,0 +1,44 @@
+# Smoke fixture for the dynamic dev toolchains feature. Applied by
+# `mage test:smoke` AFTER the oap-toolchain-go:dev image is built + kind-loaded.
+#
+# Deliberately a RAW SpiceboxSession bound directly to a SpiceboxClass — no
+# AgentClass/AgentSession layer, because the smoke execs the sandbox pod
+# directly via `kubectl exec` rather than through a ToolCall.
+#
+# No spec.tools and no spec.toolspecs on the class: the SpiceboxSession
+# controller's pod builder (pkg/platform/podspec) never reads either field — it only
+# needs class.Image (defaulted from the operator's --sandbox-image when
+# unset) and class.Resources. Toolspec coverage-gating
+# (ReasonToolspecCoverageMissing) is skipped entirely when spec.toolspecs is
+# empty, so the class stays out of that path regardless of spec.tools.
+#
+# Flow exercised end-to-end:
+#   1. The SpiceboxSession controller resolves+freezes the class's
+#      spec.toolchains: [go] onto status.resolvedToolchains and publishes the
+#      signed toolchain_audit "resolved" memory entry.
+#   2. podspec.Build composes the go toolchain's init container (copies the
+#      read-only payload into the shared `toolchains` emptyDir), the
+#      writable disk-backed /var/ap-cache, and the derived PATH/env.
+#   3. The Pod reaches Ready — the only layer with a real kubelet, so the
+#      only place the glibc pin, the `cp -R` (not `cp -a`) permission model,
+#      and the disk-backed cache are actually exercised.
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: tc-smoke-class
+spec:
+  resources:
+    cpu: "1"
+    memory: "1Gi"
+    ephemeralStorage: "500Mi"
+  toolchains:
+    - go
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxSession
+metadata:
+  name: tc-smoke
+  namespace: default
+spec:
+  class: tc-smoke-class

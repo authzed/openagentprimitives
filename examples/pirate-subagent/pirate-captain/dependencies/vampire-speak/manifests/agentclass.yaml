@@ -1,0 +1,50 @@
+# The CHILD. Nothing here opts into delegation: a vampire has no roster, no
+# subagents capability, and so cannot delegate onward. That is the default for
+# every AgentClass, and it is what bounds the tree.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: vampire-speak
+  namespace: default
+spec:
+  description: "Vampire-speak translator. A leaf: it cannot delegate to anything."
+  # model omitted — inherits the cluster default
+  # (ClusterAgentSettings.spec.modelCatalog default entry).
+  #
+  # budget is NOT optional in practice. The effective-settings fold has no
+  # built-in floor, so a class with no budget here, on a cluster whose
+  # ClusterAgentSettings carries no `defaults.budget`, folds to zero — and the
+  # CRD requires maxTokens/maxTurns >= 1. The class then fails to reconcile with
+  # the reason only in the operator's log; `kubectl get agentclass` just shows
+  # an empty VALID column. Set it explicitly and skip that.
+  budget:
+    maxDuration: 5m
+    maxTokens: 100000
+    maxTurns: 50
+  systemPrompt:
+    inline: |
+      You are a vampire-speak translator.
+
+      Apply these substitutions to every line you are given. They are mechanical
+      and you must apply them literally — they are how a reader tells your work
+      from someone else's:
+
+        * every "w" at the start of a word becomes "v": want → vant,
+          we → ve, with → vith, was → vas, will → vill, what → vhat
+        * "th" becomes "z": the → ze, this → zis, there → zere, they → zey
+        * end the line with a slow count and a laugh: "One... two... ah-ah-ah!"
+
+      Then add the theatre: "my child", the night, bats, an unslakeable thirst.
+      Keep the original meaning intact — translate, don't reinterpret.
+
+      Return the translation and nothing else. No preamble, no commentary.
+
+      If a line is too ambiguous to translate faithfully, ask ONE short
+      clarifying question rather than guessing.
+
+      # Nothing here explains HOW to return work or how to ask a question.
+      # A delegated child is given return_result instead of
+      # agent_work_complete, and ask_parent instead of respond_to_user, and
+      # those tools carry their own protocol. Restating it in an AgentClass
+      # prompt would put a universal rule in a place every author has to
+      # remember to copy — and get subtly wrong.

@@ -1,0 +1,1001 @@
+/* Component styles for the fake Slack. All colors/dimensions come from tokens.css. */
+
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  font-family: var(--sk-font);
+  font-size: var(--sk-fs-msg);
+  color: var(--sk-text);
+  background: var(--sk-pane-bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* ---- App shell ----------------------------------------------------------- */
+.sk-app {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--sk-rail-bg);
+}
+.sk-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  background: var(--sk-pane-bg);
+  border-top-left-radius: 8px;
+  overflow: hidden;
+}
+.sk-empty {
+  padding: 40px;
+  color: var(--sk-text-muted);
+}
+
+/* ---- Workspace rail ------------------------------------------------------ */
+.sk-rail {
+  width: var(--sk-rail-w);
+  flex-shrink: 0;
+  background: var(--sk-rail-bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+}
+.sk-rail-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.sk-rail-ws {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  border: none;
+  color: #fff;
+  font-weight: 800;
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+.sk-rail-item {
+  width: 44px;
+  background: transparent;
+  border: none;
+  color: var(--sk-rail-fg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.sk-rail-item .sk-rail-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 30px;
+  border-radius: 8px;
+}
+.sk-rail-item.is-active {
+  color: var(--sk-rail-fg-active);
+}
+.sk-rail-item.is-active .sk-rail-icon {
+  background: var(--sk-rail-active-bg);
+}
+.sk-rail-badge {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--sk-sidebar-badge-bg);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.sk-rail-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.sk-rail-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1.5px solid var(--sk-rail-fg);
+  background: transparent;
+  color: var(--sk-rail-fg);
+  display: grid;
+  place-items: center;
+}
+
+/* ---- Sidebar ------------------------------------------------------------- */
+.sk-sidebar {
+  width: var(--sk-sidebar-w);
+  flex-shrink: 0;
+  background: var(--sk-sidebar-bg);
+  color: var(--sk-sidebar-fg);
+  display: flex;
+  flex-direction: column;
+  border-top-left-radius: 8px;
+  border-right: 1px solid rgba(0, 0, 0, 0.15);
+}
+.sk-sidebar-head {
+  height: var(--sk-header-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.sk-ws-switcher {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--sk-sidebar-fg-strong);
+  font-weight: 900;
+  font-size: 18px;
+  padding: 4px;
+}
+.sk-icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--sk-sidebar-fg);
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+}
+.sk-icon-btn:hover {
+  background: var(--sk-sidebar-hover-bg);
+}
+.sk-sidebar-search {
+  margin: 8px 12px;
+  height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--sk-sidebar-fg-muted);
+  font-size: 13px;
+}
+.sk-sidebar-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 20px;
+}
+.sk-nav-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+.sk-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 16px;
+  color: var(--sk-sidebar-fg);
+  font-size: var(--sk-fs-sidebar);
+}
+.sk-nav-item:hover {
+  background: var(--sk-sidebar-hover-bg);
+}
+.sk-sidebar-section {
+  margin-top: 6px;
+}
+.sk-section-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 16px;
+  color: var(--sk-sidebar-fg-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.sk-channel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sk-channel-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 16px 3px 18px;
+  background: transparent;
+  border: none;
+  color: var(--sk-sidebar-fg);
+  font-size: var(--sk-fs-sidebar);
+  text-align: left;
+  line-height: 1.4;
+}
+.sk-channel-item:hover {
+  background: var(--sk-sidebar-hover-bg);
+}
+.sk-channel-item.is-active {
+  background: var(--sk-sidebar-active-bg);
+  color: var(--sk-sidebar-active-fg);
+}
+.sk-channel-item.is-active .sk-channel-icon {
+  color: #fff;
+}
+.sk-channel-item.is-unread {
+  color: var(--sk-sidebar-fg-strong);
+  font-weight: 700;
+}
+.sk-channel-icon {
+  display: grid;
+  place-items: center;
+  color: var(--sk-sidebar-fg-muted);
+  width: 20px;
+  flex-shrink: 0;
+}
+.sk-channel-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sk-mention-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--sk-sidebar-badge-bg);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.sk-dm-avatar {
+  position: relative;
+  display: inline-block;
+}
+.sk-presence {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--sk-sidebar-bg);
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--sk-sidebar-fg-muted);
+}
+.sk-presence.is-active {
+  background: #2bac76;
+  box-shadow: none;
+}
+
+/* ---- Message pane -------------------------------------------------------- */
+.sk-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--sk-pane-bg);
+}
+.sk-header {
+  height: var(--sk-header-h);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--sk-border);
+  background: var(--sk-header-bg);
+}
+.sk-header-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sk-text-strong);
+  font-weight: 900;
+  font-size: var(--sk-fs-header);
+}
+.sk-header-star {
+  color: var(--sk-text-muted);
+}
+.sk-header-caret {
+  color: var(--sk-text-muted);
+}
+.sk-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sk-text-muted);
+}
+.sk-header-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--sk-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sk-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.sk-header .sk-icon-btn {
+  color: var(--sk-text-muted);
+}
+.sk-header .sk-icon-btn:hover {
+  background: var(--sk-hover-bg);
+}
+.sk-app-tabs {
+  display: flex;
+  gap: 4px;
+}
+.sk-app-tab {
+  background: transparent;
+  border: none;
+  color: var(--sk-text-muted);
+  font-weight: 700;
+  font-size: 15px;
+  padding: 6px 4px;
+  border-bottom: 2px solid transparent;
+}
+.sk-app-tab.is-active {
+  color: var(--sk-text-strong);
+  border-bottom-color: var(--sk-text-strong);
+}
+
+.sk-msg-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 4px;
+}
+.sk-msg-list-spacer {
+  flex: 1;
+  min-height: 20px;
+}
+
+.sk-date-divider {
+  position: relative;
+  text-align: center;
+  margin: 12px 0 4px;
+}
+.sk-date-divider::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 50%;
+  border-top: 1px solid var(--sk-border);
+}
+.sk-date-pill {
+  position: relative;
+  display: inline-block;
+  padding: 2px 16px;
+  background: var(--sk-pane-bg);
+  border: 1px solid var(--sk-border);
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sk-text-strong);
+}
+
+/* ---- Message rows -------------------------------------------------------- */
+.sk-msg {
+  display: flex;
+  gap: 8px;
+  padding: var(--sk-msg-pad-y) var(--sk-msg-pad-x);
+  align-items: flex-start;
+}
+.sk-msg:hover {
+  background: var(--sk-hover-bg);
+}
+.sk-msg.is-grouped {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+.sk-msg-gutter {
+  width: var(--sk-msg-gutter);
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+.sk-msg-hovertime {
+  font-size: 11px;
+  color: var(--sk-timestamp);
+  opacity: 0;
+  line-height: 20px;
+}
+.sk-msg.is-grouped:hover .sk-msg-hovertime {
+  opacity: 1;
+}
+.sk-msg-main {
+  flex: 1;
+  min-width: 0;
+}
+.sk-msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  line-height: 1.2;
+}
+.sk-msg-author {
+  font-weight: 900;
+  color: var(--sk-text-strong);
+  font-size: 15px;
+}
+.sk-app-badge {
+  background: var(--sk-badge-bg);
+  color: var(--sk-badge-fg);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  position: relative;
+  top: -1px;
+}
+.sk-msg-time {
+  font-size: 12px;
+  color: var(--sk-timestamp);
+  font-weight: 400;
+}
+.sk-msg-body {
+  color: var(--sk-text);
+  font-size: var(--sk-fs-msg);
+  line-height: var(--sk-lh-msg);
+}
+.sk-msg-body--system {
+  color: var(--sk-text-muted);
+}
+.sk-msg-text {
+  white-space: normal;
+  word-wrap: break-word;
+}
+
+/* ---- Reactions & thread rollup ------------------------------------------ */
+.sk-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.sk-reaction {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--sk-border);
+  border-radius: 12px;
+  background: var(--sk-hover-bg);
+  color: var(--sk-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+.sk-thread-rollup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+}
+.sk-thread-rollup:hover {
+  background: var(--sk-pane-bg);
+  border-color: var(--sk-border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.sk-thread-avatars {
+  display: flex;
+  gap: 2px;
+}
+.sk-thread-count {
+  color: var(--sk-link);
+  font-size: 13px;
+  font-weight: 700;
+}
+.sk-thread-lastreply {
+  color: var(--sk-text-muted);
+  font-size: 13px;
+}
+
+/* ---- Block Kit ----------------------------------------------------------- */
+.sk-blocks > * + * {
+  margin-top: 8px;
+}
+.sk-block-header {
+  margin: 4px 0;
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--sk-text-strong);
+}
+.sk-section {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.sk-section-body {
+  flex: 1;
+  min-width: 0;
+}
+.sk-section-text {
+  line-height: var(--sk-lh-msg);
+  /* Preserve the leading-space indentation OAP emits for nested field items
+     (plan-gate phases → permission lines), so the hierarchy shows. */
+  white-space: pre-wrap;
+}
+.sk-section-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+  margin-top: 8px;
+}
+.sk-field {
+  font-size: 14px;
+  line-height: 1.4;
+}
+.sk-section-accessory {
+  flex-shrink: 0;
+}
+.sk-accessory-image {
+  border-radius: 4px;
+  max-height: 88px;
+}
+.sk-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--sk-text-muted);
+  font-size: 13px;
+}
+.sk-context-image {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+.sk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.sk-btn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 4px;
+  border: 1px solid var(--sk-btn-border);
+  background: var(--sk-btn-bg);
+  color: var(--sk-btn-fg);
+  font-size: 13.6px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+}
+.sk-btn:hover {
+  background: var(--sk-btn-hover-bg);
+}
+.sk-btn--primary {
+  background: var(--sk-btn-primary-bg);
+  border-color: transparent;
+  color: var(--sk-btn-primary-fg);
+}
+.sk-btn--primary:hover {
+  filter: brightness(0.94);
+  background: var(--sk-btn-primary-bg);
+}
+.sk-btn--danger {
+  color: var(--sk-btn-danger-fg);
+  border-color: var(--sk-btn-danger-border);
+  background: transparent;
+}
+.sk-divider {
+  border: none;
+  border-top: 1px solid var(--sk-divider);
+  margin: 8px 0;
+}
+.sk-image-block img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.sk-image-title {
+  font-size: 13px;
+  color: var(--sk-text-muted);
+  margin-bottom: 4px;
+}
+
+/* rich_text */
+.sk-rich-text > * + * {
+  margin-top: 6px;
+}
+.sk-rich-section {
+  line-height: var(--sk-lh-msg);
+}
+.sk-list {
+  margin: 4px 0;
+  padding-left: 22px;
+}
+.sk-list li {
+  margin: 2px 0;
+  line-height: var(--sk-lh-msg);
+}
+.sk-quote {
+  margin: 4px 0;
+  padding-left: 12px;
+  border-left: 4px solid var(--sk-quote-bar);
+  color: var(--sk-text);
+}
+
+/* container block — Slack's June-2026 "container": a bordered card that groups
+ * child blocks under a header, with an optional header divider. */
+.sk-container {
+  border: 1px solid var(--sk-border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  background: var(--sk-container-bg);
+}
+.sk-container-title {
+  font-weight: 700;
+  color: var(--sk-text-strong);
+  font-size: 15px;
+  line-height: 1.4;
+}
+.sk-container-title .sk-rich-text,
+.sk-container-title .sk-rich-section {
+  display: inline;
+}
+.sk-container-title .sk-emoji {
+  margin-right: 2px;
+}
+.sk-container-subtitle {
+  color: var(--sk-text-muted);
+  font-size: 13px;
+  margin-top: 1px;
+}
+/* The header divider spans the card, edge to edge. */
+.sk-container > .sk-divider {
+  margin: 10px -16px;
+}
+.sk-container > .sk-blocks {
+  margin-top: 8px;
+}
+
+/* plan block (OAP's task checklist) — same card treatment as the container. */
+.sk-plan {
+  border: 1px solid var(--sk-border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  background: var(--sk-container-bg);
+}
+.sk-plan-title {
+  font-weight: 700;
+  color: var(--sk-text-strong);
+  margin-bottom: 6px;
+}
+.sk-plan-tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sk-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+  line-height: 1.4;
+}
+.sk-task-glyph {
+  width: 16px;
+  flex-shrink: 0;
+  text-align: center;
+  font-weight: 700;
+}
+.sk-task--complete .sk-task-glyph {
+  color: #2eb67d;
+}
+.sk-task--in_progress .sk-task-glyph {
+  color: var(--sk-link);
+}
+.sk-task--pending .sk-task-glyph {
+  color: var(--sk-text-muted);
+}
+.sk-task--error .sk-task-glyph {
+  color: #e01e5a;
+}
+.sk-task--complete .sk-task-title {
+  color: var(--sk-text-muted);
+}
+
+/* inline formatting */
+.sk-link {
+  color: var(--sk-link);
+  text-decoration: none;
+}
+.sk-link:hover {
+  text-decoration: underline;
+}
+.sk-mention {
+  color: var(--sk-mention-fg);
+  background: var(--sk-mention-bg);
+  padding: 0 2px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.sk-emoji {
+  font-style: normal;
+}
+.sk-code-inline {
+  font-family: var(--sk-font-mono);
+  font-size: 12.5px;
+  color: var(--sk-inline-code-fg);
+  background: var(--sk-inline-code-bg);
+  border: 1px solid var(--sk-inline-code-border);
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+.sk-code-block {
+  font-family: var(--sk-font-mono);
+  font-size: 12.5px;
+  color: var(--sk-code-fg);
+  background: var(--sk-code-bg);
+  border: 1px solid var(--sk-code-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 4px 0;
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.5;
+}
+.sk-code-block code {
+  font-family: inherit;
+  white-space: pre;
+}
+
+/* ---- Attachments (colored bar) ------------------------------------------ */
+.sk-attachments {
+  margin-top: 4px;
+}
+.sk-attachment {
+  border-left: 4px solid var(--sk-attachment-color, var(--sk-border));
+  padding: 4px 0 4px 12px;
+  border-radius: 0 4px 4px 0;
+}
+
+/* ---- Thread panel -------------------------------------------------------- */
+.sk-thread {
+  width: var(--sk-thread-w);
+  flex-shrink: 0;
+  border-left: 1px solid var(--sk-border);
+  display: flex;
+  flex-direction: column;
+  background: var(--sk-pane-bg);
+}
+.sk-thread-head {
+  height: var(--sk-header-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--sk-border);
+}
+.sk-thread-title {
+  font-weight: 900;
+  font-size: 18px;
+  color: var(--sk-text-strong);
+}
+.sk-thread-head-tools {
+  display: flex;
+  gap: 2px;
+  color: var(--sk-text-muted);
+}
+.sk-thread-head .sk-icon-btn {
+  color: var(--sk-text-muted);
+}
+.sk-thread-head .sk-icon-btn:hover {
+  background: var(--sk-hover-bg);
+}
+.sk-thread-body {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+.sk-thread-replies-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 16px;
+  color: var(--sk-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.sk-thread-divider-line {
+  flex: 1;
+  border-top: 1px solid var(--sk-border);
+}
+
+/* ---- Composer ------------------------------------------------------------ */
+.sk-composer {
+  padding: 0 16px 16px;
+  flex-shrink: 0;
+}
+.sk-composer-box {
+  border: 1px solid var(--sk-composer-border);
+  border-radius: 8px;
+  background: var(--sk-composer-bg);
+  overflow: hidden;
+}
+.sk-composer-input {
+  padding: 9px 12px;
+  min-height: 40px;
+  color: var(--sk-text);
+}
+.sk-composer-placeholder {
+  color: var(--sk-text-muted);
+}
+.sk-composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+}
+.sk-composer-tools-left {
+  display: flex;
+  gap: 2px;
+  color: var(--sk-text-muted);
+}
+.sk-composer-tools-left .sk-icon-btn {
+  color: var(--sk-text-muted);
+}
+.sk-composer-tools-left .sk-icon-btn:hover {
+  background: var(--sk-hover-bg);
+}
+.sk-send-btn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sk-text-muted);
+}
+
+/* ---- Indicators (assistant status / typing) ----------------------------- */
+.sk-assistant-status,
+.sk-typing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px var(--sk-msg-pad-x);
+  color: var(--sk-text-muted);
+  font-size: 13px;
+}
+.sk-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--sk-text-muted) 25%,
+    var(--sk-text-strong) 50%,
+    var(--sk-text-muted) 75%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: sk-shimmer 1.6s linear infinite;
+  font-weight: 700;
+}
+@keyframes sk-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+.sk-typing-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.sk-typing-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sk-text-muted);
+  animation: sk-bounce 1.2s infinite ease-in-out;
+}
+.sk-typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.sk-typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes sk-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  40% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* ---- App Home ------------------------------------------------------------ */
+.sk-pane--home .sk-home-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px;
+}
+.sk-home-column {
+  max-width: 780px;
+}
+.sk-home-column .sk-section {
+  border: 1px solid var(--sk-border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 12px;
+}
+.sk-home-empty {
+  color: var(--sk-text-muted);
+}
+
+/* ---- Avatars ------------------------------------------------------------- */
+.sk-avatar {
+  display: inline-block;
+  object-fit: cover;
+}
+.sk-avatar--initials {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ---- Scrollbars ---------------------------------------------------------- */
+.sk-msg-list::-webkit-scrollbar,
+.sk-sidebar-scroll::-webkit-scrollbar,
+.sk-thread-body::-webkit-scrollbar,
+.sk-home-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.sk-msg-list::-webkit-scrollbar-thumb,
+.sk-sidebar-scroll::-webkit-scrollbar-thumb,
+.sk-thread-body::-webkit-scrollbar-thumb,
+.sk-home-scroll::-webkit-scrollbar-thumb {
+  background: var(--sk-scrollbar);
+  border-radius: 5px;
+}

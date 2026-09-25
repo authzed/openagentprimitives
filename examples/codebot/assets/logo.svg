@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Codebot coding agent">
+  <defs>
+    <linearGradient id="cb-badge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#78d0ed"/>
+      <stop offset="1" stop-color="#72b1ad"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#cb-badge)"/>
+  <g fill="none" stroke="#0c050f" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <!-- left chevron -->
+    <path d="M45 43 L26 64 L45 85"/>
+    <!-- code slash -->
+    <path d="M57 92 L71 36"/>
+    <!-- right chevron -->
+    <path d="M83 43 L102 64 L83 85"/>
+  </g>
+</svg>

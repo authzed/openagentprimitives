@@ -1,0 +1,61 @@
+# Fixture for reviewbot_constraints_test.go, owned by that test — NOT read
+# from examples/reviewbot/manifests/toolspecs.yaml (AGENTS.md forbids any
+# test referencing examples/). This is a copy of the same three SpiceboxToolspec
+# documents, kept in sync by hand; TestGitRo_ForbidsEveryMutatingSubcommand
+# reads spec.git-ro.allowSubcommands from this file, not the shipped one, and
+# TestClaudeToolspec_SensitiveEnvAgreesWithTheAgentOwnedCredential reads
+# spec.claude.sensitive.env from it the same way.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: git-ro
+spec:
+  name: git-ro
+  version: "1"
+  intent: "git, read-only: clone a repo and inspect a pull request's diff"
+  toolkit:
+    name: git
+    revision: "2026-04-24"
+  allowSubcommands: [clone, fetch, checkout, diff, log, status, show]
+  constraints:
+    - cel: "call.subcommand != 'clone' || !call.positional['repository'].contains('@')"
+      message: "Do not embed credentials in the clone URL. Auth is supplied automatically via GIT_TOKEN — clone with a plain URL such as https://github.com/owner/repo."
+    - cel: "!call.hasFlag('c') || call.flags['c'].all(v, v.startsWith('user.name=') || v.startsWith('user.email='))"
+      message: "git -c may only set user.name= or user.email=. Any other -c key — core.sshCommand, url.*.insteadOf, http.*.extraHeader, credential.helper, alias.*, include.path — is rejected."
+  sensitive:
+    env: [GIT_TOKEN]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: gh-review
+spec:
+  name: gh-review
+  version: "1"
+  intent: "gh, for reading a pull request and this agent's check-run history"
+  toolkit:
+    name: gh
+    revision: "2026-05-01"
+  allowSubcommands: ["api", "pr view", "pr diff", "pr checks", "auth status"]
+  constraints:
+    - cel: "call.subcommand != 'api' || (!call.hasFlag('method') && !call.hasFlag('field') && !call.hasFlag('raw-field') && !call.hasFlag('input') && !call.hasFlag('hostname') && !call.positional['endpoint'].contains('..') && call.positional['endpoint'].matches('^repos/[^/]+/[^/]+/(check-runs/[0-9]+|pulls/[0-9]+|pulls/[0-9]+/files|commits/[0-9a-f]+/check-runs)$'))"
+      message: "gh api is read-only here: GET, on check-run and PR read endpoints only. reviewbot never writes to GitHub through gh — the check run is written by the framework's trigger-status seam, and reviewbot does not comment on pull requests or modify repositories."
+  sensitive:
+    env: [GITHUB_TOKEN, GH_TOKEN]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: claude
+spec:
+  name: claude
+  version: "1"
+  intent: "the inner Claude Code that performs the review, loading the code-review skill"
+  toolkit:
+    name: claude
+    revision: "2026-05-19"
+  allowSubcommands:
+    - ""
+  sensitive:
+    env:
+      - ANTHROPIC_API_KEY

@@ -1,0 +1,42 @@
+name: gh-readonly-agentprimitives
+version: "1"
+
+intent: |
+  GitHub read-only access restricted to the authzed/openagentprimitives repository.
+  Allows viewing PRs, issues, and repo metadata. No mutations, no writes,
+  no credential persistence.
+
+toolkit:
+  name: gh
+  revision: "2026-04-24"
+
+require:
+  verifiedBinaryVersion: true
+
+allowSubcommands:
+  - pr view
+  - pr list
+  - pr checks
+  - issue view
+  - issue list
+  - repo view
+  - search repos
+  - search issues
+  - search prs
+  - auth status
+
+deny:
+  effects:
+    destructive: true
+    writes: [network, filesystem]
+    creds: {writes: true}
+
+allow:
+  network:
+    destinations: [api.github.com, github.com]
+
+constraints:
+  - cel: '!call.hasFlag("repo") || call.flag("repo") == "authzed/openagentprimitives"'
+    message: "only the authzed/openagentprimitives repo is allowed"
+  - cel: '!("GH_HOST" in call.env) || call.env["GH_HOST"] == "github.com"'
+    message: "GH_HOST, if set, must be github.com"

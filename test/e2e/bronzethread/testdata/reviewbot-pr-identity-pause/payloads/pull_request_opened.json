@@ -1,0 +1,28 @@
+{
+  "action": "opened",
+  "number": 7,
+  "pull_request": {
+    "title": "Add async review preference toggle",
+    "html_url": "https://github.example.invalid/demo-org/demo-repo/pull/7",
+    "draft": false,
+    "node_id": "PR_kwFAKE0000000001",
+    "user": {
+      "login": "demo-contributor",
+      "id": 555001
+    },
+    "head": {
+      "sha": "1111111111111111111111111111111111111111",
+      "repo": {
+        "fork": false,
+        "full_name": "demo-org/demo-repo"
+      }
+    },
+    "base": {
+      "sha": "2222222222222222222222222222222222222222"
+    },
+    "changed_files": 2
+  },
+  "repository": {
+    "full_name": "demo-org/demo-repo"
+  }
+}

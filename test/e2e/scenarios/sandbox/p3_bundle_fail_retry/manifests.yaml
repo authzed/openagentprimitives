@@ -1,0 +1,138 @@
+# Scenario 3 (p3_bundle_fail_retry) fixtures.
+#
+# Cloned from p1_multi_bundle_pvc/manifests.yaml, trimmed to a SINGLE
+# bundle so the retry ladder (fail → recreate → fail again → terminal)
+# has exactly one bundle SpiceboxSession to manipulate. Every non-name
+# field is kept identical to the git bundle in p1's manifest.
+#
+# Notes:
+#   - The e2e harness does not wire the SpiceboxToolspec controller, so the
+#     test stamps ts-code's Valid=True status after Apply.
+#   - The e2e harness does not run a real Pod scheduler, so the test also
+#     stamps the bundle SpiceboxSession Ready=True once it appears (except
+#     when the test has deliberately stamped it Failed=True).
+#
+# Placeholder Anthropic API key. provider=anthropic accepted by the
+# AgentClass controller; the actual LLM provider used at runtime is the
+# in-process ScriptedLLM (the runner factory ignores model.provider).
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Placeholder Channel credentials. The fake kind ignores them but
+# Channel.spec.credentialsRef is mandatory.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: retry-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# Toolspec wrapping git's read-only `status` subcommand.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: ts-code
+spec:
+  name: ts-code
+  version: "1"
+  toolkit:
+    name: git
+    revision: "2026-04-24"
+  allowSubcommands:
+    - status
+---
+# SpiceboxClass for the single "code" bundle. spec.tools[].name must equal
+# the Toolspec's toolkit.name so the AgentClass binding-coverage check
+# (validateBundles) accepts the binding.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: toolbelt
+spec:
+  image: registry.example.com/git-toolbelt:latest
+  resources:
+    cpu: "100m"
+    memory: "64Mi"
+    ephemeralStorage: "16Mi"
+  tools:
+    - name: git
+      command: ["/usr/bin/git"]
+  toolspecs:
+    - name: ts-code
+---
+# AgentIdentity with a credential named git-token covering the bundle's
+# toolspec. validateBundles checks that each sensitive toolkit env var
+# (GIT_TOKEN → git-token) is backed by a named credential. Static
+# credentials keep the refresh-controller and OAuth bits out of scope.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ai-retry-creds
+  namespace: default
+type: Opaque
+stringData:
+  token: "unused-by-the-test-scenarios"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: ai-retry
+  namespace: default
+spec:
+  description: "Identity for the p3_bundle_fail_retry scenario."
+  credentials:
+    - name: git-token
+      type: static
+      static:
+        secretRef:
+          name: ai-retry-creds
+          key: token
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: retry-agent
+  namespace: default
+spec:
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a test agent"
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  agentIdentity: ai-retry
+  toolBundles:
+    - name: "code"
+      class: "toolbelt"
+      toolspecs: ["ts-code"]
+---
+# Channel for the channelsd pipeline to find. kind=fake is the in-process
+# Plan-1 transport the harness drives via SendUserMessage.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: retry-agent-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: retry-agent
+  credentialsRef:
+    secretName: retry-fake-creds
+  fake:
+    echo: false

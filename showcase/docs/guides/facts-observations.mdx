@@ -1,0 +1,53 @@
+export const meta = {
+  title: 'Facts & observations',
+  section: 'Reference',
+  group: 'Memory',
+  order: 2520,
+  description:
+    'Durable knowledge attached to resources — not just a transcript — with a trust grade baked into where each fact came from.',
+}
+
+# Facts & observations
+
+<p className="doc-lede">
+  Not everything worth remembering is a message. A <strong>fact</strong> is a named value about a specific
+  resource — "this pull request's author is X", "this company's owner is Y" — stored durably and keyed to the
+  resource, so it outlives the conversation that produced it and can be used to make decisions later.
+</p>
+
+## Observations bundle facts with their subjects
+
+Facts are recorded as **observations**: a single payload yields a bundle of *subjects* (the resources it's
+about) and the *facts* about them, together. Recording them as one unit is what keeps a fact honest — a fact
+observed about one instance can never be re-attached to a different one, because the subject and the value were
+captured in the same breath.
+
+## Provenance is a trust grade
+
+Where a fact came from decides how much it's trusted, and that's **structural, not a flag** — the two kinds
+live in separate namespaces:
+
+- An **observed fact** is derived from a tool's *result*, shaped in part by arguments the agent chose. Useful,
+  but lower trust.
+- An **envelope fact** is derived by the platform from a *verified inbound delivery* — a signed webhook
+  payload. Higher trust, and a running agent structurally can't forge one: it holds only a session token and is
+  refused at the door.
+
+A rule that gates on a high-trust envelope fact can't be satisfied by a look-alike observed fact. The gate
+compiler refuses to answer an envelope reference from the observed set — you can't launder a low-trust value
+into a high-trust decision.
+
+## Write-once, so gates only tighten
+
+Facts are append-only and write-once by subject and name: recording the same fact again with the same value is
+a no-op, and a *contradictory* value fails loudly rather than overwriting. Because a fact can't be quietly
+changed, a decision gated on one can move from undetermined to satisfied — or to refused — but never flip back.
+The ordering of observations doesn't change the outcome.
+
+## How facts are written and used
+
+A tool declares an **`observes`** rule — a small expression over the call's arguments and result — saying which
+resources it's about and which facts to record; after a successful call, the matching facts are written. On the
+consuming side, an [authorization slot](#/plan-gating) can *require* a fact before it grants authority: "this
+repository may be operated on only once we've observed that it belongs to the approver." The agent's power is
+bound to what's actually known, not to what it claims.

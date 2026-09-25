@@ -1,0 +1,162 @@
+{
+  "component": "oap:page",
+  "props": {
+    "layout": "rail"
+  },
+  "children": [
+    {
+      "component": "ap:stack",
+      "props": {
+        "direction": "vertical",
+        "gap": "sm"
+      },
+      "children": [
+        {
+          "component": "ap:heading",
+          "props": {
+            "level": 2,
+            "text": "Round trip"
+          }
+        },
+        {
+          "component": "ap:table",
+          "props": {
+            "columns": [
+              {
+                "key": "name",
+                "header": "Name"
+              }
+            ],
+            "empty": "Nothing yet."
+          },
+          "bindings": {
+            "rows": {
+              "source": "memory",
+              "ref": "demo_list",
+              "args": {
+                "limit": 5
+              },
+              "select": "results[]"
+            }
+          }
+        },
+        {
+          "component": "ap:button",
+          "props": {
+            "action": "demo_go",
+            "disabled": true,
+            "label": "Go"
+          }
+        },
+        {
+          "component": "ap:agentlink",
+          "props": {
+            "agentClass": "demo-agent",
+            "label": "Try it as yourself",
+            "namespace": "ws-demo",
+            "prompt": "linear issues for PR #1234"
+          }
+        },
+        {
+          "component": "ap:collapsible",
+          "props": {
+            "collapsed": true,
+            "title": "Details"
+          },
+          "children": [
+            {
+              "component": "ap:notice",
+              "props": {
+                "body": "Test session started.",
+                "buttons": [
+                  {
+                    "label": "Done",
+                    "action": "demo_go"
+                  }
+                ],
+                "tone": "info"
+              }
+            }
+          ]
+        },
+        {
+          "component": "oap:generative",
+          "props": {
+            "allowedComponents": [
+              "ap:steps"
+            ],
+            "intent": "The stage timeline.",
+            "name": "phase"
+          },
+          "children": [
+            {
+              "component": "ap:steps",
+              "props": {
+                "pinned": true,
+                "steps": [
+                  {
+                    "id": "intake",
+                    "label": "Intake",
+                    "state": "active",
+                    "summary": "in progress"
+                  },
+                  {
+                    "id": "tools",
+                    "label": "Tools",
+                    "state": "upcoming"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "component": "ap:card",
+          "props": {
+            "title": "Your agent so far"
+          },
+          "children": [
+            {
+              "component": "oap:generative",
+              "props": {
+                "allowedComponents": [
+                  "*"
+                ],
+                "intent": "The running summary.",
+                "name": "brief",
+                "step": "intake"
+              }
+            }
+          ]
+        },
+        {
+          "component": "oap:generative",
+          "props": {
+            "allowedComponents": [
+              "ap:markdown",
+              "ap:form"
+            ],
+            "intent": "Where the person first describes the agent.",
+            "name": "intake"
+          },
+          "children": [
+            {
+              "component": "ap:card",
+              "props": {
+                "title": "Describe it"
+              },
+              "children": [
+                {
+                  "component": "ap:markdown",
+                  "props": {
+                    "body": "Tell me what it should do — in a sentence or two."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

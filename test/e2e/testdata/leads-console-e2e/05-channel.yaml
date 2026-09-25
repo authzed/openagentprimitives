@@ -1,0 +1,20 @@
+# Channel for the leads-console-e2e fixture's scenarios: the fake kind's
+# inbound path is what SendUserMessage drives to create the AgentSession
+# each scenario then opens, including browserarm_test.go's own self-test —
+# every AgentSession's cold-start turn answers spec.Prompt through the LLM
+# before the session reaches a servable phase, and only a channel-attached
+# session can complete that turn (agent_work_complete -> Idle) without going
+# terminal, so even the self-test needs this Channel.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: pipeline-desk-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: pipeline-desk
+  credentialsRef:
+    secretName: pipeline-desk-fake-creds
+  fake:
+    echo: false

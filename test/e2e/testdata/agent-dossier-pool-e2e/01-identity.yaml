@@ -1,0 +1,29 @@
+# AgentIdentity for the agent-dossier-pool-e2e fixture. One static
+# credential, referenced by 02-mcpserver.yaml's spec.auth.credential so the
+# AgentClass resolves. Nothing in this fixture ever dials the MCP server, so
+# the value is cosmetic; static (not oauth) avoids the refresh controller's
+# TokenEndpoint requirements.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dossier-mcp-token
+  namespace: default
+type: Opaque
+stringData:
+  access_token: "unused-by-the-fake-mcp-server"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: dossier-identity
+  namespace: default
+spec:
+  description: "Agent-dossier-pool-e2e fixture: static MCP bearer token."
+  credentials:
+    - name: dossier-mcp-bearer
+      type: static
+      static:
+        secretRef:
+          name: dossier-mcp-token
+          key: access_token

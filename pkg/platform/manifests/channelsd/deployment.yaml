@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicebox-channelsd
+  namespace: agentprimitives-system
+  labels:
+    app.kubernetes.io/name: spicebox-channelsd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-channelsd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spicebox-channelsd
+    spec:
+      serviceAccountName: spicebox-channelsd
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: channelsd
+          image: agentprimitives-channelsd:dev
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          args:
+            - --nats-url=nats://spicebox-nats.agentprimitives-system.svc:4222
+            - --operator-memory-url=http://spicebox-operator.agentprimitives-system.svc:8082
+            - --memory-token-path=/var/run/channelsd/memory-token
+            - --spicedb-endpoint=$(SPICEDB_ENDPOINT)
+            - --spicedb-token-path=/var/run/channelsd/spicedb-token
+            - --passthrough-signing-key-path=/var/run/channelsd/passthrough-link-key/key
+            - --anthropic-api-key-path=/etc/anthropic-api-key/key
+          env:
+            - name: SPICEDB_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: spicebox-spicedb-config
+                  key: endpoint
+                  optional: true
+            # Read by channelsd to suppress metaagent self-mentions on
+            # app_mention events targeting the metaagent bot.
+            - name: METAAGENT_SLACK_BOT_USER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: agentprimitives-system-metaagent-config
+                  key: slack_bot_user_id
+                  optional: true
+            - name: NATS_CREDS_PATH
+              value: /var/run/channelsd/nats/nats.creds
+            - name: NATS_CA_PATH
+              value: /var/run/channelsd/nats/ca.crt
+          volumeMounts:
+            - name: memory-token
+              mountPath: /var/run/channelsd/memory-token
+              subPath: token
+              readOnly: true
+            - name: spicedb-token
+              mountPath: /var/run/channelsd/spicedb-token
+              subPath: token
+              readOnly: true
+            - name: nats-creds
+              mountPath: /var/run/channelsd/nats
+              readOnly: true
+            - name: passthrough-link-key
+              mountPath: /var/run/channelsd/passthrough-link-key
+              readOnly: true
+            - name: anthropic-api-key
+              mountPath: /etc/anthropic-api-key
+              readOnly: true
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: memory-token
+          secret:
+            secretName: spicebox-channelsd-memory-token
+            defaultMode: 0444
+            items:
+              - key: token
+                path: token
+        - name: spicedb-token
+          secret:
+            secretName: spicebox-spicedb-token
+            optional: true
+            defaultMode: 0444
+            items:
+              - key: token
+                path: token
+        - name: nats-creds
+          secret:
+            secretName: spicebox-channelsd-nats-creds
+        # Deliberately NOT optional. channelsd is the sole custodian of the
+        # passthrough-link HMAC key: it mints every credential-request,
+        # portal-access, artifact-view and credential-update link, and the
+        # operator was kept OUT of that role specifically so one process holds
+        # the (cookie-forging-capable) key. That privilege separation only pays
+        # for itself if a missing key is LOUD -- with optional:true the pod
+        # started, the signer stayed nil, and both credential watchers silently
+        # self-disabled forever, which is the exact failure the split claims to
+        # avoid. Non-optional makes the kubelet block pod start instead.
+        # `oap install` mints this Secret (ensurePassthroughLinkSigningKey) in
+        # the prerequisite block, well before channelsd is applied; see
+        # pkg/platform/manifests/secret_bootstrap_test.go, which enforces that pairing.
+        - name: passthrough-link-key
+          secret:
+            secretName: spicebox-passthrough-link-key
+            defaultMode: 0444
+        - name: anthropic-api-key
+          secret:
+            secretName: spicebox-anthropic-api-key
+            optional: true
+            defaultMode: 0444
+            items:
+              - key: key
+                path: key

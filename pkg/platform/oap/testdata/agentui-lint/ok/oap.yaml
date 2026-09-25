@@ -1,0 +1,6 @@
+oapFormatVersion: "1"
+agent:
+  version: "1.0.0"
+compat:
+  minApVersion: "0.9.0"
+  crdApiVersion: agentprimitives.authzed.com/v1alpha1

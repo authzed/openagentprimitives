@@ -1,0 +1,70 @@
+# AgentClass/pipeline-desk: the e2e fixture's mirror of
+# examples/leads-console's AgentClass — same shape (the deployment half of
+# the three-way tool grant, both view capabilities) under fabricated names.
+#
+# model.provider=test is refused by the production operator
+# (TestProviderNotAllowed); only the e2e harness's reconciler
+# (AllowTestProvider=true) admits it — matches every other fixture under
+# test/e2e/testdata.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: pipeline-desk
+  namespace: default
+spec:
+  displayName: PipelineDeskBot
+  description: "E2E fixture agent for the agent-defined-UI read-half scenarios. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: pipeline-desk-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      A human may be looking at a live pipeline console next to this chat.
+      You do not drive its controls; you may summarize the pipeline into
+      the console's summary slot with update_view, after reading the
+      console's current state with read_view.
+  mcpServers:
+    - name: deals
+      ref: dealbook-crm
+  agentUI:
+    ref: pipeline-desk-ui
+    # The DEPLOYMENT half of the tool grant — see uigrant's three-way
+    # intersection. Every tool pipeline-desk-ui.spec.tools requests must
+    # also appear here or it is dead on every click regardless of the
+    # request.
+    grantedTools: [deals_list_leads, deals_stage_breakdown, deals_advance_lead_stage]
+  # authz.slots declares the (resourceType, permission) pair advance_lead_stage
+  # gates on (01-mcpserver.yaml) as a slot, which does two things guardian's
+  # ComposeSlots (pkg/authz/guardian/schema/slots.go) is the single owner of:
+  # it creates dealbook_lead's "advance" permission as
+  # `slot_grant_advance->interact + owner` (the trailing "owner" is the
+  # RELATION 01-mcpserver.yaml declares, not this slot's permission — a
+  # slotted permission may never be named "owner" itself, since ComposeSlots'
+  # direct-standing leg always references a relation of that exact name and
+  # SpiceDB rejects a relation and a permission sharing one name on one
+  # definition), and it is what makes an approved tool_call decision's
+  # channelsd-side authz.BindApproved
+  # (pkg/channels/channelsd/pipeline/tool_approval_interaction.go) able to
+  # write a slot_grant_advance tuple at all — writing to an undeclared
+  # relation fails the approval outright. No planGate here: this scenario's
+  # approval is a browser-driven JIT tool_call ask (host_approval.go's
+  # buildToolCallApprovalAsk), not an LLM plan-phase one, and slots work for
+  # that path independently of planGate.
+  authz:
+    slots:
+      - resourceType: dealbook_lead
+        description: "A CRM lead/deal record, reached by its lead id"
+        permission: advance
+  capabilities:
+    update_view: {}
+    read_view: {}
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m

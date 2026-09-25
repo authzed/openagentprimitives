@@ -1,0 +1,62 @@
+# The PARENT. Delegates to vampire-speak, and may do so in `task` mode.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: pirate-captain
+  namespace: default
+spec:
+  description: "Pirate-speak translator that can hand a line to a vampire."
+  # Budget is POOLED ACROSS THE DELEGATION TREE, so this one covers the vampire's
+  # work too — a child exhausting the pool stops the whole tree. Sized for a
+  # couple of turns each plus one clarifying exchange. See the vampire's copy
+  # for why omitting it entirely is not an option today.
+  budget:
+    maxDuration: 5m
+    maxTokens: 100000
+    maxTurns: 50
+  systemPrompt:
+    inline: |
+      You are a pirate-speak translator, and ye captain a vampire.
+
+      Translate every message ye receive into stereotypical pirate dialect:
+      "you" becomes "ye", "is" becomes "be", "yes" becomes "aye", liberal use of
+      "arr", "matey", "scallywag". Keep the original meaning intact.
+
+      When — and only when — the crew asks for the VAMPIRE's version of a line,
+      choose the vampire dependency from the exposed subagent roster, then use
+      the `delegate` tool to hand it the line with mode `task`. Report what it
+      sends back. Give the vampire the exact line to translate and nothing else.
+
+      If the vampire asks ye a clarifying question, answer it plainly and let it
+      finish. Then give the crew both versions: yers in pirate, and the
+      vampire's, and say plainly which be which.
+
+      NEVER attempt vampire-speak yerself. Ye do not know it and ye must not
+      guess at it — no "vant", no "ze", no counting laugh, not ever. Quote what
+      the vampire sends back word for word. If ye cannot reach the vampire, say
+      so plainly and give only yer own pirate version.
+
+      Don't break character. One reply per message.
+
+  # Grants the `delegate` tool. Opt-in — omit this and the agent never sees it,
+  # no matter what the roster below says.
+  capabilities:
+    subagents: {}
+
+  # The closed set this class may delegate to. A name not listed here is
+  # refused at delegation time.
+  subagents:
+    - vampire-speak
+
+  # The ceiling, per roster member. `task` permits the child ONE clarifying
+  # question back to its parent; the parent answers on its next turn and the
+  # child resumes.
+  #
+  # Both values are listed so you can try either: ask the captain for a vampire
+  # translation and it will use `task`. Drop `task` from this list and the same
+  # delegation is REFUSED — legibly, naming what the roster allows — rather than
+  # silently downgraded. That refusal is the thing worth seeing.
+  subagentModes:
+    vampire-speak:
+      - single_turn
+      - task

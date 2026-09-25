@@ -1,0 +1,61 @@
+[
+  {
+    "type": "container",
+    "rich_text_title": {
+      "type": "rich_text",
+      "elements": [
+        {
+          "type": "rich_text_section",
+          "elements": [
+            {
+              "type": "emoji",
+              "name": "large_yellow_circle"
+            },
+            {
+              "type": "text",
+              "text": "  "
+            },
+            {
+              "type": "text",
+              "text": "Alex asked to join this session and help drive the rollout — allow them to participate?",
+              "style": {
+                "bold": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "child_blocks": [
+      {
+        "type": "actions",
+        "block_id": "interaction_actions",
+        "elements": [
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Approve",
+              "emoji": false
+            },
+            "action_id": "approve",
+            "value": "{\"v\":\"interaction\",\"r\":\"join-1\",\"d\":\"approve\",\"s\":\"default/demo-sess\",\"c\":\"permission_request\"}",
+            "style": "primary"
+          },
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Deny",
+              "emoji": false
+            },
+            "action_id": "deny",
+            "value": "{\"v\":\"interaction\",\"r\":\"join-1\",\"d\":\"deny\",\"s\":\"default/demo-sess\",\"c\":\"permission_request\"}",
+            "style": "danger"
+          }
+        ]
+      }
+    ],
+    "has_header_divider": true
+  }
+]

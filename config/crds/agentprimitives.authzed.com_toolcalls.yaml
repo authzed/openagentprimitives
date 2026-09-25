@@ -1,0 +1,518 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: toolcalls.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: ToolCall
+    listKind: ToolCallList
+    plural: toolcalls
+    shortNames:
+    - tc
+    singular: toolcall
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.session
+      name: Session
+      type: string
+    - jsonPath: .spec.tool
+      name: Tool
+      type: string
+    - jsonPath: .status.exitCode
+      name: Exit
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=='Succeeded')].status
+      name: Succeeded
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Failed')].status
+      name: Failed
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Timeout')].status
+      name: Timeout
+      priority: 1
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Canceled')].status
+      name: Canceled
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ToolCall is one execution of one sandbox tool inside a SpiceboxSession: the
+          tool name, its args, non-secret env, stdin, and credential references --
+          never token bytes. The runner creates it; the outcome lands on status.
+
+          Namespaced. Reconciled by pkg/controllers/toolcall, which validates the call
+          against the session's resolved toolspecs, hands the credential descriptors
+          to the token broker to materialize exec env, and runs the process. Secrets
+          supplied through spec.env are rejected rather than passed through.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              args:
+                description: Args is the argv passed to the tool, after the class's
+                  DefaultArgs.
+                items:
+                  type: string
+                type: array
+              captureOutputs:
+                description: |-
+                  CaptureOutputs lists paths (inside the pod) to harvest after exec.
+                  Supports template variables: {{.callId}}, {{.sessionName}}.
+                items:
+                  type: string
+                type: array
+              credentials:
+                description: |-
+                  Credentials is the resolved credential descriptor set the runner
+                  stamps onto the ToolCall. The toolcall controller hands it to the
+                  token broker to materialize exec env vars. References only — never
+                  token bytes. When empty, no credentials are injected.
+                items:
+                  description: |-
+                    CredentialDescriptor is a self-contained, resolvable credential need:
+                    a reference to the backing Secret plus how to inject the resolved
+                    token. It carries references only — never token bytes. It is the unit
+                    the token broker resolves and the element type of
+                    ToolCall.spec.credentials.
+                  properties:
+                    inject:
+                      description: Inject describes how to project the resolved token.
+                      properties:
+                        envVar:
+                          description: |-
+                            EnvVar projects the token into this environment variable
+                            (CLI / toolspec tools).
+                          type: string
+                        header:
+                          description: Header projects the token into this HTTP header
+                            (MCP tools).
+                          properties:
+                            name:
+                              description: Name is the HTTP header the token is written
+                                to.
+                              type: string
+                            valuePrefix:
+                              description: ValuePrefix is prepended to the token in
+                                the header value (e.g. "Bearer ").
+                              type: string
+                          required:
+                          - name
+                          type: object
+                      type: object
+                    source:
+                      description: Source locates the credential's backing Secret.
+                      properties:
+                        key:
+                          description: Key is the Secret data key for type=static;
+                            ignored otherwise.
+                          type: string
+                        name:
+                          description: |-
+                            Name is the Secret name. For type=federated it is the IdP-identity
+                            Secret (the subject token source), NOT the upstream token.
+                          type: string
+                        namespace:
+                          description: |-
+                            Namespace is the Secret's namespace; must equal the ToolCall's own, which
+                            ToolCall.ValidateCredentialSourceNamespaces enforces.
+                          type: string
+                        resource:
+                          description: |-
+                            Resource / ResourceServerURL / Scopes are set only for
+                            type=federated and drive the ID-JAG mint.
+                          type: string
+                        resourceServerURL:
+                          type: string
+                        scopes:
+                          items:
+                            type: string
+                          type: array
+                        type:
+                          description: Type drives the read and expiry rules; see
+                            the type doc.
+                          enum:
+                          - static
+                          - oauth
+                          - federated
+                          - githubApp
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      - type
+                      type: object
+                  required:
+                  - inject
+                  - source
+                  type: object
+                type: array
+              env:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Env is non-secret configuration for the tool process. Use a bound
+                  AgentIdentity for any secret material; supplying secrets here is an
+                  error — the operator rejects keys whose name matches the well-known
+                  secret-name pattern.
+                type: object
+              idleTimeout:
+                description: |-
+                  IdleTimeout (interactive mode only) ends the session after this much
+                  wall-clock with no activity — no tool output and no human input. The
+                  runner-side bridge enforces it. Zero means a system default applies.
+                type: string
+              inputArtifacts:
+                description: InputArtifacts are stored payloads materialized into
+                  the pod before exec.
+                items:
+                  properties:
+                    artifactRef:
+                      description: ArtifactRef is an opaque storage reference resolved
+                        by the operator's ArtifactStore.
+                      type: string
+                    path:
+                      description: Path (relative) inside /work/in/<callId>/ where
+                        this artifact is materialized.
+                      type: string
+                  required:
+                  - artifactRef
+                  - path
+                  type: object
+                type: array
+              maxDuration:
+                description: |-
+                  MaxDuration (interactive mode only) is a hard wall-clock cap on the
+                  whole session, enforced by the controller's exec deadline. Zero means
+                  a system safety ceiling applies.
+                type: string
+              mode:
+                default: sync
+                description: Mode selects the execution path.
+                enum:
+                - sync
+                - stream
+                - interactive
+                type: string
+              preDispatchSnapshot:
+                description: |-
+                  PreDispatchSnapshot, when non-nil, requests the operator's
+                  toolcall controller snapshot the bundle session's workspace
+                  PVC *before* dispatching the tool. Set by the runner when the
+                  tool's stateImpact is readwrite or external — enables fork-
+                  from-this-turn semantics. The controller writes the resulting
+                  tool_dispatch_snapshot memory entry after the snapshot Job
+                  completes.
+                properties:
+                  sequence:
+                    description: |-
+                      Sequence is the within-turn ordering: 0 for the first stateful
+                      dispatch in the turn, 1 for the second, etc.
+                    format: int32
+                    type: integer
+                  sessionUID:
+                    description: |-
+                      SessionUID is the parent AgentSession's UID. Snapshot handles
+                      are addressed under this UID.
+                    type: string
+                  turnIndex:
+                    description: TurnIndex is the runner's current turn.
+                    format: int32
+                    type: integer
+                required:
+                - sequence
+                - sessionUID
+                - turnIndex
+                type: object
+              session:
+                description: Session is the name of the SpiceboxSession (same namespace)
+                  this call targets.
+                type: string
+              stdin:
+                description: |-
+                  Stdin is inline bytes piped to the tool's stdin.
+                  For large payloads, use InputArtifacts instead.
+                type: string
+              streamTokenHash:
+                description: |-
+                  StreamTokenHash is the hex-encoded SHA-256 of the gateway stream token.
+                  The runner sets this at ToolCall creation and keeps the token preimage
+                  in memory; the raw token never touches the API server. Required for
+                  streaming ToolCalls (mode=stream or mode=interactive).
+                type: string
+              timeout:
+                default: 60s
+                description: Timeout is the hard deadline for the tool process.
+                type: string
+              tool:
+                description: Tool is the name of the tool from the session's class
+                  catalog.
+                type: string
+              workspace:
+                description: Workspace selects which workspace volume the tool runs
+                  against.
+                properties:
+                  mode:
+                    default: shared
+                    description: |-
+                      Mode is whether /workspace is a shared RWX volume or private to this
+                      sandbox.
+                    enum:
+                    - shared
+                    - isolated
+                    type: string
+                  sharedClaimName:
+                    description: |-
+                      SharedClaimName is the name of the RWX PersistentVolumeClaim to mount
+                      at /workspace. Set by the AgentSession controller for bundle sessions
+                      when a workspace StorageClass is configured. Ignored when Mode is
+                      isolated or this is empty.
+                    type: string
+                type: object
+            required:
+            - session
+            - tool
+            type: object
+          status:
+            properties:
+              agent:
+                description: |-
+                  Agent reports the AgentIdentity binding that supplied env to this call.
+                  nil when no agent was bound.
+                properties:
+                  injected:
+                    description: |-
+                      Injected lists the env keys that were materialized from credentials,
+                      each with a masked sample of the value. The masked field is
+                      defence-in-depth for casual inspection — anyone with `get` on this
+                      ToolCall already has access to the same namespace's Secrets.
+                    items:
+                      properties:
+                        key:
+                          description: Key is the environment variable name the credential
+                            filled.
+                          type: string
+                        masked:
+                          description: |-
+                            Masked is a redacted display form of the injected value: a recognised
+                            delimiter-terminated vendor prefix (e.g. ghp_) plus **** plus the last 4
+                            characters, or **** alone for short or non-printable values. See pkg/x/credmask.
+                          type: string
+                      required:
+                      - key
+                      - masked
+                      type: object
+                    type: array
+                required:
+                - injected
+                type: object
+              conditions:
+                description: |-
+                  Conditions carries Validated, Running, Succeeded, Failed, Timeout and
+                  Canceled.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              exitCode:
+                description: ExitCode is the process exit status; nil when it never
+                  ran or is running.
+                format: int32
+                type: integer
+              finishedAt:
+                description: FinishedAt is when the tool process exited or was killed.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  reflects.
+                format: int64
+                type: integer
+              outputArtifacts:
+                description: OutputArtifacts are the files harvested per spec.captureOutputs.
+                items:
+                  properties:
+                    artifactRef:
+                      description: ArtifactRef is the opaque storage reference the
+                        bytes landed under.
+                      type: string
+                    path:
+                      description: Path is the in-pod path this artifact was harvested
+                        from.
+                      type: string
+                    size:
+                      description: Size is the stored artifact's size in bytes.
+                      format: int64
+                      type: integer
+                  required:
+                  - artifactRef
+                  - path
+                  - size
+                  type: object
+                type: array
+              startedAt:
+                description: StartedAt is when the tool process began.
+                format: date-time
+                type: string
+              stderrArtifactRef:
+                description: StderrArtifactRef points at the captured stderr in the
+                  artifact store.
+                type: string
+              stderrTruncated:
+                description: StderrTruncated means the capture hit its size cap and
+                  is incomplete.
+                type: boolean
+              stdoutArtifactRef:
+                description: StdoutArtifactRef points at the captured stdout in the
+                  artifact store.
+                type: string
+              stdoutTruncated:
+                description: StdoutTruncated means the capture hit its size cap and
+                  is incomplete.
+                type: boolean
+              streaming:
+                description: Streaming is where a stream/interactive call's live output
+                  can be read.
+                properties:
+                  available:
+                    description: Available is false until the gateway is ready to
+                      serve this call's stream.
+                    type: boolean
+                  gatewayEndpoint:
+                    description: GatewayEndpoint is the URL the runner connects to
+                      for live output.
+                    type: string
+                required:
+                - available
+                type: object
+              toolspec:
+                description: |-
+                  Toolspec carries the toolspec validation result, populated on every
+                  reconcile that ran the validator — which is whenever the session's class
+                  declares any toolspecs.
+                properties:
+                  acceptedBy:
+                    description: |-
+                      AcceptedBy is the name of the SpiceboxToolspec that returned Allow=true.
+                      Mutually exclusive with Failures.
+                    type: string
+                  failures:
+                    description: |-
+                      Failures lists every candidate toolspec that denied this call. Empty
+                      when AcceptedBy is set; populated when no candidate allowed.
+                    items:
+                      properties:
+                        failedOn:
+                          description: |-
+                            FailedOn points at the specific rule that denied; nil when the spec
+                            denied without one.
+                          properties:
+                            message:
+                              description: Message is that rule's own denial text.
+                              type: string
+                            path:
+                              description: Path locates the failing rule inside the
+                                toolspec.
+                              type: string
+                          required:
+                          - path
+                          type: object
+                        reason:
+                          description: Reason is the denial explanation, safe to show
+                            the agent.
+                          type: string
+                        specName:
+                          description: SpecName is the SpiceboxToolspec that denied
+                            the call.
+                          type: string
+                      required:
+                      - specName
+                      type: object
+                    type: array
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

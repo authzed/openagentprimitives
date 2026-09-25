@@ -1,0 +1,3 @@
+gate  amendment_requested phase=0 handle=tool:delegate tool=delegate outcome=denied
+gate  phase_approved  phase=0 handle=tool:delegate
+gate  plan_approved   phase=0

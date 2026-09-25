@@ -1,0 +1,24 @@
+oapFormatVersion: "1"
+agent:
+  version: "1.2.0"
+  logo: assets/logo.txt
+compat:
+  minApVersion: "0.9.0"
+  crdApiVersion: agentprimitives.authzed.com/v1alpha1
+# No requires: block. requires.secrets is derived from the bundled agent
+# graph, and this minimal demo bundles only its AgentClass — so nothing is
+# declared here. The githubToken question below still collects and creates the
+# gh-pat Secret at install.
+questions:
+  - name: repos
+    type: resourceList
+    prompt: "Which GitHub repos may this agent read?"
+    default: ["example-org/example-repo"]
+    binding:
+      - target: "AgentClass/product-manager#spec.authz.slots[github_repo].defaults"
+  - name: githubToken
+    type: secret
+    prompt: "GitHub PAT"
+    secret:
+      createSecret: { name: gh-pat, key: token }
+      orExisting: true

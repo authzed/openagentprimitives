@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# No global `namespace:` — role.yaml + rolebinding.yaml target
+# agentprimitives-identities (master-Secret CRUD), role-default.yaml +
+# rolebinding-default.yaml target "default" (a browser session's
+# Channel/AgentSession/Secret CRUD — see role-default.yaml), everything else
+# lives in agentprimitives-system. Each file pins its own metadata.namespace.
+resources:
+  - serviceaccount.yaml
+  - role.yaml
+  - rolebinding.yaml
+  - role-system.yaml
+  - rolebinding-system.yaml
+  - role-default.yaml
+  - rolebinding-default.yaml
+  - role-builder.yaml
+  - rolebinding-builder.yaml
+  - clusterrole.yaml
+  - clusterrolebinding.yaml
+  - deployment.yaml
+  - service.yaml

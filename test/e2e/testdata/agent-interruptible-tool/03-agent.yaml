@@ -1,0 +1,56 @@
+# AgentClass + Channel for the agent-interruptible-tool e2e fixture.
+#
+# AgentClass uses model.provider="test", which the production operator
+# REFUSES with Valid=False/TestProviderNotAllowed. Only the e2e harness's
+# reconciler (AllowTestProvider=true) admits it.
+#
+# Channel kind=fake is the in-process transport the harness drives inbound
+# messages through — never appropriate in production.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: interruptible-tool
+  namespace: default
+spec:
+  displayName: InterruptibleBot
+  description: "E2E fixture agent for interrupt round-trips. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: interruptible-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You watch a single activity feed. Available tools:
+        - slowfeed_watch_feed(sinceSeconds): long-poll the activity feed
+
+      # NOTE: the tool name above uses the "slowfeed_" prefix because the
+      # AgentClass declares mcpServers[0].name: slowfeed below. The runner
+      # synthesizes LLM-facing tool names as <prefix>_<tool>.
+  agentIdentity: interruptible-identity
+  mcpServers:
+    - name: slowfeed
+      ref: slowfeed-tools
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: interruptible-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: interruptible-tool
+  credentialsRef:
+    secretName: interruptible-fake-creds
+  fake:
+    echo: false

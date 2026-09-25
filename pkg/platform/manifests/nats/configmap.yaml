@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spicebox-nats-config
+  namespace: agentprimitives-system
+data:
+  nats-server.conf: |
+    port: 4222
+    http_port: 8222
+    server_name: spicebox-nats
+    tls {
+      cert_file: "/etc/nats-tls/tls.crt"
+      key_file:  "/etc/nats-tls/tls.key"
+      ca_file:   "/etc/nats-tls/ca.crt"
+    }
+    # `include` resolves relative to this config file's own directory
+    # (/etc/nats); nats-server does NOT honour an absolute include path
+    # (it joins it onto the config dir). auth.conf is mounted at
+    # /etc/nats-auth, so the include must reach it via ../ .
+    include "../nats-auth/auth.conf"

@@ -1,0 +1,78 @@
+{
+  "name": "slot-approval-by-second-user",
+  "description": "The whole multiplayer shape, end to end: user A lists the companies, asks for the contacts of one, is refused because A has no standing on it, a SECOND user (the company's owner) approves, and A then sees the results. This is the ordinary case — the requester is usually NOT the owner of the record they are asking about. The approval mints the slot grant, and the grant is what lets the re-dispatched call through, per-requester, without A ever gaining standing on the company itself.\n\nRead the assertions together: the recorded decision is `denied` because that is the Check that FIRED THE APPROVAL, and the re-dispatch after approval is not re-Checked into the log. What proves A actually saw the data is the tool result — contacts present, isError false. Asserting only on the agent's words would prove nothing, since the scripted reply says `Jane Smith` either way.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+
+  "defaultUser": "user@example.com",
+  "autoApprove": ["tool_approval"],
+  "autoApproveAs": "owner-1@example.com",
+
+  "toolOutputs": {
+    "list_companies": {
+      "results": [
+        { "id": "4210", "name": "Northwind Trading", "ownerId": "owner-1", "createdAt": "2026-07-02T09:14:00Z" },
+        { "id": "4211", "name": "Contoso Freight", "ownerId": "owner-2", "createdAt": "2026-07-04T16:41:00Z" }
+      ]
+    },
+    "list_contacts_for_company": {
+      "results": [
+        { "id": "c-88", "firstName": "Jane", "lastName": "Smith", "email": "jane.smith@northwind.example", "title": "Ops Lead" },
+        { "id": "c-91", "firstName": "John", "lastName": "Doe", "email": "john.doe@northwind.example", "title": "Controller" }
+      ]
+    }
+  },
+
+  "userTurns": [
+    "list the companies",
+    "who works at Northwind Trading?"
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": { "sinceDays": 30 } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultContains": "Northwind Trading",
+        "lastToolResultIsError": false
+      },
+      "reply": [{ "text": "Northwind Trading and Contoso Freight" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "listed" } } }]
+    },
+    {
+      "expect": { "userTextContains": "who works at Northwind" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_contacts_for_company", "args": { "operation_id": "op-contacts-4210", "_reason": "user asked who works at that company", "args": { "companyId": "4210" } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_contacts_for_company",
+        "lastToolResultContains": "jane.smith@northwind.example",
+        "lastToolResultIsError": false
+      },
+      "reply": [{ "text": "Jane Smith and John Doe work at Northwind Trading" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": [
+      "Northwind Trading",
+      "Jane Smith"
+    ],
+    "authz": {
+      "decisions": {
+        "crm_company:4210#contact_access": "denied"
+      }
+    }
+  }
+}

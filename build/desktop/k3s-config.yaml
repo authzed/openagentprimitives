@@ -1,0 +1,11 @@
+# k3s-config.yaml — baked into the desktop bundle's rootfs at
+# /etc/rancher/k3s/config.yaml by `mage desktop:rootfs`. Offline single-node
+# defaults: k3s's own bundled components (traefik) are disabled since webd
+# is reached directly (see cmd/oap/internal/desktopcmd/run_darwin.go's openDashboard
+# port-forward — there is no ingress-controller hop in this topology), and
+# the kubeconfig k3s writes to /etc/rancher/k3s/k3s.yaml must be
+# world-readable so the unprivileged apguest-share-kubeconfig.sh copy step
+# (see build/desktop/apguest-share-kubeconfig.sh) can read it.
+write-kubeconfig-mode: "0644"
+disable:
+  - traefik   # keep minimal; webd is reached directly

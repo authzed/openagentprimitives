@@ -1,0 +1,33 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spicebox-webd-builder
+  namespace: agentprimitives-system
+# Session-creation CRUD for a browser session STARTED AGAINST THE AGENT BUILDER,
+# whose AgentClass is installed into the fixed agentprimitives-system namespace
+# (cmd/oap/internal/installcmd builderClassNamespace). An AgentSession must live
+# in the same namespace as its AgentClass (the reconciler resolves spec.class in
+# sess.Namespace), so the ONLY way a person starts the builder from web chat is
+# for webd to create the Channel + creds Secret + AgentSession HERE — exactly
+# the per-conversation set role-default.yaml grants in "default".
+#
+# This is a DELIBERATE, reviewed widening (2026-09-11): role-default.yaml
+# explains why cluster-wide Secret create/delete on a browser-facing pod is
+# withheld, and this grants it in the SYSTEM namespace, a bigger blast radius.
+# It is accepted because the builder's whole point is that the web-chat admin
+# builds agents through it, which cannot happen without webd starting a session
+# in the builder's namespace. Same three resources, same verbs as the "default"
+# Role, and NOTHING cluster-wide — the widening stops at this one namespace.
+# --without-builder installs still ship it (the manifest bundle is static); it
+# grants standing that goes unused there, no class being startable in the
+# namespace, rather than a per-flag manifest split.
+rules:
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["channels"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["agentsessions"]
+    verbs: ["get", "list", "create", "delete", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "delete"]

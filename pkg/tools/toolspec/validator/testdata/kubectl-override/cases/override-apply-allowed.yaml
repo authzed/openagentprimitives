@@ -1,0 +1,11 @@
+name: override-apply-allowed
+toolkit: toolkit.yaml
+spec: spec.yaml
+invocation:
+  command: kubectl
+  argv: [apply, -f, x.yaml, -n, dev-sandbox]
+  binaryVersion: "1.30.0"
+expect:
+  allow: true
+  traceContains:
+    - {path: "exceptions[0]", status: override-applied}

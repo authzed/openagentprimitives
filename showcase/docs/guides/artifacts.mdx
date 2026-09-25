@@ -1,0 +1,49 @@
+export const meta = {
+  title: 'Artifacts',
+  section: 'Guides',
+  group: 'Concepts',
+  order: 170,
+  description:
+    'Durable, versioned agent outputs — stored, revised in place, annotated, rendered inert, and delivered as first-class deliverables.',
+}
+
+# Artifacts
+
+<p className="doc-lede">
+  When an agent produces something meant to last and be looked at — a rendered report, a chart, a page — it's an
+  <strong>artifact</strong>: a first-class output with its own durable storage, version history, and safety
+  posture, not a message that scrolls away.
+</p>
+
+<Clip name="artifacts-demo" />
+
+## A first-class output, not a chat message
+
+An artifact lives in a **durable object store**, not in the transcript, and its bytes survive the session. It's
+**versioned** — each change is a new immutable revision — and it can be revised *in place*, so "the report" is a
+stable thing you can point at while its contents evolve. It carries **metadata** you can annotate, it's rendered
+**inert** so it can be displayed without being trusted, and it's **delivered** as a deliverable the session is
+accountable for.
+
+## Where the bytes live
+
+The store is a pluggable blob backend chosen at install — cloud object storage (`gs://`, `s3://`, `azblob://`)
+in production, a local volume for a laptop. The platform is **fail-closed** about it: run without a configured
+artifact store and it refuses to start rather than falling back to an in-memory store that would silently drop
+every output on restart. `oap artifact` inspects them from the CLI.
+
+## Go deeper
+
+- **[Revisions & versioning](#/artifact-revisions)** — immutable revisions, a moving `latest`, and revising in
+  place.
+- **[Annotations & tags](#/artifact-annotations)** — names, descriptions, and named tags that point at a
+  revision.
+- **[Rendered inert](#/artifact-safety)** — sanitize, constrain with CSP, and isolate the origin so an
+  artifact's scripts can't run.
+- **[Delivery & completion](#/artifact-delivery)** — producing isn't delivering, and a session can be required
+  to actually hand its work over.
+
+<Callout kind="security" title="No artifact store, no start">
+  Durability is a precondition, not an afterthought: the store is chosen at install and verified at startup, so
+  an output can never be produced only to vanish because nothing was persisting it.
+</Callout>

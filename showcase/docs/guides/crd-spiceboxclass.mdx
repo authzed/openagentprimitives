@@ -1,0 +1,99 @@
+export const meta = {
+  title: 'SpiceboxClass',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3230,
+  description: 'SpiceboxClass is the template a tool sandbox is cut from: image, resources,',
+}
+
+# SpiceboxClass
+
+**Group** `agentprimitives.authzed.com` · **Scope** Cluster · **Short names** `sbxcls`
+
+SpiceboxClass is the template a tool sandbox is cut from: image, resources,
+network mode, mounts, and the toolspecs and toolchains available inside it.
+A SpiceboxSession instantiates one.
+
+Cluster-scoped. Reconciled by pkg/controllers/spiceboxclass, which validates
+the spec against the selected sandbox backend (pkg/tools/sandboxkinds) and
+the referenced toolchains, surfaces Valid, and maintains the pre-warm pool.
+A class naming a missing or Valid=False toolchain goes Valid=False rather
+than starting a sandbox without the compiler it promised.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.envDefaults` | `map[string]string` | EnvDefaults is merged into every bundle pod's spicebox container as unconditional environment variables. Used to point process-level env at PrivateVolumes mount paths (e.g. GIT_DIR=/var/ap-git/.git so git's metadata + url-rewrite credentials never land on the shared workspace). Keys that exactly match an auth-injected env var (those declared sensitive in any builtin toolkit's env.allowed) are rejected at class validation. |
+| `spec.image` | `string` | Image is the OCI image used for sandbox pods of this class. Optional: when empty, the operator's configured default sandbox image is used (--sandbox-image, which `oap install` registry-qualifies for the cluster, the same way it does the runner image). Set it only to pin a custom sandbox image — most classes (and every identity-setup bundle) should leave it unset so the image is portable across local and cloud clusters. |
+| `spec.mounts` | `[]object` | Mounts are extra read-only volumes composed into every sandbox pod. |
+| `spec.mounts[].digest` | `string` | Digest is the expected content identity ("sha256:..."), verified before the content is used. Empty skips verification. |
+| `spec.mounts[].format` | `string` | Format describes what the source content is. Defaults to raw, which is a direct read-only volume mount and is what every mount predating this field does. _(enum: raw \| tarGz; default: raw)_ |
+| `spec.mounts[].mountPath` \* | `string` | MountPath is the absolute path inside the sandbox container. |
+| `spec.mounts[].name` \* | `string` | Name is the pod volume name. |
+| `spec.mounts[].source` \* | `object` | Source is where the mounted content comes from. |
+| `spec.mounts[].source.configMapRef` | `object` | ConfigMapRef names a ConfigMap in the session's namespace. |
+| `spec.mounts[].source.configMapRef.name` | `string` | Name of the referent. This field is effectively required, but due to backwards compatibility is allowed to be empty. Instances of this type with an empty value here are almost certainly wrong. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names _(default:)_ |
+| `spec.network` | `object` | Network is the sandbox's egress posture. |
+| `spec.network.allowedHosts` | `[]string` | AllowedHosts is the intended hostname allowlist. RECORDED, not enforced: stock NetworkPolicy cannot express hostnames, so a DNS-aware policy controller must consume it to narrow beyond Mode's L3/L4 rules. |
+| `spec.network.mode` | `string` | Mode is the egress posture: none denies all, allowlist permits DNS plus coarse outbound TCP. _(enum: none \| allowlist; default: none)_ |
+| `spec.privateVolumes` | `[]object` | PrivateVolumes are emptyDir volumes mounted only on this class's bundle pods. Use these to hold per-bundle state that must NOT be visible to other bundles sharing the workspace (e.g. .git directory for credential isolation). |
+| `spec.privateVolumes[].mountPath` \* | `string` | MountPath is the absolute path inside the spicebox container where the volume is mounted. Must start with "/". Rejected at class validation if it collides with a pod-builder-reserved mount path (/work, /tmp, /workspace) or another PrivateVolume. |
+| `spec.privateVolumes[].name` \* | `string` | Name is the volume name (also the pod volume Name). Must be a DNS-1123 label. Rejected at class validation if it collides with a pod-builder-reserved volume name (work, tmp, workspace), a ConfigMap mount name from spec.mounts, or another PrivateVolume. |
+| `spec.resources` \* | `object` | Resources are the sandbox container's CPU, memory and storage limits. |
+| `spec.resources.cacheSize` | `` | CacheSize is the size limit of the disk-backed /var/ap-cache volume the toolchain overlay mounts. Defaults to 2Gi when unset; only takes effect when a toolchain is attached (no toolchains, no cache volume). Unlike TmpSize/WorkSize this is DISK-backed, not memory-backed: it holds the large consumers a toolchain redirects here — GOCACHE, GOMODCACHE, PNPM_HOME, the XDG roots and TMPDIR. The pod builder raises the container's ephemeral-storage limit by exactly this value, so raising it is charged against node disk, not Memory. Raise it for a build box that resolves a large dependency graph (e.g. reviewing a Go dependency-bump PR): the module + build caches easily exceed 2Gi and the kubelet evicts the pod when the volume passes its SizeLimit. |
+| `spec.resources.cpu` \* | `` | CPU is the sandbox container's CPU limit. |
+| `spec.resources.ephemeralStorage` \* | `` | EphemeralStorage is the container's disk-backed storage limit. |
+| `spec.resources.memory` \* | `` | Memory is the container's memory limit, and the real cap on the memory-backed /tmp and /work — see TmpSize. |
+| `spec.resources.pidsLimit` | `integer (int64)` | PidsLimit caps processes inside the sandbox, bounding fork bombs. _(default: 64; min 1)_ |
+| `spec.resources.tmpSize` | `` | TmpSize is the size limit of the pod's /tmp. Defaults to 50Mi when unset. /tmp and /work are memory-backed (tmpfs) emptyDirs. The size here is a CAP, not a reservation: pages are charged against this class's Memory limit only as they are written. So raising TmpSize alone buys nothing — the memory limit binds first, and the pod is OOM-killed rather than told ENOSPC. Raise Memory alongside it. Prefer pointing a tool's scratch at the disk-backed /var/ap-cache over growing tmpfs at all: TMPDIR, GOCACHE, PNPM_HOME and the XDG roots already resolve there when a toolchain is attached, so /tmp holds only what a tool writes in defiance of them. |
+| `spec.resources.workSize` | `` | WorkSize is the size limit of the pod's /work. Defaults to 100Mi when unset. Memory-backed; see TmpSize. |
+| `spec.runtimeClassName` | `string` | RuntimeClassName selects the Kubernetes RuntimeClass. Defaults to "kata-fc" when unset. |
+| `spec.sandbox` | `object` | Sandbox selects the backend that runs this class's sandboxes. Optional: an unset kind defaults to "pod", the built-in Kubernetes Pod backend. The pod-vocabulary fields above (Image, RuntimeClassName, Resources, Mounts, PrivateVolumes) remain the shared vocabulary every pod-shaped backend consumes; this stanza carries only the discriminator and backend-specific extras. |
+| `spec.sandbox.config` | `object (free-form)` | Config is passed through to the backend verbatim. Opaque to AP: each kind parses its own. Unset for the built-in pod backend, which takes all of its configuration from the pod-vocabulary fields above. |
+| `spec.sandbox.kind` | `string` | Kind names a registered sandbox kind. Defaults to "pod". An UNRECOGNIZED kind marks the class Valid=False — lookup never falls back to the built-in backend, because silently installing a different substrate than the one asked for is worse than refusing. _(default: pod)_ |
+| `spec.sandbox.warmPool` | `object` | WarmPool requests pre-warmed capacity for this backend. Unset or replicas: 0 means pre-warming is off — it spends real money on idle capacity, so it is opt-in. Only a backend whose Runtime implements the sandboxkinds.Prewarmer interface can honor a non-zero value; asking for it on a backend that cannot is a class validation error, not a silent no-op. PREREQUISITE: pre-warming only actually adopts a pod when the cluster's agent-sandbox install allows the "agentprimitives.authzed.com" label domain (its AllowedLabelDomains defaults to "sandbox.users.io" alone). Without that grant AP cannot label an adopted pod, and — because AP's per-session NetworkPolicy selects on that label — the backend degrades to ordinary cold sandboxes and emits a monitoring warning rather than run one unpoliced. |
+| `spec.sandbox.warmPool.namespaces` | `[]string` | Namespaces lists the namespaces to keep pre-warmed capacity in; a separate pool is created in EACH. SpiceboxClass is cluster-scoped but the pool objects are namespaced, and adoption only ever looks a pool up in the ADOPTING SESSION's own namespace — so a pool in a namespace nothing runs sessions in is pure idle spend nothing can adopt. Naming them explicitly rather than discovering them is deliberate: pre-warming spends real money, so the cluster owner states exactly where, as they state exactly how many. Replicas &gt; 0 with an empty Namespaces is a class validation error, not a silent no-op. |
+| `spec.sandbox.warmPool.replicas` | `integer (int32)` | Replicas is the number of sandboxes kept ready, PER NAMESPACE listed below. 0 disables pre-warming. _(min 0)_ |
+| `spec.sessionDefaults` | `object` | SessionDefaults are the lifetime defaults sessions of this class inherit. |
+| `spec.sessionDefaults.idleTTL` | `string` | IdleTTL is how long a session may sit idle before it is terminated. _(default: 30m)_ |
+| `spec.sessionDefaults.maxDuration` | `string` | MaxDuration is the wall-clock lifetime cap on a session. _(default: 4h)_ |
+| `spec.toolchains` | `[]string` | Toolchains names SpiceboxToolchain CRs whose payloads are composed into every pod of this class as read-only overlays under /opt/ap-toolchains. Each named toolchain must exist and be Valid=True or the session fails closed. Order is irrelevant: the operator sorts and deduplicates. |
+| `spec.tools` | `[]object` | Tools are the executables a ToolCall may dispatch inside this sandbox. |
+| `spec.tools[].command` \* | `[]string` | Command is the absolute path + argv[0] of the tool binary. |
+| `spec.tools[].defaultArgs` | `[]string` | DefaultArgs are prepended to every invocation's arguments. |
+| `spec.tools[].expectedDuration` | `string` | ExpectedDuration picks the dispatch mode: short runs synchronously, long and persistent stream. _(enum: short \| long \| persistent; default: short)_ |
+| `spec.tools[].name` \* | `string` | Name is how a ToolCall refers to this tool. |
+| `spec.toolspecs` | `[]object` | Toolspecs lists SpiceboxToolspec CRs whose validation rules apply to ToolCalls in sessions of this class. At least one Toolspec must cover each tool in spec.tools, otherwise the class is marked Valid=False. |
+| `spec.toolspecs[].name` \* | `string` | Name is the SpiceboxToolspec CR name. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` | Conditions carries Valid; see SpiceboxClassConditionValid. |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedGeneration` | `integer (int64)` | ObservedGeneration is the spec generation this status reflects. |
+| `status.resolvedToolchains` | `[]object` | ResolvedToolchains is the class's toolchain names resolved to concrete mounts, recorded so an operator can answer "what is this class actually running?" without reading controller logs. OBSERVATION ONLY. Nothing consumes it for correctness — sessions resolve fresh at bind and freeze their own copy. A stale value here can therefore never mis-shape a session; at worst it mis-shapes the warm pool, which self-heals when the next reconcile re-points the template. |
+| `status.resolvedToolchains[].bin` | `[]string` | Bin lists PATH entries relative to this toolchain's root. |
+| `status.resolvedToolchains[].env` | `map[string]string` | Env is already expanded — no templates remain. |
+| `status.resolvedToolchains[].image` \* | `string` | Image is the OCI image carrying the payload. |
+| `status.resolvedToolchains[].name` \* | `string` | Name is the toolchain name; it is also the directory under the root path. |
+| `status.resolvedToolchains[].prefix` \* | `string` | Prefix is the payload's absolute path inside Image. |
+| `status.resolvedToolchains[].sizeBytes` | `integer (int64)` | SizeBytes is the payload's on-disk usage, driving the emptyDir SizeLimit. |
+| `status.resolvedToolchains[].sourceKind` \* | `string` | SourceKind is the delivery backend that resolved this mount. |
+| `status.toolchainResolutionMessage` | `string` | ToolchainResolutionMessage explains why resolution failed, when it did. Pre-warming is skipped in that case but the class stays Valid: class validity must not depend on the toolchain catalog, or an unrelated toolchain edit would flip classes red that never asked for a pool. This field is what keeps that decision from making the failure invisible. |
+| `status.toolchainSetDigest` | `string` | ToolchainSetDigest is the digest of the resolved set. Computed by the SAME function the session path uses, so this and SpiceboxSession.status.toolchainSetDigest are directly comparable by eye — which is how an operator confirms a session's pod matches the warm pool's shape. |
+| `status.toolspecCoverage` | `map[string][]string` | ToolspecCoverage maps each tool name in spec.tools to the names of the SpiceboxToolspecs (from spec.toolspecs) that authorize it. A tool with no covering Toolspec causes Valid=False. |
+
+<small>\* required</small>
+

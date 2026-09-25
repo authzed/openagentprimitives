@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: spicebox-nats
+  namespace: agentprimitives-system
+  labels:
+    app.kubernetes.io/name: spicebox-nats
+spec:
+  selector:
+    app.kubernetes.io/name: spicebox-nats
+  ports:
+    - { name: client,  port: 4222, targetPort: 4222 }
+    - { name: monitor, port: 8222, targetPort: 8222 }
+  type: ClusterIP

@@ -1,0 +1,352 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: relationshipsources.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: RelationshipSource
+    listKind: RelationshipSourceList
+    plural: relationshipsources
+    shortNames:
+    - relsrc
+    singular: relationshipsource
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.kind
+      name: Kind
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          RelationshipSource declares one upstream directory (Slack first) to poll
+          and sync into SpiceDB. The upstream kind is registered
+          (pkg/platform/relsync); each poll pass writes the membership relationships
+          that upstream currently reports and prunes ones it no longer reports.
+
+          Namespaced. Reconciled by pkg/controllers/relationshipsource, which
+          resolves spec.auth's credential, enumerates upstream scopes through the
+          named kind, and writes/prunes relationships in SpiceDB one pass at a time.
+          status.sync tracks progress within and across passes so a large directory
+          is synced incrementally rather than in one reconcile.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: RelationshipSourceSpec declares one upstream directory to
+              sync.
+            properties:
+              auth:
+                description: Auth references the credential used to read the upstream.
+                properties:
+                  agentIdentity:
+                    description: AgentIdentity is the AgentIdentity CR (same namespace)
+                      holding the credential.
+                    type: string
+                  credential:
+                    description: Credential is the AgentCredential name on that identity
+                      (e.g. a slack bot token).
+                    type: string
+                required:
+                - agentIdentity
+                - credential
+                type: object
+              baseURL:
+                description: |-
+                  BaseURL is the upstream endpoint for kinds whose service is
+                  customer-hosted — the 1Password SCIM Bridge, for instance, which has no
+                  constant address. Kinds that talk to a fixed vendor endpoint (Slack)
+                  ignore it.
+
+                  Scheme and destination are deliberately unconstrained in the SCHEMA — no
+                  kubebuilder Pattern, no host allowlist here. In-cluster (a Kubernetes
+                  Service DNS name over http://, e.g.
+                  http://scim.1password.svc.cluster.local) and loopback (a test/dev bridge
+                  on http://127.0.0.1:<port>) are legitimate destinations — in fact the
+                  primary deployment shape for a customer-hosted service — mirroring
+                  MCPServerServer.URL's own doc (pkg/apis/v1alpha1/mcpserver_types.go).
+                  For the same reason a kind dereferencing this field must NOT wrap its
+                  client in pkg/x/safehttp: that guarded dialer refuses every
+                  private/loopback IP, which is exactly what this field exists to carry.
+
+                  It is nonetheless a TENANT-WRITABLE DESTINATION, and the credential sent
+                  to it must be scoped to it. This field and spec.auth sit on the same CR,
+                  and anyone who can write the CR chooses both; the operator then reads the
+                  named Secret with its OWN cluster-wide credentials and sends the value
+                  here as a bearer token. An unconstrained pairing is credential
+                  exfiltration with no `get secrets` needed — the SkillSource incident
+                  (pkg/platform/identity/credhost's package doc) on an identical CR shape.
+                  So when this field is set, the RelationshipSource controller requires the
+                  referenced credential to declare spec.credentials[].allowedHosts and to
+                  admit this host; it refuses the sync otherwise, on the Ready condition.
+                  An empty value is checked against nothing: a kind with a constant vendor
+                  endpoint has no tenant-writable destination to guard.
+
+                  Required by any kind that declares it needs one; such a kind refuses to
+                  run rather than guessing when it is empty.
+                maxLength: 2048
+                type: string
+              config:
+                description: |-
+                  Config is this kind's own configuration, opaque to the CRD: the
+                  registered kind parses and validates it, so adding a kind never adds a
+                  field here. Shape and required keys are the kind's to document (see
+                  docs/relationshipsource.md).
+                x-kubernetes-preserve-unknown-fields: true
+              kind:
+                description: Kind selects the registered relsync kind (e.g. "slack").
+                minLength: 1
+                type: string
+              sync:
+                description: Sync controls re-poll cadence.
+                properties:
+                  interval:
+                    description: Interval between full passes. Zero → controller default
+                      (15m).
+                    type: string
+                  maxScopesPerPass:
+                    description: |-
+                      MaxScopesPerPass bounds how many scopes one reconcile processes, so a
+                      single enormous source cannot starve every other RelationshipSource
+                      the operator manages. Zero → UNBOUNDED (the controller passes this
+                      value straight through to relsync.Pass with no substituted default),
+                      which is also why unbounded is the right choice unless this source's
+                      scope count genuinely needs the budget: setting ANY bound below the
+                      source's total scope count defers cross-resource reaping (an
+                      identity/workspace-membership edge no scope still asserts) — that
+                      reap only ever runs on a pass whose fetch coverage reaches every
+                      enumerated scope, which a persistent bound may prevent from ever
+                      happening.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                type: object
+            required:
+            - auth
+            - kind
+            type: object
+          status:
+            description: RelationshipSourceStatus is the observed state. Controller-owned.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  reflects.
+                format: int64
+                type: integer
+              sync:
+                description: |-
+                  Sync is the resumption marker for the in-progress or most recently
+                  completed enumeration cycle.
+                properties:
+                  cycleStartedAt:
+                    description: CycleStartedAt is when the current cycle began.
+                    format: date-time
+                    type: string
+                  enumComplete:
+                    description: |-
+                      EnumComplete reports whether scope enumeration finished this cycle.
+                      Orphan reaping is gated on it: a truncated enumeration is non-empty
+                      and well-formed and short, and reaping against it would delete every
+                      scope it never reached.
+                    type: boolean
+                  lastPass:
+                    description: |-
+                      LastPass summarizes the most recently recorded pass. Only the most
+                      recent is kept: pass history belongs in the audit plane, not in a CR
+                      status that would grow without bound.
+                    properties:
+                      finishedAt:
+                        description: FinishedAt is when the recorded pass completed.
+                        format: date-time
+                        type: string
+                      joinMisses:
+                        description: |-
+                          JoinMisses is upstream members whose identity resolved to no platform
+                          user, dropped rather than written. A nonzero, growing value is the
+                          signature of a broken identity join.
+                        format: int32
+                        type: integer
+                      pruned:
+                        description: Pruned is tuples deleted by the per-scope diff
+                          or the cross-resource reap.
+                        format: int32
+                        type: integer
+                      reapedScopes:
+                        description: ReapedScopes is scopes whose whole resource object
+                          was swept.
+                        format: int32
+                        type: integer
+                      scopeErrorSamples:
+                        description: |-
+                          ScopeErrorSamples is a small, capped sample of this pass's scope
+                          errors, sorted deterministically by (scope, message) and truncated to
+                          the first few. Deliberately NOT the whole list: a status subresource
+                          must not grow with the size of a failing directory, and an entire arm
+                          of a sync failing is exactly when the list would be longest.
+
+                          Each message is scrubbed before it lands here — a URL's query string or
+                          fragment is stripped (a scope error quotes an upstream request URL, and
+                          both halves are where a credential would ride) and the text is bounded.
+                          The sample set is also preserved verbatim across passes whose failure
+                          count and sampled scopes are unchanged: error text that varies run to
+                          run would otherwise make every reconcile a status write, and the
+                          controller's self-watch has no predicate. The live example is a rate
+                          limit, whose backoff the kind computes fresh from one upstream reset
+                          timestamp on every pass — see the relationshipsource controller's
+                          preserveStableSamples for that and for the two trades it accepts, and
+                          FinishedAt's own note above for the same hazard in its first form.
+                        items:
+                          description: |-
+                            RelationshipSourceScopeError is one sampled per-scope failure from a sync
+                            pass. Controller-owned observation.
+                          properties:
+                            message:
+                              description: |-
+                                Message is the failure text, scrubbed and truncated. Never raw error
+                                text: see ScopeErrorSamples above for what is removed and why.
+                              maxLength: 512
+                              type: string
+                            scope:
+                              description: |-
+                                Scope is the upstream scope id that failed. EMPTY when the failure is
+                                not attributable to a single scope — enumeration itself failing, or the
+                                reap scan (see relsync.ScopeError's own doc).
+                              maxLength: 256
+                              type: string
+                          type: object
+                        maxItems: 5
+                        type: array
+                      scopeErrors:
+                        description: |-
+                          ScopeErrors is how many scopes failed this pass. Non-fatal by design
+                          (relsync.Pass's own doc: "one scope failing is not a pass failure"), so
+                          Ready stays True — this count, and
+                          RelationshipSourceConditionPartialFailure alongside it, are the only
+                          things that distinguish a partially-failed pass from a clean one.
+
+                          A count, never a length: ScopeErrorSamples below is capped, so
+                          len(samples) says how many failures were SAMPLED, not how many there
+                          were. 156 failing scopes report 156 here and a handful there.
+                        format: int32
+                        type: integer
+                      scoped:
+                        description: Scoped reports that this pass processed an explicit
+                          scope subset.
+                        type: boolean
+                      scopesProcessed:
+                        description: ScopesProcessed is how many scopes the pass actually
+                          visited.
+                        format: int32
+                        type: integer
+                      written:
+                        description: Written is relationship tuples touched as additions.
+                        format: int32
+                        type: integer
+                    type: object
+                  lastSyncTime:
+                    description: LastSyncTime is the last completed full cycle.
+                    format: date-time
+                    type: string
+                  resumeAfter:
+                    description: |-
+                      ResumeAfter is the ScopeID of the last scope completed this cycle.
+                      Empty means the cycle starts from the beginning. The next pass takes
+                      the first scope sorting AFTER this one — a comparison, not a lookup,
+                      so a scope deleted between passes does not strand the cursor.
+
+                      This is deliberately a ScopeID and never an upstream pagination
+                      token: upstream cursors expire, ours does not.
+                    maxLength: 256
+                    type: string
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

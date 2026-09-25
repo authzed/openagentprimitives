@@ -1,0 +1,99 @@
+# MCPServer for the agent-leakage-e2e fixture.
+#
+# Two tools that exercise the info-leakage gate:
+#   - get_record: reads a `record:<id>` via the `view` permission;
+#     toolResourceMap declares `idArg: id` so the post-execute hook
+#     records taint for record:<id>.
+#   - get_record_uuid: reads `record_uuid:<uuid>` via `view`. The agent
+#     passes a human identifier as `id`; the tool returns the UUID in
+#     `result.uuid`. toolResourceMap uses `resultIDField: uuid` to
+#     exercise the response-side ID extraction path.
+#
+# spec.server.url is the literal sentinel `{{MCP_URL}}` — the e2e
+# harness rewrites it to the httptest server URL before kubectl apply.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: leakage-records
+  namespace: default
+spec:
+  name: leakage-records
+  version: v1
+  intent: "Fixture for the info-leakage e2e tests."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: leakage-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: record
+        # Seeded owner tuples decide who may speak for a record.
+        standing: required
+        approverPermission: owner
+        relations:
+          - name: viewer
+            subjectType: user
+          # owner is the data owner consulted by the info-leakage approver model
+          # (eligible approvers = session owners ∩ data owners). Distinct from
+          # viewer: owning a record lets you approve sharing it, not merely read.
+          - name: owner
+            subjectType: user
+        permissions:
+          - name: view
+            expr: viewer
+      - name: record_uuid
+        # Only a viewer relation exists; reading is not authority to approve.
+        standing: session-only
+        relations:
+          - name: viewer
+            subjectType: user
+        permissions:
+          - name: view
+            expr: viewer
+  tools:
+    - name: get_record
+      intent: "Fetch a record by its id."
+      args:
+        allowedFields: [id]
+      # stateImpact: stateless — opt out of tool-call SpiceDB Check.
+      # The leakage gate is the only authz layer the test exercises.
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: get_record_uuid
+      intent: "Fetch a record by human id; returns a UUID in the response."
+      args:
+        allowedFields: [id]
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: unmapped_tool
+      intent: "Intentionally NOT in toolResourceMap; exercises the fail-closed unmapped-tool path."
+      args:
+        allowedFields: [id]
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+  # toolResourceMap declares which tools read which SpiceDB resources.
+  # The leakage hook walks this on every tool call: a read declaration
+  # means "record taint after the call, gate respond_to_user against
+  # the requester's view permission". Tools NOT in this list are
+  # treated as fail-closed in enforcing mode (the unmapped-tool path).
+  toolResourceMap:
+    - tool: get_record
+      reads:
+        resourceType: record
+        idArg: id
+        permission: view
+    - tool: get_record_uuid
+      reads:
+        resourceType: record_uuid
+        resultIDField: uuid
+        permission: view

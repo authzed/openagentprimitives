@@ -1,0 +1,80 @@
+{
+  "name": "plangate-multiphase",
+  "description": "The agent declares two phases and works inside phase 0. The write-phase reach must NOT be held while phase 0 is active — the ceiling actually narrows. This is the scenario whose absence let the gate silently keep gating against the whole-surface fallback.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-logging"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["list the companies"],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "list the companies",
+        "toolOffered": "select_phase"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "list companies", "status": "pending", "phase": "recon" }
+              ],
+              "phases": [
+                {
+                  "id": "recon",
+                  "label": "List the companies",
+                  "why": "I need the company list before I can pick one",
+                  "permissions": [
+                    { "handle": "perm:list:crm_company", "why": "to list companies" }
+                  ]
+                },
+                {
+                  "id": "detail",
+                  "label": "Fetch contacts for one company",
+                  "why": "the user will want to know who works there",
+                  "requires": [{ "phase": "recon", "why": "I need a company id first" }],
+                  "permissions": [
+                    { "handle": "tool:apply_workspace", "why": "to write the summary file" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies" },
+      "reply": [{ "text": "no companies found" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["no companies found"],
+    "planGate": {
+      "frozenPhases": 2,
+      "onePlanDigest": true,
+      "rebuildableFromLog": true,
+      "gatedAgainstFrozenPlan": true,
+      "outcomes": { "centerdot_list_companies": "allow" },
+      "publishedNothing": true
+    }
+  }
+}

@@ -1,0 +1,33 @@
+page: concepts/plan-gating
+updated: 2026-09-12T00:00:00Z
+refs:
+  - id: plan-gate-hook
+    claim: "The plan gate is a PreToolCall pipeline hook that evaluates every governed tool call against the approved plan."
+    file: pkg/authz/hooks/plangate.go
+    lines: 170-210
+  - id: phase-permissions
+    claim: "A frozen plan phase carries its authority — the permission handles a call may match while that phase is active."
+    file: pkg/authz/plangate/plan.go
+    lines: 148-178
+  - id: frozen-plan
+    claim: "The plan is frozen at approval time; authorization keys on the frozen plan, not the live agent-rewritable document."
+    symbol: pkg/authz/plangate/freeze.go#FreezeFrom
+  - id: plan-digest-keys-authority
+    claim: "The plan/phase digest hashes authority only (permissions, slot values, budget), so a re-word doesn't re-ask but any widening does."
+    symbol: pkg/authz/plangate/plan.go#Digest
+  - id: plan-phase-category
+    claim: "Plan approvals are their own registered interaction category (plan_phase), rendered by the same interaction path as tool approvals."
+    symbol: pkg/channels/channelinteractions/categories/categories.go#PlanPhase
+  - id: blast-radius-tiers
+    claim: "Permission lines are toned by blast radius — readonly, readwrite, and external — with external marking effects that leave the session and cannot be undone."
+    symbol: pkg/channels/channelevents/interaction.go#ToneExternal
+  - id: agents-words-label
+    claim: "The card separates the computed 'What' from the agent's own justification, labelled 'the agent's words', so a persuasive reason can't be mistaken for the system's account."
+    symbol: pkg/agent/runner/host_approval.go#planGateFields
+  - id: slot-grant
+    claim: "Approving a plan writes a per-permission slot grant for the exact resource instance named, so only that repo is authorized."
+    symbol: pkg/authz/slot_grant.go#SlotGrantRelation
+  - id: different-repo-reasks
+    claim: "A different resource instance is different authority (the slot value is in the digest), so it has no grant and must be approved afresh."
+    file: pkg/authz/plangate/plan.go
+    lines: 96-121

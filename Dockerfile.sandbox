@@ -1,0 +1,93 @@
+# spicebox-sandbox — reference base image for SpiceboxClass sandboxes.
+#
+# Guarantees:
+#   - A shell at /bin/sh (busybox-backed via Debian base).
+#   - `tar` and `sh` — required by Plan 3's artifact hydration (tar-over-exec).
+#   - `cat`, `echo`, `sleep`, `true` from coreutils — required by podspec + examples.
+#   - Non-root user (uid 1000).
+#   - `tini` as a minimal PID 1 — defensive against images that are run without
+#     the operator's shareProcessNamespace=true (e.g., during local docker testing).
+#
+# Extend with: FROM spicebox-sandbox:<version>
+
+# Pinned digest for reproducible builds. Refresh with:
+#   docker pull debian:12-slim
+#   docker image inspect debian:12-slim --format '{{index .RepoDigests 0}}'
+FROM debian@sha256:f9c6a2fd2ddbc23e336b6257a5245e31f996953ef06cd13a59fa0a1df2d5c252
+
+# Tools required for Plan 2 + Plan 3:
+#   - tar: artifact hydration + harvest
+#   - coreutils: sleep/cat/echo/true for podspec + examples
+#   - ca-certificates: HTTPS for any tool needing egress (future allowlist mode)
+#   - tini: small pid-1 init; ~100KiB; reaps zombies even if shareProcessNamespace is off
+#   - python3: commonly-requested tool catalog entry
+#   - jq, ripgrep: generally useful
+#   - git: source-control + history queries
+#   - gh: GitHub CLI for read-only API/repo/PR queries
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tar \
+        coreutils \
+        ca-certificates \
+        tini \
+        python3 \
+        jq \
+        ripgrep \
+        git \
+        curl \
+        gpg \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# NOTE: claude-code is NOT installed here. It moved to the ap-toolchain-claude
+# overlay (images/toolchain-claude, SpiceboxToolchain/claude), composed only by
+# classes that need it (codebot's codelike-bundle) at /opt/ap-toolchains/claude.
+# Keeping it out of this base keeps every non-coding agent's sandbox slim.
+
+# git HTTPS auth helper. `git` reads no token env var of its own; this
+# GIT_ASKPASS script serves $GIT_TOKEN to git in-memory when it needs a
+# credential, so plain `git clone https://github.com/owner/repo`
+# authenticates without the token ever being written to a file. When
+# $GIT_TOKEN is unset (e.g. the codelike bundle, which has no git
+# credential) the helper echoes nothing and git auth simply fails —
+# no leak. GitHub accepts the PAT as the HTTPS password regardless of
+# the username, so echoing the token for both prompts is sufficient.
+RUN printf '#!/bin/sh\necho "$GIT_TOKEN"\n' > /usr/local/bin/oap-git-askpass \
+ && chmod 0755 /usr/local/bin/oap-git-askpass
+ENV GIT_ASKPASS=/usr/local/bin/oap-git-askpass
+
+# Pin protocol/exec-safe git config for EVERY git invocation in the sandbox.
+# A repo the agent clones is attacker-influenced data: its .git/config or
+# .gitmodules can otherwise turn a plain `git clone`/`submodule`/`checkout`
+# into arbitrary command execution (url="ext::sh -c …", core.fsmonitor,
+# core.sshCommand, hooks, the pager). GIT_CONFIG_COUNT/KEY/VALUE inject these
+# with the highest precedence (like `git -c`), so a cloned repo's own config
+# CANNOT override them — and unlike /etc/gitconfig they survive
+# GIT_CONFIG_NOSYSTEM. The sandbox authenticates over HTTPS via GIT_ASKPASS
+# (never SSH), so disabling ssh/ext/pager/hooks breaks no legitimate flow.
+ENV GIT_CONFIG_COUNT=6 \
+    GIT_CONFIG_KEY_0=protocol.ext.allow   GIT_CONFIG_VALUE_0=never \
+    GIT_CONFIG_KEY_1=protocol.file.allow  GIT_CONFIG_VALUE_1=user \
+    GIT_CONFIG_KEY_2=core.fsmonitor       GIT_CONFIG_VALUE_2=false \
+    GIT_CONFIG_KEY_3=core.hooksPath       GIT_CONFIG_VALUE_3=/dev/null \
+    GIT_CONFIG_KEY_4=core.sshCommand      GIT_CONFIG_VALUE_4=/bin/false \
+    GIT_CONFIG_KEY_5=core.pager           GIT_CONFIG_VALUE_5=cat
+
+# Non-root user; matches podspec's RunAsUser=1000.
+RUN useradd -u 1000 -m -s /bin/sh sandbox
+
+USER 1000:1000
+WORKDIR /work
+
+# ENTRYPOINT is tini so any image the operator runs reaps zombies even outside
+# a shareProcessNamespace pod. The operator's podspec overrides this with
+# command=[sleep, infinity] for Plan 2; Plan 3 adds an actual ToolCall exec path
+# that goes through kubelet's pods/exec subresource (not this ENTRYPOINT).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sleep", "infinity"]

@@ -1,0 +1,196 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: spiceboxtoolchains.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: SpiceboxToolchain
+    listKind: SpiceboxToolchainList
+    plural: spiceboxtoolchains
+    shortNames:
+    - sbxtc
+    singular: spiceboxtoolchain
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SpiceboxToolchain is a language or tooling overlay a sandbox can mount -- a
+          compiler, an SDK, a linter -- delivered by a registered backend and mounted
+          at ToolchainRootPath/<name>, with the PATH entries and env it needs.
+
+          Cluster-scoped. Reconciled by pkg/controllers/spiceboxtoolchain, which
+          validates the spec and then asks the named delivery Kind to validate its own
+          fields. A Valid=False toolchain is refused at session-bind time, so a broken
+          catalog entry fails the session closed instead of quietly dropping a
+          compiler out of the sandbox.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              bin:
+                description: |-
+                  Bin lists PATH entries relative to this toolchain's root. Each becomes
+                  <ToolchainRootPath>/<name>/<entry> on the sandbox container's PATH.
+                items:
+                  type: string
+                type: array
+              description:
+                description: Description is human-facing text surfaced by `oap`.
+                type: string
+              detect:
+                description: |-
+                  Detect are workspace-relative marker files (e.g. "go.mod") that hint this
+                  toolchain is applicable. Advisory only — nothing acts on them.
+                items:
+                  type: string
+                type: array
+              env:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Env is the process environment this toolchain needs. Values may reference
+                  exactly two template variables, spelled with surrounding spaces:
+                  "{{ .Root }}" (this toolchain's root) and "{{ .Cache }}"
+                  (ToolchainCachePath). Any other template text is rejected at validation.
+                type: object
+              provides:
+                description: |-
+                  Provides are opaque capability labels (e.g. "go", "gopls") surfaced to
+                  operators. Advisory — nothing selects on them.
+                items:
+                  type: string
+                type: array
+              sizeBytes:
+                description: |-
+                  SizeBytes is the payload's on-disk usage (measured via `du -sk * 1024`),
+                  NOT apparent size. The kubelet enforces emptyDir SizeLimit against allocated
+                  blocks; under-estimating this field evicts the pod mid-copy. The operator
+                  derives both the overlay emptyDir SizeLimit and the pod's ephemeral-storage
+                  limit from this value.
+                format: int64
+                minimum: 1
+                type: integer
+              source:
+                description: |-
+                  Source describes where the payload comes from. Kind selects a registered
+                  delivery backend (pkg/tools/toolchain/kinds/registry).
+                properties:
+                  image:
+                    description: |-
+                      Image is the OCI image carrying the payload. Must be a regular container
+                      image, NOT an ORAS artifact: containerd 2.1 silently produces an empty
+                      mount for artifacts with custom layer media types.
+                    type: string
+                  kind:
+                    description: Kind names a registered delivery backend. "image"
+                      today.
+                    type: string
+                  prefix:
+                    description: |-
+                      Prefix is the absolute path of the payload inside Image. It MUST equal
+                      <ToolchainRootPath>/<metadata.name>. Redundant by construction, and kept
+                      so the invariant is reviewable in the CR rather than implicit in a
+                      Dockerfile.
+                    type: string
+                required:
+                - kind
+                type: object
+            required:
+            - sizeBytes
+            - source
+            type: object
+          status:
+            properties:
+              conditions:
+                description: Conditions carries Valid; see SpiceboxToolchainConditionValid.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  reflects.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

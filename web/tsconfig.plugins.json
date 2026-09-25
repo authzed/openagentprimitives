@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@ap/agentui": ["packages/agentui/src/index.ts"],
+      "@ap/agentui/*": ["packages/agentui/src/*"],
+      "@ap/design": ["packages/design/src/index.ts"],
+      "@ap/design/*": ["packages/design/src/*"],
+      "@ap/runtime": ["packages/runtime/src/index.ts"],
+      "@ap/runtime/*": ["packages/runtime/src/*"],
+      "react": ["node_modules/@types/react"],
+      "react/jsx-runtime": ["node_modules/@types/react/jsx-runtime"],
+      "react-dom": ["node_modules/@types/react-dom"],
+      "react-dom/client": ["node_modules/@types/react-dom/client"],
+      "lucide-react": ["node_modules/lucide-react"],
+      "anser": ["node_modules/anser"],
+      "@mcp-ui/client": ["node_modules/@mcp-ui/client/dist/src/index.d.ts"]
+    }
+  },
+  "include": ["global.d.ts", "../pkg/**/ui/**/*.ts", "../pkg/**/ui/**/*.tsx"],
+  // src/ui/page.tsx is the compiled-page convention (web/packages/agentui/src/compile.ts
+  // parses it directly; tsc never does — it has no ap:/oap: JSX intrinsics), distinct
+  // from the plain `ui/*.tsx` React plugin files this project otherwise typechecks.
+  "exclude": ["../pkg/**/*.test.ts", "../pkg/**/*.test.tsx", "../pkg/**/src/ui/page.tsx"]
+}

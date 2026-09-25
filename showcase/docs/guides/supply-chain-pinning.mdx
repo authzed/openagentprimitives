@@ -1,0 +1,54 @@
+export const meta = {
+  title: 'Supply-chain pinning',
+  section: 'Reference',
+  group: 'Safe tools',
+  order: 2160,
+  description:
+    "Content-hashing the tools, images, skills, and subagents an agent is allowed to run — so a dependency can't change out from under it.",
+}
+
+# Supply-chain pinning
+
+<p className="doc-lede">
+  An agent's tools come from somewhere — an MCP server, a container image, a git-sourced skill, another agent.
+  Pinning content-hashes those dependencies so one can't <em>change</em> after you reviewed it. A pin doesn't
+  make a dependency trustworthy; it makes a <em>change</em> to it visible.
+</p>
+
+## One shape for every dependency
+
+Everything an agent depends on records a pin with a **strength**: `frozen` (bound to an exact hash or digest —
+immutable), `named` (a movable tag or branch), or `unpinned` (rolling). The same model covers the five kinds
+that can drift — MCP tool manifests, container images, skills, CLI tools, and packaged `.oap` agents — so
+"how pinned is this?" has one answer you can read.
+
+## Tool manifests: catching a rug-pull
+
+The sharpest supply-chain risk for an MCP server is that a tool's *description* changes — the text the model
+reads to decide how to use it — turning a trusted tool into an injection vector. So OAP hashes exactly the
+part that steers the model (each tool's name, description, and input schema) into a canonical **manifest hash**.
+Pin it, and if the server later serves a different manifest — a reworded description, a hidden new tool — the
+pin **drifts**, and the runner escalates the changed tools to per-call approval (or withholds them) instead of
+letting the new behavior through silently.
+
+## Images and subagents
+
+Container images pin by digest: a sidecar toolbox's image resolves to the digest the kubelet actually pulled,
+and a re-resolved tag that yields a new digest shows as drift. First-party platform images are digest-pinned at
+install, and an image that can't be resolved **fails the install closed** rather than running an unverified tag.
+Delegation pins too: a subagent roster entry can be written as `name@sha256:…`, and a cluster can **require**
+those digest pins — a ratchet any tier can turn on — so an agent can only hand work to a subagent whose exact
+installed bundle matches.
+
+## Managing pins
+
+`oap pin status` shows every dependency's strength, digest, and whether it's drifted; `oap pin diff` shows
+exactly *what* changed; and `oap pin update … --current` re-freezes a dependency to what you just reviewed —
+race-free, so you adopt the version you looked at and not whatever it became a moment later.
+
+<Callout kind="security" title="A hash pins content, not origin">
+  Pinning proves a dependency hasn't <em>changed</em> since you pinned it — it does not prove the thing was
+  built from trustworthy source. There's no descriptor signing or SBOM here yet, and a tag-only or unset
+  dependency is trust-on-first-use. That's why OWASP <a href="#/owasp-top10#asi04">ASI04</a> is rated
+  <em>partial</em>: pinning is a strong tripwire for change, not a full provenance chain.
+</Callout>

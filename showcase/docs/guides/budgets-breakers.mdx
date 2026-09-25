@@ -1,0 +1,52 @@
+export const meta = {
+  title: 'Budgets, rate limits & circuit breakers',
+  section: 'Reference',
+  group: 'Safe tools',
+  order: 2150,
+  description:
+    'Default-on circuit breakers, optional rate limits, and per-tool data-volume budgets that keep a misbehaving tool from running away.',
+}
+
+# Budgets, rate limits & circuit breakers
+
+<p className="doc-lede">
+  A tool can be perfectly authorized and still misbehave — failing in a loop, being called too fast, or dragging
+  back a payload far too large. OAP's <strong>toolguard</strong> bounds runaway use with circuit breakers,
+  rate limits, and data-volume budgets, so one bad tool can't take the session down with it.
+</p>
+
+## Circuit breakers (on by default)
+
+Each session runs a classic three-state breaker per tool — and a second one per **origin** (an MCP server, a
+sidecar). Consecutive failures trip the breaker; while it's open, calls are denied, and it reopens with
+**exponential backoff** before letting a single probe test whether the tool has recovered. The origin breaker
+is the blast-radius control: when a whole server starts failing, it trips *every* tool from that server at once,
+rather than hammering a dead dependency one tool at a time. These are on by default.
+
+## Credential halt
+
+One failure mode gets its own, sharper rule: repeated **authentication** refusals. No amount of backoff fixes a
+revoked credential, so a couple of consecutive auth failures **end the session** instead of retrying — a dead
+credential is surfaced loudly, not retried into the ground.
+
+## Rate limits
+
+Optionally, you can cap how often a tool runs — per turn, or within a sliding time window. A call that would
+exceed the limit is refused before it runs. Rate limits are off unless you set them.
+
+## Data-volume budgets
+
+Also optional: a byte budget on what moves through a tool.
+
+- **Egress** — cap the size of a call's arguments; over the cap, the tool doesn't run.
+- **Ingress** — cap the size of a tool's result; over the cap, the result is **withheld and replaced with an
+  error**, so an oversized payload never reaches the model.
+
+Every one of these is configured on the AgentClass — and a cluster-level ceiling can clamp what an individual
+class is allowed to loosen — with every trip written to the [audit log](#/audit-log).
+
+<Callout kind="security" title="Defaults that contain, not just observe">
+  The breakers are on out of the box, and their action is to *deny*, not merely warn. Containing a cascading
+  failure is the default posture — you opt into looser limits deliberately, not into safety by remembering to
+  configure it.
+</Callout>

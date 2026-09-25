@@ -1,0 +1,74 @@
+export const meta = {
+  title: 'ClusterSkill',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3110,
+  description: 'ClusterSkill is a cluster-scoped Skill, visible to every namespace. A',
+}
+
+# ClusterSkill
+
+**Group** `agentprimitives.authzed.com` · **Scope** Cluster · **Short names** `cskl`
+
+ClusterSkill is a cluster-scoped Skill, visible to every namespace. A
+namespaced Skill with the same canonical name shadows it at resolution time.
+
+Cluster-scoped. Reconciled by pkg/controllers/clusterskill, which only keeps
+the Valid and Pinned conditions honest -- it never pulls or stages content,
+because a ClusterSkill is fully described by its spec. Discovery and
+materialization belong to the ClusterSkillSource controller.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.body` \* | `string` | Body is the SKILL.md markdown body, loaded on demand by the load_skill tool. Stored inline, well within the etcd object budget. |
+| `spec.bundle` | `object` | Bundle references the cached scripts/assets archive; nil means the skill is instruction-only and nothing is staged into the sandbox for it. |
+| `spec.bundle.cacheKey` \* | `string` | CacheKey is the skillbundle.Store lookup key. |
+| `spec.bundle.digest` \* | `string` | Digest is the content digest of the bundle archive. |
+| `spec.canonicalName` \* | `string` | CanonicalName is the stable, collision-free identity, e.g. "github.com/someorg/somerepo//skills/skillone@v1.2.0". All references (AgentClass, settings ceilings) use this string. |
+| `spec.description` \* | `string` | Description is the frontmatter description — the always-on metadata that progressive disclosure injects into the agent prompt (~100 tokens). |
+| `spec.displayName` | `string` | DisplayName is an optional human label; defaults to the frontmatter name. |
+| `spec.frontmatter` | `object` | Frontmatter carries the remaining SKILL.md frontmatter fields. |
+| `spec.frontmatter.allowedTools` | `string` | AllowedTools is the experimental space-separated pre-approved tool list. RECORDED, not enforced: nothing gates a tool call on it. |
+| `spec.frontmatter.compatibility` | `string` | Compatibility is the author's declared compatibility statement. |
+| `spec.frontmatter.license` | `string` | License is the skill author's declared license identifier. |
+| `spec.frontmatter.metadata` | `map[string]string` | Metadata is the author's arbitrary key/value frontmatter, carried verbatim and interpreted by nothing here. |
+| `spec.frontmatter.name` \* | `string` | Name is the frontmatter "name" (kebab-case); must match the canonical skill directory basename. |
+| `spec.repoInstructions` | `object` | RepoInstructions is the repo-root agent-instructions file (AGENTS.md or CLAUDE.md) discovered in the skill's source repo, injected into the agent's system prompt when this skill is linked to an AgentClass. nil for hand-authored skills (no repo) or when the source set disableRepoInstructions. |
+| `spec.repoInstructions.content` \* | `string` | Content is the (possibly truncated) file contents. |
+| `spec.repoInstructions.sourceFile` \* | `string` | SourceFile is the repo-root filename the content came from ("AGENTS.md" or "CLAUDE.md"), shown as provenance in the prompt. |
+| `spec.repoInstructions.truncated` | `boolean` | Truncated is true when Content was capped at the 64 KiB injection limit. |
+| `spec.source` | `object` | Source records git provenance, written by the SkillSource controller. Empty for hand-authored skills. |
+| `spec.source.ref` | `string` | Ref is the requested ref (tag/branch/sha) as written in the source. |
+| `spec.source.repoLocator` \* | `string` | RepoLocator is the normalized host/org/repo (no scheme, no .git). |
+| `spec.source.resolvedSHA` | `string` | ResolvedSHA is the commit the controller actually pulled. |
+| `spec.source.sourceName` | `string` | SourceName is the owning SkillSource CR name (empty for hand-authored). |
+| `spec.source.subpath` \* | `string` | Subpath is the skill's directory within the repo. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` | Conditions carries Valid and Pinned. |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedGeneration` | `integer (int64)` | ObservedGeneration is the spec generation this status reflects. |
+| `status.pin` | `object` | Pin is the recorded pin identity in the common PinRecord shape. Its Strength ("frozen" \| "named" \| "unpinned") is the single source of the skill's syntactic pin strength. nil when the canonical name did not parse -- the Valid and Pinned conditions carry the reason. |
+| `status.pin.details` | `map[string]string` | Details carries kind-specific extras (toolCount, registry host, …). |
+| `status.pin.digest` | `string` | Digest is the immutable identity: git sha, sha256:… image digest, canonical tool-manifest hash, or binary hash. |
+| `status.pin.kind` \* | `string` | Kind is the pinning registry kind name (skill, image, mcp, cli, …). Validated against the registry by controllers, not by a CRD enum, so new kinds register without an API change. |
+| `status.pin.observedAt` | `string (date-time)` | ObservedAt is when the recording controller observed this identity. |
+| `status.pin.strength` \* | `string` | Strength is the syntactic pin strength of the declared ref. _(enum: frozen \| named \| unpinned)_ |
+| `status.pin.version` | `string` | Version is the human-readable identity: tag, serverInfo.version, or version-probe output. |
+
+<small>\* required</small>
+

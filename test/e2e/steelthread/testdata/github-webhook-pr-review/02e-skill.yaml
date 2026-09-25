@@ -1,0 +1,87 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SkillSource
+metadata:
+  name: review-kit-65b1c15b
+  namespace: default
+spec:
+  ref: master
+  repoURL: https://github.com/demo-skills-org/review-kit
+  subpath: plugins/review/skills/review-pr
+  sync:
+    interval: 1h0m0s
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SkillSource
+metadata:
+  name: security-skills-3eb600ca
+  namespace: default
+spec:
+  ref: main
+  repoURL: https://github.com/demo-skills-org/security-skills
+  subpath: plugins/differential-review/skills/differential-review
+  sync:
+    interval: 1h0m0s
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Skill
+metadata:
+  name: differential-review-3592c109
+  namespace: default
+  ownerReferences:
+  - apiVersion: agentprimitives.authzed.com/v1alpha1
+    controller: true
+    kind: SkillSource
+    name: security-skills-3eb600ca
+    uid: 00000000-0000-0000-0000-000000000000
+spec:
+  body: |
+    # Content elided
+
+    This skill's SKILL.md body was removed by an operator-declared skill elision at capture time.
+
+    The AgentClass link that names it targets the sandbox, so none of this content reached the
+    recorded system prompt or load_skill, and the replay depends only on the skill existing.
+  canonicalName: github.com/demo-skills-org/security-skills//plugins/differential-review/skills/differential-review@main
+  description: Content elided at capture time. This skill's description, body and
+    repo instructions were removed by an operator-declared skill elision; see capture.skillElisions
+    in bundle.json. Only the skill's existence is reproduced.
+  displayName: differential-review
+  frontmatter:
+    name: differential-review
+  source:
+    ref: main
+    repoLocator: github.com/demo-skills-org/security-skills
+    sourceName: security-skills-3eb600ca
+    subpath: plugins/differential-review/skills/differential-review
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Skill
+metadata:
+  name: review-pr-bac43820
+  namespace: default
+  ownerReferences:
+  - apiVersion: agentprimitives.authzed.com/v1alpha1
+    controller: true
+    kind: SkillSource
+    name: review-kit-65b1c15b
+    uid: 00000000-0000-0000-0000-000000000000
+spec:
+  body: |
+    # Content elided
+
+    This skill's SKILL.md body was removed by an operator-declared skill elision at capture time.
+
+    The AgentClass link that names it targets the sandbox, so none of this content reached the
+    recorded system prompt or load_skill, and the replay depends only on the skill existing.
+  canonicalName: github.com/demo-skills-org/review-kit//plugins/review/skills/review-pr@master
+  description: Content elided at capture time. This skill's description, body and
+    repo instructions were removed by an operator-declared skill elision; see capture.skillElisions
+    in bundle.json. Only the skill's existence is reproduced.
+  displayName: review-pr
+  frontmatter:
+    name: review-pr
+  source:
+    ref: master
+    repoLocator: github.com/demo-skills-org/review-kit
+    sourceName: review-kit-65b1c15b
+    subpath: plugins/review/skills/review-pr

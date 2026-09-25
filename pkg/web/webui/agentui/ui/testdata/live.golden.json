@@ -1,0 +1,97 @@
+{
+  "snapshot": {
+    "type": "snapshot",
+    "actions": [
+      {
+        "requestId": "req-golden-1",
+        "action": "advance",
+        "state": "submitted",
+        "message": "Request submitted.",
+        "updatedAt": "2026-01-02T15:04:05Z"
+      }
+    ]
+  },
+  "approvalEvent": {
+    "type": "event",
+    "action": {
+      "requestId": "req-golden-1",
+      "action": "advance",
+      "state": "awaiting_approval",
+      "message": "Your approval is needed to continue.",
+      "approvalAddressedToViewer": true,
+      "updatedAt": "2026-01-02T15:04:06Z"
+    }
+  },
+  "settledEvent": {
+    "type": "event",
+    "action": {
+      "requestId": "req-golden-1",
+      "action": "advance",
+      "state": "succeeded",
+      "message": "Completed successfully.",
+      "updatedAt": "2026-01-02T15:04:07Z"
+    }
+  },
+  "viewOpen": {
+    "type": "view",
+    "declaration": {
+      "view": {
+        "component": "ap:stack",
+        "children": [
+          {
+            "component": "oap:generative",
+            "props": {
+              "allowedComponents": [
+                "*"
+              ],
+              "name": "panel"
+            },
+            "children": [
+              {
+                "component": "ap:text",
+                "props": {
+                  "text": "placeholder"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "viewUpdate": {
+    "type": "view",
+    "hook": "panel",
+    "declaration": {
+      "view": {
+        "component": "ap:stack",
+        "children": [
+          {
+            "component": "oap:generative",
+            "props": {
+              "allowedComponents": [
+                "*"
+              ],
+              "name": "panel"
+            },
+            "children": [
+              {
+                "component": "ap:markdown",
+                "props": {
+                  "body": "agent copy"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "agentComposed": [
+        "panel"
+      ]
+    }
+  },
+  "errorFrame": {
+    "type": "error",
+    "message": "this view's live updates are unavailable right now"
+  }
+}

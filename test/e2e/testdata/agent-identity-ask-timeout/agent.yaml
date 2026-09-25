@@ -1,0 +1,85 @@
+# Fixture for the identityMode=ask TIMEOUT e2e scenario. Identical to
+# agent-identity-ask except spec.identityChoiceTimeout is a few seconds, so the
+# runner's choice-wait and the operator's deadline backstop both fire quickly
+# when the test injects NO decision. No real names per CLAUDE.md.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: asktimeout-placeholder
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-test-provider"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: asktimeout-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: asktimeout-identity-token
+  namespace: default
+type: Opaque
+stringData:
+  access_token: "unused-no-mcp"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: asktimeout-identity
+  namespace: default
+spec:
+  description: "identityMode=ask timeout e2e fixture."
+  credentials:
+    - name: asktimeout-static
+      type: static
+      static:
+        secretRef:
+          name: asktimeout-identity-token
+          key: access_token
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: asktimeout-agent
+  namespace: default
+spec:
+  displayName: Ask Timeout Bot
+  description: "E2E fixture for identityMode=ask deadline backstop. Do not deploy."
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: asktimeout-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the identityMode=ask timeout e2e harness.
+  identityMode: ask
+  agentIdentity: asktimeout-identity
+  identityChoiceTimeout: "5s"
+  budget:
+    maxTurns: 5
+    maxTokens: 10000
+    maxDuration: 2m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: asktimeout-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: asktimeout-agent
+  credentialsRef:
+    secretName: asktimeout-fake-creds
+  fake:
+    echo: false

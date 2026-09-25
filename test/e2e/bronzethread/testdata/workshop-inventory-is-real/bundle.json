@@ -1,0 +1,98 @@
+{
+  "name": "workshop-inventory-is-real",
+  "description": "The first e2e coverage of the agent builder: a real agent session calling `workshop_inventory` gets answers from the REAL pkg/tools/workshopmcp.Server (test/e2e/workshop_mcp.go's mountWorkshopMCP), running against the harness's real envtest apiserver — not the canned MCPStub every other sidecar bundle in this corpus dispatches through. driver.go's sidecar-probe routing closure matches on this bundle's SidecarToolbox CR name (\"workshop\", the workshopSidecarToolboxRef constant) and sends its calls to h.WorkshopMCPURL() instead of h.MCP.URL().\n\nThree facts are asserted, each provable ONLY by a real handleInventory reading real cluster state — a canned MCP stub has no SpiceboxClassList, no ClusterAgentSettings, and no apimage registry to answer from:\n  1. sandboxClasses reports the fixture's own SpiceboxClass (\"workshop-sandbox\"), read via a live SpiceboxClassList.\n  2. ceilings.budget.maxTurns reports the fixture's own ClusterAgentSettings ceiling (91), read via a live Get of the cluster-scoped singleton — which handleInventory refuses to answer at all without (see tools_inventory.go: it errors if it cannot Get one).\n  3. sidecarImages reports ap-api-adapter with a `ref` — plan 8a's WorkshopSidecarImages discovery path (pkg/platform/apimage), proving itself end to end through a real session for the first time.\n\nEach is checked with its own `workshop_inventory` call (the tool is read-only and idempotent, so three real dispatches against three cluster reads is the natural way this format asserts three distinct facts from one JSON result — Expect.LastToolResultContains is a single substring per step).\n\nVerified FAIL-FIRST per plan (see task-3-report.md): with the driver's routing closure temporarily repointed at h.MCP.URL() for the workshop ref too, this bundle fails at the FIRST workshop_inventory call — the stub has no tools/list entry for it at all (no ToolOutputs was ever registered, because this bundle deliberately carries none), so the sidecar's own tool synthesis fails closed before the model even gets a turn. That is the right failure: a bundle that would also pass against the stub proves nothing about the real server.\n\nWHAT THIS BUNDLE DOES NOT PROVE: it does not exercise the production Workshop-Ready->sidecar-identity path, which does not exist yet. RunModeFor (pkg/controllers/agentsession/sidecars.go) returns RunModeSeparatePod — the only run mode that ever gets a minted WorkshopIdentity via BuildSidecarPod's identity branch — only when a SidecarToolbox declares spec.secretInputs, and the shipped workshop toolbox (pkg/tools/workshopmcp/deploy/sidecartoolbox.yaml, copied verbatim into this bundle's fixture) declares none. So this fixture's workshop toolbox runs IN-POD, same as every other sidecar bundle in this corpus, and mountWorkshopMCP hands the real Server a synthetic WorkshopIdentity directly rather than one minted by that (nonexistent) production path. A green run here is evidence the workshop TOOLS work against real cluster state; it is not evidence the identity plumbing that would hand them a live one is wired — see mountWorkshopMCP's own doc comment for the same statement at the code that would first need to change.",
+  "agentDir": "testdata/workshop-inventory-is-real/manifests",
+  "agentClass": "workshop-demo",
+  "userTurns": [
+    "Look at this cluster's real capabilities and tell me what sandbox class, turn ceiling, and sidecar image you'd build with."
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "sandbox class, turn ceiling, and sidecar image"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_inventory",
+            "args": {
+              "operation_id": "op-1",
+              "_reason": "need the cluster's real sandbox classes before proposing a build",
+              "args": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_inventory",
+        "lastToolResultContains": "\"sandboxClasses\":[\"workshop-sandbox\"]"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_inventory",
+            "args": {
+              "operation_id": "op-2",
+              "_reason": "confirm the cluster's governance ceiling before proposing a budget",
+              "args": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_inventory",
+        "lastToolResultContains": "\"maxTurns\":91"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_inventory",
+            "args": {
+              "operation_id": "op-3",
+              "_reason": "confirm the admitted sidecar images before proposing an adapter",
+              "args": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_inventory",
+        "lastToolResultContains": "\"name\":\"ap-api-adapter\",\"ref\":\"ap-api-adapter:"
+      },
+      "reply": [
+        {
+          "text": "This cluster's real inventory: the workshop-sandbox SpiceboxClass, a 91-turn governance ceiling, and the ap-api-adapter sidecar image for REST-API tool adapters."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "reported the cluster's real inventory: sandbox class, ceiling, and sidecar image"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "workshop-sandbox"
+    ],
+    "toolsCalled": [
+      "workshop_inventory"
+    ]
+  }
+}

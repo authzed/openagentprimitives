@@ -1,0 +1,3 @@
+2026-08-27T10:14:02Z INFO  serving grpc on :50051
+2026-08-27T10:14:07Z WARN  dispatch queue depth 128 exceeds soft limit
+2026-08-27T10:14:09Z ERROR datastore: connection reset by peer

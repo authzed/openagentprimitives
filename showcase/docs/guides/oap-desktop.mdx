@@ -1,0 +1,19 @@
+export const meta = {
+  title: 'oap desktop',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2790,
+  description: 'Run the oap macOS menubar app (local VM + built-in chat; macOS/Apple Silicon only)',
+}
+
+# oap desktop
+
+desktop drives a local, single-user agent-primitives deployment from a
+menubar app: it boots a lightweight Linux VM (Virtualization.framework),
+installs agent-primitives into it with a persistent SQLite memory backend,
+and gives you a menu to open the built-in chat, open the admin dashboard,
+stop the VM, or uninstall.
+
+Only supported on macOS (Apple Silicon). On other platforms this command
+returns an error explaining why.
+

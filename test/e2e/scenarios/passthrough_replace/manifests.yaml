@@ -1,0 +1,108 @@
+# Scenario: passthrough token replace (passthrough_replace_test.go).
+#
+# Drives the user-facing "replace a linked credential's value" path:
+#   1. A credential is pre-linked directly via useridentity.PutToken
+#      (simulating a prior link) — token "tok-1".
+#   2. A user message creates a userPassthrough AgentSession. Since the
+#      credential is already present, the session reaches
+#      CredentialsReady=True WITHOUT parking (contrast with
+#      passthrough_revoke, which starts from a missing credential).
+#   3. identityd's standing portal — POST /my/accounts/linear-oauth/link/submit
+#      — replaces the credential's value with token "tok-2", exactly as a
+#      user re-pasting a rotated PAT would.
+#   4. A follow-up inbound message on the same thread wakes the (by-then
+#      Idle) session; the operator's reconcile re-projects the per-session
+#      credential Secret from the (now-updated) master Secret.
+#
+# Uses the same AgentClass + MCPServer shape as passthrough_revoke so the
+# operator's passthrough gate exercises the same real code paths.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-replace-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder. The fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-replace-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# MCPServer the passthrough class references. spec.auth.credential is the
+# credential gate key; spec.auth.provider becomes the user-visible label
+# in the SessionUserIdentity's Explanation.What.
+#
+# spec.server.url is rewritten to {{MCP_URL}} by the test before apply so
+# the MCP probe hits the in-process MCPStub rather than a real host.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: linear-mcp
+  namespace: default
+spec:
+  name: linear-mcp
+  version: v1
+  intent: "Passthrough replace e2e: drives a portal token replace on a ready session."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: linear-oauth
+    provider: Linear
+  tools: []
+---
+# AgentClass with identityMode: userPassthrough. Since the credential is
+# pre-linked BEFORE the first session is created, the passthrough gate
+# never parks this session — it reaches CredentialsReady=True on the first
+# reconcile. authz.toolCalls.mode=disabled bypasses SpiceDB authz so no
+# schema bootstrap is needed.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: triage-bot
+  namespace: default
+spec:
+  displayName: "Triage Bot"
+  identityMode: userPassthrough
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: pt-replace-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a passthrough triage agent for the replace e2e"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  mcpServers:
+    - name: linear
+      ref: linear-mcp
+---
+# Channel for the harness to drive inbound messages through.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: triage-bot-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: triage-bot
+  credentialsRef:
+    secretName: pt-replace-fake-creds
+  fake:
+    echo: false

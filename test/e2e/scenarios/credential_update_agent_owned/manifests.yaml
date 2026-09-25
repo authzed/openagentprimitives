@@ -1,0 +1,175 @@
+# Scenario: replacing an agent's OWN shared credential
+# (credential_update_agent_owned_test.go).
+#
+# The sibling `credential_update` scenario covers a PERSON's credential. This
+# one is the other half of the feature and differs in the one thing that
+# changes every downstream decision: whose credential died.
+#
+#   - identityMode: agent + spec.agentIdentity, so the resolved credential is an
+#     AgentIdentity one. That is what makes ResolvedCredential.AgentOwned() true,
+#     which routes the card to a standing admin surface instead of DMing the
+#     session's starter, and which sends the click's write through the OPERATOR
+#     rather than into the clicker's own UserIdentity.
+#   - The bot's credential is PRESENT and dead — a real-looking value in a real
+#     Secret. The premise is a credential that stopped working, not one that was
+#     never configured; a missing one would park the session on a different gate
+#     and prove nothing.
+#   - TWO Channels. The session's own (role: both) is where the agent talks. The
+#     role: monitoring one is the standing admin surface: nobody knows in advance
+#     which admin will fix a shared bot credential, so there is no person to DM.
+#     Its kind must be one that can really deliver a monitoring event — channelsd
+#     refuses to claim delivery to a Channel whose kind has no monitoring sender.
+#   - capabilities.credential_update is opt-in (DefaultOn == false) precisely
+#     because the tool can put a credential-entry form in front of a human.
+#   - spec.auth.provider is a REAL catalog id: the operator re-verifies the
+#     credential itself before asking anyone, and identityd re-verifies the
+#     PASTED value before submitting it. The test redirects that probe's HTTP
+#     client at its own server, which answers on the token it is given — dead
+#     value 401, replacement 200 — so both checks are exercised for real.
+#
+# authz.toolCalls.mode=disabled bypasses per-tool-call SpiceDB checks. The
+# authorization this scenario is about (agentidentity#update_credential) is a
+# different question entirely and IS answered by a real SpiceDB.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agentcred-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder. The fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agentcred-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# The agent's OWN shared credential. This is the Secret the operator patches
+# when an admin actions the card, and the one the CredentialUpdateRequest
+# reconciler watches to decide the request was Fulfilled.
+#
+# The value is ghp_-shaped so it passes the provider's declared token format;
+# whether it AUTHENTICATES is the probe's answer, and the probe says no.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agentcred-bot-creds
+  namespace: default
+type: Opaque
+stringData:
+  agentcred-upstream-token: "ghp_deadSharedBotCredential0"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: agentcred-support-bot
+  namespace: default
+spec:
+  credentials:
+    - name: agentcred-upstream-token
+      type: static
+      static:
+        secretRef:
+          name: agentcred-bot-creds
+          key: agentcred-upstream-token
+---
+# The upstream whose call fails. spec.auth.credential is the credential the
+# request's origin ("mcpserver/agentcred-upstream") resolves to — and, because
+# the class runs in agent mode, it resolves against the AgentIdentity above
+# rather than against whoever started the session.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: agentcred-upstream
+  namespace: default
+spec:
+  name: agentcred-upstream
+  version: v1
+  intent: "Agent-owned credential-update e2e fixture: one read-only tool whose calls can be made to fail with 401."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: agentcred-upstream-token
+    provider: github-pat
+  tools:
+    - name: list_issues
+      intent: "List issues upstream."
+      args:
+        allowedFields: [query]
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-agentcred
+  namespace: default
+spec:
+  displayName: "Shared Bot Credential Agent"
+  identityMode: agent
+  agentIdentity: agentcred-support-bot
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: agentcred-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you file issues upstream on request"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  capabilities:
+    credential_update:
+      enabled: true
+  mcpServers:
+    - name: upmcp
+      ref: agentcred-upstream
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-agentcred-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-agentcred
+  credentialsRef:
+    secretName: agentcred-fake-creds
+  fake:
+    echo: false
+---
+# The standing admin surface. Without a DELIVERABLE role=monitoring Channel,
+# channelsd has no recipient for an agent-owned card at all and says so loudly
+# instead of parking the session in silence.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-agentcred-monitor
+  namespace: default
+spec:
+  kind: fake
+  role: monitoring
+  # Deliberately NO agentClass: a monitoring Channel is a framework-event sink
+  # bound to the cluster, not to one agent (the Channel controller skips the
+  # AgentClass reference checks for this role).
+  credentialsRef:
+    secretName: agentcred-fake-creds
+  fake:
+    echo: false

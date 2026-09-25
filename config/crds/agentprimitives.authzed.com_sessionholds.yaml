@@ -1,0 +1,165 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: sessionholds.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    kind: SessionHold
+    listKind: SessionHoldList
+    plural: sessionholds
+    singular: sessionhold
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.sessionRef.name
+      name: Session
+      type: string
+    - jsonPath: .spec.source
+      name: Source
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SessionHold parks an AgentSession for forensic review and gates its return to
+          running on a human decision.
+
+          Shaped after CredentialUpdateRequest deliberately: spec.sessionRef is 1:1, so
+          its mapper is a pure name projection needing no List, and the owner-ref to the
+          AgentSession makes the hold live exactly as long as the session it holds.
+
+          This CR's controller NEVER writes AgentSession.status.phase. Phase is owned by
+          the AgentSession reconciler alone; co-ownership by two operator reconcilers is
+          the hazard credentialupdate.go documents.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              reason:
+                description: |-
+                  Reason is platform-authored trip text shown on the release card. It is
+                  never agent-authored: on this card the agent is the SUBJECT of the
+                  decision, not the requester, so it gets no voice.
+                maxLength: 512
+                type: string
+              sessionRef:
+                description: |-
+                  SessionRef is the AgentSession this hold parks. The CR also carries an
+                  owner-ref to it, so the hold is garbage-collected with the session.
+                properties:
+                  name:
+                    description: Name is the object's name.
+                    type: string
+                  namespace:
+                    description: Namespace is the object's namespace.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+              source:
+                description: |-
+                  Source is "manual" or "tripper/<name>". It exists for the audit trail and
+                  the card's wording; nothing branches on it.
+                maxLength: 128
+                type: string
+              trippedBy:
+                description: |-
+                  TrippedBy is the canonical subject of the human who tripped it. Empty for
+                  an automated trip, which is identified by Source instead.
+                type: string
+            required:
+            - reason
+            - sessionRef
+            - source
+            type: object
+          status:
+            properties:
+              containment:
+                description: |-
+                  Containment is platform-authored text explaining what happened to the
+                  SESSION as it was parked: that it is held, and whether the workspace
+                  snapshot that preserves the evidence succeeded.
+
+                  WRITTEN ONLY BY THE AGENTSESSION RECONCILER.
+
+                  It is a separate field from Determination because the two narratives are
+                  INDEPENDENT, not alternatives. A workspace snapshot can fail while a
+                  cascade to descendants also fails, and both are true at once. Sharing one
+                  field made each writer erase the other's report — so an operator
+                  debugging a doubly-degraded hold saw only whichever controller wrote
+                  last, in exactly the state where they need both. Two writers on one
+                  free-text status field also woke each other's watches on every pass; the
+                  loop was the symptom, the shared field was the disease.
+
+                  Splitting is necessary but not sufficient: each writer must ALSO skip
+                  the write when the text is unchanged, or the two keep waking each other
+                  through the same object even though neither is erasing anything.
+                type: string
+              determination:
+                description: |-
+                  Determination is platform-authored text explaining the current phase,
+                  surfaced rather than logged so a refusal is never silent.
+
+                  WRITTEN ONLY BY THE SESSIONHOLD CONTROLLER, which owns the hold's
+                  DISPOSITION: what was decided about it — released, refused, cascaded to
+                  descendants, or a cascade that failed. See Containment for the other
+                  half and why they are two fields.
+                type: string
+              interactionRef:
+                description: InteractionRef is the requestRef of the published release
+                  card.
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                description: Phase is Active or Released.
+                type: string
+              releasedBy:
+                description: |-
+                  ReleasedBy is the canonical subject of the human who approved the release
+                  card, set once by the SessionHold controller's Decide alongside
+                  Phase=Released. The AgentSession reconciler reads it back to attribute the
+                  lifecyclecore.Released event it emits when it observes this hold released.
+                type: string
+              snapshotHandle:
+                description: |-
+                  SnapshotHandle names the workspace snapshot taken at trip time, empty
+                  until the snapshot Job completes.
+                type: string
+              trippedAt:
+                description: |-
+                  TrippedAt is when the controller first observed this hold. An OBSERVATION,
+                  set once: it must never live in spec, or a re-apply stops being a no-op.
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

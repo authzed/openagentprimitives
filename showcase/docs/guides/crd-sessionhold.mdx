@@ -1,0 +1,53 @@
+export const meta = {
+  title: 'SessionHold',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3170,
+  description: 'SessionHold parks an AgentSession for forensic review and gates its return to',
+}
+
+# SessionHold
+
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced
+
+SessionHold parks an AgentSession for forensic review and gates its return to
+running on a human decision.
+
+Shaped after CredentialUpdateRequest deliberately: spec.sessionRef is 1:1, so
+its mapper is a pure name projection needing no List, and the owner-ref to the
+AgentSession makes the hold live exactly as long as the session it holds.
+
+This CR's controller NEVER writes AgentSession.status.phase. Phase is owned by
+the AgentSession reconciler alone; co-ownership by two operator reconcilers is
+the hazard credentialupdate.go documents.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.reason` \* | `string` | Reason is platform-authored trip text shown on the release card. It is never agent-authored: on this card the agent is the SUBJECT of the decision, not the requester, so it gets no voice. |
+| `spec.sessionRef` \* | `object` | SessionRef is the AgentSession this hold parks. The CR also carries an owner-ref to it, so the hold is garbage-collected with the session. |
+| `spec.sessionRef.name` \* | `string` | Name is the object's name. |
+| `spec.sessionRef.namespace` \* | `string` | Namespace is the object's namespace. |
+| `spec.source` \* | `string` | Source is "manual" or "tripper/&lt;name&gt;". It exists for the audit trail and the card's wording; nothing branches on it. |
+| `spec.trippedBy` | `string` | TrippedBy is the canonical subject of the human who tripped it. Empty for an automated trip, which is identified by Source instead. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.containment` | `string` | Containment is platform-authored text explaining what happened to the SESSION as it was parked: that it is held, and whether the workspace snapshot that preserves the evidence succeeded. WRITTEN ONLY BY THE AGENTSESSION RECONCILER. It is a separate field from Determination because the two narratives are INDEPENDENT, not alternatives. A workspace snapshot can fail while a cascade to descendants also fails, and both are true at once. Sharing one field made each writer erase the other's report — so an operator debugging a doubly-degraded hold saw only whichever controller wrote last, in exactly the state where they need both. Two writers on one free-text status field also woke each other's watches on every pass; the loop was the symptom, the shared field was the disease. Splitting is necessary but not sufficient: each writer must ALSO skip the write when the text is unchanged, or the two keep waking each other through the same object even though neither is erasing anything. |
+| `status.determination` | `string` | Determination is platform-authored text explaining the current phase, surfaced rather than logged so a refusal is never silent. WRITTEN ONLY BY THE SESSIONHOLD CONTROLLER, which owns the hold's DISPOSITION: what was decided about it — released, refused, cascaded to descendants, or a cascade that failed. See Containment for the other half and why they are two fields. |
+| `status.interactionRef` | `string` | InteractionRef is the requestRef of the published release card. |
+| `status.observedGeneration` | `integer (int64)` |  |
+| `status.phase` | `string` | Phase is Active or Released. |
+| `status.releasedBy` | `string` | ReleasedBy is the canonical subject of the human who approved the release card, set once by the SessionHold controller's Decide alongside Phase=Released. The AgentSession reconciler reads it back to attribute the lifecyclecore.Released event it emits when it observes this hold released. |
+| `status.snapshotHandle` | `string` | SnapshotHandle names the workspace snapshot taken at trip time, empty until the snapshot Job completes. |
+| `status.trippedAt` | `string (date-time)` | TrippedAt is when the controller first observed this hold. An OBSERVATION, set once: it must never live in spec, or a re-apply stops being a no-op. |
+
+<small>\* required</small>
+

@@ -1,0 +1,1358 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: clusteragentsettings.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: ClusterAgentSettings
+    listKind: ClusterAgentSettingsList
+    plural: clusteragentsettings
+    shortNames:
+    - clsagset
+    singular: clusteragentsettings
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='SelfConsistent')].status
+      name: Consistent
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ClusterAgentSettings is the cluster-wide top tier of agent governance
+          settings: the limits and defaults every namespace inherits, plus the model
+          catalog. Singleton -- the only permitted name is "cluster"
+          (ClusterAgentSettingsName).
+
+          Cluster-scoped. Reconciled by pkg/controllers/settings, which reports
+          SelfConsistent. Tier resolution lives in pkg/platform/settings; limits set
+          here are ceilings that lower tiers may narrow but never widen.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SettingsSpec is the spec shared by ClusterAgentSettings and AgentSettings.
+              It carries two field groups with opposite merge semantics: Limits (ceilings
+              that narrow downward via min/intersection) and Defaults (fallbacks used when
+              a lower tier omits the field).
+            properties:
+              classUserPreferences:
+                additionalProperties:
+                  additionalProperties:
+                    description: PreferenceGlobal is one platform-admin value for
+                      a class preference key.
+                    properties:
+                      lock:
+                        description: |-
+                          Lock mandates the value: the user layer is ignored for this key and
+                          set_preference refuses it, naming the admin policy.
+                        type: boolean
+                      value:
+                        description: |-
+                          Value is the admin-set value; validated against the class's
+                          userPreferences schema by the settings controller (status violation on
+                          mismatch) and ignored WITH a snapshot violation at resolve time if it
+                          no longer type-checks.
+                        x-kubernetes-preserve-unknown-fields: true
+                    required:
+                    - value
+                    type: object
+                  type: object
+                description: |-
+                  ClassUserPreferences carries admin globals for classes' userPreferences,
+                  keyed by class name (same namespace), then preference key. NAMESPACE
+                  TIER ONLY: the ClusterAgentSettings webhook rejects a non-empty value —
+                  namespaced class names make a cluster-tier global ambiguous.
+                type: object
+              defaults:
+                description: Defaults are fallback values used when a lower tier omits
+                  the field.
+                properties:
+                  authz:
+                    description: Authz defaults the per-class approval/authz timeouts.
+                    properties:
+                      approvalTimeout:
+                        description: ApprovalTimeout defaults AuthzBlock.ApprovalTimeout.
+                        type: string
+                      informationLeakageApprovalTTL:
+                        description: InformationLeakageApprovalTTL defaults InformationLeakagePolicy.ApprovalTTL.
+                        type: string
+                      metaagent:
+                        description: |-
+                          Metaagent defaults AuthzBlock.Metaagent — what a class gets when it says
+                          nothing. A class may still opt itself into inline; forbidding that would
+                          need a SettingsLimits floor, which does not exist for this yet.
+                        properties:
+                          trigger:
+                            default: mention
+                            description: |-
+                              Trigger is when the metaagent classifies a turn, and whether it acts.
+
+                                mention (default) — ambient off; explicit @metaagent only.
+                                shadow            — classify every turn, apply nothing, record it.
+                                inline            — classify every turn and act.
+                            enum:
+                            - mention
+                            - shadow
+                            - inline
+                            type: string
+                        type: object
+                      planGate:
+                        description: |-
+                          PlanGate defaults AuthzBlock.PlanGate — what a class gets when it says
+                          nothing. A class may still declare a laxer mode; forbidding that is
+                          SettingsLimits.MinPlanGateMode's job, and is a separate deliberate act.
+                        properties:
+                          examples:
+                            description: |-
+                              Examples are worked plans this class's author supplies, rendered after the
+                              one the runtime derives from the session's own permission surface.
+
+                              Optional, and most classes want none: the derived example already speaks
+                              the agent's own handles and shows the shape that costs one approval. These
+                              are for a class whose GOOD plan is not obvious from its surface alone —
+                              where the order of phases matters, or where two resource types must be
+                              named together, or where the natural split is by audience rather than by
+                              read-then-write.
+
+                              They are TRUSTED text, at the same level as spec.systemPrompt: an operator
+                              authors them, never the agent. But unlike the system prompt they are
+                              checked — every handle an example names must exist on this class's own
+                              surface, or the class goes Valid=False naming the offender. The prompt
+                              tells agents that a handle off the declarable list is silently dropped,
+                              and an EXAMPLE carrying such a handle would teach exactly that failure to
+                              every plan the agent writes. Measured, planners transcribe these examples
+                              closely, so a wrong one is not inert.
+                            items:
+                              description: |-
+                                PlanExample is one worked plan an AgentClass author supplies to guide
+                                planning, in the same shape update_plan takes.
+                              properties:
+                                phases:
+                                  description: |-
+                                    Phases are the plan itself. Rendered as the JSON an agent would pass to
+                                    update_plan, because that is the form it copies.
+                                  items:
+                                    description: PlanExamplePhase is one phase of
+                                      an authored example.
+                                    properties:
+                                      id:
+                                        description: ID is the phase's identifier,
+                                          as update_plan takes it.
+                                        maxLength: 60
+                                        minLength: 1
+                                        type: string
+                                      label:
+                                        description: Label is the human phrase for
+                                          the phase.
+                                        maxLength: 120
+                                        type: string
+                                      permissions:
+                                        description: |-
+                                          Permissions are the wire-format handles this phase declares
+                                          ("perm:<permission>:<resourceType>" or "tool:<name>"). Each is checked
+                                          against the class's surface at admission.
+                                        items:
+                                          type: string
+                                        maxItems: 12
+                                        type: array
+                                        x-kubernetes-list-type: atomic
+                                      slots:
+                                        description: |-
+                                          Slots are the resource TYPES this phase names an instance of. Types only:
+                                          an authored example must not carry a concrete instance id, because a
+                                          planner that copies one would address an object belonging to whoever the
+                                          example was written about.
+                                        items:
+                                          type: string
+                                        maxItems: 6
+                                        type: array
+                                        x-kubernetes-list-type: atomic
+                                    required:
+                                    - id
+                                    type: object
+                                  maxItems: 6
+                                  minItems: 1
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                task:
+                                  description: |-
+                                    Task is the one-line request this plan answers — the "when you are asked
+                                    to X" half. Without it an example shows a shape with no occasion, and the
+                                    agent cannot tell which of several examples applies.
+                                  maxLength: 200
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - phases
+                              - task
+                              type: object
+                            maxItems: 5
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          limits:
+                            description: |-
+                              Limits bound plan size. The defaults are deliberately expansive: they
+                              exist to stop a runaway or hostile plan from DoS-ing the approver and
+                              producing an unrenderable card, NOT to shape normal authoring.
+                            properties:
+                              maxPermissionsPerPhase:
+                                default: 64
+                                description: |-
+                                  MaxPermissionsPerPhase is naturally bounded by the permission surface (a
+                                  phase cannot declare a handle that does not exist), so this is a backstop
+                                  rather than a real constraint.
+                                format: int32
+                                type: integer
+                              maxPhases:
+                                default: 50
+                                format: int32
+                                type: integer
+                              maxSlotsPerPhase:
+                                default: 128
+                                description: |-
+                                  MaxSlotsPerPhase bounds the instance axis, which is genuinely unbounded
+                                  (a thread can carry many URLs), hence the larger default.
+                                format: int32
+                                type: integer
+                            type: object
+                          mode:
+                            default: disabled
+                            description: |-
+                              Mode selects how much of the gate runs.
+
+                                disabled  — off entirely; no prompt change, no plan schema surfaced.
+                                logging   — the gate runs in full: enumeration, ceiling computation,
+                                            approver resolution, severity, card rendering and the
+                                            append-only write. What it holds back is CEILINGS and
+                                            APPROVALS — the card is logged instead of published, so
+                                            nothing is approved and no grant is written, and a call that
+                                            overruns a declared phase is RECORDED rather than refused.
+
+                                            A call made with NO plan at all is still refused (see
+                                            RequirePlan). That is not an exception to the mode so much as
+                                            its precondition: without a declared plan there are no
+                                            ceilings to record and the mode measures nothing.
+                                enforcing — the card is published and the call blocks on the outcome.
+                            enum:
+                            - disabled
+                            - logging
+                            - enforcing
+                            type: string
+                          rendering:
+                            description: Rendering bounds what a single approval card
+                              shows or auto-approves.
+                            properties:
+                              maxAutoApproveHandles:
+                                default: 8
+                                description: |-
+                                  MaxAutoApproveHandles bounds the UNION of all handles auto-approved
+                                  without a human across a session — the tier-0 budget.
+                                format: int32
+                                type: integer
+                              maxNamedApprovers:
+                                default: 5
+                                description: |-
+                                  MaxNamedApprovers is the largest approver population rendered by name
+                                  before falling back to a count or a channel-supplied description.
+                                format: int32
+                                type: integer
+                              maxSingleCardHandles:
+                                default: 16
+                                description: |-
+                                  MaxSingleCardHandles bounds a phase ceiling shown on one card; a phase
+                                  exceeding it is split rather than folded behind "+N more", so the
+                                  approver sees what they approve.
+                                format: int32
+                                type: integer
+                            type: object
+                          requirePlan:
+                            description: |-
+                              RequirePlan denies every permissioned call made before a plan is declared.
+                              Without it, an agent that simply never calls update_plan falls through the
+                              implicit-phase rule and is unconstrained — i.e. "don't plan" is a total
+                              bypass.
+
+                              It bites in LOGGING mode too, which is the one place this differs from
+                              everything else the gate does. "You must declare a plan" and "you must stay
+                              within its ceiling" are separable claims; only the second is what logging
+                              mode holds back. Welding them together made logging unable to produce the
+                              dataset it exists for — agents told they MUST plan simply did not, because
+                              in logging nothing depended on it, and no wording fixes a consequence the
+                              code does not implement.
+
+                              So: with RequirePlan, a session under logging still refuses calls made with
+                              no plan at all, and still records-but-permits calls that overrun a declared
+                              ceiling. That yields real phases, ceilings, severity and approver data
+                              without switching on the enforcement the data is meant to justify.
+                              UNSET derives from Mode: required whenever the gate runs at all. Turning
+                              the gate on IS the intent to make agents plan, and leaving this an
+                              independent opt-in defaulting false meant a cluster could run
+                              `mode: logging`, look gated, and collect nothing — which is what happened
+                              across five live sessions, every call landing on the implicit phase
+                              because nothing required a plan.
+
+                              Explicit `false` remains an opt-out, because gate-on-but-observe-only is a
+                              real rollout stage: it records which handles calls actually resolve to
+                              without changing what the agent may do. Explicit `true` under
+                              `mode: disabled` is still false — a gate that does not run cannot refuse
+                              anything, and honouring it would promise a denial that never arrives.
+
+                              Pointer rather than a kubebuilder default: a static default cannot express
+                              "depends on another field", and it would erase the difference between
+                              unset and a deliberate false.
+
+                              UPGRADE NOTE. This field previously carried `+kubebuilder:default=false`,
+                              so every AgentClass created under the older CRD has an explicit `false`
+                              PERSISTED — which now reads as the observe-only opt-out rather than as
+                              unset. Such a class keeps the old behaviour after an upgrade and will not
+                              require a plan. Re-applying the class (or deleting the field) is what
+                              restores derivation; there is no way to distinguish a stamped default from
+                              a deliberate choice after the fact.
+                            type: boolean
+                        type: object
+                      scopeMaxLlmLatencyMs:
+                        description: ScopeMaxLLMLatencyMs defaults ScopeSpec.MaxLLMLatencyMs.
+                        format: int32
+                        type: integer
+                    type: object
+                  budget:
+                    description: Budget defaults the agent budget when an AgentClass
+                      omits its own.
+                    properties:
+                      maxDelegatedAgents:
+                        description: |-
+                          MaxDelegatedAgents bounds the TOTAL number of sessions in one delegation
+                          tree, counting the root. It is a property of the tree rather than of any
+                          one session: every other dimension here caps a single session's spend,
+                          and a tree of N sessions each individually within budget still spends
+                          N times it.
+
+                          Resolved from the ROOT session's effective settings and enforced by the
+                          SubagentRequest controller before a child is created.
+
+                          Zero means UNSET, not unlimited. A consumer must apply its own built-in
+                          bound rather than reading zero as "no cap" — that reading is right for a
+                          DURATION (as MaxDuration uses it) and wrong for a COUNT, where it would
+                          license exactly the runaway fan-out this field exists to prevent.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      maxDuration:
+                        description: |-
+                          MaxDuration is the cumulative ACTIVE RUN-TIME budget (e.g. "30m") — the
+                          wall time the agent actually spent working, excluding time parked waiting
+                          on a human (the next user message or a tool-call approval). It persists
+                          across sleep/resume via status.runDuration; it is NOT wall-clock since
+                          session start. For a wall-clock lifetime cap, use SessionExpiration.
+                          Zero = no run-time cap.
+                        type: string
+                      maxTokens:
+                        format: int64
+                        minimum: 1
+                        type: integer
+                      maxTurns:
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      sessionExpiration:
+                        description: |-
+                          SessionExpiration is a hard wall-clock lifetime cap measured from
+                          status.startedAt (e.g. "24h"), regardless of how much the agent ran.
+                          The operator fails the session once exceeded, even while it is idle or
+                          asleep. Zero = never expires (no default). Distinct from MaxDuration,
+                          which counts only active run-time.
+                        type: string
+                    required:
+                    - maxDuration
+                    - maxTokens
+                    - maxTurns
+                    type: object
+                  model:
+                    description: Model defaults the agent model when an AgentClass
+                      omits its own.
+                    properties:
+                      apiKey:
+                        description: |-
+                          APIKey is the same-namespace Secret holding the provider token; unset
+                          leaves the key to a lower tier or to the catalog's central TokenRef.
+                        properties:
+                          key:
+                            description: Key is the data key within the Secret holding
+                              the value.
+                            type: string
+                          name:
+                            description: Name is the Secret's name, in the referring
+                              object's own namespace.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      fromCatalog:
+                        description: |-
+                          FromCatalog lets a tier default to a catalog entry by name (alternative to
+                          inline Provider/Name).
+                        type: string
+                      name:
+                        description: Name is the provider's model identifier.
+                        type: string
+                      provider:
+                        description: Provider is the LLM provider serving this model.
+                        enum:
+                        - anthropic
+                        - openai
+                        - openrouter
+                        - test
+                        type: string
+                    required:
+                    - name
+                    - provider
+                    type: object
+                  reportSessionCost:
+                    description: |-
+                      ReportSessionCost toggles the end-of-session cost estimate (a closing
+                      channel message + status.estimatedCost). Optional, on by default: nil at
+                      every tier ⇒ on. A lower tier's explicit value wins (namespace over
+                      cluster). A behavioral default, so it lives in Defaults, not Limits.
+                    type: boolean
+                  sandbox:
+                    description: |-
+                      Sandbox is the default sandbox backend for agents in scope. A lower tier
+                      that names its own backend overrides this; a bundle that names none
+                      inherits it.
+                    properties:
+                      config:
+                        description: |-
+                          Config is passed through to the backend verbatim. Opaque to AP: each
+                          kind parses its own. Unset for the built-in pod backend, which takes all
+                          of its configuration from the pod-vocabulary fields above.
+                        x-kubernetes-preserve-unknown-fields: true
+                      kind:
+                        default: pod
+                        description: |-
+                          Kind names a registered sandbox kind. Defaults to "pod". An
+                          UNRECOGNIZED kind marks the class Valid=False — lookup never falls back
+                          to the built-in backend, because silently installing a different
+                          substrate than the one asked for is worse than refusing.
+                        type: string
+                      warmPool:
+                        description: |-
+                          WarmPool requests pre-warmed capacity for this backend. Unset or
+                          replicas: 0 means pre-warming is off — it spends real money on idle
+                          capacity, so it is opt-in. Only a backend whose Runtime implements the
+                          sandboxkinds.Prewarmer interface can honor a non-zero value; asking for
+                          it on a backend that cannot is a class validation error, not a silent
+                          no-op.
+
+                          PREREQUISITE: pre-warming only actually adopts a pod when the
+                          cluster's agent-sandbox install allows the
+                          "agentprimitives.authzed.com" label domain (its AllowedLabelDomains
+                          defaults to "sandbox.users.io" alone). Without that grant AP cannot
+                          label an adopted pod, and — because AP's per-session NetworkPolicy
+                          selects on that label — the backend degrades to ordinary cold
+                          sandboxes and emits a monitoring warning rather than run one
+                          unpoliced.
+                        properties:
+                          namespaces:
+                            description: |-
+                              Namespaces lists the namespaces to keep pre-warmed capacity in; a
+                              separate pool is created in EACH. SpiceboxClass is cluster-scoped but the
+                              pool objects are namespaced, and adoption only ever looks a pool up in
+                              the ADOPTING SESSION's own namespace — so a pool in a namespace nothing
+                              runs sessions in is pure idle spend nothing can adopt. Naming them
+                              explicitly rather than discovering them is deliberate: pre-warming spends
+                              real money, so the cluster owner states exactly where, as they state
+                              exactly how many.
+
+                              Replicas > 0 with an empty Namespaces is a class validation error, not a
+                              silent no-op.
+                            items:
+                              type: string
+                            type: array
+                          replicas:
+                            description: |-
+                              Replicas is the number of sandboxes kept ready, PER NAMESPACE listed
+                              below. 0 disables pre-warming.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                        type: object
+                    type: object
+                  toolGuard:
+                    description: |-
+                      ToolGuard is this tier's default tool-guard policy, consulted when the
+                      AgentClass has no matching rule (class → namespace → cluster → built-in).
+                    properties:
+                      rules:
+                        description: |-
+                          Rules are evaluated in order, first match wins; empty means this tier
+                          contributes nothing and the walk falls through.
+                        items:
+                          description: |-
+                            ToolGuardRule pairs a tool matcher with breaker and/or rate-limit specs. A
+                            matched rule fully replaces the built-in rule for that tool: a nil Breaker
+                            means no breaker; a nil RateLimit means no rate limit.
+                          properties:
+                            breaker:
+                              description: Breaker configures the circuit breaker;
+                                nil means matched tools get none.
+                              properties:
+                                action:
+                                  description: |-
+                                    Action when the breaker denies: halt ends the session; deny returns an
+                                    IsError tool_result; warn logs/audits but allows; off disables the
+                                    breaker for matched tools.
+                                  enum:
+                                  - halt
+                                  - deny
+                                  - warn
+                                  - "off"
+                                  type: string
+                                failureThreshold:
+                                  description: |-
+                                    FailureThreshold is consecutive Execute failures (per tool) that open
+                                    the breaker.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                initialCoolOff:
+                                  description: |-
+                                    InitialCoolOff is the first cool-off period after the breaker opens;
+                                    it doubles on each successive trip up to MaxCoolOff. Default 30s.
+                                  type: string
+                                maxCoolOff:
+                                  description: MaxCoolOff caps the exponential-backoff
+                                    cool-off. Default 10m.
+                                  type: string
+                                originFailureThreshold:
+                                  description: |-
+                                    OriginFailureThreshold is consecutive failures across ALL tools of the
+                                    tool's origin that open the origin breaker (denying every sibling).
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                              type: object
+                            dataLimit:
+                              description: DataLimit caps per-call byte volume; nil
+                                means no byte cap.
+                              properties:
+                                action:
+                                  description: |-
+                                    Action when a byte limit is exceeded: halt ends the session; deny errors
+                                    the call (egress: tool not run; ingress: result withheld); warn
+                                    logs/audits but allows.
+                                  enum:
+                                  - halt
+                                  - deny
+                                  - warn
+                                  type: string
+                                maxEgressBytes:
+                                  description: |-
+                                    MaxEgressBytes caps the serialized tool-args size sent outbound per call.
+                                    Exceeding it (at PreToolCall) applies Action; on deny the tool does not run.
+                                  format: int64
+                                  minimum: 1
+                                  type: integer
+                                maxIngressBytes:
+                                  description: |-
+                                    MaxIngressBytes caps the tool-result size returned inbound per call (any
+                                    result, success or error). Exceeding it (at PostToolCall) applies Action;
+                                    on deny the result is withheld (replaced with an IsError) so the oversized
+                                    payload never reaches the model.
+                                  format: int64
+                                  minimum: 1
+                                  type: integer
+                                maxUIIngressBytes:
+                                  description: |-
+                                    MaxUIIngressBytes caps result bytes on an agent-UI DATA BINDING, whose
+                                    result is rendered by a browser and never read by the model. Unset means
+                                    the platform's browser-sized default applies (toolguard's
+                                    DefaultUIIngressBytes) — NOT unlimited, and NOT MaxIngressBytes. Set this
+                                    to bind the UI path tighter or looser than the platform default;
+                                    tightening maxIngressBytes alone does not affect it.
+                                  format: int64
+                                  minimum: 1
+                                  type: integer
+                              type: object
+                            match:
+                              description: Match selects the tools this rule governs.
+                              properties:
+                                kind:
+                                  description: |-
+                                    Kind is the runtime tool kind. Sidecar-toolbox tools report "mcp"
+                                    (they are synthesized through the MCP synthesizer); select them via
+                                    Origin "sidecartoolbox/*".
+                                  enum:
+                                  - sandbox
+                                  - mcp
+                                  - meta
+                                  type: string
+                                origin:
+                                  description: |-
+                                    Origin is a glob over the tool's origin in "<kind>/<name>" form,
+                                    e.g. "mcpserver/github" or "sidecartoolbox/*".
+                                    Note: a bare "*" also matches origin-less tools (empty origin); use a
+                                    prefixed glob like "mcpserver/*" to scope to tools that have an origin.
+                                  type: string
+                                tool:
+                                  description: Tool is a glob over the LLM-visible
+                                    tool name (e.g. "github_*").
+                                  type: string
+                              type: object
+                            rateLimit:
+                              description: RateLimit caps call volume; nil means matched
+                                tools get no rate limit.
+                              properties:
+                                action:
+                                  description: |-
+                                    Action when a rate cap is hit: halt ends the session; deny errors the
+                                    call; warn logs and audits but allows it.
+                                  enum:
+                                  - halt
+                                  - deny
+                                  - warn
+                                  type: string
+                                maxCalls:
+                                  description: MaxCalls caps calls in the sliding
+                                    Window; both must be set together.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                maxCallsPerTurn:
+                                  description: MaxCallsPerTurn caps calls within a
+                                    single agent turn; 0 is unlimited.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                window:
+                                  description: Window is the sliding-window span for
+                                    MaxCalls; both must be set together.
+                                  type: string
+                              type: object
+                              x-kubernetes-validations:
+                              - message: rateLimit.maxCalls and rateLimit.window must
+                                  be set together
+                                rule: has(self.maxCalls) == has(self.window)
+                          required:
+                          - match
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    type: object
+                type: object
+              limits:
+                description: Limits are governance ceilings. Absent = this tier imposes
+                  no ceiling.
+                properties:
+                  allowModelOverride:
+                    description: |-
+                      AllowModelOverride permits an AgentClass to bring its own model apiKey
+                      (instead of referencing the catalog). Top-down: the cluster must grant it;
+                      lower tiers can only further restrict. nil/false ⇒ catalog-only.
+                    type: boolean
+                  allowedMCPServers:
+                    description: |-
+                      AllowedMCPServers restricts which MCPServer CRs (by name) and, optionally,
+                      which of their tools may be used. nil = no constraint; non-nil empty =
+                      deny-all.
+                    items:
+                      description: |-
+                        AllowedMCPServer names a permitted MCPServer (by CR name) and optionally
+                        restricts which of its tools may be used. A nil/empty Tools list, or a list
+                        containing "*", means all of that server's tools are allowed.
+                      properties:
+                        name:
+                          description: Name is the permitted MCPServer CR name.
+                          type: string
+                        tools:
+                          description: Tools narrows to specific tool names; nil,
+                            empty, or ["*"] allows all.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  allowedSandboxKinds:
+                    description: |-
+                      AllowedSandboxKinds constrains which sandbox backends may be used at all.
+                      Tri-state, like the other allowlists here: nil imposes no ceiling; a
+                      non-nil list (including an empty one, which denies everything)
+                      constrains. The effective set is the intersection across constraining
+                      tiers, so a lower tier can narrow but never widen.
+
+                      This is how a cluster admin refuses a backend outright — which matters
+                      once a backend can run workloads, and their credentials, outside the
+                      cluster.
+                    items:
+                      type: string
+                    type: array
+                  allowedSkills:
+                    description: |-
+                      AllowedSkills restricts which skills (by canonical name) may be used.
+                      Same tri-state semantics as AllowedMCPServers. Entries may be exact canonical
+                      names or trailing-wildcard patterns ("github.com/org/**", "repo//x@*").
+                      The effective ceiling requires a match in every constraining tier.
+                    items:
+                      type: string
+                    type: array
+                  allowedToolkits:
+                    description: |-
+                      AllowedToolkits restricts which SpiceboxToolkit names may be used.
+                      Same tri-state semantics as AllowedMCPServers.
+                    items:
+                      type: string
+                    type: array
+                  authz:
+                    description: |-
+                      Authz caps the human-in-the-loop approval windows. Ceiling semantics:
+                      each field is a MAXIMUM, the shortest across tiers wins, and a lower tier
+                      — including the AgentClass — may ask for a shorter window but never a
+                      longer one. Distinct from Defaults.Authz, which merely supplies a value
+                      the class is free to override.
+                    properties:
+                      maxApprovalTimeout:
+                        description: |-
+                          MaxApprovalTimeout caps AuthzBlock.ApprovalTimeout: how long a tool-call,
+                          leakage-share, or cold-start scope approval may wait for a human before
+                          the gate's timeout policy fires. Zero = no ceiling on the wait.
+                        type: string
+                      maxInformationLeakageApprovalTTL:
+                        description: |-
+                          MaxInformationLeakageApprovalTTL caps
+                          InformationLeakagePolicy.ApprovalTTL: how long an approved leakage share
+                          may be reused before the agent must ask again. Zero = no ceiling on
+                          reuse.
+                        type: string
+                    type: object
+                  budget:
+                    description: Budget caps the agent budget dimensions. Each dimension
+                      is optional.
+                    properties:
+                      maxDelegatedAgents:
+                        description: |-
+                          MaxDelegatedAgents caps the total number of sessions in one delegation
+                          tree. Zero = no ceiling imposed by this tier (the controller's own
+                          built-in bound still applies — see BudgetConfig.MaxDelegatedAgents).
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      maxDuration:
+                        description: MaxDuration is a duration (e.g. "2h"). Zero =
+                          no ceiling on duration.
+                        type: string
+                      maxTokens:
+                        description: MaxTokens caps total tokens per session. Zero
+                          = no ceiling on tokens.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                      maxTurns:
+                        description: MaxTurns caps agent turns per session. Zero =
+                          no ceiling on turns.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      sessionExpiration:
+                        description: |-
+                          SessionExpiration is a duration (e.g. "24h"). Zero = no ceiling on the
+                          wall-clock lifetime cap.
+                        type: string
+                    type: object
+                  builderClasses:
+                    description: |-
+                      BuilderClasses is the cluster-admin sanction list for the agent-builder
+                      workshop (spec §1.1): only a class named here, in this exact namespace,
+                      may be provisioned a workshop — and only when it also references the
+                      named SidecarToolbox. CLUSTER TIER ONLY: the AgentSession reconciler
+                      reads this from ClusterAgentSettings alone, so a namespace tenant's
+                      AgentSettings carrying it is inert (a namespace must not self-sanction).
+                    items:
+                      description: |-
+                        BuilderClassRef names one sanctioned builder AgentClass and the exact
+                        SidecarToolbox CR (by name, in the class's namespace) that receives the
+                        workshop identity. All three fields are required: a sanction that did not
+                        name the sidecar would leave "which sidecar gets the token" to a naming
+                        convention, which is a guess where a boundary needs a declaration.
+                      properties:
+                        name:
+                          minLength: 1
+                          type: string
+                        namespace:
+                          minLength: 1
+                          type: string
+                        sidecarToolbox:
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      - sidecarToolbox
+                      type: object
+                    type: array
+                  contentInspectors:
+                    description: |-
+                      ContentInspectors are content-guard plugins (referenced by registry ID)
+                      enforced on tool I/O. Ceiling semantics: lower tiers ADD inspectors but
+                      cannot remove or weaken a higher tier's. Default-off: nil ⇒ no inspection.
+                    items:
+                      description: |-
+                        ContentInspectorConfig references a registered content-guard inspector by ID
+                        and carries its opaque per-instance config (parsed by the inspector).
+                      properties:
+                        config:
+                          description: |-
+                            Config is inspector-specific configuration, validated by the inspector's
+                            Configure at admission (fail-closed) and at session start.
+                          x-kubernetes-preserve-unknown-fields: true
+                        id:
+                          description: ID must resolve in the contentguard registry
+                            (e.g. "url-allowlist").
+                          minLength: 1
+                          type: string
+                      required:
+                      - config
+                      - id
+                      type: object
+                    type: array
+                  deniedModels:
+                    description: |-
+                      DeniedModels rejects catalog models by name even when present in the
+                      catalog. UNION across tiers (a deny anywhere wins). Same pattern as
+                      DeniedSkills.
+                    items:
+                      type: string
+                    type: array
+                  deniedSkills:
+                    description: |-
+                      DeniedSkills lists skill patterns that are rejected even if allowed. The
+                      effective deny set is the UNION across tiers (a deny anywhere wins). Same
+                      pattern syntax as AllowedSkills.
+                    items:
+                      type: string
+                    type: array
+                  maxWorkshopsPerStarter:
+                    description: |-
+                      MaxWorkshopsPerStarter caps live workshops per starting person,
+                      cluster-wide default 3 when unset. Cluster tier only, like BuilderClasses.
+                    format: int32
+                    type: integer
+                  minPlanGateMode:
+                    description: |-
+                      MinPlanGateMode is the plan-gate strictness an AgentClass may not go
+                      below. Distinct from DefaultAuthz.PlanGate, which only says what a class
+                      gets when it declares nothing: a class may freely declare a laxer mode
+                      than the default, and this is what forbids it.
+
+                      Ordered disabled < logging < enforcing. Tiers ratchet UP only — a
+                      namespace declaring a laxer floor than the cluster's does not loosen it.
+                      Empty ⇒ no floor.
+                    enum:
+                    - disabled
+                    - logging
+                    - enforcing
+                    type: string
+                  nativeFileHandling:
+                    description: |-
+                      NativeFileHandling is a security-sensitive Tier-2 grant: it lets the
+                      files modality route large artifact bytes through the provider's
+                      code-execution sandbox instead of the Tier-1 fetch_artifact tool
+                      (content-guard still inspects at the bridge). Top-down: the cluster must
+                      grant it; lower tiers can only further restrict. nil/false ⇒ off.
+                    type: boolean
+                  pinning:
+                    description: |-
+                      Pinning is the unified per-kind dependency-pinning ceiling: minimum pin
+                      strengths and enforcement modes per kind, plus tier-scoped bypasses.
+                    properties:
+                      bypass:
+                        description: Bypass exempts named dependencies from this tier's
+                          rules and lower.
+                        items:
+                          description: |-
+                            PinningBypass exempts one named dependency from this tier's (and lower
+                            tiers') pinning rules. Reason is required: the escape hatch must leave an
+                            audit trail.
+                          properties:
+                            kind:
+                              description: Kind is the pinning registry kind this
+                                exemption applies to.
+                              minLength: 1
+                              type: string
+                            name:
+                              description: |-
+                                Name identifies the exempted item: a canonical skill name, MCPServer
+                                name, SidecarToolbox name, or SpiceboxToolkit name. Trailing-wildcard
+                                patterns are allowed (same syntax as AllowedSkills).
+                              minLength: 1
+                              type: string
+                            reason:
+                              description: Reason is the required audit-trail justification
+                                for the exemption.
+                              minLength: 1
+                              type: string
+                          required:
+                          - kind
+                          - name
+                          - reason
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      rules:
+                        description: Rules is at most one requirement per dependency
+                          kind.
+                        items:
+                          description: PinningRule is the requirement for one dependency
+                            kind.
+                          properties:
+                            kind:
+                              description: Kind is the pinning registry kind name
+                                this rule governs.
+                              minLength: 1
+                              type: string
+                            minStrength:
+                              description: |-
+                                MinStrength is the minimum pin strength a declared ref must have.
+                                Empty = no floor (drift observation still applies).
+                              enum:
+                              - frozen
+                              - named
+                              type: string
+                            mode:
+                              description: |-
+                                Mode governs what a violation or drift does: block (fail closed),
+                                approve (force per-call user approval), warn (surface warnings only),
+                                off (observe only). Empty = approve.
+                              enum:
+                              - block
+                              - approve
+                              - warn
+                              - "off"
+                              type: string
+                          required:
+                          - kind
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - kind
+                        x-kubernetes-list-type: map
+                    type: object
+                  requireStandingFor:
+                    description: |-
+                      RequireStandingFor names resource types that MUST use `required` standing,
+                      whatever their schema fragment declares. It is the admin veto over
+                      SpiceDBResource.Standing.
+
+                      A CEILING, not a default — the same shape as MinPlanGateMode. Tiers UNION
+                      their sets: a namespace may add types the cluster did not name, and can
+                      never remove one it did. Empty means no veto.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  requireSubagentDigestPins:
+                    description: |-
+                      RequireSubagentDigestPins is a security requirement, not a grant: when
+                      true, delegation through an UNPINNED spec.subagents roster entry is
+                      refused — every delegation target must be pinned name@sha256:<digest>
+                      and match its installed bundle digest. Requirement semantics fold
+                      downward: any tier may add the requirement; no lower tier can remove
+                      one set above it. nil/false ⇒ not required.
+                    type: boolean
+                  toolGuard:
+                    description: |-
+                      ToolGuard is the hard ceiling on tool circuit-breaker / rate-limit
+                      policy: bounds lower tiers cannot escape (strictest across tiers).
+                    properties:
+                      maxCalls:
+                        description: MaxCalls caps calls in the sliding Window; both
+                          must be set together.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      maxCallsPerTurn:
+                        description: |-
+                          MaxCallsPerTurn / MaxCalls+Window impose rate ceilings even when no
+                          lower-tier rule configures a rate limit.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      maxEgressBytes:
+                        description: |-
+                          MaxEgressBytes / MaxIngressBytes impose per-call byte ceilings even when
+                          no lower-tier rule configures a data limit (an unset limit is
+                          "unlimited", so the ceiling wins). Folded strictest-across-tiers (min).
+                        format: int64
+                        minimum: 1
+                        type: integer
+                      maxFailureThreshold:
+                        description: |-
+                          MaxFailureThreshold caps the effective breaker threshold (min wins).
+                          Note: the per-origin threshold (BreakerSpec.OriginFailureThreshold)
+                          deliberately has no ceiling yet.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      maxIngressBytes:
+                        description: MaxIngressBytes is the inbound half of the same
+                          per-call byte ceiling.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                      maxUIIngressBytes:
+                        description: |-
+                          MaxUIIngressBytes imposes a ceiling on the UI data-binding ingress path
+                          (toolguard.DefaultUIIngressBytes when neither a rule nor this ceiling
+                          sets one — this path is never unlimited). Folded strictest-across-tiers
+                          (min), independent of MaxIngressBytes.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                      minAction:
+                        description: |-
+                          MinAction is a severity floor (off < warn < deny < halt). Setting
+                          "deny" makes the breaker non-disableable below this tier.
+                        enum:
+                        - warn
+                        - deny
+                        - halt
+                        type: string
+                      minInitialCoolOff:
+                        description: |-
+                          MinInitialCoolOff raises the effective initial cool-off (max wins).
+                          Note: MaxCoolOff deliberately has no floor yet.
+                        type: string
+                      rateBounds:
+                        description: |-
+                          RateBounds carries sliding-window bounds BESIDE MaxCalls/Window. Every
+                          bound binds: a call must fit under all of them, and a lower tier can only
+                          add bounds, never trade one away.
+
+                          A ceiling is a conjunction, not a choice. Two tiers naming different
+                          windows have written bounds neither of which implies the other — a
+                          cluster {5 calls, 1s} permits 432,000/day, a namespace {10 calls, 24h}
+                          permits all 10 inside one second — so collapsing them by calls/second
+                          discards a bound its author wrote, on the very surface this type calls
+                          the hard bound lower tiers cannot escape.
+
+                          The settings fold writes it: the strictest-by-rate pair leads in
+                          MaxCalls/Window, so a reader that knows only the pair still sees a real
+                          bound, and every other distinct window lands here, deduped
+                          strictest-per-window and window-ordered so the object is stable to
+                          re-stamp onto status. Authoring it directly is how one tier expresses
+                          burst-plus-sustained on its own.
+
+                          It deliberately carries no MaxItems: one schema governs both the AUTHORED
+                          surface and the FOLDED one stamped onto status, so a cap of N would also
+                          bind a fold that unions two tiers of N+1 windows and can legitimately
+                          produce 2N+1 — the status write rejected by the very bound meant to keep
+                          it small, wedging the reconcile. Enforcement stays cheap instead because
+                          the per-call sweep is one pass over call history per bound, and the size
+                          of that history is set by maxCalls over the longest window, not by how
+                          many horizons are named.
+                        items:
+                          description: |-
+                            CallRateBound is one sliding-window call bound: at most MaxCalls in Window.
+                            Both halves are required, because half of a pair caps nothing (see CallRate)
+                            — expressing the pair as one struct is what makes a half-authored bound
+                            unrepresentable here, rather than something an XValidation rule has to catch.
+                          properties:
+                            maxCalls:
+                              description: MaxCalls is the cap on calls inside Window.
+                              format: int32
+                              minimum: 1
+                              type: integer
+                            window:
+                              description: |-
+                                Window is the sliding span MaxCalls is counted over. A non-positive
+                                duration enforces nothing; the resolver reports one rather than folding
+                                it in (pkg/platform/settings, ToolGuardRateBoundUnenforceable).
+                              type: string
+                          required:
+                          - maxCalls
+                          - window
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      window:
+                        description: Window is the sliding-window span for MaxCalls;
+                          both must be set together.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: toolGuard.maxCalls and toolGuard.window must be set
+                        together
+                      rule: has(self.maxCalls) == has(self.window)
+                type: object
+              modelCatalog:
+                description: |-
+                  ModelCatalog is the registry of permitted models — the model allowlist.
+                  The cluster tier authors entries with central TokenRefs and marks one
+                  Default; lower tiers may list name-only entries to narrow the usable set
+                  (intersection).
+                items:
+                  description: |-
+                    ModelCatalogEntry is one permitted model in the cluster-tier model catalog.
+                    At the cluster tier TokenRef is required (the central credential); at the
+                    namespace tier entries are name-only narrowing references and TokenRef/Default
+                    must be unset (enforced by the settings webhook).
+                  properties:
+                    default:
+                      description: |-
+                        Default marks the inherited default entry. At most one cluster entry may
+                        set it; `oap init` sets it.
+                      type: boolean
+                    inputPerMTok:
+                      description: |-
+                        InputPerMTok / OutputPerMTok are best-effort USD list prices per million
+                        input / output tokens, surfaced by the admin dashboard's cost estimator
+                        (labelled "estimated"). Optional; unset ⇒ no catalog price for this model
+                        and the dashboard shows "est. (no price)".
+                      minimum: 0
+                      type: number
+                    name:
+                      description: Name is the model identifier, e.g. "claude-opus-4-8".
+                      type: string
+                    outputPerMTok:
+                      description: OutputPerMTok is the output half of the same best-effort
+                        list price.
+                      minimum: 0
+                      type: number
+                    provider:
+                      description: Provider is the LLM provider serving this model.
+                      enum:
+                      - anthropic
+                      - openai
+                      - openrouter
+                      - test
+                      type: string
+                    routing:
+                      description: |-
+                        Routing configures OpenRouter dynamic model selection (auto/fallback/provider
+                        routing). Only consulted when Provider == "openrouter". Optional.
+                      properties:
+                        allowFallbacks:
+                          type: boolean
+                        allowedModels:
+                          description: Auto-router hints — apply when the model is
+                            "openrouter/auto".
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        costQualityTradeoff:
+                          description: |-
+                            CostQualityTradeoff is intentionally unvalidated (no Minimum/Maximum
+                            marker): OpenRouter documents no formal range for this value — its docs
+                            example value is 3 — so a range marker would reject valid input.
+                          type: number
+                        dataCollection:
+                          enum:
+                          - allow
+                          - deny
+                          type: string
+                        ignore:
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        maxPrice:
+                          description: |-
+                            OpenRouterMaxPrice caps per-model price, in USD per MILLION tokens
+                            (OpenRouter's max_price units; e.g. Prompt: 1 means at most $1/M prompt
+                            tokens). 0 on an axis means "no cap on this axis" (see
+                            pkg/platform/settings/routingmerge.go's tightenPrice and
+                            pkg/agent/llm/openrouter/extra.go's maxPriceObject), not "cap at $0". Only
+                            consulted when the owning ModelCatalogEntry's Provider == "openrouter".
+                          properties:
+                            completion:
+                              minimum: 0
+                              type: number
+                            prompt:
+                              minimum: 0
+                              type: number
+                          type: object
+                        models:
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        only:
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        order:
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        requireParameters:
+                          description: |-
+                            RequireParameters: unset defaults to TRUE when the request carries tools
+                            (the openrouter provider injects it — see
+                            pkg/agent/llm/openrouter/extra.go's providerObject); explicit values are
+                            honored verbatim. OpenRouter's own wire default is false — agents need
+                            tools, so auto/fallback routing must only pick providers that support
+                            the request's parameters.
+                          type: boolean
+                        sort:
+                          enum:
+                          - price
+                          - throughput
+                          - latency
+                          type: string
+                      type: object
+                    tokenRef:
+                      description: |-
+                        TokenRef is the central API-token Secret (cluster tier only). Required at
+                        the cluster tier; forbidden below it.
+                      properties:
+                        key:
+                          description: Key is the data key within the Secret holding
+                            the value.
+                          type: string
+                        name:
+                          description: Name is the Secret's name.
+                          type: string
+                        namespace:
+                          description: Namespace is the Secret's namespace.
+                          type: string
+                      required:
+                      - key
+                      - name
+                      - namespace
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+            type: object
+          status:
+            description: SettingsStatus is the shared status for both settings CRDs.
+            properties:
+              conditions:
+                description: Conditions carries SelfConsistent; see its type constant.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  reflects.
+                format: int64
+                type: integer
+              observedLimits:
+                description: |-
+                  ObservedLimits is the durable trigger state for tool-origin revocation:
+                  the allowlists the operator has already published revokes for. The
+                  settings RevokePublisher diffs spec.limits against this record, so an
+                  entry withdrawn while the operator was down — or one whose revoke failed
+                  to publish — is still emitted on the next reconcile, instead of living
+                  only in a process-scoped map that dies with the pod.
+
+                  nil means "never observed": prime without emitting, so a fresh install
+                  does not revoke origins nobody ever granted.
+                properties:
+                  allowedMCPServers:
+                    description: |-
+                      AllowedMCPServers is the set of names last observed in
+                      spec.limits.allowedMCPServers.
+                    items:
+                      type: string
+                    type: array
+                  allowedToolkits:
+                    description: |-
+                      AllowedToolkits is the set of names last observed in
+                      spec.limits.allowedToolkits.
+                    items:
+                      type: string
+                    type: array
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

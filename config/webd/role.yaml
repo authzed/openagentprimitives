@@ -1,0 +1,27 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spicebox-webd
+  namespace: agentprimitives-identities
+# Master-Secret CRUD for the credential-link flow (identityd's routes, hosted
+# in-process by webd). That is ALL this Role is for.
+#
+# It is NOT what makes the channel-webhook route work. Channels are not
+# provisioned in this namespace, so the get half here never covers a
+# credentialsRef Secret in practice; that read
+# (pkg/web/webui/channelwebhook, e.g. a GitHub webhook's HMAC signing secret)
+# is granted per Channel, by a Role + RoleBinding the operator stamps in the
+# Channel's OWN namespace, scoped by resourceNames to that one Secret and
+# owner-referenced to the Channel — see pkg/controllers/channel/webhookrbac.go.
+# Widening this Role, or promoting it to a ClusterRole, is the wrong fix and
+# pkg/platform/manifests/rbac_sufficiency_test.go forbids it.
+#
+# Deliberately ONE rule: RBAC rules union, so a second, broader-than-necessary
+# "get all secrets in this namespace" rule would silently defeat any future
+# narrowing of the credential-link CRUD (e.g. to specific resourceNames) — a
+# duplicate grant that outlives the thing it was meant to hedge is a hole, not
+# a hedge.
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "delete"]

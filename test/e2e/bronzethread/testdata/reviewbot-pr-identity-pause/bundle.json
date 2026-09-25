@@ -1,0 +1,94 @@
+{
+  "name": "reviewbot-pr-identity-pause",
+  "description": "A signed pull_request webhook, posted to the production route: the pipeline mints a session and binds the pull request into the class's github_pull_request/write_memory slot at session mint (fillFrom: [trigger]) — no human, no approval, only the verified delivery. The session reads the pull request with `gh pr view`, and the toolspec's two requireSlotBound writesRelationships blocks write the author/repo identity tuples for it; both land, because the resource they name is the SAME pull request the delivery bound. It then reads a SECOND pull request the delivery never named: the same two blocks match the call, but the slot-bound checker finds no grant for THAT resource, and relwrites.ErrSlotBoundRefused flips the tool result to IsError with the gate's own text. One call succeeds, the identically-shaped next one is refused, and the only difference is which resource the trigger bound — that contrast is what proves the gate discriminates rather than always allowing (or always denying).\n\nEvery assertion below reads a TOOL RESULT, never a reply: nothing in the transcript calls respond_to_user. The fixture still carries a SECOND Channel (kind=fake, role=output) alongside the github input, and that pairing is not optional narrative — github's ValidateSpec rejects role=output|both, and the pipeline's session-create path refuses to mint a session at all for a role=input Channel whose class resolves no role=output Channel, independent of whether a reply is ever sent. See task-6-report.md for why a Slack-REPLY loop is still not expressible here regardless: userTurns and trigger are mutually exclusive at the loader (pkg/bronzethread/bundle.go, Bundle.Validate), so a triggered run cannot express a later human inbound of any kind, on any channel — the output Channel this fixture carries is a one-way destination, never a source.\n\nNo record_observation (pool-write) leg: task-6-report.md documents why — the in-process harness's Loop.Mem never reaches pkg/memory/httpsrv, which is the ONLY place the pool-write authorization gate (destinationFor, gated on pools.ForSession(...).Write) is implemented; *memory.Local itself has no PutToPool method at all. Exercising that leg for real needs an in-process httpsrv + httpclient.Client wired into the shared harness, which is out of this task's scope.\n\nNo trace.golden yet — per AGENTS.md, a golden is promoted only after the property assertions here have proven the scenario; that promotion is left to a later pass.",
+
+  "agentDir": "testdata/agent-reviewbot-pr-identity",
+  "agentClass": "demo-pr-pause",
+
+  "trigger": {
+    "channel": "demo-pr-pause-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#7"
+  },
+
+  "mintedIDs": {
+    "operation": ["op-fac00add1ecafe00"]
+  },
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Pull request demo-org/demo-repo#7 was opened."
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "new_operation",
+            "args": { "description": "read the triggering pull request and record identity relationships about it" }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "new_operation", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gh-review_gh",
+            "args": {
+              "operation_id": "op-fac00add1ecafe00",
+              "_reason": "read the pull request the delivery bound, to record who authored it and where it lives",
+              "args": ["pr", "view", "7", "--repo", "demo-org/demo-repo", "--json", "id,author,isCrossRepository,headRepository"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "gh-review_gh",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "PR_kwFAKE0000000001"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gh-review_gh",
+            "args": {
+              "operation_id": "op-fac00add1ecafe00",
+              "_reason": "check a second pull request this session was never triggered for",
+              "args": ["pr", "view", "99", "--repo", "demo-org/demo-repo", "--json", "id,author,isCrossRepository,headRepository"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "gh-review_gh",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "has no slot-bound grant for this session"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": { "summary": "Recorded author/repo identity for demo-org/demo-repo#7; a second, untriggered pull request was correctly refused." }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "toolsCalled": ["gh-review_gh"]
+  },
+
+  "toolOutputSequence": {
+    "gh": [
+      { "stdout": "{\"id\":\"PR_kwFAKE0000000001\",\"author\":{\"id\":\"U_kwFAKE00001\",\"login\":\"demo-contributor\"},\"isCrossRepository\":false,\"headRepository\":{\"id\":\"R_kwFAKE00001\",\"name\":\"demo-repo\"}}" },
+      { "stdout": "{\"id\":\"PR_kwFAKE0000099999\",\"author\":{\"id\":\"U_kwFAKE00002\",\"login\":\"another-contributor\"},\"isCrossRepository\":false,\"headRepository\":{\"id\":\"R_kwFAKE00001\",\"name\":\"demo-repo\"}}" }
+    ]
+  }
+}

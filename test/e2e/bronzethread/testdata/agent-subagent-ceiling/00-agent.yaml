@@ -1,0 +1,76 @@
+# Fixture agents for the subagent-ceiling bronzethread bundle.
+#
+# demo-lead grants the subagents capability, names ONE class on its roster
+# (demo-coder), and sets budget.maxDelegatedAgents: 2 -- a pooled per-root
+# ceiling on the TOTAL number of sessions in the delegation tree, counting
+# the root itself. Root + one child fills the tree exactly: the bundle's
+# first delegate call is the tree's second member (count=2, at the ceiling
+# but not yet exceeding it) and is allowed; the second delegate call would
+# make a third (count=3 >= ceiling=2) and must be denied. A ceiling of 1
+# would only ever prove the denial -- this value is what proves both
+# directions in one run.
+#
+# demo-coder carries no subagents capability and no roster of its own --
+# delegation is not transitive in this fixture. Mirrors
+# agent-subagent-delegation/00-agent.yaml's shape; both classes are
+# deliberately toolless beyond their meta-tool grants: no mcpServers, no
+# agentIdentity, no boundEntities.
+apiVersion: v1
+kind: Secret
+metadata: {name: subceil-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: subceil-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-lead, namespace: default}
+spec:
+  displayName: DemoLead
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: subceil-placeholder, key: api-key}
+  capabilities:
+    subagents: {}
+  subagents: ["demo-coder"]
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You delegate bounded tasks to other agents with the delegate tool.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h", maxDelegatedAgents: 2}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-coder, namespace: default}
+spec:
+  displayName: DemoCoder
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: subceil-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You receive a single delegated task with no conversation history and
+      complete it.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: demo-lead-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: demo-lead
+  credentialsRef: {secretName: subceil-fake-creds}
+  fake: {echo: false}

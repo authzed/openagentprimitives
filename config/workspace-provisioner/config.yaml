@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ap-workspace-provisioner-config
+  namespace: ap-workspace-storage
+  labels:
+    agentprimitives.authzed.com/install-tier: workspace-provisioner-rwx
+data:
+  # nodePathMap (not sharedFileSystemPath): the on-disk path is a plain per-node
+  # hostPath dir, NOT a real shared filesystem. sharedFileSystemPath would emit
+  # RWX PVs with no nodeAffinity, so on a multi-node cluster a session's pods land
+  # on different nodes and see divergent (often empty) /workspace — git tools then
+  # fail with "not a git repository" after any cross-node respawn. nodePathMap
+  # stamps each PV with nodeAffinity for the node the first consumer scheduled on,
+  # pinning every later session pod there. nodePathMap only provisions RWO, but
+  # RWO in k8s >=1.22 is single-NODE (not single-pod), so the pinned, co-located
+  # bundle sidecars + runner still share the workspace — the session PVCs request
+  # RWO accordingly (see BuildWorkspacePVC). This is a single-node dev/kind shim
+  # hardened for multi-node; genuine shared RWX (Filestore/NFS/EFS) is the durable
+  # fix.
+  config.json: |
+    {
+      "nodePathMap": [
+        {
+          "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES",
+          "paths": ["/var/local-path-provisioner/ap-workspace"]
+        }
+      ]
+    }
+  setup: |
+    #!/bin/sh
+    set -eu
+    # 0777: the sandbox/bundle containers run as a non-root uid (1000) while the
+    # helper pod creates this dir as root. The RWX volume is hostPath-backed, so
+    # the pod's fsGroup is NOT applied (hostPath ignores fsGroup) — leaving the
+    # dir root-owned and unwritable by the sandbox uid at 0775. The volume is
+    # per-session (mounted only by that one session's same-uid pods), so a
+    # world-writable scratch dir is not a cross-tenant exposure. Matches the
+    # upstream local-path-provisioner default.
+    mkdir -m 0777 -p "$VOL_DIR"
+  teardown: |
+    #!/bin/sh
+    set -eu
+    rm -rf "$VOL_DIR"
+  helperPod.yaml: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      containers:
+        - name: helper-pod
+          image: busybox
+          imagePullPolicy: IfNotPresent

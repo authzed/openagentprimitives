@@ -1,0 +1,32 @@
+# AgentIdentity for the ptdemo-records fixture agent.
+#
+# One static credential, referenced by 02-mcpserver.yaml's
+# spec.auth.credential so the broker resolves it into an Authorization
+# header at runner startup. The harness's fake MCP server ignores the
+# header value; the token is cosmetic. Static rather than oauth so the
+# fixture does not drag in the refresh controller's TokenEndpoint
+# requirements.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ptdemo-mcp-token
+  namespace: default
+type: Opaque
+stringData:
+  access_token: "unused-by-the-fake-mcp-server"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: ptdemo-identity
+  namespace: default
+spec:
+  description: "Ledger-records e2e fixture: static MCP bearer token."
+  credentials:
+    - name: ptdemo-mcp-bearer
+      type: static
+      static:
+        secretRef:
+          name: ptdemo-mcp-token
+          key: access_token

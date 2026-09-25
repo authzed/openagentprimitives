@@ -1,0 +1,40 @@
+[
+  {
+    "type": "container",
+    "rich_text_title": {
+      "type": "rich_text",
+      "elements": [
+        {
+          "type": "rich_text_section",
+          "elements": [
+            {
+              "type": "emoji",
+              "name": "large_green_circle"
+            },
+            {
+              "type": "text",
+              "text": "  "
+            },
+            {
+              "type": "text",
+              "text": "Alex asked to join this session and help drive the rollout — allow them to participate?",
+              "style": {
+                "bold": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "child_blocks": [
+      {
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": "*Approved* by \u003c@U_OWNER\u003e"
+        }
+      }
+    ],
+    "has_header_divider": true
+  }
+]

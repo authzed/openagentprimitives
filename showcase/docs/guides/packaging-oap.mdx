@@ -1,0 +1,55 @@
+export const meta = {
+  title: 'Packaging (.oap bundle)',
+  section: 'Reference',
+  group: 'Agent definition',
+  order: 2040,
+  description:
+    'Shipping an agent and its whole dependency graph as one signed artifact that declares its secrets and asks what it needs at install.',
+}
+
+# Packaging an agent as a `.oap` bundle
+
+<p className="doc-lede">
+  A finished agent isn't just an AgentClass — it's the class plus its skills, its identity wiring, and its
+  config. A <code>.oap</code> <strong>bundle</strong> packs that whole graph into one artifact you can sign,
+  publish, and install with a single command. It's how the <a href="#/quickstart">quickstart</a> installs an
+  agent without applying any pieces by hand.
+</p>
+
+## One artifact, the whole graph
+
+`oap agent package` walks an AgentClass and everything it depends on and emits a single `.oap` file. Installing
+it — `oap agent install <folder | file.oap | registry-ref>` — recreates the entire graph and validates it as a
+unit. You can `oap agent inspect` or `oap agent lint` a bundle before trusting it, `oap agent push` it to a
+registry, and `oap agent pull` it back.
+
+A bundle can only carry a **closed set** of agent-definition kinds — the class, its identity, tools, skills,
+and config. Channels (per-install deployment config) and Secrets (materialized from your answers) are
+deliberately *not* among them, and a bundle carrying any other kind is rejected whole.
+
+## Secrets are declared, never carried
+
+A `.oap` **never contains a secret value.** Packaging records only that a Secret is *needed* — its name and
+keys — not its bytes. At install time the bundle asks its **questions** (an API key, a GitHub PAT, a config
+choice), and your answers become the Secrets in your cluster. A bundle you download can't smuggle someone
+else's credentials, and one you publish can't leak yours.
+
+## Signed and verifiable
+
+`oap agent sign` signs a bundle (cosign-format, key-based), and `oap agent verify` checks it. Installing with
+verification **pins to the exact verified digest**, so what runs is what you checked — a later tag can't swap
+the contents out from under you. Registry references are fetched through an SSRF guard that refuses
+metadata and link-local hosts.
+
+## Installing over what's already there
+
+By default an install refuses to overwrite objects it didn't create — a foreign resource is a hard conflict,
+not a silent clobber. When you *do* mean to take over a pre-existing object, `oap agent install --adopt` seizes
+and converges it deliberately; without that flag, nothing you didn't create is touched. `oap agent uninstall`
+removes what the bundle installed.
+
+<Callout kind="security" title="Installing the same bundle twice changes nothing">
+  A bundle install is a pure function of its inputs — the same bundle and the same answers produce a
+  byte-identical result, so re-installing is a no-op rather than a churn. Nothing volatile (no timestamps, no
+  random IDs) leaks into what gets applied, which is what makes "install it again" safe.
+</Callout>

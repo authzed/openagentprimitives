@@ -1,0 +1,19 @@
+# Channel for the selector-binding-e2e fixture: the fake kind's inbound
+# path is what SendUserMessage drives to create the AgentSession the
+# scenario opens. Every AgentSession's cold-start turn answers spec.Prompt
+# through the LLM before the session reaches a servable phase, and only a
+# channel-attached session can complete that turn without going terminal —
+# see leads-console-e2e/05-channel.yaml's identical note.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: acctbook-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: acctbook-desk
+  credentialsRef:
+    secretName: acctbook-fake-creds
+  fake:
+    echo: false

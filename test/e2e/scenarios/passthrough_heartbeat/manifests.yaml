@@ -1,0 +1,100 @@
+# Scenario: heartbeat extends the credential-link deadline
+# (passthrough_heartbeat_test.go).
+#
+# The test parks a passthrough AgentSession in AwaitingCredentials and
+# drives POST /heartbeat to advance SessionUserIdentity.status.lastInteractionAt.
+# It asserts the field is bumped by each heartbeat and does NOT advance once
+# heartbeating stops.
+#
+# The AgentClass uses a long CredentialLinkTimeout (30m) so the operator's
+# reaper does NOT fire during the test window — this is a wiring-only test
+# that proves the HTTP path moves LastInteractionAt forward without relying
+# on wall-clock deadline expiry.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-heartbeat-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder. The fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-heartbeat-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# MCPServer the passthrough class references. spec.auth.credential is the
+# credential gate key that causes the session to park.
+#
+# spec.server.url is rewritten to {{MCP_URL}} by the test before apply so
+# the MCP probe hits the in-process MCPStub rather than a real host.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: linear-mcp
+  namespace: default
+spec:
+  name: linear-mcp
+  version: v1
+  intent: "Passthrough heartbeat e2e: proves /heartbeat bumps LastInteractionAt."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: linear-oauth
+    provider: Linear
+  tools: []
+---
+# AgentClass with identityMode: userPassthrough — every session parks in
+# AwaitingCredentials until linear-oauth is linked. Long CredentialLinkTimeout
+# (30m, the default) so the reaper never fires during the test window.
+# authz.toolCalls.mode=disabled bypasses SpiceDB authz so no schema bootstrap is needed.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: triage-bot
+  namespace: default
+spec:
+  displayName: "Triage Bot"
+  identityMode: userPassthrough
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: pt-heartbeat-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a passthrough triage agent for the heartbeat e2e"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  mcpServers:
+    - name: linear
+      ref: linear-mcp
+---
+# Channel for the harness to drive inbound messages through.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: triage-bot-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: triage-bot
+  credentialsRef:
+    secretName: pt-heartbeat-fake-creds
+  fake:
+    echo: false

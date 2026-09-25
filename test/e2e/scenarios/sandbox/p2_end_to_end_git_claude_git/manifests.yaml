@@ -1,0 +1,240 @@
+# Scenario 4 (p2_end_to_end_git_claude_git) fixtures.
+#
+# Composes Scenarios 1, 2, and 3 into the headline end-to-end story:
+#
+#   user: "fix the failing test in widgets and push"
+#     → tool_use(new_operation)
+#     → tool_use(git_git, args=[clone, …])
+#     → tool_use(codey_codey, args=[run])         (interactive bridge)
+#     → tool_use(git_git, args=[push, …])
+#     → respond_to_user("pushed: abc1234")
+#
+# Two bundles → AgentSession reconciler provisions one RWX PVC + stamps both
+# per-bundle SpiceboxSessions with Workspace.Mode=shared (Scenario 1's
+# assertion). The git bundle's SpiceboxSession carries DefaultEnv from
+# bundleDefaultEnv("git") so GIT_CONFIG_GLOBAL et al. reach the ToolCall
+# controller's exec.Request (Scenario 2's assertion). The codey bundle's
+# single interactive subcommand (`run`) flips Interactive=true on the
+# synthesized Tool, routing it through the streaming bridge (Scenario 3's
+# assertion).
+#
+# Notes (carrying forward Scenario 1/2/3's harness invariants):
+#   - The harness does not wire the SpiceboxToolspec controller; the test
+#     stamps ts-git's + ts-codey's Valid=True after Apply.
+#   - The harness does not run a real Pod scheduler; the test stamps the
+#     bundle SpiceboxSessions Ready=True + PodName + ResolvedClass +
+#     EffectiveToolspecs once they appear.
+#   - git is a built-in toolkit (embedded under repo-root /toolkits) — no
+#     SpiceboxToolkit CR for it. codey is the CR-backed fake-codey-toolkit
+#     (mirrors test/e2e/testdata/fake-codey-toolkit.yaml).
+#
+# authz.toolCalls.mode=disabled (Scenarios 2 & 3 inherited): no SpiceDB wired in the
+# harness, and the default enforcing mode would deny on codey's "external"
+# stateImpact without a guardian grant. Disabled bypasses the Check entirely
+# — no approval prompts to consume in the test.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# SpiceboxToolkit CR: mirrors test/e2e/testdata/fake-codey-toolkit.yaml so the
+# AgentClass binding-coverage check + the toolspec registry both resolve the
+# toolkit via the cluster (vs. requiring it in the in-binary built-ins).
+# Subcommand `run` carries Interactive=true; the synthesizer detects the
+# single-allowed-interactive-subcommand shape and flips Interactive=true on
+# the resulting Tool, which routes through SandboxTool.executeInteractive.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolkit
+metadata:
+  name: codey
+spec:
+  name: codey
+  version: "0.1.0"
+  toolkitRevision: "2026-05-18"
+  target:
+    binary: codey
+  parser:
+    kind: declarative
+  env:
+    allowed: []
+  permission:
+    stateImpact: external
+    check:
+      resourceType: codey_session
+      permission: run
+  subcommands:
+    - path: [run]
+      description: "Run an interactive codey session"
+      effects:
+        destructive: false
+        reads:  [filesystem]
+        writes: [filesystem]
+        network:    {destinations: []}
+        filesystem: {paths: ["{cwd}"]}
+        creds:      {required: [], writes: []}
+      mode: interactive
+      permission:
+        stateImpact: external
+        check:
+          resourceType: codey_session
+          permission: run
+---
+# Toolspec wrapping git's `clone`, `commit`, and `push` subcommands. The LLM
+# uses all three within the e2e flow; the validator's checkAllowSubcommands
+# rejects any subcommand not listed here.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: ts-git
+spec:
+  name: ts-git
+  version: "1"
+  toolkit:
+    name: git
+    revision: "2026-04-24"
+  allowSubcommands:
+    - clone
+    - commit
+    - push
+---
+# Toolspec wrapping the codey toolkit's single `run` subcommand.
+# AllowSubcommands narrows to exactly one entry — the synthesizer's
+# single-interactive-subcommand detector wires the Subcommand onto
+# NewSandboxTool, which flips Interactive=true on the resulting Tool.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: ts-codey
+spec:
+  name: ts-codey
+  version: "1"
+  toolkit:
+    name: codey
+    revision: "2026-05-18"
+  allowSubcommands:
+    - run
+---
+# SpiceboxClass for the git bundle. spec.tools[].name MUST equal the
+# Toolspec's toolkit.name ("git") so the synthesizer matches; the resulting
+# LLM-facing tool name is "<bundle.name>_<class-tool.name>" = "git_git".
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: cls-git
+spec:
+  image: registry.example.com/git-toolbelt:latest
+  resources:
+    cpu: "100m"
+    memory: "64Mi"
+    ephemeralStorage: "16Mi"
+  tools:
+    - name: git
+      command: ["/usr/bin/git"]
+  toolspecs:
+    - name: ts-git
+---
+# SpiceboxClass for the codey bundle. spec.tools[].name = "codey" so the
+# synthesizer produces "codey_codey" as the LLM-facing name.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: cls-codey
+spec:
+  image: registry.example.com/codey:latest
+  resources:
+    cpu: "100m"
+    memory: "64Mi"
+    ephemeralStorage: "16Mi"
+  tools:
+    - name: codey
+      command: ["/usr/bin/codey"]
+  toolspecs:
+    - name: ts-codey
+---
+# AgentIdentity with a credential named git-token covering the git bundle's
+# toolspec. validateBundles checks that each sensitive toolkit env var
+# (GIT_TOKEN → git-token) is backed by a named credential. The codey toolkit
+# declares no sensitive env vars, so no credential is required for that bundle.
+# Static credentials keep the refresh-controller and OAuth bits out of scope.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ai-test-creds
+  namespace: default
+type: Opaque
+stringData:
+  token: "unused-by-the-test-scenarios"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: ai-test
+  namespace: default
+spec:
+  description: "Identity for the p2_end_to_end_git_claude_git scenario."
+  credentials:
+    - name: git-token
+      type: static
+      static:
+        secretRef:
+          name: ai-test-creds
+          key: token
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-e2e
+  namespace: default
+spec:
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a test agent"
+  # See file header for the authz.toolCalls.mode=disabled rationale.
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  agentIdentity: ai-test
+  toolBundles:
+    - name: "git"
+      class: "cls-git"
+      toolspecs: ["ts-git"]
+    - name: "codey"
+      class: "cls-codey"
+      toolspecs: ["ts-codey"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-e2e-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-e2e
+  credentialsRef:
+    secretName: e2e-fake-creds
+  fake:
+    echo: false

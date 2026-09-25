@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist — assembled verbatim into oap.app/Contents/Info.plist by
+  `mage desktop:app` (magefiles/desktop.go's Desktop.App). CFBundleExecutable
+  is "oap": the .app bundles the SAME cmd/oap binary the rest of the CLI ships
+  (built darwin/arm64 with cgo for fyne.io/systray + Code-Hex/vz), not a
+  separate oapdesktop binary — see cmd/oap/main_bundle_launch.go for how a
+  Finder double-click (zero args) turns into `oap desktop`, and
+  cmd/oap/internal/desktopcmd/run_darwin.go's desktopResourcesDir for why Contents/Resources
+  is located relative to Contents/MacOS/oap specifically.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>oap</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.authzed.oap</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>oap</string>
+	<key>CFBundleDisplayName</key>
+	<string>OAP Desktop</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<!-- Menubar-only app: no Dock icon, no app-switcher entry, no main
+	     window — matches cmd/oap/internal/desktopcmd/run_darwin.go's systray-only UI. -->
+	<key>LSUIElement</key>
+	<true/>
+	<!-- Virtualization.framework's Linux-guest support floor. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+</dict>
+</plist>

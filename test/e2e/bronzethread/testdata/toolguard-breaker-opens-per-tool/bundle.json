@@ -1,0 +1,46 @@
+{
+  "name": "toolguard-breaker-opens-per-tool",
+  "description": "Toolguard PER-TOOL circuit breaker, end to end. The class sets toolGuard breaker.failureThreshold=3 on tg_flaky, whose upstream fails every call (toolErrors). After three failures the breaker OPENS; the fourth call is denied by the breaker BEFORE it reaches the server. scenarios/sidecars covers the ORIGIN breaker; the per-tool FailureThreshold was untested whole-session (reviewbot-claim-review-conclude explicitly avoids tripping the builtin per-tool breaker at 5).\n\nThe distinguishing assertion is that the fourth result IsError AND does NOT contain the upstream failure text: calls 1-3 carry the server's own error, but the breaker-denied fourth never reaches the server, so it carries the breaker message instead. If the breaker did not open, the fourth call would reach the server and return the upstream text — which is exactly what lastToolResultNotContains catches. Asserting on the result, not the reply.",
+  "agentDir": "testdata/agent-toolguard",
+  "agentClass": "tg-agent",
+  "defaultUser": "user@example.com",
+  "toolOutputs": {
+    "emit": { "ok": true },
+    "fast": { "ok": true },
+    "flaky": { "ok": true }
+  },
+  "toolErrors": {
+    "flaky": { "message": "UPSTREAM-FLAKY-BOOM" }
+  },
+  "userTurns": ["retry the flaky tool until it settles"],
+  "llm": [
+    {
+      "expect": { "userTextContains": "flaky" },
+      "reply": [
+        { "toolUse": { "name": "tg_flaky", "args": { "operation_id": "op-flaky-1", "_reason": "attempt 1", "args": { "n": 1 } } } },
+        { "toolUse": { "name": "tg_flaky", "args": { "operation_id": "op-flaky-2", "_reason": "attempt 2", "args": { "n": 2 } } } },
+        { "toolUse": { "name": "tg_flaky", "args": { "operation_id": "op-flaky-3", "_reason": "attempt 3 — this failure opens the breaker", "args": { "n": 3 } } } }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "tg_flaky", "lastToolResultIsError": true },
+      "reply": [{ "toolUse": { "name": "tg_flaky", "args": { "operation_id": "op-flaky-4", "_reason": "attempt 4 — should hit the open breaker", "args": { "n": 4 } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "tg_flaky",
+        "lastToolResultIsError": true,
+        "lastToolResultNotContains": "UPSTREAM-FLAKY-BOOM"
+      },
+      "reply": [{ "text": "The circuit breaker opened after repeated failures and blocked the next call before it reached the server." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "the per-tool breaker opened" } } }]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": ["circuit breaker opened"],
+    "toolsCalled": ["tg_flaky"]
+  }
+}

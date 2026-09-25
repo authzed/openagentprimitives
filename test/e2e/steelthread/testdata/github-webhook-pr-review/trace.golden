@@ -1,0 +1,4 @@
+authz git_repo:https=3A//github=2Ecom/fixture-owner/fixture-review#fetch denied
+authz git_repo:workspace#read denied
+authz git_repo:workspace#write denied
+authz github_repo_url:aHR0cHM6Ly9naXRodWIuY29tL2ZpeHR1cmUtb3duZXIvZml4dHVyZS1yZXZpZXc#read denied

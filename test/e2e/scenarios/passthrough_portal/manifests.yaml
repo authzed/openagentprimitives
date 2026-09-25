@@ -1,0 +1,152 @@
+# Scenario: proactive linking via portal (passthrough_portal_test.go).
+#
+# Drives the full Slice-2.5 phase-α + phase-ι3 proactive-link flow end to
+# end in a single in-process process:
+#
+#   1. Operator wires a non-passthrough AgentClass (triage-bot) to a fake
+#      Channel so the first inbound creates an ACTIVE session — required
+#      for the portal-access triggerer, which only fires on inbound that
+#      route to an active session (Pending/Running/Idle). Slice 2's
+#      passthrough scenario can't be reused verbatim because the
+#      identityMode=userPassthrough class parks the session in
+#      AwaitingCredentials, which the pipeline does not treat as active.
+#   2. A SEPARATE passthrough AgentClass (linear-helper) lives cluster-wide
+#      so identityd's "suggested credentials" aggregator (α4) lists
+#      linear-oauth as a credential the user can link from the portal.
+#      The portal's suggestion source is every passthrough AgentClass's
+#      MCPServer.spec.auth.credential, not the bound channel's class.
+#   3. The test sends a non-trigger message first to create the session,
+#      then "manage my accounts" to fire channelsd's PortalAccessTriggerer
+#      (α5). The fake kind's portal_access sub-channel sender (α6) records
+#      the resulting envelope; the test asserts the LinkURL points at
+#      identityd's /my/accounts endpoint.
+#   4. The test drives identityd's web flow with a cookie jar:
+#        GET <LinkURL>           → portal page, sets idd_session cookie
+#        GET .../linear-oauth/link        → one-credential PAT form
+#        POST .../linear-oauth/link/submit → success page
+#   5. The test asserts the master Secret + UserIdentity materialized AND
+#      the credential_linked OOB confirmation envelope (ι3) was published
+#      by channelsd's watcher to the same fake channel.
+#
+# Non-trivial token / key values chosen to avoid false-positive matches
+# with other env vars or test fixtures.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-portal-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder. The fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-portal-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# MCPServer the passthrough class (linear-helper) declares a credential
+# for. spec.auth.credential is what identityd's suggested-credentials
+# aggregator surfaces in the portal as a linkable account.
+#
+# spec.server.url is rewritten to {{MCP_URL}} by the test before apply so
+# the MCP probe (run by the MCPServer controller) hits the in-process
+# MCPStub. The probe doesn't need any tools — this scenario asserts on
+# the portal-access flow, not on tool dispatch.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: linear-mcp
+  namespace: default
+spec:
+  name: linear-mcp
+  version: v1
+  intent: "Passthrough portal e2e: drives the proactive-link flow."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: linear-oauth
+    provider: Linear
+  tools: []
+---
+# Non-passthrough AgentClass bound to the fake Channel. Sessions stay
+# active (Pending/Running/Idle) so the portal-access triggerer fires when
+# the second message arrives. authz.toolCalls.mode=disabled bypasses SpiceDB
+# authz so no schema bootstrap is needed.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: triage-bot
+  namespace: default
+spec:
+  displayName: "Triage Bot"
+  identityMode: agent
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: pt-portal-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a triage agent for the portal e2e"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+---
+# Passthrough AgentClass that references the linear-mcp MCPServer.
+# Lives cluster-wide so identityd's portal page surfaces linear-oauth as
+# a credential the user can link. This AgentClass is NOT bound to any
+# Channel — it exists purely for the portal's suggested-credentials
+# aggregator (α4) to find a passthrough class with a credential.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: linear-helper
+  namespace: default
+spec:
+  displayName: "Linear Helper"
+  identityMode: userPassthrough
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: pt-portal-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a linear-passthrough helper agent"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  mcpServers:
+    - name: linear
+      ref: linear-mcp
+---
+# Channel for the harness to drive inbound messages through.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: triage-bot-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: triage-bot
+  credentialsRef:
+    secretName: pt-portal-fake-creds
+  fake:
+    echo: false

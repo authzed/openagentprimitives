@@ -1,0 +1,22 @@
+# The round-trip test (roundtrip_test.go) captures a bundle into
+# testdata/roundtrip-scratch and removes it on cleanup. It is regenerated on
+# every run and must never be committed: a committed copy would be discovered by
+# TestSteelthread and run as if it were a real capture from a live session,
+# which is the one thing a steel bundle is supposed to be evidence of.
+/roundtrip-scratch/
+
+# A bundle captured from a REAL session, dropped here by hand to check that it
+# replays before deciding whether it can be committed at all.
+#
+# It has to live under testdata/ rather than in a temp directory, because a
+# bundle's agentDir is "testdata/<name>" and the harness resolves it relative to
+# this package's working directory — a capture anywhere else boots no fixture.
+# So the safe place is one git cannot pick up.
+#
+# It is ignored because a live capture is the one artifact that must be READ
+# before it is committed. A real session's tool output is whatever the tools
+# returned: customer names, hostnames, internal identifiers, anything the agent
+# was looking at. The secret scan proves the absence of known credential VALUES
+# and says nothing about any of that. Capture into here, replay, read the
+# bundle, and only then decide.
+/livecapture-scratch/

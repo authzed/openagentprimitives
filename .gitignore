@@ -1,0 +1,37 @@
+/bin/
+/dist/
+/operator
+/runner
+/agentprimitives-runner
+/oap
+/ap
+/authzd
+/channelsd
+/identityd
+/streamclient
+/claudeshim
+/webd
+*.test
+coverage.out
+.envrc
+.env
+TODO
+.claude/
+.worktrees/
+.superpowers/
+
+# mage desktop:* build outputs (rootfs.img, images-minimal.tar.zst, ap.app)
+# and downloaded upstream artifacts (Ubuntu cloud image, k3s release) — see
+# magefiles/desktop.go. Multi-GB; never committed.
+/build/desktop/cache/
+/build/desktop/out/
+FIXPLAN*.md
+
+# `oap channel create` writes the Slack app manifest into the working
+# directory; run from the repo root it lands here. Root-anchored so the
+# temp-dir copies the wizard tests write are unaffected.
+/slack-app-manifest-*.yaml
+
+# build outputs of the workshop sidecar and the CLI, run from the repo root
+/workshop
+/oap

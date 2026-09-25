@@ -1,0 +1,12 @@
+name: allow-pr-view
+toolkit: toolkit.yaml
+spec: spec.yaml
+invocation:
+  command: gh
+  argv: [pr, view, "123", -R, authzed/openagentprimitives]
+  binaryVersion: "2.53.1"
+expect:
+  allow: true
+  traceContains:
+    - {path: parse,              status: pass}
+    - {path: allowSubcommands,   status: pass}

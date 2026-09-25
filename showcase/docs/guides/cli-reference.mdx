@@ -1,0 +1,57 @@
+export const meta = {
+  title: 'oap CLI reference',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2700,
+  description: 'Every oap command family, generated from the CLI itself.',
+}
+
+# oap CLI reference
+
+The `oap` CLI installs, manages, and runs agents. Every command below is generated directly
+from the CLI, so it matches the binary you have. Pick a family for its subcommands and flags.
+
+## Families
+
+| Family | What it does |
+| --- | --- |
+| [`oap agent`](#/oap-agent) | Manage and run AgentClass resources |
+| [`oap artifact`](#/oap-artifact) | Inspect versioned artifacts and their revisions |
+| [`oap audit`](#/oap-audit) | Verify the tamper-evident audit log of a session |
+| [`oap build`](#/oap-build) | Build (and load) Docker images |
+| [`oap channel`](#/oap-channel) | Manage Channel CRs (Slack, future webhook/cron, ...). |
+| [`oap check`](#/oap-check) | verify namespace, CRDs, services, and every registered component's health |
+| [`oap class`](#/oap-class) | Inspect SpiceboxClass resources (sandbox image + capability descriptors) |
+| [`oap clean`](#/oap-clean) | Remove everything oap installed (CRs → operator → CRDs → namespace) |
+| [`oap desktop`](#/oap-desktop) | Run the oap macOS menubar app (local VM + built-in chat; macOS/Apple Silicon only) |
+| [`oap identity`](#/oap-identity) | Manage AgentIdentity resources |
+| [`oap idp`](#/oap-idp) | Manage the cluster identity provider |
+| [`oap image`](#/oap-image) | Work with local Docker images and the current cluster |
+| [`oap init`](#/oap-init) | Bring up agent-primitives end-to-end (build + install + check) |
+| [`oap install`](#/oap-install) | Install the operator + CRDs into the configured cluster |
+| [`oap kg`](#/oap-kg) | Query the knowledge graph |
+| [`oap login`](#/oap-login) | Log in to this cluster's identity provider and cache the assertion |
+| [`oap logout`](#/oap-logout) | Remove the cached identity assertion |
+| [`oap memory`](#/oap-memory) | Inspect and manage session memory entries |
+| [`oap pin`](#/oap-pin) | Inspect and update dependency pin baselines |
+| [`oap plangate`](#/oap-plangate) | Inspect what the plan gate recorded for a session |
+| [`oap platform`](#/oap-platform) | Manage platform-level admin access (the admin UI gate) |
+| [`oap sandbox`](#/oap-sandbox) | Inspect SpiceboxSession resources (per-bundle running sandbox pods) |
+| [`oap session`](#/oap-session) | Inspect AgentSession resources |
+| [`oap settings`](#/oap-settings) | Manage cluster-wide agent settings (security defaults wizard + apply). |
+| [`oap skill`](#/oap-skill) | List, view, create, and delete agent Skills and SkillSources |
+| [`oap spicedb`](#/oap-spicedb) | Apply schema and check permissions against the system SpiceDB. |
+| [`oap tools`](#/oap-tools) | Manage tools used by agents (kind-agnostic) |
+| [`oap user-identity`](#/oap-user-identity) | Manage UserIdentity resources (per-user credential catalogs) |
+
+## Global flags
+
+These persistent flags apply to every command:
+
+```text
+--context string        Kubeconfig context to use (default: current-context)
+--kubeconfig string     Path to kubeconfig file (default: $KUBECONFIG or ~/.kube/config)
+--no-color              Disable terminal colors (also auto-disabled when stdout isn't a TTY or NO_COLOR is set)
+-n, --namespace string  Kubernetes namespace (default: kubeconfig context's namespace, falling back to 'default')
+```
+

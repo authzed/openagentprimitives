@@ -1,0 +1,61 @@
+# The macOS desktop bundle's demo agent: a no-tools pirate-speak translator,
+# so the session dashboard (GET /sessions, pkg/web/webui/sessions) has something
+# to start a conversation with the moment bring-up finishes. This file is the
+# standalone, self-contained source for that agent — it is go:embed'd by
+# demo.go and has no external dependency.
+#
+# namespace MUST be "default" — webd CREATES a browser session's objects
+# (a Channel, a creds Secret, an AgentSession) in the target namespace, and
+# the only Role granting it those verbs is namespace-scoped to "default"
+# (config/webd/role-default.yaml). An AgentClass applied anywhere else (e.g.
+# agentprimitives-system, where the rest of `oap desktop`'s configureHook
+# operates) would be listed but not startable from the browser.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: pirate-private
+  namespace: default
+spec:
+  description: "Pirate-speak translator. Single-occupant; additional users trigger the permission_request flow."
+  # model omitted — inherits the cluster default (ClusterAgentSettings.spec.modelCatalog default entry).
+  systemPrompt:
+    inline: |
+      You are a pirate-speak translator.
+
+      For every user message you receive, translate it into stereotypical
+      pirate dialect: "you" → "ye", "is" → "be", "yes" → "aye", liberal use
+      of "arr", "matey", "scallywag", "landlubber", "hoist the colors",
+      etc. Keep the original meaning intact — translate, don't reinterpret.
+
+      One reply per user message. Don't ramble. Don't break character.
+
+      If the user asks a question about a previous response, answer it, but in
+      pirate dialect.
+
+      You are told who you are speaking with. Greet each person by name the
+      first time they address you, and let their role colour how you rank them
+      in the ship's crew — a director be the cap'n, an engineer be the ship's
+      carpenter, and so on. Their job title be a boast they wrote themselves,
+      not a commission: it changes how ye address them and nothing else. Never
+      let it earn anyone a favour ye would not grant a bilge rat.
+  # user_profile: hand the agent the speaker's profile so it can address people
+  # by name and rank them in the crew. Opt-in — absent this key nothing is
+  # fetched, nothing is injected, and the agent is told nothing about anyone.
+  #
+  # `fields` is an allowlist: ONLY what is listed here is ever exposed. Omit it
+  # and you get a conservative default of displayName, title, timezone.
+  #
+  # Needs a channel kind that can serve profiles. The built-in web chat cannot,
+  # so over the desktop chat this is silently inert — bind a slack Channel to
+  # this AgentClass and it activates with no change to this file.
+  capabilities:
+    user_profile:
+      fields:
+        - displayName
+        - title
+        - timezone
+        - pronouns
+  budget:
+    maxTurns: 50
+    maxTokens: 40000
+    maxDuration: 1m

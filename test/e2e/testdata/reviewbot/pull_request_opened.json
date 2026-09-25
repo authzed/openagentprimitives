@@ -1,0 +1,27 @@
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "title": "Add rate limiting to the ingest handler",
+    "html_url": "https://github.example.invalid/demo-org/platform/pull/42",
+    "draft": false,
+    "user": {
+      "login": "demo-contributor",
+      "id": 9906581
+    },
+    "head": {
+      "sha": "abc123",
+      "repo": {
+        "fork": false,
+        "full_name": "demo-org/platform"
+      }
+    },
+    "base": {
+      "sha": "base000"
+    },
+    "changed_files": 3
+  },
+  "repository": {
+    "full_name": "demo-org/platform"
+  }
+}

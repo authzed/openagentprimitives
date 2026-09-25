@@ -1,0 +1,166 @@
+# MCPServer for the centerdot-companies e2e fixture agent.
+#
+# Self-contained mirror of the hubspot-companies pattern: two
+# read-only tools (list_companies, list_contacts_for_company), with
+# list_contacts_for_company is gated on a SpiceDB contact_access permission
+# that resolves through owner indirection plus a per-session SLOT GRANT.
+#
+# There is no wildcard leaf on contact_access and no routeViaSessionGrant
+# flag, because the grant tuple now points resource -> session. Evaluating
+# it resolves the session's member set, so the approved call succeeds for
+# the requester without anything having to make a re-check of
+# contact_access pass for a user who by construction lacks it. The wildcard
+# that used to be load-bearing for exactly that re-check is gone; `any_user`
+# survives only on the `list` permission, which is genuinely public.
+#
+# contact_access is COMPOSER-OWNED: because the AgentClass declares
+# crm_company as an authz slot, the schema composer rewrites the expression
+# below to `slot_grant_contact_access->interact + owner`. The `owner` here
+# is what the file declares; the slot half is added at compose time.
+#
+# list_contacts_for_company also uses enforceMode: always so a deny is
+# final regardless of `authz.toolCalls.mode`.
+#
+# spec.server.url is the literal sentinel `{{MCP_URL}}` — the e2e
+# harness rewrites it to the httptest server URL before kubectl apply.
+# That keeps this CR diffable in git while still pointing at a live
+# in-process MCP server during the test run.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: centerdot-companies
+  namespace: default
+spec:
+  name: centerdot-companies
+  version: v1
+  intent: "Self-contained companies/contacts fixture for the e2e harness."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: centerdot-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: crm_owner
+        # A subject holder, never a thing an approval is routed against.
+        standing: session-only
+        relations:
+          - name: user
+            subjectType: user
+        permissions:
+          - name: resolve
+            expr: user
+      - name: crm_company
+        # SpiceDB governs this one: owner_ref tuples are seeded, so the owner
+        # permission really does say who may speak for a company.
+        standing: required
+        approverPermission: owner
+        relations:
+          - name: owner_ref
+            subjectType: crm_owner
+          # Wildcard, and deliberately scoped to LISTING only. The sentinel
+          # crm_company:any carries `any_user:*` from the bootstrap so the
+          # catalogue call passes for everyone; it grants nothing about any
+          # particular company.
+          - name: any_user
+            subjectType: user
+            wildcard: true
+        permissions:
+          - name: owner
+            expr: owner_ref->user
+          # Listing the catalogue is open. Separating it from contact_access is
+          # the point: the wildcard now sits ONLY on the permission that is
+          # genuinely public, never on the one an approval gates.
+          - name: list
+            expr: any_user
+          # contact_access is COMPOSER-OWNED: the schema composer replaces this
+          # line with `slot_grant_contact_access->interact + owner` because the
+          # AgentClass declares crm_company as an authz slot.
+          #
+          # It used to read `any_user + grant_contact_access + owner`. The
+          # wildcard was not a shortcut: the old approval tuple ran FROM the
+          # session TO the company, so evaluating it re-checked contact_access
+          # for the original user — who lacks it by construction, which is why
+          # the approval fired. Only a wildcard leaf could make that arrow pass.
+          # Reversing the tuple (resource -> session) resolves the session's
+          # member set instead, so no wildcard is needed and the check is
+          # per-requester.
+          - name: contact_access
+            expr: owner
+  tools:
+    - name: list_companies
+      intent: "List companies created within the last N days."
+      args:
+        allowedFields: [sinceDays]
+      # The list endpoint is ungated, exactly as in
+      # examples/agent-hubspot-companies (objectType=companies is
+      # passthrough there). It deliberately declares NO check: the only
+      # permission crm_company has that everyone could satisfy is
+      # contact_access, and contact_access is wildcard-reachable — a
+      # non-routed check on it would pass for every user, which is the
+      # fail-open half admission now rejects.
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: crm_company
+          resourceIDTemplate: "any"
+          permission: list
+      # JIT-write owner indirection for every company observed in
+      # the tool response, so list_contacts_for_company can later
+      # walk crm_company -> crm_owner -> user without a separate
+      # owner-resolution step.
+      # JIT-write the company-to-owner chain so subsequent
+      # list_contacts_for_company checks succeed. The e2e harness's
+      # fake MCP server returns results in the shape
+      # {results: [{id: <string>, ownerId: <string>}, ...]} — keep in
+      # sync with the test MCP stub's OnTool("list_companies", ...) handler.
+      writesRelationships:
+        # owner_ref: the crm_company -> crm_owner -> user chain that
+        # resolves crm_company:<id>#owner, i.e. who may approve.
+        - when: 'has(result.results)'
+          forEach: 'result.results'
+          tuple:
+            resource: '"crm_company:" + item.id'
+            relation: '"owner_ref"'
+            subject: '"crm_owner:" + item.ownerId'
+        # any_user@user:*: part 3 of the three-part shape. SAFE only
+        # because every check on contact_access sets
+        # routeViaSessionGrant — the direct check never runs, so this
+        # tuple grants nothing by itself. It exists so the approved
+        # call's agentsession→crm_company arrow resolves for the
+        # original requester instead of re-deriving the denial that
+        # triggered the approval.
+        - when: 'has(result.results)'
+          forEach: 'result.results'
+          tuple:
+            resource: '"crm_company:" + item.id'
+            relation: '"any_user"'
+            subject: '"user:*"'
+      effects:
+        readOnly: true
+        idempotent: true
+
+    - name: list_contacts_for_company
+      intent: "List contacts for one company; requires owner approval."
+      args:
+        allowedFields: [companyId]
+      # Readonly Check against crm_company:<companyId>. enforceMode
+      # always means this deny is final even under a permissive
+      # class-level `authz.toolCalls.mode` — the privacy-sensitive
+      # escape hatch.
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: crm_company
+          resourceIDExpr: '"" + args.companyId'
+          permission: contact_access
+          enforceMode: always
+          # Part 1 of the three-part shape: route every decision through
+          # agentsession:<sess>#check_contact_access_crm_company. With no
+          # session grant tuple the check denies and approval fires; the
+          # grant is bound to (session, company id, args hash) and
+          # expires, so a different session/company/args re-approves.
+          routeViaSessionGrant: true
+      effects:
+        readOnly: true
+        idempotent: true

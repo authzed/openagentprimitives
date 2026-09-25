@@ -1,0 +1,185 @@
+# Fixture agents for the child-requests / human-approves bundle.
+#
+# The scenario the spec calls a MID-FLIGHT information request (§3.2), and the
+# one shape that exercises every party in order:
+#
+#   1. demo-lead2 delegates WITHOUT sending any data.
+#   2. demo-helper finds it cannot do the task and calls request_input,
+#      naming the slot it needs. That PARKS it and hands control back to its
+#      parent — the only way the parent can act, since delegate blocks it
+#      until the child parks or finishes.
+#   3. demo-lead2 reads the entry and answers with send_input, naming the
+#      tool call whose result holds it. Never pasting: pasted text loses the
+#      permissions the datum carried.
+#   4. Grading declines to auto-grant, so a person who can speak for the datum
+#      is asked. The bundle approves as that person.
+#   5. The slot binds onto the RUNNING child, and the child resumes with the
+#      data in its context.
+#
+# demo-helper has no MCP server and no capabilities beyond the core meta
+# tools: everything it learns about the entry arrives through the slot. If any
+# link in the chain fails it has only the task text, which its own scripted
+# step would then not match.
+#
+# The entry is viewable by auditor-2 and NOT by lead-1, who runs the session.
+# That is what makes binding it a disclosure the grader routes rather than
+# auto-grants — and auditor-2 owns it, so there is someone to ask.
+apiVersion: v1
+kind: Secret
+metadata: {name: midflight-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: midflight-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: midflight-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: midflight-identity, namespace: default}
+spec:
+  description: "Handoff fixture: static MCP bearer token."
+  credentials:
+    - name: midflight-mcp-bearer
+      type: static
+      static:
+        secretRef: {name: midflight-mcp-token, key: access_token}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: midflight-ledger, namespace: default}
+spec:
+  name: midflight-ledger
+  version: v1
+  intent: "Fixture for the data-slot handoff bundle."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth: {credential: midflight-mcp-bearer}
+  spicedbSchema:
+    resources:
+      - name: midflight_entry
+        standing: session-only
+        relations:
+          - {name: viewer, subjectType: user}
+          # owner is who may RULE on sharing this entry, distinct from viewer:
+          # being able to read a thing is not authority to authorize sharing
+          # it. The disclosure card resolves its deciders against #owner, so
+          # without this relation nobody could answer and the offer expires.
+          - {name: owner, subjectType: user}
+        permissions:
+          - {name: view, expr: viewer}
+  tools:
+    - name: read_entry
+      intent: "Fetch one ledger entry by its id."
+      args: {allowedFields: [id]}
+      # stateImpact: stateless — the claim here is about the HANDOFF, and a
+      # per-tool Check would make a failure ambiguous between "denied" and
+      # "the slot never reached the child".
+      permission: {stateImpact: stateless}
+      effects: {readOnly: true, idempotent: true}
+  # The declared read is what mints the tag, and the mint is what stores the
+  # result behind it. Without this entry there is no tag, so nothing to bind.
+  toolResourceMap:
+    - tool: read_entry
+      reads:
+        resourceType: midflight_entry
+        idArg: id
+        permission: view
+        # The session's user is NOT a viewer of this entry — that is what
+        # makes handing it to the child a disclosure the grader routes rather
+        # than auto-grants. Without the bypass the read is refused before any
+        # tag exists, and there would be nothing to offer.
+        bypassRequesterCheck: true
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-lead2, namespace: default}
+spec:
+  displayName: DemoAnalyst
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: midflight-placeholder, key: api-key}
+  agentIdentity: midflight-identity
+  mcpServers:
+    - {name: ledger, ref: midflight-ledger}
+  capabilities:
+    subagents: {}
+  subagents: ["demo-helper"]
+  # `task` grants the child ONE bounded round trip to its parent, which is
+  # what a mid-flight data request is. Without it the child's park is ignored
+  # (a single_turn delegation never becomes a conversation) and the request
+  # would reach nobody.
+  subagentModes:
+    demo-helper: ["task"]
+  authz:
+    informationLeakage:
+      mode: enforcing
+      approvalTTL: 1m
+      onUnsupportedChannel: blockBinding
+      singleUserBypass: false
+      loggingNoticeToRequester: false
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You read ledger entries with ledger_read_entry(id), and delegate
+      analysis to other agents. When you delegate, hand over the data you
+      read using the delegate tool's `inputs`, naming the tool call that
+      produced it — do not paste the data into the task text.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-helper, namespace: default}
+spec:
+  displayName: DemoAuditor
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: midflight-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You receive a single delegated task. Data the delegating agent
+      handed you appears in your opening context, labeled by slot.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: demo-lead2-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: demo-lead2
+  credentialsRef: {secretName: midflight-fake-creds}
+  fake: {echo: false}
+---
+# Seeds the entry's viewer. One user, who is also the session's own — so the
+# child's audience is a subset of the tag's readers and the grader auto-grants.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata: {name: midflight-seed, namespace: default}
+spec:
+  relationships:
+    # auditor-2 can see the entry and can rule on sharing it. lead-1, who runs
+    # the session, can do NEITHER — which is exactly what makes handing this
+    # datum to the child a disclosure somebody has to approve.
+    - resource: {type: midflight_entry, id: "entry-88"}
+      relation: viewer
+      subject: {type: user, id: "auditor-2@example.com", canonicalize: true}
+    - resource: {type: midflight_entry, id: "entry-88"}
+      relation: owner
+      subject: {type: user, id: "auditor-2@example.com", canonicalize: true}

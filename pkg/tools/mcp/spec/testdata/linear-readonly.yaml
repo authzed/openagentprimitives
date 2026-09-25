@@ -1,0 +1,28 @@
+name: linear-readonly
+version: "1"
+intent: |
+  Linear read-only access for two teams.
+server:
+  url: https://mcp.linear.example/v1
+  transport: streamable-http
+auth:
+  header: Authorization
+  valuePrefix: "Bearer "
+callTimeout: 60s
+tools:
+  - name: search_issues
+    intent: "Find issues."
+    args:
+      allowedFields: [teamId, query]
+      constraints:
+        - cel: 'args.teamId in ["TEAM1", "TEAM2"]'
+          message: "teamId restricted"
+      sensitiveFields: []
+    deny:
+      effects:
+        destructive: false
+        writes: [network]
+        creds: { writes: true }
+  - name: get_issue
+    args:
+      allowedFields: [issueId]

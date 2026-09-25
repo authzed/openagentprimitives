@@ -1,0 +1,37 @@
+{
+  "name": "git-repo-url-required",
+  "description": "The DENIAL half of git's per-repository scoping, and the half that has to be usable.\n\n`git fetch origin` names no repository that argv can see — `origin` resolves from .git/config, which the check never reads. The toolkit's guard expression yields \"\" for anything that is not a URL, and an empty resource id is a denial, so the call fails CLOSED rather than authorizing against an unnamed repo.\n\nWhat this pins is the MESSAGE. The denial an agent used to get was `internal: authz: template references arg ...`, which reads as a system fault and tells the model not to retry; the fix routes an unresolvable id through the check author's resourceIDHint instead. The assertion is on the tool result text because that is exactly what the model reads before deciding whether to try again — assert it on the reply and a scripted transcript would say the same words either way.\n\nMutation test: delete resourceIDHint from the git toolkit's fetch check and this bundle fails.\n\nThe call never executes; the denial happens at PreToolCall, before dispatch.",
+
+  "agentDir": "testdata/agent-gitscope",
+  "agentClass": "git-fetcher",
+
+  "userTurns": ["fetch from origin"],
+
+  "llm": [
+    { "expect": {"userTextContains": "fetch from origin"}, "reply": [{"toolUse":{"name":"update_plan","args":{"name":"main","items":[{"id":"s1","label":"fetch","status":"pending","phase":"sync"}],"phases":[{"id":"sync","label":"Fetch from the remote","why":"the user asked to fetch","permissions":[{"handle":"perm:fetch:git_repo","why":"to read the remote"}]}]}}}] },
+    {
+      "expect": {"lastToolResult": "update_plan"},
+      "reply": [{"toolUse": {"name": "gitlike_git", "args": {
+        "operation_id": "op-1", "_reason": "fetch the latest refs",
+        "args": ["fetch", "origin"]
+      }}}]
+    },
+    {
+      "expect": {
+        "lastToolResult": "gitlike_git",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "full URL"
+      },
+      "reply": [{"text": "I need the remote as a full URL to fetch it"}]
+    },
+    {
+      "expect": {"lastToolResult": "respond_to_user"},
+      "reply": [{"toolUse": {"name": "agent_work_complete", "args": {"summary": "done"}}}]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["I need the remote as a full URL"],
+    "authz": {"neverAllowed": ["git_repo:origin#fetch"]}
+  }
+}

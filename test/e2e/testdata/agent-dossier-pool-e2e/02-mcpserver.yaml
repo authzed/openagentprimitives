@@ -1,0 +1,107 @@
+# MCPServer for the agent-dossier-pool-e2e fixture.
+#
+# Its whole reason to exist is the spicedbSchema fragment below: `dossier` is
+# the RESOURCE TYPE whose memory pool the resource-pool read scenario reaches.
+# The fragment declares THREE permissions, and the separation is the point —
+# they are different permissions, and they must stay that way:
+#
+#   view_memory  the pool's AUDIENCE. Whoever holds it on a dossier instance
+#                may see what that instance's memory pool holds, and it is
+#                what a pool entry's per-datum provenance tag is minted
+#                against (memory.PermissionViewMemory). Nothing slots it.
+#
+#   read         a SLOTTABLE permission. AgentClass dossier-pool-e2e declares
+#                `dossier/read` in spec.authz.slots, so the guardian's
+#                ComposeSlots OWNS this line: it is rewritten at compose time
+#                into `slot_grant_read->interact + owner`, and the
+#                `relation slot_grant_read: agentsession with expiration` it
+#                needs is injected alongside. That relation is what a session's
+#                slot grant is written on, and what pools.ForSession reads back.
+#
+#   write_memory the other SLOTTABLE permission, and the one that authorizes
+#                writing INTO the pool. AgentClass dossier-pool-write-e2e
+#                declares `dossier/write_memory`, so this line is
+#                composer-owned exactly as `read` is, and the composed
+#                `relation slot_grant_write_memory` is the ONLY relation
+#                pools.ForSession puts in the WRITE half of a session's pools
+#                — every other slot_grant_* lands in Read alone.
+#
+# Two AgentClasses rather than one because spec.authz.slots admits at most one
+# entry per resourceType (validateSlotDeclarations refuses a duplicate), while
+# slot COMPOSITION is global across every class in the cluster. So the only way
+# one resource type can carry both a read slot and a write_memory slot — which
+# is what lets one scenario hold a read grant and a write grant on instances of
+# the SAME type, with nothing but the relation name distinguishing them — is
+# two classes declaring one slot each.
+#
+# Pointing a slot at view_memory instead would be REFUSED outright by
+# pkg/authz/guardian/schema's isSlottableMemoryPermission (a memory audience
+# permission is not slottable; only a write_* one is), precisely because the
+# composer owning that line would silently redefine who may read every entry
+# already in the pool. The separation here is that guard's fixture side.
+#
+# spec.server.url is the literal sentinel `{{MCP_URL}}` — the e2e harness
+# rewrites it to the live MCPStub URL before kubectl apply.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: dossier-records
+  namespace: default
+spec:
+  name: dossier-records
+  version: v1
+  intent: "Fixture resource type for the resource-memory pool e2e scenario."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: dossier-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: dossier
+        # SpiceDB governs this type: `owner` is a real permission backed by
+        # tuples a test seeds, so it can say who may speak for an instance.
+        standing: required
+        approverPermission: owner
+        relations:
+          - name: owner_ref
+            subjectType: user
+          # The audience relation: a human who may see this dossier's memory
+          # pool WITHOUT owning the dossier. Separate from owner_ref so the
+          # audience is demonstrably not just "the owners".
+          - name: audience
+            subjectType: user
+        permissions:
+          - name: owner
+            expr: owner_ref
+          # The pool's AUDIENCE permission. NOT slottable, NOT composer-owned:
+          # what this file says is what the composed schema keeps.
+          - name: view_memory
+            expr: audience + owner_ref
+          # COMPOSER-OWNED. dossier-pool-e2e declares dossier/read as a slot, so
+          # ComposeSlots replaces this expression with
+          # `slot_grant_read->interact + owner`. What is written here is only
+          # what the type means with no session in the picture.
+          - name: read
+            expr: owner_ref
+          # COMPOSER-OWNED, same as `read`: dossier-pool-write-e2e declares
+          # dossier/write_memory, so this becomes
+          # `slot_grant_write_memory->interact + owner`. Written out here
+          # rather than left for the composer to create (it would) so the
+          # fragment names every permission the type has, and so a composition
+          # that stopped running leaves a schema that is obviously uncomposed
+          # instead of one missing the permission entirely.
+          - name: write_memory
+            expr: owner_ref
+  tools:
+    - name: get_dossier
+      intent: "Fetch a dossier by its id."
+      args:
+        allowedFields: [id]
+      # stateImpact: stateless — this fixture never runs a session, and a
+      # tool-call Check is not what it is about.
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true

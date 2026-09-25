@@ -1,0 +1,131 @@
+# Scenario: passthrough OAuth flow (passthrough_oauth_test.go).
+#
+# Drives the full Slice-3 ε OAuth dance end-to-end in a single in-process
+# process:
+#
+#   1. Operator parks an identityMode=userPassthrough AgentSession in
+#      AwaitingCredentials and writes a SessionUserIdentity that lists
+#      linear-oauth in MissingCredentials. The credential's MCPServer
+#      declares spec.auth.type=oauth, so the credential_request watcher
+#      partitions it to the per-OAuth-button branch (ε8).
+#   2. A CredentialRequestWatcher (channelsd's E1 work, run in-test)
+#      publishes a KindCredentialRequest envelope on the session's bound
+#      channel. The LinkButton's URL is <identityd>/link/oauth/linear-oauth
+#      (no signed deep-link — OAuth credentials don't share the PAT
+#      signed-link path).
+#   3. The test "drives the user" by minting an idd_session cookie with
+#      the shared signer (same shortcut Slice 2's passthrough_selfservice
+#      uses to skip the portal-bootstrap step), follows the LinkButton
+#      URL, and lets the http.Client cookie jar chase the redirect chain:
+#        /link/oauth/linear-oauth     → fakeoauth /authorize (DCR + PKCE)
+#        fakeoauth /authorize         → /oauth/callback/linear-oauth
+#        /oauth/callback/linear-oauth → /my/accounts?linked=linear-oauth
+#   4. identityd's /oauth/callback exchanges the code with fakeoauth's
+#      /token (PKCE-verified), receives tokens, and persists via
+#      PutOAuthToken. The master Secret has the OAuth multi-key shape
+#      (access_token + refresh_token + expires_at + token_type + scope).
+#   5. The operator's UserIdentity watch re-enqueues the parked session;
+#      the passthrough gate un-parks it (CredentialsReady=True,
+#      SessionUserIdentity Ready=True).
+#
+# MCPServer.spec.server.url is rewritten by the test to the fakeoauth
+# provider's httptest URL so OAuth discovery, DCR, authorize, token-
+# exchange all land on the in-process fake. The catch-all root handler
+# returns 200, so the MCPServer controller's probe doesn't hang on DNS
+# (the probe's actual MCP-handshake will see no MCP, but finalSuccess
+# unconditionally stamps Valid=True; CredentialsReady is what gates the
+# scenario's un-park assertion).
+#
+# Token / key values are non-trivial hex/uuid strings chosen to avoid
+# false-positive matches with other env vars or test fixtures.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-oauth-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder. The fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-oauth-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# MCPServer with spec.auth.type=oauth — drives the OAuth-typed
+# credential branch in the credential_request watcher (one LinkButton
+# per OAuth cred, URL = /link/oauth/<credname>).
+#
+# spec.server.url is rewritten to {{OAUTH_URL}} by the test before apply
+# so OAuth discovery + DCR + authorize + token-exchange all land on the
+# in-process fakeoauth provider.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: linear-mcp
+  namespace: default
+spec:
+  name: linear-mcp
+  version: v1
+  intent: "Passthrough OAuth e2e: drives the OAuth dance end-to-end."
+  server:
+    url: "{{OAUTH_URL}}"
+    transport: http
+  auth:
+    type: oauth
+    credential: linear-oauth
+    provider: Linear
+  tools: []
+---
+# AgentClass with identityMode: userPassthrough — every session parks on
+# the starter's UserIdentity until linear-oauth is linked.
+# authz.toolCalls.mode=disabled bypasses SpiceDB authz so no schema bootstrap
+# is required for the un-park assertion.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: triage-bot
+  namespace: default
+spec:
+  displayName: "Triage Bot"
+  identityMode: userPassthrough
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: pt-oauth-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a passthrough triage agent for OAuth e2e"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  mcpServers:
+    - name: linear
+      ref: linear-mcp
+---
+# Channel for the harness to drive inbound messages through.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: triage-bot-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: triage-bot
+  credentialsRef:
+    secretName: pt-oauth-fake-creds
+  fake:
+    echo: false

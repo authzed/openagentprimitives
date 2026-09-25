@@ -1,0 +1,30 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spicebox-operator-debug
+  namespace: agentprimitives-system
+rules:
+  # Kubernetes RBAC: resourceNames cannot restrict `create` (the named object
+  # doesn't yet exist), so `create` is namespace-wide for secrets. `get` is
+  # narrowed to the specific debug-token Secret.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["spicebox-operator-debug-token"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spicebox-operator-debug
+  namespace: agentprimitives-system
+subjects:
+  - kind: ServiceAccount
+    name: spicebox-operator
+    namespace: agentprimitives-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spicebox-operator-debug

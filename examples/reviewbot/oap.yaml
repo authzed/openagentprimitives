@@ -1,0 +1,91 @@
+# examples/reviewbot/oap.yaml
+#
+# The .oap manifest for reviewbot: an agent-owned (identityMode: agent) code
+# reviewer. A session starts from a GitHub webhook, not a person, so there is
+# no user credential to link at session start (contrast codebot's
+# userPassthrough) — every credential is minted or read on the agent's OWN
+# behalf, declared once in manifests/agentidentity.yaml. The only install
+# choice is which language toolchains the review sandbox gets, same mechanism
+# codebot uses.
+#
+#   oap agent lint    examples/reviewbot
+#   oap agent install examples/reviewbot --namespace default
+oapFormatVersion: "1"
+agent:
+  version: "1.0.0"
+  logo: assets/logo.svg
+compat:
+  minApVersion: "0.9.0"
+  crdApiVersion: agentprimitives.authzed.com/v1alpha1
+requires:
+  # secrets and skills are INHERITED, not declared here: requires.secrets is
+  # derived from the bundled AgentIdentity's credentials (manifests/
+  # agentidentity.yaml — the agent-owned Anthropic key and the github-app
+  # credential) and requires.skills from AgentClass spec.skills
+  # (manifests/agentclass.yaml). Authoring either here is refused by
+  # `oap agent lint`.
+  #
+  # A Channel is still never bundled content (see allowedBundleKinds in
+  # pkg/platform/oap/bundle.go) — it is per-install deployment config, not
+  # portable. Declaring one here only NAMES it as required, so `oap agent
+  # install` can drive each kind's wizard itself once the CRs below are on the
+  # cluster (or, run non-interactively, skip it and print the `oap channel
+  # create` command that finishes it — see the README).
+  #
+  # `demo-reviewbot-gh` is not a free choice: manifests/agentidentity.yaml's
+  # `github-app` credential reads Secret "demo-reviewbot-gh-creds", which the
+  # github wizard only writes for a Channel of that exact name. `oap agent
+  # lint` cross-checks the two and fails naming both if they ever disagree.
+  channels:
+    - kind: github
+      role: input
+      name: demo-reviewbot-gh
+      purpose: "Receives pull-request webhooks and starts one review session per PR."
+    - kind: slack
+      role: output
+      name: demo-reviewbot-slack
+      purpose: "Where review summaries and their HTML artifacts are delivered."
+questions:
+  # Install-time QUESTIONS. The two channels above are answered by each kind's
+  # own wizard, not by an entry here — a Channel is not portable, shareable
+  # agent-container content (see allowedBundleKinds, above), so it is declared
+  # under requires.channels instead of asked as a bundle question.
+  - name: toolchains
+    type: resourceList
+    prompt: "Which language toolchains should the inner Claude Code have?"
+    description: >-
+      Composed onto the codelike sandbox so the inner Claude Code can run the
+      reviewed repository's OWN build/test suite (per whichever review skill
+      is used) instead of reviewing the diff by static reading alone. Both
+      ship with `oap install`; pick none to keep the sandbox minimal — the
+      review still runs, just without the ability to execute the reviewed
+      repo's tests.
+    enum: [go, node]
+    default: [go, node]
+    binding:
+      # demo-reviewbot-codelike statically composes [claude] (spiceboxclasses.yaml);
+      # the `[]` append marker UNIONS this language selection onto it instead
+      # of replacing it, so claude (the agent's own runtime) always survives
+      # the selection.
+      - target: "SpiceboxClass/demo-reviewbot-codelike#spec.toolchains[]"
+
+  # The repository allowlist. Bound into the AgentClass's generic config plane
+  # (spec.config.allowedRepos), which the git/gh toolspec constraints read as
+  # config.allowedRepos to refuse any repository not listed — the same bound for
+  # a webhook-triggered review and a review a human asks for in Slack. The
+  # AgentClass ships allowedRepos: [] (manifests/agentclass.yaml), so leaving
+  # this empty produces a fail-closed agent (it can review nothing until
+  # reconfigured) rather than an unrestricted one.
+  - name: allowedRepos
+    type: resourceList
+    prompt: "Which repositories may reviewbot clone and read? (owner/repo, owner/*, or */* for all, lowercase)"
+    description: >-
+      Fail-closed allowlist. reviewbot can only clone and read pull requests in
+      these repositories, whether a review is triggered by a GitHub webhook or
+      asked for in Slack. Use owner/* for a whole org, or */* to allow every
+      repository the App can reach (a deliberate widen). Lowercase only. An empty
+      list means it can review nothing until reconfigured.
+    binding:
+      # No static base to union with (unlike toolchains): the `[]` append marker
+      # writes the operator's answer as spec.config.allowedRepos on the AgentClass.
+      - target: "AgentClass/demo-reviewbot#spec.config.allowedRepos[]"

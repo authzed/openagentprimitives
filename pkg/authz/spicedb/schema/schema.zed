@@ -1,0 +1,662 @@
+// agentprimitives authorization schema — the SINGLE source of truth.
+//
+// Embedded by pkg/authz/spicedb/schema (var Schema) and read by every consumer:
+//   - pkg/authz/guardian/schema  (operator runtime: composed with MCPServer /
+//     channel-kind fragments + grant pairs, then written to live SpiceDB)
+//   - cmd/oap              (`oap spicedb apply-schema` writes it verbatim; oap install
+//     marshals it into the spicebox-spicedb-bootstrap ConfigMap the SpiceDB
+//     pod loads via --datastore-bootstrap-files — so there is NO separate
+//     schema file in config/; the embed is the only copy)
+//   - test/testspicedb      (test SpiceDB fixtures)
+//
+// Do NOT fork this schema into another file. That drift is exactly what broke
+// artifact live-view (operator base lacked `artifact`) and silently disabled
+// the is_denied blocklist (operator base lacked `is_denied`).
+
+use expiration
+
+// check_hash gates a grant tuple on the caller's runtime arguments hash
+// matching the approved hash. Compose injects grant relations of the form
+// `grant_<perm>_<resType>: <resType> with check_hash and expiration`, so this
+// must be live at compose time.
+caveat check_hash(arguments_hash string, allowed_arguments_hash string) {
+    arguments_hash == allowed_arguments_hash
+}
+
+// token_value_matches binds an authorized_token grant to the exact token value
+// the operator blessed: the checker presents a per-session HMAC of the value it
+// is about to use, which must equal the hash stamped at grant time. Omitted for
+// federated grants (per-mint tokens can't be value-bound) via the union arm.
+caveat token_value_matches(presented_value_hash string, authorized_value_hash string) {
+    presented_value_hash == authorized_value_hash
+}
+
+// infoleakage_resource_match scopes an infoleakage_grant to a specific
+// accessed-resource identity. resource_type / resource_id correspond to the
+// infoleakagetaint memory kind's TaintRecord fields.
+caveat infoleakage_resource_match(resource_type string, resource_id string) {
+    resource_type != "" && resource_id != ""
+}
+
+definition user {}
+
+// agent is the sentinel subject type for a bot/agent principal a connector's
+// membership sync recognizes — Slack's slack_user#user and slack_bot#agent
+// name it today. Declared HERE, not in any one connector's fragment, so a
+// single source of truth covers Slack and Linear / other connector fragments
+// without a dedup collision (the same reasoning as `string` below). It is
+// deliberately relation-less, like `service` below: nothing is granted to an
+// agent subject through this definition itself.
+//
+// Moving it here from a connector fragment RESERVES the name cluster-wide:
+// ValidateFragment refuses any tenant fragment (MCPServer, SidecarToolbox,
+// SpiceboxToolkit, SpiceDBBootstrap) that declares its own `agent` definition,
+// even on a cluster running no connector kind that would otherwise need this
+// one. If you landed here chasing a fragment's SpiceDBSchemaValid condition
+// flipping False on upgrade with a "collides with a reserved scaffold
+// definition" message naming `agent`, this is why — rename the tenant
+// definition.
+definition agent {}
+
+// Sentinel subject type for relationship-set hashes. SpiceDB has no
+// string-valued relation, so a sync source stores a scope's content hash as
+// slack_channel:C3#relhash@string:<sha256>. It declares no permissions and
+// grants nothing; it exists only to be a subject.
+//
+// Declared HERE, once, rather than in any kind's fragment: two fragments
+// declaring it is a composition conflict the fragment validator rejects.
+definition string {}
+
+// service is the non-human principal a session acts as when its inbound
+// supplied no starting user AND its input Channel explicitly declares
+// `authzSubject: "service:<id>"`.
+//
+// It is the OVERRIDE, not the default. A userless session that declares
+// nothing acts as ITSELF — `agentsession:<ns>/<name>` — because the session
+// already has the lifecycle a wizard-typed service name never had: it is
+// scoped to the work, and revoking it is deleting it. See
+// pkg/agent/runner's serviceSubjectFor.
+//
+// The override remains because several sessions sharing ONE durable principal
+// is a real thing to want — a fleet of webhook-triggered runs holding one
+// standing grant — and a per-session principal cannot express it.
+//
+// It is DELIBERATELY relation-less, and no tuple is ever written naming one.
+// It exists so that a check against a service subject RESOLVES — returning no
+// permission — instead of erroring. Without the definition, SpiceDB rejects the
+// request outright, and an InvalidArgument is strictly worse than a deny: it is
+// unreadable to an operator, and it defeats the mode distinction, because
+// `permissive` cannot report what `enforcing` would have done for a check that
+// never reached the schema.
+//
+// Granting a service principal anything is therefore a deliberate future act:
+// it means adding a relation here, or naming service in an existing one.
+definition service {}
+
+// group is referenced by agentsession#participant for class-wide grants
+// (AgentClass.spec.authz.session.interactPermission, like
+// "group:engineering#member"). Memberships are populated out-of-band — for a
+// 1Password-synced directory, see docs/relationshipsource.md's bootstrap join.
+//
+// member unions onepassword_group#member: SpiceDB has no aliasing mechanism,
+// so this union IS the aliasing. Every consumer keeps writing group#member
+// and never learns which directory produced a member, and a third directory
+// later is one more arm rather than a new seam.
+definition group {
+    relation member: user | onepassword_group#member
+    permission membership = member
+}
+
+// onepassword_group is the membership 1Password's SCIM Bridge reports, synced
+// by pkg/channels/channelkinds/onepassword. Every member of one is a member of
+// the `group` above, which is the whole point: a consumer keeps checking
+// group#member and never learns which directory produced the member.
+//
+// It is declared HERE, in the scaffold, rather than in the sync kind's own
+// fragment, because group#member names it and the scaffold has to resolve on
+// its own. SpiceDB's WriteSchema resolves every allowed subject type and
+// rejects the whole schema when one is undeclared, and the scaffold is written
+// BARE in three places that compose no fragments at all: the install bootstrap
+// ConfigMap, `oap spicedb apply-schema`, and test/testspicedb.WriteSchemaText.
+// A fragment could not supply it either way — a fragment may not redeclare a
+// scaffold definition, so the union arm cannot move out of `group` to join it.
+//
+// Declaring it here does NOT make it the scaffold's to write. Exclusive write
+// ownership of these three relations belongs to the sync source's claim
+// (pkg/channels/channelkinds/onepassword/directory_sync_source.go), which is
+// what stops anything else from writing what the sync's diff-and-prune
+// deletes; which file the text sits in decides nothing about that.
+//
+// `label` carries the group's SCIM displayName for the admin console, as
+// onepassword_group:<uuid>#label@string:<base64url of the name> — the same
+// string-subject shape relhash uses, and display data only. It appears in no
+// permission here and its subject type declares none, so it can grant nothing;
+// see pkg/authz/spicedb/relsource's LabelRelation for the full argument and
+// the registration-time guard that keeps it out of identity probes.
+definition onepassword_group {
+    relation member: user
+    relation relhash: string
+    relation label: string
+}
+
+// github_user binds a GitHub account (keyed by GitHub's NUMERIC account id,
+// which is immutable — a login is not, and a released login is reclaimable)
+// to a platform user. The edge is minted by the useridentity reconciler from
+// a verified credential; this definition confers no permission of its own.
+//
+// Declared HERE rather than in the github channel kind's fragment because
+// three independent fragments name it — the kind's session links, the gh
+// toolkit's repo roles, and the directory sync's writes — and only one may
+// declare it. Same reason `string` and `onepassword_group` live here.
+//
+// TWO relations, and the split is load-bearing:
+//
+//   user      every binding. Consumed ONLY by agentsession owner/participant/
+//             denied, via the github kind's SessionRelationLinks.
+//   sole_user written only while EXACTLY ONE platform subject claims this
+//             account, and withdrawn the moment a second appears. Everything
+//             conferring durable authority — repository roles — traverses
+//             this one.
+//
+// Two subjects claiming one account is a normal case (one human, two
+// channels), so the reconciler reports it rather than vetoing it. That was
+// judged safe while the only consumer was session membership. Repository
+// access is not session-scoped, so it hangs off sole_user instead: a second
+// claimant costs BOTH subjects repo authority, fail-closed, because nothing
+// can tell which claim is legitimate. See
+// pkg/controllers/useridentity/attested_edge.go.
+//
+// `user`'s subject type is `user` alone, not `user | agent`: nothing has ever
+// minted this edge for an `agent` subject — the reconciler refuses whenever
+// spec.subject is not a user subject (attested_edge.go's
+// reconcileAttestedEdge). `agent` is declared in this scaffold (above), so
+// schema availability is no longer what would block the union from widening;
+// widening it remains a deliberate follow-on, not something to fold in here
+// for a subject type nothing writes.
+definition github_user {
+    relation user: user
+    relation sole_user: user
+}
+
+// externaltoken is the identity of an external credential (GitHub PAT, Slack
+// token, OAuth/federated access token), keyed by a hash of its source
+// coordinates. Its only purpose is to be the subject of an agentsession's
+// authorized_token grant; deleting that grant revokes the session's use of the
+// token on the next fully-consistent use_token check.
+definition externaltoken {}
+
+definition agentsession {
+    // started_by records who initiated the session. It confers interact and
+    // NOTHING else — see the interact/approve split below.
+    relation started_by: user
+    // owner is the authz subject of the session: who may approve, manage
+    // scope, fork, and (with started_by and participants) interact. Written at
+    // session creation by the operator's owner resolver from per-channel policy.
+    // group#member admits channel-membership groups and class-wide group owners.
+    relation owner: user | group#member
+    // agentclass#starter lets a class fix its sessions' interact set to its own
+    // explicit starters (spec.authz.session.onlyStartersInteract): one tuple
+    // naming the set, resolved live, instead of one tuple per person.
+    relation participant: user | group#member | agentclass#starter
+    // denied is the blocklist, written when the original requester clicks Deny
+    // on a permission_request. denied wins over EVERY grant below — it is
+    // subtracted from all four permissions, not just interact. A user an owner
+    // explicitly Denied must not retain the ability to approve, fork, or widen
+    // scope; anything else makes the Deny button mean "lost read access."
+    // Lifted via DeleteDenied (a Deny is reversible).
+    //
+    // It accepts exactly the subject types owner and participant do, and the
+    // composer unions every channel-kind link type into all three. That parity
+    // is load-bearing: a subject set that can be GRANTED but not DENIED is a
+    // one-way door. With owner admitting slack_channel#member, one tuple can
+    // mean an entire channel, and a user-only blocklist could only rescind it
+    // one member at a time — which never finishes for a channel that grows.
+    relation denied: user | group#member | agentclass#starter
+    // parent links a delegated child session to the session that spawned it.
+    // Lineage is a LIVE arrow, never copied tuples: revoking standing on a
+    // parent takes effect on every descendant at the next check, with no
+    // cascade bookkeeping. This is the opposite choice from a FORK, which
+    // writes the child fresh tuples (a fork replaces its parent and outlives
+    // it; a delegated child is subordinate to a live one).
+    relation parent: agentsession
+    // child is the DOWNWARD half of the same delegation edge, written by the
+    // same atomic write as parent (spicedb.Client.TouchLineage). It exists
+    // because a SpiceDB arrow only walks from a resource to its OWN relations:
+    // `parent` on the child answers "is this subject my parent", and there is
+    // no expression on the PARENT that reaches the sessions holding a `parent`
+    // tuple pointing back at it. Without this relation the child->parent
+    // direction of `converse` below is not expressible at all.
+    //
+    // Standing does NOT flow through it. Nothing arrows across `child`, so a
+    // parent gains no permission on its descendants from this tuple — the
+    // upward arrows (approve, hold, read_transcript) remain the only lineage
+    // inheritance, and they still hang off `parent`.
+    relation child: agentsession
+    relation authorized_token: externaltoken | externaltoken with token_value_matches
+    // delegation_revoked is the operator-side kill switch for THIS session's
+    // delegation. Absent by default — delegation is permitted, gated already at
+    // the class level (spec.capabilities.subagents + spec.subagents + the plan
+    // gate). An operator/SRE writes agentsession:<X>#delegation_revoked@user:*
+    // to stop this session spawning children at RUNTIME, without redeploying the
+    // class. It is narrower than `hold`: a held session cannot run at all, while
+    // a delegation-revoked one keeps running and merely cannot delegate. The
+    // subject is the WILDCARD because the switch is session-wide, not per-user —
+    // who asked to delegate is irrelevant once an operator has revoked it. Lives
+    // in the BASE schema because agentsession is reserved (the composer forbids a
+    // fragment rewriting it).
+    relation delegation_revoked: user:*
+    // artifact_org_viewer is the OPT-IN org-wide artifact audience. When the
+    // session's class declares spec.authz.session.artifactVisibility:
+    // organization, the operator levels
+    // agentsession:<X>#artifact_org_viewer@user:* here on every reconcile
+    // (SyncArtifactOrgViewer), and each artifact of this session widens view —
+    // and only view — to any user subject, via artifact#view's
+    // parent->artifact_org_view arm. "Any user" is scoped one layer up: webd
+    // mints subjects only for IdP-verified corp logins, so the effective
+    // audience is exactly who can authenticate against the corp directory.
+    // Level-triggered: a class dropping the opt-in deletes the tuple and the
+    // widening ends at the next check. The subject is the WILDCARD for the
+    // same reason delegation_revoked's is — the switch is session-wide, not
+    // per-user — and, as there, only user:* can be written.
+    relation artifact_org_viewer: user:*
+    // started_by is in interact so a session can never lock out its own
+    // starter. The two relations are written by DIFFERENT components at
+    // DIFFERENT times: channelsd writes started_by when it creates the session,
+    // while owner is written later by the operator's owner resolver (it alone
+    // reads the per-channel owner policy). A session whose reconcile had not
+    // yet reached — or never reached — that write held started_by and nothing
+    // else, so every gate resolved through #owner denied the very person who
+    // started the thread, and the join-approval flow then asked them to approve
+    // themselves (which `approve = owner` also refused). Deliberately NOT
+    // folded into #owner: channel.spec.owner.explicit exists so a channel can
+    // declare "sessions here are owned by this team, not by whoever typed
+    // first", and granting the starter approve/manage_scope/fork would void
+    // that policy — they could self-approve their own tool calls. Subtracting
+    // denied last keeps the Deny button authoritative over all three sources.
+    permission interact = owner + started_by + participant - denied
+    permission is_denied = denied
+    // artifact_org_view is what artifact#view's parent-> arrow reaches; it is
+    // NOT part of interact, so an org viewer gets the artifact and never the
+    // conversation/plan mirrors or send standing. denied is subtracted so the
+    // session's deny list stays authoritative even against the wildcard — a
+    // user the owner explicitly Denied must not read the artifacts through
+    // the org-wide side door.
+    permission artifact_org_view = artifact_org_viewer - denied
+    // ancestor is the transitive closure UP the delegation tree, with an
+    // agentsession subject. It exists so a resource owned by a child can be
+    // reached by the sessions accountable for it. No `- denied`: the subject
+    // here is a session, and denied holds users.
+    permission ancestor = parent + parent->ancestor
+    // converse gates AGENT-TO-AGENT inbound: may the SUBJECT SESSION send a
+    // turn into this one. A conversational subagent (SubagentRequestSpec.Mode
+    // task/chat) talks to its parent over a Channel of kind "agent", and
+    // channelsd authorizes every such message through this permission.
+    //
+    // It is deliberately NOT `interact`, and the separation is in subject TYPE
+    // as well as in name. interact admits `user | group#member` only, so no
+    // session can ever satisfy it and nothing here lets an agent act with a
+    // human's standing; conversely nothing a human is granted reaches converse,
+    // because every relation feeding it is agentsession-typed.
+    //
+    // Exactly ONE hop in each direction, matching the transport: a
+    // conversational child is bound to a single `agent` Channel whose
+    // counterparty is its immediate parent, so a grandparent has no surface
+    // to address a grandchild on and is refused here too. Siblings likewise.
+    //
+    // No `- denied`: denied holds `user | group#member` and every subject
+    // reaching converse is an agentsession, so the subtraction could not match
+    // — the same reason `ancestor` above omits it. Freezing a delegated session
+    // is `hold`'s job, not a blocklist entry's.
+    permission converse = parent + child
+    // delegation_blocked resolves the kill switch above. The SubagentRequest
+    // controller checks it (with any concrete user subject — the relation is a
+    // wildcard, so the subject is immaterial) BEFORE spawning a child, and
+    // refuses the delegation when it is set. Operator-side, never a runner
+    // Check: the runner already asked (its delegate call created the request);
+    // this is the platform deciding whether to honour it.
+    permission delegation_blocked = delegation_revoked
+    // read_transcript splits READ from WRITE for delegated children. interact
+    // still gates sending INTO a session, so a human cannot bypass a parent's
+    // orchestration by typing at a child; read_transcript additionally lets the
+    // people accountable for a parent INSPECT what a child did. For a root
+    // session the two are identical, so nothing existing changes.
+    //
+    // The `+ parent` arm (the `converse = parent + child` precedent) admits the
+    // parent AGENTSESSION itself as a subject, not just the humans reachable
+    // through it via `parent->read_transcript`. A session that spawns a child to
+    // do bounded work — a builder testing what it just built — needs to read
+    // that child's transcript directly, with no human in the loop.
+    //
+    // `- denied` does NOT reach this arm: `denied` (below) is typed
+    // `user | group#member | agentclass#starter` and can never hold an
+    // agentsession subject, so the subtraction is a structural no-op against
+    // `+ parent` — it only ever masks `interact` and `parent->read_transcript`.
+    // A Deny relationship on the child revokes a HUMAN's inherited read, never
+    // the parent session's direct one; the parent session's access ends only
+    // when the `parent` tuple itself is removed (child/request deletion) or its
+    // bearer token is revoked.
+    permission read_transcript = interact + parent + parent->read_transcript - denied
+    permission manage_scope = owner - denied
+    permission fork = owner - denied
+    // approve gates the approver side of every human approval. A distinct
+    // permission so the approver surface can later diverge from owner without
+    // touching call sites. Inherits through parent so the people accountable
+    // for a parent session can approve on behalf of a delegated child — denied
+    // is subtracted LAST, after the parent arrow, so a Deny on the child wins
+    // even when the denied user is also an approver on the parent.
+    permission approve = owner + parent->approve - denied
+    // hold gates who may FREEZE a session for human review. It mirrors
+    // approve's shape deliberately: both answer "who is accountable for this
+    // session", and both inherit through parent so the people accountable for
+    // a parent can act on a delegated child. A child that could be frozen only
+    // by its own owner would be unfreezable by the humans who actually own the
+    // work it is doing.
+    //
+    // This gates HUMAN and API callers. It does NOT gate the denial-streak
+    // tripper, which runs in the operator with no user subject and must be
+    // able to freeze a session when nobody is watching — that is the whole
+    // point of an automated containment control. Do not add a check there
+    // expecting this permission to answer it; there is no subject to check.
+    //
+    // The expression is byte-for-byte `approve`'s, and that is INTENDED, not a
+    // duplicate to collapse. Same reasoning as manage_budget / manage_model
+    // below: two questions that happen to have the same answer today are still
+    // two questions, and a permission that has to be split later cannot be,
+    // once call sites depend on it. Writing it as `permission hold = approve`
+    // would make "who may freeze" and "who may approve" the same question by
+    // construction, so the first deployment that wants a narrower freeze right
+    // — an on-call rotation that can halt a session but not approve its tool
+    // calls — would have to change every caller instead of one line here.
+    // Keep them independent; if one ever changes, say in its comment why the
+    // other did not.
+    permission hold = owner + parent->hold - denied
+    // manage_budget and manage_model gate the metaagent's budget and model
+    // capabilities. Distinct permissions rather than reuses of manage_scope,
+    // because they answer a different question: manage_scope is "may you change
+    // WHAT this session can reach", these are "may you change what it may
+    // SPEND, and which model it runs on". An operator who wants to delegate one
+    // without the others needs them separable, and a permission that has to be
+    // split later cannot be, once call sites depend on it.
+    //
+    // Both resolve through owner today, so they grant nobody anything new on
+    // day one — the split is about where they can diverge, not about who holds
+    // them now. `- denied` for the same reason every other gate has it: a user
+    // an owner explicitly denied must not retain the ability to widen a budget.
+    //
+    // These live in the BASE schema and not in a fragment because agentsession
+    // is a reserved definition — the composer refuses to let a fragment rewrite
+    // it, so there is nowhere else they could go.
+    permission manage_budget = owner - denied
+    permission manage_model = owner - denied
+    permission use_token = authorized_token
+
+    // unknown_provenance is the audience FLOOR for data whose provenance the
+    // information-leakage gate could not pin to a declared resource — an
+    // undeclared non-meta tool (a sidecar/CLI tool with no toolResourceMap
+    // entry). Such data taints the session against this permission, so it flows
+    // WITHIN the conversation without a prompt and only widening beyond the
+    // session's own participants trips the respond-time leak check. It resolves
+    // to `interact` (the participant set) but is NAMED separately so the floor's
+    // meaning is explicit and can evolve without moving `interact`. Lives in the
+    // BASE schema, not a fragment, because agentsession is a reserved definition.
+    permission unknown_provenance = interact
+}
+
+definition memory_entry {
+    relation session: agentsession
+    relation creator: user
+    // Readable by anyone who can read the parent session's transcript. For a
+    // root session read_transcript == interact exactly, so this is not a
+    // behavior change for any session without a parent.
+    permission read = session->read_transcript
+    permission write = creator
+    permission delete = creator
+}
+
+// artifact is the Phase-2 live-view resource (one per logical artifact, id
+// "artifact-<hex>"). view derives from THREE arms, all through relations the
+// single TouchArtifactParent funnel (or the session reconciler) writes:
+//   - parent->interact — the session's started_by + participants, minus
+//     denied, may view it;
+//   - parent->artifact_org_view — the opt-in org-wide audience: any user
+//     subject, when the session carries the artifact_org_viewer wildcard (see
+//     that relation's comment on agentsession), still minus denied;
+//   - platform->view_audit — a platform admin may view ANY artifact — the
+//     admin live-view gate, enforced purely in this schema with no app-layer
+//     authz branch.
+// webd's CheckArtifactView checks artifact#view; the spicedbauthorizer's
+// TouchArtifactParent writes BOTH artifact#parent and artifact#platform (the
+// latter ties every artifact to the singleton platform:platform object, so
+// view_audit resolves for admins).
+definition artifact {
+    relation parent: agentsession
+    relation creator: user
+    relation platform: platform
+    permission view = parent->interact + parent->artifact_org_view + platform->view_audit
+    permission delete = creator
+}
+
+// infoleakage_grant records approver consent for a specific information-leakage
+// event (session × audience_subject × accessed_resource), TTL-expiring. Both
+// the session link and the scoped audience_subject must exist for valid.
+definition infoleakage_grant {
+    relation session: agentsession
+    relation audience_subject: user with infoleakage_resource_match and expiration
+    permission valid = session & audience_subject
+}
+
+// pt_tag is one datum's provenance: where it was minted, what it was derived
+// from, and who may see it. It is the per-datum half of info-leakage tracking,
+// alongside infoleakage_grant's session-wide taint set — which remains the
+// FALLBACK whenever a payload is not fully tag-covered.
+//
+// The lattice is not modelled on top of SpiceDB; it IS the arrow semantics,
+// and the two arrows are deliberately different operators:
+//
+//   - Confidentiality is an INTERSECTION, so it is `.all()`. Combining two
+//     data narrows the audience to those authorized on BOTH. A union here
+//     would mean concatenating a tag readable by A with one readable by B
+//     produced something readable by each — a laundering primitive, and
+//     exactly the operation an agent performs when assembling a handoff.
+//   - Integrity is a minimum, which over a boolean is a union, so it is `->`.
+//     One untrusted source anywhere in the tree taints everything below it,
+//     and a trusted sibling cannot launder it clean.
+//
+// Two questions, two permissions: `access` asks which SESSIONS may hold this
+// tag (it gates binding); `reader` asks which USERS may see its content (it
+// gates disclosure).
+//
+// A tag is either a LEAF (direct_reader set, no derived_from) or DERIVED
+// (derived_from set, no direct_reader) — never both. The `+` in `reader` is a
+// union, so a derived tag carrying its own direct readers would widen past the
+// intersection and silently break the lattice. Nothing in the schema can
+// enforce that; it is enforced at the composer, and asserted in the
+// integration tests alongside the empty-derived_from case.
+//
+// granted_to deliberately does NOT arrow onward: a tag granted to a child is
+// held by that child alone, and a grandchild needs its own binding. Monotonic
+// attenuation, applied to information rather than to permissions.
+definition pt_tag {
+    relation session:      agentsession
+    relation granted_to:   agentsession with expiration
+    relation derived_from: pt_tag
+    relation direct_reader:    user
+    relation untrusted_origin: pt_tag
+
+    permission access = session + session->ancestor + granted_to
+
+    // confidentiality — intersection over the derivation tree
+    permission reader = direct_reader + derived_from.all(reader)
+
+    // integrity — union over the derivation tree
+    permission carries_untrusted = untrusted_origin + derived_from->carries_untrusted
+}
+
+// platform is the singleton control-plane object ("platform:platform")
+// gating the admin UI. Per-area permissions all alias can_admin today;
+// consumers MUST check the per-area permission (view_overview /
+// view_live / view_sessions / view_audit / kill_session / install_agent /
+// start_session), never can_admin directly, so areas can later grow their
+// own relations without touching any consumer. Admins are granted via
+// `oap platform grant-admin <email>`.
+definition platform {
+    relation admin: user | group#member
+    permission can_admin = admin
+    permission view_overview = can_admin
+    permission view_live = can_admin
+    permission view_sessions = can_admin
+    permission view_audit = can_admin
+    permission view_config = can_admin
+    permission kill_session = can_admin
+    permission install_agent = can_admin
+    // start_session is the platform-wide arm of the session-start gate: "may
+    // start ANY agent", as opposed to agentclass#starter's "may start THIS
+    // agent".
+    //
+    // It is NOT checked directly by any consumer. The gate checks
+    // agentclass#start_session, which reaches this through
+    // `platform->start_session` — so a future per-agent grant and this
+    // platform-wide one stay ONE question with one answer, rather than two
+    // gates that drift. See the agentclass definition below.
+    //
+    // Deliberately a per-area permission rather than a can_admin check at the
+    // consumer, per this definition's contract above: "may bootstrap a session
+    // for an arbitrary agent" is a materially different power from "may read
+    // the admin console", and pinning it here lets it later be granted to a
+    // non-admin (or grow its own relation) without touching the gate.
+    permission start_session = can_admin
+}
+
+// agentclass is an AgentClass CR (id "<ns>/<name>") — the agent a session
+// would be started FOR. start_session gates WHO may start a new session of it
+// from a browser.
+//
+// It has two arms, and they answer different questions:
+//
+//   - starter — "this team may start THIS agent". Ships DELIBERATELY
+//     UNPOPULATED; nothing writes it today. It exists so that delegating a
+//     single agent later is a relationship write rather than a schema
+//     migration recomposed and rewritten onto every live cluster (the same
+//     reasoning as agentidentity#editor below).
+//   - platform->start_session — "this person may start ANY agent". The
+//     bootstrap arm, and the only live one today. It is what breaks the
+//     cold-start cycle: the OTHER half of the start gate derives standing
+//     from sessions the viewer already holds interact on, which is empty for
+//     everyone on a cluster whose first session has never been started.
+//
+// Because starter is empty, the #platform tuple is the ONLY thing that makes
+// start_session satisfiable by anyone. It is written by the AgentClass
+// reconciler (pkg/controllers/agentclass) via
+// spicedb.Client.EnsureAgentClassPlatform, on every reconcile and BEFORE any
+// validation gate — a class that fails validation is still one an admin may
+// need to start a session of to diagnose. Without that write every check here
+// fails closed, and it fails closed SILENTLY: the schema still compiles, the
+// dashboard still renders, and the agent picker is simply empty with no
+// indication why. For the same reason the lookup behind the picker's GATE is
+// FullyConsistent — the link can be written by the very reconcile that
+// created the class, so a MinimizeLatency read can miss it and refuse a
+// legitimate admin (see LookupStartableClasses in pkg/authz/spicedb).
+definition agentclass {
+    relation platform: platform
+    relation starter: user | group#member
+
+    permission start_session = starter + platform->start_session
+    // start_explicit is the gate a class with platformAdminsMayStart: false
+    // checks: the starter list and nothing else. The platform arm is absent on
+    // purpose — an explicit allowlist is one admins put themselves on.
+    permission start_explicit = starter
+
+    // interactor is any user attributed a turn in a session of this class.
+    // Durable (survives session GC — the tuple lives on the class, not the
+    // session), write-once-idempotent, the enumeration source for the Slack
+    // App Home preferences pane. Consumed ONLY by can_personalize below.
+    relation interactor: user
+
+    // can_personalize is the LookupResources target for "which classes may
+    // this user personalize" = the classes they've interacted with. A named
+    // permission (not the raw relation) keeps the query stable if the rule grows.
+    permission can_personalize = interactor
+}
+
+// workshop is one builder session's build space, keyed by its NAMESPACE name
+// (ws-<uid12>). Its tuples are written together by the workshop controller at
+// provisioning and deleted together at teardown. build is checked
+// FullyConsistent at every privileged act — the admission webhook, the
+// cross-namespace delegation admit (plan 4), the probe controller (plan 3) — so
+// that even a misconfigured RBAC layer cannot admit a session the tuple does
+// not name (spec layer 1.3).
+//
+// build and close answer two different questions and share no arm. build is
+// "may this SESSION act as this workshop", and stays the bound session alone.
+// close is "may this PERSON end this workshop from another builder" — the way
+// someone at their workshop limit frees a slot — and is deliberately not
+// reachable from build: a builder session holding build on its own workshop
+// gets no standing over anyone else's.
+//
+// starter is the person the builder session acts for (Workshop
+// spec.starterCanonical, which is optional — an unattributed workshop simply
+// has no starter tuple and is closable by a platform admin alone). platform is
+// the singleton link, and it is the ONLY thing that makes the admin arm
+// satisfiable: omit that one write and admins are refused with the schema still
+// compiling and platform#admin still populated, the same silent shape
+// agentidentity#platform documents.
+//
+// The admin arm goes through can_admin, the PERMISSION, not through the admin
+// relation directly — as every other platform arrow here does
+// (agentidentity#update_credential, artifact#view, agentclass#start_session).
+// The two resolve identically while can_admin is just `admin`; arrowing at the
+// relation is what silently stops resolving the day platform grows a second way
+// to be an admin.
+definition workshop {
+    relation session: agentsession
+    relation starter: user
+    relation platform: platform
+
+    permission build = session
+    permission close = starter + platform->can_admin
+}
+
+// agentidentity is an AgentIdentity CR (id "<ns>/<name>") — the agent's OWN
+// shared credential set, as opposed to a per-user credential. update_credential
+// gates WHO may replace one of its credentials after the platform has
+// independently confirmed the current value is dead. A platform admin always
+// may (platform->can_admin): a dead bot credential is a control-plane problem
+// with no session-scoped owner to ask.
+//
+// editor ships DELIBERATELY UNPOPULATED — nothing writes it today. It exists so
+// that delegating "this team may replace this bot's token" later is a
+// relationship write rather than a schema migration recomposed and rewritten
+// onto every live cluster.
+//
+// Because editor is empty, the #platform tuple is the ONLY thing that makes
+// update_credential satisfiable by anyone. It is written by the AgentIdentity
+// reconciler (pkg/controllers/agentidentity) via
+// spicedb.Client.EnsureAgentIdentityPlatform, on every reconcile and BEFORE any
+// validation gate — an identity whose Secret is missing or expired is exactly
+// the one a human is being asked to fix. Without that write every check here
+// fails closed, and it fails closed SILENTLY: the schema still compiles, the
+// credential-update card still publishes, the button still renders, and every
+// click is refused. For the same reason every check of update_credential must
+// be FullyConsistent — the link can be written by the very reconcile that
+// surfaced the dead credential, so a MinimizeLatency read can miss it and
+// refuse a legitimate admin (see EnsureAgentIdentityPlatform in
+// pkg/authz/spicedb/client.go).
+definition agentidentity {
+    relation platform: platform
+    relation editor: user | group#member
+
+    permission update_credential = editor + platform->can_admin
+}
+
+// cluster is a debuggable Kubernetes cluster known to the SRE tooling.
+// debugger gates WHO may fetch a kubeconfig for it (checked by the
+// sre toolkit's get-kubeconfig permission.check). debug_target records
+// WHICH session is pinned to it (written JIT by the fetch toolspec's
+// writesRelationships block after a successful fetch).
+definition cluster {
+    relation debugger: user
+    relation debug_target: agentsession
+
+    permission debug = debugger
+    permission pinned = debug_target
+}

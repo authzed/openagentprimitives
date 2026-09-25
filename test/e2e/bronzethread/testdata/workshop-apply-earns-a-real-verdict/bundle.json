@@ -1,0 +1,156 @@
+{
+  "name": "workshop-apply-earns-a-real-verdict",
+  "description": "The first bronze bundle that proves something about the BUILDER itself rather than the harness: that its author->apply->read-the-verdict loop runs against a REAL reconciler, and that a genuine cross-build-space refusal reaches a real tool result.\n\nThe scripted session calls `workshop_apply` (pkg/tools/workshopmcp/tools_apply.go's handleApply, mounted for real by test/e2e/workshop_mcp.go's mountWorkshopMCP -- see workshop-inventory-is-real's bundle for the same real-server-vs-canned-stub explanation) TWICE, applying two different candidate AgentClass manifests into the workshop's own namespace, and reads back applyCR's polled status.conditions from each tool result -- the REAL pkg/controllers/agentclass reconciler's own verdict, not a canned reply:\n\n  1. `builder-candidate-foreign` references a SpiceboxToolspec (`ts-foreign-workshop`) labeled `agentprimitives.authzed.com/workshop-namespace: other-build-space` -- a DIFFERENT namespace than the one this candidate actually lands in (\"default\"). pkg/controllers/agentclass/builderclass.go's validateBuilderClass (called from controller.go's Reconcile, the CONSUMER half of the workshop's prefix/label rule -- see that function's own doc) refuses it: Valid=False, reason=ReferencesWorkshopTool.\n  2. `builder-candidate-clean` references `ts-own-workshop` -- a sibling toolspec labeled for `default`, the namespace the candidate actually lands in. Same reconciler, same namespace, same identityMode, same toolBundles SHAPE: the two candidates differ in exactly one VALUE, the toolspec's workshop-namespace label. Valid=True. That is what makes the pair pin the LABEL as the discriminator rather than merely the presence of a toolspec reference -- a regression refusing ANY toolspec ref would pass a pair whose clean half carried none.\n\nOne refusal alone would only prove the gate can fire; asserting BOTH from the SAME bundle is what proves the loop DISCRIMINATES rather than always refusing (or always allowing) whatever a builder proposes. Both assertions are on `lastToolResultContains` against the tool result's JSON (`applyCR`'s serialized `status.conditions`), never on the agent's prose -- a scripted transcript would say the same words either way. (The bundle's own `assert.agentReplyContains` check on \"ReferencesWorkshopTool\" IS on prose -- it is the required blocking assertion every bronze bundle needs so the run cannot race ahead of the pipeline, not a claim about authorization semantics; the two `lastToolResultContains` checks above carry the actual claims.)\n\nOrdering note: pkg/controllers/agentclass's validateBundles runs BEFORE validateBuilderClass in Reconcile, and requires every toolBundles[].toolspecs entry to itself be Valid=True (or the class fails there instead, for the wrong reason). `ts-foreign-workshop` is pre-stamped Valid=True by the driver's stampToolspecsValid stand-in (this harness runs no real SpiceboxToolspec controller) before the scripted turns run, so the foreign-labeled toolspec's own validity is never in question -- only its label is.\n\nWHAT THIS BUNDLE DOES NOT PROVE: the ADMISSION-side half of the same workshop prefix/label rule (a validating webhook refusing the write outright, before it ever reaches a reconciler) is NOT exercised here. This harness registers no validating admission webhook at all -- a bundle asserting \"the webhook refused\" would assert nothing, because the write would simply succeed, and it would be indistinguishable in CI from the same bundle run against a cluster where a real webhook refusal happened. This bundle instead asserts on the CONSUMER-side gate (validateBuilderClass), which IS wired in this harness. A green run here is evidence the consumer gate discriminates correctly; it must NOT be read as evidence the admission-side lockdown is registered or exercised anywhere in this suite.",
+  "agentDir": "testdata/workshop-apply-earns-a-real-verdict/manifests",
+  "agentClass": "workshop-demo",
+  "userTurns": [
+    "I have two candidate agent classes to propose: one that references a tool from a different build space, and a clean one with no such reference. Apply both and tell me what the real controller says about each."
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "candidate agent classes"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_apply",
+            "args": {
+              "operation_id": "op-1",
+              "_reason": "apply the first candidate -- it references a toolspec labeled for a different build space, and I want to see whether the real controller refuses it",
+              "args": {
+                "manifest": {
+                  "apiVersion": "agentprimitives.authzed.com/v1alpha1",
+                  "kind": "AgentClass",
+                  "metadata": {
+                    "name": "builder-candidate-foreign"
+                  },
+                  "spec": {
+                    "displayName": "CandidateFromForeignBuildSpace",
+                    "description": "Candidate class referencing a toolspec labeled for a different build space.",
+                    "model": {
+                      "provider": "test",
+                      "name": "scripted",
+                      "apiKey": {
+                        "name": "workshop-demo-placeholder",
+                        "key": "api-key"
+                      }
+                    },
+                    "systemPrompt": {
+                      "inline": "placeholder system prompt for a candidate class under test"
+                    },
+                    "identityMode": "userPassthrough",
+                    "budget": {
+                      "maxTurns": 10,
+                      "maxTokens": 10000,
+                      "maxDuration": "5m"
+                    },
+                    "toolBundles": [
+                      {
+                        "name": "toolkit",
+                        "class": "cls-candidate",
+                        "toolspecs": [
+                          "ts-foreign-workshop"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_apply",
+        "lastToolResultContains": "\"reason\":\"ReferencesWorkshopTool\",\"status\":\"False\",\"type\":\"Valid\""
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_apply",
+            "args": {
+              "operation_id": "op-2",
+              "_reason": "the foreign-labeled candidate was refused as expected; now apply the clean candidate, which references no workshop tool at all",
+              "args": {
+                "manifest": {
+                  "apiVersion": "agentprimitives.authzed.com/v1alpha1",
+                  "kind": "AgentClass",
+                  "metadata": {
+                    "name": "builder-candidate-clean"
+                  },
+                  "spec": {
+                    "displayName": "CandidateClean",
+                    "description": "Candidate class referencing a toolspec labeled for its OWN build space -- identical in shape to the refused candidate, differing only in that label.",
+                    "model": {
+                      "provider": "test",
+                      "name": "scripted",
+                      "apiKey": {
+                        "name": "workshop-demo-placeholder",
+                        "key": "api-key"
+                      }
+                    },
+                    "systemPrompt": {
+                      "inline": "placeholder system prompt for a candidate class under test"
+                    },
+                    "budget": {
+                      "maxTurns": 10,
+                      "maxTokens": 10000,
+                      "maxDuration": "5m"
+                    },
+                    "identityMode": "userPassthrough",
+                    "toolBundles": [
+                      {
+                        "name": "toolkit",
+                        "class": "cls-candidate",
+                        "toolspecs": [
+                          "ts-own-workshop"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_apply",
+        "lastToolResultContains": "\"status\":\"True\",\"type\":\"Valid\""
+      },
+      "reply": [
+        {
+          "text": "The foreign-labeled candidate was refused by the real controller (Valid=False, reason ReferencesWorkshopTool). The clean candidate, otherwise identical, reconciled Valid=True. The controller discriminates on the reference, not just on the shape of the request."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "applied a foreign-referencing candidate (refused, ReferencesWorkshopTool) and a clean candidate (accepted) and reported the real controller's verdict on each"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "ReferencesWorkshopTool"
+    ],
+    "toolsCalled": [
+      "workshop_apply"
+    ]
+  }
+}

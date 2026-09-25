@@ -1,0 +1,50 @@
+# AgentClass + Channel for the agent-UI view-capability e2e fixture (Task
+# 6): proves update_view is offered ONLY when spec.capabilities grants it,
+# and never otherwise, against the real capability.Assemble registry
+# wiring in internal/cmd/runner/main.go and test/e2e/inprocess_runner_factory.go
+# (not just the package-internal unit coverage in
+# pkg/agent/tool/meta/capability).
+#
+# No spec.capabilities here — this is the BASE, negative-case state (the
+# same "no override" shape agent-channel-history-e2e/01-agent.yaml uses
+# for its own negative row). TestUIViewCapabilities_OptIn_ToolOffered
+# overrides this AgentClass via Options.ExtraManifests, same
+# namespace/name, adding spec.capabilities.update_view.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: uiviews-agent
+  namespace: default
+spec:
+  displayName: UIViewsBot
+  description: "E2E fixture agent for the update_view/read_view capability gate. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: uiviews-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+  agentUI:
+    ref: uiviews-ui
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: uiviews-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: uiviews-agent
+  credentialsRef:
+    secretName: uiviews-fake-creds
+  fake:
+    echo: false

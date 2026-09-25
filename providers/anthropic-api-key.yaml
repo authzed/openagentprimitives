@@ -1,0 +1,80 @@
+id: anthropic-api-key
+title: Claude
+description: A Claude API key so the agent can call the Claude API on your behalf, billed to your account.
+docsURL: https://platform.claude.com/docs/en/manage-claude/authentication
+shape: bearer
+
+# No builtin: — there is no Go setup flow for this provider, so the setup
+# engine falls through to the LLM-driven agent, which is the correct
+# already-supported behaviour for a paste-a-key credential.
+
+# Shown verbatim in every enter-token UI.
+instructions: |
+  This agent calls the Claude API as you, billed to your Claude account.
+  Create an API key from the Anthropic Console:
+
+    1. Open the Anthropic Console and sign in.
+    2. Go to Settings -> API keys, then create a new key.
+    3. Copy the key (starts with "sk-ant-api") and paste it here.
+
+  The key is shown only once at creation — copy it when shown. It is an
+  API key, NOT a Claude subscription token: `claude setup-token` produces
+  an sk-ant-oat… token, which belongs to the anthropic-oauth provider.
+
+# Format gate — enforced at every entry point (paste forms, put-token CLI,
+# setup flow) via ValidateToken. Claude API keys begin with sk-ant-api; this
+# prefix is the documented way to tell an API key from a subscription OAuth
+# token (sk-ant-oat…, anthropic-oauth's tokenShape), so pasting the wrong one
+# is rejected loudly at entry instead of failing later as an opaque 401 the
+# first time the agent runs. Kept prefix-only (not length-anchored) so a
+# valid key is never rejected.
+tokenShape:
+  pattern: '^sk-ant-api'
+  description: 'a Claude API key starting with sk-ant-api… (from the Anthropic Console)'
+
+# NO verify: — deliberately, and NOT because no probe exists.
+#
+# The probe we WANT is documented and would be a good one:
+#   GET https://api.anthropic.com/v1/models?limit=1
+#   headers: x-api-key: <key>, anthropic-version: 2023-06-01
+# It is authenticated, non-mutating, produces no tokens, and rejection is
+# documented as 401 authentication_error ("malformed, revoked, or expired"),
+# distinct from the adjacent 402 billing_error / 403 permission_error /
+# 429 rate_limit_error, none of which mean the credential died.
+#
+# It cannot be expressed today: VerifyConfig sends the token as an
+# Authorization header with a `token`/`Bearer` scheme and has no field for
+# static headers, while this API needs BOTH `x-api-key` and a mandatory
+# `anthropic-version`. Adding static-header support to VerifyConfig is the
+# prerequisite; recorded here so the next author does not re-derive it.
+#
+# There is also no subjectField to surface: /v1/models returns
+# {data, first_id, has_more, last_id} with no org/user identity. The one
+# documented Anthropic identity endpoint (GET /v1/organizations/me) accepts
+# only an sk-ant-admin… key or an org:admin OAuth token, not a plain API
+# key, so it must not be used as the probe.
+
+# NO authFailure: — deliberately deferred, not overlooked.
+#
+# The only consumer of this provider is toolkits/claude.yaml, a CLI toolkit
+# whose origin is toolkit/claude. A CLI's corroboration surface is exit
+# codes and stderr, and both are shaped by the agent: a sandbox tool's argv
+# is a freeform []string the model fills in, and every shipped CLI echoes
+# that argv back into its own error output. `claude` is worse still — it
+# writes its auth error to STDOUT, which a prompt injection can author.
+# Because this provider has no verify: probe, corroboration would be the
+# SOLE evidence for raising a credential-entry card, so a forgeable pattern
+# here is a phishing primitive rather than a merely-weak signal. See the
+# StderrPatterns essay in pkg/platform/identity/provider/types.go.
+#
+# httpStatuses: [401] is the correct entry the day an MCP-shaped origin
+# uses this provider — only the provider's own HTTP auth layer emits a 401 —
+# but no such origin exists today.
+
+prompt: |
+  The user must supply a Claude API key from the Anthropic Console
+  (Settings -> API keys). Do NOT attempt to drive an OAuth flow and do NOT
+  suggest `claude setup-token` — that produces a subscription OAuth token
+  (sk-ant-oat…), which is a DIFFERENT credential handled by the
+  anthropic-oauth provider. Instruct the user to create an API key, confirm
+  it starts with sk-ant-api, and call store_credential.

@@ -1,0 +1,32 @@
+[
+  {
+    "type": "plan",
+    "title": "rollout",
+    "tasks": [
+      {
+        "type": "task_card",
+        "task_id": "canary",
+        "title": "Update the canary and watch error rate",
+        "status": "complete"
+      },
+      {
+        "type": "task_card",
+        "task_id": "roll",
+        "title": "Roll the remaining 11 pods, 3 at a time",
+        "status": "in_progress"
+      },
+      {
+        "type": "task_card",
+        "task_id": "smoke",
+        "title": "Run the smoke suite against prod-us-east",
+        "status": "pending"
+      },
+      {
+        "type": "task_card",
+        "task_id": "summary",
+        "title": "Post a rollout summary to the thread",
+        "status": "pending"
+      }
+    ]
+  }
+]

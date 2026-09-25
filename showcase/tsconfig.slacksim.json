@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["demos/slacksim/src"],
+  "exclude": ["**/*.test.ts", "**/*.test.tsx"]
+}

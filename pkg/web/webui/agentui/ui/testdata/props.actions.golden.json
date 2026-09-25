@@ -1,0 +1,34 @@
+{
+  "ns": "workshop",
+  "name": "sess-live",
+  "declaration": {
+    "actions": [
+      {
+        "name": "advance",
+        "tool": "demo_advance_stage",
+        "args": {
+          "id": "42"
+        },
+        "inputs": [
+          "note"
+        ]
+      },
+      {
+        "name": "archive",
+        "tool": "demo_archive_stage"
+      }
+    ],
+    "view": {
+      "component": "ap:stack",
+      "children": [
+        {
+          "component": "ap:button",
+          "props": {
+            "action": "advance",
+            "label": "Advance"
+          }
+        }
+      ]
+    }
+  }
+}

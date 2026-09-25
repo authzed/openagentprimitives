@@ -1,0 +1,31 @@
+page: concepts/multiplayer-sessions
+updated: 2026-09-12T00:00:00Z
+refs:
+  - id: approval-is-interaction-category
+    claim: "OAP models approvals as a first-class interaction category (permission_request / tool_approval), not free-form message text."
+    symbol: pkg/channels/channelinteractions/categories/categories.go#PermissionRequest
+  - id: tool-approval-category
+    claim: "tool_approval is a resource-owner-gated approval category whose card carries approve/deny actions."
+    symbol: pkg/channels/channelinteractions/categories/categories.go#ToolApproval
+  - id: owner-gated-approval
+    claim: "The approve/deny buttons are owner-gated: the clicker must hold #owner on a gated source resource; an empty approverPermission means owner."
+    file: pkg/authz/approve.go
+    lines: 9-41
+  - id: any-owner-quorum-one
+    claim: "Any one owner may approve — quorum is one (the clicker must be #owner on at least one source resource)."
+    file: pkg/authz/approve.go
+    lines: 52-56
+  - id: click-time-approver-check
+    claim: "Authorization is checked at click time, against live SpiceDB state, confirming the clicker is an authorized approver."
+    symbol: pkg/authz/approve.go#CheckApproverAuthorized
+  - id: owner-dm-fanout
+    claim: "The approval is fanned out to the eligible resource owners as direct messages, capped and de-duplicated."
+    symbol: pkg/channels/channelkinds/slack/interaction_fanout.go#capApproverFanout
+  - id: resolves-in-place
+    claim: "Resolving the interaction updates the original approval card in place (the applied-interaction path)."
+    file: pkg/channels/channelkinds/slack/interaction_applied.go
+    lines: 1-40
+  - id: slack-interaction-rendering
+    claim: "Slack approval interactions are rendered as Block Kit with encoded button custom IDs, from the interaction the runner raised."
+    file: pkg/channels/channelkinds/slack/interaction.go
+    lines: 1-40

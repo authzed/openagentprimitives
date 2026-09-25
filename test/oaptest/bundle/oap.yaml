@@ -1,0 +1,20 @@
+oapFormatVersion: "1"
+agent:
+  version: "1.2.0"
+  logo: assets/logo.txt
+compat:
+  minApVersion: "0.9.0"
+  crdApiVersion: agentprimitives.authzed.com/v1alpha1
+questions:
+  - name: repos
+    type: resourceList
+    prompt: "Which repos may this agent read?"
+    default: ["demo-org/demo-repo"]
+    binding:
+      - target: "AgentClass/demo-class#spec.authz.slots[github_repo_url].defaults"
+  - name: demoToken
+    type: secret
+    prompt: "Demo PAT"
+    secret:
+      createSecret: { name: demo-pat, key: token }
+      orExisting: true

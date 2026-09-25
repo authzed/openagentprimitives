@@ -1,0 +1,62 @@
+# MCPServer for the SEP-1913 trust-enforcement e2e fixture.
+#
+# Two tools exercise the two SEP-1913 enforcement paths:
+#
+#   irreversible_action — pre-call deny path:
+#     trust.inputMetadata.outcomes = ["irreversible"] records that the
+#     server's tools/list advertises irreversible outcomes; the spec
+#     opts into denial via deny.trust.outcomesIrreversible: true.
+#     validator.Check rejects the call before the dispatcher sends the
+#     HTTP request — stub.Calls() stays empty.
+#
+#   flagged_query — post-call redact path:
+#     no static trust annotations; the stub's OnToolWithMeta handler
+#     returns _meta.annotations.maliciousActivityHint=true on the
+#     tools/call response. The dispatcher redacts the server-controlled
+#     content and returns a hardcoded placeholder instead.
+#
+# spec.server.url is the literal sentinel {{MCP_URL}} — the e2e harness
+# rewrites it to the httptest server URL before apply.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: sep1913-tools
+  namespace: default
+spec:
+  name: sep1913-tools
+  version: v1
+  intent: "SEP-1913 trust-enforcement e2e fixture."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: sep1913-mcp-bearer
+  tools:
+    - name: irreversible_action
+      intent: "An action whose server declares irreversible outcomes."
+      args:
+        allowedFields: [target]
+      # trust: snapshot of what the server's tools/list advertised.
+      # deny.trust.outcomesIrreversible opts the spec into pre-call denial.
+      trust:
+        inputMetadata:
+          outcomes:
+            - irreversible
+      deny:
+        trust:
+          outcomesIrreversible: true
+      # passthrough: the authz layer is intentionally bypassed so the
+      # SEP-1913 validator (deny.trust.outcomesIrreversible) is the
+      # active enforcement mechanism for this tool. Using external here
+      # would deny in the authz layer before the validator runs.
+      permission:
+        stateImpact: passthrough
+
+    - name: flagged_query
+      intent: "A query whose response the server may flag as malicious."
+      args:
+        allowedFields: [query]
+      # passthrough: no SpiceDB check needed for this test; the enforcement
+      # under test is the dispatcher's post-call _meta.annotations inspection.
+      permission:
+        stateImpact: passthrough

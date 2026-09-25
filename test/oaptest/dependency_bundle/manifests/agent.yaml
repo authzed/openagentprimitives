@@ -1,0 +1,20 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: fixture-coordinator
+spec:
+  description: Test-only dependency coordinator.
+  budget:
+    maxDuration: 5m
+    maxTokens: 100000
+    maxTurns: 50
+  systemPrompt:
+    inline: You are a fixture coordinator. Delegate requested translations to the fixture translator.
+  capabilities:
+    subagents: {}
+  subagents:
+    - fixture-translator
+  subagentModes:
+    fixture-translator:
+      - single_turn
+      - task

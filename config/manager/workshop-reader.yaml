@@ -1,0 +1,35 @@
+---
+# Shared ClusterRole granting a workshop sidecar identity READ access to the
+# cluster-scoped, non-secret descriptive CRDs the `inventory` tool
+# (internal/cmd/workshop/tools_inventory.go) reads at Assess time:
+#   - ClusterAgentSettings — the cluster's governance ceilings (budget caps,
+#     denied models, the model catalog) so a builder never proposes what the
+#     cluster forbids (design spec Ruling C).
+#   - ClusterSkill — cluster-scoped agent skills a builder may reference.
+#   - SpiceboxClass — the sandbox CLASS templates a SidecarToolbox names by
+#     spec.sandbox.class (pkg/apis/v1alpha1/sidecartoolbox_types.go). The
+#     sandbox BACKEND kind set (pod, agent-sandbox) is a Go-registry read and
+#     needs no RBAC at all — this grant is for the CR-level catalog of
+#     authored classes, a different set inventory reports separately.
+# All three are cluster-scoped, so the workshop namespace's own Role
+# (pkg/controllers/workshop, "workshop-agent") cannot grant them.
+#
+# get;list only — no watch, no write, no delete. inventory answers a single
+# point-in-time snapshot per call; it never subscribes to change and never
+# mutates any of these three kinds.
+#
+# Shared but NOT bound to every ServiceAccount in the cluster: the Workshop
+# controller creates one ClusterRoleBinding per workshop (name
+# "workshop-reader-<namespace>-<session>", workshop.WorkshopReaderCRBName) —
+# subject is exactly that workshop's sidecar ServiceAccount — and the
+# Workshop finalizer (teardown.go) deletes that ClusterRoleBinding when the
+# workshop is torn down, the same shape as spicebox-workshop-toolwriter
+# (config/manager/workshop-toolwriter.yaml).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spicebox-workshop-reader
+rules:
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["clusteragentsettings", "clusterskills", "spiceboxclasses"]
+    verbs: ["get", "list"]

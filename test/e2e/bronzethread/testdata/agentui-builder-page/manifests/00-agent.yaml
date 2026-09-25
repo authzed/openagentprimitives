@@ -1,0 +1,51 @@
+# Fixture agent for the agentui-builder-page bronze bundle.
+#
+# The point of this fixture is proving a builder-shaped page repaints through
+# update_view: the model advances an ap:steps timeline and places an
+# ap:question directly on the page instead of asking in prose. Both
+# capabilities are opt-in (spec.capabilities) and require the spec.agentUI
+# grant below — pkg/agent/tool/meta/capability/agentui_views.go's Offer skips
+# update_view/read_view entirely whenever no AgentUI is wired for the class.
+apiVersion: v1
+kind: Secret
+metadata: {name: demo-builder-page-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: demo-builder-page-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: demo-builder-page
+  namespace: default
+spec:
+  displayName: DemoBuilderPageBot
+  description: "A demo class whose page is generative hooks; exercises update_view on a builder-shaped page. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: demo-builder-page-placeholder, key: api-key}
+  systemPrompt:
+    inline: "You help a person build an agent. Keep the phase timeline current with update_view; ask questions on the page with ap:question."
+  capabilities:
+    update_view: {}
+    read_view: {}
+  agentUI:
+    ref: demo-builder-page-ui
+    grantedTools: []
+  budget: {maxTurns: 30, maxTokens: 50000, maxDuration: 5m}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: demo-builder-page-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: demo-builder-page
+  credentialsRef: {secretName: demo-builder-page-fake-creds}
+  fake: {echo: false}

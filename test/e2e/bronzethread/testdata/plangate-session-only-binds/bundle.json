@@ -1,0 +1,110 @@
+{
+  "name": "plangate-session-only-binds",
+  "description": "A session-only slot binds and the permissioned call SUCCEEDS with NO standing tuple existing anywhere — no `owner` relationship on reposcope_repo, no SpiceDBBootstrap granting anything (see 00-agent.yaml: this fixture ships none). reposcope_repo declares no `standing`, so it resolves to the CRD default (session-only): the approver's decision on the plan-gate card IS the authority. That is the case that was impossible before this feature — previously the approver-standing pre-check asked SpiceDB whether the approver already held `push` on the named repository, which nobody upstream-governed ever does.\n\nSession-only is not 'no gate': the plan gate still requires an approved phase, the slot still binds to the NAMED instance, the grant is still written with a mandatory expiry and is still session-scoped and revocable, and the tool-call Check still resolves slot_grant_push->interact + owner. The only thing skipped is the pre-check.\n\nThe push tool is called TWICE in the same session after ONE approval. approvalPrompts:1 is what distinguishes a persisted grant from one re-granted per call — the exact gap that let a missing decision-writer sit behind a green scenario before. Both calls are asserted on the TOOL RESULT, not the reply, because a scripted transcript says the same words whether the call returned success or a permission error.\n\nThe card copy is asserted too, since this feature changes what a human reads: the session-only sentence must appear, and no internal vocabulary (slot_grant, the escaped object id, SpiceDB/agentsession terms) may leak onto it.\n\nAll of it sits in ONE user turn deliberately, matching every other plangate-* bundle. Each turn boundary is a race: after agent_work_complete the runner makes one more model call, and whether the next user message has landed by then decides what that call carries. Fewer boundaries, fewer ways for a positional transcript to drift.",
+
+  "agentDir": "testdata/plangate-session-only-binds",
+  "agentClass": "reposcope-fixture",
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "toolOutputs": {
+    "status": { "ready": true },
+    "push": { "status": "pushed", "commitSha": "f00dfeed01cafe" }
+  },
+
+  "userTurns": [
+    "I need to push my committed changes to https://github.com/fictional-forge/beacon-service — check things are ready first, then go ahead and push it twice"
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "check things are ready first" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "push to the repository", "status": "pending", "phase": "push_phase" }
+              ],
+              "phases": [
+                {
+                  "id": "push_phase",
+                  "label": "Push to the repository",
+                  "why": "the user asked me to push their committed changes",
+                  "permissions": [
+                    { "handle": "perm:push:reposcope_repo", "why": "pushing requires write access to the repository" }
+                  ],
+                  "slots": [
+                    { "type": "reposcope_repo", "id": "https://github.com/fictional-forge/beacon-service", "why": "the user named this repository" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "reposcope_status", "args": { "operation_id": "op-status", "_reason": "checking the push tool is ready", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "reposcope_status", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "reposcope_push", "args": { "operation_id": "op-push-1", "_reason": "pushing the user's committed changes", "args": { "repoUrl": "https://github.com/fictional-forge/beacon-service" } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "reposcope_push",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "f00dfeed01cafe",
+        "lastToolResultNotContains": "permission"
+      },
+      "reply": [{ "toolUse": { "name": "reposcope_push", "args": { "operation_id": "op-push-2", "_reason": "pushing a second time in the same session", "args": { "repoUrl": "https://github.com/fictional-forge/beacon-service" } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "reposcope_push",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "f00dfeed01cafe",
+        "lastToolResultNotContains": "does not match regex"
+      },
+      "reply": [{ "text": "pushed your changes to the repository, twice" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "pushed twice" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": [
+      "pushed your changes to the repository, twice"
+    ],
+    "authz": {
+      "decisions": {
+        "reposcope_repo:https=3A//github=2Ecom/fictional-forge/beacon-service#push": "allowed"
+      }
+    },
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 1,
+      "cardWhatContains": [
+        "This session will be able to push for as long as it runs.",
+        "https://github.com/fictional-forge/beacon-service",
+        "Approving grants this session access to the named resources for as long as it runs.",
+        "Push commits to the repository"
+      ],
+      "cardWhatOmits": [
+        "perm:",
+        "slot_grant",
+        "=3A",
+        "SpiceDB",
+        "agentsession"
+      ]
+    }
+  }
+}

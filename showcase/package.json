@@ -1,0 +1,48 @@
+{
+  "name": "@oap/showcase",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "OAP docs + narrated-demo-video system: fake Slack simulator, scenario/screenplay engine, and the code-anchored MDX docs site.",
+  "scripts": {
+    "slacksim:dev": "vite --config vite.slacksim.config.ts",
+    "slacksim:build": "tsc -p tsconfig.slacksim.json && vite build --config vite.slacksim.config.ts",
+    "slacksim:preview": "vite preview --config vite.slacksim.config.ts",
+    "consolesim:dev": "vite --config vite.consolesim.config.ts",
+    "consolesim:build": "tsc -p tsconfig.consolesim.json && vite build --config vite.consolesim.config.ts",
+    "consolesim:preview": "vite preview --config vite.consolesim.config.ts",
+    "docs:dev": "vite --config vite.docs.config.ts",
+    "docs:build": "vite build --config vite.docs.config.ts",
+    "docs:preview": "vite preview --config vite.docs.config.ts",
+    "docs:check": "tsx docs/check.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@mdx-js/react": "^3.1.1",
+    "@xterm/xterm": "^6.0.0",
+    "lucide-react": "^0.454.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.1.0"
+  },
+  "devDependencies": {
+    "@mdx-js/rollup": "^3.1.1",
+    "@testing-library/jest-dom": "^6.4.8",
+    "@testing-library/react": "^16.0.1",
+    "@types/mdx": "^2.0.14",
+    "@types/node": "^22.20.2",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "jsdom": "^25.0.0",
+    "playwright": "^1.63.0",
+    "remark-gfm": "^4.0.1",
+    "tsx": "^4.23.13",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2",
+    "vitest": "^2.0.5",
+    "yaml": "^2.9.1"
+  }
+}

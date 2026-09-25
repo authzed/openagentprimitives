@@ -1,0 +1,31 @@
+{
+  "declaration": {
+    "view": {
+      "component": "ap:stack",
+      "children": [
+        {
+          "component": "ap:stack",
+          "children": [
+            {
+              "component": "ap:select",
+              "props": { "param": "span", "value": "30d", "options": [{ "value": "30d" }, { "value": "90d" }] }
+            },
+            {
+              "component": "ap:daterange",
+              "props": { "param": "window", "from": "2026-01-01T00:00:00Z", "to": "2026-02-01T00:00:00Z" }
+            },
+            {
+              "component": "ap:text",
+              "props": { "text": "drives nothing" }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "parameters": [
+    { "key": "span", "value": "30d" },
+    { "key": "window.from", "value": "2026-01-01T00:00:00Z" },
+    { "key": "window.to", "value": "2026-02-01T00:00:00Z" }
+  ]
+}

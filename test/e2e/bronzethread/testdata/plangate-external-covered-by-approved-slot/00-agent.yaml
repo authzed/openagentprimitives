@@ -1,0 +1,185 @@
+# Fixture agent for the EXTERNAL-stateImpact + covering-slot-grant bronzethread
+# scenario.
+#
+# This is plangate-session-only-binds with ONE substantive change: the push
+# tool's stateImpact is `external` rather than `readwrite`. That single field
+# moves the call onto a different authorization path — the one that asks
+# whether a human has approved THIS instance for THIS session, rather than
+# whether the requester holds the permission.
+#
+# `external` is satisfied by a slot grant and by nothing else. Approving the
+# plan-gate card writes `extrepo_repo:<url>#slot_grant_push@agentsession:<ns>/
+# <name>`, and the check reads that RELATION directly. It deliberately does not
+# read the composed `slot_grant_push->interact + owner` permission: that union
+# cannot distinguish an approval from ambient ownership, and reading it let a
+# repo owner authorize an irreversible push nobody had seen.
+#
+# So both pushes below run with no card of their own. That is the claim.
+#
+# Like its sibling, this fixture ships NO SpiceDBBootstrap and NO `owner`
+# relationship on extrepo_repo — there is no ambient ownership in this cluster
+# that could produce a false allow, so an `allowed` decision can only have come
+# from the grant the approval wrote.
+#
+# The resource type is named extrepo_repo rather than git_repo because guardian
+# composes every builtin toolkit's spicedbSchema into one cluster-wide schema,
+# and colliding with the real git toolkit's git_repo makes guardian refuse to
+# write any schema at all — surfacing two hops away as a misleading
+# AllowlistDrift on unrelated AgentClasses.
+#
+# planGate.mode is enforcing because the claim under test starts with an
+# approval binding the slot.
+# The two dummy values below deliberately do NOT read
+# "unused-by-the-test-provider" / "unused-by-the-fake-channel", which is what
+# every other fixture in this tree says. They are unused for exactly the same
+# reasons — provider=test never reads the model key, the fake kind never reads
+# Channel credentials — but those two phrases are also the literal placeholders
+# steelthread's fixture rewrite SUBSTITUTES when it turns a live agent into a
+# bundle. This scenario is the source the steelthread round trip captures
+# (test/e2e/steelthread/roundtrip_test.go), and the capture's leak scan is a
+# substring match over the emitted bytes: with the live value equal to the
+# placeholder, every capture of this fixture reports a secret leak that is a
+# coincidence, and — worse — a scan that CANNOT distinguish a real leak from
+# the substitution working. Distinct values make it able to prove something.
+apiVersion: v1
+kind: Secret
+metadata: {name: extrepo-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "extrepo-model-key-never-read-by-provider-test"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: extrepo-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "extrepo-channel-creds-never-read-by-the-fake-kind"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: extrepo-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: extrepo-identity, namespace: default}
+spec:
+  description: "Session-only-standing e2e fixture: static MCP bearer token."
+  credentials:
+    - name: extrepo-mcp-bearer
+      type: static
+      static: {secretRef: {name: extrepo-mcp-token, key: access_token}}
+---
+# Self-contained MCP fixture exposing one tool, "push", gated on
+# extrepo_repo#push.
+#
+# extrepo_repo declares standing session-only: no local relation governs who
+# may approve it, so the session's own approvers decide. Nothing in this file
+# (or anywhere in this bundle) writes a tuple granting `owner` on extrepo_repo
+# to anybody — so the only route to an allow is the slot grant the plan
+# approval writes, which is exactly what this scenario exists to prove.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: extrepo-fixture, namespace: default}
+spec:
+  name: extrepo-fixture
+  version: v1
+  intent: "Self-contained git-push-shaped fixture for the e2e harness."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: extrepo-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: extrepo_repo
+        # Stated explicitly: nothing local governs who may approve, so the session's own approvers decide.
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          # ComposeSlots rewrites this to slot_grant_push->interact + owner
+          # because the AgentClass below declares extrepo_repo as an authz
+          # slot.
+          #
+          # title is the human phrase the approval card shows instead of the
+          # wire handle (`perm:push:extrepo_repo`) — the fragment→controller
+          # →status→runner→card chain this whole bundle exists to prove.
+          - {name: push, expr: owner, title: "Push commits to the repository"}
+  tools:
+    - name: status
+      intent: "Report whether the push tool is ready to use. Stateless — no SpiceDB check."
+      args:
+        allowedFields: []
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: push
+      intent: "Push locally committed changes to a remote repository."
+      args:
+        allowedFields: [repoUrl]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: extrepo_repo
+          resourceIDExpr: '"" + args.repoUrl'
+          # The same [normalize_url, spicedb_escape] chain the real git
+          # toolkit keys git_repo with — this is the exact chain the live bug
+          # (raw URL reaching SpiceDB unescaped) bypassed, so exercising it
+          # here is the point, not incidental.
+          resourceIDTransforms: [normalize_url, spicedb_escape]
+          resourceIDHint: "give the repository as a full https:// URL"
+          permission: push
+      effects:
+        readOnly: false
+        idempotent: false
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: extrepo-fixture, namespace: default}
+spec:
+  displayName: ExtRepoBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: extrepo-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You push local changes to remote repositories. Available tools:
+        - extrepo_status(): check whether the push tool is ready
+        - extrepo_push(repoUrl): push committed changes to the named repository
+
+      When the user asks you to push, call update_plan first to declare a
+      phase naming the repository, then call extrepo_status, then call
+      extrepo_push.
+  agentIdentity: extrepo-identity
+  mcpServers:
+    - name: extrepo
+      ref: extrepo-fixture
+  authz:
+    slots:
+      - resourceType: extrepo_repo
+        description: "A remote repository, reached by its URL"
+        permission: push
+    planGate:
+      mode: enforcing
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: extrepo-fixture-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: extrepo-fixture
+  credentialsRef: {secretName: extrepo-fake-creds}
+  fake: {echo: false}

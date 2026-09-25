@@ -1,0 +1,38 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spicebox-webd-default
+  namespace: default
+# Per-conversation CRUD for a browser session: webd creates a Channel + creds
+# Secret + AgentSession, reads the operator-minted per-session memory-token
+# Secret, and deletes all three on teardown. Creation targets whatever
+# namespace the start route was asked for; `oap`'s own CLI default is "default"
+# (pkg/web/browsersession).
+#
+# Scoped to "default" only (NOT a ClusterRole), which is a deliberate LIMIT and
+# not a statement that no other namespace needs it. Every install serves
+# conversations now — the transcript data plane mounts wherever its NATS /
+# SpiceDB / operator-URL prerequisites hold, and authorizes every request on
+# agentsession#interact — so READING a session's Channel is granted
+# cluster-wide (see clusterrole.yaml). CREATION is not, because these verbs
+# include Secret create/delete, and a browser-facing pod holding those in every
+# namespace is standing privilege that outlives every request.
+#
+# The consequence is real: starting a session in a
+# namespace this Role does not cover fails at the create, loudly (a 500 with
+# the apiserver's refusal in the operator log), rather than silently.
+rules:
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["channels"]
+    verbs: ["get", "list", "create", "delete"]
+  # agentsessions also needs patch/update: the browser channel kind's inbound
+  # delivery WAKES an idle session by patching a wake annotation onto the
+  # AgentSession (pkg/channels/channelkinds/browser listener). Without patch, a follow-up
+  # message to an idle conversation fails with "cannot patch agentsessions"
+  # and the agent never resumes.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["agentsessions"]
+    verbs: ["get", "list", "create", "delete", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "delete"]

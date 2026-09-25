@@ -1,0 +1,352 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spicebox-operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - list
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - limitranges
+  - resourcequotas
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - persistentvolumeclaims
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumes
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - agentclasses
+  - agentidentities
+  - agentsessions
+  - agentuis
+  - channels
+  - clusterskills
+  - mcpservers
+  - sidecartoolboxes
+  - skills
+  - spiceboxsessions
+  - spiceboxtoolkits
+  - spiceboxtoolspecs
+  - subagentrequests
+  - toolcalls
+  - workshops
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - agentclasses/status
+  - agentidentities/status
+  - agentsessiongrants/status
+  - agentsessions/status
+  - agentsettings/status
+  - agentuis/status
+  - artifactrenders/status
+  - channels/status
+  - clusteragentsettings/status
+  - clusteridentityproviders/status
+  - clusterskills/status
+  - clusterskillsources/status
+  - credentialupdaterequests/status
+  - mcpservers/status
+  - publicendpoints/status
+  - relationshipsources/status
+  - sessionholds/status
+  - sessionuseridentities/status
+  - sidecartoolboxes/status
+  - skills/status
+  - skillsources/status
+  - spiceboxclasses/status
+  - spiceboxsessions/status
+  - spiceboxtoolchains/status
+  - spiceboxtoolkits/status
+  - spiceboxtoolspecs/status
+  - spicedbbootstraps/status
+  - subagentrequests/status
+  - toolcalls/status
+  - useridentities/status
+  - workshopprobes/status
+  - workshops/status
+  - workspacesources/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - agentsessiongrants
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - agentsessions/finalizers
+  - artifactrenders/finalizers
+  - credentialupdaterequests/finalizers
+  - publicendpoints/finalizers
+  - sidecartoolboxes/finalizers
+  - spiceboxsessions/finalizers
+  - spicedbbootstraps/finalizers
+  - toolcalls/finalizers
+  - useridentities/finalizers
+  - workshops/finalizers
+  - workspacesources/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - agentsettings
+  - clusteragentsettings
+  - clusteridentityproviders
+  - clusterskillsources
+  - relationshipsources
+  - skillsources
+  - spiceboxtoolchains
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - artifactrenders
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - credentialupdaterequests
+  - sessionholds
+  - workshopprobes
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - publicendpoints
+  - spicedbbootstraps
+  - useridentities
+  - workspacesources
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - sessionuseridentities
+  - spiceboxclasses
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - agents.x-k8s.io
+  resources:
+  - sandboxes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - agents.x-k8s.io
+  resources:
+  - sandboxes/status
+  verbs:
+  - get
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - statefulsets
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - extensions.agents.x-k8s.io
+  resources:
+  - sandboxclaims
+  - sandboxtemplates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - extensions.agents.x-k8s.io
+  resources:
+  - sandboxwarmpools
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - metrics.k8s.io
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  verbs:
+  - create
+  - delete
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+  - watch

@@ -1,0 +1,125 @@
+{
+  "name": "workshop-try-it-link-and-watch",
+  "description": "The bronze bundle for the three tools that replaced the builder-delegated `run_test`: `test_link`, `watch_test` and `test_sessions` (pkg/tools/workshopmcp/tools_trytest.go). The old design had the builder itself run an attended test session AS the person -- a child running as the person widens the builder's own identity, which the delegation gates refuse. The current design instead has the PERSON start their own test session themselves, from the browser chat: the builder paints a link (test_link), asks to be told about it (watch_test), and finds/reads/stops it by name (test_sessions/read_test_log/stop_test, the latter two unexercised here -- they need an actual test session to read or stop, which this scripted run never starts).\n\nLike workshop-recommend-capability-is-real, this bundle scripts TWO user turns because watch_test and test_sessions key their Workshop-CR lookup on the builder session's own (namespace, name) -- WorkshopIdentity.SessionNamespace/SessionName, frozen to a placeholder at mount time (see test/e2e/workshop_mcp.go's mountWorkshopMCP doc) until test/e2e/threadrun's bindWorkshopSessionOnce late-binds them to the REAL builder AgentSession. Turn 1 is a no-op check-in whose only job is to force a full round trip so the driver can bind the session before turn 2's three tool calls need it bound. test_link does NOT need the bind -- it Gets the candidate AgentClass by Identity.Namespace alone, which is frozen at mount time to this harness's own namespace and stays correct regardless -- but it is exercised in the same turn as the other two for one continuous script.\n\nThe Workshop CR watch_test/test_sessions act on is itself real: this fixture's ClusterAgentSettings sanctions (namespace: default, name: workshop-demo, sidecarToolbox: workshop) in spec.limits.builderClasses, which is exactly what the REAL pkg/controllers/agentsession ensureWorkshop hook (already wired in this harness) requires before it will create a Workshop CR for a session at all.\n\nThree assertions carry the bundle's actual claims, all on `lastToolResultContains` against the real tool result's JSON, never on the agent's prose:\n\n  1. `workshop_test_link` against the candidate class `demo-built` (identityMode: userPassthrough) returns a label of \"Try it as yourself\", not the generic \"Try it\" -- proving the label switch reads the REAL AgentClass's identityMode rather than a constant.\n  2. `workshop_watch_test` returns `\"status\":\"watching\"` -- proving the call reached the real Workshop CR and wrote spec.testWatch via a real Get-then-Update, rather than erroring for want of a CR to write to.\n  3. `workshop_test_sessions` returns an empty `\"sessions\":[]` -- correct here because nobody in this scripted run has actually started a demo-built test session; a non-empty answer would mean the tool is finding sessions it should not.\n\nWHAT THIS BUNDLE DOES NOT PROVE: the Workshop CONTROLLER (pkg/controllers/workshop) is not wired into this harness at all, so nothing ever reacts to spec.testWatch and no wake-up is ever delivered to this session's transcript when a real person's test actually starts, pauses, ends or times out. The bundle asserts that watch_test WROTE the watch to a real object, never that anything came back from it -- same disclosed gap as every other workshop bundle's Workshop-CR half of provisioning (the workshop NAMESPACE/RBAC/sidecar-identity half, which would set status.namespace and status.phase=Ready, is a separate controller this harness does not run either).",
+  "agentDir": "testdata/workshop-try-it-link-and-watch/manifests",
+  "agentClass": "workshop-demo",
+  "userTurns": [
+    "Before you dig in, just check in with me so I know you're listening.",
+    "I want to try this myself. Give me a link with a prompt about linear issues for PR #1234, keep watch for when I start testing it, and tell me if anything's running yet."
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "check in with me"
+      },
+      "reply": [
+        {
+          "text": "Ready and listening -- go ahead whenever you are."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "endTurn": true
+        }
+      ]
+    },
+    {
+      "expect": {
+        "userTextContains": "try this myself"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_test_link",
+            "args": {
+              "operation_id": "op-1",
+              "_reason": "the person wants to try the agent themselves; painting the link for demo-built",
+              "args": {
+                "class": "demo-built",
+                "prompt": "linear issues for PR #1234"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_test_link",
+        "lastToolResultContains": "\"agentClass\":\"demo-built\",\"label\":\"Try it as yourself\""
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_watch_test",
+            "args": {
+              "operation_id": "op-2",
+              "_reason": "watch for the person's own test of demo-built starting, pausing, ending, or timing out",
+              "args": {
+                "class": "demo-built",
+                "timeoutMinutes": 5
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_watch_test",
+        "lastToolResultContains": "\"status\":\"watching\""
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_test_sessions",
+            "args": {
+              "operation_id": "op-3",
+              "_reason": "check whether the person has already started a test session of demo-built",
+              "args": {
+                "class": "demo-built"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_test_sessions",
+        "lastToolResultContains": "\"sessions\":[]"
+      },
+      "reply": [
+        {
+          "text": "Here's your link to try it yourself -- I'll let you know as soon as you start, and nothing is running yet."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "endTurn": true
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "Ready and listening -- go ahead whenever you are.",
+      "Here's your link to try it yourself"
+    ],
+    "toolsCalled": [
+      "workshop_test_link",
+      "workshop_watch_test",
+      "workshop_test_sessions"
+    ]
+  }
+}

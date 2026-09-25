@@ -1,0 +1,61 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolchain
+metadata:
+  name: node
+spec:
+  description: "Node.js 22 with npm, pnpm, yarn, and the TypeScript language server"
+  source:
+    kind: image
+    # Rewritten to <registry>/ap-toolchain-node:dev@sha256:... by pkg/platform/manifests.Substitute
+    # on a registry install, because apimage.Catalog() includes this image.
+    image: ap-toolchain-node:dev
+    prefix: /opt/ap-toolchains/node
+  bin:
+    - bin
+  env:
+    # Every one of these exists to keep a package manager's cache OFF $HOME.
+    # HOME is /tmp in the sandbox — a memory-backed emptyDir charged against the
+    # pod's memory limit — so an unredirected npm/pnpm cache exhausts it on the
+    # first install. /var/ap-cache is the disk-backed volume.
+    npm_config_cache: "{{ .Cache }}/npm"
+    # PNPM_HOME sets pnpm's home, and pnpm derives its content-addressed STORE
+    # from it ($PNPM_HOME/store/vN). The store is by far the largest artifact an
+    # install produces, so this is the load-bearing one.
+    #
+    # Do NOT reach for `npm_config_store_dir` or `PNPM_STORE_PATH`: verified
+    # against pnpm 11.1.1 — both are ignored (`pnpm config get store-dir` stays
+    # `undefined`) and the store silently falls back to $HOME/.local/share/pnpm.
+    PNPM_HOME: "{{ .Cache }}/pnpm"
+    # pnpm's fallback, and the default for a lot of other Node tooling, is
+    # $XDG_DATA_HOME (itself defaulting to $HOME/.local/share). Redirect the XDG
+    # roots so a tool we did not anticipate still writes to disk, not to tmpfs.
+    XDG_DATA_HOME: "{{ .Cache }}/xdg/data"
+    XDG_CACHE_HOME: "{{ .Cache }}/xdg/cache"
+    XDG_STATE_HOME: "{{ .Cache }}/xdg/state"
+    # corepack caches the package-manager tarballs it resolves. pnpm is baked in
+    # as a real package (not a corepack shim), so this should stay near-empty —
+    # but if a repo pins a different packageManager, corepack fetches it here
+    # rather than trying (and failing) to write $HOME.
+    COREPACK_HOME: "{{ .Cache }}/corepack"
+    # yarn (classic, shipped by the node image) honors this.
+    YARN_CACHE_FOLDER: "{{ .Cache }}/yarn"
+  provides:
+    - node
+    - npm
+    - npx
+    - pnpm
+    - yarn
+    - tsc
+    - typescript-language-server
+  detect:
+    - package.json
+    - pnpm-lock.yaml
+    - yarn.lock
+    - package-lock.json
+  # SizeBytes MUST be the on-disk usage (du -sk * 1024), NOT apparent size
+  # (du -sb). The kubelet enforces emptyDir SizeLimit against allocated blocks.
+  # Measured via: docker run --rm --entrypoint /bin/sh ap-toolchain-node:dev -c
+  # 'du -sk /opt/ap-toolchains/node' → 254968 KB = 261,087,232 bytes. Rounded up
+  # to 300000000 (SizeLimit 330,000,000, ~69MB spare); over-estimating only
+  # inflates ephemeral-storage, while under-estimating evicts the pod mid-copy.
+  sizeBytes: 300000000

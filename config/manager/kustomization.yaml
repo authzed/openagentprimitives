@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentprimitives-system
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - role.yaml
+  - rolebinding.yaml
+  - role-debug.yaml
+  - runner-toolspec-reader.yaml
+  - snapshotter-rbac.yaml
+  - workshop-toolwriter.yaml
+  - workshop-reader.yaml
+  - deployment.yaml
+  - pvc.yaml
+  - service.yaml
+  - webhook.yaml

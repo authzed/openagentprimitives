@@ -1,0 +1,67 @@
+{
+  "name": "plangate-governs-unplanned-delegation",
+  "description": "The plan gate governs the SPAWN. delegate is Stateless at dispatch (it reaches no SpiceDB resource of its own and the operator re-verifies the delegation), so before Plan 1c the permsurface dropped it and the gate never saw it -- a parent under injection escaped its own plan by delegating a write it could not itself perform. delegate now implements the PlanGateGoverned marker, so the plan-gate handle resolver hands the gate a `tool:delegate` handle even though dispatch stays Stateless. Under enforcing mode pgd-lead declares a plan whose one phase's ceiling cannot contain tool:delegate (delegate is never on the surface, so no phase can pre-authorize a spawn), then calls delegate with no justification -- the gate refuses it fail-closed with denialReason, BEFORE any child SubagentRequest is created. The refusal names tool:delegate and reaches the model as an error, which is the whole proof: the gate resolved the spawn to a handle and governed it, which is what 'the human approves the run itself' bottoms out to. Asserts on the TOOL RESULT (not the reply): a scripted transcript says the same words whether the gate governed delegate or skipped it, so only the result content and the recorded outcome prove the gate reached the spawn. agentReplyContains is the BLOCKING assertion that makes the driver wait for the run to finish before checkPlanGate reads the log -- without it the driver races the pipeline and reports a misleading 'no AgentSession' error. A self-contained agent dir bakes planGate enforcing into the class rather than layering an ExtraManifests overlay, because Create-or-Update of the same class after the channel is wired bumps its generation mid-setup and no session is created.",
+
+  "agentDir": "testdata/agent-plangate-delegation",
+  "agentClass": "pgd-lead",
+
+  "defaultUser": "user@example.com",
+
+  "autoApprove": ["plan_phase"],
+  "autoDeny": ["plan_amendment"],
+
+  "userTurns": ["have the coder fix the failing auth middleware test"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "coder" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "hand the fix to the coder", "status": "pending", "phase": "handoff" }
+              ],
+              "phases": [
+                {
+                  "id": "handoff",
+                  "label": "Hand off the fix",
+                  "why": "I planned to write the fix myself, not to spawn a sub-agent",
+                  "permissions": [
+                    { "handle": "tool:apply_workspace", "why": "to write the fix file myself" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": { "agent": "pgd-coder", "task": "fix the failing auth middleware test" } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": true
+      },
+      "reply": [{ "toolUse": { "name": "respond_to_user", "args": { "text": "I cannot hand this to the coder: spawning a sub-agent is not in my approved plan." } } }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "blocked on plan approval to delegate" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["not in my approved plan"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "outcomes": { "delegate": "denied" }
+    }
+  }
+}

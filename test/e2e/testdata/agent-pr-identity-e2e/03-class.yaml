@@ -1,0 +1,18 @@
+# SpiceboxClass for the agent-pr-identity-e2e fixture. Cluster-scoped, so it
+# carries no namespace. Nothing in this scenario ever schedules a sandbox pod
+# — the in-process harness reconciles CRD validity only — so the resource
+# figures are nominal.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: pr-identity-sandbox
+spec:
+  resources:
+    cpu: 250m
+    memory: 128Mi
+    ephemeralStorage: 128Mi
+  tools:
+    - name: gh
+      command: ["/usr/bin/gh"]
+  toolspecs:
+    - name: pr-identity-gh-review

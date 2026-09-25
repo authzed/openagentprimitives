@@ -1,0 +1,91 @@
+# Fixture for the identityMode=ask e2e scenarios (choose-agent, cancel,
+# non-interactive). A minimal fake-channel agent with NO MCP servers — the
+# identity-choice gate resolves before any tool matters, so the scenarios need
+# only respond_to_user.
+#
+# AgentClass uses model.provider="test" (only the e2e reconciler's
+# AllowTestProvider admits it) and identityMode=ask, which per the CRD CEL rule
+# requires spec.agentIdentity to be set.
+#
+# No real names — everything here is fictional per CLAUDE.md.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ask-placeholder
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-test-provider"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ask-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ask-identity-token
+  namespace: default
+type: Opaque
+stringData:
+  access_token: "unused-no-mcp"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: ask-identity
+  namespace: default
+spec:
+  description: "identityMode=ask e2e fixture: agent identity (no MCP references it)."
+  credentials:
+    - name: ask-static
+      type: static
+      static:
+        secretRef:
+          name: ask-identity-token
+          key: access_token
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ask-agent
+  namespace: default
+spec:
+  displayName: Ask Bot
+  description: "E2E fixture for identityMode=ask. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: ask-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the identityMode=ask e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+  identityMode: ask
+  agentIdentity: ask-identity
+  budget:
+    maxTurns: 5
+    maxTokens: 10000
+    maxDuration: 2m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ask-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ask-agent
+  credentialsRef:
+    secretName: ask-fake-creds
+  fake:
+    echo: false

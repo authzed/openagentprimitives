@@ -1,0 +1,5 @@
+packages:
+  - packages/*
+allowBuilds:
+  '@modelcontextprotocol/ext-apps': false
+  esbuild: false

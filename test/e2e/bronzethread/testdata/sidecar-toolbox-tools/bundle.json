@@ -1,0 +1,70 @@
+{
+  "name": "sidecar-toolbox-tools",
+  "description": "A SidecarToolbox's tools are reachable and dispatchable in a replayed bundle.\n\nThis is the only bronze scenario that exercises the SIDECAR route into the runner's tool set. A sidecar tool is an MCP tool by the time the model sees it — sidecartoolbox.Synthesize hands mcptool.Synthesize a synthetic MCPServer built from the CR's own tools allowlist, and at replay the same single fake MCP stub serves it — but it ARRIVES by a different path than an MCPServer CR does: through AgentSession.status.resolvedSidecarToolboxes, not through AgentClass.spec.mcpServers.\n\nThat difference is what the bundle pins, and it costs the driver two things nothing else needed: the SidecarToolbox CR has to be stamped Valid=True (the AgentClass controller refuses to go Valid while a sidecarToolboxes[].ref points at a toolbox that is not), and the runner's sidecar probe has to be redirected at the harness stub (the endpoint is derived at runtime from a pod IP and an operator-allocated port, so no {{MCP_URL}} sentinel can be written into a manifest). Drop either and this bundle hangs in WaitForAgentClassValid or fails dispatch; every other bundle stays green.\n\nlastToolResultContains is the load-bearing assertion. agentReplyContains alone would pass on a scripted transcript whether the sidecar dispatched or returned nothing at all, which is this suite's oldest lesson — assert on the TOOL RESULT, not the reply.\n\ntoolOutputs carries `nodes` even though the transcript never calls it, and that is not padding: mcp.Synthesize returns an error when the allowlist names a tool the live server does not expose, and the stub builds its tools/list from OnTool registrations alone. Delete the `nodes` entry and synthesis of the whole toolbox fails, taking `pods` with it.",
+  "agentDir": "testdata/sidecar-toolbox-tools/manifests",
+  "agentClass": "sidecar-demo",
+  "userTurns": [
+    "which pods are running?"
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "which pods are running?"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "kube_pods",
+            "args": {
+              "operation_id": "op-1",
+              "_reason": "the user asked which pods are running",
+              "args": {
+                "namespace": "default"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "kube_pods",
+        "lastToolResultContains": "gateway-7d9f"
+      },
+      "reply": [
+        {
+          "text": "two pods are running: gateway-7d9f and worker-2b41"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "listed the running pods"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "gateway-7d9f"
+    ]
+  },
+  "toolOutputs": {
+    "pods": {
+      "items": [
+        "gateway-7d9f",
+        "worker-2b41"
+      ]
+    },
+    "nodes": {}
+  }
+}

@@ -1,0 +1,36 @@
+# SpiceDBBootstrap for the centerdot-companies fixture.
+#
+# Seeds the two owner identities the approval flow resolves against.
+# The MCPServer fragment in 02-mcpserver.yaml already declares the
+# crm_owner / crm_company definitions, so this CR is
+# relationships-only.
+#
+# One wildcard seed, on the sentinel resource crm_company:any. It backs
+# the `list` permission only, which list_companies is gated on — listing
+# the catalogue is genuinely public. There is deliberately no wildcard on
+# contact_access: that permission is gated by a per-session slot grant, and
+# a wildcard leaf on it would hand contact_access to everyone.
+#
+# Note: canonicalize=true on the owner subjects runs the email
+# through pkg/platform/identity.Canonicalize so the tuple matches the
+# subject form the runtime Check uses.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: centerdot-seed
+  namespace: default
+spec:
+  relationships:
+    - resource: { type: crm_owner, id: "owner-1" }
+      relation: user
+      subject:  { type: user, id: "owner-1@example.com", canonicalize: true }
+    - resource: { type: crm_owner, id: "owner-2" }
+      relation: user
+      subject:  { type: user, id: "owner-2@example.com", canonicalize: true }
+    # Wildcard tuple for the list_companies sentinel: listing the catalogue is
+    # open at the SpiceDB layer, so the gated `list` check on crm_company:any
+    # passes for everyone. It says nothing about any particular company —
+    # contact_access is a separate permission with no wildcard on it at all.
+    - resource: { type: crm_company, id: "any" }
+      relation: any_user
+      subject:  { type: user, wildcard: true }

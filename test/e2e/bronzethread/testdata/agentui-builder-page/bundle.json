@@ -1,0 +1,44 @@
+{
+  "name": "agentui-builder-page",
+  "description": "The builder-shaped page is repainted through update_view: the timeline advances and a question is asked ON THE PAGE (ap:question), not in prose. Asserts on tool results, never on the reply. The SAME hook is then repainted with a DIFFERENT ap:question -- one question at a time, which is how the builder asks -- and must be accepted as another update: a repaint is an ordinary tool call, not a second question the framework has to reconcile. The turn ends on a bare endTurn with no respond_to_user at all -- the model's answer to this user turn IS the page repaint, not a chat reply -- so this bundle carries no assert.agentReplyContains; the session settling at Idle (test/e2e/threadrun's wantSessionPhaseFor) is the barrier that lets the run finish before the checks below read it. Two closing read_view turns then prove the page comes back as JSX, not HTML-escaped, and that the agent's own fill of the brief hook is marked as such.",
+  "agentDir": "testdata/agentui-builder-page/manifests",
+  "agentClass": "demo-builder-page",
+  "userTurns": [
+    "I want an agent that summarizes my team's open pull requests every morning."
+  ],
+  "llm": [
+    {
+      "expect": { "userTextContains": "summarizes my team's open pull requests", "toolOffered": "update_view" },
+      "reply": [ { "toolUse": { "name": "update_view", "args": { "hook": "phase", "node": { "component": "ap:steps", "props": { "steps": [ { "label": "Intake", "state": "done" }, { "label": "Tools", "state": "active" } ] } } } } } ]
+    },
+    {
+      "expect": { "lastToolResult": "update_view", "lastToolResultContains": "\"hook\":\"phase\",\"updated\":true" },
+      "reply": [ { "toolUse": { "name": "update_view", "args": { "hook": "brief", "node": { "component": "ap:question", "props": { "prompt": "Which repository should it watch?", "placeholder": "org/repo" } } } } } ]
+    },
+    {
+      "expect": { "lastToolResult": "update_view", "lastToolResultContains": "\"hook\":\"brief\",\"updated\":true" },
+      "reply": [ { "toolUse": { "name": "update_view", "args": { "hook": "brief", "node": { "component": "ap:question", "props": { "prompt": "Which channel should the digest go to?", "placeholder": "#team-updates" } } } } } ]
+    },
+    {
+      "expect": { "lastToolResult": "update_view", "lastToolResultContains": "\"hook\":\"brief\",\"updated\":true" },
+      "reply": [ { "toolUse": { "name": "read_view", "args": {} } } ]
+    },
+    {
+      "expect": {"lastToolResult": "read_view", "lastToolResultContains": "<oap:generative"},
+      "reply": [{"toolUse": {"name": "read_view", "args": {}}}]
+    },
+    {
+      "expect": {"lastToolResult": "read_view", "lastToolResultContains": "{/* your fill */}"},
+      "reply": [{"endTurn": true}]
+    }
+  ],
+  "assert": {
+    "toolsCalled": ["update_view", "read_view"],
+    "systemPromptContains": [
+      "## Your page",
+      "- phase: no instruction from the author (allowed: any registered component)",
+      "- brief: no instruction from the author (allowed: any registered component)",
+      "Call read_view before your first update_view"
+    ]
+  }
+}

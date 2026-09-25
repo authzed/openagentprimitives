@@ -1,0 +1,57 @@
+# Fixture agent for the completion-requirement bundles.
+#
+# No tool bundles at all: the scenario is entirely about meta tools — render an
+# artifact, reply, try to finish — so a sandbox would only add moving parts that
+# have nothing to do with the behaviour under test.
+#
+# The two things that matter here are on the AgentClass: the `artifacts`
+# capability (opt-in, which is what puts artifact_prepare in the catalog) and
+# `completionRequirements`, the operator's statement that a round of this
+# agent's work is not finished until what it produced has reached someone.
+apiVersion: v1
+kind: Secret
+metadata: {name: reportbot-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: reportbot-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: reportbot, namespace: default}
+spec:
+  displayName: ReportBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: reportbot-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You write a report as an HTML artifact and deliver it to the user.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  # Opt in to the artifact meta tools. Without this grant artifact_prepare is
+  # not offered and the scenario has nothing to leave undelivered.
+  capabilities:
+    artifacts: {}
+  # The requirement under test. A render being Ready says the bytes exist; it
+  # says nothing about anyone having seen them, and this is what refuses to call
+  # a round done on the strength of the first.
+  completionRequirements:
+    - artifact-delivered
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: reportbot-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: reportbot
+  credentialsRef: {secretName: reportbot-fake-creds}
+  fake: {echo: false}

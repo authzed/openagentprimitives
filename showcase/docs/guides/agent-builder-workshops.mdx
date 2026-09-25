@@ -1,0 +1,70 @@
+export const meta = {
+  title: 'Workshops and limits',
+  section: 'Guides',
+  group: 'Agent builder',
+  order: 64,
+  description: 'Every build runs in its own workshop. A person may keep a few open; a finished one releases itself; a builder can close the others for you.',
+}
+
+# Workshops and limits
+
+<p className="doc-lede">
+  A <strong>workshop</strong> is the isolated space one build runs in: its own namespace, its own permissions,
+  its own sidecar identity, created when a builder session starts and torn down when the build is over. It is
+  what lets the builder apply, test, and fix a draft freely without any of it touching the cluster's real
+  agents.
+</p>
+
+## What a workshop holds
+
+- **The draft** — the agent's definition, its connectors, its skills, applied inside the workshop and nowhere
+  else. The builder's own tools can only reach objects in that namespace.
+- **The test session** — when you press *Start the test*, the new agent runs there too, under the cluster's
+  normal guards, with the workshop's identity.
+- **Resource ceilings** — a maximum age, a cap on objects per kind, and a cap on test sessions, fixed at
+  creation and not changeable from inside.
+
+The builder's write tools are keyed on the draft, so the stage approval you give covers the draft in that
+workshop and nothing else; a grant for one workshop means nothing in another.
+
+## How many you may have open
+
+Each person may keep a small number of workshops open at once — **three by default**, set cluster-wide by
+`limits.maxWorkshopsPerStarter` in [settings](#/settings-config). "Open" means live: a build still going, or one
+that finished but whose workshop has not been released yet.
+
+Starting a builder session past the limit is refused before anything is created. The refusal names the open
+workshops by their session names and states, and says what to do:
+
+> You already have the maximum number of builder workshops open at once. Finish or close one before starting
+> another. Open now: agent-builder-8659e605 (in progress), agent-builder-c179e6f3 (in progress),
+> agent-builder-d41b45db (finished). Open one of them and ask it to close the others.
+
+## Closing workshops
+
+Open any of your builder sessions and ask it, in the conversation or on the page, to close your other
+workshops. It closes all of them, or only the ones you name — by the session name the refusal showed you —
+and tells you what was closed, what was refused and why, and anything still being decided. It never closes
+the workshop it is in.
+
+Closing a workshop ends that builder session and deletes the workshop; its saved draft, if it reached
+delivery, is an attachment in that conversation and outlives the workshop.
+
+A platform admin can name anyone's workshop; anyone else can name only their own. If you ask a second time
+while the first ask is still being decided, the builder waits for that answer rather than asking again, and
+says so — a workshop opened since then is not covered until you ask again.
+
+## What releases a workshop
+
+You do not have to close a finished build. A workshop is released on its own once its builder session has
+ended **and** any install request it made has been decided — installed, declined, or failed. Hand-off has no
+request to wait for, so a session that ends after *Hand the draft to someone* releases immediately. Released
+workshops stop counting toward the limit.
+
+<Callout kind="note" title="For admins">
+  The [admin console](#/admin-dashboard) lists every open workshop with its starter, its install request if it
+  made one, and the option to delete it outright. The per-person limit is `spec.limits.maxWorkshopsPerStarter`
+  on the cluster's settings; the list of classes allowed to open a workshop at all is
+  `spec.limits.builderClasses`, seeded by <code>oap install</code> for the builder and never widened by a
+  namespace's own settings.
+</Callout>

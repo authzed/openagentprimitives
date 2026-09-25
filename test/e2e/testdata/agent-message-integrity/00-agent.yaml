@@ -1,0 +1,77 @@
+# Fixture agents for TestAgentMessageIntegrity (test/e2e/agent_message_integrity_test.go).
+#
+# Trimmed from bronzethread/testdata/agent-subagent-chat/00-agent.yaml's
+# lead/helper shape (same mechanics: subagents capability + subagentModes
+# raising the roster member to "chat"), copied rather than referenced so
+# this test owns its own fixture per CLAUDE.md's test-conventions rule —
+# and renamed so a future edit to the bronze fixture can't silently change
+# what this integrity test exercises.
+#
+# mi-lead delegates to mi-helper in `chat` mode, which is what gives the
+# pair a real `agent` Channel (created by the SubagentRequest controller)
+# and lets mi-lead's reply_to_subagent publish a REAL, signed
+# agent_message_send envelope onto the bus — the one this test captures and
+# replays. mi-helper carries no roster of its own; delegation is not
+# transitive here.
+apiVersion: v1
+kind: Secret
+metadata: {name: mi-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: mi-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: mi-lead, namespace: default}
+spec:
+  displayName: IntegrityLead
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: mi-placeholder, key: api-key}
+  capabilities:
+    subagents: {}
+  subagents: ["mi-helper"]
+  subagentModes:
+    mi-helper: ["chat"]
+  systemPrompt:
+    inline: |
+      You are the DELEGATING fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You hand bounded work to other agents and answer them when they come back
+      with a question.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: mi-helper, namespace: default}
+spec:
+  displayName: IntegrityHelper
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: mi-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are the DELEGATED fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You receive one task from the agent that delegated it, and ask that agent
+      when the task is ambiguous.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: mi-lead-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: mi-lead
+  credentialsRef: {secretName: mi-fake-creds}
+  fake: {echo: false}

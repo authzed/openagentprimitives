@@ -1,0 +1,58 @@
+export const meta = {
+  title: 'Storage, search & the knowledge graph',
+  section: 'Reference',
+  group: 'Memory',
+  order: 2510,
+  description:
+    'The three-layer memory stack — durable storage, ranked search, and a knowledge-graph layer — and the two kinds of recall.',
+}
+
+# Storage, search & the knowledge graph
+
+<p className="doc-lede">
+  Memory is three layers, not one bucket: durable <strong>storage</strong>, ranked <strong>search</strong>, and
+  a <strong>knowledge-graph</strong> layer that turns turns into entities and facts. Each is pluggable, and the
+  right backend is chosen by your install profile.
+</p>
+
+## Storage
+
+The bottom layer just durably holds entries. The backend depends on the profile: an in-memory or SQLite store
+for local and Desktop, a Postgres-backed store for durable clusters (with a shadow mode that dual-writes while
+you migrate). The layer above never cares which — it's an interface.
+
+## Two kinds of recall: query vs. search
+
+Recall comes in two flavors, and they answer different questions:
+
+- **`query`** is boolean filtering — "everything tagged `incident`, written in the last day." Exact, structured,
+  no scoring.
+- **`search`** is scoring — "what's most *relevant* to this?" It fuses structured filters, full-text search, and
+  vector similarity, then re-ranks the merged results.
+
+Search fans out to every configured provider concurrently, merges their results with reciprocal-rank fusion, and
+**post-filters through the same authorization graph** as everything else — so a result you're not allowed to see
+never makes it back.
+
+## The knowledge graph
+
+On top of storage and search sits an optional knowledge-graph layer. As turns complete, it extracts entities and
+facts, deduplicates them, and notices contradictions — building a graph you can traverse ("what facts do we know
+about this entity? what's related?") rather than just a pile of text.
+
+## Reaching it
+
+Agents get three tools — `query_memory`, `search_memory`, and `query_knowledge` — and you get matching CLI
+commands:
+
+```bash
+oap memory search <session> --text "…"    # ranked retrieval
+oap memory query  <session> [filters]      # structured recall
+oap kg search      <session> --text "…"    # graph-aware facts
+oap kg related     <session> --entity <id> # neighbors in the graph
+```
+
+<Callout kind="tip" title="Search is authorized, not just relevant">
+  Ranking decides what's *relevant*; the authorization post-filter decides what's *permitted*. Both run on every
+  search, so relevance can never surface something the caller has no right to read.
+</Callout>

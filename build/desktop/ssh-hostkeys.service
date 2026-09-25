@@ -1,0 +1,33 @@
+# ssh-hostkeys.service — generates the guest's SSH host keys on first boot,
+# baked in (enabled) by `mage desktop:rootfs`
+# (build/desktop/rootfs-customize.sh) alongside k3s/apguest.
+#
+# Why this exists instead of relying on Ubuntu's own on-demand host-key
+# generation: openssh-server ships a systemd GENERATOR
+# (sshd-socket-generator) that synthesizes sshd-keygen@<type>.service units
+# at boot from the sshd_config HostKey list — but a vendored drop-in
+# (sshd-keygen@.service.d/disable-sshd-keygen-if-cloud-init-active.conf)
+# disables those units whenever cloud-init.target is going to run, deferring
+# host-key generation to cloud-init's own "ssh" config module instead. This
+# bundle's rootfs never runs cloud-init against a real datasource (no
+# NoCloud seed, no metadata service — see this file's sibling units
+# k3s.service/apguest.service, which bypass cloud-init the same way for
+# their own config), so relying on that deferred path is exactly the kind
+# of silent, environment-dependent gap this project's conventions warn
+# against. Baking an explicit, unconditional `ssh-keygen -A` oneshot removes
+# the dependency on cloud-init reaching its config stage at all.
+#
+# `ssh-keygen -A` is idempotent (only creates the host key files that don't
+# already exist for each of the default types), so running it on every boot
+# is harmless.
+[Unit]
+Description=Generate missing SSH host keys (agentprimitives desktop bundle)
+Before=ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolchain
+metadata:
+  name: go
+spec:
+  description: "Go 1.26 toolchain (compiler, stdlib) with the gopls language server"
+  source:
+    kind: image
+    # Rewritten to <registry>/ap-toolchain-go:dev@sha256:... by pkg/platform/manifests.Substitute
+    # on a registry install, because apimage.Catalog() includes this image.
+    image: ap-toolchain-go:dev
+    prefix: /opt/ap-toolchains/go
+  bin:
+    - bin
+    - tools/bin
+  env:
+    GOROOT: "{{ .Root }}"
+    GOCACHE: "{{ .Cache }}/gobuild"
+    GOMODCACHE: "{{ .Cache }}/gomod"
+    # The builder stage pins GOTOOLCHAIN=local too, but ENV does not cross a
+    # multi-stage Dockerfile boundary — it must be declared here as well. Without
+    # it, a go.mod naming a newer Go than this overlay ships would make the `go`
+    # command try to download a toolchain at build time; the sandbox's restricted
+    # egress turns that into a confusing hang/proxy-error instead of a clear,
+    # immediate "your go.mod wants a newer Go" failure.
+    GOTOOLCHAIN: "local"
+  provides:
+    - go
+    - gopls
+  detect:
+    - go.mod
+  # SizeBytes MUST be the on-disk usage (du -sk * 1024), NOT apparent size
+  # (du -sb). The kubelet enforces emptyDir SizeLimit against allocated blocks.
+  # Measured via: docker run --rm --entrypoint /bin/sh ap-toolchain-go:dev -c
+  # 'du -sk /opt/ap-toolchains/go' → 306584 KB = 313,942,016 bytes on Go 1.26.1.
+  # Held at 350000000 (SizeLimit 385,000,000, ~71MB spare) so a routine patch
+  # bump doesn't require re-tuning; over-estimating only inflates
+  # ephemeral-storage, while under-estimating evicts the pod mid-copy.
+  sizeBytes: 350000000

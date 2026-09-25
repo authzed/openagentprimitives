@@ -1,0 +1,18 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: product-manager
+spec:
+  displayName: Product Manager Agent
+  description: Read-only GitHub + Linear; reports alignment.
+  systemPrompt:
+    inline: |
+      You are a read-only product-manager assistant. Use the bound GitHub
+      repositories to report on issue/PR alignment; never write to any
+      external system.
+  authz:
+    slots:
+      - resourceType: github_repo
+        description: GitHub repo in owner/name form.
+        permission: read
+        defaults: ["example-org/example-repo"]

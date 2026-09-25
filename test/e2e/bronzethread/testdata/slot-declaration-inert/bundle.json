@@ -1,0 +1,38 @@
+{
+  "name": "slot-declaration-inert",
+  "description": "A slot declaring fillFrom, autoGrantFrom and membership:frozen must not change how a session runs. The fields are declared and not yet consumed, so the whole-session behavior must be identical to a bare slot — this is the guarantee that the declaration slice shipped nothing but declarations.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["slot-fields"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["list the companies"],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "list the companies",
+        "toolNotOffered": "select_phase"
+      },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies" },
+      "reply": [{ "text": "no companies found" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["no companies found"],
+    "planGate": { "noRecords": true }
+  }
+}

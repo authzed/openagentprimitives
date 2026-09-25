@@ -1,0 +1,52 @@
+export const meta = {
+  title: 'Per-subject authorization',
+  section: 'Reference',
+  group: 'Memory',
+  order: 2530,
+  description:
+    'Memory is gated by the same graph as tools: reads need session membership, writes need the creator, behind an unforgeable capability door.',
+}
+
+# Per-subject authorization
+
+<p className="doc-lede">
+  Memory isn't a shared bucket the agent can rummage through. Every read and write is authorized <strong>per
+  subject</strong> — the acting user or agent — through the same SpiceDB graph as tools, behind a door that
+  fails closed.
+</p>
+
+## Reads need membership; writes need the creator
+
+The rule is small and enforced in the graph: reading a memory entry requires **membership in the session that
+owns it**, and writing or deleting one requires being its **creator**. There is no "the agent can read all
+memory" — an entry is visible to the sessions and subjects the graph says can see it, and nothing else. A
+[search](#/memory-storage-search) that ranks a result you're not allowed to see drops it before it ever comes
+back.
+
+## An unforgeable door in front of the store
+
+Before any memory operation touches the backend, it must present a **capability** for that operation on that
+scope — and the capability is unforgeable. It's a witness with no public constructor, carried in the request
+context under a private key, that only the authorization layer can mint. A caller without the right capability
+is refused *before* the backend is called. There's no code path where a forgotten check quietly defaults to
+open: the door fails closed, on reads and writes alike.
+
+## Sharing is a grant, not a copy
+
+When one session should see another's memory, you don't copy data between them — you **grant** it. `oap memory
+share <session> --with <other-session>` writes a relationship that lets the other session's user read the
+first's entries; revoke it and the access is gone. Access follows the graph, so there's one place to reason
+about who can see what.
+
+## Channel-wide history is opt-in
+
+By default an agent sees only its own thread. A channel can opt in — `spec.channelHistory` — to offer the agent
+a tool that reads the *whole channel's* prior history, which a support agent might need to know what was already
+discussed. It's off unless enabled, available only where the transport supports it (Slack), and every read is
+authorized server-side against the graph — the same subject check as any other memory read.
+
+<Callout kind="security" title="Same graph, everywhere">
+  Memory reuses the exact authorization model as tools and channels — one SpiceDB graph, checked per subject.
+  That's the point: you don't learn a second, weaker permission system for "just the data." Who can read a
+  memory is the same kind of question as who can call a tool.
+</Callout>

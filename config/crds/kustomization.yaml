@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - agentprimitives.authzed.com_agentclasses.yaml
+  - agentprimitives.authzed.com_agentidentities.yaml
+  - agentprimitives.authzed.com_agentsessiongrants.yaml
+  - agentprimitives.authzed.com_agentsessions.yaml
+  - agentprimitives.authzed.com_agentsettings.yaml
+  - agentprimitives.authzed.com_agentuis.yaml
+  - agentprimitives.authzed.com_artifactrenders.yaml
+  - agentprimitives.authzed.com_channels.yaml
+  - agentprimitives.authzed.com_clusteragentsettings.yaml
+  - agentprimitives.authzed.com_clusteridentityproviders.yaml
+  - agentprimitives.authzed.com_clusterskills.yaml
+  - agentprimitives.authzed.com_clusterskillsources.yaml
+  - agentprimitives.authzed.com_credentialupdaterequests.yaml
+  - agentprimitives.authzed.com_mcpservers.yaml
+  - agentprimitives.authzed.com_publicendpoints.yaml
+  - agentprimitives.authzed.com_relationshipsources.yaml
+  - agentprimitives.authzed.com_sessionholds.yaml
+  - agentprimitives.authzed.com_sessionuseridentities.yaml
+  - agentprimitives.authzed.com_sidecartoolboxes.yaml
+  - agentprimitives.authzed.com_skills.yaml
+  - agentprimitives.authzed.com_skillsources.yaml
+  - agentprimitives.authzed.com_spiceboxclasses.yaml
+  - agentprimitives.authzed.com_spiceboxsessions.yaml
+  - agentprimitives.authzed.com_spiceboxtoolchains.yaml
+  - agentprimitives.authzed.com_spiceboxtoolkits.yaml
+  - agentprimitives.authzed.com_spiceboxtoolspecs.yaml
+  - agentprimitives.authzed.com_spicedbbootstraps.yaml
+  - agentprimitives.authzed.com_subagentrequests.yaml
+  - agentprimitives.authzed.com_toolcalls.yaml
+  - agentprimitives.authzed.com_useridentities.yaml
+  - agentprimitives.authzed.com_workshops.yaml
+  - agentprimitives.authzed.com_workshopprobes.yaml
+  - agentprimitives.authzed.com_workspacesources.yaml

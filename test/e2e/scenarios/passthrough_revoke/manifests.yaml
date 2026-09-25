@@ -1,0 +1,107 @@
+# Scenario: passthrough revoke + re-link (passthrough_revoke_test.go).
+#
+# Drives the full revoke → re-link cycle end-to-end:
+#   1. A pre-linked credential is seeded directly via useridentity.PutToken
+#      (simulating a user who linked in a prior session).
+#   2. The portal's POST /my/accounts/linear-oauth/revoke removes the
+#      master Secret + the UserIdentity entry.
+#   3. A new AgentSession for the same user parks in AwaitingCredentials
+#      because the credential is now missing.
+#   4. channelsd's CredentialRequestWatcher publishes a credential_request
+#      envelope with a deep-link; the test drives GET /link + POST
+#      /link/submit to re-link.
+#   5. The operator un-parks the session (CredentialsReady=True).
+#   6. Exactly one credential_linked OOB confirmation fires (the re-link;
+#      the revoke must not emit one, per ι3's design).
+#
+# Uses the same AgentClass + MCPServer shape as passthrough_selfservice
+# so the operator's passthrough gate and the credential-request watcher
+# exercise the same real code paths.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-revoke-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder. The fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-revoke-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# MCPServer the passthrough class references. spec.auth.credential is the
+# credential gate key; spec.auth.provider becomes the user-visible label
+# in the SessionUserIdentity's Explanation.What.
+#
+# spec.server.url is rewritten to {{MCP_URL}} by the test before apply so
+# the MCP probe hits the in-process MCPStub rather than a real host.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: linear-mcp
+  namespace: default
+spec:
+  name: linear-mcp
+  version: v1
+  intent: "Passthrough revoke e2e: drives the revoke + re-link cycle."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: linear-oauth
+    provider: Linear
+  tools: []
+---
+# AgentClass with identityMode: userPassthrough — every session parks in
+# AwaitingCredentials until linear-oauth is linked. authz.toolCalls.mode=disabled
+# bypasses SpiceDB authz so no schema bootstrap is needed.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: triage-bot
+  namespace: default
+spec:
+  displayName: "Triage Bot"
+  identityMode: userPassthrough
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: pt-revoke-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a passthrough triage agent for the revoke e2e"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  mcpServers:
+    - name: linear
+      ref: linear-mcp
+---
+# Channel for the harness to drive inbound messages through.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: triage-bot-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: triage-bot
+  credentialsRef:
+    secretName: pt-revoke-fake-creds
+  fake:
+    echo: false

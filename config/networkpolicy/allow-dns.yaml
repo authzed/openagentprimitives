@@ -1,0 +1,55 @@
+# allow-dns: lets every pod in the namespace EXCEPT extractord resolve DNS.
+#
+# Without this, default-deny would block egress to the cluster DNS service
+# (CoreDNS in kube-system) and every name lookup would fail — pods could not
+# resolve spicebox-nats.agentprimitives-system.svc, the kube apiserver, the
+# Slack/LLM API hostnames, etc.
+#
+# The egress rule restricts the DESTINATION to UDP+TCP port 53. The `to` peer
+# scopes it to the kube-system namespace where CoreDNS runs; this relies on
+# kube-system carrying the standard kubernetes.io/metadata.name label that the
+# apiserver stamps on every namespace.
+#
+# The podSelector excludes extractord (app.kubernetes.io/name NotIn
+# [agentprimitives-extractord]) rather than matching every pod: extractord's
+# whole security story is deny-all egress, DNS included
+# (config/networkpolicy/extractord.yaml) — it dials nothing and resolves no
+# names, so a working DNS path out of the one pod that parses hostile
+# user-uploaded bytes would be a live exfiltration channel (DNS-tunneling
+# extracted document text out via CoreDNS, which forwards upstream by
+# default). Without this exclusion, this namespace-wide rule would silently
+# reopen exactly the path extractord.yaml's egress: [] closes. Every other pod
+# in the namespace is unaffected.
+#
+# This rule is CLOUD-AGNOSTIC. Clusters whose DNS resolves via a non-kube-system
+# endpoint (e.g. GKE Autopilot's NodeLocal DNSCache, which answers on a
+# link-local 169.254.x.x address) get an ADDITIONAL allow-dns-cloud policy that
+# `oap install` creates from the detected cloud's Cloud.DNSEgressCIDRs() — the
+# cloud-specific CIDRs live with the cloud provider, not here.
+#
+# CANONICAL SOURCE: keep in sync with netpolrule.DNSEgress() in
+# pkg/controllers/agentsession/netpolrule; TestAllowDNSYAMLMatchesNetpolRule
+# (pkg/platform/manifests) fails if they drift. That test only checks the egress rule
+# (destination + ports), not podSelector, so the extractord exclusion here
+# does not need a netpolrule.go mirror.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: NotIn
+        values:
+          - agentprimitives-extractord
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spicebox-operator-memory
+  namespace: agentprimitives-system
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      # Durable volume for the operator's sqlite memory store. Must sit at or
+      # above the disk-type floor of every supported cloud: GKE hyperdisk-balanced
+      # (and Azure managed disks) reject anything under 4Gi with a non-retryable
+      # InvalidArgument, which permanently wedges an unbound PVC and stalls
+      # `oap install`. 10Gi both clears that floor with headroom and matches the
+      # postgres memory sibling (spicebox-postgres-data, also a durable memory
+      # store) so the two don't drift. Do NOT lower below 4Gi.
+      storage: 10Gi

@@ -1,0 +1,232 @@
+{
+  "name": "workshop-draft-slot-narrows-to-the-phase",
+  "description": "One phase approval covers EVERY apply of the draft, and covers nothing else.\n\nThe workshop sidecar's `apply` is `external` -- which in this repo means \"an approval naming the instance\" -- and keys the CONSTANT id `draft` on permission `change`; `delete` keys the same instance on `remove`. The builder class declares `workshop_draft` as an authz slot, so a plan phase listing `perm:change:workshop_draft` binds `workshop_draft:draft#slot_grant_change` for the session when the person approves it, and every `workshop_apply` in that phase then runs with no further card. Before the slot existed, no instance could be named at all: every apply, every re-armed watch and every delete cost the person a card, and a card's grant is ONE-SHOT (revoked the moment the call it authorized has run -- host_approval.go, \"revoke one-shot slot grant\").\n\nTHIS BUNDLE RUNS WITH TOOL-CALL AUTHORIZATION ENFORCING, and that is the whole reason it exists. The four sibling workshop bundles (workshop-inventory-is-real, workshop-apply-earns-a-real-verdict, workshop-recommend-capability-is-real, workshop-try-it-link-and-watch) each set `authz.toolCalls: {mode: disabled}` so their scenario isolates the real workshop server from the approval round trip -- so none of them reaches the runner's gate, and a copy of this scenario run their way would stay green with the slot deleted, the checks deleted and the approval never asked for.\n\nTHE PHASE NAMES THE TYPE AND NO ID, WHICH IS THE POINT. `draft` is fixed by the toolbox: it appears in no plan, no argument produces it, and an agent cannot know it to write it down. What the gate refuses is SILENCE, not deferral (plangate.MissingSlotDeclarations), so the phase declares {\"type\":\"workshop_draft\"} with no `id` -- the legal way to say \"I act on this, I cannot name it\" -- and planGateBindings supplies the instance from the permission surface's own ConstantResourceID, the same shape git_repo's literal \"workspace\" has. That is why `assert.authz.decisions` names `workshop_draft:draft#change` rather than a bare type: a binding that lost the constant would carry an empty id, bind nothing, and every following call would escalate again. Writing `\"id\": \"draft\"` into the plan by hand would make this bundle pass with that plumbing broken, and would test a plan no builder writes.\n\nAPPLY IS CALLED TWICE on purpose. One call cannot distinguish a grant that PERSISTS from one re-granted per call: both produce an identical transcript and identical tool results, and the run \"works\" either way -- the person just clicks N times instead of once. Counting cards is the only thing that separates them, which is the lesson plangate-amendment-binds-constant-instance was written for.\n\napprovalPrompts is 2, and WHICH two is the point -- so `assert.noticeCounts` states it per kind (`plan_phase: 1`, `plan_amendment: 1`, `tool_approval: 0`) rather than leaving it to the total. A total of 2 is reachable by two per-call `tool_approval` cards and no plan card at all, which is the exact failure this bundle exists to catch, so the sum says nothing on its own. The two:\n  1. `plan_phase`, raised on the FIRST `workshop_apply` and cleared once. The second apply raises nothing.\n  2. `plan_amendment`, raised by `workshop_delete` -- whose handle is `perm:remove:workshop_draft`, which the approved phase never named. It is an AMENDMENT rather than a per-call `tool_approval`, and which one it is follows from hook order: the plan gate runs at hooks.OrderPlanGate (19), before ToolCallAuthz (20). The call is out of ceiling and carries a `_reason`, so the gate reads it as a justified retry and asks to widen the plan; the approved amendment binds `remove` on the same constant instance, and the tool-call gate downstream never sees the call un-granted.\n\nA DIFFERENT COUNT IS A DEFECT, in one of two directions, and they are not equally bad.\n  - 3 or more: the phase approval bound NO instance, so each apply fell through to a per-call `tool_approval` card and the person is back to clicking Approve per apply -- \"the approval was recorded but bound no instance\", the failure the constant-id fallback exists to prevent. (Arithmetic: with the grant missing, apply #1 costs plan_phase + tool_approval, apply #2 another tool_approval, and the delete costs its amendment plus one more -- so the count runs well past 3, but anything above 2 is this failure. Measured, as an ABLATION: deleting the slot block from the class in this fixture takes the count to 5, with both applies and the delete then recorded as denied on the external grant leg. Read that for what it is -- a class that DECLARES no slot is a different fault from a declared slot whose approval bound no instance, even though both read above 2. The ablation shows the count is sensitive to the join being broken; it does not reproduce the specific binding failure.)\n  - 1: the `workshop_delete` ran with NO approval. This is the WORSE defect: it means a `change` grant satisfied `remove`, so one approval to edit the draft silently bought the authority to destroy it.\n\n`tool_approval` is in autoApprove deliberately, and not to make the run pass. It is auto-answered so the run continues, and `noticeCounts` then pins it at 0 -- so a regression that re-raises the per-call card on the delete FAILS BY NAME, naming the category that was raised. Drop it from autoApprove and the same regression parks the session on an unanswered prompt until the class approval timeout, and reads as a hang with nothing naming the cause.\n\nEvery claim is asserted on the TOOL RESULT. Both applies read back the REAL pkg/controllers/agentclass reconciler's own `Valid` condition through the real workshop server test/e2e/workshop_mcp.go mounts (see workshop-apply-earns-a-real-verdict for what that mount does and does not prove), and each also asserts the human-approval refusal is ABSENT from the result it got. The delete reads back `{\"deleted\":true,...}`. `planGate.outcomes` pins the delete's own gate record as `denied` -- the ceiling refusing `remove` is what makes the second card a real refusal rather than an incidental extra prompt.",
+  "agentDir": "testdata/workshop-draft-slot-narrows-to-the-phase/manifests",
+  "agentClass": "demo-workshop-draft",
+  "autoApprove": [
+    "plan_phase",
+    "plan_amendment",
+    "tool_approval"
+  ],
+  "userTurns": [
+    "Build me a small notifier agent in the workshop: apply a first draft, revise it and apply it again, then take it back off the draft -- I only want to be asked about the build once."
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "apply a first draft"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "s1",
+                  "label": "build the notifier draft",
+                  "status": "pending",
+                  "phase": "build_stage"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "build_stage",
+                  "label": "Build the notifier draft",
+                  "why": "the person asked for a notifier agent to be built in this workshop",
+                  "permissions": [
+                    {
+                      "handle": "perm:change:workshop_draft",
+                      "why": "building means applying the draft, and I will apply it again once I have revised it"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "workshop_draft",
+                      "why": "the draft this workshop is building is the only thing I will change; its name is fixed by the workshop, so I have none to give"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_apply",
+            "args": {
+              "operation_id": "op-apply-1",
+              "_reason": "applying the first draft of the notifier agent",
+              "args": {
+                "manifest": {
+                  "apiVersion": "agentprimitives.authzed.com/v1alpha1",
+                  "kind": "AgentClass",
+                  "metadata": {
+                    "name": "demo-notifier-draft"
+                  },
+                  "spec": {
+                    "displayName": "DemoNotifier",
+                    "description": "First draft of the notifier agent this workshop is building.",
+                    "model": {
+                      "provider": "test",
+                      "name": "scripted",
+                      "apiKey": {
+                        "name": "demo-workshop-draft-placeholder",
+                        "key": "api-key"
+                      }
+                    },
+                    "systemPrompt": {
+                      "inline": "placeholder system prompt for the notifier draft under construction"
+                    },
+                    "identityMode": "userPassthrough",
+                    "budget": {
+                      "maxTurns": 10,
+                      "maxTokens": 10000,
+                      "maxDuration": "5m"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_apply",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"status\":\"True\",\"type\":\"Valid\"",
+        "lastToolResultNotContains": "human approval required"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_apply",
+            "args": {
+              "operation_id": "op-apply-2",
+              "_reason": "applying the revised draft in the same build stage",
+              "args": {
+                "manifest": {
+                  "apiVersion": "agentprimitives.authzed.com/v1alpha1",
+                  "kind": "AgentClass",
+                  "metadata": {
+                    "name": "demo-notifier-draft"
+                  },
+                  "spec": {
+                    "displayName": "DemoNotifier",
+                    "description": "Revised draft of the notifier agent: the same draft, applied a second time in the same approved stage.",
+                    "model": {
+                      "provider": "test",
+                      "name": "scripted",
+                      "apiKey": {
+                        "name": "demo-workshop-draft-placeholder",
+                        "key": "api-key"
+                      }
+                    },
+                    "systemPrompt": {
+                      "inline": "revised placeholder system prompt for the notifier draft under construction"
+                    },
+                    "identityMode": "userPassthrough",
+                    "budget": {
+                      "maxTurns": 10,
+                      "maxTokens": 10000,
+                      "maxDuration": "5m"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_apply",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"status\":\"True\",\"type\":\"Valid\"",
+        "lastToolResultNotContains": "human approval required"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_delete",
+            "args": {
+              "operation_id": "op-delete-1",
+              "_reason": "the person asked for the draft to be taken back off the workshop once it had been built",
+              "args": {
+                "kind": "AgentClass",
+                "name": "demo-notifier-draft"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_delete",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"deleted\":true"
+      },
+      "reply": [
+        {
+          "text": "applied the notifier draft twice and then removed it from the workshop"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "applied the draft twice under one approved build stage, then removed it"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "applied the notifier draft twice and then removed it from the workshop"
+    ],
+    "toolsCalled": [
+      "workshop_apply",
+      "workshop_delete"
+    ],
+    "authz": {
+      "decisions": {
+        "workshop_draft:draft#change": "allowed",
+        "workshop_draft:draft#remove": "allowed"
+      }
+    },
+    "noticeCounts": {
+      "plan_phase": 1,
+      "plan_amendment": 1,
+      "tool_approval": 0
+    },
+    "planGate": {
+      "frozenPhases": 1,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 2,
+      "outcomes": {
+        "workshop_delete": "denied"
+      }
+    }
+  }
+}

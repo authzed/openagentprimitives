@@ -1,0 +1,62 @@
+{
+  "name": "precondition-fork-gated",
+  "description": "A slot PRECONDITION gates an authz slot on a signed envelope fact, and here it REFUSES. A pull_request webhook opens the session; its head lives on a fork, so the github kind records envelope fact head_is_fork=true keyed to the head OID. The agent's checkout of that OID is refused BEFORE it dispatches — the git_commit slot's `requires: [!facts.envelope.head_is_fork]` holds it shut — and the refusal raises exactly one precondition_waiver card.\n\nThe waiver is auto-DENIED here (the human declines to run untrusted fork code), so the call stays refused. That is the gated half; precondition-fork-approved is the same fixture with the waiver approved.\n\nWhat is asserted, and what is not. The recorded authz decision on git_commit:<head OID>#checkout is `denied` — the airtight proof the gate held, read from the decision log rather than the tool result, because a scripted transcript says the same words either way. lastToolResultIsError is true. The card count is NOT asserted here: approvalPrompts is a plan-gate assertion (checkPlanGate requires a plan_gate_audit record, which a pure precondition scenario never writes), so the `denied` decision carries the whole claim — the same channel gh-api-is-not-a-bypass and git-repo-url-scopes-per-repo assert their boundaries through. The approved twin proves the other direction: `allowed` is reachable ONLY through the waiver, since the slot starts empty and the precondition is Refused. The tool result CONTENT is the executor's generic 'approval denied or timed out' framing, not the gate's RefusalMessage: an auto-denied waiver never runs the runner-side effect that would surface the gate text, so this bundle does not assert the refusal string on the tool result — the `denied` decision is the load-bearing claim, exactly as gh-api-is-not-a-bypass asserts the boundary through the decision and not the message.\n\nThe fixture is self-contained: its own AgentClass and a fixture SpiceboxToolkit (forkgit) that declares git_commit and a checkout subcommand keyed on it. toolkits/git.yaml is untouched.",
+
+  "agentDir": "testdata/precondition-fork-gated",
+  "agentClass": "forkbot",
+
+  "trigger": {
+    "channel": "forkbot-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#7",
+    "headSHA": "feed1234feed1234feed1234feed1234feed1234",
+    "statusName": "forkbot"
+  },
+
+  "autoDeny": ["precondition_waiver"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "Pull request demo-org/demo-repo#7 was opened" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "forkgit_forkgit",
+            "args": {
+              "operation_id": "op-checkout-1",
+              "_reason": "check out the pull request head to read its code",
+              "args": ["checkout", "feed1234feed1234feed1234feed1234feed1234"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "forkgit_forkgit",
+        "lastToolResultIsError": true
+      },
+      "reply": [
+        { "text": "I can't check out this pull request: its head branch is on a fork, so running its code needs a human waiver, which was declined." }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": { "summary": "Refused to check out the fork PR's head; the precondition waiver was declined." }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "authz": {
+      "decisions": { "git_commit:feed1234feed1234feed1234feed1234feed1234#checkout": "denied" }
+    }
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "name": "sandbox-subcommand-permissions",
+  "description": "A sandbox toolkit declares different permissions per subcommand \u2014 `gh pr view` is readonly#github_repo_url#read, `gh pr create` is EXTERNAL#github_repo_url#write. A toolspec allowing both synthesizes ONE tool for the whole CLI, and that tool used to take the toolkit-level default (passthrough): every per-subcommand check was discarded at synthesis, so `gh pr create` was authorized exactly like `gh pr view` and the permission surface enumerated ZERO handles.\n\ngatedAgainstFrozenPlan is the load-bearing assertion and it is mutation-proven: revert PermissionForCall to the pre-fix behaviour and this bundle fails with 'no permissioned call reached the gate'. It exercises the whole chain \u2014 the call resolves to its subcommand's permission, the resource id resolves from PARSED argv (a template reading {repo} cannot see an argv array without it), and the gate then recognises the call as permissioned and records it against the frozen ceiling.\n\nDo NOT weaken this to frozenPhases alone: a phase freezes whether or not any of that held, just with an empty ceiling. Two earlier drafts asserted exactly that and were vacuous.\n\nThe gh call REACHES the sandbox and comes back with the recorded stdout. toolOutputs[\"gh\"] is the SpiceboxClass tool's recorded result, served by the fake exec binder rather than by the MCP stub \u2014 a bundle replays black boxes, and which transport answered is not something it reproduces. Deleting that entry fails this bundle: the responder refuses an argv it has no recording for, the call comes back IsError, and lastToolResultIsError:false catches it. The transcript mints its operation through new_operation and threads that operation's id into the call, because a sandbox call with an unregistered operation_id is refused before dispatch and never reaches the sandbox at all. mintedIDs pins the id the run mints, so the recorded argument is literal and still correct.",
+  "agentDir": "testdata/sandbox-subcommand-permissions/manifests",
+  "agentClass": "gh-reviewer",
+  "userTurns": [
+    "look at the open PRs"
+  ],
+  "mintedIDs": { "operation": ["op-5a4b0c0d5a4b0c0d"] },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "look at the open PRs"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "s1",
+                  "label": "review",
+                  "status": "pending",
+                  "phase": "review"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "review",
+                  "label": "Review PRs",
+                  "why": "asked",
+                  "permissions": [
+                    {
+                      "handle": "perm:read:github_repo_url",
+                      "why": "read"
+                    },
+                    {
+                      "handle": "perm:write:github_repo_url",
+                      "why": "comment"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "new_operation",
+            "args": {
+              "description": "review the open PRs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "new_operation"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_gh",
+            "args": {
+              "operation_id": "op-5a4b0c0d5a4b0c0d",
+              "_reason": "read the open PRs",
+              "args": [
+                "pr",
+                "view",
+                "123",
+                "--repo",
+                "demo-org/demo-repo"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "gitlike_gh",
+        "lastToolResultContains": "no open pull requests",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "text": "no open PRs"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "done"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "no open PRs"
+    ],
+    "planGate": {
+      "frozenPhases": 1,
+      "gatedAgainstFrozenPlan": true,
+      "rebuildableFromLog": true
+    }
+  },
+  "toolOutputs": {
+    "gh": {
+      "stdout": "no open pull requests"
+    }
+  }
+}

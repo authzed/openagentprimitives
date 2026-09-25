@@ -1,0 +1,76 @@
+# AgentClass + Channel for the native-attachment-passthrough e2e fixture: an
+# image arrives over Slack, no extractor claims its MIME, and the runner's
+# hydration pass carries the raw bytes to the provider as a native image
+# block instead of a reference.
+#
+# Grants ONLY the "attachments" capability and opts the Channel into
+# attachment ingestion — the same gate-open shape the fetch_artifact scenario
+# uses, deliberately, because the point of THIS scenario is that the native
+# path needs no additional grant: declaring the MIME on the model row is the
+# whole opt-in. A separate fixture (rather than sharing that scenario's) keeps
+# the two independent — this one's file is an image with no extracted text,
+# where that one's is a document read back through fetch_artifact, and neither
+# should break when the other's fixture is tuned.
+#
+# AgentClass uses model.provider="test", which the production operator
+# REFUSES with Valid=False reason=TestProviderNotAllowed. Only the e2e
+# harness's reconciler (AllowTestProvider=true) admits it — see
+# test/e2e/harness.go's startManager.
+#
+# Deliberately toolless beyond the meta-tool capabilities: no mcpServers, no
+# agentIdentity, no boundEntities.
+#
+# Channel kind=slack (role: both) is the REAL slack transport, backed by the
+# e2e harness's shared fakeslack.Client, with files.info routed through the
+# fake too (pkg/channels/channelkinds/slack/attachments.go's
+# attachmentInfoClientFactory).
+#
+# No SpiceDBBootstrap is needed: the session's agentsession#owner is resolved
+# from the DM sender at session-creation time, and agentsession#interact =
+# owner + participant - denied, so the sender's own message always passes
+# CheckInteract without extra relationship seeding.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: native-attach-agent
+  namespace: default
+spec:
+  displayName: NativeAttachBot
+  description: "E2E fixture agent for the native-attachment-passthrough scenario. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: native-attach-placeholder
+      key: api-key
+  capabilities:
+    attachments: {}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      When a message says an image was attached, describe what you see
+      and reply to the user with respond_to_user.
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: native-attach-channel
+  namespace: default
+spec:
+  kind: slack
+  role: both
+  agentClass: native-attach-agent
+  sessionScope: auto
+  credentialsRef:
+    secretName: native-attach-creds
+  attachments:
+    enabled: true
+  slack:
+    mode: socket

@@ -1,0 +1,105 @@
+{
+  "name": "plangate-child-inherits-enforcing-ceiling",
+  "description": "The projected child ceiling must actually BITE at the child, AND an inherited read-only phase must run without a human. plangate-amendment-approves-the-spawn proves a delegated child RUNS under an inherited root, but its child class is not enforcing, so the inherited ceiling is inert and nothing ever consults it to deny. This is the missing enforcement half, and the regression test for the tier-0 parity fix (DeriveChildPhaseClearance): a read-only phase auto-clears when an agent declares it via update_plan, and this proves it also auto-clears when a child INHERITS it -- without which an enforcing child stalls on a plan_phase it can neither answer (headless) nor self-clear (select_phase is withheld from children). pcc-lead runs the plan gate at LOGGING and freezes a single-phase plan whose ceiling is exactly {perm:list:pcc_widget}; logging blocks nothing and publishes no approval, so the parent's delegate runs unblocked and the ONLY enforcing gate in the run is the child's -- which is what makes every child-side denial unambiguously the inherited ceiling and not the parent's. WriteChildRoot folds that frozen plan, writes pcc-worker's root (ceiling {perm:list:pcc_widget}, phase 0) AND -- because the parent priced that read-only phase tier-0 -- a tier-0 clearance, all BEFORE the child CR exists. pcc-worker then runs ENFORCING with no update_plan of its own and NO plan_phase auto-approval configured: catalog_read_widget (perm:list:pcc_widget, IN ceiling, phase auto-cleared) returns a real non-error result, and catalog_read_gadget (perm:list:pcc_gadget, OUT of ceiling) is refused -- the amendment is denied so the refusal is final and reaches the model as an error. The DELIBERATE absence of autoApprove:[plan_phase] is load-bearing: if the tier-0 clearance regressed, the child's phase would fold UNAPPROVED, its read_widget would raise a plan_phase nobody answers, and the run would hang to failure rather than pass on a masked auto-approval. Both list permissions are wildcard-satisfiable, so the tool CHECKER allows both reads; the only thing that can deny the gadget read is the plan gate, so the denial cannot be a SpiceDB refusal in disguise. Asserts on the child's TOOL RESULTS (not the reply): the widget read non-error and the gadget read IsError, each read against the child session via agentClass scoping, because a scripted transcript says the same words whether the ceiling bit or not. agentReplyContains is the BLOCKING assertion that makes the driver wait for the run to finish.",
+
+  "agentDir": "testdata/agent-plangate-child-ceiling",
+  "agentClass": "pcc-lead",
+
+  "defaultUser": "lead-1@example.com",
+
+  "autoDeny": ["plan_amendment"],
+
+  "toolOutputs": {
+    "read_widget": { "widgets": ["widget-alpha", "widget-beta"] },
+    "read_gadget": { "gadgets": ["gadget-x"] }
+  },
+
+  "userTurns": ["have the worker list the widgets in the catalog"],
+
+  "llm": [
+    {
+      "agentClass": "pcc-lead",
+      "expect": { "userTextContains": "widgets" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "hand the widget listing to the worker", "status": "pending", "phase": "handoff" }
+              ],
+              "phases": [
+                {
+                  "id": "handoff",
+                  "label": "Delegate the widget listing",
+                  "why": "the worker owns the catalog reads; I only need it to list widgets",
+                  "permissions": [
+                    { "handle": "perm:list:pcc_widget", "why": "the worker will list widgets on my behalf" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "agentClass": "pcc-lead",
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": {
+        "agent": "pcc-worker",
+        "task": "List the widgets in the catalog and report them. Do not read gadgets."
+      } } }]
+    },
+
+    {
+      "agentClass": "pcc-worker",
+      "expect": { "userTextContains": "List the widgets" },
+      "reply": [{ "toolUse": { "name": "catalog_read_widget", "args": { "operation_id": "op-w", "_reason": "the task asks me to list widgets", "args": {} } } }]
+    },
+    {
+      "agentClass": "pcc-worker",
+      "expect": {
+        "lastToolResult": "catalog_read_widget",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "widget-alpha"
+      },
+      "reply": [{ "toolUse": { "name": "catalog_read_gadget", "args": { "operation_id": "op-g", "_reason": "checking whether gadgets are reachable too", "args": {} } } }]
+    },
+    {
+      "agentClass": "pcc-worker",
+      "expect": {
+        "lastToolResult": "catalog_read_gadget",
+        "lastToolResultIsError": true
+      },
+      "reply": [{ "toolUse": { "name": "return_result", "args": {
+        "result": "Listed the widgets (widget-alpha, widget-beta). Reading gadgets was outside my approved plan, so I did not."
+      } } }]
+    },
+
+    {
+      "agentClass": "pcc-lead",
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "widget-alpha"
+      },
+      "reply": [{ "toolUse": { "name": "respond_to_user", "args": { "text": "The worker listed the widgets; it could not reach gadgets, which were outside its approved plan." } } }]
+    },
+    {
+      "agentClass": "pcc-lead",
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "worker listed widgets; gadgets refused by the inherited ceiling" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["could not reach gadgets"],
+    "toolsCalled": ["update_plan", "delegate"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true
+    }
+  }
+}

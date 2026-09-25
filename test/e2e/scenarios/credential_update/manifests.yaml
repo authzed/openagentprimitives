@@ -1,0 +1,122 @@
+# Scenario: credential-update requests (credential_update_test.go).
+#
+# An identityMode=userPassthrough agent whose upstream MCP call fails with an
+# authentication error asks a human to replace the credential behind it. The
+# fixture's whole job is to make that ask REACHABLE:
+#
+#   - userPassthrough, because slice 1 only ever offers to update a USER-owned
+#     credential (an AgentIdentity's own is refused NotUpdatable), so the
+#     resolved credential has to be a SessionUserIdentity one.
+#   - The credential is PRE-LINKED by the test before the first message, so
+#     the passthrough gate CLEARS. The premise is a credential that is present
+#     and dead, not one that was never linked — if the session parked on the
+#     missing-credential gate instead, it would look identical from the
+#     outside and prove nothing.
+#   - capabilities.credential_update is granted explicitly: the capability is
+#     opt-in (DefaultOn == false) precisely because the tool can put a
+#     credential-entry form in front of a human, so no class gets it for free.
+#   - spec.auth.provider is a REAL provider-catalog id, because the operator's
+#     independent re-verification runs that provider's declarative probe. The
+#     test redirects the probe's HTTP client at its own server to decide,
+#     per test, whether the credential answers "dead" or "still live".
+#
+# authz.toolCalls.mode=disabled bypasses SpiceDB entirely — this scenario is
+# about the credential-update determination, not authorization.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cu-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder. The fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cu-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# The upstream whose call fails. spec.auth.credential is the credential the
+# request's origin ("mcpserver/cu-upstream") resolves to; spec.auth.provider
+# is the catalog entry whose verify probe the operator re-runs before it will
+# ask anybody anything.
+#
+# spec.server.url is rewritten to {{MCP_URL}} by the test before apply so the
+# MCPServer controller's tools/list probe and the agent's own calls both hit
+# the in-process MCPStub.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: cu-upstream
+  namespace: default
+spec:
+  name: cu-upstream
+  version: v1
+  intent: "Credential-update e2e fixture: one read-only tool whose calls can be made to fail with 401."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: cu-upstream-token
+    provider: github-pat
+  tools:
+    - name: list_issues
+      intent: "List issues upstream."
+      args:
+        allowedFields: [query]
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-credupdate
+  namespace: default
+spec:
+  displayName: "Credential Update Bot"
+  identityMode: userPassthrough
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: cu-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you file issues upstream on request"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  capabilities:
+    credential_update:
+      enabled: true
+  mcpServers:
+    - name: upmcp
+      ref: cu-upstream
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-credupdate-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-credupdate
+  credentialsRef:
+    secretName: cu-fake-creds
+  fake:
+    echo: false

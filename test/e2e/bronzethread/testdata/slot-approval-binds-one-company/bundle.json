@@ -1,0 +1,88 @@
+{
+  "name": "slot-approval-binds-one-company",
+  "description": "One approval buys ONE company. User A — who owns neither — is approved for Northwind by ITS owner, then asks for Fabrikam in the same turn and is refused; A ends able to see company 1 and not company 2. This is the guarantee that replaced the args-hash binding: an approval is scoped to the (instance, permission) pair it was granted for, so it cannot be spent on the next company the agent happens to name.\n\nBoth companies record a `denied` decision — for Northwind that is the Check that FIRED the approval, and the approved re-dispatch is not re-Checked into the log. What separates them is the tool result: Northwind returns the contacts with isError false, Fabrikam returns an error with the contact payload absent. The notContains is the load-bearing half — a refusal that still spilled the rows into context would have denied nothing.\n\nBoth calls sit in ONE user turn deliberately. Each turn boundary is a race: after agent_work_complete the runner makes one more model call, and whether the next user message has landed by then decides what that call carries. Fewer boundaries, fewer ways for a positional transcript to drift.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+
+  "defaultUser": "user@example.com",
+  "autoApprove": ["tool_approval"],
+  "autoApproveAs": "owner-1@example.com",
+
+  "toolOutputs": {
+    "list_companies": {
+      "results": [
+        { "id": "4210", "name": "Northwind Trading", "ownerId": "owner-1", "createdAt": "2026-07-02T09:14:00Z" },
+        { "id": "4299", "name": "Fabrikam Logistics", "ownerId": "owner-9", "createdAt": "2026-07-05T11:02:00Z" }
+      ]
+    },
+    "list_contacts_for_company": {
+      "results": [
+        { "id": "c-88", "firstName": "Jane", "lastName": "Smith", "email": "jane.smith@northwind.example", "title": "Ops Lead" }
+      ]
+    }
+  },
+
+  "userTurns": [
+    "list the companies",
+    "who works at Northwind Trading, and who works at Fabrikam Logistics?"
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": { "sinceDays": 30 } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultContains": "Fabrikam Logistics",
+        "lastToolResultIsError": false
+      },
+      "reply": [{ "text": "Northwind Trading and Fabrikam Logistics" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "listed" } } }]
+    },
+
+    {
+      "expect": { "userTextContains": "who works at Northwind Trading" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_contacts_for_company", "args": { "operation_id": "op-contacts-4210", "_reason": "user asked who works at that company", "args": { "companyId": "4210" } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_contacts_for_company",
+        "lastToolResultContains": "jane.smith@northwind.example",
+        "lastToolResultIsError": false
+      },
+      "reply": [{ "toolUse": { "name": "centerdot_list_contacts_for_company", "args": { "operation_id": "op-contacts-4299", "_reason": "user asked who works at that company", "args": { "companyId": "4299" } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_contacts_for_company",
+        "lastToolResultNotContains": "jane.smith@northwind.example",
+        "lastToolResultIsError": true
+      },
+      "reply": [{ "text": "Jane Smith works at Northwind Trading; I could not read the contacts for Fabrikam Logistics" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": [
+      "Northwind Trading",
+      "could not read the contacts for Fabrikam"
+    ],
+    "authz": {
+      "decisions": {
+        "crm_company:4210#contact_access": "denied",
+        "crm_company:4299#contact_access": "denied"
+      },
+      "neverAllowed": ["crm_company:4299#contact_access"]
+    }
+  }
+}

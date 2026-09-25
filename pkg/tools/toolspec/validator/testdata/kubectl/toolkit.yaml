@@ -1,0 +1,113 @@
+name: kubectl
+version: "1"
+toolkitRevision: "2026-04-24"
+target:
+  binary: kubectl
+  versionRange: ">=1.28.0 <2.0.0"
+  versionProbe:
+    args: ["version", "--client", "-o", "json"]
+    extract: {kind: regex, pattern: '"gitVersion":"v([0-9]+\.[0-9]+\.[0-9]+)'}
+parser:
+  kind: declarative
+
+env:
+  allowed:
+    - {name: KUBECONFIG, description: "Path to kubeconfig file"}
+    - {name: HTTPS_PROXY, description: "HTTP proxy"}
+
+globalFlags:
+  - {long: namespace, short: "n", type: string}
+  - {long: context,               type: string}
+  - {long: help,      short: "h", type: bool}
+
+subcommands:
+  - path: [get]
+    description: "Read resources"
+    positional:
+      - {name: resource, type: string, required: true}
+      - {name: name,     type: string, required: false}
+    flags:
+      - {long: output, short: o, type: string}
+      - {long: selector, short: l, type: string}
+      - {long: all-namespaces, short: A, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: ["{env:KUBECONFIG}"]}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [describe]
+    description: "Describe a resource"
+    positional:
+      - {name: resource, type: string, required: true}
+      - {name: name,     type: string, required: false}
+    flags: []
+    effects:
+      destructive: false
+      reads: [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [logs]
+    description: "Print pod logs"
+    positional:
+      - {name: pod, type: string, required: true}
+    flags:
+      - {long: container, short: c, type: string}
+      - {long: follow,    short: f, type: bool}
+      - {long: tail,                type: int}
+    effects:
+      destructive: false
+      reads: [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [exec]
+    description: "Execute command in a pod"
+    positional:
+      - {name: pod, type: string, required: true}
+    flags:
+      - {long: container, short: c, type: string}
+      - {long: stdin,     short: i, type: bool}
+      - {long: tty,       short: t, type: bool}
+    effects:
+      destructive: false
+      reads: [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [apply]
+    description: "Apply config from a file"
+    flags:
+      - {long: filename, short: f, type: string}
+      - {long: recursive, short: R, type: bool}
+    effects:
+      destructive: true
+      reads: [network, filesystem]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: ["{flag:filename}"]}
+      creds: {required: [], writes: []}
+
+  - path: [delete]
+    description: "Delete resources"
+    positional:
+      - {name: resource, type: string, required: true}
+      - {name: name,     type: string, required: false}
+    flags:
+      - {long: filename, short: f, type: string}
+    effects:
+      destructive: true
+      reads: [network]
+      writes: [network]
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}

@@ -1,0 +1,178 @@
+{
+  "name": "plangate-card-names-constant-instance",
+  "description": "An approval card must name EVERY instance a phase reaches, including one the agent never declared — AND approving it must actually grant them.\n\nwsrepo_repo keys push on the remote URL (per call) and read on the literal \"workspace\" (fixed by the toolkit), so a phase declaring a slot for the URL still reaches a second, different object of the same type. The card lists both.\n\nBINDING THE CONSTANT is the half this bundle used to leave open, and calling the inspect tool is what closes it. The card says \"Every resource above is named, so this approval covers them\"; the binding paired every ceiling permission with the DECLARED instance only, so `workspace` received no grant and the first read of it raised an amendment for a resource the human had already been shown and had already approved. The card promised coverage the binding did not deliver.\n\nThe same defect ran the other way too: the declared URL received slot_grant_write for a permission that resolves to workspace and never to the URL — a grant no check can spend. Both are one rule: EACH PERMISSION BINDS THE INSTANCE IT RESOLVES TO (planGateBindings).\n\nObserved live 2026-08-21 as a card that named workspace nowhere, and again 2026-08-23 — after the card was fixed — as an amendment asking to add \"Read the checked-out files and history\" reaching workspace, on a plan whose card had listed workspace and claimed to cover it.\n\nWHAT EACH ASSERTION HOLDS. cardWhatContains pins the READING half: the constant appears on the card a human decides from, and What is the half computed from the frozen plan, never from anything the agent wrote. approvalPrompts=1 pins the BINDING half: the inspect call runs on the grant the approval wrote, so no amendment follows. `tool_approval` and `plan_amendment` stay in autoApprove deliberately — a regression surfaces as a count of 2 rather than hanging the run.\n\nThe inspect result is asserted NotContains \"does not have read\", the exact denial the runner logged live when the constant instance had no grant.",
+  "agentDir": "testdata/plangate-card-names-constant-instance",
+  "agentClass": "wsrepo-fixture",
+  "autoApprove": [
+    "plan_phase",
+    "plan_amendment",
+    "tool_approval"
+  ],
+  "userTurns": [
+    "I need to push my committed changes to https://github.com/fictional-forge/beacon-service — check things are ready first, then push it"
+  ],
+  "toolOutputs": {
+    "status": {
+      "ready": true
+    },
+    "inspect": {
+      "clean": true
+    },
+    "push": {
+      "status": "pushed",
+      "commitSha": "f00dfeed01cafe"
+    }
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "check things are ready first"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "s1",
+                  "label": "push to the repository",
+                  "status": "pending",
+                  "phase": "push_phase"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "push_phase",
+                  "label": "Push to the repository",
+                  "why": "the user asked me to push their committed changes",
+                  "permissions": [
+                    {
+                      "handle": "perm:push:wsrepo_repo",
+                      "why": "pushing requires write access to the remote"
+                    },
+                    {
+                      "handle": "perm:read:wsrepo_repo",
+                      "why": "I need to read the checked-out copy before pushing"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "wsrepo_repo",
+                      "id": "https://github.com/fictional-forge/beacon-service",
+                      "why": "the user named this repository"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "wsrepo_status",
+            "args": {
+              "operation_id": "op-status",
+              "_reason": "checking the push tool is ready",
+              "args": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "wsrepo_status",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "wsrepo_inspect",
+            "args": {
+              "operation_id": "op-inspect",
+              "_reason": "reading the checked-out copy before pushing",
+              "args": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "wsrepo_inspect",
+        "lastToolResultIsError": false,
+        "lastToolResultNotContains": "does not have read"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "wsrepo_push",
+            "args": {
+              "operation_id": "op-push-1",
+              "_reason": "pushing the user's committed changes",
+              "args": {
+                "repoUrl": "https://github.com/fictional-forge/beacon-service"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "wsrepo_push",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "f00dfeed01cafe"
+      },
+      "reply": [
+        {
+          "text": "pushed your changes to the repository"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "pushed"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "pushed your changes to the repository"
+    ],
+    "planGate": {
+      "frozenPhases": 1,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 1,
+      "cardWhatContains": [
+        "https://github.com/fictional-forge/beacon-service",
+        "workspace"
+      ],
+      "cardWhatOmits": [
+        "perm:",
+        "slot_grant",
+        "{",
+        "SpiceDB"
+      ]
+    }
+  }
+}

@@ -1,0 +1,200 @@
+# Scenario 3 (p2_interactive_happy_path) fixtures.
+#
+# A single `codey` bundle with one interactive subcommand. The flow exercises
+# the full Plan-2 interactive bridge round-trip:
+#   1. LLM calls codey_codey (a Mode=interactive sandbox tool).
+#   2. Sandbox tool creates a Mode=interactive ToolCall; the controller's
+#      streaming path registers an ActiveStream on the in-process gateway.
+#   3. Runner-side bridge claims the stream and pumps stdin/stdout via the
+#      InteractiveHooks wired by InProcessRunnerFactory (Task 4/8).
+#   4. ScriptedInteractiveTool, installed on the fake-exec pod key BEFORE the
+#      SpiceboxSession flips Ready, satisfies the StreamExec the controller
+#      issues.
+#   5. ExpectToolSessionDelta / SendChannelInputToToolSession assert + drive
+#      the bridge round-trip from the channel side.
+#
+# Notes (carrying forward Scenario 1/2's harness invariants):
+#   - The harness does not wire the SpiceboxToolspec controller; the test
+#     stamps ts-codey's Valid=True after Apply.
+#   - The harness does not run a real Pod scheduler; the test stamps the
+#     bundle SpiceboxSession Ready=True + PodName + ResolvedClass +
+#     EffectiveToolspecs once it appears.
+#   - The toolkit is registered as a SpiceboxToolkit CR (not a built-in).
+#     The toolspec registry the ToolCall controller AND the harness's runner
+#     factory consult both query SpiceboxToolkit CRs as a fallback after the
+#     embedded built-ins — Scenario 3 is the headline test for that path.
+#
+# authz.toolCalls.mode=disabled mirrors Scenario 2: no SpiceDB wired in the harness,
+# and the default enforcing mode would deny on the "external" stateImpact
+# without a guardian grant tuple to clear the Check.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: codey-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# SpiceboxToolkit CR: mirrors test/e2e/testdata/fake-codey-toolkit.yaml so the
+# AgentClass binding-coverage check + the toolspec registry both resolve the
+# toolkit via the cluster (vs. requiring it in the in-binary built-ins).
+# Subcommand `run` carries Interactive=true; the synthesizer detects the
+# single-allowed-interactive-subcommand shape and wires it onto SandboxOpts,
+# which flips Interactive=true on the resulting Tool.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolkit
+metadata:
+  name: codey
+spec:
+  name: codey
+  version: "0.1.0"
+  toolkitRevision: "2026-05-18"
+  target:
+    binary: codey
+  parser:
+    kind: declarative
+  env:
+    allowed: []
+  permission:
+    stateImpact: external
+    check:
+      resourceType: codey_session
+      permission: run
+  subcommands:
+    - path: [run]
+      description: "Run an interactive codey session"
+      effects:
+        destructive: false
+        reads:  [filesystem]
+        writes: [filesystem]
+        network:    {destinations: []}
+        filesystem: {paths: ["{cwd}"]}
+        creds:      {required: [], writes: []}
+      mode: interactive
+      permission:
+        stateImpact: external
+        check:
+          resourceType: codey_session
+          permission: run
+---
+# Toolspec wrapping the toolkit's single `run` subcommand. AllowSubcommands
+# narrows to just `run` so the synthesizer's single-interactive-subcommand
+# detector wires the Subcommand onto NewSandboxTool (which flips
+# Interactive=true on the resulting Tool).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: ts-codey
+spec:
+  name: ts-codey
+  version: "1"
+  toolkit:
+    name: codey
+    revision: "2026-05-18"
+  allowSubcommands:
+    - run
+---
+# SpiceboxClass for the codey bundle. The class tool entry's name MUST equal
+# the toolspec's toolkit.name ("codey") so the synthesizer matches; the
+# resulting LLM-facing tool name is "<bundle.name>_<class-tool.name>" =
+# "codey_codey".
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: cls-codey
+spec:
+  image: registry.example.com/codey:latest
+  resources:
+    cpu: "100m"
+    memory: "64Mi"
+    ephemeralStorage: "16Mi"
+  tools:
+    - name: codey
+      command: ["/usr/bin/codey"]
+  toolspecs:
+    - name: ts-codey
+---
+# AgentIdentity with a binding covering the codey bundle's toolspec. The
+# fake-codey-toolkit declares env.allowed: [] (no credentials reach exec),
+# but a binding is still required by validateBundles' binding-coverage check.
+# Static creds keep the refresh-controller out of scope.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ai-test-creds
+  namespace: default
+type: Opaque
+stringData:
+  token: "unused-by-the-test-scenarios"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: ai-test
+  namespace: default
+spec:
+  description: "Identity for the p2_interactive_happy_path scenario."
+  credentials:
+    - name: noop
+      type: static
+      static:
+        secretRef:
+          name: ai-test-creds
+          key: token
+  bindings:
+    - match:
+        allows: [cli:codey]
+      env: {}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-codey
+  namespace: default
+spec:
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a test agent"
+  # See file header for the authz.toolCalls.mode=disabled rationale.
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  agentIdentity: ai-test
+  toolBundles:
+    - name: "codey"
+      class: "cls-codey"
+      toolspecs: ["ts-codey"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-codey-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-codey
+  credentialsRef:
+    secretName: codey-fake-creds
+  fake:
+    echo: false

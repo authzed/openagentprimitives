@@ -1,0 +1,241 @@
+{
+  "name": "reviewbot-claim-review-conclude",
+  "description": "A real reviewbot round, replayed from a live-cluster capture: a pull request opens, a signed webhook spawns the session, the agent claims the check run, renders an HTML report, delivers the summary to Slack WITH the report attached, offers that same report as a live view, concludes the check run, and only then finishes.\n\nThe delivery is genuine down to the HMAC — the payload is signed with the Channel's own credentials Secret and posted to the production webhook route — so the whole receive path is under test, not stubbed. Only GitHub's own API is a fixture, and only because a test cannot reach github.com.\n\nThe report goes out BOTH ways, and that is the point of the delivery half of this bundle. The captured session did only the second: it replied with no `attached` field and offered the live view, which reached its operator because Slack could render the offer and they clicked it. Nothing in the session established that, and on a transport with no live-view surface the same round would have delivered nothing at all. It also could not have attached even had it tried — respond_to_user was being shaped from the session's INPUT binding, github, which advertises no asset capability, so the field was absent from its schema. This bundle is a split-channel session (github in, slack out), which is what makes it the place that catches a regression there: the `attached` array below only exists because the tool is shaped from the channel that RENDERS the reply.\n\nWhat this catches that a unit test cannot: that claim_trigger_status and conclude_trigger_status are OFFERED at all (the gate is the input binding's kind, and only a webhook-spawned session has one); that the claim opens exactly one check run and the conclusion PATCHES it rather than opening a second; that the round did not end while the pull request still showed the work in progress; and that the review and the report landed in the thread the session-opening line rooted, rather than loose in a busy channel.\n\nNOT reproduced from the capture: the sandbox half. The real session called gitlike_gh once, gitlike_git five times (one of them failing) and codelike_claude once, through SpiceboxToolspec-driven tools. Bronzethread executes no sandbox — a ToolCall CR reaches no reconciler — so replaying those calls would mean seven consecutive dispatch errors, which both misrepresents a successful round and would trip the builtin per-tool circuit breaker at five failures, changing the very ordering this bundle exists to pin. The steps that remain are the ones every assertion below rests on, and all of them run for real.\n\nmintedIDs pins the ids the run mints, and here it is an assertion in its own right: three operations, one per plan item moved to in_progress, in item order, plus the one artifact head. Drop one and the run exhausts the sequence at #3; add one and it is reported unused. Both were checked.",
+
+  "agentDir": "testdata/agent-reviewbot",
+  "agentClass": "demo-reviewbot",
+
+  "trigger": {
+    "channel": "demo-reviewbot-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#4",
+    "headSHA": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+    "statusName": "demo-reviewbot"
+  },
+
+  "mintedIDs": {
+    "artifact": ["artifact-4ee7000000000001"],
+    "operation": [
+      "op-4ee7000000000011",
+      "op-4ee7000000000012",
+      "op-4ee7000000000013"
+    ]
+  },
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Pull request demo-org/demo-repo#4 was opened",
+        "toolOffered": "claim_trigger_status"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_status",
+            "args": {
+              "short": "Claiming review task…",
+              "text": "Claiming review task and reading the pull request…"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_status", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "claim_trigger_status", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "claim_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"already_concluded\":false"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "Review PR #4 - Update README.md",
+              "items": [
+                { "id": "report", "label": "Build HTML report artifact", "status": "in_progress" },
+                { "id": "deliver", "label": "Deliver summary to user", "status": "pending" },
+                { "id": "conclude", "label": "Conclude trigger status", "status": "pending" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_status",
+            "args": {
+              "short": "Building HTML report…",
+              "text": "Building HTML review report artifact…",
+              "expected_duration_seconds": 30
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_status", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "artifact_prepare",
+            "args": {
+              "kind": "html",
+              "name": "PR #4 Review - Update README.md",
+              "description": "Review report for demo-org/demo-repo#4",
+              "filename": "pr4-review.html",
+              "payload": "<h1>Pull Request Review</h1><p>demo-org/demo-repo #4 - \"Update README.md\"</p><h2>Summary</h2><p>Documentation-only change: +3/-1 lines in README.md, no code, config, tests, or APIs touched.</p><h2>Findings (2 Low)</h2><ul><li>Spelling: \"reprostiry\" should be \"repository\" (README.md:3)</li><li>Spelling: \"col\" should be \"cool\" (README.md:3)</li></ul><h2>Verdict</h2><p>Safe to merge. Fixing the two typos is optional.</p>"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "artifact_prepare",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"status\":\"ready\""
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "Review PR #4 - Update README.md",
+              "items": [
+                { "id": "report", "label": "Build HTML report artifact", "status": "done" },
+                { "id": "deliver", "label": "Deliver summary to user", "status": "in_progress" },
+                { "id": "conclude", "label": "Conclude trigger status", "status": "pending" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Reviewed PR #4 \"Update README.md\" (demo-org/demo-repo).\n\nThis is a documentation-only change (+3/-1 lines in README.md); no code, config, or tests touched. Found 2 low-severity spelling typos in the added prose:\n- \"reprostiry\" should be \"repository\" (README.md:3)\n- \"col\" should be \"cool\" (README.md:3)\n\nNo security, correctness, or logic issues. Safe to merge as-is; fixing the typos is optional.\n\nFull report attached.",
+              "attached": ["artifact-4ee7000000000001"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "artifact_offer_view",
+            "args": { "artifact_id": "artifact-4ee7000000000001" }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "artifact_offer_view",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "live-view offer published to the slack channel"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "Review PR #4 - Update README.md",
+              "items": [
+                { "id": "report", "label": "Build HTML report artifact", "status": "done" },
+                { "id": "deliver", "label": "Deliver summary to user", "status": "done" },
+                { "id": "conclude", "label": "Conclude trigger status", "status": "in_progress" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "conclude_trigger_status",
+            "args": {
+              "outcome": "clean",
+              "summary": "Docs-only change to README.md (+3/-1), no code/config/tests touched. Found 2 low-severity typos on README.md:3. No security or correctness issues. Safe to merge; typo fix optional."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "conclude_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "recorded on the GitHub check run on demo-org/demo-repo#4: clean"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "Review PR #4 - Update README.md",
+              "items": [
+                { "id": "report", "label": "Build HTML report artifact", "status": "done" },
+                { "id": "deliver", "label": "Deliver summary to user", "status": "done" },
+                { "id": "conclude", "label": "Conclude trigger status", "status": "done" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Reviewed demo-org/demo-repo#4 (docs-only README.md change). Found 2 low-severity typos, no security or correctness issues. Delivered the HTML report and a summary to the user; concluded the check run as clean."
+            }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "triggerStatus": {
+      "status": "completed",
+      "conclusion": "success",
+      "externalID": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+      "summaryContains": ["Safe to merge"],
+      "creates": 1,
+      "updates": 1
+    },
+    "channel": {
+      "postCount": 4,
+      "postsContain": [
+        "Picked up pull request demo-org/demo-repo#4",
+        "reprostiry",
+        "Live view ready"
+      ],
+      "threadRootedByFirstPost": true
+    }
+  }
+}

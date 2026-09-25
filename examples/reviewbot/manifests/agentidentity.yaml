@@ -1,0 +1,36 @@
+# reviewbot is agent-owned: it links no user credentials at session start.
+# Both credentials below are minted/read on the agent's own behalf, never a
+# human's — there is no channel user to borrow a PAT or subscription token
+# from, since a session starts from a webhook, not a person.
+#
+# AgentIdentity is namespaced. metadata.namespace is intentionally omitted —
+# `oap agent install --namespace` stamps it, same as agentclass.yaml (Task 4).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: demo-reviewbot-id
+spec:
+  description: "reviewbot's agent-owned credentials: a minted GitHub App installation token and a static Anthropic API key. Nothing here is linked or rotated by a human."
+  credentials:
+    # Minted per session from the App private key the channel wizard wrote.
+    # Nothing here expires from a human's point of view: the broker re-mints
+    # roughly hourly and no one is ever asked to rotate a token.
+    - name: github-app
+      type: githubApp
+      githubApp:
+        secretRef:
+          # The GitHub channel wizard names the Secret it writes
+          # "<channel-name>-creds" (pkg/channels/channelkinds/github/wizard.go's
+          # credsSecretName). oap.yaml's requires.channels declares this
+          # channel's name as "demo-reviewbot-gh", so `oap agent install`
+          # creates the Channel under that name itself, and `oap agent lint`
+          # refuses the pairing if this secretRef and that declaration ever
+          # disagree — see the README's "Why `demo-reviewbot-gh` is not a free
+          # choice".
+          name: demo-reviewbot-gh-creds
+    - name: anthropic-api-key
+      type: static
+      static:
+        secretRef:
+          name: demo-reviewbot-anthropic
+          key: api-key

@@ -1,0 +1,122 @@
+export const meta = {
+  title: 'Workshop',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3310,
+  description: 'Workshop is one builder session\'s isolated build space: the durable record',
+}
+
+# Workshop
+
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `wksp`
+
+Workshop is one builder session's isolated build space: the durable record
+of its namespace, RBAC, SpiceDB tuple, tokens and sidecar identity, created
+by the AgentSession reconciler ONLY for a sanctioned class (spec §1.1) and
+owned end-to-end by the workshop controller. A restarted operator
+re-provisions from this CR; the webhook attributes SA → session → workshop
+by reading it; the sweeper enforces its limits without the session's
+cooperation.
+
+SECURITY: status is the trust boundary. status.sidecarIdentity is the ONLY
+source the sidecar-pod builder consumes — never AgentSession.status, which
+the runner holds patch on. spec.session, spec.starterCanonical and
+spec.limits are immutable after creation (CEL below): the sidecar SA holds
+update on this one object for the later-plan request fields, and must not
+be able to re-point the workshop or raise its own limits.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.capabilityRequest` | `object` |  |
+| `spec.capabilityRequest.artifactRef` \* | `string` |  |
+| `spec.capabilityRequest.draftRef` | `string` |  |
+| `spec.capabilityRequest.summary` \* | `string` |  |
+| `spec.closeRequests` | `[]object` | CloseRequests are the OTHER workshops this workshop's builder has been asked to end, written by the sidecar's close_others tool through its update grant on this CR. Each Target is a Workshop — bare in this same (builder) namespace, `namespace/name` for one elsewhere — or a wildcard ask the controller expands: `*` the first time this workshop asks to close every other one, and `*:&lt;n&gt;` for each later ask, so a person may ask again and have it expanded afresh. Either way a target is requested at most once under that exact spelling, since the list is keyed by target. A request is only ever a REQUEST: the Workshop controller decides each against SpiceDB's workshop#close for the person this workshop's builder acts for (spec.starterCanonical) and records the outcome once in status.closeRequests. Nothing here authorizes anything. |
+| `spec.closeRequests[].requestedAt` \* | `string (date-time)` | RequestedAt is when the tool asked. |
+| `spec.closeRequests[].target` \* | `string` | Target is a Workshop: its name in the requester's builder namespace, `namespace/name` for one elsewhere, `*` for every other workshop of the same person, `*:&lt;n&gt;` for a later such ask. |
+| `spec.credentialRequests` | `[]object` | CredentialRequests are the bot/shared credentials the builder has asked a person to connect for AgentIdentities it authored in this workshop (plan 5a). Written by the sidecar's request_credential tool via its update grant on this CR. A pure function of (identity, credential): a re-request of the same pair is byte-identical, so this is SSA-idempotent. AuthKind is pat\|static (a pasted secret) or oauth-mcp (a shared/bot OAuth connect the person authorizes through identityd). |
+| `spec.credentialRequests[].authKind` \* | `string` | AuthKind is pat, static, or oauth-mcp. _(enum: pat \| static \| oauth-mcp)_ |
+| `spec.credentialRequests[].credential` \* | `string` | Credential is the credential name on that AgentIdentity. |
+| `spec.credentialRequests[].identity` \* | `string` | Identity is the AgentIdentity (in the workshop namespace W) the credential belongs to. |
+| `spec.exportRequested` | `boolean` | ExportRequested, InstallRequest and CapabilityRequest are written by the workshop sidecar in later plans (export/install/handoff flows). This plan's controller ignores them; they exist now so the CRD does not churn. |
+| `spec.installRequest` | `object` | WorkshopInstallRequest and WorkshopCapabilityRequest are the later-plan sidecar-written requests (spec §2.1). Digest/refs only — never a secret. |
+| `spec.installRequest.answers` | `map[string]string` |  |
+| `spec.installRequest.bundleDigest` \* | `string` |  |
+| `spec.installRequest.suggestedName` \* | `string` |  |
+| `spec.limits` \* | `object` | Limits are copied from ClusterAgentSettings at creation and are immutable: the sidecar SA holds update on this object for the request fields below and must not be able to raise its own ceilings. |
+| `spec.limits.maxAge` \* | `string` | MaxAge bounds the workshop's total life from provisionedAt, regardless of session state. The sweeper deletes past it. |
+| `spec.limits.maxConcurrentProbes` \* | `integer (int32)` | MaxConcurrentProbes must be at least 1: zero is never a valid config — it would deadlock every WorkshopProbe in the namespace permanently (workshopprobe.Reconciler's concurrency-cap check has no slot to ever grant). The default is 2 (defaultWorkshopLimits, pkg/controllers/agentsession/workshop_hook.go). _(min 1)_ |
+| `spec.limits.maxObjects` \* | `integer (int32)` | _(min 1)_ |
+| `spec.limits.maxObjectsPerKind` \* | `integer (int32)` | _(min 1)_ |
+| `spec.session` \* | `object` | Session is the builder AgentSession this workshop belongs to, in the same namespace as this CR. Set once by the AgentSession reconciler. |
+| `spec.session.name` \* | `string` | Name is the object's name. |
+| `spec.session.namespace` \* | `string` | Namespace is the object's namespace. |
+| `spec.sidecarToolbox` \* | `string` | SidecarToolbox is the name of the sanctioned SidecarToolbox CR (in the class's namespace) that receives this workshop's identity — copied from the BuilderClassRef at creation. The AgentSession reconciler consumes it (workshopIdentityFor) to decide WHICH sidecar of the class gets the projected SA token. Set once. |
+| `spec.starterCanonical` | `string` | StarterCanonical is the canonical id of the person who started the session ("user:" prefix stripped), recorded so maxWorkshopsPerStarter can count without reading every session. Set once. |
+| `spec.testWatch` | `object` | TestWatch is the sidecar's request to watch the person's own test of a built class (Try it as yourself). See WorkshopTestWatch. |
+| `spec.testWatch.class` \* | `string` | Class is the AgentClass (in the workshop namespace) whose sessions count. |
+| `spec.testWatch.deadline` \* | `string (date-time)` | Deadline is when the watch times out. |
+| `spec.testWatch.startedAt` \* | `string (date-time)` | StartedAt is when the watch began; only sessions created after it are the person's test. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.capabilityRequest` | `object` | CapabilityRequest is the observed delivery state of spec.capabilityRequest, written SOLELY by the WorkshopHandoffWatcher. |
+| `status.capabilityRequest.deliveredAt` | `string (date-time)` |  |
+| `status.capabilityRequest.noticeRef` | `string` |  |
+| `status.closeRequests` | `[]object` | CloseRequests is the Workshop controller's decision for each spec.closeRequests entry — Closed, Refused or NotFound — written SOLELY by that controller, one entry per requested spelling, SET ONCE. A decision already recorded for a target is what stops it being decided (and closed) a second time under any spelling, so nothing here is ever rewritten. |
+| `status.closeRequests[].ask` | `string` | Ask is the wildcard request this entry was decided for; empty for a named request. An entry decided before the field existed carries none and reads as a named decision; deploy the CRD and operator before the workshop image. |
+| `status.closeRequests[].decidedAt` | `string (date-time)` | DecidedAt is when the controller decided. |
+| `status.closeRequests[].message` | `string` | Message is the plain-words why, for a decision that was not a close. |
+| `status.closeRequests[].phase` \* | `string` | Phase is Closed, Refused, or NotFound. _(enum: Closed \| Refused \| NotFound)_ |
+| `status.closeRequests[].target` \* | `string` | Target echoes the spec request's target, and is this list's key. |
+| `status.conditions` | `[]object` |  |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.credentialRequests` | `[]object` | CredentialRequests mirrors spec.credentialRequests with the observed delivery state. Written SOLELY by the channelsd WorkshopCredentialWatcher (deliveredAt/noticeRef) — a single writer, so the atomic list cannot clobber. Volatile values live HERE, never in the applied spec. |
+| `status.credentialRequests[].credential` \* | `string` |  |
+| `status.credentialRequests[].deliveredAt` | `string (date-time)` |  |
+| `status.credentialRequests[].identity` \* | `string` |  |
+| `status.credentialRequests[].noticeRef` | `string` |  |
+| `status.export` | `object` | Export records the most recently stored drafted .oap bundle for this workshop. Written by the tuple-authorized draft-export operator route (pkg/web/workshopdraftsrv) immediately after it durably stores the bytes under the builder session's scope — never by the sidecar, which holds no update on this object's status subresource. Set-once per digest: a re-export whose content is byte-identical to the last one leaves this field (and ExportedAt) untouched, so a retry is not volatile churn on a controller-owned field. |
+| `status.export.artifactRef` \* | `string` | ArtifactRef is the opaque artifactstore reference the bundle bytes are stored under, scoped to the builder session (spec.session) — never the workshop namespace. |
+| `status.export.digest` \* | `string` | Digest is the sha256 (hex-encoded) of the stored bytes. |
+| `status.export.exportedAt` \* | `string (date-time)` | ExportedAt is when this digest was first recorded. |
+| `status.install` | `object` | Install is the observed state of spec.installRequest. status.install.phase (Requested→Approved/Installed or Declined/Failed) is written by TWO owners with disjoint fields: the channelsd WorkshopHandoffWatcher sets Requested + DeliveredAt when it delivers the admin card; admind sets Installed/Declined/ Failed + ApprovedBy + InstalledRef on the admin's click. Volatile values here. |
+| `status.install.approvedBy` | `string` | ApprovedBy is the canonical id of the admin who approved/declined. Set by admind. |
+| `status.install.deliveredAt` | `string (date-time)` |  |
+| `status.install.installedRef` | `string` | InstalledRef is "&lt;namespace&gt;/&lt;name&gt;" of the installed AgentClass on success. |
+| `status.install.message` | `string` |  |
+| `status.install.phase` \* | `string` | Phase is Requested, Approved, Installed, Declined, or Failed. _(enum: Requested \| Approved \| Installed \| Declined \| Failed)_ |
+| `status.install.requestedAt` | `string (date-time)` |  |
+| `status.namespace` | `string` | Namespace is the provisioned workshop namespace (ws-&lt;uid12&gt;). |
+| `status.observedGeneration` | `integer (int64)` |  |
+| `status.phase` | `string` | Phase is Provisioning, Ready, Expired or Deleting. |
+| `status.provisionedAt` | `string (date-time)` |  |
+| `status.sidecarIdentity` | `object` | SidecarIdentity is the identity the AgentSession reconciler hands the workshop sidecar pod: run as this ServiceAccount (projected token) and envFrom this Secret (the workshop bearer). Controller-owned status on an object the runner cannot touch — the ONLY source BuildSidecarPod consumes (spec §13). |
+| `status.sidecarIdentity.serviceAccount` \* | `string` |  |
+| `status.sidecarIdentity.tokenSecret` \* | `string` |  |
+| `status.standins` | `[]object` | Standins is the AUTHORITATIVE registry of every credential-free rehearsal stand-in AgentClass this workshop has projected (agent-builder plan 9b, Task 1; pkg/web/workshopprojectsrv), written by the tuple-authorized project-agent operator route immediately after it creates or updates the stand-in AgentClass — never by the sidecar, which holds no update on this object's status subresource (same division of labor as Export, above). This is the fix for a real hole: the stand-in AgentClass itself also carries AnnotationStandinSource, but that annotation is a human-readable label ONLY and must NEVER be trusted as a security decision — a builder's own workshop_apply tool server-side-applies arbitrary metadata.annotations into the workshop namespace, and the admission webhook never inspects them, so a builder (or a prompt-injected model driving one) can stamp the marker onto a class it authored itself. This list is what the project-agent route's collision check and soleAuthoredClassName's authored-count now consult instead: a bare name is a stand-in for &#123;SourceNamespace, SourceName&#125; iff an entry here says so, never because some object merely carries the annotation. This is this repo's SSA discipline applied literally (observations belong in controller-owned status, never a client-writable field) — see CLAUDE.md's "Server-side apply" section. Set-once per (Name, SourceNamespace, SourceName): re-projecting the same source is a no-op here. No timestamp, unlike Export/ExportedAt above: an entry carries no field that a retry could ever leave stale (Export's ExportedAt exists to record WHEN a digest was first seen; a stand-in entry has no analogous volatile fact — the same three fields are true for as long as the entry exists at all), so there is nothing here for the SSA-churn rule to protect against. Bounded at spec.limits.maxObjectsPerKind entries: the project-agent route writes as the operator, so it bypasses the admission webhook's checkLimits (which only ever fires for a write attributed to the sidecar's own SA) — capping this list at the SAME per-kind ceiling a sidecar-authored AgentClass would have been held to is what keeps a workshop's stand-in count from becoming an unbounded mint through this one route (see pkg/web/workshopprojectsrv's own package doc). |
+| `status.standins[].name` \* | `string` | Name is the stand-in's own metadata.name — bare, per the projection route's Ruling C, so it can collide with a bare name the workshop's builder authored itself; that collision is exactly what this registry exists to adjudicate. |
+| `status.standins[].sourceName` \* | `string` |  |
+| `status.standins[].sourceNamespace` \* | `string` | SourceNamespace/SourceName are the foreign AgentClass this stand-in stands in for — the same &#123;namespace, name&#125; pair the project-agent route's reachability check verified before projecting. |
+| `status.testWatch` | `object` | TestWatch is the observed state of spec.testWatch, written SOLELY by the Workshop controller. Set-on-change: each delivered event is appended once; a replaced watch resets it. |
+| `status.testWatch.class` \* | `string` | Class echoes the spec.testWatch.class this status describes, so a replaced watch (a different class or startedAt) starts a fresh record. |
+| `status.testWatch.delivered` | `[]string` | Delivered lists the events the builder has been told about, in order: started, paused, resumed, ended, timedOut. Each is delivered at most once, except paused and resumed, which repeat each time the session pauses and comes back. A re-armed watch that kept its identity drops timedOut so the rest of that test can still be reported. |
+| `status.testWatch.lastPhase` | `string` | LastPhase is the test session's phase at the last delivery, so a repeat of the same phase delivers nothing. |
+| `status.testWatch.session` | `string` | Session is the test session, once one qualified. |
+| `status.testWatch.startedAt` \* | `string (date-time)` | StartedAt echoes spec.testWatch.startedAt for the same reason. |
+
+<small>\* required</small>
+

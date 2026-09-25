@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": { "noEmit": true },
+  "include": [
+    "global.d.ts",
+    "packages/design/src",
+    "packages/design/tailwind-preset.ts",
+    "packages/runtime/src",
+    "packages/agentui/src"
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "name": "child-requests-human-approves-child-continues",
+  "description": "The mid-flight information request, end to end and through a person. demo-lead2 delegates with NO data. demo-helper cannot do the task, calls request_input naming the slot it needs, and PARKS — which is what hands control back, since delegate blocks its parent until the child parks or finishes. The parent reads the entry and answers with send_input, naming the tool call whose result holds it rather than pasting the text. Grading declines to auto-grant, because the entry's readers (auditor-2) do not include the child's audience, so a person who can speak for the datum is asked; the bundle approves as auditor-2. The slot then binds onto the RUNNING child, and the child resumes with the data in its context. The child's own step is the proof: it expects the entry's memo in what it was resumed with, and neither the task text nor the parent's reply contains it — only the bound slot does. Steps are scoped per session with agentClass, so each turn is read against the session that actually took it.",
+
+  "agentDir": "testdata/agent-midflight-ledger",
+  "agentClass": "demo-lead2",
+
+  "defaultUser": "lead-1@example.com",
+
+  "autoApprove": ["data_slot_disclosure"],
+  "autoApproveAs": "auditor-2@example.com",
+
+  "toolOutputs": {
+    "read_entry": {
+      "id": "entry-88",
+      "memo": "restated Q4 accrual",
+      "amount": "1290.00"
+    }
+  },
+
+  "userTurns": [
+    "have the helper summarize ledger entry entry-88"
+  ],
+
+  "llm": [
+    {
+      "agentClass": "demo-lead2",
+      "expect": { "userTextContains": "entry-88" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": {
+        "agent": "demo-helper",
+        "task": "Summarize the ledger entry this task is about. You will need its contents in your ledger input slot.",
+        "mode": "task"
+      } } }]
+    },
+
+    {
+      "agentClass": "demo-helper",
+      "expect": { "userTextContains": "Summarize the ledger entry" },
+      "reply": [{ "toolUse": { "name": "request_input", "args": {
+        "slot": "ledger",
+        "why": "the task names an entry but I have nothing in my ledger slot to summarize"
+      } } }]
+    },
+
+    {
+      "agentClass": "demo-lead2",
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "send_input",
+        "capture": { "delegation": "reply_to_subagent\\(delegation=\"([^\"]+)\"\\)" }
+      },
+      "reply": [{ "toolUse": { "name": "ledger_read_entry", "args": { "operation_id": "op-read", "_reason": "the helper needs this entry", "args": { "id": "entry-88" } } } }]
+    },
+    {
+      "agentClass": "demo-lead2",
+      "expect": { "lastToolResult": "ledger_read_entry" },
+      "reply": [{ "toolUse": { "name": "send_input", "args": {
+        "delegation": "{{delegation}}",
+        "slot": "ledger",
+        "tool_use_id": "toolu_0"
+      } } }]
+    },
+    {
+      "agentClass": "demo-lead2",
+      "expect": { "lastToolResult": "send_input", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "reply_to_subagent", "args": {
+        "delegation": "{{delegation}}",
+        "message": "Sent the entry to your ledger slot."
+      } } }]
+    },
+
+    {
+      "agentClass": "demo-helper",
+      "expect": { "userTextContains": "restated Q4 accrual" },
+      "reply": [{ "toolUse": { "name": "return_result", "args": { "result": "entry-88 is a restated Q4 accrual for 1290.00." } } }]
+    },
+
+    {
+      "agentClass": "demo-lead2",
+      "expect": {
+        "lastToolResult": "reply_to_subagent",
+        "lastToolResultContains": "restated Q4 accrual"
+      },
+      "reply": [{ "toolUse": { "name": "respond_to_user", "args": { "text": "The helper summarized entry-88 once I sent it the entry." } } }]
+    },
+    {
+      "agentClass": "demo-lead2",
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["The helper summarized entry-88"],
+    "toolsCalled": ["delegate", "ledger_read_entry", "send_input"],
+    "ptTags": {
+      "minted": 1,
+      "readersInclude": ["auditor-2@example.com"],
+      "readersExclude": ["lead-1@example.com"]
+    }
+  }
+}

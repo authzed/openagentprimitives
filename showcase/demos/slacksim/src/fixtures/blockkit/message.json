@@ -1,0 +1,25 @@
+[
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "Rollout complete. `hotfix-1.4.2` is live on `prod-us-east` — 12/12 pods healthy."
+    }
+  },
+  {
+    "type": "actions",
+    "block_id": "show_settings_actions",
+    "elements": [
+      {
+        "type": "button",
+        "text": {
+          "type": "plain_text",
+          "text": "Show settings",
+          "emoji": true
+        },
+        "action_id": "show_settings",
+        "value": "{\"v\":\"show_settings\",\"r\":\"\",\"d\":\"\",\"s\":\"default/demo-sess\"}"
+      }
+    ]
+  }
+]

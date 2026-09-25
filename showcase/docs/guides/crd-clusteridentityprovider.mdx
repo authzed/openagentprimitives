@@ -1,0 +1,60 @@
+export const meta = {
+  title: 'ClusterIdentityProvider',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3100,
+  description: 'ClusterIdentityProvider configures cluster-wide human login: which',
+}
+
+# ClusterIdentityProvider
+
+**Group** `agentprimitives.authzed.com` · **Scope** Cluster · **Short names** `cidp`
+
+ClusterIdentityProvider configures cluster-wide human login: which
+registered idp.Kind authenticates people (pkg/platform/identity/idp), its
+OIDC client details, which email domains are admitted, and how long a
+browser session lives.
+
+Cluster-scoped singleton -- the only permitted name is "default"
+(ClusterIdentityProviderName). Reconciled by
+pkg/controllers/clusteridentityprovider, which shares its spec judgment with
+the admission webhook so the two can never disagree, and refuses a
+local-only kind on a non-local cluster.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.allowAnyEmail` | `boolean` | AllowAnyEmail must be set explicitly to run with no domain gate. |
+| `spec.allowedEmailDomains` | `[]string` | AllowedEmailDomains gates who counts as logged in. Empty with AllowAnyEmail=false is invalid (fail closed) — enforced by webhook. |
+| `spec.clientID` \* | `string` | ClientID is the OAuth client id (not secret; inline). |
+| `spec.clientSecretRef` \* | `object` | ClientSecretRef names the Secret key holding the client secret. |
+| `spec.clientSecretRef.key` \* | `string` | Key is the data key within the Secret holding the value. |
+| `spec.clientSecretRef.name` \* | `string` | Name is the Secret's name. |
+| `spec.clientSecretRef.namespace` \* | `string` | Namespace is the Secret's namespace; required, since the referring CRD is cluster-scoped. |
+| `spec.federation` | `object` | Federation, when Enabled, turns this IdP into an EMA federation source: login requests offline_access so the user's refresh token is captured, and the broker mints upstream tokens via ID-JAG. Requires kind=oidc and a confidential client (see the webhook). |
+| `spec.federation.enabled` | `boolean` | Enabled turns this IdP into an EMA federation source. |
+| `spec.issuer` | `string` | Issuer is the OIDC issuer URL. Required for kind=oidc; must be empty for kind=google (the kind pins it). Enforced by webhook. |
+| `spec.kind` \* | `string` | Kind names the registered idp kind: "oidc" or "google". |
+| `spec.scopes` | `[]string` | Scopes are extra scopes beyond openid/email/profile. |
+| `spec.sessionTTL` | `string` | SessionTTL is the idd_session cookie lifetime for IdP-verified logins (and the CLI assertion lifetime). Default 12h. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` | Conditions carries Valid; identityd consults it before serving login. |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedGeneration` | `integer (int64)` | ObservedGeneration is the generation the conditions describe. |
+
+<small>\* required</small>
+

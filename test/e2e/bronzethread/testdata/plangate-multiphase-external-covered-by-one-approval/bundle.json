@@ -1,0 +1,216 @@
+{
+  "name": "plangate-multiphase-external-covered-by-one-approval",
+  "description": "A WHOLE-PLAN approval binds EACH phase's own permissions, so an external call in a LATER phase runs on the grant that approval wrote.\n\nOne click covers every phase, and the binding runs once per covered phase — but the permissions it bound came from the pending ask (the phase that raised the card) instead of from the phase being bound. Every phase therefore got phase 1's permission set. A 2-phase plan wrote slot_grant_fetch on the repository and nothing else; phase 2's push had no grant, external found none, and the human was asked again for a plan they had already approved.\n\nWHY NO BUNDLE CAUGHT IT. Every bundle with an external tool had ONE phase, and every multi-phase bundle had no external tool. The bug lives exactly in the intersection, so a full green gate said nothing about it. That is what this bundle closes.\n\nObserved live 2026-08-23: a 2-phase plan approved in one click, then three more cards — an amendment plus both external calls. SpiceDB held slot_grant_fetch and slot_grant_read for phase 1 and no slot_grant_push at all.\n\nTHE SHAPE. Phase 1 fetches (readonly, extrepo_repo#fetch). Phase 2 pushes (external, extrepo_repo#push). Both name the SAME repository, so the instance axis is identical across phases and only the PERMISSION differs — which is precisely the axis that was wrong. A bundle whose phases named different instances would pass with the bug present, because the instances were per-record all along.\n\napprovalPrompts is 1: the single plan-gate card. `tool_approval` stays in autoApprove deliberately, so a regression that re-raises the per-call card surfaces as a count of 2 rather than hanging the run.\n\nThe push is called TWICE, so a grant that persists is distinguishable from a one-shot approval consumed at first use. Both are asserted on the TOOL RESULT, never the reply.\n\nThe recorded decisions cover both phases: fetch `allowed` (the readonly leg, satisfied by the same approval) and push `allowed` (the external leg, satisfied by the grant leg alone). This fixture ships NO SpiceDBBootstrap and NO `owner` relationship, so neither allow can have come from ambient ownership.",
+  "agentDir": "testdata/plangate-multiphase-external-covered-by-one-approval",
+  "agentClass": "extrepo-fixture",
+  "autoApprove": [
+    "plan_phase",
+    "plan_amendment",
+    "tool_approval"
+  ],
+  "userTurns": [
+    "fetch https://github.com/fictional-forge/beacon-service, then push my committed changes to it twice"
+  ],
+  "toolOutputs": {
+    "status": {
+      "ready": true
+    },
+    "fetch": {
+      "status": "fetched",
+      "ref": "main"
+    },
+    "push": {
+      "status": "pushed",
+      "commitSha": "f00dfeed01cafe"
+    }
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "fetch https://github.com"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "s1",
+                  "label": "fetch the repository",
+                  "status": "pending",
+                  "phase": "fetch_phase"
+                },
+                {
+                  "id": "s2",
+                  "label": "push to the repository",
+                  "status": "pending",
+                  "phase": "push_phase"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "fetch_phase",
+                  "label": "Fetch the repository",
+                  "why": "the user asked me to fetch before pushing",
+                  "permissions": [
+                    {
+                      "handle": "perm:fetch:extrepo_repo",
+                      "why": "fetching reads the remote"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "extrepo_repo",
+                      "id": "https://github.com/fictional-forge/beacon-service",
+                      "why": "the user named this repository"
+                    }
+                  ]
+                },
+                {
+                  "id": "push_phase",
+                  "label": "Push to the repository",
+                  "why": "the user asked me to push their committed changes",
+                  "permissions": [
+                    {
+                      "handle": "perm:push:extrepo_repo",
+                      "why": "pushing requires write access"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "extrepo_repo",
+                      "id": "https://github.com/fictional-forge/beacon-service",
+                      "why": "the same repository it fetched"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "extrepo_fetch",
+            "args": {
+              "operation_id": "op-fetch",
+              "_reason": "fetching before the push",
+              "args": {
+                "repoUrl": "https://github.com/fictional-forge/beacon-service"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "extrepo_fetch",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "select_phase",
+            "args": {
+              "index": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "select_phase",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "extrepo_push",
+            "args": {
+              "operation_id": "op-push-1",
+              "_reason": "pushing the committed changes",
+              "args": {
+                "repoUrl": "https://github.com/fictional-forge/beacon-service"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "extrepo_push",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "f00dfeed01cafe",
+        "lastToolResultNotContains": "no one has standing"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "extrepo_push",
+            "args": {
+              "operation_id": "op-push-2",
+              "_reason": "pushing a second time in the same session",
+              "args": {
+                "repoUrl": "https://github.com/fictional-forge/beacon-service"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "extrepo_push",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "f00dfeed01cafe"
+      },
+      "reply": [
+        {
+          "text": "fetched and pushed twice"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "fetched and pushed twice"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "fetched and pushed twice"
+    ],
+    "authz": {
+      "decisions": {
+        "extrepo_repo:https=3A//github=2Ecom/fictional-forge/beacon-service#fetch": "allowed",
+        "extrepo_repo:https=3A//github=2Ecom/fictional-forge/beacon-service#push": "allowed"
+      }
+    },
+    "planGate": {
+      "frozenPhases": 2,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 1
+    }
+  }
+}

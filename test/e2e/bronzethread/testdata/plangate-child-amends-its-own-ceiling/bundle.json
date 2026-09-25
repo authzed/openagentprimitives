@@ -1,0 +1,106 @@
+{
+  "name": "plangate-child-amends-its-own-ceiling",
+  "description": "The child's OWN escape valve, end to end: a delegated enforcing child hits a handle OUTSIDE its inherited ceiling, the gate raises a plan_amendment routed to the human who owns the tree, the human APPROVES, and the child's out-of-ceiling call then PROCEEDS. Paired mirror of plangate-child-inherits-enforcing-ceiling (the DENY half): SAME fixture, only autoApprove vs autoDeny of the child's plan_amendment differs, so catalog_read_gadget flipping from IsError to a real result is caused by the amendment decision and nothing else. This is the 'request authority' path the plan-gate-meets-delegation model leaned on but that was only unit/code-proven before -- a child cannot self-clear (select_phase/update_plan are withheld from a delegated child), so the ONLY way it widens its reach is by asking, and this proves the ask reaches a person and takes effect. Reachable as a bronze bundle only now that a headless child's interaction decision is actually delivered to its Await (the inprocess_runner_factory fix) and there is a child-with-tools fixture to exercise a non-empty inherited ceiling. pcc-lead runs the plan gate at LOGGING and freezes a one-phase read ceiling {perm:list:pcc_widget}; the ONLY enforcing gate is the child's. pcc-worker (enforcing, no update_plan) auto-runs catalog_read_widget (IN ceiling, tier-0 cleared), then calls catalog_read_gadget (perm:list:pcc_gadget, OUT of ceiling): the gate raises the amendment (Verdict Allow + Approval), autoApprove answers YES, and the call falls through to a real gadget result -- proving the approved amendment widened the child's own ceiling rather than changing nothing. Asserts on the child's TOOL RESULTS via agentClass scoping: widget non-error, gadget non-error and carrying the gadget datum. autoApprove:[plan_phase] is DELIBERATELY ABSENT so a tier-0 regression on the widget phase hangs rather than passing on a masked approval. agentReplyContains is the blocking assertion.",
+
+  "agentDir": "testdata/agent-plangate-child-ceiling",
+  "agentClass": "pcc-lead",
+
+  "defaultUser": "lead-1@example.com",
+
+  "autoApprove": ["plan_amendment"],
+
+  "toolOutputs": {
+    "read_widget": { "widgets": ["widget-alpha", "widget-beta"] },
+    "read_gadget": { "gadgets": ["gadget-x"] }
+  },
+
+  "userTurns": ["have the worker list the widgets and the gadgets too"],
+
+  "llm": [
+    {
+      "agentClass": "pcc-lead",
+      "expect": { "userTextContains": "widgets" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "hand the catalog reads to the worker", "status": "pending", "phase": "handoff" }
+              ],
+              "phases": [
+                {
+                  "id": "handoff",
+                  "label": "Delegate the catalog reads",
+                  "why": "the worker owns the catalog; I only need it to list widgets",
+                  "permissions": [
+                    { "handle": "perm:list:pcc_widget", "why": "the worker will list widgets on my behalf" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "agentClass": "pcc-lead",
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": {
+        "agent": "pcc-worker",
+        "task": "List the widgets in the catalog, then also list the gadgets. If reading gadgets is outside your plan, request the amendment and proceed once it is approved."
+      } } }]
+    },
+
+    {
+      "agentClass": "pcc-worker",
+      "expect": { "userTextContains": "List the widgets" },
+      "reply": [{ "toolUse": { "name": "catalog_read_widget", "args": { "operation_id": "op-w", "_reason": "the task asks me to list widgets", "args": {} } } }]
+    },
+    {
+      "agentClass": "pcc-worker",
+      "expect": {
+        "lastToolResult": "catalog_read_widget",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "widget-alpha"
+      },
+      "reply": [{ "toolUse": { "name": "catalog_read_gadget", "args": { "operation_id": "op-g", "_reason": "the task also asks for gadgets; requesting the amendment to reach them", "args": {} } } }]
+    },
+    {
+      "agentClass": "pcc-worker",
+      "expect": {
+        "lastToolResult": "catalog_read_gadget",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "gadget-x"
+      },
+      "reply": [{ "toolUse": { "name": "return_result", "args": {
+        "result": "Listed the widgets (widget-alpha, widget-beta) and the gadgets (gadget-x). Reading gadgets was outside my inherited plan, so I requested a plan amendment and proceeded once it was approved."
+      } } }]
+    },
+
+    {
+      "agentClass": "pcc-lead",
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "gadget-x"
+      },
+      "reply": [{ "toolUse": { "name": "respond_to_user", "args": { "text": "The worker listed both widgets and gadgets; it reached the gadgets after its plan amendment was approved." } } }]
+    },
+    {
+      "agentClass": "pcc-lead",
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "worker listed widgets and, after an approved amendment, gadgets" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["plan amendment was approved"],
+    "toolsCalled": ["update_plan", "delegate"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true
+    }
+  }
+}

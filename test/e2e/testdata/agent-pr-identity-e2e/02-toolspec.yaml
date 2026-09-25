@@ -1,0 +1,60 @@
+# SpiceboxToolspec for the agent-pr-identity-e2e fixture. Cluster-scoped, so
+# it carries no namespace.
+#
+# The two writesRelationships blocks below are a PARALLEL COPY of the pinned
+# CEL in pkg/tools/toolspec/reviewbot_pr_relwrites_test.go
+# (ghPRAuthorWhenCEL/ghPRAuthorResourceCEL/ghPRAuthorSubjectCEL and their
+# ghPRRepo* siblings) and of the same blocks on the shipped
+# `demo-reviewbot-gh-review` toolspec
+# (examples/reviewbot/manifests/toolspecs.yaml) — same convention as that Go
+# file's own header comment: kept in sync BY HAND, and this repo's tests may
+# never reference examples/, so this is a fixture copy rather than a read of
+# any shipped file. This fixture is where the write path is exercised end to
+# end against a real SpiceDB, by
+# test/e2e/scenarios/resourcepool/pr_identity_write_test.go; the shipped
+# demo's own trigger-time binding shape (a slot bound at session mint rather
+# than seeded directly) is exercised by trigger_slot_binding_test.go in the
+# same package. Both blocks declare requireSlotBound: true — github_user is a
+# reserved scaffold subject type (pkg/authz/relwrites/reserved_types.go) and
+# ValidateSlotBoundSubject refuses a github_user subject from any block that
+# doesn't.
+#
+# The no-jq/no-template constraint mirrors the shipped toolspec's own guard
+# (examples/reviewbot/manifests/toolspecs.yaml) for the same reason: `gh pr
+# view --jq EXPR` or `--template EXPR` each replace stdout with a
+# model-reshaped filter, which would let the model steer either half of the
+# tuple these blocks resolve from result.stdoutJSON. --template is refused
+# ahead of need — `pr view` does not declare it today (pinned by
+# toolkits/gh_pr_view_flags_test.go) — so this half is inert until it does.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: pr-identity-gh-review
+spec:
+  name: pr-identity-gh-review
+  version: "1"
+  intent: "Fixture toolspec for the PR-identity relwrites e2e scenario: gh pr view, and nothing else."
+  toolkit:
+    name: gh
+    revision: "2026-05-01"
+  allowSubcommands:
+    - "pr view"
+  sensitive:
+    env:
+      - GITHUB_TOKEN
+  constraints:
+    - cel: call.subcommand != 'pr view' || (!call.hasFlag('jq') && !call.hasFlag('template'))
+      message: "gh pr view --jq/--template lets the model reshape the forge's own response; denied so the identity blocks below read result.stdoutJSON verbatim."
+  writesRelationships:
+    - when: 'size(args.argv) > 1 && args.argv[0] == "pr" && args.argv[1] == "view" && has(result.stdoutJSON) && has(result.stdoutJSON.id) && has(result.stdoutJSON.author)'
+      requireSlotBound: true
+      tuple:
+        resource: '"github_pull_request:" + result.stdoutJSON.id'
+        relation: '"author"'
+        subject: '"github_user:" + result.stdoutJSON.author.id'
+    - when: 'size(args.argv) > 1 && args.argv[0] == "pr" && args.argv[1] == "view" && has(result.stdoutJSON) && has(result.stdoutJSON.id) && has(result.stdoutJSON.isCrossRepository) && !result.stdoutJSON.isCrossRepository && has(result.stdoutJSON.headRepository) && has(result.stdoutJSON.headRepository.id)'
+      requireSlotBound: true
+      tuple:
+        resource: '"github_pull_request:" + result.stdoutJSON.id'
+        relation: '"repo"'
+        subject: '"github_repo:" + result.stdoutJSON.headRepository.id'

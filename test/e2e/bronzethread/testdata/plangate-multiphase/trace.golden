@@ -1,0 +1,5 @@
+authz crm_company:any#list allowed
+gate  gate_allowed    phase=0 handle=perm:list:crm_company tool=centerdot_list_companies outcome=allow
+gate  phase_approved  phase=0
+gate  plan_approved   phase=0
+gate  plan_approved   phase=1

@@ -1,0 +1,10 @@
+name: deny-wrong-namespace
+toolkit: toolkit.yaml
+spec: spec.yaml
+invocation:
+  command: kubectl
+  argv: [get, pods, -n, other-ns]
+  binaryVersion: "1.30.0"
+expect:
+  allow: false
+  failedOn: {path: "constraints[0]"}

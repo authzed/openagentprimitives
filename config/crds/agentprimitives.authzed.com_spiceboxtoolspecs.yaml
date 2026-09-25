@@ -1,0 +1,474 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: spiceboxtoolspecs.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: SpiceboxToolspec
+    listKind: SpiceboxToolspecList
+    plural: spiceboxtoolspecs
+    shortNames:
+    - sbxtsp
+    singular: spiceboxtoolspec
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SpiceboxToolspec is one sandbox tool as the agent sees it: a SpiceboxToolkit
+          reference narrowed to an allowed subcommand set, with CEL argument
+          constraints, denied effects and an authz policy.
+
+          Cluster-scoped. Reconciled by pkg/controllers/spiceboxtoolspec, which
+          resolves the referenced toolkit, compiles every CEL expression, and surfaces
+          Valid=True/False. A Valid=False toolspec is skipped at ToolCall validation
+          time rather than executed unchecked.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SpiceboxToolspecSpec mirrors pkg/tools/toolspec/spec.Spec.
+            properties:
+              allow:
+                description: Allow widens what a call may reach beyond the defaults.
+                properties:
+                  creds:
+                    description: Creds names the credentials a call may consume.
+                    properties:
+                      required:
+                        description: Required names the credentials that must resolve
+                          for a call to run.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                  filesystem:
+                    description: Filesystem widens what a call may touch on disk.
+                    properties:
+                      pathsUnder:
+                        description: PathsUnder are the directory roots a call may
+                          touch.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                  network:
+                    description: Network widens where a call may reach.
+                    properties:
+                      destinations:
+                        description: Destinations are the hosts a call may contact;
+                          empty allows none.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                type: object
+              allowSubcommands:
+                description: |-
+                  AllowSubcommands is the allowlist of toolkit subcommand paths; anything
+                  absent is denied.
+                items:
+                  type: string
+                type: array
+              constraints:
+                description: Constraints are CEL predicates every call's arguments
+                  must satisfy.
+                items:
+                  properties:
+                    cel:
+                      description: CEL is a boolean expression over the call's arguments;
+                        false denies.
+                      type: string
+                    message:
+                      description: Message is the denial text shown when CEL evaluates
+                        false.
+                      type: string
+                  required:
+                  - cel
+                  type: object
+                type: array
+              deny:
+                description: Deny refuses calls by declared effect even inside AllowSubcommands.
+                properties:
+                  effects:
+                    description: Effects refuses calls whose declared effects match.
+                    properties:
+                      creds:
+                        description: Creds denies credential-touching effects.
+                        properties:
+                          writes:
+                            description: Writes denies any subcommand that would write
+                              credential material.
+                            type: boolean
+                        type: object
+                      destructive:
+                        description: Destructive denies any subcommand the toolkit
+                          marks destructive.
+                        type: boolean
+                      reads:
+                        description: Reads names resource kinds whose reads are denied.
+                        items:
+                          type: string
+                        type: array
+                      writes:
+                        description: Writes names resource kinds whose writes are
+                          denied.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                type: object
+              exceptions:
+                description: Exceptions conditionally relax named Deny rules.
+                items:
+                  properties:
+                    message:
+                      description: Message explains the exception in denial output.
+                      type: string
+                    overrides:
+                      description: Overrides names the deny rules this exception relaxes.
+                      items:
+                        type: string
+                      type: array
+                    when:
+                      description: When is the CEL predicate that must hold for the
+                        relaxation to apply.
+                      type: string
+                  required:
+                  - overrides
+                  - when
+                  type: object
+                type: array
+              intent:
+                description: Intent is the one-line purpose shown to authors and reviewers.
+                type: string
+              name:
+                description: Name is the LLM-facing tool name this spec produces.
+                type: string
+              observes:
+                description: |-
+                  Observes declares facts this tool's result asserts about specific
+                  resource instances, co-derived with the subjects they are about.
+                  Evaluated after a SUCCESSFUL call. Reuses the MCPServer per-tool type
+                  and CEL semantics; see MCPServerTool.Observes.
+                items:
+                  description: |-
+                    ObservesBlock is one observation declaration on a tool. The dispatcher
+                    evaluates it after tool.Execute succeeds.
+
+                    One block yields the SUBJECTS and the FACTS from the same `item`. They are
+                    not two declarations that happen to agree: a fact and the object it describes
+                    come out of one payload, which is what stops a fact about one instance from
+                    being made to answer for another.
+                  properties:
+                    facts:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Facts maps a fact name to a CEL expression yielding its value, evaluated
+                        against the same `item` as Subjects.
+                      minProperties: 1
+                      type: object
+                    forEach:
+                      description: |-
+                        ForEach is a CEL expression yielding a list. One observation is emitted
+                        per element with `item` bound to it. Unset emits exactly one, with `item`
+                        bound to nil.
+                      type: string
+                    subjects:
+                      description: |-
+                        Subjects are the objects this observation is about, as CEL string
+                        expression pairs. At least one is REQUIRED: a block recording facts about
+                        nothing would produce a session-scoped boolean that answers for every
+                        instance at once.
+                      items:
+                        description: |-
+                          ObserveSubject is one subject as a (resourceType, resourceID) pair of CEL
+                          string expressions.
+                        properties:
+                          resourceID:
+                            description: ResourceID is a CEL string expression yielding
+                              the object id.
+                            type: string
+                          resourceType:
+                            description: |-
+                              ResourceType is a CEL string expression yielding a SpiceDB definition
+                              name (commonly a literal, e.g. `"github_pr"`).
+                            type: string
+                        required:
+                        - resourceID
+                        - resourceType
+                        type: object
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    when:
+                      description: |-
+                        When is a CEL boolean over `args`, `result`; the block is skipped if it
+                        evaluates false. Unset means always taken.
+                      type: string
+                  required:
+                  - facts
+                  - subjects
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              require:
+                description: Require declares preconditions the sandbox must satisfy.
+                properties:
+                  verifiedBinaryVersion:
+                    description: |-
+                      VerifiedBinaryVersion refuses the call unless the sandbox's binary
+                      version was probed and matched the toolkit's declared range.
+                    type: boolean
+                type: object
+              secretOutput:
+                description: |-
+                  SecretOutput, when non-nil, declares that this tool produces a single
+                  secret value that the runner must capture out-of-band. Mirrors
+                  pkg/tools/toolspec/spec.SecretOutputSpec; json tags must match exactly so the
+                  ToSpec JSON round-trip carries the value through.
+                properties:
+                  description:
+                    description: Description is human-visible text about the secret
+                      (caveats, usage, expiry).
+                    type: string
+                  name:
+                    description: Name is the logical key for the secret (e.g. "kubeconfig").
+                    type: string
+                  source:
+                    description: 'Source declares where the secret value lives: "stdout"
+                      or "file:<absolute-path>".'
+                    type: string
+                required:
+                - name
+                - source
+                type: object
+              sensitive:
+                description: Sensitive names arguments and env to redact from logs
+                  and prompts.
+                properties:
+                  env:
+                    description: Env names environment variables whose values must
+                      be redacted.
+                    items:
+                      type: string
+                    type: array
+                  flags:
+                    description: Flags names flags whose values must be redacted.
+                    items:
+                      type: string
+                    type: array
+                  positional:
+                    description: Positional names positional arguments whose values
+                      must be redacted.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              toolkit:
+                description: Toolkit is the SpiceboxToolkit this spec narrows.
+                properties:
+                  name:
+                    description: Name is the SpiceboxToolkit name (or a builtin toolkit's
+                      name).
+                    type: string
+                  revision:
+                    description: |-
+                      Revision is the toolkitRevision this spec was authored against; a
+                      mismatch is a validation failure, not a silent upgrade.
+                    type: string
+                required:
+                - name
+                - revision
+                type: object
+              version:
+                description: Version is the spec author's version of this declaration.
+                type: string
+              writesRelationships:
+                description: |-
+                  WritesRelationships are JIT SpiceDB relationship-write blocks the
+                  runner evaluates after a SUCCESSFUL tool call. Reuses the MCPServer
+                  per-tool type and CEL semantics (when/forEach/tuple), with two extra
+                  bindings on the sandbox path: `session` ("<ns>/<name>" of the
+                  AgentSession) and `args.argv` (the raw argv list the agent supplied).
+                  For toolspecs that also declare secretOutput, `result` carries only
+                  {success: bool} — the captured secret value is never exposed to CEL.
+                items:
+                  description: |-
+                    MCPServerRelationshipWrite is one JIT-write block on an MCPServer
+                    tool. The dispatcher invokes it after tool.Execute succeeds.
+                  properties:
+                    exclusive:
+                      description: |-
+                        Exclusive makes this write atomically write-once per subject: the write
+                        FAILS (no tuple written) if the subject already holds `relation` on ANY
+                        resource of the tuple's resource type. Used for session-pin semantics
+                        (a session may be pinned to exactly one cluster). Implemented as a
+                        SpiceDB MUST_NOT_MATCH precondition, so it is atomic under concurrent
+                        writers. Default false preserves the plain TOUCH-upsert behavior.
+                      type: boolean
+                    forEach:
+                      description: |-
+                        ForEach is a CEL expression that must evaluate to a list.
+                        One tuple is emitted per element, with `item` bound to that
+                        element. When unset, exactly one tuple is emitted.
+                      type: string
+                    requireSlotBound:
+                      description: |-
+                        RequireSlotBound refuses every tuple this block emits unless the calling
+                        session holds a SLOT GRANT on the tuple's RESOURCE — the instance a human
+                        (or the pool machinery acting on one's approval) named for this session.
+
+                        Declare it on a block that writes an identity or an authority tuple onto
+                        an instance the tool itself names. Without it, whatever id the tool's
+                        response happens to carry becomes the resource of a real SpiceDB write,
+                        so a response naming somebody else's instance writes there too. With it,
+                        the write can only ever land on an instance the session was already
+                        bound to.
+
+                        The grant's PERMISSION is deliberately not consulted: a grant is a human
+                        act naming the instance, and which permission it carries is the pool
+                        machinery's concern. Any slot_grant_* on the resource binds it.
+
+                        Default false is byte-identical to the previous behaviour — an unmarked
+                        block consults nothing. A marked block whose dispatcher has no checker
+                        wired is REFUSED, not written: see pkg/authz/relwrites.Run.
+                      type: boolean
+                    tuple:
+                      description: |-
+                        Tuple holds the CEL expressions that compose the SpiceDB
+                        relationship tuple.
+                      properties:
+                        relation:
+                          description: |-
+                            Relation is a CEL string expression that must evaluate to a
+                            relation name declared on the Resource's type.
+                          type: string
+                        resource:
+                          description: |-
+                            Resource is a CEL string expression that must evaluate to a
+                            SpiceDB object reference of the form "<type>:<id>".
+                          type: string
+                        subject:
+                          description: |-
+                            Subject is a CEL string expression that must evaluate to a
+                            SpiceDB object reference of the form "<type>:<id>".
+                          type: string
+                      required:
+                      - relation
+                      - resource
+                      - subject
+                      type: object
+                    when:
+                      description: |-
+                        When is a CEL boolean expression with `args`, `result` in
+                        scope; the block is skipped if it evaluates false.
+                        When unset, the block is always taken.
+                      type: string
+                  required:
+                  - tuple
+                  type: object
+                type: array
+            required:
+            - allowSubcommands
+            - toolkit
+            type: object
+          status:
+            properties:
+              conditions:
+                description: Conditions carries Valid; see SpiceboxToolspecConditionValid.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  reflects.
+                format: int64
+                type: integer
+              resolvedToolkit:
+                description: |-
+                  ResolvedToolkit names the SpiceboxToolkit CR (or "<builtin>") that this
+                  Toolspec's spec.toolkit reference resolved to.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,192 @@
+# MCPServer/dealbook-crm: the e2e fixture's mirror of examples/leads-console's
+# leadflow-crm MCPServer — same shape (three app-only tools: two readonly
+# reads gated behind a wildcard-viewer permission, one mutation), entirely
+# fabricated names, pointed at a REAL pkg/web/uidemo/leadflow server instead of
+# the harness's simplified MCPStub. See pkg/web/uidemo/leadflow/leadflow.go's
+# own doc comment for why leadflow lives outside examples/ (so tests may
+# import it) and carries no build tag (so both `go test` and `-tags=e2e`
+# can use it).
+#
+# spec.server.url is the sentinel {{CRM_URL}} — deliberately NOT
+# {{MCP_URL}}, which test/e2e's applyAgentDir substitutes automatically with
+# the harness's own MCPStub URL. This fixture is applied manually (not via
+# Options.AgentDir) precisely so a test can point it at a real
+# httptest.NewServer(leadflow.New(...).Handler()) instead.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: dealbook-crm
+  namespace: default
+spec:
+  name: dealbook-crm
+  version: "1.0.0"
+  intent: >-
+    A fabricated CRM pipeline e2e fixture: list/filter leads, summarize the
+    pipeline by stage, and advance one lead to its next stage.
+  server:
+    url: "{{CRM_URL}}"
+    transport: streamable-http
+  # Without this, none of the three tools below are synthesized into either
+  # tool registry (mcpdispatch.Synthesize's app-visible split) — the
+  # origin's own opt-in half of uigrant.Materialize's three-way grant.
+  mcpUiAppTools:
+    enabled: true
+    maxCallsPerMin: 60
+  # Wildcard viewer relation on a single fixed resource ("leads"): every
+  # session participant satisfies the two readonly tools' checks once the
+  # wildcard tuple is seeded (04-spicedbbootstrap.yaml) — matching
+  # examples/leads-console/00-mcpserver.yaml's demo posture, but with the
+  # tuple actually WRITTEN (the example's own schema declares the wildcard
+  # RELATION shape; nothing in that example writes the TUPLE that makes a
+  # check against it resolve true — a gap this fixture does not repeat).
+  spicedbSchema:
+    resources:
+      - name: dealbook_lead
+        # Seeded owner tuples decide who may speak for a lead.
+        standing: required
+        approverPermission: owner
+        relations:
+          - name: viewer
+            subjectType: user
+            wildcard: true
+          # owner is the write-half e2e's addition (Task 7,
+          # leads_console_action_test.go) — absent from both the read-half
+          # fixture and examples/leads-console/00-mcpserver.yaml, neither of
+          # which exercises advance_lead_stage's approval.
+          #
+          # A concrete `user` relation, not a wildcard: this is what
+          # host_approval.go's approver-routing names directly, and what
+          # leads_console_action_test.go's e2e.WriteRel writes a per-viewer
+          # tuple onto so the exact-match membership check
+          # ApprovalAddressedToViewer depends on can resolve (a wildcard
+          # tuple resolves via LookupSubjects to a wildcard marker, not an
+          # enumerable member — see 04-spicedbbootstrap.yaml).
+          #
+          # No permission here is named "owner" — that name is reserved for
+          # this RELATION. Below, "advance" is a PLACEHOLDER permission
+          # (see its own comment): 03-agentclass.yaml declares
+          # (dealbook_lead, advance) as an authz.slot, and guardian's
+          # ComposeSlots (pkg/authz/guardian/schema/slots.go) OWNS the
+          # permission line for every slotted (type, permission) pair at
+          # runtime — it REPLACES the placeholder with
+          # `permission advance = slot_grant_advance->interact + owner`,
+          # referencing this "owner" RELATION as the direct-standing leg.
+          # That is also why advance_lead_stage's check below is
+          # stateImpact: external, not readwrite — a direct `owner` tuple
+          # (this test seeds one, on purpose, to exercise self-approval)
+          # would let readwrite's Check succeed outright via that same
+          # direct-standing leg and skip approval; external asks every
+          # time, regardless of standing, and channelsd's approve-time
+          # authz.BindApproved is what actually authorizes the call by
+          # writing the slot_grant_advance tuple the composed "advance"
+          # permission resolves.
+          - name: owner
+            subjectType: user
+        permissions:
+          - name: view
+            expr: viewer
+          # Placeholder "advance", REPLACED at runtime by guardian's
+          # ComposeSlots (see the "owner" relation's comment above) — its
+          # expr here (an ordinary alias to the "owner" relation) only has
+          # to satisfy the AgentClass controller's admission-time
+          # PermissionSchemaMismatch check, which validates a tool's
+          # check.permission against THIS hand-authored fragment and knows
+          # nothing about guardian's later runtime composition. Mirrors
+          # test/e2e/bronzethread/testdata/plangate-session-only-binds's
+          # "push" permission, including the title: the human phrase the
+          # approval card shows instead of the wire handle
+          # (`perm:advance:dealbook_lead`).
+          - name: advance
+            expr: owner
+            title: "Advance the lead's pipeline stage"
+  tools:
+    - name: list_leads
+      intent: "List leads in the pipeline, optionally filtered by an update-date range and/or stage."
+      visibility: [app]
+      args:
+        allowedFields: [from, to, stage]
+      effects:
+        readOnly: true
+      # stateImpact=readonly requires a non-nil check (StateImpact.CheckRequired)
+      # — half of the runner's auto-run predicate, alongside the origin's own
+      # readOnlyHint above (leadflow's own tool announcement sets
+      # ReadOnlyHint: true — see pkg/web/uidemo/leadflow/tools.go's toolTable).
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: dealbook_lead
+          resourceIDExpr: '"leads"'
+          permission: view
+
+    - name: stage_breakdown
+      intent: "Count leads per pipeline stage within an optional update-date range."
+      visibility: [app]
+      args:
+        allowedFields: [from, to]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: dealbook_lead
+          resourceIDExpr: '"leads"'
+          permission: view
+
+    - name: advance_lead_stage
+      intent: "Move one lead to its next pipeline stage."
+      visibility: [app]
+      args:
+        allowedFields: [leadId, note]
+      # No effects.readOnly and stateImpact=external (not readonly, and NOT
+      # readwrite): this is the mutation, so it never auto-runs and always
+      # routes through per-click approval — exercised end to end by
+      # leads_console_action_test.go (Task 7).
+      #
+      # permission is "advance", not "view": the two read tools above ALSO
+      # check dealbook_lead's "view" permission, ungated — the demo's
+      # "every session participant may read" posture. "advance" is a
+      # separate permission dedicated to this one gated check, so the read
+      # tools' ungated "view" checks are untouched.
+      #
+      # NOT named "owner": a relation and a permission on the same SpiceDB
+      # definition share one namespace (SpiceDB's own compiler rejects a
+      # schema that reuses one — "found duplicate relation/permission
+      # name"), and "owner" is already taken by the RELATION this composed
+      # permission's direct-standing leg references (see the dealbook_lead
+      # relations block above) — the same relation
+      # leads_console_action_test.go's e2e.WriteRel writes the viewer's own
+      # tuple onto and host_approval.go's approver-routing names directly
+      # (that routing is hardcoded to <resourceType>:<id>#owner regardless
+      # of what this check's OWN permission is named — see
+      # buildToolCallApprovalAsk's resourceOwnerSets).
+      #
+      # stateImpact: external, not readwrite, is load-bearing. The scenario
+      # this tool exists to exercise is SELF-approval: the clicking viewer
+      # already holds a direct dealbook_lead:<leadId>#owner tuple (the test
+      # writes one, on purpose — see leads_console_action_test.go), and the
+      # point is that this must NOT let the check pass outright. Under
+      # readwrite, authz.check's positive Check would resolve Allowed
+      # against that direct tuple (guardian's ComposeSlots unions the slot
+      # leg with the SAME "owner" relation as a second, direct-standing
+      # arm — see slotPermissionExpr) and
+      # pkg/authz/hooks/toolcallauthz.go's needsApproval would skip the ask
+      # entirely — exactly the "a viewer who must approve their own action
+      # was never told" regression this bundle guards against. external's
+      # Check always denies pre-approval regardless of any tuple
+      # (authz.check's External case), so needsApproval is unconditionally
+      # true and the ask always fires; the Check's resourceType/permission
+      # are still read to build the ask (host_approval.go's
+      # buildToolCallApprovalAsk), which routes it to
+      # dealbook_lead:<leadId>#owner — and post-approval channelsd's
+      # authz.BindApproved writes the slot_grant_advance tuple the
+      # resource's composed "advance" permission resolves
+      # (03-agentclass.yaml's authz.slots + guardian's ComposeSlots) — the
+      # actual authorization for the call, since external skips the
+      # post-approval re-check entirely (host_approval.go's
+      # toolCallPostApprove: "the human approval IS the authorization").
+      permission:
+        stateImpact: external
+        check:
+          resourceType: dealbook_lead
+          resourceIDExpr: '"" + args.leadId'
+          permission: advance

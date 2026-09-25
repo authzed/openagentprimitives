@@ -1,0 +1,146 @@
+# Scenario: identity → class → session validity chain (the explicit-credential
+# redesign capstone). Drives the WHOLE chain through the REAL controllers the
+# harness wires (agentidentity, agentclass, agentsession) — no manual condition
+# stamping — starting from an empty credential Secret:
+#
+#   empty Secret  → AgentIdentity Valid=False (CredentialEmpty)
+#                 → AgentClass    Valid=False (AgentIdentityInvalid)
+#                 → AgentSession  ClassResolved=False (AgentClassNotValid); parked, no runner
+#   populate Secret → AgentIdentity Valid=True → AgentClass Valid=True
+#
+# The complementary "resolved env carries the credential value" leg is proven
+# by the credentials scenario (scenarios/credentials), which asserts GIT_TOKEN
+# reaches the sandbox exec with the Secret value via the broker.
+#
+# Notes:
+#   - The e2e harness does not wire the SpiceboxToolspec controller, so the
+#     test stamps ts-vchain-git Valid=True after Apply.
+#   - authz.toolCalls.mode=disabled keeps SpiceDB authz out of scope.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vchain-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder: the fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vchain-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# The credential Secret backing the git-token credential. It starts EMPTY
+# (key present, value ""), which drives the AgentIdentity controller to
+# stamp Valid=False/CredentialEmpty. The test later populates "token" with a
+# real value to drive the chain back to Valid=True.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vchain-git-token
+  namespace: default
+type: Opaque
+stringData:
+  token: ""
+---
+# Toolspec wrapping git's read-only `status` subcommand. The git toolkit's
+# GIT_TOKEN sensitive env declares credential=git-token, which the AgentClass
+# name-coverage check matches against the AgentIdentity credential below.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: ts-vchain-git
+spec:
+  name: ts-vchain-git
+  version: "1"
+  toolkit:
+    name: git
+    revision: "2026-04-24"
+  allowSubcommands:
+    - status
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: cls-vchain-git
+spec:
+  image: registry.example.com/git-toolbelt:latest
+  resources:
+    cpu: "100m"
+    memory: "64Mi"
+    ephemeralStorage: "16Mi"
+  tools:
+    - name: git
+      command: ["/usr/bin/git"]
+  toolspecs:
+    - name: ts-vchain-git
+---
+# AgentIdentity whose git-token credential is backed by the empty Secret.
+# The credential NAME matches the git toolkit's declared credential
+# (credential: git-token), so the AgentClass name-coverage check passes —
+# the only reason the class goes invalid is the identity's own Valid=False,
+# proving validity (not name coverage) is what propagates.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: ai-vchain
+  namespace: default
+spec:
+  description: "Identity for the identity_validity_chain scenario (empty Secret → Valid=False)."
+  credentials:
+    - name: git-token
+      type: static
+      static:
+        secretRef:
+          name: vchain-git-token
+          key: token
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-vchain
+  namespace: default
+spec:
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: vchain-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a validity-chain test agent"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  agentIdentity: ai-vchain
+  toolBundles:
+    - name: "git"
+      class: "cls-vchain-git"
+      toolspecs: ["ts-vchain-git"]
+---
+# Channel for the channelsd pipeline to find. kind=fake is the in-process
+# transport the harness drives via SendUserMessage.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-vchain-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-vchain
+  credentialsRef:
+    secretName: vchain-fake-creds
+  fake:
+    echo: false

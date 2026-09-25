@@ -1,0 +1,28 @@
+# AgentIdentity for the SEP-1913 trust-enforcement e2e fixture.
+#
+# Mirrors the centerdot-companies shape with a static credential. The fake
+# MCP server ignores the Authorization header.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sep1913-mcp-token
+  namespace: default
+type: Opaque
+stringData:
+  access_token: "unused-by-the-fake-mcp-server"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: sep1913-identity
+  namespace: default
+spec:
+  description: "SEP-1913 trust-enforcement e2e fixture: static MCP bearer token."
+  credentials:
+    - name: sep1913-mcp-bearer
+      type: static
+      static:
+        secretRef:
+          name: sep1913-mcp-token
+          key: access_token

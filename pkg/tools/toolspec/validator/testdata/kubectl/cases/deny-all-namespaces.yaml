@@ -1,0 +1,19 @@
+# The namespace pin is constraints[0] and is SATISFIED by `-n tenant-foo`, which
+# kubectl then ignores in favour of -A. constraints[1] is the only thing
+# standing between this spec's stated intent -- read-only access restricted to
+# one namespace -- and every Secret in the cluster.
+#
+# It asserted nothing for the whole life of the spec: --all-namespaces is a
+# bool, call.flag() rendered every non-string as "", and so the second disjunct
+# of `!call.hasFlag(x) || call.flag(x) == ""` was unconditionally true. No
+# golden case reached constraints[1], so nothing said so.
+name: deny-all-namespaces
+toolkit: toolkit.yaml
+spec: spec.yaml
+invocation:
+  command: kubectl
+  argv: [get, secrets, -n, tenant-foo, --all-namespaces]
+  binaryVersion: "1.30.0"
+expect:
+  allow: false
+  failedOn: {path: "constraints[1]"}

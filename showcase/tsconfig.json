@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "types": ["vitest/globals", "@testing-library/jest-dom", "vite/client", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@slacksim/*": ["demos/slacksim/src/*"]
+    }
+  },
+  "include": ["demos", "engine", "docs", "vite.slacksim.config.ts", "vite.docs.config.ts", "vitest.setup.ts"]
+}

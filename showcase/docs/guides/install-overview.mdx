@@ -1,0 +1,56 @@
+export const meta = {
+  title: 'Install — overview',
+  section: 'Guides',
+  group: 'Get started',
+  order: 20,
+  description: 'The two install commands, the prerequisites, and what gets stood up.',
+}
+
+# Installing OAP
+
+<p className="doc-lede">
+  OAP runs on Kubernetes. There are two ways in: a one-command bring-up for a laptop or a Mac, and a
+  platform-only install for an existing cluster.
+</p>
+
+## `oap init` vs. `oap install`
+
+- **`oap init`** is the one-shot onboarding command: it builds the images, installs the platform, and runs a
+  health check, then optionally walks you through a security-settings wizard and a default model. Use this to go
+  from nothing to a working install — see the [step-by-step](#/install-init).
+- **`oap install`** does just the platform bring-up — the operator, CRDs, and services — against a cluster
+  you've already got, without building images.
+
+```bash
+oap init              # build + install + check (first run)
+oap install           # platform only, into the configured cluster
+oap check             # verify every component is healthy
+oap check --watch     # keep checking every couple of seconds
+```
+
+## Prerequisites
+
+- A reachable **Kubernetes cluster** — a local one (kind, Docker Desktop) for development, or a managed cluster
+  for production. Everything runs off your kubeconfig.
+- **Docker + buildx** only if you're building images locally (the `oap init` / `oap build` path). A cluster that
+  pulls prebaked images doesn't need Docker on your machine.
+
+If you're on a Mac and don't want to manage a cluster at all, skip straight to
+**[Desktop](#/install-desktop)** — it runs the whole thing in a local VM.
+
+## What gets stood up
+
+An install brings up the platform components: the **operator** (and the CRDs), the **authorization** service,
+the **channels** daemon, an operator-managed **SpiceDB**, the **web** server (sessions + admin), plus the
+messaging bus and the memory/knowledge-graph stores appropriate to your profile. `oap check` verifies each one
+and reports `✓ / ⚠ / ✗` per component.
+
+## The install experience
+
+Install isn't a fire-and-forget script. It renders as a live checklist of named phases, each with a readiness
+wait — and when a component is slow, it asks whether to keep waiting rather than aborting, and (if you've wired
+an AI CLI) can even launch it to diagnose a stalled component. An interrupt offers to tear down what was applied
+so a failed install doesn't leave debris.
+
+Next: **[Desktop](#/install-desktop)** for the zero-Kubernetes Mac flow, or **[On a cluster](#/install-cluster)**
+for the platform matrix.

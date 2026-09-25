@@ -1,0 +1,284 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: artifactrenders.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - agentprimitives
+    kind: ArtifactRender
+    listKind: ArtifactRenderList
+    plural: artifactrenders
+    shortNames:
+    - arender
+    singular: artifactrender
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.kind
+      name: Kind
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.outputMIME
+      name: MIME
+      type: string
+    - jsonPath: .status.outputSize
+      name: Size
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ArtifactRender is one request to turn agent-supplied bytes into a
+          deliverable artifact -- an HTML page, an SVG, an image -- through a named
+          renderer plug-in. The agent creates it; the rendered output is persisted to
+          the artifactstore and referenced from status.
+
+          Namespaced. Reconciled by pkg/controllers/artifactrender, which drives the
+          phase machine Pending -> Rendering -> Ready/Failed by dispatching to the
+          renderer registered under spec.kind
+          (pkg/channels/channelassets/registry).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              altText:
+                description: |-
+                  AltText is the accessibility / channel-side preview text shown when
+                  the artifact can't render. Required for image-MIME renderer outputs;
+                  optional otherwise (the runner enforces in prepare_artifact).
+                type: string
+              csp:
+                description: |-
+                  CSP is a widget's declared `_meta.ui.csp` (mcp-ui / MCP Apps protocol),
+                  carried from the MCP tool result so the session-view page's per-widget CSP
+                  can honor domains the widget says it needs instead of falling back to the
+                  restrictive same-origin default. nil when the widget declared none, and
+                  always nil for non-mcpui renders. MCP-server-authored and therefore
+                  UNTRUSTED: every consumer sanitizes each domain before use.
+                properties:
+                  connectDomains:
+                    description: |-
+                      ConnectDomains lists the origins the widget needs XHR/fetch/WebSocket
+                      access to (maps to the CSP connect-src directive).
+                    items:
+                      type: string
+                    type: array
+                  frameDomains:
+                    description: |-
+                      FrameDomains lists the origins the widget may embed as a nested
+                      frame (maps to frame-src).
+                    items:
+                      type: string
+                    type: array
+                  resourceDomains:
+                    description: |-
+                      ResourceDomains lists the origins the widget loads scripts, styles,
+                      and images from (maps to script-src/style-src/img-src).
+                    items:
+                      type: string
+                    type: array
+                type: object
+              filename:
+                description: |-
+                  Filename is a delivery hint for the channel's file-upload primitive.
+                  Renderers may rewrite (e.g. force ".html" extension).
+                type: string
+              kind:
+                description: |-
+                  Kind names the renderer plug-in (matches the registered Kind() value).
+                  Pattern: lowercase, dash-separated. Example: "html".
+                type: string
+              payload:
+                description: |-
+                  Payload is the raw input bytes. Exactly one of Payload (inline,
+                  ≤256 KiB) or PayloadRef (artifactstore) MUST be set.
+                format: byte
+                type: string
+              payloadRef:
+                description: |-
+                  PayloadRef is an artifactstore.Ref the controller fetches the input bytes
+                  from, for payloads too large to inline. Deleted with the CR.
+                type: string
+              timeoutSeconds:
+                default: 30
+                description: |-
+                  TimeoutSeconds is the agent-requested per-render budget. Operator
+                  caps at 300; default 30.
+                format: int32
+                maximum: 300
+                minimum: 1
+                type: integer
+            required:
+            - kind
+            type: object
+          status:
+            properties:
+              conditions:
+                description: Conditions carries Ready; see ArtifactRenderConditionReady.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              failureMessage:
+                description: FailureMessage is the human-readable detail behind FailureReason.
+                type: string
+              failureReason:
+                description: FailureReason is the machine-readable failure code. Set
+                  when phase=Failed.
+                type: string
+              finishedAt:
+                description: FinishedAt is when rendering reached Ready or Failed.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  reflects.
+                format: int64
+                type: integer
+              outputFilename:
+                description: OutputFilename is the delivery filename, after any renderer
+                  rewrite.
+                type: string
+              outputMIME:
+                description: OutputMIME is the rendered artifact's content type.
+                type: string
+              outputRef:
+                description: |-
+                  OutputRef is the artifactstore ref the rendered bytes landed under.
+                  Set when phase=Ready.
+                type: string
+              outputSize:
+                description: OutputSize is the rendered artifact's size in bytes.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the render lifecycle position.
+                enum:
+                - Pending
+                - Rendering
+                - Ready
+                - Failed
+                type: string
+              startedAt:
+                description: StartedAt is when rendering began.
+                format: date-time
+                type: string
+              warnings:
+                description: |-
+                  Warnings are the sanitizer's findings, surfaced so the agent can fix its
+                  source; a non-empty list does not mean the render failed.
+                items:
+                  description: |-
+                    SanitizerWarning is a structured finding from the artifact renderer's
+                    sanitizer, surfaced to the agent so it can adjust the source. Mirrors
+                    channelassets.Warning (the apis package cannot import channelassets).
+                  properties:
+                    action:
+                      description: action is "unwrapped", "removed", "stripped", or
+                        "kept".
+                      type: string
+                    count:
+                      description: count is the number of occurrences.
+                      type: integer
+                    kind:
+                      description: kind is "tag", "attr", or "css".
+                      type: string
+                    name:
+                      description: name is the element, attribute, or CSS construct
+                        affected.
+                      type: string
+                    note:
+                      description: note is an optional actionable hint.
+                      type: string
+                  required:
+                  - action
+                  - count
+                  - kind
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

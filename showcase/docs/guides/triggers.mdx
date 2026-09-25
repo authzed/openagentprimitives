@@ -1,0 +1,49 @@
+export const meta = {
+  title: 'Triggers: webhooks & schedules',
+  section: 'Reference',
+  group: 'Channels',
+  order: 2450,
+  description:
+    'Not every session starts with a human typing — a signed webhook (a pull request) or a schedule (a cron) can start one, verified and attributed before the agent runs.',
+}
+
+# Triggers: webhooks & schedules
+
+<p className="doc-lede">
+  A [session](#/session-lifecycle) doesn't have to begin with someone typing. A <strong>trigger</strong> starts
+  one from an external event — a pull request opened, a schedule firing — and the inbound payload <em>is</em> the
+  input. The event is verified and attributed before the agent runs, so a triggered agent is no less governed
+  than a chatted-with one.
+</p>
+
+## Webhooks: a signed event starts a session
+
+The GitHub channel kind turns a **pull-request webhook** into a session. It's input-only, arrives at the web
+daemon over HTTP, and is **cryptographically verified** before anything runs: the request's HMAC-SHA256
+signature is checked in constant time against the channel's secret, fail-closed on a missing secret, and the
+route refuses a payload whose kind doesn't match the channel's — so a signature for one system can't be replayed
+against another. One thread of work maps to one durable session (`pr:<owner>/<repo>#<number>`), and the agent's
+replies go out on a **separate, paired output channel** (a Slack thread, say).
+
+Because a webhook is a machine event, the session is attributed to a declared subject rather than a human, and
+the untrusted parts of the payload — a PR title or body an outsider wrote — are wrapped as untrusted content
+and sanitized before the agent reads them.
+
+## Reporting back to the source
+
+A trigger can also report *status* to where it came from. The GitHub trigger opens and updates a **check run**
+on the pull request's commit: a clean result maps to success, findings to action-required, and a run that
+couldn't finish to a neutral result — deliberately not a hard failure. What it observed is written as
+[signed facts](#/facts-observations) keyed to the commit and the PR.
+
+## Schedules
+
+The Bento kind is the scheduled sibling: instead of an inbound webhook it fires a synthetic event on an
+interval, starting a session on a cron. Same model — a non-human input that opens a governed session — with the
+schedule as the trigger.
+
+<Callout kind="security" title="Verified first, then translated">
+  A triggered session runs under the same tools, identity, and authorization as any other. The one extra
+  discipline is at the door: the event is verified before it's translated into a prompt, and the parts an
+  outsider controls are never treated as instructions — closing the obvious "anyone can POST a webhook" hole.
+</Callout>

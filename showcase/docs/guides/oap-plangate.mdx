@@ -1,0 +1,39 @@
+export const meta = {
+  title: 'oap plangate',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2900,
+  description: 'Inspect what the plan gate recorded for a session',
+}
+
+# oap plangate
+
+Inspect what the plan gate recorded for a session
+
+## `oap plangate metrics <session>`
+
+Metrics reconstructs the session's frozen plan from its append-only
+plan-gate log and reports what enforcement would have done.
+
+The plan-wide numbers are the four the enforcement decision is gated on: how
+many calls the gate governed, how many enforcement would have refused, the
+approvals it would have raised by tier, and the gap between reach the agent
+declared and reach it actually used.
+
+The per-phase breakdown is the same question asked where it is actionable.
+"Declared but never exercised" is the concrete form of over-declaration, and a
+plan-wide total cannot say which phase to narrow — a use-it-or-lose-it ratchet
+drops handles from the phase that did not use them, so it needs the per-phase
+view. A phase that never ran at all is reported separately from one that ran and
+used everything: both exercise nothing, and only the first is over-declaration.
+
+This reads the log and nothing else. It makes no changes and reaches no
+decision — a session run in logging mode produces exactly this, which is the
+evidence the enforcement default is meant to rest on.
+
+Flags:
+
+```text
+--json  Emit the report as JSON
+```
+

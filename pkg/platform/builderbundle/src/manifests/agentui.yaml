@@ -1,0 +1,91 @@
+# AgentUI/agent-builder-workshop: the §5 workshop page. PROMPT-BACKED — every
+# control fires a Prompt action (a message to the builder's transcript), so the
+# page declares no tools and validates with zero granted tools. The page is
+# compiled from ../ui/page.tsx by `mage ui:compile` into page.view.json, which
+# Bundle() splices into spec.view; this file keeps the ACTIONS. The builder
+# paints each hook via update_view as it advances a phase (plan 6b's skills).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentUI
+metadata:
+  name: agent-builder-workshop
+spec:
+  displayName: "Agent Builder Workshop"
+  actions:
+    # The entry point. The person types what they want in the agent hook's
+    # form and clicks Start; this seeds the conversation. The builder then
+    # takes over, asking one question at a time and repainting the hooks as it
+    # advances — including the phase timeline's active step. It is also the
+    # amendment point: after Edit, the person submits the same form, so this
+    # same action fires again on every amendment — hence the last sentence,
+    # which is what tells the two apart.
+    - name: describe_agent
+      inputs: [description]
+      prompt: >-
+        The person described the agent they want to build: "{description}".
+        Repaint the `agent` hook now as its intent says: their description
+        verbatim under "In your words" with the Edit button, and "What we've
+        settled" holding what you can already state from it. Acknowledge in one
+        sentence what you understood, then ask your first clarifying question
+        through the `questions` hook, one at a time. As you advance, grow the
+        settled facts in the `agent` hook and keep the phase timeline (the
+        `phase` hook) current — the active stage and every step's summary. If
+        their description is already on the page, this is an amendment: revise
+        the settled facts that depended on the old words, say in one sentence
+        what changed, and continue the interview from where you were rather
+        than starting it again.
+    - name: edit_description
+      prompt: >-
+        The person wants to change their description. Repaint the `agent`
+        hook with the describe form again — the same ap:form the page started
+        with, with `values` carrying their current description so they edit it
+        rather than retype it. When they submit, treat it as an amendment:
+        repaint the `agent` hook with the new text, revise every settled fact
+        that depended on the old one, and say in one sentence what changed.
+    - name: test_done
+      prompt: >-
+        The person says they are done testing. Read the test session's log now
+        with workshop_test_sessions and workshop_read_test_log, then tell them
+        what the agent actually did — its tool calls and results, not its
+        prose — and ask — through the `questions` hook, as an ap:question —
+        whether that looked right.
+    - name: stop_test
+      prompt: >-
+        The person clicked Stop on the test. First read what it did with
+        workshop_test_sessions and workshop_read_test_log, then stop it with
+        workshop_stop_test, naming that session.
+    - name: thats_not_right
+      prompt: >-
+        The person says the test result isn't right. Ask what they expected
+        versus what actually happened through the `questions` hook, one
+        ap:question at a time, then route back to fixing it.
+    - name: keep_watching
+      prompt: >-
+        The person wants you to keep watching the test. Call
+        workshop_watch_test once for the same agent. If its result says
+        keptWatching is true, the watch kept following the same test: repaint
+        the test state as running, with the time it first started. If
+        keptWatching is false, that test is gone or finished and the new watch
+        has seen nothing: read what it did with workshop_test_sessions and
+        workshop_read_test_log if it still exists, repaint the ended row, and
+        offer Start a fresh test.
+    - name: start_fresh_test
+      prompt: >-
+        The person wants a fresh test. If a test is still running, read its log
+        first with workshop_test_sessions and workshop_read_test_log and stop it
+        with workshop_stop_test naming that session; then set the test up again
+        from step 2 of the test skill, with a new link.
+    - name: hand_off
+      prompt: >-
+        The person wants to hand the draft to someone else. Tell them what the
+        download is and how the other person can ask for it to be installed,
+        in plain terms, and that nothing of their own accounts travels with it.
+    - name: test_again
+      prompt: >-
+        The person wants to test the agent again before deciding. Repaint the
+        `phase` hook with Test active and Deliver back to upcoming — the
+        testRun hook is off the stage until you do — then load the test skill
+        and set the test up again from its step 2.
+    - name: install_for_real
+      prompt: >-
+        The person wants to install this agent for real. Start the request with
+        workshop_request_install so a platform admin can approve it.

@@ -1,0 +1,6 @@
+apiVersion: authzed.com/v1alpha1
+kind: PermissionSystem
+metadata:
+  name: demo-system
+spec:
+  replicas: 2

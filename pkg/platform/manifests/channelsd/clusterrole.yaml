@@ -1,0 +1,93 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spicebox-channelsd
+# Minimized to the verbs channelsd's code actually uses. channelsd is a NATS
+# consumer with NO k8s informers, so every `watch` was dead and is dropped;
+# agentsession status is written via agentstatus.WriteOwned (a merge Patch for
+# scalars + an Update for conditions); secrets are read by name (no cluster-wide
+# list/watch). Guarded by TestRBACSufficiency.
+rules:
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["channels"]
+    verbs: ["get","list"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["channels/status"]
+    verbs: ["patch"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["agentclasses"]
+    verbs: ["get"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["agentsessions"]
+    verbs: ["get","list","create","patch"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["agentsessions/status"]
+    verbs: ["patch","update"]
+  # Inbound routing consults liveInteractiveToolCall: a label-filtered List of
+  # ToolCalls for the session to detect a Running interactive ToolCall (so the
+  # message routes to the live tool's stdin instead of waking the agent). List
+  # only — filtered by the agentsession label, never fetched by name or watched.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["toolcalls"]
+    verbs: ["list"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["sessionuseridentities"]
+    verbs: ["get"]
+  # The inbound initiative gate reads the SubagentRequest that created a
+  # delegated child (by the name on the child's own owner reference) to learn
+  # whether that delegation's mode lets a PERSON open a turn into it. Read-only
+  # and by name: the terms of a delegation are the operator's to write.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["subagentrequests"]
+    verbs: ["get"]
+  # CredentialUpdateWatcher polls (no informer, matching this component's
+  # NATS-consumer shape) every Open, undelivered CredentialUpdateRequest
+  # cluster-wide -- a session (and therefore its requests) can live in any
+  # namespace, so list is unscoped. It never fetches one by name. Once it
+  # publishes the card it patches status.interactionRef so the request drops
+  # out of future polls.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["credentialupdaterequests"]
+    verbs: ["list"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["credentialupdaterequests/status"]
+    verbs: ["patch"]
+  # The WorkshopCredentialWatcher lists Workshops cluster-wide (a builder session,
+  # and therefore its Workshop, can live in any namespace) to find undelivered
+  # spec.credentialRequests, and patches status.credentialRequests[].deliveredAt
+  # after delivering the card. List only -- it never fetches one by name -- same
+  # NATS-consumer/poller shape as the other credential watchers here.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["workshops"]
+    verbs: ["list"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["workshops/status"]
+    verbs: ["patch"]
+  # UserIdentity is cluster-scoped. channelsd reads it (credential_linked
+  # diffing) AND ensure-creates + upserts the channel-identity directory on
+  # status.channelIdentities for every distinct human sender.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["useridentities"]
+    verbs: ["get","list","create","patch"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["useridentities/status"]
+    verbs: ["patch"]
+  # MCPServer is namespaced; passthroughcatalog lists them cluster-wide
+  # to look up each missing credential's auth.type — OAuth credentials
+  # get per-credential /link/oauth/ buttons in credential_request,
+  # PAT credentials share one /link?d= button. List only (no by-name get).
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["mcpservers"]
+    verbs: ["list"]
+  # Read by name (channel CredentialsRef) — no cluster-wide list/watch.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  # externalurl.Provider polls spicebox-webd-external-url for all
+  # passthrough deep-links and artifact-view links — identityd's pages
+  # are now served on webd's trusted origin. Name-scoped get.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+    resourceNames:
+      - spicebox-webd-external-url

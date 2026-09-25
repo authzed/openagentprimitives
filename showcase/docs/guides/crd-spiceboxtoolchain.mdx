@@ -1,0 +1,56 @@
+export const meta = {
+  title: 'SpiceboxToolchain',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3250,
+  description: 'SpiceboxToolchain is a language or tooling overlay a sandbox can mount -- a',
+}
+
+# SpiceboxToolchain
+
+**Group** `agentprimitives.authzed.com` · **Scope** Cluster · **Short names** `sbxtc`
+
+SpiceboxToolchain is a language or tooling overlay a sandbox can mount -- a
+compiler, an SDK, a linter -- delivered by a registered backend and mounted
+at ToolchainRootPath/&lt;name&gt;, with the PATH entries and env it needs.
+
+Cluster-scoped. Reconciled by pkg/controllers/spiceboxtoolchain, which
+validates the spec and then asks the named delivery Kind to validate its own
+fields. A Valid=False toolchain is refused at session-bind time, so a broken
+catalog entry fails the session closed instead of quietly dropping a
+compiler out of the sandbox.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.bin` | `[]string` | Bin lists PATH entries relative to this toolchain's root. Each becomes &lt;ToolchainRootPath&gt;/&lt;name&gt;/&lt;entry&gt; on the sandbox container's PATH. |
+| `spec.description` | `string` | Description is human-facing text surfaced by `oap`. |
+| `spec.detect` | `[]string` | Detect are workspace-relative marker files (e.g. "go.mod") that hint this toolchain is applicable. Advisory only — nothing acts on them. |
+| `spec.env` | `map[string]string` | Env is the process environment this toolchain needs. Values may reference exactly two template variables, spelled with surrounding spaces: "&#123;&#123; .Root &#125;&#125;" (this toolchain's root) and "&#123;&#123; .Cache &#125;&#125;" (ToolchainCachePath). Any other template text is rejected at validation. |
+| `spec.provides` | `[]string` | Provides are opaque capability labels (e.g. "go", "gopls") surfaced to operators. Advisory — nothing selects on them. |
+| `spec.sizeBytes` \* | `integer (int64)` | SizeBytes is the payload's on-disk usage (measured via `du -sk * 1024`), NOT apparent size. The kubelet enforces emptyDir SizeLimit against allocated blocks; under-estimating this field evicts the pod mid-copy. The operator derives both the overlay emptyDir SizeLimit and the pod's ephemeral-storage limit from this value. _(min 1)_ |
+| `spec.source` \* | `object` | Source describes where the payload comes from. Kind selects a registered delivery backend (pkg/tools/toolchain/kinds/registry). |
+| `spec.source.image` | `string` | Image is the OCI image carrying the payload. Must be a regular container image, NOT an ORAS artifact: containerd 2.1 silently produces an empty mount for artifacts with custom layer media types. |
+| `spec.source.kind` \* | `string` | Kind names a registered delivery backend. "image" today. |
+| `spec.source.prefix` | `string` | Prefix is the absolute path of the payload inside Image. It MUST equal &lt;ToolchainRootPath&gt;/&lt;metadata.name&gt;. Redundant by construction, and kept so the invariant is reviewable in the CR rather than implicit in a Dockerfile. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` | Conditions carries Valid; see SpiceboxToolchainConditionValid. |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedGeneration` | `integer (int64)` | ObservedGeneration is the spec generation this status reflects. |
+
+<small>\* required</small>
+

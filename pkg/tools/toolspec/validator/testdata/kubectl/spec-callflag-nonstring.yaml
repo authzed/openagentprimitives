@@ -1,0 +1,39 @@
+# A spec whose SOLE constraint uses the buggy-shaped `call.flag(x) == ""` form
+# directly against a bool flag. It is the shape an author reaches for to mean
+# "this flag was not passed", and the shape that actually shipped in three
+# specs.
+#
+# It exists to give the validator tier real coverage of the call.flag()
+# non-string fix. The golden cases under cases/ use `!call.hasFlag(...)`, which
+# never calls call.flag() at all, so they do not exercise the fix. Here, with
+# --all-namespaces present, call.flag("all-namespaces") on a bool must ERROR
+# ("not a string"); checkConstraints propagates that so Check fails closed.
+# Revert the engine fix (render "" for a non-string) and the expression becomes
+# `"" == ""` → true → Check ALLOWS — which TestCallFlag_NonStringPropagatesFailClosed
+# catches. Driven by a Go test, not the golden harness, because the harness
+# requires Check to return no error and this case's whole point is that it does.
+name: kubectl-callflag-nonstring-guard
+version: "1"
+
+intent: |
+  Defense-in-depth: the sole constraint fails closed only because call.flag()
+  on a non-string flag errors rather than rendering "".
+
+toolkit:
+  name: kubectl
+  revision: "2026-04-24"
+
+allowSubcommands:
+  - get
+  - describe
+  - logs
+
+deny:
+  effects:
+    destructive: true
+    writes: [network, filesystem]
+    creds: {writes: true}
+
+constraints:
+  - cel: 'call.flag("all-namespaces") == ""'
+    message: "call.flag on a non-string flag must fail closed, not render empty"

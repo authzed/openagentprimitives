@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OAP Desktop — Setup</title>
+<style>
+  :root {
+    color-scheme: dark;
+    /* N1 palette (2026-09-16), the same rungs as the admin UI's tokens.css:
+       stone surfaces, teal-400 as the one state hue, red-500 for failure. */
+    --bg: #0c050f;            /* stone-975 */
+    --bg-elevated: #1e1424;   /* stone-900 */
+    --card: #1e1424;          /* stone-900 */
+    --border: #2a2130;        /* stone-850 */
+    --text: #dedddf;          /* stone-100 */
+    --text-dim: #aaa5ac;      /* stone-300 */
+    --text-faint: #79727e;    /* stone-400 */
+    --accent: #72b1ad;        /* teal-400 = --state */
+    --accent-dim: #72b1ad33;
+    --green: #72b1ad;         /* ready = state, not a second hue */
+    --green-dim: #72b1ad33;
+    --red: #f0566d;           /* red-500 */
+    --red-dim: #f0566d26;
+    /* Relay hues = the admin chart series (teal, blue, red, magenta, violet). */
+    --relay-1: #72b1ad; --relay-2: #78d0ed; --relay-3: #f0566d; --relay-4: #a5318a; --relay-5: #ad96f3;
+    --radius: 12px;
+    font-size: 15px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100%;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #app {
+    width: 100%;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 40px 32px 56px;
+  }
+
+  header#app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 32px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text);
+  }
+
+  /* The OAP mark. `svg.mark` is the plain mark in currentColor; the relay band
+     paths sit on top and are only driven (and only visible) while
+     body[data-working] is set, i.e. phase == running. Motion for indication
+     only: idle, ready and failed all show the static mark. */
+  svg.mark { display: block; overflow: visible; flex: none; }
+  svg.mark .ink { fill: currentColor; }
+  svg.mark .seg { fill: none; stroke-width: 12; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+  svg.mark .seg.t { stroke-linecap: butt; }
+  svg.mark .band { opacity: 0; transition: opacity 240ms ease-out; }
+  body[data-working] svg.mark.working .band { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { svg.mark .band { display: none; } }
+  .brand svg.logomark { display: block; flex: none; height: 22px; width: auto; }
+  .brand .brand-sub { color: var(--text-dim); font-weight: 500; }
+  .timeline-mark { display: flex; justify-content: center; margin: 4px 0 22px; color: var(--text); }
+  .timeline-mark svg.mark { width: 72px; height: auto; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+
+  .badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .badge.phase-running { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-dim); }
+  .badge.phase-ready { color: var(--green); border-color: var(--green-dim); background: var(--green-dim); }
+  .badge.phase-failed { color: var(--red); border-color: var(--red-dim); background: var(--red-dim); }
+  .badge.phase-running .dot { animation: pulse 1.4s ease-in-out infinite; }
+
+  main { position: relative; }
+
+  section { display: block; }
+  section[hidden] { display: none !important; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+  }
+
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+
+  h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 13.5px;
+    margin: 0 0 24px;
+    line-height: 1.5;
+  }
+
+  label {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin: 0 0 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .field { margin-bottom: 18px; }
+
+  .field-optional { color: var(--text-faint); text-transform: none; letter-spacing: 0; }
+
+  .field-hint {
+    color: var(--text-faint);
+    font-size: 12px;
+    margin-top: 6px;
+    line-height: 1.5;
+  }
+
+  .field-hint code {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 11.5px;
+  }
+
+  select, input[type="password"], input[type="text"] {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+  }
+
+  select:focus, input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    border-radius: 8px;
+    padding: 11px 18px;
+  }
+
+  button.primary {
+    background: var(--accent);
+    color: white;
+    width: 100%;
+  }
+
+  button.primary:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  button.primary:not(:disabled):hover { filter: brightness(1.08); }
+
+  .error-text {
+    color: var(--red);
+    background: var(--red-dim);
+    border: 1px solid var(--red-dim);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.4;
+    margin: 4px 0 18px;
+  }
+
+  /* Timeline */
+  ol#timeline-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .step {
+    position: relative;
+    display: flex;
+    gap: 14px;
+    padding-bottom: 26px;
+  }
+
+  .step:last-child { padding-bottom: 0; }
+
+  .step::before {
+    content: "";
+    position: absolute;
+    left: 10px;
+    top: 22px;
+    bottom: -4px;
+    width: 1px;
+    background: var(--border);
+  }
+
+  .step:last-child::before { display: none; }
+
+  .step-marker {
+    flex: none;
+    width: 21px;
+    height: 21px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    line-height: 1;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--text-faint);
+    z-index: 1;
+  }
+
+  .step-done .step-marker {
+    background: var(--green-dim);
+    border-color: var(--green);
+    color: var(--green);
+  }
+
+  .step-failed .step-marker {
+    background: var(--red-dim);
+    border-color: var(--red);
+    color: var(--red);
+  }
+
+  .step-active .step-marker {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+
+  .step-active .step-marker .spinner {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 2px solid var(--accent-dim);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+
+  .step-body { flex: 1; padding-top: 1px; min-width: 0; }
+
+  .step-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .step-name {
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .step-pending .step-name { color: var(--text-faint); }
+
+  .step-elapsed {
+    font-size: 12.5px;
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+  }
+
+  .step-detail {
+    margin-top: 3px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+  }
+
+  .step-error {
+    margin-top: 4px;
+    font-size: 12.5px;
+    color: var(--red);
+  }
+
+  /* Ready / Failed terminal screens */
+  .terminal-screen {
+    text-align: center;
+    padding: 36px 28px;
+  }
+
+  .terminal-icon {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+  }
+
+  .terminal-icon.success { background: var(--green-dim); color: var(--green); }
+  .terminal-icon.failure { background: var(--red-dim); color: var(--red); }
+
+  .terminal-screen h2 { font-size: 19px; }
+  .terminal-screen .subtitle { margin-bottom: 22px; }
+
+  .terminal-screen .step-error {
+    text-align: left;
+    background: var(--red-dim);
+    border: 1px solid var(--red-dim);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 12px 0 18px;
+    font-size: 13px;
+  }
+
+  .hint {
+    color: var(--text-faint);
+    font-size: 12px;
+    margin-top: 18px;
+    line-height: 1.5;
+  }
+
+  .hint code {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 11.5px;
+  }
+
+  button.secondary {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+
+  #open-dashboard-btn { min-width: 200px; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  @media (max-width: 480px) {
+    #app { padding: 24px 16px 40px; }
+    .card { padding: 20px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="app-header">
+    <div class="brand"><svg class="logomark" viewBox="0 0 1000 393" aria-hidden="true" fill="currentColor"><path d="M160.219 0C248.705 2.34906e-05 320.437 71.7324 320.438 160.219C320.437 248.705 248.705 320.437 160.219 320.438C71.7324 320.438 2.35732e-05 248.705 0 160.219C-1.21838e-05 71.7324 71.7324 1.1051e-05 160.219 0ZM170.219 90.417C164.031 86.8444 156.407 86.8445 150.219 90.417L104.769 116.658C98.5808 120.231 94.7686 126.833 94.7686 133.979V186.459C94.7686 193.604 98.5808 200.207 104.769 203.779L150.219 230.021C156.407 233.593 164.031 233.593 170.219 230.021L215.669 203.779C221.857 200.207 225.669 193.604 225.669 186.459V133.979C225.669 126.833 221.857 120.231 215.669 116.658L170.219 90.417Z"/><path d="M478.478 19.8457C484.286 9.71696 498.895 9.71695 504.703 19.8457L661.864 293.951C667.642 304.028 660.367 316.585 648.752 316.585H334.43C322.814 316.585 315.54 304.028 321.317 293.951L478.478 19.8457ZM498.147 145.475C495.244 140.41 487.939 140.41 485.035 145.475L436.547 230.043C433.658 235.081 437.295 241.359 443.102 241.359H540.079C545.887 241.359 549.524 235.081 546.636 230.043L498.147 145.475Z"/><path d="M977.327 12.2494C989.849 12.2494 1000 22.3997 1000 34.9213V278.912C1000 291.434 989.849 301.585 977.327 301.585H826.933C814.412 301.586 804.262 311.736 804.262 324.257V369.663C804.262 382.185 794.11 392.336 781.589 392.336H721.129C708.607 392.336 698.457 382.185 698.457 369.663V34.9213C698.457 22.3998 708.607 12.2496 721.129 12.2494H977.327ZM762.693 143.302C762.693 151.65 769.46 158.417 777.808 158.417H860.646C868.993 158.417 875.761 165.185 875.761 173.532V208.245C875.761 216.593 882.528 223.36 890.876 223.36H920.646C928.993 223.36 935.761 216.593 935.761 208.245V113.532C935.761 105.185 928.993 98.4174 920.646 98.4174H777.808C769.46 98.4174 762.693 105.185 762.693 113.532V143.302Z"/></svg><span class="brand-sub">desktop</span></div>
+    <div id="phase-badge" class="badge phase-configuring"><span class="dot"></span><span id="phase-badge-text">Starting up</span></div>
+  </header>
+
+  <main>
+    <!-- First-run config form: shown while the snapshot's needsConfig is true. -->
+    <section id="config-form" hidden>
+      <div class="card">
+        <h1>Set up OAP Desktop</h1>
+        <p class="subtitle">Connect a model provider so your local cluster can run agents, and choose a password for the admin dashboard. You can change the model provider later; the password protects the admin dashboard's login.</p>
+        <p id="config-error" class="error-text" hidden></p>
+        <form id="config-form-el" novalidate>
+          <!-- Every option value MUST be a provider desktop.Config accepts;
+               setupui's TestServer_IndexOffersEveryKnownModelProvider asserts
+               this list and desktop.ModelProviderNames() stay in step. -->
+          <div class="field">
+            <label for="provider-select">Model provider</label>
+            <select id="provider-select" name="provider">
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="openrouter">OpenRouter</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="api-key-input">API key</label>
+            <input id="api-key-input" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the API key for this provider">
+          </div>
+          <div class="field">
+            <label for="model-input">Model <span class="field-optional">(optional)</span></label>
+            <input id="model-input" name="model" type="text" autocomplete="off" spellcheck="false" placeholder="Leave blank for this provider's recommended model">
+            <p class="field-hint">OpenRouter models are namespaced, e.g. <code>anthropic/claude-3.5-sonnet</code>.</p>
+          </div>
+          <div class="field">
+            <label for="admin-password-input">Admin password</label>
+            <input id="admin-password-input" name="password" type="password" autocomplete="new-password" spellcheck="false" placeholder="Choose a password for the admin dashboard">
+          </div>
+          <div class="field">
+            <label for="admin-password-confirm-input">Confirm password</label>
+            <input id="admin-password-confirm-input" name="passwordConfirm" type="password" autocomplete="new-password" spellcheck="false" placeholder="Re-enter the password">
+          </div>
+          <button type="submit" id="config-submit" class="primary">Continue</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Live bring-up timeline: driven by /events (SSE), falling back to
+         polling /progress. -->
+    <section id="timeline" hidden>
+      <div class="card">
+        <div class="timeline-mark" id="timeline-mark"></div>
+        <h1 id="timeline-heading">Setting up your cluster</h1>
+        <p class="subtitle" id="timeline-subtitle">This usually takes a few minutes the first time.</p>
+        <ol id="timeline-list"></ol>
+      </div>
+    </section>
+
+    <!-- Terminal: phase == ready -->
+    <section id="ready-screen" hidden>
+      <div class="card terminal-screen">
+        <div class="terminal-icon success">&#10003;</div>
+        <h2>OAP Desktop is ready</h2>
+        <p class="subtitle">Your local cluster is up and running.</p>
+        <p id="open-dashboard-error" class="error-text" hidden></p>
+        <button id="open-dashboard-btn" class="primary">Open dashboard</button>
+      </div>
+    </section>
+
+    <!-- Terminal: phase == failed -->
+    <section id="failed-screen" hidden>
+      <div class="card terminal-screen">
+        <div class="terminal-icon failure">&#10007;</div>
+        <h2>Setup didn't finish</h2>
+        <p class="subtitle" id="failed-step-name"></p>
+        <p id="failed-error-message" class="step-error"></p>
+        <p class="hint">Logs are available at <code>~/Library/Application Support/oap/logs</code> if you'd like to see more detail.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var screens = ["config-form", "timeline", "ready-screen", "failed-screen"];
+  var configSubmitted = false;
+  var lastState = null;
+  var tickTimer = null;
+  var reconnectTimer = null;
+  var pollTimer = null;
+  var eventSource = null;
+
+  function $(id) { return document.getElementById(id); }
+
+  // ── Relay mark ────────────────────────────────────────────────────────────
+  // The mark with a comet band running its outline, hue handing over at every
+  // second corner (motion lab 2026-09-16, pick Y2). The band splits at the
+  // vertex it is crossing so the new hue grows out of the corner while the
+  // old drains into it. Runs only while phase == running.
+  var MARK_OUTLINE = "M159.186 7.59677C164.993 -2.53226 179.604 -2.53226 185.411 7.59677L342.572 281.702C348.349 291.779 341.075 304.335 329.459 304.335H15.138C3.52262 304.335 -3.75273 291.779 2.02468 281.702L159.186 7.59677Z";
+  var MARK_HOLE = "M178.855 133.226C175.951 128.161 168.646 128.161 165.742 133.226L117.254 217.794C114.366 222.832 118.003 229.11 123.811 229.11H220.786C226.594 229.11 230.232 222.832 227.343 217.794L178.855 133.226Z";
+  var RELAY = { lapMs: 2400, band: 12, handoverEvery: 2, tailSteps: 12, tailLength: 3.2, tailOpacity: 0.55 };
+  var RELAY_HUES = [1, 2, 3, 4, 5].map(function (n) { return "var(--relay-" + n + ")"; });
+  var relayRaf = 0, relayT0 = 0;
+
+  function buildRelayMark(host) {
+    var ns = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 345 305");
+    svg.setAttribute("class", "mark working");
+    svg.setAttribute("aria-hidden", "true");
+    var ink = document.createElementNS(ns, "path");
+    ink.setAttribute("class", "ink");
+    ink.setAttribute("d", MARK_OUTLINE + MARK_HOLE);
+    svg.appendChild(ink);
+    var band = document.createElementNS(ns, "g");
+    band.setAttribute("class", "band");
+    var segs = { t: [] };
+    for (var k = 0; k < RELAY.tailSteps; k++) segs.t.push(relaySeg(ns, band, "seg t"));
+    segs.a = relaySeg(ns, band, "seg a");
+    segs.b = relaySeg(ns, band, "seg b");
+    svg.appendChild(band);
+    host.appendChild(svg);
+    return segs;
+  }
+
+  function relaySeg(ns, parent, cls) {
+    var p = document.createElementNS(ns, "path");
+    p.setAttribute("class", cls);
+    p.setAttribute("d", MARK_OUTLINE);
+    p.setAttribute("pathLength", "100");
+    parent.appendChild(p);
+    return p;
+  }
+
+  function relayDash(el, start, len, color) {
+    if (len <= 0.05) { el.style.opacity = "0"; return; }
+    el.style.opacity = "1";
+    el.style.stroke = color;
+    el.style.strokeDasharray = len + " " + (100 - len);
+    el.style.strokeDashoffset = String(-start);
+  }
+
+  function relayTick(segs) {
+    return function (now) {
+      var lap = (now - relayT0) / RELAY.lapMs;
+      var head = (lap * 100) % 100;
+      var tail = (head - RELAY.band + 100) % 100;
+      var crossings = Math.floor(lap * 3);
+      var hueIndex = Math.floor(crossings / RELAY.handoverEvery);
+      var hueNew = RELAY_HUES[hueIndex % RELAY_HUES.length];
+      var hueOld = RELAY_HUES[(hueIndex - 1 + RELAY_HUES.length) % RELAY_HUES.length];
+      var lastCross = ((crossings / 3) * 100) % 100;
+      var sinceCross = (head - lastCross + 100) % 100;
+      var splitting = crossings % RELAY.handoverEvery === 0 && sinceCross < RELAY.band;
+      if (splitting) {
+        relayDash(segs.a, tail, RELAY.band - sinceCross, hueOld);
+        relayDash(segs.b, lastCross, sinceCross, hueNew);
+      } else {
+        relayDash(segs.a, tail, RELAY.band, hueNew);
+        relayDash(segs.b, 0, 0, hueNew);
+      }
+      var tailHue = splitting ? hueOld : hueNew;
+      var step = (RELAY.band * RELAY.tailLength) / RELAY.tailSteps;
+      for (var k = 0; k < RELAY.tailSteps; k++) {
+        relayDash(segs.t[k], (tail - step * (k + 1) + 100) % 100, step + 0.15, tailHue);
+        segs.t[k].style.opacity = (RELAY.tailOpacity * Math.pow(1 - k / RELAY.tailSteps, 1.6)).toFixed(3);
+      }
+      relayRaf = requestAnimationFrame(relayTick(segs));
+    };
+  }
+
+  var relaySegs = null;
+  function setWorking(on) {
+    if (!relaySegs) relaySegs = buildRelayMark($("timeline-mark"));
+    var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (on && !reduced) {
+      if (!document.body.hasAttribute("data-working")) {
+        document.body.setAttribute("data-working", "");
+        relayT0 = performance.now();
+        relayRaf = requestAnimationFrame(relayTick(relaySegs));
+      }
+    } else {
+      document.body.removeAttribute("data-working");
+      if (relayRaf) { cancelAnimationFrame(relayRaf); relayRaf = 0; }
+    }
+  }
+
+  function showScreen(id) {
+    for (var i = 0; i < screens.length; i++) {
+      $(screens[i]).hidden = screens[i] !== id;
+    }
+  }
+
+  function formatElapsed(ms) {
+    if (ms < 0) ms = 0;
+    var totalSeconds = Math.floor(ms / 1000);
+    var minutes = Math.floor(totalSeconds / 60);
+    var seconds = totalSeconds % 60;
+    if (minutes <= 0) return seconds + "s";
+    return minutes + "m " + (seconds < 10 ? "0" : "") + seconds + "s";
+  }
+
+  function stepElapsedMs(step) {
+    if (!step.startedAt) return null;
+    var end = step.endedAt || Date.now();
+    return end - step.startedAt;
+  }
+
+  var PHASE_LABELS = {
+    configuring: "Starting up",
+    running: "Setting up",
+    ready: "Ready",
+    failed: "Failed"
+  };
+
+  function updatePhaseBadge(phase) {
+    var badge = $("phase-badge");
+    badge.className = "badge phase-" + phase;
+    $("phase-badge-text").textContent = PHASE_LABELS[phase] || phase;
+  }
+
+  function renderTimeline(state) {
+    var list = $("timeline-list");
+    list.innerHTML = "";
+    var steps = state.steps || [];
+    for (var i = 0; i < steps.length; i++) {
+      list.appendChild(renderStep(steps[i]));
+    }
+    $("timeline-subtitle").textContent = steps.length
+      ? "This usually takes a few minutes the first time."
+      : "Getting things started…";
+  }
+
+  function renderStep(step) {
+    var li = document.createElement("li");
+    li.className = "step step-" + step.status;
+
+    var marker = document.createElement("div");
+    marker.className = "step-marker";
+    if (step.status === "done") {
+      marker.textContent = "✓";
+    } else if (step.status === "failed") {
+      marker.textContent = "✕";
+    } else if (step.status === "active") {
+      var spinner = document.createElement("div");
+      spinner.className = "spinner";
+      marker.appendChild(spinner);
+    } else {
+      marker.textContent = "○";
+    }
+    li.appendChild(marker);
+
+    var body = document.createElement("div");
+    body.className = "step-body";
+
+    var row = document.createElement("div");
+    row.className = "step-row";
+
+    var name = document.createElement("div");
+    name.className = "step-name";
+    name.textContent = step.name;
+    row.appendChild(name);
+
+    var elapsedMs = stepElapsedMs(step);
+    if (elapsedMs !== null) {
+      var elapsed = document.createElement("div");
+      elapsed.className = "step-elapsed";
+      elapsed.textContent = formatElapsed(elapsedMs);
+      row.appendChild(elapsed);
+    }
+    body.appendChild(row);
+
+    if (step.status === "active" && step.detail) {
+      var detail = document.createElement("div");
+      detail.className = "step-detail";
+      detail.textContent = step.detail;
+      body.appendChild(detail);
+    }
+
+    if (step.status === "failed" && step.error) {
+      var err = document.createElement("div");
+      err.className = "step-error";
+      err.textContent = step.error;
+      body.appendChild(err);
+    }
+
+    li.appendChild(body);
+    return li;
+  }
+
+  function renderFailed(state) {
+    var steps = state.steps || [];
+    var failedStep = null;
+    for (var i = 0; i < steps.length; i++) {
+      if (steps[i].status === "failed") { failedStep = steps[i]; break; }
+    }
+    $("failed-step-name").textContent = failedStep
+      ? "The \"" + failedStep.name + "\" step failed."
+      : "Setup could not continue.";
+    $("failed-error-message").textContent = failedStep && failedStep.error
+      ? failedStep.error
+      : "An unknown error occurred.";
+  }
+
+  function stopTicking() {
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  }
+
+  function startTicking() {
+    stopTicking();
+    tickTimer = setInterval(function () {
+      if (lastState && lastState.phase === "running") {
+        renderTimeline(lastState);
+      }
+    }, 1000);
+  }
+
+  function handleState(state) {
+    lastState = state;
+
+    if (state.needsConfig && !configSubmitted) {
+      showScreen("config-form");
+      return;
+    }
+
+    updatePhaseBadge(state.phase);
+    setWorking(state.phase === "running");
+
+    if (state.phase === "ready") {
+      stopTicking();
+      showScreen("ready-screen");
+    } else if (state.phase === "failed") {
+      stopTicking();
+      renderFailed(state);
+      showScreen("failed-screen");
+    } else {
+      renderTimeline(state);
+      startTicking();
+      showScreen("timeline");
+    }
+  }
+
+  // --- SSE consumption with polling fallback -------------------------------
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function startPolling() {
+    stopPolling();
+    pollTimer = setInterval(fetchProgressOnce, 1500);
+  }
+
+  function fetchProgressOnce() {
+    fetch("/progress")
+      .then(function (r) { return r.json(); })
+      .then(handleState)
+      .catch(function () { /* transient; next poll/reconnect will retry */ });
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      connectEvents();
+    }, 2000);
+  }
+
+  function connectEvents() {
+    if (typeof window.EventSource === "undefined") {
+      startPolling();
+      return;
+    }
+    stopPolling();
+    try {
+      eventSource = new EventSource("/events");
+    } catch (e) {
+      startPolling();
+      return;
+    }
+    eventSource.onmessage = function (ev) {
+      try {
+        handleState(JSON.parse(ev.data));
+      } catch (e) { /* ignore a malformed frame; the next one will arrive */ }
+    };
+    eventSource.onerror = function () {
+      if (eventSource) { eventSource.close(); eventSource = null; }
+      scheduleReconnect();
+    };
+  }
+
+  // --- Config form ----------------------------------------------------------
+
+  function setConfigError(message) {
+    var el = $("config-error");
+    if (message) {
+      el.textContent = message;
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+    }
+  }
+
+  $("config-form-el").addEventListener("submit", function (e) {
+    e.preventDefault();
+    setConfigError(null);
+
+    var password = $("admin-password-input").value;
+    var passwordConfirm = $("admin-password-confirm-input").value;
+    if (!password) {
+      setConfigError("Choose a password for the admin dashboard.");
+      return;
+    }
+    if (password !== passwordConfirm) {
+      setConfigError("Passwords don't match.");
+      return;
+    }
+
+    var submitBtn = $("config-submit");
+    submitBtn.disabled = true;
+
+    var payload = {
+      provider: $("provider-select").value,
+      apiKey: $("api-key-input").value,
+      model: $("model-input").value.trim(),
+      password: password
+    };
+
+    fetch("/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(function (resp) {
+      return resp.text().then(function (text) {
+        return { ok: resp.ok, text: text };
+      });
+    }).then(function (result) {
+      submitBtn.disabled = false;
+      if (result.ok) {
+        configSubmitted = true;
+        connectEvents();
+      } else {
+        setConfigError(result.text || "Could not save this configuration.");
+      }
+    }).catch(function (err) {
+      submitBtn.disabled = false;
+      setConfigError("Could not reach the setup server: " + err.message);
+    });
+  });
+
+  // --- Open dashboard ---------------------------------------------------------
+
+  $("open-dashboard-btn").addEventListener("click", function () {
+    var btn = $("open-dashboard-btn");
+    var errEl = $("open-dashboard-error");
+    errEl.hidden = true;
+    btn.disabled = true;
+    fetch("/open-dashboard", { method: "POST" }).then(function (resp) {
+      btn.disabled = false;
+      if (!resp.ok) {
+        return resp.text().then(function (text) {
+          errEl.textContent = text || "Could not open the dashboard.";
+          errEl.hidden = false;
+        });
+      }
+    }).catch(function (err) {
+      btn.disabled = false;
+      errEl.textContent = "Could not reach the setup server: " + err.message;
+      errEl.hidden = false;
+    });
+  });
+
+  // --- Boot -------------------------------------------------------------------
+
+  fetch("/progress")
+    .then(function (r) { return r.json(); })
+    .then(function (state) {
+      handleState(state);
+      if (!(state.needsConfig && !configSubmitted)) {
+        connectEvents();
+      }
+    })
+    .catch(function () {
+      // No initial snapshot available; fall straight to live updates, whose
+      // own first frame carries the current state.
+      connectEvents();
+    });
+})();
+</script>
+</body>
+</html>

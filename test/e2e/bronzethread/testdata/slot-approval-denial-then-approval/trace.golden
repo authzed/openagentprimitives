@@ -1,0 +1,3 @@
+authz crm_company:4210#contact_access denied
+authz crm_company:4299#contact_access denied
+authz crm_company:any#list allowed

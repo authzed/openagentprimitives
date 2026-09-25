@@ -1,0 +1,71 @@
+# operator: restricts who may reach the operator's HTTP endpoints.
+#
+# Ingress to spicebox-operator pods is allowed on:
+#   - 8082  debug/memory HTTP — the bearer-authed /debug/artifact endpoint
+#           and the per-session /memory/{ns}/{name}* endpoints
+#   - 8443  gateway HTTP
+# and only FROM:
+#   - channelsd  (consumes the memory + gateway endpoints)
+#   - runner pods, identified by the agentprimitives.authzed.com/agentsession
+#     label key — same cross-namespace peer pattern as the nats/spicedb
+#     policies, because runner pods may live in arbitrary session namespaces.
+#
+# The operator metrics endpoint binds 127.0.0.1 (it is unauthenticated),
+# so it is unreachable from other pods regardless of NetworkPolicy
+# enforcement. Metrics remain reachable for debugging via
+# `kubectl port-forward`: port-forward dials the pod's own localhost,
+# so loopback-only binds are accessible through it. Health port 8081 is
+# deliberately NOT listed — default-deny keeps it unreachable from
+# in-namespace pods, and kubelet liveness/readiness probes originate from
+# the node and are generally NOT subject to NetworkPolicy, so probes keep
+# working.
+#
+# NOTE on `oap` CLI: `oap` reaches the operator via `kubectl port-forward`.
+# port-forward traffic is proxied by the apiserver and arrives at the pod
+# from the node/kubelet, which is generally NOT subject to NetworkPolicy
+# (most CNIs exempt host-network / node-sourced traffic). The `oap` CLI
+# therefore continues to work without an explicit allow rule here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: operator
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-operator
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-channelsd
+        # authzd registers its audit publisher key + reads memory; webd's
+        # artifact-view reads the memory API (OPERATOR_MEMORY_URL :8082).
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: agentprimitives-authzd
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-webd
+        # Runner pods, in any namespace, identified by the agentsession label.
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - { key: agentprimitives.authzed.com/agentsession, operator: Exists }
+      ports:
+        - { protocol: TCP, port: 8082 }
+        - { protocol: TCP, port: 8443 }
+    # The admission webhook server (:9443, fronted by the spicebox-webhook Service
+    # :443) is called by the kube-apiserver. The apiserver is NOT a selectable
+    # in-cluster peer — its source varies by cloud / managed control plane and IS
+    # subject to ingress NetworkPolicy on enforcing CNIs (Cilium / Dataplane V2),
+    # unlike the node-sourced kubelet probes above. Without this allow every
+    # webhook call is dropped: the toolcall webhook (failurePolicy: Fail) then
+    # rejects ALL ToolCall writes (stalling privileged exec), and the other
+    # webhooks (failurePolicy: Ignore) silently stop validating — admitting
+    # malformed/over-budget specs unchecked. Allow :9443 from any source: only the
+    # operator listens there, the webhook is a pure validator (no side effects),
+    # and the apiserver authenticates it via the webhook config's caBundle/TLS.
+    - ports:
+        - { protocol: TCP, port: 9443 }

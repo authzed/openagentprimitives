@@ -1,0 +1,8 @@
+name: hand
+version: "1"
+intent: "Say a phrase"
+toolkit: {name: tool, revision: "r"}
+allowSubcommands: [say]
+constraints:
+  - cel: 'call.subcommand == "say"'
+    message: "only the say subcommand is permitted"

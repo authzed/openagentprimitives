@@ -1,0 +1,172 @@
+# egress-external: lets the control-plane workloads reach what they need.
+#
+# default-deny blocks ALL egress, including the internal control-plane flows
+# and the external APIs these workloads depend on. NetworkPolicy requires
+# BOTH the source's egress and the destination's ingress to permit a flow, so
+# the ingress allowlists in nats/spicedb/operator are only effective if the
+# clients also have matching egress. This policy supplies that egress.
+#
+# It selects the trusted control-plane workloads by label: channelsd, operator,
+# authzd, and webd. authzd dials NATS + SpiceDB + the operator memory API +
+# Anthropic; webd dials NATS + SpiceDB + the operator memory API. They were
+# originally omitted — invisible on Docker Desktop (whose CNI does not enforce
+# NetworkPolicy) but a hard hang on an enforcing cluster (GKE Autopilot/Cilium).
+# (Runner pods get their egress via a peer policy stamped into their own namespace
+# by the operator at session-provision time — see README and
+# --session-network-policies.)
+#
+# Two egress rule groups:
+#
+#   1. Internal: to the in-namespace data stores / operator on the exact
+#      ports the ingress policies opened — NATS 4222, SpiceDB 50051, operator
+#      8082 + 8443. Scoped to agentprimitives-system via namespaceSelector.
+#
+#   2. External: TCP 443 and 6443 to any destination WITHOUT RFC1918 except
+#      blocks. operator and channelsd are TRUSTED control-plane components —
+#      they do not run untrusted LLM/tool code (the runner/sandbox does, in
+#      per-session namespaces covered by a separate policy). Because the kube
+#      apiserver's in-cluster ClusterIP (kubernetes.default.svc) falls inside
+#      the Service CIDR — typically 10.0.0.0/8 — an `except` block for
+#      RFC1918 would silently block operator→apiserver egress and break
+#      controller-runtime on most clusters. There is no portable NetworkPolicy
+#      selector for "the apiserver" on managed clusters where it is not a pod.
+#      Unrestricted egress for these trusted components is therefore correct;
+#      SSRF containment is the concern of runner pods (per-session-namespace
+#      policy stamped by the operator — see --session-network-policies) and
+#      the application-layer pkg/x/safehttp
+#      guard that applies on every outbound HTTP call made by runner tooling.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-external
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - spicebox-channelsd
+          - spicebox-operator
+          - agentprimitives-authzd
+          - spicebox-webd
+  policyTypes:
+    - Egress
+  egress:
+    # 1. Internal control-plane flows — must mirror the ingress allowlists.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentprimitives-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-nats
+      ports:
+        - { protocol: TCP, port: 4222 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentprimitives-system
+          podSelector:
+            matchLabels:
+              authzed.com/cluster-component: spicedb
+      ports:
+        - { protocol: TCP, port: 50051 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentprimitives-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-operator
+      ports:
+        - { protocol: TCP, port: 8082 }
+        - { protocol: TCP, port: 8443 }
+    # Postgres (memory store) + Graphiti (knowledge-graph API). The operator is
+    # the only one of these four that dials them, but the rule is harmless for
+    # the others. Omitting these is what hung the operator at startup on an
+    # enforcing CNI: the postgres connect timed out under default-deny while it
+    # worked on Docker Desktop (no NetworkPolicy enforcement).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentprimitives-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-postgres
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentprimitives-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-graphiti
+      ports:
+        - { protocol: TCP, port: 8000 }
+    # extractord (attachment text extraction). Only the operator dials it —
+    # extractord's own NetworkPolicy (config/networkpolicy/extractord.yaml)
+    # allows ingress solely from spicebox-operator — but the rule sits in
+    # this shared policy like postgres/graphiti above: harmless for
+    # channelsd/authzd/webd, and it must exist on THIS side or the operator's
+    # calls are silently dropped on an enforcing CNI even though extractord's
+    # ingress side allows them.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentprimitives-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: agentprimitives-extractord
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # webd. Only the operator dials it, and only since the public tunnel moved
+    # into the operator process: pkg/controllers/publicendpoint forwards the
+    # tunnel at spicebox-webd.agentprimitives-system.svc.cluster.local:8080.
+    # The `oap init --local` port-forward it replaced reached webd from the
+    # kubelet, which is exempt from NetworkPolicy, so no rule ever had to exist
+    # for it. Like the postgres/graphiti/extractord rules above, this one is
+    # harmless for the other three selected components — and like them, it must
+    # exist on THIS side or the dial is dropped even though webd's own ingress
+    # policy (config/networkpolicy/webd.yaml) allows it.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentprimitives-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-webd
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # SidecarToolbox reachability probe. The operator creates a short-lived probe
+    # Pod in the SidecarToolbox's OWN namespace — ANY namespace, not just
+    # agentprimitives-system — and dials its MCP endpoint on the probe port
+    # (pkg/controllers/sidecartoolbox/probe.go) to confirm reachability and
+    # discover the live tool list. Without this egress the dial is silently
+    # dropped on an enforcing CNI (k3s/Cilium/Calico) and every SidecarToolbox
+    # lands Reachable=False/ProbeFailed with "MCP endpoint did not become
+    # reachable in time" — invisible on Docker Desktop, which does not enforce
+    # NetworkPolicy. Scoped to the probe label (matched by KEY: its value is the
+    # CR name, so it cannot be pinned) and the probe port; the empty
+    # namespaceSelector spans all namespaces because a SidecarToolbox may live
+    # anywhere. Only the operator (of the four selected components) creates these
+    # pods, so the rule is harmless for channelsd/authzd/webd — like the
+    # postgres/graphiti/extractord/webd rules above.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - key: agentprimitives.authzed.com/sidecartoolbox-probe
+                operator: Exists
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # 2. External APIs (Slack, LLM, MCP) and kube apiserver (443 or 6443,
+    #    cluster-specific IP — may be inside RFC1918 Service CIDR). No except
+    #    blocks: operator and channelsd are trusted control-plane components
+    #    that must reach the apiserver regardless of cluster topology.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }

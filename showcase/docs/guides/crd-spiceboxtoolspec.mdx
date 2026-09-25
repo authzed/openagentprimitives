@@ -1,0 +1,100 @@
+export const meta = {
+  title: 'SpiceboxToolspec',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3270,
+  description: 'SpiceboxToolspec is one sandbox tool as the agent sees it: a SpiceboxToolkit',
+}
+
+# SpiceboxToolspec
+
+**Group** `agentprimitives.authzed.com` · **Scope** Cluster · **Short names** `sbxtsp`
+
+SpiceboxToolspec is one sandbox tool as the agent sees it: a SpiceboxToolkit
+reference narrowed to an allowed subcommand set, with CEL argument
+constraints, denied effects and an authz policy.
+
+Cluster-scoped. Reconciled by pkg/controllers/spiceboxtoolspec, which
+resolves the referenced toolkit, compiles every CEL expression, and surfaces
+Valid=True/False. A Valid=False toolspec is skipped at ToolCall validation
+time rather than executed unchecked.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.allow` | `object` | Allow widens what a call may reach beyond the defaults. |
+| `spec.allow.creds` | `object` | Creds names the credentials a call may consume. |
+| `spec.allow.creds.required` | `[]string` | Required names the credentials that must resolve for a call to run. |
+| `spec.allow.filesystem` | `object` | Filesystem widens what a call may touch on disk. |
+| `spec.allow.filesystem.pathsUnder` | `[]string` | PathsUnder are the directory roots a call may touch. |
+| `spec.allow.network` | `object` | Network widens where a call may reach. |
+| `spec.allow.network.destinations` | `[]string` | Destinations are the hosts a call may contact; empty allows none. |
+| `spec.allowSubcommands` \* | `[]string` | AllowSubcommands is the allowlist of toolkit subcommand paths; anything absent is denied. |
+| `spec.constraints` | `[]object` | Constraints are CEL predicates every call's arguments must satisfy. |
+| `spec.constraints[].cel` \* | `string` | CEL is a boolean expression over the call's arguments; false denies. |
+| `spec.constraints[].message` | `string` | Message is the denial text shown when CEL evaluates false. |
+| `spec.deny` | `object` | Deny refuses calls by declared effect even inside AllowSubcommands. |
+| `spec.deny.effects` | `object` | Effects refuses calls whose declared effects match. |
+| `spec.deny.effects.creds` | `object` | Creds denies credential-touching effects. |
+| `spec.deny.effects.creds.writes` | `boolean` | Writes denies any subcommand that would write credential material. |
+| `spec.deny.effects.destructive` | `boolean` | Destructive denies any subcommand the toolkit marks destructive. |
+| `spec.deny.effects.reads` | `[]string` | Reads names resource kinds whose reads are denied. |
+| `spec.deny.effects.writes` | `[]string` | Writes names resource kinds whose writes are denied. |
+| `spec.exceptions` | `[]object` | Exceptions conditionally relax named Deny rules. |
+| `spec.exceptions[].message` | `string` | Message explains the exception in denial output. |
+| `spec.exceptions[].overrides` \* | `[]string` | Overrides names the deny rules this exception relaxes. |
+| `spec.exceptions[].when` \* | `string` | When is the CEL predicate that must hold for the relaxation to apply. |
+| `spec.intent` | `string` | Intent is the one-line purpose shown to authors and reviewers. |
+| `spec.name` | `string` | Name is the LLM-facing tool name this spec produces. |
+| `spec.observes` | `[]object` | Observes declares facts this tool's result asserts about specific resource instances, co-derived with the subjects they are about. Evaluated after a SUCCESSFUL call. Reuses the MCPServer per-tool type and CEL semantics; see MCPServerTool.Observes. |
+| `spec.observes[].facts` \* | `map[string]string` | Facts maps a fact name to a CEL expression yielding its value, evaluated against the same `item` as Subjects. |
+| `spec.observes[].forEach` | `string` | ForEach is a CEL expression yielding a list. One observation is emitted per element with `item` bound to it. Unset emits exactly one, with `item` bound to nil. |
+| `spec.observes[].subjects` \* | `[]object` | Subjects are the objects this observation is about, as CEL string expression pairs. At least one is REQUIRED: a block recording facts about nothing would produce a session-scoped boolean that answers for every instance at once. |
+| `spec.observes[].subjects[].resourceID` \* | `string` | ResourceID is a CEL string expression yielding the object id. |
+| `spec.observes[].subjects[].resourceType` \* | `string` | ResourceType is a CEL string expression yielding a SpiceDB definition name (commonly a literal, e.g. `"github_pr"`). |
+| `spec.observes[].when` | `string` | When is a CEL boolean over `args`, `result`; the block is skipped if it evaluates false. Unset means always taken. |
+| `spec.require` | `object` | Require declares preconditions the sandbox must satisfy. |
+| `spec.require.verifiedBinaryVersion` | `boolean` | VerifiedBinaryVersion refuses the call unless the sandbox's binary version was probed and matched the toolkit's declared range. |
+| `spec.secretOutput` | `object` | SecretOutput, when non-nil, declares that this tool produces a single secret value that the runner must capture out-of-band. Mirrors pkg/tools/toolspec/spec.SecretOutputSpec; json tags must match exactly so the ToSpec JSON round-trip carries the value through. |
+| `spec.secretOutput.description` | `string` | Description is human-visible text about the secret (caveats, usage, expiry). |
+| `spec.secretOutput.name` \* | `string` | Name is the logical key for the secret (e.g. "kubeconfig"). |
+| `spec.secretOutput.source` \* | `string` | Source declares where the secret value lives: "stdout" or "file:&lt;absolute-path&gt;". |
+| `spec.sensitive` | `object` | Sensitive names arguments and env to redact from logs and prompts. |
+| `spec.sensitive.env` | `[]string` | Env names environment variables whose values must be redacted. |
+| `spec.sensitive.flags` | `[]string` | Flags names flags whose values must be redacted. |
+| `spec.sensitive.positional` | `[]string` | Positional names positional arguments whose values must be redacted. |
+| `spec.toolkit` \* | `object` | Toolkit is the SpiceboxToolkit this spec narrows. |
+| `spec.toolkit.name` \* | `string` | Name is the SpiceboxToolkit name (or a builtin toolkit's name). |
+| `spec.toolkit.revision` \* | `string` | Revision is the toolkitRevision this spec was authored against; a mismatch is a validation failure, not a silent upgrade. |
+| `spec.version` | `string` | Version is the spec author's version of this declaration. |
+| `spec.writesRelationships` | `[]object` | WritesRelationships are JIT SpiceDB relationship-write blocks the runner evaluates after a SUCCESSFUL tool call. Reuses the MCPServer per-tool type and CEL semantics (when/forEach/tuple), with two extra bindings on the sandbox path: `session` ("&lt;ns&gt;/&lt;name&gt;" of the AgentSession) and `args.argv` (the raw argv list the agent supplied). For toolspecs that also declare secretOutput, `result` carries only &#123;success: bool&#125; — the captured secret value is never exposed to CEL. |
+| `spec.writesRelationships[].exclusive` | `boolean` | Exclusive makes this write atomically write-once per subject: the write FAILS (no tuple written) if the subject already holds `relation` on ANY resource of the tuple's resource type. Used for session-pin semantics (a session may be pinned to exactly one cluster). Implemented as a SpiceDB MUST_NOT_MATCH precondition, so it is atomic under concurrent writers. Default false preserves the plain TOUCH-upsert behavior. |
+| `spec.writesRelationships[].forEach` | `string` | ForEach is a CEL expression that must evaluate to a list. One tuple is emitted per element, with `item` bound to that element. When unset, exactly one tuple is emitted. |
+| `spec.writesRelationships[].requireSlotBound` | `boolean` | RequireSlotBound refuses every tuple this block emits unless the calling session holds a SLOT GRANT on the tuple's RESOURCE — the instance a human (or the pool machinery acting on one's approval) named for this session. Declare it on a block that writes an identity or an authority tuple onto an instance the tool itself names. Without it, whatever id the tool's response happens to carry becomes the resource of a real SpiceDB write, so a response naming somebody else's instance writes there too. With it, the write can only ever land on an instance the session was already bound to. The grant's PERMISSION is deliberately not consulted: a grant is a human act naming the instance, and which permission it carries is the pool machinery's concern. Any slot_grant_* on the resource binds it. Default false is byte-identical to the previous behaviour — an unmarked block consults nothing. A marked block whose dispatcher has no checker wired is REFUSED, not written: see pkg/authz/relwrites.Run. |
+| `spec.writesRelationships[].tuple` \* | `object` | Tuple holds the CEL expressions that compose the SpiceDB relationship tuple. |
+| `spec.writesRelationships[].tuple.relation` \* | `string` | Relation is a CEL string expression that must evaluate to a relation name declared on the Resource's type. |
+| `spec.writesRelationships[].tuple.resource` \* | `string` | Resource is a CEL string expression that must evaluate to a SpiceDB object reference of the form "&lt;type&gt;:&lt;id&gt;". |
+| `spec.writesRelationships[].tuple.subject` \* | `string` | Subject is a CEL string expression that must evaluate to a SpiceDB object reference of the form "&lt;type&gt;:&lt;id&gt;". |
+| `spec.writesRelationships[].when` | `string` | When is a CEL boolean expression with `args`, `result` in scope; the block is skipped if it evaluates false. When unset, the block is always taken. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` | Conditions carries Valid; see SpiceboxToolspecConditionValid. |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedGeneration` | `integer (int64)` | ObservedGeneration is the spec generation this status reflects. |
+| `status.resolvedToolkit` | `string` | ResolvedToolkit names the SpiceboxToolkit CR (or "&lt;builtin&gt;") that this Toolspec's spec.toolkit reference resolved to. |
+
+<small>\* required</small>
+

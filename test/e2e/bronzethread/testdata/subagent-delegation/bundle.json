@@ -1,0 +1,60 @@
+{
+  "name": "subagent-delegation",
+  "description": "demo-lead delegates to demo-coder, which IS on its roster, and the delegation must reach the model as a real, non-error tool result -- not a scripted reply that merely describes success. The delegated child is a REAL AgentSession that runs its own turn through the shared ScriptedLLM (there is no session-scoped LLM in this harness), so the child's own step is scripted positionally between the parent's delegate call and the parent's next call -- the parent's delegate tool call blocks polling the SubagentRequest until the child finishes, so the child's Send() is guaranteed to land strictly between those two parent calls. demo-lead then asks to delegate to demo-sre, a class that is neither on the roster nor defined anywhere in the fixture, and that must be denied with the refusal reaching the model as an error naming demo-sre -- not a generic failure and not a success the transcript merely narrates as a refusal. The off-roster denial happens before any child is created, so there is no second child turn to script.",
+
+  "agentDir": "testdata/agent-subagent-delegation",
+  "agentClass": "demo-lead",
+
+  "defaultUser": "user@example.com",
+
+  "userTurns": [
+    "have the coder fix the failing auth middleware test",
+    "now have the sre agent check the cluster"
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "coder" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": { "agent": "demo-coder", "task": "fix the failing auth middleware test" } } }]
+    },
+    {
+      "expect": { "userTextContains": "fix the failing auth middleware test" },
+      "reply": [{ "toolUse": { "name": "return_result", "args": { "result": "Fixed the failing auth middleware test." } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "Fixed the failing auth middleware test."
+      },
+      "reply": [{ "toolUse": { "name": "respond_to_user", "args": { "text": "The coder is on it." } } }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "await_user_message", "args": {} } }]
+    },
+    {
+      "expect": { "userTextContains": "sre" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": { "agent": "demo-sre", "task": "check the cluster" } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "demo-sre"
+      },
+      "reply": [{ "text": "I can't reach the sre agent — it isn't one I'm allowed to delegate to." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": [
+      "The coder is on it.",
+      "isn't one I'm allowed to delegate to"
+    ]
+  }
+}

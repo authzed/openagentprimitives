@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "baseUrl": ".",
+    "paths": {
+      "@ap/agentui": ["packages/agentui/src/index.ts"],
+      "@ap/agentui/*": ["packages/agentui/src/*"],
+      "@ap/design": ["packages/design/src/index.ts"],
+      "@ap/design/*": ["packages/design/src/*"],
+      "@ap/runtime": ["packages/runtime/src/index.ts"],
+      "@ap/runtime/*": ["packages/runtime/src/*"]
+    }
+  }
+}

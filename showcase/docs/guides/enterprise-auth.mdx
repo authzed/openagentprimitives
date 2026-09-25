@@ -1,0 +1,41 @@
+export const meta = {
+  title: 'Enterprise managed auth',
+  section: 'Reference',
+  group: 'Identity',
+  order: 2250,
+  description:
+    "Deriving an upstream service token from a user's enterprise identity, instead of asking them to paste one.",
+}
+
+# Enterprise managed auth
+
+<p className="doc-lede">
+  In an enterprise, users shouldn't have to paste personal tokens for every service — their identity is already
+  established by the company IdP. OAP can <strong>derive an upstream service token from that enterprise
+  identity</strong>, on demand, with no stored secret.
+</p>
+
+## The idea
+
+Instead of storing a credential, a **`federated`** credential stores *nothing* — it mints a token at the moment
+of use, from the user's enterprise identity, through a standards-based token exchange. The user never handles a
+token; the company IdP is the source of truth, and access follows their enterprise identity.
+
+## How the exchange works
+
+The mechanism is **ID-JAG** (Identity Assertion JWT Authorization Grant), a two-leg exchange:
+
+1. **At the IdP** — a token exchange (RFC 8693) turns the user's identity into an *ID-JAG*: a short-lived
+   assertion audienced to the specific resource the agent is about to call.
+2. **At the resource** — that ID-JAG is presented as a JWT authorization grant to the resource's own
+   authorization server (discovered automatically) to obtain the actual upstream access token.
+
+The result is a live, correctly-scoped token for exactly the resource being called, derived from the user's
+enterprise identity — and gone when the call is done. Because there's no stored token, there's nothing to leak,
+rotate, or revoke separately: it tracks the user's IdP identity.
+
+<Callout kind="note" title="Passthrough only">
+  `federated` credentials are a user-passthrough concept — they represent a *person's* enterprise identity. The
+  agent-identity mirror, for an agent acting as itself, is `githubApp` (a short-lived installation token minted
+  from a stored app key).
+</Callout>

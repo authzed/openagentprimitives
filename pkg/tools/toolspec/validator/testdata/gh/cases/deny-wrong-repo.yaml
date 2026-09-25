@@ -1,0 +1,10 @@
+name: deny-wrong-repo
+toolkit: toolkit.yaml
+spec: spec.yaml
+invocation:
+  command: gh
+  argv: [pr, view, "1", -R, some/other]
+  binaryVersion: "2.53.1"
+expect:
+  allow: false
+  failedOn: {path: "constraints[0]"}

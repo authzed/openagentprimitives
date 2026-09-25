@@ -1,0 +1,63 @@
+definition slack_workspace {
+    relation member: slack_user#user
+    relation relhash: string
+}
+
+definition slack_user {
+    relation user: user | agent
+}
+
+definition slack_bot {
+    relation agent: agent
+}
+
+definition slack_channel {
+    relation workspace: slack_workspace
+    relation member: slack_user#user | slack_bot#agent
+    relation relhash: string
+    relation label: string
+
+    permission view = member + workspace->member
+}
+
+definition slack_usergroup {
+    relation member: slack_user#user
+    relation relhash: string
+}
+
+// The definitions above are the Slack hierarchy, contributed as RawZed
+// because the structured SpiceDBResource form can't represent
+// subject-relations (slack_user#user) or unions (user | agent). Translated
+// from connectors-prototype/schema.zed.
+//
+// Two subject types this fragment REFERENCES but does not DECLARE, both for
+// the same reason: they are base-scaffold definitions
+// (pkg/authz/spicedb/schema/schema.zed), and redeclaring either here would be
+// the two-fragments-declare-the-same-name conflict the fragment validator
+// rejects.
+//
+//   - `agent`, named by slack_user#user and slack_bot#agent, is the sentinel
+//     bot/agent principal the connectors-prototype schemas depend on. It
+//     used to be declared in this fragment; it moved to the scaffold so a
+//     single source of truth covers both Slack and Linear / other connector
+//     fragments without a dedup collision.
+//   - `string`, `relhash`'s subject type, is referenced by every kind
+//     fragment that needs a hash sentinel.
+//
+// slack_channel#label rides that same base-scaffold `string` type and carries
+// the channel's name for the admin console's Directory panel
+// (slack_channel:C3#label@string:<base64url of the name>). It is declared on
+// slack_channel ALONE, and the asymmetry with relhash — which slack_workspace
+// and slack_usergroup also declare — is deliberate: relhash is claimed ahead of
+// a writer so nothing else can forge one on a type that already declares it,
+// whereas an UNDECLARED relation cannot be written by anybody at all, so the
+// tighter answer for a type that is not yet a sync scope is to leave it out of
+// the schema until one enumerates it. It appears in no permission and its
+// subject type declares none; see pkg/authz/spicedb/relsource's LabelRelation.
+//
+// This comment sits AFTER the declarations, not above them, on purpose: a
+// comment block immediately preceding a definition is parsed as that
+// definition's doc comment and the composer's generator re-emits it into the
+// COMPOSED schema text. A trailing comment with no declaration following it
+// is dropped by the same round trip, so it stays here for a human reader
+// without changing one byte of what gets composed and written to SpiceDB.

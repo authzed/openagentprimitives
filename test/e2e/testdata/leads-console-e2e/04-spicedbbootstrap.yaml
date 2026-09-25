@@ -1,0 +1,46 @@
+# SpiceDBBootstrap for the leads-console-e2e fixture.
+#
+# Seeds the wildcard viewer tuple the two readonly tools' checks need:
+# 01-mcpserver.yaml's spicedbSchema declares dealbook_lead#viewer as a
+# WILDCARD-typed relation (subjectType: user, wildcard: true), but a
+# relation's wildcard TYPE only permits writing a user:* tuple for it — it
+# does not itself make a check resolve true. This CR writes that tuple.
+#
+# NOT present in examples/leads-console/00-mcpserver.yaml's own comment
+# ("Demo authorization posture: one resource with a WILDCARD viewer
+# relation, so every session participant satisfies the checks below") —
+# that example declares the relation SHAPE but never writes the tuple
+# anywhere in its bundle. This fixture does not repeat that gap; see the
+# task report for why the difference matters here (a runnable e2e fixture,
+# not a lint-only example).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: pipeline-desk-seed
+  namespace: default
+spec:
+  relationships:
+    - resource: { type: dealbook_lead, id: "leads" }
+      relation: viewer
+      subject: { type: user, wildcard: true }
+  # advance_lead_stage's approval check (01-mcpserver.yaml) is per-LEAD
+  # (resourceIDExpr: args.leadId) and stateImpact: external, so the check
+  # ALWAYS denies pre-approval and the ask always fires, regardless of any
+  # tuple. host_approval.go's approver routing looks up who may click
+  # approve via dealbook_lead:<leadId>#owner (the resource owner-set) —
+  # that lookup needs a dealbook_lead:<leadId>#owner tuple naming a CONCRETE
+  # subject, not a wildcard: a wildcard tuple resolves via LookupSubjects to
+  # a wildcard marker, not an enumerable member, so it could never satisfy
+  # the exact-match membership check uiActionRecorder.onApproval and
+  # ApprovalAddressedToViewer depend on (host_approval.go's
+  # buildToolCallPending: slices.ContainsFunc against the resolved
+  # approvers). leads_console_action_test.go (Task 7) writes these two
+  # tuples itself, at test runtime, naming its own viewer's canonical
+  # subject via e2e.WriteRel — the SAME pattern browserarm_test.go's
+  # self-test uses for agentsession#owner — because only the test knows
+  # that subject ahead of the SpiceDBBootstrap apply. Post-approval
+  # authorization is a SEPARATE tuple: channelsd's authz.BindApproved
+  # writes dealbook_lead:<leadId>#slot_grant_owner@agentsession:<session>,
+  # which the resource's composed "owner" permission
+  # (03-agentclass.yaml's authz.slots + guardian's ComposeSlots) resolves
+  # through the session's member set — not through this owner tuple at all.

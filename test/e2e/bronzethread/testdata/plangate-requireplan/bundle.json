@@ -1,0 +1,37 @@
+{
+  "name": "plangate-requireplan",
+  "description": "requirePlan closes the 'never plan' bypass. The agent skips update_plan entirely and goes straight for a permissioned tool. Without requirePlan it would fall through to the synthesized whole-surface fallback and be completely unconstrained; with it, the call is denied and the agent is told to declare a plan.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-requireplan"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["list the companies"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies" },
+      "reply": [{ "text": "I need an approved plan before I can do that." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "blocked" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["need an approved plan"],
+    "planGate": {
+      "outcomes": { "centerdot_list_companies": "denied" }
+    }
+  }
+}

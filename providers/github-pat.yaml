@@ -1,0 +1,72 @@
+id: github-pat
+title: GitHub
+description: A GitHub access token so the agent can read and write your repositories and pull requests as you.
+docsURL: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
+shape: bearer
+builtin: github-pat
+
+instructions: |
+  Create a GitHub Personal Access Token so this agent can act as you:
+
+    1. Open https://github.com/settings/personal-access-tokens/new
+    2. Grant the target repositories Contents: read & write and
+       Pull requests: read & write (metadata read is implied).
+    3. Generate the token (starts with github_pat_ or ghp_) and paste it here.
+
+prompt: |
+  Walk the user through generating a fine-grained GitHub Personal Access
+  Token. Open https://github.com/settings/personal-access-tokens/new in a
+  browser. For read-only access to repos + PRs, the typical scope set is:
+    contents:read, pull_requests:read, metadata:read
+  Mutating workflows additionally need contents:write, pull_requests:write.
+  After the user pastes the token, validate the shape and call
+  store_credential.
+
+# SECURITY NOTE: Regexes must be anchored at both ends (^ ... $).
+# An unanchored pattern like "^gh auth status " would allow
+# "gh auth status; rm -rf /" to pass because regexp.MatchString only
+# requires the pattern to match somewhere in the input.
+runShellAllowlist:
+  - regex: '^gh auth status( --hostname [a-zA-Z0-9._-]+)?$'
+    description: "Check existing local gh authentication status"
+  - regex: '^gh auth token( --hostname [a-zA-Z0-9._-]+)?$'
+    description: "Read existing local gh token"
+
+# Format gate — enforced at every entry point (paste forms, put-token CLI,
+# setup flow) via ValidateToken. Prefix-only on purpose: classic tokens use a
+# gh<x>_ prefix (ghp_/gho_/ghs_/ghu_/ghr_) and fine-grained ones use
+# github_pat_. Kept broad (no length anchor) so an unusual-but-valid token is
+# never rejected while a grossly-wrong paste (e.g. an Anthropic token) is.
+tokenShape:
+  pattern: '^(gh[a-z]_|github_pat_)'
+  description: 'a GitHub token starting with ghp_, gho_, ghs_ (classic) or github_pat_ (fine-grained)'
+
+# Live-verification probe — executed at every entry point after the
+# tokenShape format gate. GET /user with the pasted token: 200 proves the
+# token is live (login becomes the verified subject), 401 proves it is
+# rejected, anything else (403, rate limits, outages) is indeterminate and
+# never blocks the credential.
+#
+# 403 is indeterminate for the same reason it is excluded from authFailure
+# below: GitHub returns it for a SAML-SSO-restricted, org-blocked, or
+# under-scoped token that is perfectly alive, so treating it as rejection
+# would ask a human to replace a working credential.
+verify:
+  endpoint: https://api.github.com/user
+  authScheme: token
+  subjectField: login
+  # The graph keys on `id`, never on `login`: GitHub logins are mutable and a
+  # released login can be claimed by a different account, so an edge keyed on
+  # one is a privilege transfer waiting to happen. `login` stays above because
+  # it is what the human sees in the verification message.
+  subjectIDField: id
+
+# What a real GitHub auth failure looks like, so the platform can
+# independently corroborate an agent's claim that this credential died
+# rather than taking the agent's word. 401-only on purpose: 403 from the
+# GitHub API is also returned for scope/rate-limit problems on a VALID
+# token, so treating it as credential rejection would let an LLM manufacture
+# corroboration by requesting something out of scope. See AuthFailure's doc
+# comment in pkg/platform/identity/provider/types.go.
+authFailure:
+  httpStatuses: [401]

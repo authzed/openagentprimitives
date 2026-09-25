@@ -1,0 +1,128 @@
+# Fixture agent for the credential-halt bundle.
+#
+# One streaming toolkit ("codey") whose subcommand declares
+# streamFormat: claude-stream-json, so the sandbox tool resolves a stream parser
+# and the toolkit's own terminal `result` event becomes the tool result. That
+# event is where the halt signal lives: a non-success the provider metered
+# nothing for.
+#
+# The subcommand is readonly on purpose. This bundle is about what happens
+# AFTER a call runs, so an approval pause in front of it would add a second
+# moving part with no bearing on the claim — and a bundle that hangs waiting
+# for one proves nothing about the path it was written to cover.
+apiVersion: v1
+kind: Secret
+metadata: {name: codey-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: codey-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: codey-token-secret, namespace: default}
+type: Opaque
+stringData: {token: "unused-the-fake-exec-never-authenticates"}
+---
+# The toolkit under test. streamFormat is the whole point: without it the
+# sandbox tool resolves no parser, the NDJSON the fake exec writes is treated
+# as opaque stdout, and no terminal result — billed or not — is ever observed.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolkit
+metadata: {name: codey-credhalt, namespace: default}
+spec:
+  name: codey-credhalt
+  version: "0.1.0"
+  toolkitRevision: "2026-08-25"
+  target: {binary: codey}
+  parser: {kind: declarative}
+  streamFormat: claude-stream-json
+  env: {allowed: []}
+  permission:
+    stateImpact: readonly
+    check: {resourceType: agentsession, permission: interact}
+  subcommands:
+    - path: [run]
+      description: "Run a codey session that streams claude-stream-json"
+      effects:
+        destructive: false
+        reads: [filesystem]
+        writes: []
+        network: {destinations: []}
+        filesystem: {paths: ["{cwd}"]}
+        creds: {required: [], writes: []}
+      mode: stream
+      permission:
+        stateImpact: readonly
+        check: {resourceType: agentsession, permission: interact}
+---
+# Exactly one allowed subcommand, which is what makes the synthesizer pick the
+# streaming path (pickStreamingSubcommand stays conservative otherwise).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata: {name: ts-codey-credhalt, namespace: default}
+spec:
+  name: ts-codey-credhalt
+  version: "1"
+  toolkit: {name: codey-credhalt, revision: "2026-08-25"}
+  allowSubcommands: ["run"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata: {name: cls-codey-credhalt, namespace: default}
+spec:
+  image: registry.example.com/codey:latest
+  resources: {cpu: "100m", memory: "64Mi", ephemeralStorage: "16Mi"}
+  tools:
+    - {name: codey-credhalt, command: ["/usr/bin/codey"]}
+  toolspecs:
+    - {name: ts-codey-credhalt}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: codey-identity, namespace: default}
+spec:
+  description: "Fixture identity for the credential-halt bundle."
+  credentials:
+    - name: codey-token
+      type: static
+      static: {secretRef: {name: codey-token-secret, key: token}}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: codey-runner, namespace: default}
+spec:
+  displayName: CodeyRunner
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: codey-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You drive a codey session with the codey_codey-credhalt tool.
+  agentIdentity: codey-identity
+  authz:
+    toolCalls: {mode: permissive}
+  # A budget wide enough that a dead credential would have plenty of room to
+  # burn through it. If the halt regresses, this bundle fails on a divergence
+  # at the next transcript step rather than by quietly running out of turns.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  toolBundles:
+    - {name: "codey", class: "cls-codey-credhalt", toolspecs: ["ts-codey-credhalt"]}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: codey-runner-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: codey-runner
+  credentialsRef: {secretName: codey-fake-creds}
+  fake: {echo: false}

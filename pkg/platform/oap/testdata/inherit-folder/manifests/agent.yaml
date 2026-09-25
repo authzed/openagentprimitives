@@ -1,0 +1,27 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: demo-agent
+spec:
+  displayName: Demo Agent
+  description: does demo things
+  agentIdentity: demo-agent-id
+  credentialExplanations:
+    - credential: api-cred
+      reason: why we need the api key
+  skills:
+    - name: planner
+      ref: github.com/fakeorg/fakerepo//skills/planner@v1
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: demo-agent-id
+spec:
+  credentials:
+    - name: api-cred
+      type: static
+      static:
+        secretRef:
+          name: demo-agent-secret
+          key: api-key

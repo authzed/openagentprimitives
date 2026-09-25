@@ -1,0 +1,163 @@
+<!doctype html>
+<!--
+  A faithful MOCK of OAP's artifact viewer (pkg/web/webui/artifactview/ui/ArtifactView.tsx)
+  showing the ANNOTATION feature: the reader marks up elements of the rendered
+  artifact, and those notes are sent back to the agent (which revises). Authored
+  for the docs — the artifact viewer is a real feature, but this chrome is
+  illustrative, not a live capture. All identifiers are fabricated.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --bg: #0b0c0e; --card: #131519; --border: #262a31; --fg: #e6e8eb;
+        --muted: #9aa1ab; --accent: #2f6feb; --success: #2ea043; --hl: #ffd76633;
+        --hl-border: #e3b341;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body { font: 14px/1.5 -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+             background: var(--bg); color: var(--fg); }
+      .app { display: flex; flex-direction: column; height: 100vh; }
+
+      /* top bar */
+      .bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px;
+             min-height: 52px; background: var(--card); border-bottom: 1px solid var(--border); }
+      .icon { width: 28px; height: 28px; display: grid; place-items: center; color: var(--muted);
+              border-radius: 6px; }
+      .title { display: flex; flex-direction: column; min-width: 0; max-width: 46%; }
+      .title b { font-size: 13px; font-weight: 600; }
+      .title span { font-size: 11px; color: var(--muted); }
+      .vdiv { width: 1px; height: 26px; background: var(--border); }
+      .status { font-size: 12px; color: var(--muted); }
+      .spacer { margin-left: auto; }
+      .right { display: flex; align-items: center; gap: 10px; }
+      .live { display: inline-flex; align-items: center; gap: 6px; background: #1c2128;
+              border: 1px solid var(--border); color: var(--fg); font-size: 12px;
+              padding: 4px 9px; border-radius: 6px; }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); display: inline-block; }
+
+      /* body */
+      .body { display: flex; flex: 1; min-height: 0; }
+      .side { width: 300px; background: var(--card); border-right: 1px solid var(--border);
+              overflow-y: auto; padding: 10px; }
+      .side h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+                 color: var(--muted); margin: 4px 6px 10px; }
+      .rev { padding: 9px 10px; border-radius: 8px; margin-bottom: 4px; cursor: default; }
+      .rev.sel { background: #1b2230; outline: 1px solid #2b3a55; }
+      .rev .h { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+      .rev .tag { font-size: 10px; color: #cbd5e1; background: #24304a; border-radius: 999px; padding: 1px 7px; }
+      .rev .m { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+      /* rendered artifact (white document, like the sandboxed iframe) */
+      .content { flex: 1; background: #fbfbfa; color: #1f2328; overflow-y: auto; padding: 40px 48px; position: relative; }
+      .content h1 { font: 600 24px/1.3 Georgia, "Times New Roman", serif; margin: 0 0 6px; }
+      .content .sub { color: #6b7280; margin: 0 0 22px; }
+      .content h2 { font-size: 15px; margin: 26px 0 8px; }
+      .content p { margin: 0 0 12px; max-width: 60ch; }
+      table { border-collapse: collapse; width: 100%; max-width: 620px; font-size: 13px; }
+      th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #e5e7eb; }
+      th { color: #6b7280; font-weight: 600; }
+      /* an element being annotated */
+      .annot { background: var(--hl); box-shadow: inset 0 0 0 1px var(--hl-border); border-radius: 3px; cursor: text; position: relative; }
+      .note { position: absolute; width: 236px; background: #fff; color: #1f2328;
+              border: 1px solid #e3b341; border-radius: 10px; padding: 10px 12px;
+              box-shadow: 0 8px 24px rgba(0,0,0,.18); font-size: 12.5px; z-index: 5; }
+      .note:before { content: ""; position: absolute; left: -7px; top: 14px; width: 12px; height: 12px;
+                     background: #fff; border-left: 1px solid #e3b341; border-bottom: 1px solid #e3b341;
+                     transform: rotate(45deg); }
+      .note .who { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+      .note .av { width: 18px; height: 18px; border-radius: 50%; background: #2f6feb; color: #fff;
+                  font-size: 10px; display: grid; place-items: center; font-weight: 700; }
+      .note .who b { font-size: 12px; }
+
+      /* annotation compose panel (right) */
+      .panel { width: 320px; background: var(--card); border-left: 1px solid var(--border);
+               display: flex; flex-direction: column; }
+      .panel h4 { font-size: 12px; margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border);
+                  display: flex; align-items: center; gap: 8px; }
+      .panel h4 .count { margin-left: auto; font-size: 11px; color: var(--muted); }
+      .notes { padding: 10px 12px; flex: 1; overflow-y: auto; }
+      .ncard { background: #171a1f; border: 1px solid var(--border); border-radius: 10px;
+               padding: 9px 11px; margin-bottom: 8px; }
+      .ncard .ref { font-size: 11px; color: #e3b341; margin-bottom: 3px; }
+      .ncard .txt { font-size: 12.5px; color: var(--fg); }
+      .send { padding: 12px; border-top: 1px solid var(--border); }
+      .send button { width: 100%; background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+                     padding: 9px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
+      .send .hint { font-size: 11px; color: var(--muted); text-align: center; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="bar">
+        <div class="icon">☰</div>
+        <div class="title"><b>Q3 Incident Review</b><span>Reliability review — Q3 2026</span></div>
+        <div class="vdiv"></div>
+        <div class="status">Ready · revision 2</div>
+        <div class="spacer"></div>
+        <div class="right">
+          <div class="icon" title="Download">⬇</div>
+          <div class="live"><span class="dot"></span> Live</div>
+        </div>
+      </div>
+
+      <div class="body">
+        <aside class="side">
+          <h4>Revisions</h4>
+          <div class="rev sel">
+            <div class="h">Revision 2 <span class="tag">latest</span></div>
+            <div class="m">Initial incident table · 2m ago</div>
+          </div>
+          <div class="rev">
+            <div class="h">Revision 1</div>
+            <div class="m">Outline · 6m ago</div>
+          </div>
+        </aside>
+
+        <main class="content">
+          <h1>Q3 Incident Review</h1>
+          <p class="sub">Payments &amp; Search · July–September 2026</p>
+          <p>Seven incidents were logged in Q3. Two were customer-visible; the rest were caught before impact.
+             Mean time to recovery improved 18% quarter over quarter.</p>
+
+          <h2>Incidents</h2>
+          <table>
+            <tr><th>Incident</th><th>Date</th><th>Impact</th><th>MTTR</th></tr>
+            <tr><td>Search latency spike</td><td>Jul 09</td><td>Degraded</td><td>22m</td></tr>
+            <tr><td>Checkout 5xx</td><td>Aug 02</td><td>Partial outage</td><td>41m</td></tr>
+            <tr><td>Payments timeout</td><td><span class="annot">Aug 14</span></td><td>Degraded</td><td>17m</td></tr>
+          </table>
+
+          <div class="note" style="left: 300px; top: 300px;">
+            <div class="who"><span class="av">J</span><b>jordan</b></div>
+            This should be <b>Sept 14</b>, and it was a full outage — not "degraded". Can you pull the real
+            figures and revise?
+          </div>
+
+          <h2>Follow-ups</h2>
+          <p>Add automated canary alerts to the payments path; backfill the runbook for checkout 5xx.</p>
+        </main>
+
+        <div class="panel">
+          <h4>Annotations <span class="count">2 to send</span></h4>
+          <div class="notes">
+            <div class="ncard">
+              <div class="ref">on “Aug 14”</div>
+              <div class="txt">Should be Sept 14, and it was a full outage — revise with the real figures.</div>
+            </div>
+            <div class="ncard">
+              <div class="ref">on “improved 18%”</div>
+              <div class="txt">Double-check this against the corrected MTTR numbers.</div>
+            </div>
+          </div>
+          <div class="send">
+            <button>Send 2 notes to the agent</button>
+            <div class="hint">Your notes go back to opsbot, which revises the report in place.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

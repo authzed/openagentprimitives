@@ -1,0 +1,37 @@
+{
+  "name": "plangate-disabled",
+  "description": "The gate is off by default. The same interaction must run identically and write nothing — the slice-1 behavior-neutrality guarantee, asserted through a whole-session path rather than a unit test.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["list the companies"],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "list the companies",
+        "toolNotOffered": "select_phase"
+      },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies" },
+      "reply": [{ "text": "no companies found" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["no companies found"],
+    "planGate": { "noRecords": true }
+  }
+}

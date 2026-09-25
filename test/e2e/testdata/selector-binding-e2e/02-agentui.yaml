@@ -1,0 +1,69 @@
+# AgentUI/acctbook-ui: the ONLY declaration in this repo (fixture or
+# example) that binds an envelope-shaped tool through Binding.Select and is
+# exercised against the REAL runner, REAL NATS resolution path, and REAL
+# readonly gate — see selector_binding_test.go.
+#
+# Two slots sharing the same tool ref, on purpose:
+#   - accounts: select "results[].properties" — the CORRECT path into
+#     search_accounts' envelope (pkg/web/uidemo/leadflow.SearchAccountsEnvelope).
+#   - accountsMiss: select "items[].properties" — a selector written against
+#     the wrong top-level key, so its binding must fail WITHOUT taking the
+#     "accounts" slot down with it (the containment claim: one bad selector
+#     costs one section, never the page).
+#
+# This harness does not register pkg/controllers/agentui's reconciler (see
+# leads-console-e2e/02-agentui.yaml's own note), so the test stamps
+# AgentUI.Status.Conditions itself via stampAgentUIValidity.
+#
+# Both bindings omit Args entirely — search_accounts takes no arguments.
+# (An earlier revision of this fixture spelled out `args: {}` to work around
+# a bug in pkg/authz/hooks/mcptrust.go, which denied every omitted-args call
+# instead of treating it as a legitimate zero-argument one; that hook is now
+# fixed to treat an omitted/null args the same as an empty object, so the
+# workaround is gone.)
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentUI
+metadata:
+  name: acctbook-ui
+  namespace: default
+spec:
+  displayName: Account search
+  chrome:
+    initialState: expanded
+  tools: [acct_search_accounts]
+  slots:
+    - name: accounts
+      default:
+        component: ap:card
+        props:
+          title: Accounts
+        children:
+          - component: ap:table
+            props:
+              empty: No accounts found.
+              columns:
+                - {key: name, header: Name}
+                - {key: stage, header: Stage}
+            bindings:
+              rows:
+                source: tool
+                ref: acct_search_accounts
+                select: "results[].properties"
+
+    - name: accountsMiss
+      default:
+        component: ap:card
+        props:
+          title: Accounts (broken selector, for the containment assertion)
+        children:
+          - component: ap:table
+            props:
+              empty: No accounts found.
+              columns:
+                - {key: name, header: Name}
+                - {key: stage, header: Stage}
+            bindings:
+              rows:
+                source: tool
+                ref: acct_search_accounts
+                select: "items[].properties"

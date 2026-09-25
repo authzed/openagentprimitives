@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentprimitives-extractord
+  namespace: agentprimitives-system
+  labels:
+    app.kubernetes.io/name: agentprimitives-extractord
+    app.kubernetes.io/part-of: agentprimitives
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentprimitives-extractord
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentprimitives-extractord
+    spec:
+      serviceAccountName: agentprimitives-extractord
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: extractord
+          image: agentprimitives-extractord:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            # pkg/platform/extract/tabula requires a filesystem path for every format
+            # except HTML — its per-format readers are filename-only — so the
+            # adapter spills each upload to a temp file under os.TempDir()
+            # and removes it. TMPDIR + the emptyDir volume below give it
+            # somewhere writable despite the read-only root filesystem;
+            # without both, every non-HTML extraction fails with a
+            # permission error that no unit test catches (tests run on a
+            # normal, writable filesystem).
+            - name: TMPDIR
+              value: /tmp
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+      volumes:
+        # Writable scratch space for pkg/platform/extract/tabula's temp-file adapter
+        # (see the TMPDIR comment above). sizeLimit is headroom over
+        # defaultMaxBytes (25Mi in internal/cmd/extractord) for the single in-flight
+        # upload this pod ever holds — not a cache, so it never needs to grow
+        # past one request's worth of data.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi

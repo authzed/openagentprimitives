@@ -1,0 +1,62 @@
+export const meta = {
+  title: 'WorkspaceSource',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3330,
+  description: 'WorkspaceSource declares a named, pluggable origin that per-session',
+}
+
+# WorkspaceSource
+
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `wsrc`
+
+WorkspaceSource declares a named, pluggable origin that per-session
+workspaces are cut from. The origin kind is registered
+(pkg/platform/workspacekinds); git is the backend that exists today.
+
+Namespaced. Reconciled by pkg/controllers/workspacesource, which validates
+the spec against the named kind, provisions a shared base PVC, and runs a
+Job to materialize the checkout into it. Sessions never clone the origin
+themselves: the AgentSession reconciler cuts a copy-on-write overlay off
+that shared base once, then freezes it for the session lifetime, so
+re-pointing this object mid-session does not move a running workspace.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.base` | `object` | Base configures the shared read-cache every session overlays off. |
+| `spec.base.refresh` | `string` | Refresh controls whether/how often the shared base is re-pulled from the origin. "" or "onDemand" (default) never auto-refreshes. A Go duration (e.g. "10m") re-pulls the base on that interval so new sessions overlay off a near-current base and pull only the delta. |
+| `spec.base.size` | `string` | Size is the base PVC request (default 2Gi). |
+| `spec.scope` | `object` | Scope narrows which subpaths a session may see; empty exposes everything. |
+| `spec.scope.paths` | `[]object` | Paths is the allowlist; empty exposes the whole checkout. |
+| `spec.scope.paths[].path` \* | `string` | Path is a subpath relative to the checkout root. |
+| `spec.scope.paths[].writable` | `boolean` | Writable permits the session to modify this subtree; default is read-only. |
+| `spec.source` \* | `object` | Source is the driver and the location it points at. |
+| `spec.source.config` | `map[string]string` | Config is driver-specific extra configuration, opaque here. |
+| `spec.source.kind` \* | `string` | Kind selects the registered driver (e.g. "git"). |
+| `spec.source.locator` \* | `string` | Locator is the driver-parsed source location (repo URL, file:// path, …). |
+| `spec.source.ref` | `string` | Ref is the driver-specific revision (a git branch, tag or SHA); empty takes the driver's default. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.baseClaimName` | `string` | BaseClaimName is the shared base PVC sessions cut their overlay from. |
+| `status.conditions` | `[]object` | Conditions carries Valid and Ready. |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.lastMaterializedAt` | `string (date-time)` | LastMaterializedAt is when the base checkout was first populated. |
+| `status.lastRefreshedAt` | `string (date-time)` | LastRefreshedAt is when a scheduled base refresh last completed. |
+| `status.observedGeneration` | `integer (int64)` | ObservedGeneration is the spec generation this status reflects. |
+
+<small>\* required</small>
+

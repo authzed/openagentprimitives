@@ -1,0 +1,33 @@
+# SpiceDBBootstrap for the agent-interruptible-tool fixture.
+#
+# Grants `feed:activity-stream#read` to exactly ONE subject — the requester
+# the consuming tests drive traffic as. The `feed` definition itself is
+# declared by 02-mcpserver.yaml's spicedbSchema fragment, so this CR is
+# relationships-only (the harness applies files in sorted order, so 02 lands
+# before 04).
+#
+# DELIBERATELY A SINGLE NAMED SUBJECT, NOT `user:*`. A wildcard leaf would
+# make the fixture user-agnostic, but it would also put this fragment back
+# inside the blast radius of the MCPServer reconcile's wildcardLeafRouteCheck
+# / routeViaSessionGrantCheck invariant — the exact coupling this fixture
+# exists to escape. One named subject means the fragment has no wildcard
+# surface at all, and a consumer that drives traffic as some OTHER user gets
+# a clean SpiceDB deny rather than a silent free pass.
+#
+# CONSUMER CONTRACT: any test using this fixture MUST Start with
+#   e2e.Options{DefaultUser: "user@example.com"}
+# (or send with e2e.AsUser("user@example.com")), or watch_feed denies and
+# never reaches the MCP stub.
+#
+# canonicalize: true runs the address through pkg/platform/identity.Canonicalize so
+# the tuple matches the subject form the runtime Check builds.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: interruptible-seed
+  namespace: default
+spec:
+  relationships:
+    - resource: { type: feed, id: "activity-stream" }
+      relation: reader
+      subject:  { type: user, id: "user@example.com", canonicalize: true }

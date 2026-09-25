@@ -1,0 +1,674 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: workshops.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    kind: Workshop
+    listKind: WorkshopList
+    plural: workshops
+    shortNames:
+    - wksp
+    singular: workshop
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.session.name
+      name: Session
+      type: string
+    - jsonPath: .status.namespace
+      name: Workspace
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Workshop is one builder session's isolated build space: the durable record
+          of its namespace, RBAC, SpiceDB tuple, tokens and sidecar identity, created
+          by the AgentSession reconciler ONLY for a sanctioned class (spec §1.1) and
+          owned end-to-end by the workshop controller. A restarted operator
+          re-provisions from this CR; the webhook attributes SA → session → workshop
+          by reading it; the sweeper enforces its limits without the session's
+          cooperation.
+
+          SECURITY: status is the trust boundary. status.sidecarIdentity is the ONLY
+          source the sidecar-pod builder consumes — never AgentSession.status, which
+          the runner holds patch on. spec.session, spec.starterCanonical and
+          spec.limits are immutable after creation (CEL below): the sidecar SA holds
+          update on this one object for the later-plan request fields, and must not
+          be able to re-point the workshop or raise its own limits.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              capabilityRequest:
+                properties:
+                  artifactRef:
+                    type: string
+                  draftRef:
+                    type: string
+                  summary:
+                    type: string
+                required:
+                - artifactRef
+                - summary
+                type: object
+              closeRequests:
+                description: |-
+                  CloseRequests are the OTHER workshops this workshop's builder has been
+                  asked to end, written by the sidecar's close_others tool through its
+                  update grant on this CR. Each Target is a Workshop — bare in this same
+                  (builder) namespace, `namespace/name` for one elsewhere — or a wildcard
+                  ask the controller expands: `*` the first time this workshop asks to
+                  close every other one, and `*:<n>` for each later ask, so a person may
+                  ask again and have it expanded afresh. Either way a target is requested
+                  at most once under that exact spelling, since the list is keyed by
+                  target.
+
+                  A request is only ever a REQUEST: the Workshop controller decides each
+                  against SpiceDB's workshop#close for the person this workshop's builder
+                  acts for (spec.starterCanonical) and records the outcome once in
+                  status.closeRequests. Nothing here authorizes anything.
+                items:
+                  description: |-
+                    WorkshopCloseRequest asks the operator to end ANOTHER workshop of the same
+                    person (or anyone's, when the requester is a platform admin). Written by the
+                    sidecar's close_others tool onto the REQUESTING workshop's spec; decided by
+                    the Workshop controller against SpiceDB workshop#close and recorded in
+                    status, once per target. The workshop a builder is IN is never a valid
+                    target: the tool refuses it before writing, and the controller refuses it
+                    again.
+
+                    RequestedAt is a wall-clock value in a spec field, which the repo's SSA rule
+                    otherwise warns against — it is safe here for the same reason
+                    WorkshopTestWatch.StartedAt is: the tool writes an entry ONCE per target with
+                    a plain Update, never a repeated apply, and the list is keyed by target so
+                    there is no second write of the same entry to be non-idempotent about. The
+                    controller's own observations live in status.closeRequests, never here.
+                  properties:
+                    requestedAt:
+                      description: RequestedAt is when the tool asked.
+                      format: date-time
+                      type: string
+                    target:
+                      description: |-
+                        Target is a Workshop: its name in the requester's builder namespace,
+                        `namespace/name` for one elsewhere, `*` for every other workshop of the
+                        same person, `*:<n>` for a later such ask.
+                      maxLength: 127
+                      minLength: 1
+                      pattern: ^(\*(:[1-9][0-9]*)?|([a-z0-9]([-a-z0-9]*[a-z0-9])?/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?)$
+                      type: string
+                  required:
+                  - requestedAt
+                  - target
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - target
+                x-kubernetes-list-type: map
+              credentialRequests:
+                description: |-
+                  CredentialRequests are the bot/shared credentials the builder has asked a
+                  person to connect for AgentIdentities it authored in this workshop (plan
+                  5a). Written by the sidecar's request_credential tool via its update grant
+                  on this CR. A pure function of (identity, credential): a re-request of the
+                  same pair is byte-identical, so this is SSA-idempotent. AuthKind is
+                  pat|static (a pasted secret) or oauth-mcp (a shared/bot OAuth connect the
+                  person authorizes through identityd).
+                items:
+                  description: |-
+                    WorkshopCredentialRequest is one bot/shared credential the builder asked a
+                    person to connect (plan 5a §6). Refs and names only — never a secret value.
+                  properties:
+                    authKind:
+                      description: AuthKind is pat, static, or oauth-mcp.
+                      enum:
+                      - pat
+                      - static
+                      - oauth-mcp
+                      type: string
+                    credential:
+                      description: Credential is the credential name on that AgentIdentity.
+                      minLength: 1
+                      type: string
+                    identity:
+                      description: |-
+                        Identity is the AgentIdentity (in the workshop namespace W) the credential
+                        belongs to.
+                      minLength: 1
+                      type: string
+                  required:
+                  - authKind
+                  - credential
+                  - identity
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              exportRequested:
+                description: |-
+                  ExportRequested, InstallRequest and CapabilityRequest are written by the
+                  workshop sidecar in later plans (export/install/handoff flows). This
+                  plan's controller ignores them; they exist now so the CRD does not churn.
+                type: boolean
+              installRequest:
+                description: |-
+                  WorkshopInstallRequest and WorkshopCapabilityRequest are the later-plan
+                  sidecar-written requests (spec §2.1). Digest/refs only — never a secret.
+                properties:
+                  answers:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  bundleDigest:
+                    type: string
+                  suggestedName:
+                    type: string
+                required:
+                - bundleDigest
+                - suggestedName
+                type: object
+              limits:
+                description: |-
+                  Limits are copied from ClusterAgentSettings at creation and are
+                  immutable: the sidecar SA holds update on this object for the request
+                  fields below and must not be able to raise its own ceilings.
+                properties:
+                  maxAge:
+                    description: |-
+                      MaxAge bounds the workshop's total life from provisionedAt, regardless
+                      of session state. The sweeper deletes past it.
+                    type: string
+                  maxConcurrentProbes:
+                    description: |-
+                      MaxConcurrentProbes must be at least 1: zero is never a valid config —
+                      it would deadlock every WorkshopProbe in the namespace permanently
+                      (workshopprobe.Reconciler's concurrency-cap check has no slot to ever
+                      grant). The default is 2 (defaultWorkshopLimits,
+                      pkg/controllers/agentsession/workshop_hook.go).
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  maxObjects:
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  maxObjectsPerKind:
+                    format: int32
+                    minimum: 1
+                    type: integer
+                required:
+                - maxAge
+                - maxConcurrentProbes
+                - maxObjects
+                - maxObjectsPerKind
+                type: object
+                x-kubernetes-validations:
+                - message: spec.limits is immutable
+                  rule: self == oldSelf
+              session:
+                description: |-
+                  Session is the builder AgentSession this workshop belongs to, in the
+                  same namespace as this CR. Set once by the AgentSession reconciler.
+                properties:
+                  name:
+                    description: Name is the object's name.
+                    type: string
+                  namespace:
+                    description: Namespace is the object's namespace.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+                x-kubernetes-validations:
+                - message: spec.session is immutable
+                  rule: self == oldSelf
+              sidecarToolbox:
+                description: |-
+                  SidecarToolbox is the name of the sanctioned SidecarToolbox CR (in the
+                  class's namespace) that receives this workshop's identity — copied from
+                  the BuilderClassRef at creation. The AgentSession reconciler consumes it
+                  (workshopIdentityFor) to decide WHICH sidecar of the class gets the
+                  projected SA token. Set once.
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: spec.sidecarToolbox is immutable
+                  rule: self == oldSelf
+              starterCanonical:
+                description: |-
+                  StarterCanonical is the canonical id of the person who started the
+                  session ("user:" prefix stripped), recorded so maxWorkshopsPerStarter
+                  can count without reading every session. Set once.
+                type: string
+                x-kubernetes-validations:
+                - message: spec.starterCanonical is immutable
+                  rule: self == oldSelf
+              testWatch:
+                description: |-
+                  TestWatch is the sidecar's request to watch the person's own test of a
+                  built class (Try it as yourself). See WorkshopTestWatch.
+                properties:
+                  class:
+                    description: Class is the AgentClass (in the workshop namespace)
+                      whose sessions count.
+                    minLength: 1
+                    type: string
+                  deadline:
+                    description: Deadline is when the watch times out.
+                    format: date-time
+                    type: string
+                  startedAt:
+                    description: |-
+                      StartedAt is when the watch began; only sessions created after it are
+                      the person's test.
+                    format: date-time
+                    type: string
+                required:
+                - class
+                - deadline
+                - startedAt
+                type: object
+            required:
+            - limits
+            - session
+            - sidecarToolbox
+            type: object
+          status:
+            properties:
+              capabilityRequest:
+                description: |-
+                  CapabilityRequest is the observed delivery state of spec.capabilityRequest,
+                  written SOLELY by the WorkshopHandoffWatcher.
+                properties:
+                  deliveredAt:
+                    format: date-time
+                    type: string
+                  noticeRef:
+                    type: string
+                type: object
+              closeRequests:
+                description: |-
+                  CloseRequests is the Workshop controller's decision for each
+                  spec.closeRequests entry — Closed, Refused or NotFound — written SOLELY
+                  by that controller, one entry per requested spelling, SET ONCE. A
+                  decision already recorded for a target is what stops it being decided
+                  (and closed) a second time under any spelling, so nothing here is ever
+                  rewritten.
+                items:
+                  description: |-
+                    WorkshopCloseStatus is the Workshop controller's decision for one
+                    spec.closeRequests entry. Written once per CANONICAL target — the
+                    namespace and name the spelling resolves to — and never revised: the close
+                    it records has already happened (the target's builder session is deleted),
+                    so re-deciding could only reach through to a LATER session that happens to
+                    carry the same name.
+
+                    Two spellings of one workshop ("x" and "<builder namespace>/x") are one
+                    canonical target, so the second is answered by copying the first's decision
+                    into an entry of its own: a second entry, never a second close.
+
+                    A wildcard ask ("*", "*:<n>") is answered in an entry of its own too — its
+                    summary of what THAT ask decided — and every workshop the ask decided carries
+                    the ask in Ask. A later ask reads that to skip what is already settled, and
+                    the tool reads it to report the answer to its own call.
+                  properties:
+                    ask:
+                      description: |-
+                        Ask is the wildcard request this entry was decided for; empty for a
+                        named request. An entry decided before the field existed carries none
+                        and reads as a named decision; deploy the CRD and operator before the
+                        workshop image.
+                      type: string
+                    decidedAt:
+                      description: DecidedAt is when the controller decided.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Message is the plain-words why, for a decision
+                        that was not a close.
+                      type: string
+                    phase:
+                      description: Phase is Closed, Refused, or NotFound.
+                      enum:
+                      - Closed
+                      - Refused
+                      - NotFound
+                      type: string
+                    target:
+                      description: Target echoes the spec request's target, and is
+                        this list's key.
+                      type: string
+                  required:
+                  - phase
+                  - target
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - target
+                x-kubernetes-list-type: map
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              credentialRequests:
+                description: |-
+                  CredentialRequests mirrors spec.credentialRequests with the observed
+                  delivery state. Written SOLELY by the channelsd WorkshopCredentialWatcher
+                  (deliveredAt/noticeRef) — a single writer, so the atomic list cannot
+                  clobber. Volatile values live HERE, never in the applied spec.
+                items:
+                  description: |-
+                    WorkshopCredentialRequestStatus is the observed delivery state for one
+                    entry in spec.credentialRequests (plan 5a §6). Identity/Credential key it
+                    back to its spec request; DeliveredAt/NoticeRef are set by the
+                    WorkshopCredentialWatcher when it DELIVERS the credential card to the builder
+                    session (NoticeRef is that interaction's request id). A non-nil DeliveredAt is
+                    the dedup marker that stops re-delivery — it records card delivery, not that
+                    the person has connected the credential (Secret existence is read directly).
+                  properties:
+                    credential:
+                      type: string
+                    deliveredAt:
+                      format: date-time
+                      type: string
+                    identity:
+                      type: string
+                    noticeRef:
+                      type: string
+                  required:
+                  - credential
+                  - identity
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              export:
+                description: |-
+                  Export records the most recently stored drafted .oap bundle for this
+                  workshop. Written by the tuple-authorized draft-export operator route
+                  (pkg/web/workshopdraftsrv) immediately after it durably stores the
+                  bytes under the builder session's scope — never by the sidecar, which
+                  holds no update on this object's status subresource. Set-once per
+                  digest: a re-export whose content is byte-identical to the last one
+                  leaves this field (and ExportedAt) untouched, so a retry is not
+                  volatile churn on a controller-owned field.
+                properties:
+                  artifactRef:
+                    description: |-
+                      ArtifactRef is the opaque artifactstore reference the bundle bytes are
+                      stored under, scoped to the builder session (spec.session) — never the
+                      workshop namespace.
+                    type: string
+                  digest:
+                    description: Digest is the sha256 (hex-encoded) of the stored
+                      bytes.
+                    type: string
+                  exportedAt:
+                    description: ExportedAt is when this digest was first recorded.
+                    format: date-time
+                    type: string
+                required:
+                - artifactRef
+                - digest
+                - exportedAt
+                type: object
+              install:
+                description: |-
+                  Install is the observed state of spec.installRequest. status.install.phase
+                  (Requested→Approved/Installed or Declined/Failed) is written by TWO owners
+                  with disjoint fields: the channelsd WorkshopHandoffWatcher sets Requested +
+                  DeliveredAt when it delivers the admin card; admind sets Installed/Declined/
+                  Failed + ApprovedBy + InstalledRef on the admin's click. Volatile values here.
+                properties:
+                  approvedBy:
+                    description: ApprovedBy is the canonical id of the admin who approved/declined.
+                      Set by admind.
+                    type: string
+                  deliveredAt:
+                    format: date-time
+                    type: string
+                  installedRef:
+                    description: InstalledRef is "<namespace>/<name>" of the installed
+                      AgentClass on success.
+                    type: string
+                  message:
+                    type: string
+                  phase:
+                    description: Phase is Requested, Approved, Installed, Declined,
+                      or Failed.
+                    enum:
+                    - Requested
+                    - Approved
+                    - Installed
+                    - Declined
+                    - Failed
+                    type: string
+                  requestedAt:
+                    format: date-time
+                    type: string
+                required:
+                - phase
+                type: object
+              namespace:
+                description: Namespace is the provisioned workshop namespace (ws-<uid12>).
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                description: Phase is Provisioning, Ready, Expired or Deleting.
+                type: string
+              provisionedAt:
+                format: date-time
+                type: string
+              sidecarIdentity:
+                description: |-
+                  SidecarIdentity is the identity the AgentSession reconciler hands the
+                  workshop sidecar pod: run as this ServiceAccount (projected token) and
+                  envFrom this Secret (the workshop bearer). Controller-owned status on an
+                  object the runner cannot touch — the ONLY source BuildSidecarPod
+                  consumes (spec §13).
+                properties:
+                  serviceAccount:
+                    type: string
+                  tokenSecret:
+                    type: string
+                required:
+                - serviceAccount
+                - tokenSecret
+                type: object
+              standins:
+                description: |-
+                  Standins is the AUTHORITATIVE registry of every credential-free
+                  rehearsal stand-in AgentClass this workshop has projected (agent-builder
+                  plan 9b, Task 1; pkg/web/workshopprojectsrv), written by the
+                  tuple-authorized project-agent operator route immediately after it
+                  creates or updates the stand-in AgentClass — never by the sidecar,
+                  which holds no update on this object's status subresource (same
+                  division of labor as Export, above).
+
+                  This is the fix for a real hole: the stand-in AgentClass itself also
+                  carries AnnotationStandinSource, but that annotation is a
+                  human-readable label ONLY and must NEVER be trusted as a security
+                  decision — a builder's own workshop_apply tool server-side-applies
+                  arbitrary metadata.annotations into the workshop namespace, and the
+                  admission webhook never inspects them, so a builder (or a
+                  prompt-injected model driving one) can stamp the marker onto a class
+                  it authored itself. This list is what the project-agent route's
+                  collision check and soleAuthoredClassName's authored-count now consult
+                  instead: a bare name is a stand-in for {SourceNamespace, SourceName}
+                  iff an entry here says so, never because some object merely carries
+                  the annotation. This is this repo's SSA discipline applied literally
+                  (observations belong in controller-owned status, never a
+                  client-writable field) — see CLAUDE.md's "Server-side apply" section.
+
+                  Set-once per (Name, SourceNamespace, SourceName): re-projecting the
+                  same source is a no-op here. No timestamp, unlike Export/ExportedAt
+                  above: an entry carries no field that a retry could ever leave stale
+                  (Export's ExportedAt exists to record WHEN a digest was first seen;
+                  a stand-in entry has no analogous volatile fact — the same three
+                  fields are true for as long as the entry exists at all), so there is
+                  nothing here for the SSA-churn rule to protect against.
+
+                  Bounded at spec.limits.maxObjectsPerKind entries: the project-agent
+                  route writes as the operator, so it bypasses the admission webhook's
+                  checkLimits (which only ever fires for a write attributed to the
+                  sidecar's own SA) — capping this list at the SAME per-kind ceiling a
+                  sidecar-authored AgentClass would have been held to is what keeps a
+                  workshop's stand-in count from becoming an unbounded mint through this
+                  one route (see pkg/web/workshopprojectsrv's own package doc).
+                items:
+                  description: |-
+                    WorkshopStandin is one authoritative registry entry naming a
+                    credential-free rehearsal stand-in AgentClass this workshop has projected
+                    (see WorkshopStatus.Standins' own doc for why this list, not the stand-in
+                    object's own annotation, is the security boundary).
+                  properties:
+                    name:
+                      description: |-
+                        Name is the stand-in's own metadata.name — bare, per the projection
+                        route's Ruling C, so it can collide with a bare name the workshop's
+                        builder authored itself; that collision is exactly what this registry
+                        exists to adjudicate.
+                      type: string
+                    sourceName:
+                      type: string
+                    sourceNamespace:
+                      description: |-
+                        SourceNamespace/SourceName are the foreign AgentClass this stand-in
+                        stands in for — the same {namespace, name} pair the project-agent
+                        route's reachability check verified before projecting.
+                      type: string
+                  required:
+                  - name
+                  - sourceName
+                  - sourceNamespace
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              testWatch:
+                description: |-
+                  TestWatch is the observed state of spec.testWatch, written SOLELY by the
+                  Workshop controller. Set-on-change: each delivered event is appended
+                  once; a replaced watch resets it.
+                properties:
+                  class:
+                    description: |-
+                      Class echoes the spec.testWatch.class this status describes, so a
+                      replaced watch (a different class or startedAt) starts a fresh record.
+                    type: string
+                  delivered:
+                    description: |-
+                      Delivered lists the events the builder has been told about, in order:
+                      started, paused, resumed, ended, timedOut. Each is delivered at most
+                      once, except paused and resumed, which repeat each time the session
+                      pauses and comes back. A re-armed watch that kept its identity drops
+                      timedOut so the rest of that test can still be reported.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  lastPhase:
+                    description: |-
+                      LastPhase is the test session's phase at the last delivery, so a repeat
+                      of the same phase delivers nothing.
+                    type: string
+                  session:
+                    description: Session is the test session, once one qualified.
+                    type: string
+                  startedAt:
+                    description: StartedAt echoes spec.testWatch.startedAt for the
+                      same reason.
+                    format: date-time
+                    type: string
+                required:
+                - class
+                - startedAt
+                type: object
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

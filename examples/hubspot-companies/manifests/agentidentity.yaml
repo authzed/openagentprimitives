@@ -1,0 +1,22 @@
+# AgentIdentity for the hubspot-companies agent.
+#
+# `hubspot-creds` backs the only credential the AgentClass needs: the
+# OAuth bearer token for the hubspot-companies MCPServer. The credential
+# itself is appended at:
+#
+#   oap agent setup-identity hubspot-companies
+#
+# which dispatches the `mcp:hubspot-companies` requirement to the
+# oauth-mcp builtin. The handshake runs against an OAuth app you
+# pre-registered with HubSpot (paste client_id + client_secret when
+# prompted); the resulting access_token + refresh_token are stored
+# under this identity. No need to pre-author them in YAML.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: hubspot-creds
+spec:
+  description: "Hubspot-companies agent: OAuth identity for the HubSpot MCP server."
+  # The credential for mcp:hubspot-companies is appended by
+  # `oap agent setup-identity hubspot-companies` — leave empty here.
+  credentials: []

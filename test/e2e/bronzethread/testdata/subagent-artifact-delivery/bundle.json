@@ -1,0 +1,151 @@
+{
+  "name": "subagent-artifact-delivery",
+  "description": "An artifact crossing the delegation boundary and reaching a person, end to end: demo-parent delegates in `chat` mode; demo-child -- which is offered artifact_prepare and deliberately NOT respond_to_user -- renders an HTML file and hands its `ar-…` handle back through return_result's `artifacts` array; the delegate result names that handle as a `delegation/handle` pair; and demo-parent attaches the pair and delivers it. demo-parent grants no artifacts capability at all, so the only artifact in the run is the child's and a delivery can only have come from the child's.\n\nEvery claim is made against a TOOL RESULT, never the scripted reply. That is the whole point here: a transcript says the same words whether the handle crossed the boundary or not, so agentReplyContains is a SETTLE POINT only and proves nothing on its own.\n\nThree things are pinned, and each fails differently. (1) The delegate result carries the child's artifact: the parent's step asserts the child's return_result DESCRIPTION appears in it, which reaches the parent only via SubagentRequest.status.artifacts, and the same step's captures refuse to bind unless a `delegation/ar-…` pair is actually listed. Propagation broken in any way and this step cannot produce a reply at all. (2) The composite handle RESOLVES and the entitlement passes -- the second respond_to_user comes back the literal \"delivered\". (3) A handle the parent was never given is REFUSED. Without (3), (2) passes just as well against a tool that accepts anything.\n\nThe negative names the REAL delegation with an artifact that delegation never returned, so the composite form parses cleanly and the only thing left to refuse it is the entitlement itself -- status.artifacts membership. It is asserted on the entitlement's own words (\"returned no artifact \\\"ar-never-returned-by-the-child\\\"\"), which a parse error, a missing delegation or an ownership mismatch could not produce, and paired with a NotContains on \"delivered\" so a refusal that still published cannot pass. It runs BEFORE the successful delivery so its outcome cannot be explained by a handle already spent.\n\nThe bundle opts into fakeDeliverySurfaces. The fake kind ships without them, because a channel kind's capabilities decide which meta tools every class is offered and widening them globally would move the tool list under every other bundle here. Without the opt-in `attached` is not in respond_to_user's schema at all and there is no delivery to make.\n\nSteps are scoped per session with agentClass, so the child's turns are the CHILD's rather than the parent's rules read in order -- and every scoped step must be reached, which is what stops a delegation that never ran from passing.",
+
+  "agentDir": "testdata/agent-subagent-artifact",
+  "agentClass": "demo-parent",
+  "fakeDeliverySurfaces": true,
+
+  "defaultUser": "user@example.com",
+
+  "userTurns": [
+    "have the child agent build the compatibility matrix and send it to me"
+  ],
+
+  "llm": [
+    {
+      "agentClass": "demo-parent",
+      "expect": {
+        "userTextContains": "compatibility matrix",
+        "toolOffered": "delegate"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "delegate",
+            "args": {
+              "agent": "demo-child",
+              "task": "Render the compatibility matrix for the 4.2 line as an HTML file.",
+              "mode": "chat"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "agentClass": "demo-child",
+      "expect": {
+        "userTextContains": "Render the compatibility matrix for the 4.2 line",
+        "toolOffered": "artifact_prepare",
+        "toolNotOffered": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "artifact_prepare",
+            "args": {
+              "kind": "html",
+              "payload": "<h1>4.2 compatibility</h1><table><tr><td>ok</td></tr></table>",
+              "filename": "matrix.html",
+              "name": "Compatibility matrix",
+              "description": "Rendered by the delegated agent."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "agentClass": "demo-child",
+      "expect": {
+        "lastToolResult": "artifact_prepare",
+        "lastToolResultIsError": false,
+        "toolNotOffered": "agent_work_complete",
+        "capture": {
+          "childHandle": "\"handle\"\\s*:\\s*\"(ar-[^\"]+)\""
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "return_result",
+            "args": {
+              "result": "The matrix is built. I cannot show it to anyone myself.",
+              "artifacts": [
+                {
+                  "id": "{{childHandle}}",
+                  "description": "The 4.2 compatibility matrix."
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "agentClass": "demo-parent",
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "The 4.2 compatibility matrix.",
+        "capture": {
+          "delegation": "- \"([^\"/]+)/ar-[^\"]+\"",
+          "delegatedHandle": "- \"([^\"/]+/ar-[^\"]+)\""
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Here is the matrix.",
+              "attached": ["{{delegation}}/ar-never-returned-by-the-child"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "agentClass": "demo-parent",
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "returned no artifact \"ar-never-returned-by-the-child\"",
+        "lastToolResultNotContains": "delivered"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Here is the compatibility matrix the child agent produced.",
+              "attached": ["{{delegatedHandle}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "agentClass": "demo-parent",
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "delivered"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": { "summary": "Delivered the child agent's matrix to the user" }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": [
+      "Here is the compatibility matrix the child agent produced."
+    ],
+    "artifactsDelivered": ["artifact-"]
+  }
+}

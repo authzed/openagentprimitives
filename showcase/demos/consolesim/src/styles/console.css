@@ -1,0 +1,81 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: #06070a;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+:root[data-theme='light'] body {
+  background: #e7e8ea;
+}
+#root {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+/* terminal window chrome */
+.cs-window {
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0c0e14;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme='light'] .cs-window {
+  background: #fbfbfa;
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
+}
+.cs-titlebar {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  background: #191c24;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+:root[data-theme='light'] .cs-titlebar {
+  background: #ececec;
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+.cs-dots {
+  display: flex;
+  gap: 8px;
+}
+.cs-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+.cs-red {
+  background: #ff5f57;
+}
+.cs-yellow {
+  background: #febc2e;
+}
+.cs-green {
+  background: #28c840;
+}
+.cs-title {
+  margin: 0 auto;
+  padding-right: 44px; /* balance the dots so the title is centered */
+  font-size: 12.5px;
+  color: #9aa1ab;
+  font-family: 'JetBrains Mono', monospace;
+}
+:root[data-theme='light'] .cs-title {
+  color: #6e7781;
+}
+.cs-body {
+  padding: 14px 16px;
+}
+.xterm {
+  padding: 0;
+}

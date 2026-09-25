@@ -1,0 +1,112 @@
+# Fixture agent for the sandbox per-subcommand permission bundle.
+#
+# The builtin gh toolkit is passthrough at the toolkit level and carries REAL
+# checks per subcommand: `pr view` is readonly#github_repo_url#read, `pr create` is
+# EXTERNAL#github_repo_url#write. A toolspec allowing both synthesizes ONE tool for
+# the whole CLI — the shape that used to collapse both into the toolkit default
+# and enumerate a permission surface of ZERO.
+apiVersion: v1
+kind: Secret
+metadata: {name: gh-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: gh-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: gh-token-secret, namespace: default}
+type: Opaque
+stringData: {token: "ghp_unusedTheSandboxNeverExecutes"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata: {name: ts-gh, namespace: default}
+spec:
+  name: ts-gh
+  version: "1"
+  toolkit: {name: gh, revision: "2026-05-01"}
+  # Both severities deliberately: a spec narrowed to readonly subcommands could
+  # not tell a collapsed surface from a correct one.
+  # `api` is here for the bypass bundle sharing this fixture. It contributes
+  # perm:write:github_repo_url, which `pr create` already contributes, so the
+  # permission surface is unchanged and the sibling bundle's assertions hold.
+  allowSubcommands: ["pr view", "pr create", "api"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata: {name: cls-gh, namespace: default}
+spec:
+  image: registry.example.com/gh-toolbelt:latest
+  resources: {cpu: "100m", memory: "64Mi", ephemeralStorage: "16Mi"}
+  tools:
+    - {name: gh, command: ["/usr/bin/gh"]}
+  toolspecs:
+    - {name: ts-gh}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: gh-identity, namespace: default}
+spec:
+  description: "Fixture identity for the sandbox permission bundle."
+  credentials:
+    - name: github-token
+      type: static
+      static: {secretRef: {name: gh-token-secret, key: token}}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: gh-reviewer, namespace: default}
+spec:
+  displayName: GhReviewer
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: gh-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You review pull requests with the gitlike_gh tool.
+  agentIdentity: gh-identity
+  authz:
+    toolCalls: {mode: permissive}
+    planGate:
+      mode: logging
+      # One handle auto-approves at tier 0; a phase carrying BOTH the read and
+      # the write cannot, so the surface's two entries stay observable.
+      rendering: {maxAutoApproveHandles: 1}
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  toolBundles:
+    - {name: "gitlike", class: "cls-gh", toolspecs: ["ts-gh"]}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: gh-reviewer-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: gh-reviewer
+  credentialsRef: {secretName: gh-fake-creds}
+  fake: {echo: false}
+---
+# Relationships only. The github_repo_url DEFINITION ships with the gh toolkit
+# (toolkits/gh.yaml `spicedbSchema`) and is composed by the guardian, so this
+# fixture supplies just the tuple that makes the check resolve to ALLOW.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata: {name: gh-repo-schema, namespace: default}
+spec:
+  relationships:
+    # The harness waits for RelationshipsApplied, which a schema-only bootstrap
+    # never gets — and this tuple is load-bearing anyway: it makes the requester
+    # the repo's owner, so `gh pr view` resolves to ALLOW and the bundle pins a
+    # gated call that succeeded rather than one that merely failed differently.
+    - resource: {type: github_repo_url, id: "aHR0cHM6Ly9naXRodWIuY29tL2RlbW8tb3JnL2RlbW8tcmVwbw"}
+      relation: owner
+      subject: {type: user, id: "user@example.com", canonicalize: true}

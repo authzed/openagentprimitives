@@ -1,0 +1,35 @@
+name: echo
+version: "1"
+toolkitRevision: "2026-04-25"
+target:
+  binary: echo
+  versionRange: ""
+parser:
+  kind: declarative
+env:
+  allowed: []
+globalFlags:
+  - {long: help, type: bool}
+
+permission:
+  stateImpact: stateless
+
+subcommands:
+  - path: []
+    description: "Print arguments to stdout"
+    positional:
+      - {name: args, type: stringList}
+    flags:
+      - {long: n, type: bool, description: "Suppress trailing newline"}
+      - {long: e, type: bool, description: "Enable interpretation of backslash escapes"}
+    effects:
+      destructive: false
+      reads: []
+      writes: []
+      network:
+        destinations: []
+      filesystem:
+        paths: []
+      creds:
+        required: []
+        writes: []

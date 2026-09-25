@@ -1,0 +1,18 @@
+{
+  "ns": "workshop",
+  "name": "sess-live",
+  "declaration": {
+    "view": {
+      "component": "ap:stack",
+      "children": [
+        {
+          "component": "ap:heading",
+          "props": {
+            "level": 1,
+            "text": "Fleet Console"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,1222 @@
+name: gh
+version: "1"
+toolkitRevision: "2026-05-01"
+siteURL: https://github.com
+target:
+  binary: gh
+  versionRange: ">=2.40.0 <3.0.0"
+  versionProbe:
+    args: ["--version"]
+    extract:
+      kind: regex
+      pattern: 'gh version ([0-9]+\.[0-9]+\.[0-9]+)'
+docs: ./gh.md
+parser:
+  kind: declarative
+
+env:
+  allowed:
+    - {name: GITHUB_TOKEN, title: "GitHub", description: "A GitHub token so the agent can read and write your repositories and pull requests as you.", sensitive: true, provider: github-pat, credential: github-token}
+    - {name: GH_HOST,      description: "Enterprise GitHub host"}
+    - {name: HTTPS_PROXY,  description: "HTTP proxy"}
+
+globalFlags:
+  - {long: help,    short: h, type: bool}
+  - {long: version,           type: bool}
+
+permission:
+  stateImpact: passthrough
+
+# The SpiceDB resource types this toolkit's checks name. See the equivalent
+# block in git.yaml for why a toolkit ships its own definitions.
+#
+# ONE repository, TWO objects, and the split is the whole design here.
+#
+# A running agent names a repository the only way it can: by URL, or by the
+# OWNER/NAME pair that is a URL in shorthand, read straight out of the call's
+# own arguments. Authorization has to answer from that alone — there is no
+# network round-trip inside a permission check. GitHub names the same
+# repository by a numeric account id, which is what survives a rename; a URL
+# does not, and a released name is reclaimable by someone else.
+#
+# Neither key can adopt the other's, so there are two definitions:
+#
+#   github_repo_url  keyed by base64url of the canonical https URL. This is the
+#                    type EVERY check below resolves against.
+#   github_repo      keyed by GitHub's numeric repository id. This is the type
+#                    the directory sync writes, carrying GitHub's five
+#                    collaborator roles and the org/team containers they
+#                    traverse.
+#
+# The bridge between them is a WRITTEN TUPLE — github_repo_url#repo — so a URL
+# that has not been synced yet simply reaches no forge object, and one that has
+# been renamed follows the numeric id rather than the stale name.
+#
+# Every github_repo_url permission is `owner + repo->can_*`, never `repo->can_*`
+# alone. The union is ADDITIVE on purpose: the sync is still earning trust, and
+# a sync that is stale, half-written, or not running at all must not be able to
+# take away a grant that works today. The local `owner` arm is exactly what the
+# type conferred before the forge types existed.
+#
+# create_repo is the deliberate exception, and keeps `expr: owner`: the check
+# keys on the requested NAME (resourceIDTemplate "{name}"), so the object id is
+# the repo about to be created. It does not exist on the forge, so there is no
+# forge permission to consult and an arrow into one could only ever contribute
+# nothing. Granting it means "may create THIS repo", which is the useful scope —
+# an org-wide "may create any repo" is expressible as a wildcard the operator
+# adds, and is not something this toolkit should assume.
+spicedbSchema:
+  resources:
+    - name: github_repo_url
+      # Still session-only: who may APPROVE a grant on a repository is not yet
+      # answered by the forge. Moving to `required` with
+      # approverPermission: can_admin is deliberate follow-on work, after the
+      # synced data is verified against a real forge.
+      standing: session-only
+      relations:
+        - {name: owner, subjectType: user}
+        # The bridge. One tuple per URL, written by the directory sync, tying
+        # the URL an agent typed to the repository the forge enumerated.
+        - {name: repo, subjectType: github_repo}
+      # github_repo_url is vendor-specific — it is never anything but a GitHub
+      # repository — so `icon` may name the vendor's own mark.
+      #
+      # `label: b64url_path` decodes the object id and THEN shortens it to its
+      # path (demo-org/demo-repo), so a card shows WHICH repository, not just
+      # that it is one. Decoding first is the load-bearing half: url.Parse on
+      # the encoded form finds no host and derives nothing, which is the same
+      # type-name fallback this comment used to record from when the ids were
+      # bare OWNER/NAME pairs.
+      display: {name: "GitHub repository", icon: github, label: b64url_path}
+      permissions:
+        # KNOWN LIMITATION, and an operator has to be told rather than left to
+        # infer it from a sync that appears to do nothing:
+        #
+        #   An AgentClass that declares a SLOT on one of these permissions does
+        #   NOT get forge-backed access through it.
+        #
+        # ComposeSlots OWNS a slot permission's expression line and replaces
+        # whatever is written here with `slot_grant_<perm>->interact + owner`
+        # (pkg/authz/guardian/schema/slots.go, composeOneSlot). That is a
+        # security property — it is what stops an AgentClass author widening a
+        # slot permission, and what removes a wildcard leaf — and the composer
+        # cannot presently tell a toolkit-authored expression from a
+        # tenant-authored one. `repo->can_read` IS a widening; it is just a
+        # legitimate one, and it is dropped with it.
+        #
+        # So for a slotted permission the slot grant and `owner` are what
+        # resolve, and the directory sync contributes nothing. For an unslotted
+        # one the union below is what resolves and the sync works as written.
+        # Fixing this needs provenance-aware composition (preserve the
+        # compile-time baseline's expressions, keep replacing tenant ones).
+        # The erasure is pinned by
+        # TestComposeSlots_ErasesTheGhForgeTraversal so that fixing the composer
+        # fails a test naming this comment.
+        #
+        # `title` is the phrase a human reads on an approval card instead of the
+        # handle (`perm:write:github_repo_url`). It must not narrow what the
+        # permission actually covers: `write` gates `gh api` — arbitrary
+        # authenticated GitHub API requests, stateImpact external — alongside
+        # the issue and pull-request commands, so a title naming only issues and
+        # PRs would understate it in the one direction that matters.
+        - {name: read,        expr: "owner + repo->can_read",  title: "Read the project on GitHub"}
+        - {name: write,       expr: "owner + repo->can_write", title: "Change the project on GitHub, including direct API calls"}
+        - {name: admin,       expr: "owner + repo->can_admin", title: "Merge pull requests"}
+        - {name: create_repo, expr: owner,                     title: "Create a new repository"}
+
+    - name: github_pull_request
+      # Still session-only, for the same reason github_repo_url above is: who
+      # may APPROVE a grant on a forge resource is not yet answered by the
+      # forge. The write path for these tuples exists and is exercised end to
+      # end — a requireSlotBound writesRelationships block reads `gh pr view`'s
+      # own JSON result (author, always; repo only when the result says the
+      # pull request is not cross-repository, since gh has no field naming
+      # the target repository on a fork PR, only the fork itself) and writes
+      # author/repo through relwrites.Run gated on relwrites.NewSlotBoundChecker
+      # — proven against a real SpiceDB by
+      # test/e2e/scenarios/resourcepool/pr_identity_write_test.go, over the
+      # fixture toolspec at test/e2e/testdata/agent-pr-identity-e2e/02-toolspec.yaml.
+      # requireSlotBound is mandatory on both blocks — github_user is a
+      # reserved scaffold subject type (pkg/authz/relwrites/reserved_types.go)
+      # — and the toolspec denies `--jq` on the same call, so the tuples are
+      # read from the forge's response verbatim rather than a model-reshaped
+      # filter of it.
+      #
+      # The shipped reviewbot demo carries both blocks
+      # (examples/reviewbot/manifests/toolspecs.yaml): its AgentClass declares
+      # a slot on github_pull_request/write_memory with fillFrom: [trigger]
+      # (examples/reviewbot/manifests/agentclass.yaml), so the pipeline binds
+      # the triggering pull request into that slot at session mint — before
+      # either block ever runs, with no approval step and no human in the
+      # loop, only the verified webhook delivery itself. The tuples are still
+      # unverified against a real forge, so view_memory resolves to whoever
+      # this tool recorded, not a claim GitHub itself confirmed; moving to
+      # `required` with an approverPermission is deliberate follow-on work
+      # once that verification exists.
+      standing: session-only
+      relations:
+        - {name: repo, subjectType: github_repo}
+        - {name: author, subjectType: github_user}
+      permissions:
+        # NOTE: never name a RELATION here after a permission that will be
+        # slotted (write_memory today). The slot composer matches an existing
+        # permission by `permission <name> =` only, so a relation of that name
+        # is not recognized and a SECOND declaration is inserted, which
+        # SpiceDB refuses as a duplicate.
+        #
+        # write_memory is deliberately NOT declared: ComposeSlots creates it
+        # when a slot names it, and owns the line it writes.
+        - {name: view_memory, expr: "author->sole_user + repo->can_admin"}
+
+  # The forge-keyed half, as RawZed because the structured form cannot express
+  # either shape it needs: subject-relations (`github_user#sole_user`) and
+  # unions of them.
+  #
+  # Roles take github_user#sole_user, NEVER #user. #user is minted for every
+  # attested binding, and two platform subjects claiming one GitHub account is a
+  # normal case the useridentity reconciler reports rather than vetoes — safe
+  # while its only consumer was session membership, which is why an invariant
+  # test in pkg/authz/guardian/schema keeps #user scoped there. Repository
+  # access is durable rather than session-scoped, so it hangs off the binding
+  # that exists only while EXACTLY ONE subject claims the account; a second
+  # claimant costs both subjects repo authority, fail-closed, because nothing
+  # can tell which claim is legitimate.
+  #
+  # `reader` carries no `user:*` arm, and its absence is deliberate rather than
+  # an omission. Downstream, pttagmint intersects raw subject ids as opaque
+  # strings, so a wildcard arrives as the literal id `*` and matches nobody: a
+  # public repository's memory would resolve to an audience of no one while
+  # every permission check on it still said yes.
+  #
+  # `relhash` is the relsync engine's per-scope content sentinel (subject type
+  # `string`, declared in the base scaffold), not an authorization relation.
+  #
+  # github_repo's `owner` is a COMPATIBILITY SHIM. Do not delete it as unused —
+  # nothing writes it, and that is the point.
+  #
+  # Before this split, `github_repo` was the URL-keyed type with an `owner:
+  # user` relation, so an AgentClass declaring a slot on github_repo#read was
+  # the natural thing to write and several did. ComposeSlots CREATES a
+  # permission it does not find rather than skipping it (it skips only a type
+  # the schema does not DECLARE, and this one still is), so such a slot now
+  # composes `permission read = slot_grant_read->interact + owner` onto THIS
+  # definition. Without an `owner` relation that is a dangling reference, the
+  # pass that would catch it in RunAll is report-only, and SpiceDB's WriteSchema
+  # then refuses the entire composed schema — cluster-wide, for every
+  # AgentSessionGrants at once, not just for the AgentClass at fault.
+  #
+  # With the relation present the same stale slot resolves and the schema
+  # writes. It grants nothing: nothing writes an `owner` tuple here, and a slot
+  # left over from the URL-keyed era carries URL-derived resource ids, which
+  # match no forge-keyed object. So the shim costs an unclaimed relation and
+  # buys the upgrade not wedging.
+  rawZed: |
+    definition github_org {
+        relation member: github_user#sole_user
+        relation relhash: string
+    }
+
+    definition github_team {
+        relation org: github_org
+        relation direct_member: github_user#sole_user
+        relation subteam: github_team
+        relation relhash: string
+
+        permission member = direct_member + subteam->member
+    }
+
+    definition github_repo {
+        relation org: github_org
+        // The compatibility shim. See the note above the rawZed block:
+        // unclaimed and unwritten, present so a stale github_repo slot composes
+        // to a resolvable expression instead of wedging every schema write.
+        relation owner: user
+        relation admin:    github_user#sole_user | github_team#member
+        relation maintain: github_user#sole_user | github_team#member
+        relation write:    github_user#sole_user | github_team#member
+        relation triage:   github_user#sole_user | github_team#member
+        relation reader:   github_user#sole_user | github_team#member
+        relation relhash: string
+
+        permission can_admin    = admin
+        permission can_maintain = admin + maintain
+        permission can_write    = can_maintain + write
+        permission can_triage   = can_write + triage
+        permission can_read     = can_triage + reader + org->member
+    }
+
+subcommands:
+  - path: [pr, view]
+    description: "View a pull request"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,     short: R, type: string}
+      - {long: json,               type: string}
+      - {long: jq,                 type: string}
+      - {long: comments,           type: bool}
+      - {long: web,      short: w, type: bool}
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: read
+        extractionPrompt: |
+          Recognize GitHub repositories in owner/name form. Bare names
+          (e.g., "foo") should NOT be extracted unless surrounding text
+          makes it unambiguous which owner is intended.
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, create]
+    description: "Open a new pull request"
+    flags:
+      - {long: repo,      short: R, type: string}
+      - {long: title,     short: t, type: string}
+      - {long: body,      short: b, type: string}
+      - {long: body-file,           type: path}
+      - {long: base,      short: B, type: string}
+      - {long: head,      short: H, type: string}
+      - {long: draft,     short: d, type: bool}
+      - {long: fill,      short: f, type: bool}
+      - {long: assignee,  short: a, type: stringList}
+      - {long: reviewer,  short: r, type: stringList}
+      - {long: label,     short: l, type: stringList}
+      - {long: milestone, short: m, type: string}
+      - {long: web,       short: w, type: bool}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: write
+        extractionPrompt: |
+          Recognize GitHub repositories in owner/name form. Bare names
+          (e.g., "foo") should NOT be extracted unless surrounding text
+          makes it unambiguous which owner is intended.
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, edit]
+    description: "Edit an existing pull request"
+    positional:
+      - {name: idOrUrl, type: string, required: false}
+    flags:
+      - {long: repo,         short: R, type: string}
+      - {long: title,        short: t, type: string}
+      - {long: body,         short: b, type: string}
+      - {long: body-file,              type: path}
+      - {long: base,         short: B, type: string}
+      - {long: add-assignee,           type: stringList}
+      - {long: remove-assignee,        type: stringList}
+      - {long: add-reviewer,           type: stringList}
+      - {long: remove-reviewer,        type: stringList}
+      - {long: add-label,              type: stringList}
+      - {long: remove-label,           type: stringList}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: write
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, close]
+    description: "Close a pull request without merging"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,           short: R, type: string}
+      - {long: comment,        short: c, type: string}
+      - {long: delete-branch,  short: d, type: bool}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: write
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, checkout]
+    description: "Check out a pull request locally"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,         short: R, type: string}
+      - {long: branch,       short: b, type: string}
+      - {long: detach,                 type: bool}
+      - {long: force,        short: f, type: bool}
+      - {long: recurse-submodules,     type: bool}
+    permission:
+      # Checking out a PR fetches its head into the workspace — a repository read
+      # by another name.
+      stateImpact: readwrite
+      check:
+        resourceType: github_repo_url
+        permission: read
+        # --repo is what names the repository; without it gh infers one from the
+        # cwd's remote, which argv cannot see. Fail closed, as the git remote
+        # guard does.
+        resourceIDExpr: 'has(args.repo) && args.repo != "" ? args.repo : ""'
+        resourceIDTransforms: [github_repo_url_id]
+        resourceIDHint: "pass --repo OWNER/NAME — the repository cannot be inferred from the working directory for authorization"
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [filesystem]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, merge]
+    description: "Merge a pull request"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,   short: R, type: string}
+      - {long: squash,           type: bool}
+      - {long: merge,            type: bool}
+      - {long: rebase,           type: bool}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: admin
+        extractionPrompt: |
+          Recognize GitHub repositories in owner/name form. Bare names
+          (e.g., "foo") should NOT be extracted unless surrounding text
+          makes it unambiguous which owner is intended.
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, list]
+    description: "List pull requests"
+    flags:
+      - {long: repo,     short: R, type: string}
+      - {long: state,    short: s, type: string}
+      - {long: label,    short: l, type: string}
+      - {long: json,               type: string}
+      - {long: jq,                 type: string}
+      - {long: limit,    short: L, type: string}
+      - {long: author,   short: A, type: string}
+      - {long: assignee, short: a, type: string}
+      - {long: base,     short: B, type: string}
+      - {long: head,     short: H, type: string}
+      - {long: search,             type: string}
+      - {long: app,                type: string}
+      - {long: draft,    short: d, type: bool}
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: read
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, comment]
+    description: "Add a comment to a pull request"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,      short: R, type: string}
+      - {long: body,      short: b, type: string}
+      - {long: body-file,           type: path}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: write
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, checks]
+    description: "Show CI status for a pull request"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo, short: R, type: string}
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: read
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, ready]
+    description: "Mark a pull request as ready for review"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo, short: R, type: string}
+      - {long: undo,           type: bool}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: write
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, view]
+    description: "View an issue"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,     short: R, type: string}
+      - {long: json,               type: string}
+      - {long: jq,                 type: string}
+      - {long: comments,           type: bool}
+      - {long: web,      short: w, type: bool}
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: read
+        extractionPrompt: |
+          Recognize GitHub repositories in owner/name form. Bare names
+          (e.g., "foo") should NOT be extracted unless surrounding text
+          makes it unambiguous which owner is intended.
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, create]
+    description: "Open a new issue"
+    flags:
+      - {long: repo,      short: R, type: string}
+      - {long: title,     short: t, type: string}
+      - {long: body,      short: b, type: string}
+      - {long: body-file,           type: path}
+      - {long: assignee,  short: a, type: stringList}
+      - {long: label,     short: l, type: stringList}
+      - {long: milestone, short: m, type: string}
+      - {long: project,   short: p, type: stringList}
+      - {long: web,       short: w, type: bool}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: write
+        extractionPrompt: |
+          Recognize GitHub repositories in owner/name form. Bare names
+          (e.g., "foo") should NOT be extracted unless surrounding text
+          makes it unambiguous which owner is intended.
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, edit]
+    description: "Edit an existing issue"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,            short: R, type: string}
+      - {long: title,           short: t, type: string}
+      - {long: body,            short: b, type: string}
+      - {long: body-file,                 type: path}
+      - {long: add-assignee,              type: stringList}
+      - {long: remove-assignee,           type: stringList}
+      - {long: add-label,                 type: stringList}
+      - {long: remove-label,              type: stringList}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: write
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, list]
+    description: "List issues"
+    flags:
+      - {long: repo,     short: R, type: string}
+      - {long: state,    short: s, type: string}
+      - {long: label,    short: l, type: string}
+      - {long: json,               type: string}
+      - {long: jq,                 type: string}
+      - {long: limit,    short: L, type: string}
+      - {long: author,   short: A, type: string}
+      - {long: assignee, short: a, type: string}
+      - {long: mention,            type: string}
+      - {long: milestone,short: m, type: string}
+      - {long: search,             type: string}
+      - {long: app,                type: string}
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: read
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, comment]
+    description: "Add a comment to an issue"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,      short: R, type: string}
+      - {long: body,      short: b, type: string}
+      - {long: body-file,           type: path}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: write
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, close]
+    description: "Close an issue"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,    short: R, type: string}
+      - {long: comment, short: c, type: string}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: write
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [repo, view]
+    description: "View repository information"
+    positional:
+      - {name: repo, type: string, required: false}
+    flags:
+      - {long: web,  short: w, type: bool}
+      - {long: json,           type: string}
+    permission:
+      stateImpact: readonly
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: read
+        extractionPrompt: |
+          Recognize GitHub repositories in owner/name form. Bare names
+          (e.g., "foo") should NOT be extracted unless surrounding text
+          makes it unambiguous which owner is intended.
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [repo, clone]
+    description: "Clone a repository locally"
+    positional:
+      - {name: repo, type: string, required: true}
+      - {name: directory, type: string, required: false}
+    permission:
+      # Cloning reads the repository's entire contents. It was passthrough while
+      # `git clone` is readwrite#git_repo#fetch — the same fetch, one gated and
+      # one not.
+      stateImpact: readwrite
+      check:
+        resourceType: github_repo_url
+        permission: read
+        resourceIDTemplate: "{repo}"
+        resourceIDTransforms: [github_repo_url_id]
+        resourceIDHint: "name the repository as OWNER/NAME"
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [filesystem]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [repo, create]
+    description: "Create a new repository on GitHub"
+    positional:
+      - {name: name, type: string, required: false}
+    flags:
+      - {long: public,                 type: bool}
+      - {long: private,                type: bool}
+      - {long: internal,               type: bool}
+      - {long: description, short: d,  type: string}
+      - {long: homepage,    short: h,  type: string}
+      - {long: source,      short: s,  type: path}
+      - {long: clone,       short: c,  type: bool}
+      - {long: push,                   type: bool}
+      - {long: license,     short: l,  type: string}
+      - {long: gitignore,   short: g,  type: string}
+      - {long: template,    short: t,  type: string}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{name}"
+        resourceIDHint: "name the repository as OWNER/NAME"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: create_repo
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network, filesystem]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [repo, fork]
+    description: "Create a fork of a repository"
+    positional:
+      - {name: repo, type: string, required: false}
+    flags:
+      - {long: clone,           type: bool}
+      - {long: remote,          type: bool}
+      - {long: remote-name,     type: string}
+      - {long: org,             type: string}
+      - {long: fork-name,       type: string}
+      - {long: default-branch-only, type: bool}
+    permission:
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        resourceIDTemplate: "{repo}"
+        resourceIDHint: "pass --repo OWNER/NAME — gh infers the repository from the working directory's remote, which is not visible to authorization"
+        # github_repo_url_id folds every spelling of one repository onto a
+        # single canonical id (https://github.com/owner/name) and base64url-
+        # encodes it: the OWNER/NAME pair gh takes, the remote URLs git sees, a
+        # trailing .git, the scp form, and case (GitHub treats
+        # Demo-Org/Demo-Repo and demo-org/demo-repo as ONE repository). git.yaml
+        # runs github_repo_id — the same fold WITHOUT the encoding — so the two
+        # tools still agree on which repository is meant.
+        #
+        # No spicedb_escape after it. base64url's alphabet is already a legal
+        # object id and contains no '=', which is spicedb_escape's own escape
+        # introducer, so escaping an encoded id would only mangle it — and an
+        # encoded id can never be misread as an escaped one.
+        resourceIDTransforms: [github_repo_url_id]
+        permission: read
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network, filesystem]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [search, repos]
+    description: "Search for repositories"
+    positional:
+      - {name: query, type: string, required: true}
+    flags:
+      - {long: json,  type: string}
+      - {long: limit, type: int}
+    permission:
+      # Search spans repositories, so there is no single instance to scope to —
+      # but it still READS repository contents across the org, which is exactly
+      # what `github_repo_url#read` on one repo is meant to bound. Keyed on the
+      # sentinel `search`, following git's `workspace` precedent: an operator
+      # grants github_repo_url:search#read to permit cross-repo search at all,
+      # as a separate decision from any per-repo grant.
+      #
+      # The sentinel keeps its literal id through github_repo_url_id: `search`
+      # names no repository, so the transform passes it through untouched rather
+      # than encoding it. Its grant is written on `search` exactly as before.
+      stateImpact: readonly
+      check:
+        resourceType: github_repo_url
+        permission: read
+        resourceIDTemplate: "search"
+        resourceIDTransforms: [github_repo_url_id]
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [search, issues]
+    description: "Search for issues"
+    positional:
+      - {name: query, type: string, required: true}
+    flags:
+      - {long: json,  type: string}
+      - {long: limit, type: int}
+    permission:
+      # Search spans repositories, so there is no single instance to scope to —
+      # but it still READS repository contents across the org, which is exactly
+      # what `github_repo_url#read` on one repo is meant to bound. Keyed on the
+      # sentinel `search`, following git's `workspace` precedent: an operator
+      # grants github_repo_url:search#read to permit cross-repo search at all,
+      # as a separate decision from any per-repo grant.
+      #
+      # The sentinel keeps its literal id through github_repo_url_id: `search`
+      # names no repository, so the transform passes it through untouched rather
+      # than encoding it. Its grant is written on `search` exactly as before.
+      stateImpact: readonly
+      check:
+        resourceType: github_repo_url
+        permission: read
+        resourceIDTemplate: "search"
+        resourceIDTransforms: [github_repo_url_id]
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [search, prs]
+    description: "Search for pull requests"
+    positional:
+      - {name: query, type: string, required: true}
+    flags:
+      - {long: json,  type: string}
+      - {long: limit, type: int}
+    permission:
+      # Search spans repositories, so there is no single instance to scope to —
+      # but it still READS repository contents across the org, which is exactly
+      # what `github_repo_url#read` on one repo is meant to bound. Keyed on the
+      # sentinel `search`, following git's `workspace` precedent: an operator
+      # grants github_repo_url:search#read to permit cross-repo search at all,
+      # as a separate decision from any per-repo grant.
+      #
+      # The sentinel keeps its literal id through github_repo_url_id: `search`
+      # names no repository, so the transform passes it through untouched rather
+      # than encoding it. Its grant is written on `search` exactly as before.
+      stateImpact: readonly
+      check:
+        resourceType: github_repo_url
+        permission: read
+        resourceIDTemplate: "search"
+        resourceIDTransforms: [github_repo_url_id]
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [auth, status]
+    description: "View authentication status"
+    permission:
+      stateImpact: passthrough
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [api]
+    description: "Make authenticated API requests to the GitHub API"
+    positional:
+      - {name: endpoint, type: url, required: true}
+    flags:
+      - {long: method,      short: X, type: string}
+      - {long: field,       short: F, type: string}
+      - {long: raw-field,   short: f, type: string}
+      - {long: header,      short: H, type: string}
+      - {long: hostname,             type: string}
+      - {long: jq,                   type: string}
+    permission:
+      # The FALLBACK is the dangerous reading, and that ordering is the design:
+      # variants below name what is SAFE, so a method or endpoint nobody
+      # anticipated lands here rather than slipping past an allowlist.
+      stateImpact: external
+      check:
+        resourceType: github_repo_url
+        permission: write
+        resourceIDExpr: 'has(args.endpoint) && args.endpoint.startsWith("repos/") && args.endpoint.split("/").size() >= 3 ? args.endpoint.split("/")[1] + "/" + args.endpoint.split("/")[2] : ""'
+        resourceIDTransforms: [github_repo_url_id]
+        resourceIDHint: "for a write, call a repo-scoped endpoint (repos/OWNER/NAME/...) — an endpoint naming no repository cannot be authorized"
+    permissionVariants:
+      # EVERY variant below must also carry the safe-flags guard:
+      #
+      #   !("field" in args) && !("raw-field" in args) && !("hostname" in args)
+      #
+      # The endpoint and method do not describe what this call does on their
+      # own. `-f`/`-F` add parameters, and gh's method defaults to POST once
+      # parameters are present — so a write reads as a GET. `-F key=@path`
+      # additionally reads that path off the sandbox filesystem, and
+      # `--hostname` chooses where the request is sent; together they are a
+      # single-call file exfiltration charged as a repository read.
+      #
+      # Map membership, not `has()`: `has(args.raw-field)` does not compile,
+      # because CEL parses the hyphen as subtraction. A variant whose
+      # expression fails to compile is dropped and the call falls back, so the
+      # mistake fails closed — and silently disables the read path for
+      # everyone, which is why it is called out here.
+      #
+      # A repo-scoped GET is a read of that repository. `gh pr view` is
+      # readonly#read on the same object; routing the identical read through a
+      # human just because it went via `api` was over-restriction, not security.
+      - when: '(!has(args.method) || args.method == "" || args.method == "GET") && !("field" in args) && !("raw-field" in args) && !("hostname" in args) && has(args.endpoint) && args.endpoint.startsWith("repos/") && args.endpoint.split("/").size() >= 3'
+        check:
+          stateImpact: readonly
+          check:
+            resourceType: github_repo_url
+            permission: read
+            resourceIDExpr: 'args.endpoint.split("/")[1] + "/" + args.endpoint.split("/")[2]'
+            # Same canonical id as every other repository reference here: the
+            # endpoint yields OWNER/NAME, and github_repo_url_id folds and
+            # encodes it exactly as `gh pr view` does, so `gh api repos/o/r/...`
+            # and `gh pr view --repo o/r` are one target and one grant.
+            resourceIDTransforms: [github_repo_url_id]
+      # `gh api user` — the authenticated user's own profile. codebot's identity
+      # flow opens with it to derive the committer, and it names no repository,
+      # so it keys on the `self` sentinel: grantable and revocable on its own,
+      # rather than either ungated or impossible.
+      - when: '(!has(args.method) || args.method == "" || args.method == "GET") && !("field" in args) && !("raw-field" in args) && !("hostname" in args) && has(args.endpoint) && (args.endpoint == "user" || args.endpoint.startsWith("user/"))'
+        check:
+          stateImpact: readonly
+          check:
+            resourceType: github_repo_url
+            permission: read
+            resourceIDTemplate: "self"
+            # Carried even though the id is a constant, so that EVERY check on
+            # this type runs one chain and none can key it differently by
+            # omission. It is a no-op here by construction: `self` names no
+            # github.com repository, so the transform passes it through and the
+            # grant stays written on the literal `self`, exactly as before.
+            resourceIDTransforms: [github_repo_url_id]
+      # Cross-repo search, same sentinel the `search` subcommands use.
+      - when: '(!has(args.method) || args.method == "" || args.method == "GET") && !("field" in args) && !("raw-field" in args) && !("hostname" in args) && has(args.endpoint) && args.endpoint.startsWith("search/")'
+        check:
+          stateImpact: readonly
+          check:
+            resourceType: github_repo_url
+            permission: read
+            resourceIDTemplate: "search"
+            resourceIDTransforms: [github_repo_url_id]
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, "{flag:hostname}"]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}

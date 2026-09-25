@@ -1,0 +1,76 @@
+<!doctype html><html><head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="style-src 'nonce-apdev'">
+  <title>Annotation harness</title>
+  <style nonce="apdev">
+    html,body{margin:0;height:100%;font:14px system-ui,sans-serif;color:#111}
+    #wrap{display:flex;height:100vh}
+    #stage{flex:1;position:relative;border-right:1px solid #e2e8f0;min-width:0}
+    #ap-artifact{border:0;width:100%;height:100%;background:#fff;display:block}
+    #side{width:440px;display:flex;flex-direction:column;padding:12px;gap:10px;overflow:auto;background:#f8fafc}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .row label{font-weight:600}
+    select,button.ctl{font:inherit;padding:5px 8px;border-radius:6px;border:1px solid #cbd5e1;background:#fff;cursor:pointer}
+    h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin:6px 0 0}
+    #bundle-panel{white-space:pre-wrap;font:12px/1.5 ui-monospace,SFMono-Regular,monospace;background:#0b1020;color:#d6e2ff;padding:12px;border-radius:8px;min-height:140px;overflow:auto}
+    #send-log{list-style:none;margin:0;padding:0;font:12px ui-monospace,monospace}
+    #send-log li{padding:3px 0;border-bottom:1px solid #e2e8f0}
+    /* Annotator chrome — MUST mirror annotatorCSS in host.go. Class-driven only:
+       the strict style-src above strips any inline style="" the chrome might set. */
+    .ap-annot-toolbar{position:fixed;right:16px;bottom:16px;z-index:2147483647;display:flex;align-items:flex-end;gap:8px;font:13px/1.4 system-ui,sans-serif}
+    .ap-annot-panel{box-sizing:border-box;min-width:0;max-width:0;opacity:0;overflow:hidden;display:flex;flex-direction:column;gap:8px;background:#111827;color:#fff;padding:0;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.4);transition:max-width .28s ease,opacity .2s ease,padding .28s ease}
+    .ap-annot-toolbar.ap-annot-open .ap-annot-panel{max-width:320px;opacity:1;padding:10px}
+    .ap-annot-row{display:flex;align-items:center;gap:8px}
+    .ap-annot-btn{appearance:none;-webkit-appearance:none;border:0;cursor:pointer;background:#374151;color:#fff;padding:5px 10px;border-radius:6px;font:inherit;line-height:1.4}
+    .ap-annot-btn:hover{background:#4b5563}
+    .ap-annot-toggle[aria-pressed='true']{background:#e11d48}
+    .ap-annot-send{margin-left:auto}
+    .ap-annot-send:disabled{opacity:.45;cursor:not-allowed}
+    .ap-annot-fab{flex:none;position:relative;display:flex;align-items:center;justify-content:center;padding:0;width:44px;height:44px;border-radius:50%;background:#e11d48;font:18px/1 system-ui;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+    .ap-annot-fab:hover{background:#be123c}
+    .ap-annot-fab-count{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#111827;color:#fff;font-size:11px}
+    .ap-annot-fab-count[hidden]{display:none}
+    .ap-annot-count{color:#9ca3af;font-size:12px;white-space:nowrap}
+    .ap-annot-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:44vh;overflow:auto}
+    .ap-annot-list:empty{display:none}
+    .ap-annot-item{display:flex;align-items:center;gap:6px;background:#1f2937;border-radius:6px;padding:4px 6px}
+    .ap-annot-item-n{flex:none;min-width:16px;height:16px;line-height:16px;text-align:center;border-radius:8px;background:#e11d48;color:#fff;font-size:11px;padding:0 3px}
+    .ap-annot-item-label{flex:none;max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cbd5e1}
+    .ap-annot-item-note{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+    .ap-annot-empty{color:#6b7280;font-style:italic}
+    .ap-annot-edit,.ap-annot-remove{flex:none;appearance:none;-webkit-appearance:none;border:0;cursor:pointer;background:transparent;color:#9ca3af;font:inherit;padding:2px 4px;border-radius:4px}
+    .ap-annot-edit:hover,.ap-annot-remove:hover{background:#374151;color:#fff}
+    .ap-annot-pop{position:fixed;left:16px;bottom:16px;z-index:2147483647;width:300px;max-width:calc(100vw - 32px);display:flex;flex-direction:column;gap:8px;background:#0b1220;color:#fff;padding:12px;border-radius:10px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5);border:1px solid #1f2937}
+    .ap-annot-pop-head{font-size:12px;color:#9ca3af;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .ap-annot-pop-hint{font-size:11px;color:#6b7280}
+    .ap-annot-pop textarea{width:100%;box-sizing:border-box;min-height:70px;resize:vertical;background:#111827;color:#fff;border:1px solid #374151;border-radius:6px;padding:6px;font:inherit}
+    .ap-annot-chips{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+    .ap-annot-chips-label{color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-right:2px}
+    .ap-annot-chip{appearance:none;-webkit-appearance:none;cursor:pointer;border:1px solid #374151;background:transparent;color:#cbd5e1;font:inherit;font-size:12px;padding:2px 8px;border-radius:999px}
+    .ap-annot-chip[aria-pressed='true']{background:#2563eb;border-color:#2563eb;color:#fff}
+    .ap-annot-pop-actions{display:flex;justify-content:space-between;gap:8px;margin-top:2px}
+    .ap-annot-del{background:#7f1d1d}
+    .ap-annot-del:hover{background:#991b1b}
+  </style>
+</head><body>
+  <div id="wrap">
+    <div id="stage"><iframe id="ap-artifact" title="fake artifact"></iframe></div>
+    <div id="side">
+      <div class="row">
+        <label for="fixture">Fixture</label>
+        <select id="fixture">
+          <option value="rich">rich landing page</option>
+          <option value="form">form-heavy</option>
+          <option value="long">long scroll</option>
+          <option value="minimal">minimal</option>
+        </select>
+        <button id="swap" class="ctl">Push new revision</button>
+      </div>
+      <h2>Emitted bundle</h2>
+      <div id="bundle-panel">Click “Annotate”, mark elements, then “Send”. The bundle the agent would receive appears here.</div>
+      <h2>Send log</h2>
+      <ul id="send-log"></ul>
+    </div>
+  </div>
+  <script type="module" src="/harness.ts"></script>
+</body></html>

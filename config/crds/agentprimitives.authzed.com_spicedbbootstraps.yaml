@@ -1,0 +1,464 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: spicedbbootstraps.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: SpiceDBBootstrap
+    listKind: SpiceDBBootstrapList
+    plural: spicedbbootstraps
+    shortNames:
+    - spicedbstrap
+    singular: spicedbbootstrap
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Valid')].status
+      name: Valid
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='SchemaIncluded')].status
+      name: SchemaIncluded
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='RelationshipsApplied')].status
+      name: RelationshipsApplied
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SpiceDBBootstrap declaratively seeds SpiceDB state: an optional schema
+          fragment and/or a set of relationships TOUCHed into SpiceDB. At least one of
+          spec.spicedbSchema.resources and spec.relationships MUST be non-empty.
+
+          Namespaced. It has no reconciler of its own -- pkg/controllers/guardian
+          watches it from the AgentSessionGrants loop, composes its fragment into the
+          unified schema alongside MCPServer fragments, and refcounts its
+          relationships across every CR that claims them, so deleting one CR removes
+          only the tuples no other CR still owns.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              reclaimPolicy:
+                default: Delete
+                description: |-
+                  ReclaimPolicy controls cleanup of tuples this CR previously
+                  wrote. Delete (default) reconciles to desired state via
+                  cluster-wide refcounting; Retain TOUCHes on each reconcile but
+                  never DELETEs and does not participate in refcount.
+                enum:
+                - Delete
+                - Retain
+                type: string
+              relationships:
+                description: |-
+                  Relationships is an optional list of tuples to TOUCH into SpiceDB.
+                  With reclaimPolicy=Delete (default), the controller also DELETEs
+                  tuples that were previously TOUCHed but have since dropped out
+                  of the cluster-wide desired set (refcounted across all
+                  SpiceDBBootstrap CRs).
+                items:
+                  properties:
+                    relation:
+                      description: Relation is the relation name declared on Resource's
+                        type.
+                      pattern: ^[a-z][a-z0-9_]*$
+                      type: string
+                    resource:
+                      description: Resource is the tuple's left-hand object.
+                      properties:
+                        id:
+                          description: |-
+                            SpiceDB's object_id regex is `^(([a-zA-Z0-9/_|\-=+]{1,})|\*)$` — letters,
+                            digits, and _ / | - = + . The pattern below admits all of those, plus '@'
+                            and '.' so that an email can be carried verbatim when
+                            subject.canonicalize=true; the controller's L2 validation rejects an '@'
+                            in a user subject when canonicalize is false.
+
+                            '=' is load-bearing beyond email. It is the escape character
+                            authz.spicedb_escape uses to fit a free-form value — a repository URL —
+                            into an object id INJECTIVELY, which is what lets an approval name one
+                            repository without also covering another. A bootstrap that seeds a grant
+                            on such a value has to be able to express the id the check will compute,
+                            so a pattern narrower than SpiceDB's own rejects legal ids.
+                          maxLength: 1024
+                          pattern: ^[a-zA-Z0-9_/.@=|+-]+$
+                          type: string
+                        type:
+                          description: Type is the SpiceDB definition name.
+                          pattern: ^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$
+                          type: string
+                      required:
+                      - id
+                      - type
+                      type: object
+                    subject:
+                      description: Subject is the tuple's right-hand subject.
+                      properties:
+                        canonicalize:
+                          description: |-
+                            Canonicalize, when true, runs ID through identity.EmailReference(id).Canonical()
+                            before writing. Only valid when Type=="user" and ID is an email.
+                            Mutually exclusive with wildcard=true.
+                          type: boolean
+                        id:
+                          description: |-
+                            ID is required UNLESS Wildcard=true (which forces the wire-form
+                            SpiceDB subject id to "*", the wildcard match-any value).
+                          maxLength: 1024
+                          pattern: ^[a-zA-Z0-9_/.@=|+-]+$
+                          type: string
+                        relation:
+                          description: |-
+                            Relation, when set, makes this a subject-set reference like
+                            "group:eng#member". Mutually exclusive with canonicalize=true
+                            and wildcard=true.
+                          pattern: ^[a-z][a-z0-9_]*$
+                          type: string
+                        type:
+                          description: Type is the SpiceDB definition name of the
+                            subject.
+                          pattern: ^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$
+                          type: string
+                        wildcard:
+                          description: |-
+                            Wildcard, when true, writes the SpiceDB wildcard subject
+                            (`<type>:*`) — every subject of Type matches. Requires the
+                            corresponding relation on the target resource to itself be
+                            wildcard-typed in the schema (see
+                            SpiceDBRelation.Wildcard). Mutually exclusive with
+                            Relation and Canonicalize. When true, ID is ignored.
+                          type: boolean
+                      required:
+                      - type
+                      type: object
+                  required:
+                  - relation
+                  - resource
+                  - subject
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              spicedbSchema:
+                description: |-
+                  SpiceDBSchema is an optional schema fragment composed into the
+                  unified SpiceDB schema by the guardian reconciler. Same shape and
+                  rules as MCPServer.spec.spicedbSchema. Must not redeclare 'user'.
+                properties:
+                  rawZed:
+                    description: |-
+                      RawZed is appended verbatim to the composed schema after Resources
+                      are emitted. Use this for SpiceDB schema features the structured
+                      form can't represent: subject-relations (e.g. `slack_user#user`)
+                      and unions (e.g. `user | agent`). The composer does not parse or
+                      validate RawZed beyond schema-load time; malformed text fails the
+                      SpiceDB WriteSchema call.
+                    type: string
+                  resources:
+                    description: |-
+                      Resources lists structured SpiceDB definitions contributed by this
+                      fragment. Each resource is emitted with its declared relations and
+                      permissions; the composer dedupes by name across fragments.
+                    items:
+                      description: SpiceDBResource is one SpiceDB resource definition
+                        contributed by a fragment.
+                      properties:
+                        approverPermission:
+                          description: |-
+                            ApproverPermission names the permission an approver must hold on an
+                            instance for their approval to count. Required when Standing is `required`,
+                            and must be empty when it is `session-only` — a type nothing governs has no
+                            permission to name, and accepting one there would read as governance that
+                            is never consulted.
+
+                            Declared rather than assumed. This was hardcoded to "owner" at four call
+                            sites, which silently made two very different types look identical to the
+                            approval router: crm_company's `owner` is a real computed permission backed
+                            by seeded tuples, while git_repo's `owner` is a bare relation declared only
+                            so the checks are answerable and never populated by anything. The router
+                            could not tell governance from an artifact of schema shape, so a push to a
+                            git remote resolved to an empty owner-set and became unapprovable forever.
+
+                            Naming it also lifts the assumption that the approving permission is called
+                            "owner": a type may route approval through `maintainer`, `admin`, or any
+                            permission its own schema defines.
+                          type: string
+                        display:
+                          description: |-
+                            Display declares how an INSTANCE of this resource type presents on an
+                            approval card — an icon, and how to turn its raw value (a URL, typically)
+                            into a short label. Absent means the card falls back to the wire type
+                            name, exactly as before this field existed.
+                          properties:
+                            icon:
+                              description: |-
+                                Icon names a glyph from a CLOSED, code-defined registry — never a URL
+                                and never free-form. A vendor-specific type (github_repo) may name the
+                                vendor's own mark; a host-agnostic type (git_repo) must name a generic
+                                one, because claiming a vendor mark would lie the moment an instance
+                                points somewhere else (a self-hosted remote). An unrecognized name
+                                renders no icon — never a fallback image, never a guess.
+                              maxLength: 40
+                              type: string
+                            label:
+                              description: |-
+                                Label names a deriver from a CLOSED, code-defined set that turns an
+                                instance's raw value into a short display label — "url_path",
+                                "b64url_path", "last_segment", or "none" (the set registered in
+                                pkg/authz/plangate's labelDerivers, which is the authority; this list is
+                                prose and has drifted from it once). Not a template and not a regex: nothing here
+                                can produce a label the code did not author, and the deriver never sees
+                                anything an agent did not itself write into the plan (the instance
+                                value), so a declaration can shorten a value's presentation but can
+                                never fabricate one. An unrecognized name derives nothing, and the card
+                                falls back to Name.
+                              maxLength: 40
+                              type: string
+                            name:
+                              description: |-
+                                Name is the human name for this resource TYPE — "Git repository", never
+                                the wire handle "git_repo". Shown when no per-instance label can be
+                                derived (Label is "none", unset, or the deriver produces nothing for
+                                this instance's value).
+                              maxLength: 60
+                              type: string
+                          type: object
+                        name:
+                          description: Name is the SpiceDB definition name; the composer
+                            dedupes on it.
+                          type: string
+                        permissions:
+                          description: Permissions are the resource's computed permissions.
+                          items:
+                            description: |-
+                              SpiceDBPermission is one permission on a resource. Expr is
+                              the right-hand-side of the SpiceDB schema's `permission <name> = ...`
+                              statement; the composer pastes it verbatim.
+                            properties:
+                              expr:
+                                description: Expr is the right-hand side of `permission
+                                  <name> = …`, pasted verbatim.
+                                type: string
+                              name:
+                                description: Name is the permission name.
+                                type: string
+                              planningNote:
+                                description: |-
+                                  PlanningNote is one line of guidance the agent reads while DECLARING a
+                                  plan, rendered next to the handles it may declare.
+
+                                  The knowledge that shapes a good plan is toolkit-specific, so it lives
+                                  with the toolkit rather than in the runner's generic prompt. git_repo
+                                  splits its permissions across two instances — read/write key on the
+                                  checked-out copy, fetch/push on the remote URL — so a phase declaring
+                                  `write` without `read` can change files it cannot open, and the first
+                                  read interrupts the human with an amendment the plan should have carried
+                                  from the start.
+
+                                  It shapes what the agent DECLARES, never what anything grants: a note is
+                                  prose the model reads at plan time, and no authorization decision reads
+                                  it. A phase that ignores its guidance still gets the gate it earned.
+                                maxLength: 300
+                                type: string
+                              title:
+                                description: |-
+                                  Title is the phrase a human reads on an approval card instead of the
+                                  permission's handle. `perm:push:git_repo` is a WIRE FORMAT; asking
+                                  somebody to decide on it makes the decision slower and worse exactly
+                                  where care matters most.
+
+                                  Declared here because this is where the permission itself is declared, so
+                                  one declaration serves every channel and the CLI. Absent is fine and
+                                  common: the card detokenizes the handle instead, which shows no plumbing
+                                  and invents no English.
+                                maxLength: 120
+                                type: string
+                            required:
+                            - expr
+                            - name
+                            type: object
+                          type: array
+                        relations:
+                          description: Relations are the resource's relations, emitted
+                            verbatim.
+                          items:
+                            description: SpiceDBRelation is one relation on a resource.
+                            properties:
+                              name:
+                                description: Name is the relation name as it appears
+                                  in the composed schema.
+                                type: string
+                              subjectType:
+                                description: |-
+                                  SubjectType must be a bare resource-type name (e.g. "user",
+                                  "hubspot_owner") declared in this same SpiceDBSchema or the
+                                  implicit "user" type. Wildcards ("user:*") are expressed via
+                                  the separate Wildcard field. Subject-relation forms
+                                  ("team#member") are NOT representable. Exactly one
+                                  SubjectType per Relation — SpiceDB unions like
+                                  `relation viewer: user | team#member` cannot be modeled.
+                                type: string
+                              wildcard:
+                                description: |-
+                                  Wildcard, when true, makes the relation accept ANY subject
+                                  of SubjectType — emitted as `relation <name>: <subjectType>:*`
+                                  in the composed schema. Use sparingly: a wildcard relation
+                                  effectively grants the underlying-resource permission to
+                                  every subject of that type, so any per-call gating must come
+                                  from a different layer (e.g. `stateImpact: external` on the
+                                  tool, which routes every call through the approval flow
+                                  regardless of the SpiceDB Check result).
+                                type: boolean
+                            required:
+                            - name
+                            - subjectType
+                            type: object
+                          type: array
+                        standing:
+                          description: |-
+                            Standing declares whether SpiceDB is AUTHORITATIVE for this resource type —
+                            that is, whether an approver can be expected to already hold a permission on
+                            an instance of it. REQUIRED, with no default.
+
+                              - required      SpiceDB governs who may approve. The approver pool is
+                                              ApproverPermission on the named instance, and an EMPTY pool
+                                              is a final refusal — nobody can approve what nobody governs.
+                              - session-only  No local permission governs approval for this type, so the
+                                              session's own approvers decide and their decision IS the
+                                              authority. Everything downstream is unchanged: the grant is
+                                              still written, still expiring, still session-scoped and
+                                              revocable, and the tool-call Check still runs.
+
+                            There is deliberately NO default. A default is a hole you open by omission:
+                            defaulting to session-only silently widens who may approve a type somebody
+                            forgot to classify, and defaulting to required makes a forge-governed type
+                            permanently unbindable because nothing writes a SpiceDB tuple for every git
+                            remote. Neither failure announces itself, so the author states the answer.
+                            Same reasoning as AP_CLUSTER_KIND, which also refuses to default.
+
+                            Choosing is a question about the RESOURCE, not about convenience: does a
+                            permission on this instance already say who may speak for it? A CRM company
+                            with seeded owner tuples: yes, `required`. A git remote whose permissions
+                            live at the forge: no, `session-only`.
+
+                            A cluster or namespace admin can force any type to `required` with
+                            SettingsLimits.RequireStandingFor, which no fragment may widen past.
+                          enum:
+                          - session-only
+                          - required
+                          type: string
+                      required:
+                      - name
+                      - standing
+                      type: object
+                    type: array
+                type: object
+            type: object
+            x-kubernetes-validations:
+            - message: spec must declare at least one of spicedbSchema.resources or
+                relationships
+              rule: (has(self.spicedbSchema) && has(self.spicedbSchema.resources)
+                && size(self.spicedbSchema.resources) > 0) || (has(self.relationships)
+                && size(self.relationships) > 0)
+          status:
+            properties:
+              conditions:
+                description: Conditions carries Valid, SchemaIncluded and RelationshipsApplied.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  reflects.
+                format: int64
+                type: integer
+              observedRelationships:
+                description: |-
+                  ObservedRelationships is the count of tuples in spec.relationships
+                  that the controller successfully TOUCHed on the last reconcile.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

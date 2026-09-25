@@ -1,0 +1,33 @@
+# AgentIdentity for the centerdot-companies fixture agent.
+#
+# Single static credential named centerdot-mcp-bearer, referenced by
+# 02-mcpserver.yaml spec.auth.credential so the broker resolves it into
+# an Authorization header at runner startup. The fake MCP server in the
+# e2e harness ignores the header value entirely; the token is cosmetic.
+# We use a static credential (not oauth) to avoid the refresh
+# controller's TokenEndpoint requirements; no `oap agent setup-identity`
+# invocation is needed for this fixture.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: centerdot-mcp-token
+  namespace: default
+type: Opaque
+stringData:
+  access_token: "unused-by-the-fake-mcp-server"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: centerdot-identity
+  namespace: default
+spec:
+  description: "Centerdot-companies e2e fixture: static MCP bearer token."
+  credentials:
+    - name: centerdot-mcp-bearer
+      type: static
+      static:
+        secretRef:
+          name: centerdot-mcp-token
+          key: access_token

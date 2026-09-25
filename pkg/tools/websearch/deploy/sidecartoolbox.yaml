@@ -1,0 +1,125 @@
+# SidecarToolbox/websearchd: the platform's client-dispatched web search and
+# fetch primitive.
+#
+# This is a FLAT declaration — sidecartoolbox.Kind.ValidateFile (and the
+# MatchFlat-based `oap tools validate` dispatch) unmarshal a file like this
+# one directly into SidecarToolboxSpec, no apiVersion/kind/metadata/spec
+# wrapper, exactly like pkg/tools/workshopmcp/deploy/sidecartoolbox.yaml.
+# Whatever wires this onto a real cluster (a future task) wraps it into a
+# real CR at that point; this file is the single declaration both that
+# wiring and this package's own tests read.
+#
+# This is the ONE shipped copy of this declaration (CLAUDE.md's plan-8c
+# lesson: the workshop toolbox now exists in four hand-maintained copies
+# because each consumer added its own). Anything ELSE that needs this
+# toolset must reference THIS file, not transcribe it; if a second copy is
+# ever unavoidable, it must be added to a comparison table in the same
+# commit that adds it.
+#
+# isolation: isolated (plan 0a) is load-bearing, not decorative: it is what
+# buys this sidecar its own per-session pod, its own NetworkPolicy (separate
+# from the runner's), and — the property the whole design turns on — keeps
+# WEBSEARCH_API_KEY out of the runner's own container. Without it, a
+# SidecarToolbox with no secretInputs runs IN the runner pod by default (see
+# SidecarToolboxSpec.Isolation's doc comment).
+#
+# upstreamAuth names a real AgentIdentity-resolved credential (unlike the
+# workshop sidecar's "none" sentinel): ap-websearchd's own main.go refuses to
+# start without WEBSEARCH_API_KEY (internal/cmd/websearchd/main.go's
+# loadFromEnv), so the per-session Secret this drives really is load-bearing,
+# not advisory.
+#
+# Both tools below declare stateImpact: passthrough, not readonly/readwrite/
+# external, and that is a DELIBERATE choice made by reading the actual gate
+# before picking (per this task's own brief):
+#
+#   - pkg/authz/spicedb/toolcheck/check_tool_call.go's check() denies
+#     OUTRIGHT ("stateImpact requires a check but none was supplied")
+#     whenever StateImpact.CheckRequired() is true (readonly/readwrite/
+#     external) and Check is nil — the exact plan-8c workshop outage
+#     (13 of 21 tools hard-denied, no approval card, no path through).
+#     Neither search nor fetch has a per-call SpiceDB resource to check
+#     against (there is no "resource" for an arbitrary query string or URL),
+#     so declaring readonly/readwrite here would repeat that outage.
+#   - external is check-less-reachable (checkExternalSlotGrant denies to
+#     "needs approval" when Check is nil, which routes to a human on EVERY
+#     call — the workshop's own apply/delete/watch_test precedent), but that
+#     is the WRONG cost here: spec R3 keeps the URL space open by default
+#     specifically so this primitive does not need a human in the loop for
+#     an ordinary search. An external-with-no-check search tool would make
+#     "search the web" as expensive as "delete this resource", which is not
+#     what the design asks for.
+#   - passthrough's own doc comment is exactly this shape: "tool touches
+#     state but doesn't map to a SpiceDB resource. No Check today; future
+#     provenance treats result as tainted (we can't say who can view what
+#     came back)." That is a precise description of a web search/fetch: it
+#     reaches real external state (the open web), has no SpiceDB resource id
+#     to check, and its result IS meant to carry the untrusted-provenance
+#     taint below. authz.Passthrough allows unconditionally
+#     (case authz.Stateless, authz.Passthrough in check()), so both tools
+#     dispatch with no approval and no check — reachable by construction,
+#     the same precedent sync_workspace and 18 of the workshop's own 21
+#     tools already use.
+#
+# trust.returnMetadata.source: untrustedPublic on BOTH tools is the per-datum
+# taint declaration (design doc §6): search result snippets and fetched page
+# text are both the least ambiguous untrusted source this platform has (SEO-
+# poisoned snippets, a hostile page's own body), and a SidecarToolbox can
+# carry this SEP-1913 declaration where an in-runner meta tool cannot — the
+# deciding argument (beyond the pipeline question) for why this ships as a
+# sidecar and not a capability-native tool. See
+# pkg/agent/runner/leakagewiring.UntrustedSourceEnum.
+name: websearchd
+version: "1"
+intent: >-
+  Client-dispatched web search and fetch. search returns titles/URLs/
+  snippets only — no page bodies. fetch reads a single https URL, reduces
+  HTML to plain text, and caps the result to the prompt-injection
+  classifier's own inspect window (pkg/authz/contentguard.MaxInspectBytes);
+  a larger page is spilled to an artifact and returned as a bounded excerpt
+  plus a handle. Runs isolated so its search credential never enters the
+  runner's own container.
+
+source:
+  image: ap-websearchd:dev
+
+sandbox:
+  class: websearch-sandbox
+
+isolation: isolated
+
+transport:
+  port: 8080
+  path: /mcp
+  healthcheck:
+    path: /healthz
+    timeoutSeconds: 30
+
+upstreamAuth:
+  provider: bravesearch
+  envVar: WEBSEARCH_API_KEY
+
+tools:
+  - name: search
+    intent: "Search the web for results matching a query. Returns titles, URLs, and short snippets only — no page bodies."
+    args:
+      allowedFields: ["query", "limit"]
+    effects:
+      readOnly: true
+    trust:
+      returnMetadata:
+        source: untrustedPublic
+    permission:
+      stateImpact: passthrough
+
+  - name: fetch
+    intent: "Fetch the text content of a single https URL. HTML is reduced to plain text before it is measured against the size cap; a page over the cap is spilled to an artifact and returned as a bounded excerpt plus a handle."
+    args:
+      allowedFields: ["url"]
+    effects:
+      readOnly: true
+    trust:
+      returnMetadata:
+        source: untrustedPublic
+    permission:
+      stateImpact: passthrough

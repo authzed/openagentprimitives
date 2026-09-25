@@ -1,0 +1,29 @@
+Spec: gh-readonly
+Intent: GitHub read-only for my repo
+Source: llm:gemini-3-flash-preview  (2026-04-24T15:00:00Z)
+
+WHAT YOU CAN DO:
+  ✓ Look at a single pull request you name               (gh pr view)
+
+CONSTRAINTS:
+  • You named this specific repo — only it is allowed
+
+HARD STOPS:
+  ✗ You said 'read-only', so nothing irreversible
+  ✗ Read-only intent — no writes to network or disk
+  ✗ Read-only intent — never persist new credentials
+
+BOUNDS:
+  • Only GitHub's own hosts
+
+NETWORK: only api.github.com, github.com
+CREDS:   uses GITHUB_TOKEN; never writes/changes it
+
+⚠  WARNINGS:
+  • search subcommands are not allowed at all here — add them if you need them
+
+❌  I COULDN'T REPRESENT:
+  • "only during business hours" — spec schema does not support time-based constraints
+
+DELIBERATELY EXCLUDED:
+  • pr comment — writes a comment — excluded from read-only

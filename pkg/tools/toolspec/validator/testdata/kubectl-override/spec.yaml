@@ -1,0 +1,26 @@
+name: kubectl-override-demo
+version: "1"
+
+intent: |
+  Read-only in production namespaces, with an explicit dev-namespace carve-out
+  that lifts the destructive/writes deny for kubectl apply.
+
+toolkit:
+  name: kubectl
+  revision: "2026-04-24"
+
+allowSubcommands:
+  - get
+  - describe
+  - logs
+  - apply
+
+deny:
+  effects:
+    destructive: true
+    writes: [network, filesystem]
+
+exceptions:
+  - overrides: [deny.effects.destructive, deny.effects.writes]
+    when: 'call.flag("namespace") == "dev-sandbox"'
+    message: "apply allowed in dev-sandbox namespace"

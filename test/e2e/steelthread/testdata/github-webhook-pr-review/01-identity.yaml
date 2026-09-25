@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: demo-reviewbot-gh-creds
+  namespace: default
+stringData:
+  app-id: fixture-placeholder-app-id
+  installation-id: fixture-placeholder-installation-id
+  private-key: fixture-placeholder-private-key
+type: Opaque
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: demo-reviewbot-anthropic
+  namespace: default
+stringData:
+  api-key: sk-ant-api-fixtureplaceholder
+type: Opaque
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: demo-reviewbot-id
+  namespace: default
+spec:
+  credentials:
+  - githubApp:
+      secretRef:
+        name: demo-reviewbot-gh-creds
+    name: github-app
+    type: githubApp
+  - name: anthropic-api-key
+    static:
+      secretRef:
+        key: api-key
+        name: demo-reviewbot-anthropic
+    type: static
+  description: 'reviewbot''s agent-owned credentials: a minted GitHub App installation
+    token and a static Anthropic API key. Nothing here is linked or rotated by a human.'

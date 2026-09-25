@@ -1,0 +1,4 @@
+oapFormatVersion: "1"
+agent:
+  version: "2.3.0"
+  logo: assets/logo.svg

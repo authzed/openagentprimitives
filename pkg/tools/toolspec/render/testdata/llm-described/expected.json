@@ -1,0 +1,31 @@
+{
+  "spec": "gh-readonly",
+  "intent": "GitHub read-only for my repo",
+  "source": "llm:gemini-3-flash-preview",
+  "generatedAt": "2026-04-24T15:00:00Z",
+  "allows": [
+    {"subcommand": "gh pr view", "description": "Look at a single pull request you name"}
+  ],
+  "constraints": [
+    {"message": "You named this specific repo — only it is allowed"}
+  ],
+  "hardStops": [
+    {"path": "deny.effects.destructive", "description": "You said 'read-only', so nothing irreversible"},
+    {"path": "deny.effects.writes",      "description": "Read-only intent — no writes to network or disk"},
+    {"path": "deny.effects.creds.writes", "description": "Read-only intent — never persist new credentials"}
+  ],
+  "bounds": [
+    {"path": "allow.network.destinations", "description": "Only GitHub's own hosts"}
+  ],
+  "network": "only api.github.com, github.com",
+  "creds": "uses GITHUB_TOKEN; never writes/changes it",
+  "warnings": [
+    "search subcommands are not allowed at all here — add them if you need them"
+  ],
+  "unmatched": [
+    {"request": "only during business hours", "reason": "spec schema does not support time-based constraints"}
+  ],
+  "excluded": [
+    {"name": "pr comment", "reason": "writes a comment — excluded from read-only"}
+  ]
+}

@@ -1,0 +1,103 @@
+# sre_pinning scenario fixtures.
+#
+# A channel-attached AgentClass with NO tool bundles and NO MCP servers. The
+# fake SRE producer tool (emits a secretOutput AND carries a writesRelationships
+# pin block + write-once fast-fail) is injected in-process via
+# h.SetSREKubeconfigProducer (the InProcessRunnerFactory's ExtraTools seam),
+# because the SpiceboxToolspec CRD does not yet mirror the toolspec library's
+# secretOutput field — so the CRD-driven sandbox synthesis path can't carry it.
+# The runner-side capture path (applySecretOutput → store → operator
+# /secret-output publish → status → Content scrub) and the pin path
+# (relwrites.Run → SpiceDBWriter) are identical to a real sandbox producer's.
+#
+# authz.toolCalls.mode=disabled keeps the dispatcher from running a Check on the
+# injected tool (it also declares StateImpact=passthrough, so no Check is
+# required regardless).
+#
+# The SpiceDBBootstrap seeds cluster#debugger tuples. Its real job here is a
+# barrier: processing it forces the guardian to compose+write the base platform
+# schema (which defines `cluster` with its debug_target/pinned relations) into
+# the harness SpiceDB at startup, and WaitForSpiceDBBootstrap blocks until it is
+# applied — so the producer's pin WriteRelationships can never race a not-yet-
+# written `cluster` definition. The debugger relation is on a DIFFERENT relation
+# than pinned(=debug_target), so it does not accidentally satisfy the pin Check.
+---
+# Placeholder Anthropic API key. provider=anthropic is accepted by the
+# AgentClass controller; the runtime LLM is the in-process ScriptedLLM.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Placeholder Channel credentials. The fake kind ignores them but
+# Channel.spec.credentialsRef is mandatory.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sre-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-sre-pinning
+  namespace: default
+spec:
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a test SRE agent that fetches cluster kubeconfigs"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+---
+# Channel for the channelsd pipeline to find. kind=fake is the in-process
+# transport the harness drives via SendUserMessage.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-sre-pinning-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-sre-pinning
+  credentialsRef:
+    secretName: sre-fake-creds
+  fake:
+    echo: false
+---
+# Forces a startup base-schema write (which defines `cluster`) + a barrier via
+# WaitForSpiceDBBootstrap. Relationships-only (no schema fragment); `cluster` is
+# a base-schema definition, not a fragment.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: sre-pinning-clusters
+  namespace: default
+spec:
+  # A plain (non-email) user id: SpiceDB object ids forbid '@' and '.', and we
+  # never Check the debugger relation here, so no email canonicalization is
+  # needed — the tuples exist only to force+await the base-schema write.
+  relationships:
+    - resource: { type: cluster, id: "fake-cluster-1" }
+      relation: debugger
+      subject:  { type: user, id: "sre-debugger" }
+    - resource: { type: cluster, id: "fake-cluster-2" }
+      relation: debugger
+      subject:  { type: user, id: "sre-debugger" }

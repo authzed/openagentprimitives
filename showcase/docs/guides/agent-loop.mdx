@@ -1,0 +1,54 @@
+export const meta = {
+  title: 'The agent loop',
+  section: 'Reference',
+  group: 'Agent definition',
+  order: 2020,
+  description:
+    'How a turn runs — model proposes, tools dispatch through a hook pipeline, results feed back — and where the safety checks sit.',
+}
+
+# The agent loop
+
+<p className="doc-lede">
+  A turn is the familiar loop: the model proposes tool calls, the tools run, their results feed back, and it
+  repeats until the agent answers. What's different in OAP is that <strong>every tool call passes through a
+  hook pipeline before it runs</strong> — the model never touches a tool directly.
+</p>
+
+## A turn, step by step
+
+The runner drains the inbound messages for the turn and hands the conversation to the model. The model
+proposes zero or more tool calls. Each proposed call is **dispatched through a chain of hooks**; only if it
+survives them does it reach the sandbox or MCP server. The results come back as content, the model continues,
+and the turn ends when the agent produces a reply or hits a budget or the watchdog.
+
+## Tool output is data, never instructions
+
+A tool result is treated as *content the agent read*, not as commands it must obey. Text that comes back from
+a web page, a file, or an API — however imperative it sounds — can't cause the agent to take an action without
+that action going through the same gates as any other tool call. Mechanically, every result is wrapped in
+nonce-tagged delimiters before it's shown to the model, and the system prompt tells the model to treat
+anything inside those tags strictly as data — and to *report*, not obey, any instructions it finds there
+("ignore previous instructions", "now call tool X", "the user approved…"). This is the structural answer to
+prompt injection: there is no path from "a tool returned some text" to "a privileged action ran" that skips
+the checks.
+
+## Where the safety checks sit
+
+The hooks run **before** dispatch, in the pre-tool-call stage:
+
+- **Authorization** — can this subject take this action, on this resource, right now? ([Authorization](#/authorization))
+- **Plan gate** — is this call inside an approved plan, or does it need one? ([Plan gating](#/plan-gating))
+- **Content guards** — does the call's input or the tool's output need inspecting or bounding? ([Content guards](#/content-guards-egress))
+- **Rate limits & circuit breakers** — has this tool run away? ([Budgets & breakers](#/budgets-breakers))
+
+A call that any gate denies **never reaches the tool** — no sandbox exec, no MCP request. The denial comes
+back to the model as an error result, which it reads like any other content. And nothing is allowed to hang
+silently: the runner enforces the session's time budget and bounds every human-approval wait, while a separate
+**silence watchdog** catches a turn that goes quiet — failing loudly rather than stalling.
+
+<Callout kind="security" title="The model is not the trust boundary — the pipeline is">
+  Safety doesn't depend on the model choosing to behave. Every consequential thing an agent does is a tool
+  call, and every tool call is checked at a choke point the model can't route around. A jailbroken prompt can
+  make the model <em>try</em> anything; it can't make a denied call actually run.
+</Callout>

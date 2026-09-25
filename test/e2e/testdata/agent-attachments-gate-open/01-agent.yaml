@@ -1,0 +1,79 @@
+# AgentClass + Channel for the Task-7 inbound-attachments e2e fixture,
+# gate-OPEN variant: grants ONLY the "attachments" capability (channelsd-side
+# ingestion gate AND, since the C1 fix round, the runner-side fetch_artifact
+# tool — see pkg/agent/tool/meta/capability/attachments.go), and the Channel
+# opts into attachment ingestion. Deliberately does NOT grant "artifacts":
+# that capability injects the four PRODUCTION artifact_* tools
+# (create/await/list/publish an ArtifactRender), an unrelated and much
+# broader grant this fixture must not need — proving that in the same breath
+# it proves the documented "grant attachments, get fetch_artifact" path
+# actually works. Pairs with agent-attachments-gate-closed, whose AgentClass
+# grants neither — the two fixtures are deliberately near-identical so the
+# only material difference between the open/closed e2e scenarios is the
+# capability grant itself, not incidental fixture drift.
+#
+# AgentClass uses model.provider="test", which the production operator
+# REFUSES with Valid=False reason=TestProviderNotAllowed. Only the e2e
+# harness's reconciler (AllowTestProvider=true) admits it — see
+# test/e2e/harness.go's startManager.
+#
+# Deliberately toolless beyond the meta-tool capabilities: no mcpServers, no
+# agentIdentity, no boundEntities.
+#
+# Channel kind=slack (role: both) is the REAL slack transport, backed by the
+# e2e harness's shared fakeslack.Client (see slack.InstallTestTransport in
+# test/e2e/harness.go) — same wiring agent-slack-dm uses, plus files.info now
+# routes through the fake too (pkg/channels/channelkinds/slack/attachments.go's
+# attachmentInfoClientFactory).
+#
+# No SpiceDBBootstrap is needed here: the session's agentsession#owner is
+# resolved from the channel-provided starting user (DM sender) at
+# session-creation time, and agentsession#interact = owner + participant -
+# denied — so the sending user's own message always passes CheckInteract
+# without any extra relationship seeding.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: attach-open-agent
+  namespace: default
+spec:
+  displayName: AttachOpenBot
+  description: "E2E fixture agent for the gate-OPEN inbound-attachments scenario. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: attach-open-placeholder
+      key: api-key
+  capabilities:
+    attachments: {}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      When a message tells you a file was attached and read, use
+      fetch_artifact to read its extracted text, then summarize it
+      back to the user via respond_to_user.
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: attach-open-channel
+  namespace: default
+spec:
+  kind: slack
+  role: both
+  agentClass: attach-open-agent
+  sessionScope: auto
+  credentialsRef:
+    secretName: attach-open-creds
+  attachments:
+    enabled: true
+  slack:
+    mode: socket

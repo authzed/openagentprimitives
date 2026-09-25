@@ -1,0 +1,36 @@
+# examples/codebot/oap.yaml
+#
+# The .oap manifest for codebot: a userPassthrough coding agent that clones a
+# repo, edits with the user's own Claude Code, commits AS the user, and opens a
+# PR. It carries NO secrets — the user links their GitHub PAT and Claude Code
+# token at session start via identityd, and the orchestrator LLM uses the
+# cluster default-model token. The only install choice is which language
+# toolchains the sandbox gets.
+#
+#   oap agent lint    examples/codebot
+#   oap agent install examples/codebot --namespace default
+oapFormatVersion: "1"
+agent:
+  version: "1.0.0"
+  logo: assets/logo.svg
+compat:
+  minApVersion: "0.9.0"
+  crdApiVersion: agentprimitives.authzed.com/v1alpha1
+# No requires.secrets: userPassthrough links github-token + anthropic-oauth at
+# session start via identityd; the orchestrator uses the cluster default model.
+questions:
+  - name: toolchains
+    type: resourceList
+    prompt: "Which language toolchains should Claude Code have?"
+    description: >-
+      Composed onto the codelike sandbox so Claude Code can actually build/vet/test
+      the code it edits (go build, pnpm install, tsc) instead of producing text that
+      merely looks like it compiles. Both ship with `oap install`; pick none to keep
+      the sandbox minimal.
+    enum: [go, node]
+    default: [go, node]
+    binding:
+      # codelike-bundle statically composes [claude]; the `[]` append marker
+      # UNIONS this language selection onto it instead of replacing it, so claude
+      # (the agent's own runtime) always survives the selection.
+      - target: "SpiceboxClass/codelike-bundle#spec.toolchains[]"

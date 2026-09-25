@@ -1,0 +1,16 @@
+{
+  "name": "@ap/agentui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "peerDependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "dependencies": {
+    "@ap/design": "workspace:*",
+    "recharts": "^2.15.4"
+  }
+}

@@ -1,0 +1,44 @@
+# SpiceDBBootstrap for the ledger-EGRESS fixture.
+#
+# ledger_entry / ledger_board definitions come from the MCPServer fragment in
+# 02-mcpserver.yaml, so this CR is relationships-only.
+#
+# entry-100's audience is exactly the session user (auditor-1). board-solo is
+# visible only to auditor-1, so posting entry-100 to it does NOT leak — its whole
+# audience already reads the datum. That is what makes the allow scenario resolve
+# PER-DATUM rather than on the coarse floor. auditor-9 is seeded as a real subject
+# elsewhere so an exclusion assertion against them is not trivially true.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: ledger-egress-seed
+  namespace: default
+spec:
+  relationships:
+    - resource: { type: ledger_entry, id: "entry-100" }
+      relation: viewer
+      subject:  { type: user, id: "auditor-1@example.com", canonicalize: true }
+    # entry-100's OWNER, who an info_leakage approval on this datum routes to.
+    # The leak-path bundle auto-approves as this subject.
+    - resource: { type: ledger_entry, id: "entry-100" }
+      relation: owner
+      subject:  { type: user, id: "auditor-1@example.com", canonicalize: true }
+    # A second entry auditor-9 can see, so auditor-9 is a real subject with
+    # standing somewhere rather than a name resolving to nothing.
+    - resource: { type: ledger_entry, id: "entry-900" }
+      relation: viewer
+      subject:  { type: user, id: "auditor-9@example.com", canonicalize: true }
+    # board-solo: only the session user can view it (poster => view via
+    # `view = viewer + poster`). auditor-1 is also the poster, so it may write.
+    - resource: { type: ledger_board, id: "board-solo" }
+      relation: poster
+      subject:  { type: user, id: "auditor-1@example.com", canonicalize: true }
+    # board-team: auditor-1 posts, auditor-9 also views. Posting entry-100
+    # (readable only by auditor-1) here LEAKS — auditor-9 reads the board but not
+    # the datum — which is the per-datum leak the leak-path bundle exercises.
+    - resource: { type: ledger_board, id: "board-team" }
+      relation: poster
+      subject:  { type: user, id: "auditor-1@example.com", canonicalize: true }
+    - resource: { type: ledger_board, id: "board-team" }
+      relation: viewer
+      subject:  { type: user, id: "auditor-9@example.com", canonicalize: true }

@@ -1,0 +1,31 @@
+# cert-manager HTTP-01 solver ingress: on the cert-manager / Let's Encrypt TLS
+# path, cert-manager spawns a short-lived cm-acme-http-solver pod in this
+# namespace and routes the ACME challenge to it through the Gateway. Under the
+# namespace-wide default-deny that solver pod is unreachable, so the HTTP-01
+# challenge fails and the real Let's Encrypt cert never issues — masked because
+# applyWebdCertificate serves a temporary self-signed cert meanwhile (the LB
+# programs and users just hit a TLS-trust error that never clears). Allow the
+# Gateway data path to reach the solver on its serving port (8089, cert-manager's
+# acmesolver default): the Envoy proxy (envoy-gateway-system — the non-GKE path)
+# OR the GKE LB health-check/proxy ranges (only relevant if cert-manager is forced
+# on GKE via --tls-issuer; GKE's default is Google-managed certs, which use no
+# solver). NO-OP whenever no solver pod exists (between challenges, or on GKE).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-acme-solver
+spec:
+  podSelector:
+    matchLabels:
+      acme.cert-manager.io/http01-solver: "true"
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+        - ipBlock: { cidr: 35.191.0.0/16 }
+        - ipBlock: { cidr: 130.211.0.0/22 }
+      ports:
+        - { protocol: TCP, port: 8089 }

@@ -1,0 +1,73 @@
+{
+  "name": "completion-requirement-refuses-undelivered-artifact",
+  "description": "The observed defect, scripted. The agent renders its report, replies 'full report attached below' with NO attached field, and calls agent_work_complete. The declared artifact-delivered requirement refuses, naming the render nobody delivered, and the session does not end. The agent then finishes with a bypass_reason — which succeeds AND posts a notice telling the user what was skipped, because a bypass nobody sees would be an off switch.",
+
+  "agentDir": "testdata/agent-reportbot",
+  "agentClass": "reportbot",
+
+  "userTurns": ["review the pull request and send me the report"],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "review the pull request",
+        "toolOffered": "artifact_prepare"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "artifact_prepare",
+            "args": {
+              "kind": "html",
+              "payload": "<h1>Review</h1><p>Two findings.</p>",
+              "filename": "review.html",
+              "name": "PR review",
+              "description": "The full review report."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "artifact_prepare",
+        "lastToolResultIsError": false
+      },
+      "reply": [{ "text": "Done — full report attached below." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": { "summary": "Delivered artifact and summary to user" }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "agent_work_complete",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "artifact-delivered"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Delivered summary; report render could not be attached",
+              "bypass_reason": "I could not attach the rendered report on this surface. The two findings are in the message above, so this is a degraded review rather than a failed one."
+            }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["full report attached below"],
+    "noticesPublished": ["completion_requirement_bypassed"]
+  }
+}

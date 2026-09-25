@@ -1,0 +1,26 @@
+{
+  "action": "opened",
+  "number": 7,
+  "pull_request": {
+    "title": "Add a caching layer",
+    "html_url": "https://github.example.invalid/demo-org/demo-repo/pull/7",
+    "draft": false,
+    "user": {
+      "login": "demo-outside-contributor"
+    },
+    "head": {
+      "sha": "feed1234feed1234feed1234feed1234feed1234",
+      "repo": {
+        "fork": true,
+        "full_name": "demo-outside-contributor/demo-repo"
+      }
+    },
+    "base": {
+      "sha": "ecc9b6ebcd0d6ef275121a55557a3e7283e59d14"
+    },
+    "changed_files": 3
+  },
+  "repository": {
+    "full_name": "demo-org/demo-repo"
+  }
+}

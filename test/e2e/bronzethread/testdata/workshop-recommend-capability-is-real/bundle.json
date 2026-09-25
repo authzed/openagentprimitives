@@ -1,0 +1,87 @@
+{
+  "name": "workshop-recommend-capability-is-real",
+  "description": "Plan-8c Task 4's own evidence: proves the harness's real workshop MCP server (test/e2e/workshop_mcp.go's mountWorkshopMCP) can be late-bound to its ACTUAL builder session, and that the Workshop CR its handoff tools key on is a REAL object -- not fixture data, not a stand-in the test hand-creates.\n\nAt mount time WorkshopIdentity.SessionNamespace/SessionName are frozen to the harness namespace itself (see mountWorkshopMCP's doc), because no AgentSession exists yet. Seven tools (test_tool, watch_test, test_sessions, request_credential, request_install, recommend_capability, export_draft's registry read) key a Workshop-CR or parent-session lookup on those two fields, so all seven looked for an object that could never exist. (test_link is not among them: it Gets its candidate AgentClass by Identity.Namespace alone, which is frozen at mount time and needs no bind.) test/e2e/threadrun's driver now calls Harness.BindWorkshopSession once a session is confirmed to exist (bindWorkshopSessionOnce), which is why this bundle scripts TWO user turns: the first lets the driver synchronize on the real session before the second turn's recommend_capability call needs it bound.\n\nThe Workshop CR recommend_capability writes to is ITSELF real: this fixture's ClusterAgentSettings sanctions (namespace: default, name: workshop-demo, sidecarToolbox: workshop) in spec.limits.builderClasses, which is exactly what pkg/controllers/agentsession's REAL ensureWorkshop hook (already wired in this harness) requires before it will create a Workshop CR for a session at all. Neither of the other two workshop bundles ships that sanction, so ensureWorkshop no-oped for them -- invisible only because neither called a tool that needed the CR to exist.\n\nThe scripted transcript: turn 1 is a no-op check-in (no workshop tool call at all) whose only job is to force a full round trip so the driver can bind the session before turn 2 -- including the loop's own follow-up call after respond_to_user resolves, answered with a bare endTurn so turn 1 closes without ending the SESSION (agent_work_complete would end that, and turn 2 needs the same session still running). Turn 2 calls workshop_recommend_capability with a summary and artifactRef; the FOLLOWING llm step's `expect.lastToolResultContains` pins the real success shape (`\"status\":\"recommended\"`) that only a real Get-then-Update against the session's own Workshop CR can produce -- a lookup keyed on the pre-Task-4 placeholder identity would instead return a NotFound tool error, which this assertion would catch by failing with the actual (wrong) result text.\n\nWHAT THIS DOES NOT PROVE: the production Workshop-Ready->sidecar-identity path, which does not exist yet -- not merely unwired in this harness. RunModeFor (pkg/controllers/agentsession/sidecars.go) returns RunModeSeparatePod -- the only run mode that ever gets a minted WorkshopIdentity via BuildSidecarPod's identity branch -- only when a SidecarToolbox declares spec.secretInputs, and the shipped workshop toolbox (pkg/tools/workshopmcp/deploy/sidecartoolbox.yaml, copied verbatim into this bundle's fixture) declares none. So for THIS toolbox that path never runs anywhere: this fixture's workshop toolbox runs IN-POD, same as every other sidecar bundle in this corpus, and the Workshop CR this bundle proves real sits with an empty status forever. recommend_capability never reads status, only spec, so that gap does not block what this bundle exercises. This bundle also does NOT attempt watch_test or test_sessions, which key the same late-bound session ref: those two, plus test_link, have their own bundle (workshop-try-it-link-and-watch).",
+  "agentDir": "testdata/workshop-recommend-capability-is-real/manifests",
+  "agentClass": "workshop-demo",
+  "userTurns": [
+    "Before you dig in, just check in with me so I know you're listening.",
+    "There's no toolkit anywhere in this cluster for signing PDFs, and this build needs one. Recommend that capability to the platform team, then wrap up for now."
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "check in with me"
+      },
+      "reply": [
+        {
+          "text": "Ready and listening -- go ahead whenever you are."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "endTurn": true
+        }
+      ]
+    },
+    {
+      "expect": {
+        "userTextContains": "no toolkit anywhere"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "workshop_recommend_capability",
+            "args": {
+              "operation_id": "op-1",
+              "_reason": "no existing toolkit signs PDFs; recording the gap for the platform team to consider",
+              "args": {
+                "summary": "No toolkit exists for signing PDFs; this build needed one and the cluster's catalog has nothing that fits.",
+                "artifactRef": "no-pdf-signing-toolkit-found"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "workshop_recommend_capability",
+        "lastToolResultContains": "\"status\":\"recommended\""
+      },
+      "reply": [
+        {
+          "text": "Recorded the capability gap for the platform team to review."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "recommended a PDF-signing capability gap to the platform team"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "Ready and listening",
+      "Recorded the capability gap"
+    ],
+    "toolsCalled": [
+      "workshop_recommend_capability"
+    ]
+  }
+}

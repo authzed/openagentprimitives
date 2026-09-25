@@ -1,0 +1,158 @@
+# Fixture agent for the EXTERNAL-stateImpact + NO-declared-slot bronzethread
+# scenario.
+#
+# This is the other half of plangate-external-covered-by-approved-slot. There,
+# the class declares the resource type as an authz slot, so approving the
+# plan-gate card writes a grant and the external calls that follow need no card
+# of their own. Here the class declares NO slots at all — so no grant relation
+# exists in the composed schema, nothing could ever have been approved against
+# this instance, and every external call must stop and ask a human.
+#
+# Two properties are under test, and they used to live in one bundle:
+#
+#  1. The check does not go looking for a grant on a type that cannot have one.
+#     ComposeSlots only writes `slot_grant_<p>` for a DECLARED slot, so asking
+#     SpiceDB about it here can only error — and an operator reading logs would
+#     see a SpiceDB failure for what is really the ordinary case of an external
+#     tool with no instance axis. It denies to human approval without querying.
+#
+#  2. The card it raises is one this type can actually approve. soloext_repo
+#     declares standing session-only, and a session-only type has NO owners by
+#     design: nobody writes an owner tuple for every remote a session might
+#     touch, which is the entire reason the standing exists. Routing the
+#     approval to the resource's owner-set therefore finds an empty pool and
+#     fails closed with "no one has standing to approve", making the tool
+#     permanently unapprovable.
+#
+# Property 2 was observed live on 2026-08-21: an approved two-phase plan cloned,
+# edited and committed, then died at its push with
+#   approval flow: no one has standing to approve tool "gitlike_git"
+#   (git_repo:https://github.com/... has no owners to route the approval to)
+# on a class whose status published git_repo standing=session-only. Every suite
+# was green at the time.
+#
+# No plan gate here: with no slots to bind and no phases to freeze, a gate would
+# add a card that has nothing to do with the claim. The ONLY approval in this
+# run is the per-call tool card, which is what makes the count assertion sharp.
+#
+# The resource type is named soloext_repo — not git_repo, and not the sibling
+# bundle's extrepo_repo — because guardian composes every MCPServer's
+# spicedbSchema into one cluster-wide schema. Colliding with the real git
+# toolkit makes guardian refuse to write any schema at all, and colliding with
+# the sibling would make the two bundles fight over one type definition.
+apiVersion: v1
+kind: Secret
+metadata: {name: soloext-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: soloext-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: soloext-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: soloext-identity, namespace: default}
+spec:
+  description: "Unslotted-external e2e fixture: static MCP bearer token."
+  credentials:
+    - name: soloext-mcp-bearer
+      type: static
+      static: {secretRef: {name: soloext-mcp-token, key: access_token}}
+---
+# Self-contained MCP fixture exposing one tool, "push", gated on
+# soloext_repo#push.
+#
+# soloext_repo declares standing session-only, and nothing in this bundle
+# writes an `owner` tuple for it. That combination is the fixture: the approval
+# has nowhere to route EXCEPT the session's own approvers.
+#
+# Note there is no AgentClass authz.slots entry for this type below, so the
+# `push` permission stays exactly as written here — ComposeSlots does not
+# rewrite it, and no slot_grant relation is ever created.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: soloext-fixture, namespace: default}
+spec:
+  name: soloext-fixture
+  version: v1
+  intent: "Self-contained git-push-shaped fixture with no instance axis."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: soloext-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: soloext_repo
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          - {name: push, expr: owner, title: "Push commits to the repository"}
+  tools:
+    - name: push
+      intent: "Push locally committed changes to a remote repository."
+      args:
+        allowedFields: [repoUrl]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: soloext_repo
+          resourceIDExpr: '"" + args.repoUrl'
+          resourceIDTransforms: [normalize_url, spicedb_escape]
+          resourceIDHint: "give the repository as a full https:// URL"
+          permission: push
+      effects:
+        readOnly: false
+        idempotent: false
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: soloext-fixture, namespace: default}
+spec:
+  displayName: SoloExtBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: soloext-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You push local changes to remote repositories. Available tools:
+        - soloext_push(repoUrl): push committed changes to the named repository
+
+      When the user asks you to push, call soloext_push with the repository
+      they named.
+  agentIdentity: soloext-identity
+  mcpServers:
+    - name: soloext
+      ref: soloext-fixture
+  # No authz stanza at all: no slots, so no instance axis and no grant
+  # relation; no planGate, so the tool card is the only approval in the run.
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: soloext-fixture-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: soloext-fixture
+  credentialsRef: {secretName: soloext-fake-creds}
+  fake: {echo: false}

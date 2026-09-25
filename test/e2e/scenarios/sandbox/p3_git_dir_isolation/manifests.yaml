@@ -1,0 +1,198 @@
+# Scenario (p3_git_dir_isolation) fixtures.
+#
+# Phase C's end-to-end isolation proof. Two bundles share a workspace PVC,
+# but only the git-like bundle's SpiceboxClass declares EnvDefaults +
+# PrivateVolumes. The pod-spec builder must:
+#
+#   - Stamp AP_PRIVATE_DIR=/var/ap-git on the gitlike bundle pod's
+#     spicebox container (class.EnvDefaults).
+#   - Mount an emptyDir at /var/ap-git on the gitlike bundle pod ONLY
+#     (class.PrivateVolumes).
+#   - Leave the codelike bundle pod free of both — proving the private
+#     volume is genuinely per-class, not session-wide.
+#   - Mount the same workspace PVC on BOTH pods (the shared mount the
+#     codelike bundle exists to demonstrate is still visible).
+#
+# AP_PRIVATE_DIR is synthetic (not GIT_DIR) to keep the assertion focused
+# on the volume-mount + env-default wiring, not on git CLI semantics. The
+# isolation invariant under test is the pod-spec, not the binary.
+#
+# Built-in `git` and `cat` toolkits cover both bundles — no SpiceboxToolkit
+# CR needed. The class tool entries match the upstream toolkit names so
+# the synthesizer resolves them; the LLM-facing tool names are
+# "gitlike_git" and "codelike_cat".
+#
+# Notes (inherited from p1_multi_bundle_pvc / p1_defaultenv):
+#   - The harness does not wire the SpiceboxToolspec controller; the test
+#     stamps each Toolspec's Valid=True after Apply.
+#   - The harness does not run a real Pod scheduler; the test stamps each
+#     bundle SpiceboxSession with PodName + ResolvedClass + Ready=True so
+#     the AgentSession reconciler clears BundlesReady and the ToolCall
+#     controller's validate() can resolve every field it reads.
+#   - authz.toolCalls.mode=disabled bypasses the Check on the built-in toolkits'
+#     "external" stateImpact (no SpiceDB grants wired in the harness).
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: isolation-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# Toolspec wrapping git's read-only `status` subcommand. The gitlike
+# bundle's tool_use targets this so its exec call lands on the gitlike
+# pod's sandbox container (where the AP_PRIVATE_DIR env + /var/ap-git
+# mount would be visible in a real pod).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: ts-gitlike
+spec:
+  name: ts-gitlike
+  version: "1"
+  toolkit:
+    name: git
+    revision: "2026-04-24"
+  allowSubcommands:
+    - status
+---
+# Toolspec wrapping cat. cat's single subcommand path is the empty path,
+# so the joined subcommand-string is "".
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: ts-codelike
+spec:
+  name: ts-codelike
+  version: "1"
+  toolkit:
+    name: cat
+    revision: "2026-04-25"
+  allowSubcommands:
+    - ""
+---
+# Gitlike class — declares EnvDefaults + PrivateVolumes. The pod builder's
+# Phase C handlers must stamp AP_PRIVATE_DIR on the container env and
+# mount the oap-git emptyDir at /var/ap-git. spec.tools[].name "git"
+# matches the Toolspec's toolkit.name so the synthesizer matches; the
+# LLM-facing tool name is "<bundle>_<class-tool>" = "gitlike_git".
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: cls-gitlike
+spec:
+  image: registry.example.com/git-toolbelt:latest
+  resources:
+    cpu: "100m"
+    memory: "64Mi"
+    ephemeralStorage: "16Mi"
+  tools:
+    - name: git
+      command: ["/usr/bin/git"]
+  toolspecs:
+    - name: ts-gitlike
+  envDefaults:
+    AP_PRIVATE_DIR: /var/ap-git
+  privateVolumes:
+    - name: ap-git
+      mountPath: /var/ap-git
+---
+# Codelike class — declares NEITHER EnvDefaults NOR PrivateVolumes. The
+# pod builder must leave AP_PRIVATE_DIR off this pod's env and skip the
+# /var/ap-git mount. Workspace PVC mount still applies (cross-bundle
+# sharing path is independent of per-bundle private state).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: cls-codelike
+spec:
+  image: registry.example.com/cat-toolbelt:latest
+  resources:
+    cpu: "100m"
+    memory: "64Mi"
+    ephemeralStorage: "16Mi"
+  tools:
+    - name: cat
+      command: ["/bin/cat"]
+  toolspecs:
+    - name: ts-codelike
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ai-test-creds
+  namespace: default
+type: Opaque
+stringData:
+  token: "unused-by-the-test-scenarios"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: ai-test
+  namespace: default
+spec:
+  description: "Identity for the p3_git_dir_isolation scenario."
+  credentials:
+    - name: git-token
+      type: static
+      static:
+        secretRef:
+          name: ai-test-creds
+          key: token
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-isolation
+  namespace: default
+spec:
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a test agent"
+  # See file header for the authz.toolCalls.mode=disabled rationale.
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  agentIdentity: ai-test
+  toolBundles:
+    - name: "gitlike"
+      class: "cls-gitlike"
+      toolspecs: ["ts-gitlike"]
+    - name: "codelike"
+      class: "cls-codelike"
+      toolspecs: ["ts-codelike"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-isolation-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-isolation
+  credentialsRef:
+    secretName: isolation-fake-creds
+  fake:
+    echo: false

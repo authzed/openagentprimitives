@@ -1,0 +1,149 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spicebox-webd
+# Cluster-wide reads/writes for the passthrough-identity flow (identityd's
+# routes, hosted in-process by webd).
+rules:
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["useridentities"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["agentsessions"]
+    verbs: ["get"]
+  # The transcript data plane (pkg/web/webui/chat) serves a session in whatever
+  # namespace the viewer holds agentsession#interact in, so it must be able to
+  # READ the Channel bound to that session anywhere in the cluster:
+  # Registry.rehydrate Gets it to rebuild an in-process sink, and the
+  # channel-validity poll re-reads it. Without this grant every attempt to OPEN
+  # a conversation outside "default" — the websocket, a message, an interrupt, a
+  # decision — fails with Forbidden and surfaces as "session not found", a
+  # readable-but-unopenable conversation.
+  #
+  # READ-ONLY on purpose, and deliberately narrower than the namespaced Role
+  # below: rehydrate never creates or deletes a Channel it did not itself just
+  # build. Per-conversation CREATION (Channel + creds Secret + AgentSession)
+  # stays scoped to the namespaced spicebox-webd-default Role — granting a
+  # browser-facing pod cluster-wide Secret creation is exactly the standing
+  # privilege that Role's own comment refuses.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["channels"]
+    verbs: ["get"]
+  # The artifact live-view serve-transform (webd's ServeTransform) reads the
+  # ArtifactRender CR by name to apply the artifact kind's per-render transform
+  # before serving the sandboxed content frame. Read-only, cluster-wide — mirrors
+  # the agentsessions read above (a render belongs to a session). Without it,
+  # ServeTransform 403s and every artifact live-view is served UNTRANSFORMED.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["artifactrenders"]
+    verbs: ["get", "list"]
+  # Main resource read by name; status writes use the /status rule below.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["sessionuseridentities"]
+    verbs: ["get"]
+  # identityd writes SessionUserIdentity .status (heartbeat liveness + link
+  # completion) via Status().Update/Patch — the status subresource needs its
+  # own rule; the main-resource verbs above do not cover it.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["sessionuseridentities/status"]
+    verbs: ["update", "patch"]
+  # identityd's PurposeWorkshopCredential clicker gate (credupdate_agentowned.go's
+  # mayUpdateWorkshopCredential) Gets the builder session's Workshop CR by name to
+  # authorize the clicker == the workshop's starter. Read-only by name, like the
+  # other agentprimitives reads above; without it every legitimate starter is
+  # Forbidden at the gate and the workshop-credential card refuses to open.
+  #
+  # "list" is additionally needed by artifactViewDeps.WorkshopNamespacesFor
+  # (internal/cmd/webd/main.go), the browser start gate's dynamic arm: it lists
+  # Workshops cluster-wide to find the Ready ones a viewer owns, since the
+  # Workshop controller binds this process's start Role into each one
+  # (pkg/controllers/workshop.BuildWorkshopBrowserRBAC) rather than webd
+  # discovering its own bindings.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["workshops"]
+    verbs: ["get", "list"]
+  # The browser start route's per-starter builder-workshop cap
+  # (pkg/web/webui/sessions' workshopCapRefusal) reads the singleton
+  # ClusterAgentSettings to learn two things: whether the class being started
+  # is one the CLUSTER admin sanctioned for a workshop, and the ceiling on how
+  # many a person may hold open. Cluster-scoped, so it needs a ClusterRole
+  # rule; get by name only — webd never lists or writes settings, and the
+  # namespace tier (agentsettings) is deliberately NOT granted, because a
+  # namespace must not be able to sanction itself for a workshop.
+  #
+  # Without this grant the read 403s, which is neither a sanction nor a
+  # refusal: the route answers 503 and NO start succeeds for any class, so a
+  # missing rule here takes the start button down cluster-wide rather than
+  # failing quietly.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["clusteragentsettings"]
+    verbs: ["get"]
+  # The portal aggregates suggested credentials by listing AgentClasses
+  # cluster-wide (pkg/platform/identityd/suggested.go). "get" is separately required by
+  # both start routes: pkg/web/browsersession resolves the named AgentClass (for
+  # its UID, which owner-refs the Channel, and its Valid condition) on every
+  # start, and the session dashboard's list join reads each session's class for
+  # its display title. See config/webd/role-default.yaml for the
+  # namespace-scoped verbs a start needs beyond this read.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["agentclasses"]
+    verbs: ["get", "list"]
+  # The agent-defined UI. walkAgentUIDoors (pkg/web/webui/agentui/page.go) Gets the
+  # AgentUI named by AgentClass.spec.agentUI.ref to resolve the declaration the
+  # page renders, and the session shell reaches the same code for a selected
+  # session (pkg/web/webui/sessions' viewFor).
+  #
+  # Cluster-wide and get-only, for the same reason as agentclasses and channels
+  # above: the shell serves a session in whatever namespace the viewer holds
+  # agentsession#interact in, and it never writes an AgentUI — the AgentUI
+  # reconciler owns that object's status, not webd.
+  #
+  # Without this grant EVERY agent-UI page load fails, in the one shape that
+  # reads as the agent's fault rather than the platform's: walkAgentUIDoors
+  # branches Forbidden into its non-NotFound arm, which renders "Agent error /
+  # This agent's UI isn't available right now." while the AgentUI CR sits there
+  # Valid=True. The whole feature is unreachable and nothing on the CR says so.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["agentuis"]
+    verbs: ["get"]
+  # The icon resolver reads SpiceboxToolkits to derive a tool's site URL for
+  # favicon discovery (pkg/platform/identityd/icons/resolver.go: List + Get).
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["spiceboxtoolkits"]
+    verbs: ["get", "list"]
+  # MCPServer is namespaced; the OAuth handler lists cluster-wide via
+  # passthroughcatalog.LookupMCPServerByCredential to find the server backing a
+  # given credential name. Used by /link/oauth/<credname> + /oauth/callback.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["mcpservers"]
+    verbs: ["get", "list"]
+  # identityd's IdP loader Gets the singleton ClusterIdentityProvider CR
+  # ("default") at login time (hosted in-process by webd).
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["clusteridentityproviders"]
+    verbs: ["get"]
+  # A credential_update deep-link (pkg/platform/identityd/credupdate_agentowned.go) can
+  # cover a PERSON's credential or the AGENT's own shared one, and the link
+  # itself carries no identity reference. The authority on which it is, is the
+  # CredentialUpdateRequest's own status.resolvedCredential, so identityd lists
+  # the session's requests to route the click. Read-only: identityd never
+  # writes a CredentialUpdateRequest (the operator determines, channelsd
+  # publishes).
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["credentialupdaterequests"]
+    verbs: ["list"]
+  # Reading whether an agent-owned credential CAN be replaced by pasting a value
+  # (type=static with a Secret name+key) so the form refuses an OAuth/federated
+  # one before an admin types a live token into it. Read-only, and it reads only
+  # secret REFERENCES — webd holds no CLUSTER-WIDE Secret access at all; every
+  # Secret grant it has is namespace-scoped (role.yaml, role-default.yaml, and
+  # the per-Channel webhook-secret Roles the operator stamps —
+  # pkg/controllers/channel/webhookrbac.go) and it never performs this write:
+  # the replacement is submitted to the operator, which authorizes it
+  # independently and patches the Secret. Granting the browser-facing pod
+  # cluster-wide Secret access would be standing RBAC that outlives every
+  # request and, on compromise, reads and overwrites the SpiceDB preshared key,
+  # the passthroughlink HMAC key, and every stored credential in the cluster.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["agentidentities"]
+    verbs: ["get"]

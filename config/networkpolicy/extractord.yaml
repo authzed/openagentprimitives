@@ -1,0 +1,35 @@
+# extractord: the deliberately powerless attachment-extraction pod. Unlike
+# every sibling policy in this directory — which lists ONLY Ingress and
+# leans on default-deny.yaml for the egress half — this policy restates
+# Egress explicitly with an empty rule list. extractord's whole security
+# story is "bytes in over HTTP, text out in the response, never calls back
+# to anything," so its egress posture is meant to be provable by reading
+# this one file, not by cross-referencing the namespace-wide default.
+#
+# policyTypes MUST list both Ingress and Egress. An empty `egress:` list
+# with Egress OMITTED from policyTypes is not deny-all — it means
+# NetworkPolicy has no opinion on egress for this pod and everything is
+# allowed. Both must be present, or this file silently stops meaning what
+# its own comment says.
+#
+# Ingress is allowed only from the operator pod — the sole caller of
+# POST /extract.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: extractord
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agentprimitives-extractord
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-operator
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress: []

@@ -1,0 +1,24 @@
+{
+  "name": "guest-start-approved",
+  "description": "The APPROVE half of the guest session-start gate. The channel attributes org membership (fake: orgScoped), the sender carries no membership stamp — which an attributing channel reads as guest, fail-closed — and holds no agentclass#start_session, so the pipeline creates the session PARKED: no started_by tuple, no runner, and a start_approval card to the platform admins. The background approver, deciding AS the seeded platform admin, clicks Approve; the decision pipe re-checks platform#start_session server-side, decideStartApproval writes the withheld standing and removes the parking marker, the operator unparks, and the runner cold-starts on the guest's original message — no retype. The agent's reply is the proof the whole chain closed.",
+  "agentDir": "testdata/agent-guestgate",
+  "agentClass": "guestgate-bot",
+  "defaultUser": "guest@example.com",
+  "userTurns": ["please summarize the weekly numbers"],
+  "autoApprove": ["start_approval"],
+  "autoApproveAs": "admin@example.com",
+  "llm": [
+    {
+      "expect": {"userTextContains": "summarize the weekly numbers"},
+      "reply": [{"text": "Here is the weekly summary: all metrics are steady."}]
+    },
+    {
+      "expect": {"lastToolResult": "respond_to_user"},
+      "reply": [{"toolUse": {"name": "agent_work_complete", "args": {"summary": "summarized the weekly numbers"}}}]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": ["weekly summary"],
+    "approvalPrompts": 1
+  }
+}

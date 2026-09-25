@@ -1,0 +1,53 @@
+# AgentClass + Channel for the Task-7 inbound-attachments e2e fixture,
+# gate-CLOSED variant: the Channel still opts into attachment ingestion
+# (spec.attachments.enabled: true), but the AgentClass grants neither the
+# "attachments" nor the "artifacts" capability. This isolates the capability
+# leg of processAttachments' three-part gate (channel opt-in AND capability
+# grant AND the bound kind implementing AttachmentFetcher — see
+# pkg/channels/channelsd/pipeline/attachments.go) — the channel side is wide open, so
+# a failure to gate can only be attributed to the missing capability grant.
+# Pairs with agent-attachments-gate-open; see that fixture's header for the
+# shared rationale (test provider, fake slack transport, no SpiceDBBootstrap
+# needed).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: attach-closed-agent
+  namespace: default
+spec:
+  displayName: AttachClosedBot
+  description: "E2E fixture agent for the gate-CLOSED inbound-attachments scenario. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: attach-closed-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      Simply respond to the user's message directly via respond_to_user.
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: attach-closed-channel
+  namespace: default
+spec:
+  kind: slack
+  role: both
+  agentClass: attach-closed-agent
+  sessionScope: auto
+  credentialsRef:
+    secretName: attach-closed-creds
+  attachments:
+    enabled: true
+  slack:
+    mode: socket

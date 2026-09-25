@@ -1,0 +1,153 @@
+# Fixture agent for the toolguard data-plane bundles (data-volume, rate-limit,
+# per-tool breaker). One public MCP tool per limit, each gated on a genuinely
+# public `read` permission (a `thing` resource carrying any_user:*), so the ONLY
+# thing a bundle exercises is the toolGuard rule — never an authz denial.
+#
+# The tools return whatever the bundle's toolOutputs canned for them; the guard
+# acts on that. spec.server.url is the {{MCP_URL}} sentinel the harness rewrites.
+apiVersion: v1
+kind: Secret
+metadata: {name: tg-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: tg-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: tg-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: tg-identity, namespace: default}
+spec:
+  description: "Toolguard e2e fixture: static MCP bearer token."
+  credentials:
+    - name: tg-mcp-bearer
+      type: static
+      static: {secretRef: {name: tg-mcp-token, key: access_token}}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: tg, namespace: default}
+spec:
+  name: tg
+  version: v1
+  intent: "Public emit tools for the toolguard data-plane fixture."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: tg-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: thing
+        # Genuinely public: a wildcard any_user:* backs the only permission the
+        # tools check, so the read passes for every session with no grant.
+        standing: session-only
+        relations:
+          - name: any_user
+            subjectType: user
+            wildcard: true
+        permissions:
+          - name: read
+            expr: any_user
+  tools:
+    - name: emit
+      intent: "Return whatever the fixture canned; the guard acts on the result."
+      args:
+        allowedFields: ["n"]   # quoted: bare `n` is YAML-1.1 boolean false
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: thing
+          resourceIDTemplate: "any"
+          permission: read
+      effects: {readOnly: true, idempotent: true}
+    - name: fast
+      intent: "Callable repeatedly; the rate-limit rule caps calls per turn."
+      args:
+        allowedFields: ["n"]
+      permission:
+        stateImpact: readonly
+        check: {resourceType: thing, resourceIDTemplate: "any", permission: read}
+      effects: {readOnly: true, idempotent: true}
+    - name: flaky
+      intent: "Fails on demand; the breaker opens after the failure threshold."
+      args:
+        allowedFields: ["n"]
+      permission:
+        stateImpact: readonly
+        check: {resourceType: thing, resourceIDTemplate: "any", permission: read}
+      effects: {readOnly: true, idempotent: true}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: tg-agent, namespace: default}
+spec:
+  displayName: ToolguardBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: tg-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You call the tg_emit tool when asked.
+  agentIdentity: tg-identity
+  mcpServers:
+    - name: tg
+      ref: tg
+  authz:
+    # disabled, not the default: the discriminator here is the toolGuard byte
+    # cap, nothing else. Under logging or enforcing the plan gate's RequirePlan
+    # refuses an unplanned tg_emit call before the data limit is ever reached, so
+    # the gate would mask the very thing under test. This fixture declares no
+    # plan, so the gate must be off.
+    planGate:
+      mode: disabled
+  # One rule per limit, each matched to its own tool by a disjoint suffix glob
+  # (path.Match), so a bundle exercises exactly one knob:
+  #   *emit  → data-volume: an oversized result is withheld as an IsError.
+  #   *fast  → rate-limit:  the 2nd call in a turn is denied.
+  #   *flaky → per-tool breaker: after 3 failures the tool opens (4th denied),
+  #            while a different tool is unaffected.
+  toolGuard:
+    rules:
+      - match: {tool: "*emit"}
+        dataLimit: {maxIngressBytes: 200, action: deny}
+      - match: {tool: "*fast"}
+        rateLimit: {maxCallsPerTurn: 1, action: deny}
+      - match: {tool: "*flaky"}
+        breaker: {failureThreshold: 3, action: deny}
+  budget: {maxTurns: 10, maxTokens: 50000, maxDuration: 5m}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: tg-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: tg-agent
+  credentialsRef: {secretName: tg-fake-creds}
+  fake: {echo: false}
+---
+# Seeds the public wildcard the emit tools' `read` check resolves against.
+# Without it thing:any#read has no tuple, the readonly call is denied, and the
+# denial raises an approval that times out — masking the data limit under test.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata: {name: tg-seed, namespace: default}
+spec:
+  relationships:
+    - resource: {type: thing, id: "any"}
+      relation: any_user
+      subject: {type: user, wildcard: true}

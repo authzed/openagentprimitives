@@ -1,0 +1,48 @@
+# No MCPServer manifest in this fixture at all: the AgentClass's mcpServers
+# entry points at "demo-crm-external", an origin this bundle legitimately
+# expects to find already installed on the target cluster. The lint must
+# still report it (silence there is indistinguishable from "checked and
+# fine") but as an INFORMATIONAL finding, not an error.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: demo-console
+spec:
+  description: "Fixture AgentClass for oap.LintAgentUIs's own test suite."
+  systemPrompt:
+    inline: "You are a fixture agent used only by oap.LintAgentUIs's own test suite."
+  mcpServers:
+    - name: demo
+      ref: demo-crm-external
+  agentUI:
+    ref: demo-console-ui
+    grantedTools: [demo_list_rows]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentUI
+metadata:
+  name: demo-console-ui
+spec:
+  displayName: Demo console
+  tools: [demo_list_rows]
+  slots:
+    - name: main
+      default:
+        component: ap:card
+        props:
+          title: Rows
+        children:
+          - component: ap:select
+            props:
+              param: stage
+              placeholder: Stage
+          - component: ap:table
+            props:
+              columns:
+                - {key: label, header: Label}
+            bindings:
+              rows:
+                source: tool
+                ref: demo_list_rows
+                args:
+                  stage: {"$param": "stage"}

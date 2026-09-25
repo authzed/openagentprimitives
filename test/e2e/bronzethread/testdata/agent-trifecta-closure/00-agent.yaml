@@ -1,0 +1,231 @@
+# Fixture agents for the trifecta bundle — the one scenario that assembles ALL
+# THREE legs on a bound datum, and the only fixture in the suite with TWO
+# MCPServers.
+#
+# Each leg is arranged deliberately, because the system is built to keep this
+# combination from arising by accident:
+#
+#   A (untrusted)     read_flagged_note declares SEP-1913
+#                     returnMetadata.source: untrustedPublic, so the tag it
+#                     mints carries an untrusted origin.
+#
+#   B (sensitive)     The note is viewable ONLY by reviewer-9, never by
+#                     reviewer-1 who runs the session, so the minted tag's
+#                     readers exclude the child's whole audience and binding it
+#                     discloses. bypassRequesterCheck lets the session make the
+#                     read at all — a tool fetching on the platform's behalf
+#                     rather than the caller's.
+#
+#   C (consequential) demo-writer holds file_write, stateImpact: readwrite.
+#
+# Legs A and B are each independently enough for the GRADER to decline, which
+# is why the delegation routes to a person. The bundle approves it. That is the
+# case the trifecta exists for and the only way to reach it: a human ruled on
+# the DISCLOSURE, and the gate still refuses the COMBINATION.
+#
+# Two MCPServers is also what exposed the AgentClass requeue bug: the class
+# validates its readwrite tool's check against the LIVE schema, and the
+# guardian composes fragments asynchronously without touching a healthy
+# server's status — so a class reconciling in between used to park forever.
+apiVersion: v1
+kind: Secret
+metadata: {name: trifecta-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: trifecta-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: trifecta-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: trifecta-identity, namespace: default}
+spec:
+  description: "Trifecta fixture: static MCP bearer token."
+  credentials:
+    - name: trifecta-mcp-bearer
+      type: static
+      static:
+        secretRef: {name: trifecta-mcp-token, key: access_token}
+---
+# The PARENT's server: one read that is both untrusted and narrowly readable.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: trifecta-notes, namespace: default}
+spec:
+  name: trifecta-notes
+  version: v1
+  intent: "Fixture for the trifecta bundle: an untrusted, restricted read."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth: {credential: trifecta-mcp-bearer}
+  spicedbSchema:
+    resources:
+      - name: flagged_note
+        standing: session-only
+        relations:
+          - {name: viewer, subjectType: user}
+          # owner is who may RULE on disclosing this note, distinct from
+          # viewer: reading a thing is not authority to authorize sharing it.
+          # The disclosure card resolves its deciders against #owner.
+          - {name: owner, subjectType: user}
+        permissions:
+          - {name: view, expr: viewer}
+  tools:
+    - name: read_flagged_note
+      intent: "Fetch a flagged note routed for review."
+      args: {allowedFields: [id]}
+      permission: {stateImpact: stateless}
+      effects: {readOnly: true, idempotent: true}
+      # Leg A: the server declares its own result may carry content the agent
+      # must not treat as instructions.
+      trust:
+        returnMetadata:
+          source: ["untrustedPublic"]
+  toolResourceMap:
+    - tool: read_flagged_note
+      reads:
+        resourceType: flagged_note
+        idArg: id
+        permission: view
+        bypassRequesterCheck: true
+---
+# The CHILD's server: the ability to ACT. Leg C.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: trifecta-writer, namespace: default}
+spec:
+  name: trifecta-writer
+  version: v1
+  intent: "Fixture for the trifecta bundle: a consequential tool."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth: {credential: trifecta-mcp-bearer}
+  # A server with a non-stateless tool must declare its own schema
+  # (SpicedbSchemaMissing otherwise).
+  spicedbSchema:
+    resources:
+      - name: summary_doc
+        standing: session-only
+        relations:
+          - {name: author, subjectType: user}
+        permissions:
+          - {name: compose, expr: author}
+  tools:
+    - name: file_write
+      intent: "Write a summary file."
+      args: {allowedFields: [path, body]}
+      # Leg C: readwrite is what makes a call consequential. readonly is leg
+      # B's territory and can never complete the trifecta.
+      #
+      # The check block is mandatory for readwrite, and the class disables
+      # toolCalls so it never runs — deliberately: with that gate live, a
+      # denial there would refuse the call before the trifecta saw it and the
+      # bundle would be green for the wrong reason.
+      permission:
+        stateImpact: readwrite
+        check:
+          # A CONSTANT id: SpiceDB object ids cannot contain "/", so a
+          # filesystem path would never be a valid object.
+          resourceType: summary_doc
+          resourceIDTemplate: "summary"
+          permission: compose
+      effects: {readOnly: false, idempotent: false}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-router, namespace: default}
+spec:
+  displayName: DemoRouter
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: trifecta-placeholder, key: api-key}
+  agentIdentity: trifecta-identity
+  mcpServers:
+    - {name: notes, ref: trifecta-notes}
+  capabilities:
+    subagents: {}
+  subagents: ["demo-writer"]
+  authz:
+    informationLeakage:
+      mode: enforcing
+      approvalTTL: 1m
+      onUnsupportedChannel: blockBinding
+      singleUserBypass: false
+      loggingNoticeToRequester: false
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You read flagged notes and hand them to a writer agent, passing the note
+      by reference with the delegate tool's `inputs`.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-writer, namespace: default}
+spec:
+  displayName: DemoWriter
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: trifecta-placeholder, key: api-key}
+  agentIdentity: trifecta-identity
+  mcpServers:
+    - {name: writer, ref: trifecta-writer}
+  authz:
+    # toolCalls OFF, trifecta ON — and that pairing is itself part of what this
+    # proves. The CRD says the trifecta has its own mode and is "deliberately
+    # not reached through toolCalls.mode: a control that disappears when an
+    # operator disables a different permission check is not a control." Here
+    # the per-tool Check is disabled, so the ONLY thing that can refuse the
+    # write is the trifecta.
+    toolCalls:
+      mode: disabled
+    trifecta:
+      mode: enforcing
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You receive a note in an input slot and write a summary of it with
+      writer_file_write.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: demo-router-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: demo-router
+  credentialsRef: {secretName: trifecta-fake-creds}
+  fake: {echo: false}
+---
+# Leg B's seed. reviewer-9 can see the note and rule on sharing it; reviewer-1,
+# who runs the session, can do neither — which is what makes the tag's readers
+# exclude the child's whole audience.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata: {name: trifecta-seed, namespace: default}
+spec:
+  relationships:
+    - resource: {type: flagged_note, id: "note-3"}
+      relation: viewer
+      subject: {type: user, id: "reviewer-9@example.com", canonicalize: true}
+    - resource: {type: flagged_note, id: "note-3"}
+      relation: owner
+      subject: {type: user, id: "reviewer-9@example.com", canonicalize: true}

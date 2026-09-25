@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package spicebox.gateway.v1;
+
+option go_package = "github.com/authzed/openagentprimitives/pkg/web/gateway/v1;gatewayv1";
+
+// Gateway streams bytes between a ToolCall client and the sandbox pod the
+// operator launched for that call. Clients authenticate on the first message.
+//
+// The operator (internal/cmd/operator) serves it; the agent runner's bridge
+// (pkg/agent/tool/sandbox) and the streamclient debug CLI (internal/cmd/streamclient)
+// dial it. See README.md for the end-to-end flow.
+service Gateway {
+  // Stream attaches the caller to the live exec of one streaming ToolCall and
+  // pumps bytes in both directions until the tool process exits.
+  //
+  // The first client message MUST be Hello; anything else fails the RPC with
+  // UNAUTHENTICATED. A ToolCall's exec can be attached to at most once — a
+  // second Stream for the same ToolCall fails with PERMISSION_DENIED, so there
+  // is no resume and no reconnect after a dropped connection.
+  //
+  // The server ends the RPC by sending exactly one Exit and returning. If the
+  // caller disconnects first, the operator cancels the exec rather than leave
+  // the sandbox process running with no consumer left to read it.
+  rpc Stream(stream Message) returns (stream Message);
+}
+
+// Message is one frame in either direction. Exactly one member of `kind` is
+// set; which members are legal depends on the direction and on how far the
+// stream has progressed.
+message Message {
+  oneof kind {
+    // Opening handshake proving the caller owns this ToolCall. Client → server,
+    // valid only as the very first frame; a later Hello is ignored.
+    Hello hello = 1;
+
+    // Bytes to write to the tool process's stdin. Client → server, and
+    // meaningful only for an interactive ToolCall: a stream-mode call's stdin
+    // was fixed at exec time and is already closed, so writing to it fails the
+    // RPC.
+    BytesChunk stdin = 2;
+
+    // Bytes the tool wrote to its stdout. Server → client.
+    BytesChunk stdout = 3;
+
+    // Bytes the tool wrote to its stderr, kept separate from stdout so the
+    // client can route diagnostics away from the tool's real output.
+    BytesChunk stderr = 4;
+
+    // The process's terminal outcome. Server → client, sent at most once and
+    // always last.
+    Exit exit = 5;
+  }
+}
+
+// Hello names the ToolCall to attach to and proves the caller is entitled to
+// it.
+message Hello {
+  // The raw stream-token preimage. Only its SHA-256 is ever stored — on
+  // ToolCall.spec.streamTokenHash and in the operator's registry — so holding
+  // the token is itself the proof that the caller is the runner that created
+  // the ToolCall.
+  string token = 1;
+
+  // Kubernetes namespace of the ToolCall; with tool_call_name it forms the key
+  // the operator parked the live exec under.
+  string namespace = 2;
+
+  // Name of the ToolCall whose exec to attach to.
+  string tool_call_name = 3;
+}
+
+// BytesChunk carries an arbitrary slice of a byte stream.
+message BytesChunk {
+  // Opaque bytes. Chunk boundaries are transport artifacts, never line or
+  // record boundaries — a consumer that needs framing must impose its own.
+  bytes data = 1;
+}
+
+// Exit reports how the tool process finished, and terminates the stream.
+message Exit {
+  // The process's exit status: 0 on success, its own non-zero status on
+  // failure, and -1 when the exec transport broke before the process ever
+  // reported one.
+  int32 code = 1;
+
+  // Human-readable detail when the exec itself errored — a deadline, a
+  // transport failure. Empty when the process simply exited, whatever its code.
+  string reason = 2;
+}

@@ -1,0 +1,16 @@
+name: kubectl
+version: "1"
+toolkitRevision: "2026-04-24"
+target: {binary: kubectl}
+parser: {kind: declarative}
+env: {allowed: []}
+subcommands:
+  - path: [get]
+    description: "Read resources"
+    effects:
+      destructive: false
+      reads: [network]
+      writes: []
+      network: {destinations: []}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}

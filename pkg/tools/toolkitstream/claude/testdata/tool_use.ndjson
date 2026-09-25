@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the file now."}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"foo.go"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"package foo\n\nfunc Bar() {}","is_error":false}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_2","name":"Edit","input":{"file_path":"foo.go","old_string":"Bar","new_string":"Baz"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_2","content":"file edited successfully","is_error":false}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.0210,"duration_ms":8500}

@@ -1,0 +1,20 @@
+@import "@fontsource-variable/inter/index.css";
+@import "@fontsource-variable/jetbrains-mono/index.css";
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { border-color: hsl(var(--border)); }
+  html { color-scheme: dark; }
+  html[data-theme="light"] { color-scheme: light; }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: "Inter Variable", system-ui, sans-serif;
+  }
+  code, pre, .font-mono { font-family: "JetBrains Mono Variable", ui-monospace, monospace; }
+}
+

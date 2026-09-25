@@ -1,0 +1,8 @@
+authz ledger_board:board-team#post allowed
+flow  leakage_approved
+flow  read_permitted           tool=ledger_read_entry
+flow  read_unchecked           tool=ledger_post_to_board
+flow  respond_no_leak
+flow  tool_call_leak_per_datum tool=ledger_post_to_board
+tag   kind=leaf untrusted=false readers=1 sources=1
+tag   kind=leaf untrusted=false readers=2 sources=1

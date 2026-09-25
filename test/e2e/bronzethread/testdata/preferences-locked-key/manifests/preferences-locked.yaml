@@ -1,0 +1,19 @@
+# Turns on ONE admin-locked global for the prefdemo fixture's language
+# preference. classUserPreferences is keyed by class name (same namespace),
+# then preference key — AgentSettings is a per-namespace singleton, so the
+# only permitted name is "default" (v1alpha1.AgentSettingsName), in the same
+# "default" namespace every bundle's session runs in.
+#
+# Unlike an AgentClass extraManifest, this does NOT replace anything: it is
+# the class's ONLY AgentSettings in this bundle's run, applied fresh.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentSettings
+metadata:
+  name: default
+  namespace: default
+spec:
+  classUserPreferences:
+    prefdemo:
+      language:
+        value: en
+        lock: true

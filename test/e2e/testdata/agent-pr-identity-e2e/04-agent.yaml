@@ -1,0 +1,65 @@
+# AgentClass for the agent-pr-identity-e2e fixture.
+#
+# Its authz.slots entry is what makes the AgentClass controller emit an
+# AgentSessionGrants naming github_pull_request/pin, and the guardian's
+# ComposeSlots compose, into the live schema, the
+# `relation slot_grant_pin: agentsession with expiration` plus
+# `permission pin = slot_grant_pin->interact` this scenario's slot grants are
+# written on. github_pull_request declares no `owner` relation, so
+# ComposeSlots' second leg (`+ owner`) is omitted — see
+# pkg/authz/guardian/schema/slots.go's slotPermissionExpr.
+#
+# `pin` (not view_memory, not write_memory) on purpose: this slot exists only
+# to bind ONE pull request instance to the session, the same way
+# dossier-pool-e2e's `read` slot binds a dossier — it names no memory
+# permission at all, so isSlottableMemoryPermission never even looks at it.
+#
+# github_pull_request is reachable for standing/slot-keying resolution only
+# through a toolBundle naming a SpiceboxToolspec whose spec.toolkit.name is
+# "gh" (pkg/controllers/agentclass/slot_valuekey.go's toolkitsForKeying) — a
+# slot declared with no toolBundle reaching that toolkit is refused with
+# "declares no standing", so the toolBundle below is load-bearing for the
+# slot, not decoration.
+#
+# model.provider=test is refused by the production operator; only the e2e
+# harness's reconciler (AllowTestProvider=true) admits it, and is never
+# appropriate on a real cluster. No Channel: nothing ever starts a session of
+# this class, and the AgentClass controller does not require one to reach
+# Valid=True (see agent-dossier-pool-e2e's write-half fixture for the same
+# note).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: pr-identity-e2e
+  namespace: default
+spec:
+  displayName: PRIdentityE2E
+  description: "E2E fixture for the PR-identity relwrites gate."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: pr-identity-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      This fixture exists for its SCHEMA, not its conversation: no scenario
+      using it drives a turn.
+  agentIdentity: pr-identity-gh
+  toolBundles:
+    - name: gh-review
+      class: pr-identity-sandbox
+      toolspecs:
+        - pr-identity-gh-review
+  authz:
+    slots:
+      - resourceType: github_pull_request
+        description: "A pull request the session may record identity relationships about"
+        permission: pin
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m

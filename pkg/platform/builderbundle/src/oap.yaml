@@ -1,0 +1,18 @@
+oapFormatVersion: "1"
+agent:
+  name: agent-builder
+  version: "0.1.0"
+  displayName: Agent Builder
+  description: Builds other OAP agents through a guided conversation.
+compat:
+  minApVersion: "0.9.0"
+requires:
+  images:
+    - ref: ap-workshop
+questions:
+  - name: builderStarters
+    type: resourceList
+    prompt: "Who may start the agent builder? (user or group identities)"
+    required: true
+    binding:
+      - target: "AgentClass/agent-builder#spec.authz.session.allowedStarters"

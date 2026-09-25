@@ -1,0 +1,17 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: demo-class
+spec:
+  displayName: Demo Agent
+  description: Demo fixture agent.
+  systemPrompt:
+    inline: |
+      You are a read-only demo assistant. Use the bound repositories to
+      report on issue/PR alignment; never write to any external system.
+  authz:
+    slots:
+      - resourceType: github_repo_url
+        description: Repo in owner/name form.
+        permission: read
+        defaults: ["demo-org/demo-repo"]

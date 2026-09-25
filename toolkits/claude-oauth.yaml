@@ -1,0 +1,57 @@
+name: claude-oauth
+version: "1"
+toolkitRevision: "2026-06-25"
+target:
+  binary: claude
+  versionRange: ">=2.0.0 <3.0.0"
+  versionProbe:
+    args: ["--version"]
+    extract:
+      kind: regex
+      pattern: '([0-9]+\.[0-9]+\.[0-9]+)'
+docs: ./claude.md
+parser:
+  kind: declarative
+
+streamFormat: claude-stream-json
+
+env:
+  allowed:
+    - {name: CLAUDE_CODE_OAUTH_TOKEN, title: "Claude", description: "Your Claude Code subscription token, so the agent can run Claude Code as you.", sensitive: true, provider: anthropic-oauth, credential: anthropic-oauth}
+
+# Static, non-secret hardening for the Claude Code CLI itself. See the same
+# block in claude.yaml for why: the CLI treats HTTP 401 as retryable and
+# defaults to ten retries with exponential backoff, so a revoked subscription
+# token costs roughly three minutes per call instead of failing. An expired
+# OAuth token is the likelier version of that here than a mistyped API key.
+envDefaults:
+  CLAUDE_CODE_MAX_RETRIES: "1"
+
+permission:
+  stateImpact: passthrough
+
+subcommands:
+  - path: []
+    description: "Run Claude Code with a prompt"
+    mode: stream
+    positional:
+      - {name: prompt, type: string, required: false}
+    flags:
+      - {long: print,                        short: p, type: bool}
+      - {long: verbose,                                type: bool}
+      - {long: continue,                     short: c, type: bool}
+      - {long: output-format,                          type: enum, values: [stream-json, text, json]}
+      - {long: input-format,                           type: enum, values: [text, stream-json]}
+      - {long: allowedTools,                           type: stringList}
+      - {long: disallowedTools,                        type: stringList}
+      - {long: dangerously-skip-permissions,           type: bool}
+      - {long: permission-mode,                        type: enum, values: [default, acceptEdits, plan, auto, dontAsk, bypassPermissions]}
+      - {long: model,                                  type: string}
+      - {long: include-partial-messages,               type: bool}
+    effects:
+      destructive: false
+      reads:  [filesystem, network]
+      writes: [filesystem]
+      network: {destinations: [api.anthropic.com]}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [CLAUDE_CODE_OAUTH_TOKEN], writes: []}

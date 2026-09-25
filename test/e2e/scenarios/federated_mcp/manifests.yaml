@@ -1,0 +1,117 @@
+# Scenario: federated MCP credential mint → inject → revoke (federated_mcp_test.go).
+#
+# A userPassthrough session exercises the federated credential path through
+# the token broker: SessionUserIdentity[type=federated] → inproc.Broker →
+# fake.Minter → Authorization: Bearer minted-for-<resource> on the MCP stub.
+#
+# Notes:
+#   - authz.toolCalls.mode=disabled bypasses SpiceDB authz.
+#   - The MCPServer declares spec.auth.type=federated + spec.auth.resource.
+#     The AgentSession controller synthesizes a type=federated AgentCredential
+#     on the SessionUserIdentity; the broker mints the token via the fake
+#     Minter wired through h.SetMinter.
+#   - The IdP-identity Secret (u-146a1438133c18ae56e18aeee2dd3d2b50e08ceb4f7d5382-idp-identity)
+#     is created by the test in agentprimitives-identities; its presence
+#     signals that alice@example.com is logged in via the enterprise IdP.
+#   - The MCPServer.spec.server.url sentinel {{MCP_URL}} is replaced with
+#     the live MCPStub URL before apply.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fedmcp-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder: fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fedmcp-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# MCPServer with federated auth. The AgentSession controller synthesizes
+# a type=federated AgentCredential on the SessionUserIdentity keyed by
+# spec.auth.credential ("linear-token"). spec.auth.resource is the ID-JAG
+# audience passed to the Minter; the fake Minter returns
+# "minted-for-<resource>".
+#
+# spec.server.url is rewritten to {{MCP_URL}} by the test.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: fedmcp-linear
+  namespace: default
+spec:
+  name: fedmcp-linear
+  version: v1
+  intent: "Federated-MCP e2e fixture: proves mint→inject→revoke."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    type: federated
+    credential: linear-token
+    resource: "https://linear.api.example.invalid"
+  tools:
+    - name: ping
+      intent: "Echo the caller's message back."
+      args:
+        allowedFields: [message]
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+---
+# AgentClass with identityMode: userPassthrough, referencing the federated
+# MCPServer. No agentIdentity: the user's synthesized SessionUserIdentity
+# carries the type=federated credential.
+# authz.toolCalls.mode=disabled bypasses SpiceDB authz checks.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-fedmcp
+  namespace: default
+spec:
+  displayName: "Federated MCP Test Agent"
+  identityMode: userPassthrough
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: fedmcp-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a federated-mcp test agent"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  mcpServers:
+    - name: linear
+      ref: fedmcp-linear
+---
+# Channel for the harness to drive messages through.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-fedmcp-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-fedmcp
+  credentialsRef:
+    secretName: fedmcp-fake-creds
+  fake:
+    echo: false

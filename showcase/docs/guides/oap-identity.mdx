@@ -1,0 +1,99 @@
+export const meta = {
+  title: 'oap identity',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2800,
+  description: 'Manage AgentIdentity resources',
+}
+
+# oap identity
+
+Manage AgentIdentity resources
+
+## `oap identity apply <path>`
+
+Server-side apply an AgentIdentity YAML
+
+## `oap identity canonical-id <email>`
+
+Print the canonical user ID derived from an email address.
+
+Use this when constructing SpiceDB group-membership writes for the
+multiplayer-sessions feature. Example:
+
+    zed relationship create group:engineering member user:$(oap identity canonical-id alice@example.com)
+
+The canonical form (base64-encoded lowercased email) is the same
+encoding channelsd uses internally, so admin-written group memberships
+match what's looked up at message time.
+
+## `oap identity delete <name>`
+
+Delete an AgentIdentity
+
+## `oap identity list`
+
+List AgentIdentity CRs
+
+## `oap identity put-token <identity-name>`
+
+Read an existing AgentIdentity, look up the named credential's
+secretRef, and create-or-update the underlying Secret with the supplied
+token bytes. Lets you keep AgentIdentity YAML in git without secrets.
+
+Exactly one of --from-literal, --from-env, --from-env-file, --from-file,
+--from-stdin must be supplied.
+
+Flags:
+
+```text
+--credential string     Name of the credential within the AgentIdentity (required)
+--from-env string       Read token from the named environment variable (e.g. GITHUB_TOKEN)
+--from-env-file string  Read token from a .env file: PATH:KEY (note: PATH may not contain a colon)
+--from-file string      Read token from a file path
+--from-literal string   Token value as a literal string (avoid in shell history)
+--from-stdin            Read token from stdin (single line; trailing newline trimmed)
+--skip-verify           Skip live verification of the token against the provider (format check still applies)
+```
+
+## `oap identity refresh <identity-name>`
+
+Walk AgentIdentity.spec.credentials[*] looking for type=oauth.
+For each whose expires_at is within --threshold (default 5m) — or every
+oauth credential if --all-oauth — perform an RFC 6749 refresh-token
+grant against the stored token_endpoint and update the Secret in place.
+
+--credential &lt;name&gt; refreshes one specific credential (skips threshold check).
+Refresh failures don't mutate existing Secret values.
+
+Flags:
+
+```text
+--all-oauth           Refresh every type=oauth credential
+--credential string   Refresh a single credential by name
+--threshold duration  Refresh credentials expiring within this duration (default "5m0s")
+```
+
+## `oap identity setup <identity-name>`
+
+Identity-rooted setup (no AgentClass context). Requires at least
+one of --toolkits or --mcps. Each entry is the resource name (e.g.
+gh, kubectl, linear-readonly).
+
+This is the experimentation path; for production agents you typically
+want 'oap agent setup-identity &lt;classname&gt;' which derives intent from
+the AgentClass's Toolspec/MCP graph.
+
+Flags:
+
+```text
+--force                 Re-run flows even when credential is already set up
+--mcps stringSlice      Comma-separated MCPServer names
+--non-interactive       Never prompt: verify credentials that are already provisioned and fail on any that are not
+--toolkits stringSlice  Comma-separated toolkit names (e.g. gh,kubectl)
+```
+
+## `oap identity show <name>`
+
+Show details of an AgentIdentity
+

@@ -1,0 +1,12 @@
+[Unit]
+Description=Report VM IP to host over vsock (agentprimitives desktop bundle)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/apguest
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

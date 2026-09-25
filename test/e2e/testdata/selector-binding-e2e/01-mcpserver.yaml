@@ -1,0 +1,62 @@
+# MCPServer/acctbook-crm: a DEDICATED fixture for
+# selector_binding_test.go — deliberately separate from
+# leads-console-e2e/01-mcpserver.yaml rather than adding a fourth tool entry
+# to that shared fixture, which four other test files (browserarm_test.go,
+# leads_console_read_test.go, leads_console_action_test.go,
+# view_capability_test.go) already depend on. Each e2e scenario gets its own
+# in-process envtest control plane (e2e.Start per test), so there is no name
+# collision to avoid by reusing the shared fixture; this is about blast
+# radius, not namespacing.
+#
+# Points at the SAME pkg/web/uidemo/leadflow server the leads-console-e2e
+# fixture uses (leadflow.New serves search_accounts alongside its other
+# tools), via the {{CRM_URL}} sentinel the test substitutes with a real
+# httptest.Server URL — see leads-console-e2e/01-mcpserver.yaml's own doc
+# comment for why this is applied manually rather than through
+# Options.AgentDir's {{MCP_URL}} substitution.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: acctbook-crm
+  namespace: default
+spec:
+  name: acctbook-crm
+  version: "1.0.0"
+  intent: >-
+    A fabricated CRM account-search e2e fixture: search accounts, answering
+    with a paged envelope rather than a bare list.
+  server:
+    url: "{{CRM_URL}}"
+    transport: streamable-http
+  mcpUiAppTools:
+    enabled: true
+    maxCallsPerMin: 60
+  # Wildcard viewer relation on a single fixed resource ("accounts") — same
+  # demo posture as leads-console-e2e/01-mcpserver.yaml's dealbook_lead,
+  # with the tuple actually WRITTEN (04-spicedbbootstrap.yaml).
+  spicedbSchema:
+    resources:
+      - name: acctbook_account
+        # Only a viewer relation exists; reading is not authority to approve.
+        standing: session-only
+        relations:
+          - name: viewer
+            subjectType: user
+            wildcard: true
+        permissions:
+          - name: view
+            expr: viewer
+  tools:
+    - name: search_accounts
+      intent: "Search CRM accounts, optionally filtered by an update-date range and/or stage."
+      visibility: [app]
+      args:
+        allowedFields: [from, to, stage]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: acctbook_account
+          resourceIDExpr: '"accounts"'
+          permission: view

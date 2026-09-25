@@ -1,0 +1,12 @@
+Spec: hand
+Intent: Say a phrase
+Source: user
+
+WHAT YOU CAN DO:
+  ✓ Say something                                        (tool say)
+
+CONSTRAINTS:
+  • only the say subcommand is permitted
+
+NETWORK: (no bound declared)
+CREDS:   no required creds declared

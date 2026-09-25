@@ -1,0 +1,109 @@
+{
+  "name": "plangate-approval-excludes-others",
+  "description": "A plan-gate approval reaches exactly the instance its phase named. One phase declares a single slot — crm_company 4210 (Northwind) — and nothing else; the human clears it once. The agent then reaches for a SECOND company of the SAME type, 4299 (Fabrikam), that the plan never named, and is refused. `list` is wildcard-open for everyone and 4299 has its own real owner (owner-2) who could grant it — so this is not SpiceDB refusing 4299 regardless of the plan. The approver's standing is seeded on 4210 alone (manifests/approver-standing.yaml), which is what makes the run exercise the DELEGABLE filter for real: drop that seed and the approver can speak for nothing, no grant is written, and 4210's own call comes back denied. This bundle is the first scenario that drives narrowToApproved (host_approval.go) into an actual SpiceDB Check on a gated tool — the earlier plan-gate bundles (plangate-phase-approval, plangate-plan-scoped-approval) only ever call the ungated list_companies tool. It does NOT isolate the grant as the sole reason 4210 succeeds, and does NOT prove Layer-2 session_scope narrowing is enforced at dispatch; see README.md for both.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-enforcing", "approver-standing"],
+
+  "defaultUser": "user@example.com",
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "toolOutputs": {
+    "list_companies": {
+      "results": [
+        { "id": "4210", "name": "Northwind Trading", "ownerId": "owner-1", "createdAt": "2026-07-02T09:14:00Z" },
+        { "id": "4299", "name": "Fabrikam Logistics", "ownerId": "owner-2", "createdAt": "2026-07-05T11:02:00Z" }
+      ]
+    },
+    "list_contacts_for_company": {
+      "results": [
+        { "id": "c-88", "firstName": "Jane", "lastName": "Smith", "email": "jane.smith@northwind.example", "title": "Ops Lead" }
+      ]
+    }
+  },
+
+  "userTurns": ["check on Northwind, then pull contacts for Northwind and for Fabrikam"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "check on Northwind", "toolOffered": "select_phase" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "look up Northwind and its contacts", "status": "pending", "phase": "northwind" }
+              ],
+              "phases": [
+                {
+                  "id": "northwind",
+                  "label": "Look up Northwind and pull its contacts",
+                  "why": "the user asked about Northwind specifically",
+                  "permissions": [
+                    { "handle": "perm:list:crm_company", "why": "to find the company" },
+                    { "handle": "perm:contact_access:crm_company", "why": "to read who works there" }
+                  ],
+                  "slots": [
+                    { "type": "crm_company", "id": "4210", "why": "Northwind Trading is company 4210 — the only company this plan names" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked to check on Northwind", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "centerdot_list_contacts_for_company", "args": { "operation_id": "op-contacts-4210", "_reason": "user asked who works at Northwind", "args": { "companyId": "4210" } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_contacts_for_company",
+        "lastToolResultContains": "jane.smith@northwind.example",
+        "lastToolResultIsError": false
+      },
+      "reply": [{ "toolUse": { "name": "centerdot_list_contacts_for_company", "args": { "operation_id": "op-contacts-4299", "_reason": "user also asked who works at Fabrikam", "args": { "companyId": "4299" } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_contacts_for_company",
+        "lastToolResultNotContains": "jane.smith@northwind.example",
+        "lastToolResultIsError": true
+      },
+      "reply": [{ "text": "Jane Smith works at Northwind Trading; I could not read the contacts for Fabrikam Logistics — that was never part of the approved plan" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": [
+      "Jane Smith works at Northwind Trading",
+      "could not read the contacts for Fabrikam"
+    ],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 2,
+      "cardWhatContains": ["crm_company", "4210"]
+    },
+    "authz": {
+      "decisions": {
+        "crm_company:4210#contact_access": "allowed",
+        "crm_company:4299#contact_access": "denied"
+      },
+      "neverAllowed": ["crm_company:4299#contact_access"]
+    }
+  }
+}

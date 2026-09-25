@@ -1,0 +1,5 @@
+node_modules/
+*.tsbuildinfo
+.vite/
+# Built output is committed under pkg/web/webui/webassets/dist (the parent module),
+# not here — Vite writes there via build.outDir.

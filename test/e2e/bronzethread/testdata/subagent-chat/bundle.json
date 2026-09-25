@@ -1,0 +1,72 @@
+{
+  "name": "subagent-chat",
+  "description": "The whole conversational-delegation chain, end to end, in one run: demo-lead delegates to demo-helper in `chat` mode (permitted by spec.subagentModes -- roster membership alone would have bought single_turn and no channel at all); the child, which is offered ask_parent and deliberately NOT respond_to_user, asks its PARENT a clarifying question through the delegation; delegate RETURNS with that question rather than blocking to a terminal phase; the lead answers with reply_to_subagent naming the handle the delegate result gave it; and the child resumes and completes using the answer. Every claim is made against a TOOL RESULT, never the scripted reply -- a transcript says the same words whether the question arrived or not. The question the child asks names two release lines and the lead's answer picks one, so the child's final summary can only contain '4.2 ... as you specified' if the parent's reply actually reached it: a delegation that silently ran headless, or one whose reply was dropped, cannot produce that string. agentReplyContains is a SETTLE POINT only (it is scripted, so it proves nothing) -- whether the lead relays anything to a human is a second hop this bundle does not claim. Steps are scoped per session with agentClass, so the child's turns are the CHILD's rather than the parent's rules read in order.",
+
+  "agentDir": "testdata/agent-subagent-chat",
+  "agentClass": "demo-lead",
+
+  "defaultUser": "user@example.com",
+
+  "userTurns": [
+    "have the helper summarize the release notes"
+  ],
+
+  "llm": [
+    {
+      "agentClass": "demo-lead",
+      "expect": {
+        "userTextContains": "release notes",
+        "toolOffered": "respond_to_user"
+      },
+      "reply": [{ "toolUse": { "name": "delegate", "args": { "agent": "demo-helper", "task": "Summarize the release notes.", "mode": "chat" } } }]
+    },
+    {
+      "agentClass": "demo-helper",
+      "expect": {
+        "userTextContains": "Summarize the release notes.",
+        "toolOffered": "ask_parent",
+        "toolNotOffered": "respond_to_user"
+      },
+      "reply": [{ "toolUse": { "name": "ask_parent", "args": { "question": "Which release line should I summarize, 4.1 or 4.2?" } } }]
+    },
+    {
+      "agentClass": "demo-lead",
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "4.1 or 4.2",
+        "toolOffered": "reply_to_subagent",
+        "capture": { "delegation": "reply_to_subagent\\(delegation=\"([^\"]+)\"\\)" }
+      },
+      "reply": [{ "toolUse": { "name": "reply_to_subagent", "args": { "delegation": "{{delegation}}", "message": "Summarize the 4.2 release line only." } } }]
+    },
+    {
+      "agentClass": "demo-helper",
+      "expect": {
+        "userTextContains": "Summarize the 4.2 release line only.",
+        "toolNotOffered": "agent_work_complete"
+      },
+      "reply": [{ "toolUse": { "name": "return_result", "args": { "result": "Summarized the 4.2 release line, as you specified." } } }]
+    },
+    {
+      "agentClass": "demo-lead",
+      "expect": {
+        "lastToolResult": "reply_to_subagent",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "4.2 release line, as you specified"
+      },
+      "reply": [{ "toolUse": { "name": "respond_to_user", "args": { "text": "The helper summarized the 4.2 release line." } } }]
+    },
+    {
+      "agentClass": "demo-lead",
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": [
+      "The helper summarized the 4.2 release line."
+    ]
+  }
+}

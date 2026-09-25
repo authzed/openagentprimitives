@@ -1,0 +1,170 @@
+{
+  "name": "plangate-external-covered-by-approved-slot",
+  "description": "An EXTERNAL tool is satisfied by a slot grant the session already holds, and by nothing else. Approving the plan-gate card that names this repository and this permission IS the human approval `external` requires — so the pushes that follow run uninterrupted, and no second card is raised for a decision the human already made.\n\nWHY THE GRANT LEG ALONE. ComposeSlots rewrites the slot permission to `slot_grant_push->interact + owner`, and consulting THAT composed permission was tried and reverted: it cannot tell \"a human approved this instance for this session\" from \"the requester happens to own the resource\", so ambient ownership authorized an irreversible outbound call nobody had seen. The check therefore asks for the `slot_grant_push` RELATION with the SESSION as subject — a tuple only an approval writes. gh-api-is-not-a-bypass still guards the other direction: its fixture seeds `github_repo_url:demo-org/demo-repo#owner` with no slot declared, and its POST stays refused.\n\nThe push is called TWICE on purpose. One call cannot distinguish a grant that persists from a one-shot approval consumed at the first use, and the durability of the grant is the whole claim. Both are asserted on the TOOL RESULT, never the reply.\n\napprovalPrompts is 1: the plan-gate card, and nothing after it. `tool_approval` stays in autoApprove deliberately — a regression that re-raises the per-call card would be auto-approved and surface as a count of 2 or 3 here, rather than hanging the run.\n\nThe recorded decision is `allowed`, and that is the assertion that would catch the check silently widening: it must be the grant leg saying yes. This fixture ships NO SpiceDBBootstrap and NO `owner` relationship on extrepo_repo, so there is no ambient ownership available to produce a false allow.\n\nSTANDING. extrepo_repo declares standing session-only: nobody writes an owner tuple for every git remote a session might touch, which is the entire reason the type is session-only. The sibling claim — that an external tool with NO declared slot still raises a card a session-only type can actually approve — moved to plangate-external-unslotted-still-approvable, because a covering grant means this bundle no longer reaches buildToolCallApprovalAsk at all.\n\nThe resource type is named extrepo_repo rather than git_repo because guardian composes every builtin toolkit's spicedbSchema into one cluster-wide schema, and colliding with the real git toolkit's git_repo makes guardian refuse to write any schema at all.",
+  "agentDir": "testdata/plangate-external-covered-by-approved-slot",
+  "agentClass": "extrepo-fixture",
+  "autoApprove": [
+    "plan_phase",
+    "plan_amendment",
+    "tool_approval"
+  ],
+  "userTurns": [
+    "I need to push my committed changes to https://github.com/fictional-forge/beacon-service — check things are ready first, then go ahead and push it twice"
+  ],
+  "toolOutputs": {
+    "status": {
+      "ready": true
+    },
+    "push": {
+      "status": "pushed",
+      "commitSha": "f00dfeed01cafe"
+    }
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "check things are ready first"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "s1",
+                  "label": "push to the repository",
+                  "status": "pending",
+                  "phase": "push_phase"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "push_phase",
+                  "label": "Push to the repository",
+                  "why": "the user asked me to push their committed changes",
+                  "permissions": [
+                    {
+                      "handle": "perm:push:extrepo_repo",
+                      "why": "pushing requires write access to the repository"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "extrepo_repo",
+                      "id": "https://github.com/fictional-forge/beacon-service",
+                      "why": "the user named this repository"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "extrepo_status",
+            "args": {
+              "operation_id": "op-status",
+              "_reason": "checking the push tool is ready",
+              "args": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "extrepo_status",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "extrepo_push",
+            "args": {
+              "operation_id": "op-push-1",
+              "_reason": "pushing the user's committed changes",
+              "args": {
+                "repoUrl": "https://github.com/fictional-forge/beacon-service"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "extrepo_push",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "f00dfeed01cafe",
+        "lastToolResultNotContains": "no one has standing"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "extrepo_push",
+            "args": {
+              "operation_id": "op-push-2",
+              "_reason": "pushing a second time in the same session",
+              "args": {
+                "repoUrl": "https://github.com/fictional-forge/beacon-service"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "extrepo_push",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "f00dfeed01cafe",
+        "lastToolResultNotContains": "no one has standing"
+      },
+      "reply": [
+        {
+          "text": "pushed your changes to the repository, twice"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "pushed twice"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "pushed your changes to the repository, twice"
+    ],
+    "authz": {
+      "decisions": {
+        "extrepo_repo:https=3A//github=2Ecom/fictional-forge/beacon-service#push": "allowed"
+      }
+    },
+    "planGate": {
+      "frozenPhases": 1,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 1
+    }
+  }
+}

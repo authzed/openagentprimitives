@@ -1,0 +1,39 @@
+# examples/hubspot-companies/oap.yaml
+#
+# The .oap manifest for hubspot-companies: a read-only HubSpot CRM reporting
+# agent. A bento cron fires a weekly digest of newly-created, high-scoring
+# companies, tags each company's owner via the channel directory, and delivers
+# the summary to Slack. Contacts on a named company are gated behind an
+# owner-approval flow.
+#
+#   oap agent lint    examples/hubspot-companies
+#   oap agent install examples/hubspot-companies --namespace default
+#
+# agent.name / displayName / description are INHERITED from the bundled
+# AgentClass (manifests/agentclass.yaml); requires.secrets/skills likewise —
+# authoring any here is refused by `oap agent lint`. The HubSpot MCP OAuth
+# credential is not a bundle secret: it is minted by
+# `oap agent setup-identity hubspot-companies` (the oauth-mcp browser flow).
+oapFormatVersion: "1"
+agent:
+  version: "1.0.0"
+compat:
+  minApVersion: "0.9.0"
+  crdApiVersion: agentprimitives.authzed.com/v1alpha1
+requires:
+  # Channels are never bundled content — they are per-install deployment config
+  # collected by each kind's wizard at install time. Declaring them here NAMES
+  # them as required so `oap agent install` can drive each wizard.
+  channels:
+    - kind: bento
+      role: input
+      name: hubspot-weekly-digest
+      purpose: >-
+        Cron trigger that starts one digest session on a schedule. The bento
+        wizard collects the interval (e.g. "0 9 * * MON") and the Bloblang
+        mapping whose output becomes the prompt (e.g. "What companies were
+        added to HubSpot in the last 7 days?").
+    - kind: slack
+      role: output
+      name: hubspot-slack
+      purpose: "Where the qualified-companies digest is delivered."

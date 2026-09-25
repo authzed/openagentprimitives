@@ -1,0 +1,80 @@
+{
+  "name": "plangate-external-unslotted-still-approvable",
+  "description": "An EXTERNAL tool whose resource type is NOT a declared slot still raises a card, and that card is one a session-only type can actually approve.\n\nThis is the other half of plangate-external-covered-by-approved-slot. There, a plan approval writes a slot grant and the external calls that follow need no card of their own. Here the class declares no slots, so no `slot_grant_push` relation exists in the composed schema, nothing could ever have been approved against this instance, and the call must stop and ask a human — which is what `external` has always meant.\n\nTWO CLAIMS, both of which used to live in the sibling bundle:\n\n1. The check does not query for a grant on a type that cannot carry one. ComposeSlots only writes the grant relation for a DECLARED slot, so the query would error, and the error arm would report a SpiceDB failure for what is really the ordinary case of an external tool with no instance axis. Covered directly at the check layer by TestCheck_External_UndeclaredSlotTypeDeniesWithoutQuerying; covered here end-to-end by the run completing without a SpiceDB error reaching the tool result.\n\n2. The card routes to someone who can approve it. soloext_repo declares standing session-only and this bundle writes no `owner` tuple for it — nobody writes an owner tuple for every remote a session might touch, which is the entire reason the standing exists. Resolving the approver pool from the resource's owner-set therefore finds it empty and fails closed with \"no one has standing to approve\", making the tool permanently unapprovable. Observed live on 2026-08-21 with every suite green.\n\n`lastToolResultNotContains: \"no one has standing\"` is the assertion carrying claim 2: an empty-pool regression surfaces as that exact string in the tool result rather than as a missing approval.\n\nplanGate.noRecords pins that no plan gate was involved at all: the approval here came from the per-call tool card, which is the distinction between this bundle and its sibling. The gate-card COUNT is deliberately not asserted — approvalPrompts counts cards the GATE published, and there is no gate here. The recorded decision is `denied`, which is correct and load-bearing: for `external` the Check never authorizes on its own, it defers to a human, so `denied` proves the call reached approval rather than being silently auto-allowed.\n\nThe resource type is named soloext_repo — not git_repo, and not the sibling's extrepo_repo — because guardian composes every MCPServer's spicedbSchema into one cluster-wide schema, so colliding with the real git toolkit makes guardian refuse to write any schema at all, and colliding with the sibling would make the two bundles fight over one type definition.",
+  "agentDir": "testdata/plangate-external-unslotted-still-approvable",
+  "agentClass": "soloext-fixture",
+  "autoApprove": [
+    "tool_approval"
+  ],
+  "userTurns": [
+    "please push my committed changes to https://github.com/fictional-forge/beacon-service"
+  ],
+  "toolOutputs": {
+    "push": {
+      "status": "pushed",
+      "commitSha": "f00dfeed01cafe"
+    }
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "push my committed changes"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "soloext_push",
+            "args": {
+              "operation_id": "op-push-1",
+              "_reason": "pushing the user's committed changes",
+              "args": {
+                "repoUrl": "https://github.com/fictional-forge/beacon-service"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "soloext_push",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "f00dfeed01cafe",
+        "lastToolResultNotContains": "no one has standing"
+      },
+      "reply": [
+        {
+          "text": "pushed your changes to the repository"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "pushed once"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "pushed your changes to the repository"
+    ],
+    "authz": {
+      "decisions": {
+        "soloext_repo:https=3A//github=2Ecom/fictional-forge/beacon-service#push": "denied"
+      }
+    },
+    "planGate": {
+      "noRecords": true
+    }
+  }
+}

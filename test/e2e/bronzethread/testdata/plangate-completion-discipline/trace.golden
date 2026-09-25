@@ -1,0 +1,5 @@
+gate  phase_approved  phase=0
+gate  phase_completed phase=0
+gate  phase_selected  phase=1
+gate  plan_approved   phase=0
+gate  plan_approved   phase=1

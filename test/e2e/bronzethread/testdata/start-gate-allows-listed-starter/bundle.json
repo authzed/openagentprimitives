@@ -1,0 +1,22 @@
+{
+  "name": "start-gate-allows-listed-starter",
+  "description": "A class with an explicit allowlist (platformAdminsMayStart: false, onlyStartersInteract: true) admits a listed starter end to end: the session starts, the agent answers. This is the non-misfire control for the start gate — the refusal path is proven by the agentsession integration test against real SpiceDB, and a refusal bundle joins the scenario set once the fake channel kind renders metaagent notices as posts.",
+
+  "agentDir": "testdata/agent-gatebot",
+  "agentClass": "gatebot",
+
+  "defaultUser": "user@example.com",
+
+  "userTurns": ["are you there?"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "are you there" },
+      "reply": [{ "text": "hello from gatebot" }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["hello from gatebot"]
+  }
+}

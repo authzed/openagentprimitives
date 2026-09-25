@@ -1,0 +1,53 @@
+# Fixture agent for the archive fan-out bundle.
+#
+# Both gate legs are OPEN here: the AgentClass grants `attachments` and the
+# Channel opts in. This bundle's subject is what happens once an archive is
+# actually ingested — the index, and a member fetched out of it — which is the
+# opposite of agent-notebot's subject, where the point is a CLOSED gate.
+#
+# Two fixtures rather than one parameterized one, because a bundle that had to
+# configure the gate itself could not then assert on the gate.
+apiVersion: v1
+kind: Secret
+metadata: {name: notebot-attachments-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: notebot-attachments-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: notebot-attachments, namespace: default}
+spec:
+  displayName: NoteBot (attachments)
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: notebot-attachments-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You read attached files and summarize them.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  # Grants fetch_artifact, which is how the agent reads the archive's index and
+  # then a member named in it.
+  capabilities:
+    attachments: {}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: notebot-attachments-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: notebot-attachments
+  credentialsRef: {secretName: notebot-attachments-fake-creds}
+  fake: {echo: false}
+  attachments:
+    enabled: true

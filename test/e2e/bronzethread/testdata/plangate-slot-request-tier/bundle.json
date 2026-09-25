@@ -1,0 +1,71 @@
+{
+  "name": "plangate-slot-request-tier",
+  "description": "A phase whose handles are ALL readonly would normally auto-approve at tier 0 and cost nobody anything. This one also requests a slot — and approving a slot request writes a SpiceDB grant on somebody's resource, which no amount of readonly-ness makes free. So the phase must reach a human: exactly one card, where the identical phase without the slot request would produce none. Without this rule the cheapest possible phase acquires an instance grant with nobody asked.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-enforcing"],
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["list the companies"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies", "toolOffered": "select_phase" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "list companies", "status": "pending", "phase": "recon" }
+              ],
+              "phases": [
+                {
+                  "id": "recon",
+                  "label": "List the companies",
+                  "why": "the user asked which companies exist",
+                  "permissions": [
+                    { "handle": "perm:list:crm_company", "why": "to list companies" }
+                  ],
+                  "slots": [
+                    { "type": "crm_company", "why": "I will need to reach a specific company" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [{ "text": "no companies found" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["no companies found"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 1
+    }
+  }
+}

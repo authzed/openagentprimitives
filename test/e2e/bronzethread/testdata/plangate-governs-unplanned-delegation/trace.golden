@@ -1,0 +1,2 @@
+gate  gate_would_deny phase=0 handle=tool:delegate tool=delegate outcome=denied
+gate  plan_approved   phase=0

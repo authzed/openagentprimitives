@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spicebox-webd-default
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spicebox-webd-default
+subjects:
+  - kind: ServiceAccount
+    name: spicebox-webd
+    namespace: agentprimitives-system

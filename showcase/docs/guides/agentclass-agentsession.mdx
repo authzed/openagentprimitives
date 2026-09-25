@@ -1,0 +1,59 @@
+export const meta = {
+  title: 'AgentClass & AgentSession',
+  section: 'Reference',
+  group: 'Agent definition',
+  order: 2010,
+  description:
+    'The template/instance split, field by field: what an AgentClass declares, what an AgentSession scopes, and the three ways a session starts.',
+}
+
+# AgentClass & AgentSession
+
+<p className="doc-lede">
+  An <code>AgentClass</code> is everything an agent is <em>allowed to be</em> — reviewed once, pinned, reused.
+  An <code>AgentSession</code> is one <em>run</em> of that class — scoped, budgeted, audited, and torn down
+  when it's done. The class is the thing you trust; the session is the thing that acts.
+</p>
+
+## The AgentClass: the reviewable template
+
+An AgentClass is a Kubernetes resource, so you diff it, review it, and pin it like any other. In one place it
+declares the whole agent:
+
+- **Model** — which LLM (or nothing, to use the [cluster default](#/install-overview)).
+- **Prompt** — the system prompt that defines the agent's job.
+- **Tools** — the toolspecs, MCP servers, and skills it may use, and nothing else.
+- **Identity** — whose credentials it acts as ([agent, passthrough, ask, or dynamic](#/identity-modes)).
+- **Authorization** — the permissions and resource *slots* it can be granted, checked per action.
+- **Channels** — where it can be reached (bound separately, per install).
+- **Budgets** — ceilings on tokens, turns, and wall-clock time.
+
+Because it's one declarative artifact, "what can this agent do?" has a single answer you can read before it
+ever runs — not something you reconstruct from scattered code.
+
+## The AgentSession: one disposable run
+
+An AgentSession references a class (`agentClassRef`) and represents a single conversation or task. It gets its
+own workspace, its own budget, and its own audit trail, and it is reaped when it goes idle. A session can
+never exceed what its class allows — it inherits the class's tools, identity, and authorization, and narrows
+from there. Its `status` tracks the live phase (starting, running, idle, asleep, completed) and the record of
+what happened.
+
+<Screenshot name="agent-definition-sessions" />
+
+## Three ways a session starts
+
+The same class produces sessions through any surface:
+
+- **From a channel** — someone messages the agent in Slack, or a webhook fires. The inbound message opens a
+  session bound to that thread. This is the common case.
+- **From the CLI** — `oap agent chat <class>` for an interactive terminal session, or `oap agent run <class>
+  --prompt "…"` for a scripted one-shot.
+- **From the cluster** — `kubectl apply` (or `oap agent apply`) an AgentSession manifest directly, for a
+  headless run.
+
+<Callout kind="security" title="The class is the trust boundary, not the session">
+  You review and approve the <strong>class</strong>; every session is bounded by it. A session started by a
+  stranger in Slack is still confined to the tools, identity, and authorization the class declared — the worst
+  a session can do is already written down and already reviewed.
+</Callout>

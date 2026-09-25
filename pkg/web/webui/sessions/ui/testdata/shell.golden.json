@@ -1,0 +1,74 @@
+{
+  "subject": "alice@example.com",
+  "sessions": [
+    {
+      "ns": "demo-ns",
+      "name": "alpha",
+      "class": "demo-agent",
+      "title": "Demo Agent",
+      "phase": "Active",
+      "awaitingHuman": false,
+      "ended": false,
+      "startedAt": "2026-01-02T00:00:00Z"
+    },
+    {
+      "ns": "demo-ns",
+      "name": "beta",
+      "class": "demo-agent",
+      "title": "Demo Agent",
+      "phase": "Waiting for you",
+      "awaitingHuman": true,
+      "ended": false,
+      "startedAt": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "notices": {
+    "unavailable": 2,
+    "truncated": false,
+    "bootstrapUnavailable": false
+  },
+  "selected": {
+    "ns": "demo-ns",
+    "name": "alpha",
+    "sessionOrigin": "attached",
+    "chrome": {
+      "initialState": "collapsed"
+    },
+    "offersAgentUI": true,
+    "view": {
+      "kind": "agent-ui",
+      "ui": {
+        "ns": "demo-ns",
+        "name": "alpha",
+        "declaration": {
+          "view": {
+            "component": "ap:stack",
+            "children": [
+              {
+                "component": "ap:heading",
+                "props": {
+                  "level": 1,
+                  "text": "Fleet Console"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "chat": {
+        "ns": "demo-ns",
+        "name": "alpha"
+      }
+    }
+  },
+  "startableClasses": [
+    {
+      "ns": "demo-ns",
+      "class": "demo-agent",
+      "title": "Demo Agent",
+      "startable": true,
+      "offersUI": true
+    }
+  ],
+  "canStartSessions": true
+}

@@ -1,0 +1,182 @@
+# codebot AgentClass — a userPassthrough coding agent.
+#
+# The user links two credentials before their first session:
+#   github-token    — a GitHub PAT (used by both git and gh; unified via
+#                     credentialRemap on the gitlike bundle)
+#   anthropic-oauth — the user's Claude Code subscription token (obtained
+#                     via `claude setup-token` and linked through identityd)
+#
+# The orchestrator LLM (the cluster default model — no model is pinned here)
+# is driven by the cluster's central default-model token, registered once via
+# `oap settings wizard` / `oap init` (ClusterAgentSettings.spec.modelCatalog) —
+# never a per-agent Secret. The inner Claude Code process uses the USER's own
+# subscription token — never the platform key.
+#
+# metadata.namespace is intentionally omitted — `oap agent install --namespace`
+# stamps it.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: codebot
+spec:
+  displayName: Codebot
+  description: "A passthrough coding agent: clones a repo, edits with the user's Claude Code, commits AS the user, opens a PR."
+  credentialExplanations:
+    - credential: github-token
+      reason: "So codebot can clone the repo and push commits and PRs as you."
+    - credential: anthropic-oauth
+      reason: "So codebot can run Claude Code as you to make the edits."
+  identityMode: userPassthrough
+  # model omitted — inherits the cluster default (ClusterAgentSettings.spec.modelCatalog default entry).
+  authz:
+    toolCalls:
+      # Bootstrap example. Flip to "enforcing" once SpiceDB grants are populated.
+      mode: permissive
+    slots:
+      # The instance axis. Without a declared slot a plan can only ever say "I
+      # need a git_repo", so the approver agrees to a CATEGORY and every actual
+      # repository has to be decided later, one prompt at a time. Declaring it
+      # is what lets the agent name the repository in its plan and the human
+      # approve that repository once.
+      #
+      # push, because that is the authority worth asking about: the flow clones,
+      # commits and pushes, and pushing is the step with an effect outside the
+      # session that a person should have agreed to by name.
+      #
+      # Declaring this is only sound because git's checks key a repository URL
+      # through an INJECTIVE chain (normalize_url + spicedb_escape). With a
+      # lossy one, the URL shown on the card would not be the only URL that
+      # reaches the grant — and validatePermissionShape now refuses that on a
+      # toolkit, so a class declaring this slot against a lossy check will not
+      # become Valid rather than silently approving the wrong repository.
+      - resourceType: git_repo
+        description: "Git repository URL the agent will clone from and push to (e.g. https://github.com/<owner>/<repo>)."
+        permission: push
+        # The CEILING an approval on this slot may bind within — read, write and
+        # fetch alongside push. Declaring a permission GRANTS nothing: it makes
+        # the composed schema carry a `slot_grant_<permission>` relation, which
+        # is what makes a grant for it writable at all.
+        #
+        # Without them this flow cannot finish. The plan approves `push`, then
+        # the agent runs `git status`/`git add`/`git commit` — which key on
+        # read/write, not push — and the plan gate raises an amendment. The
+        # human approves it, no `slot_grant_read` relation exists to bind, the
+        # approval buys nothing, and the very next call asks again. Observed
+        # live on 2026-08-21 as the same amendment card over and over.
+        #
+        # fetch is here for the same reason: clone/pull key on fetch, not push.
+        permissions: [read, write, fetch]
+      # The GitHub side of the same instance axis. Without it a `gh` approval has
+      # no slot to bind to: BindApproved writes a slot_grant tuple whatever the
+      # tool-call mode is, and with no slot declared there is no
+      # slot_grant_<permission> relation for it, so the click fails with
+      # FailedPrecondition and the PR never opens. Observed live 2026-08-21.
+      #
+      # write is primary — opening the pull request is the step that leaves the
+      # session. read comes along so viewing the repo and its PRs is covered by
+      # the same approval rather than prompting again.
+      #
+      # admin (merge) and create_repo are deliberately ABSENT. They are in the
+      # toolkit's schema, and leaving them out of this ceiling is what stops an
+      # approval on this slot ever binding them: a typo-fixing agent has no
+      # business merging its own PR or creating repositories.
+      - resourceType: github_repo
+        description: "GitHub repository the agent reads and opens pull requests against (owner/name)."
+        permission: write
+        permissions: [read]
+    planGate:
+      # logging — the gate runs in full (enumeration, ceiling, severity, the
+      # append-only write) but publishes no card and blocks nothing, so an
+      # agent's phases are recorded without a human being asked anything.
+      #
+      # Set EXPLICITLY rather than left out. Omitting it defaults to `disabled`,
+      # and a disabled gate is indistinguishable from a working one until you
+      # read the records: every call is attributed to the implicit phase and
+      # comes back `gate_allowed`, so a session looks gated and is not. That is
+      # not hypothetical — two live sessions were run and analysed on this
+      # cluster before anyone noticed the gate had never been on.
+      #
+      # It is also what produces the dataset that decides whether ENFORCING is
+      # safe to turn on. A cluster running with it unset contributes nothing to
+      # that question while appearing to.
+      # enforcing — the gate publishes the approval card and blocks on the
+      # answer. logging runs every step EXCEPT those two, so it records a
+      # complete-looking trace while showing nobody anything; it is the right
+      # mode for gathering the dataset and the wrong one for exercising the
+      # approval surface, because the card it would have published never
+      # reaches a human.
+      mode: enforcing
+      # requirePlan is deliberately NOT set: unset derives from the mode, so a
+      # running gate requires a plan. Spelling it out here would hide the fact
+      # that the mode alone is now enough.
+  systemPrompt:
+    inline: |
+      You are a coding agent that drives Claude Code AS the user who started
+      this thread. Credentials are the user's own (passthrough): git/gh use
+      their GitHub PAT; `claude` uses their Claude subscription token.
+
+      You have two sandbox bundles sharing /workspace:
+      1. gitlike — `git` and `gh` (the GitHub CLI). Auth is injected; never
+         handle the token. There is NO preset committer identity — you set it
+         per-user (see below).
+      2. codelike — `claude` (Claude Code), editing /workspace.
+
+      ## Establish the user's git identity FIRST
+      Before committing, derive the user's GitHub identity so commits are
+      attributed to them:
+        gh api user
+      Read `login` and `id` from the JSON. Use:
+        name  = login
+        email = <id>+<login>@users.noreply.github.com
+      Pass these on every commit with the global -c flags, e.g.:
+        git -c user.name="<login>" -c user.email="<id>+<login>@users.noreply.github.com" -C /workspace/<dir> commit -m "<msg>"
+
+      ## Task flow
+      1. Clone into the shared workspace with a PLAIN https URL (never embed a
+         token): git clone https://github.com/<owner>/<repo> /workspace/<dir>
+         Every later git command needs -C /workspace/<dir> before the subcommand.
+      2. Drive Claude Code via codelike_claude-oauth with:
+         --print --output-format stream-json --include-partial-messages --verbose "<task>"
+         Give ONE complete, self-contained instruction: which path under
+         /workspace to work in and exactly what to change. End that instruction
+         by telling Claude to finish with a short summary of what it changed and
+         the files it touched — that summary is returned to you as the tool
+         result, so use it to write the commit message and the PR body, and to
+         detect when Claude could not complete the task.
+      3. Stage + commit AS the user (see the -c flags above):
+         git -C /workspace/<dir> add <files>
+         git -c user.name=... -c user.email=... -C /workspace/<dir> commit -m "<msg>"
+      4. Branch + push: git -C /workspace/<dir> checkout -b <branch> ;
+         git -C /workspace/<dir> push -u origin <branch>
+      5. Open the PR: gh pr create --repo <owner>/<repo> --base main --head <branch> --title "<t>" --body "<b>"
+      6. Reply with the PR URL.
+
+      ## Constraints
+      - Never run git/gh from codelike, never run claude from gitlike.
+      - Never put a token in a URL — auth is automatic.
+      - Commits are attributed to the user but are NOT cryptographically
+        signed ("Unverified" is expected in v1).
+      - Confirm in-thread before anything destructive (force-push, branch/PR deletion).
+
+      ## Ending the session
+      End with a one-paragraph summary including the PR URL.
+  toolBundles:
+    - name: gitlike
+      class: gitlike-bundle
+      toolspecs:
+        - git-rw
+        - gh-pr
+      # git's toolkit declares GIT_TOKEN → credential git-token.
+      # gh's toolkit declares GITHUB_TOKEN → credential github-token.
+      # Remap git-token → github-token so both tools share the user's single
+      # GitHub PAT (one credential link, two tools).
+      credentialRemap:
+        git-token: github-token
+    - name: codelike
+      class: codelike-bundle
+      toolspecs:
+        - claude-oauth
+  budget:
+    maxTurns: 360
+    maxTokens: 40000000
+    maxDuration: 60m

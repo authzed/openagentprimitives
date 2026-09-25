@@ -1,0 +1,46 @@
+export const meta = {
+  title: 'Channels & continuity',
+  section: 'Guides',
+  group: 'Concepts',
+  order: 150,
+  description:
+    'Agents are reached where teams already work; threads continue and approvals live in-channel.',
+}
+
+# Channels & continuity
+
+<p className="doc-lede">
+  An agent is only useful if a human can reach it, follow what it's doing, and step in. The usual failures: the
+  agent lives where nobody is (a separate web app instead of Slack or the ticket queue), there's no real thread
+  to follow (only a transcript the framework owns), and anyone who can type can drive it. OAP reaches agents
+  <strong>where teams already work</strong>, with durable threads and approvals that live in-channel.
+</p>
+
+<Clip name="channels-demo" />
+
+## How it works
+
+A **channel** is a pluggable transport: Slack, a browser tab, a terminal, a webhook. The same agent is reachable
+through any of them, and the conversation is a real, durable thread — it continues across turns, and everyone in
+it sees the same plan, the same status, and the same approvals. In Slack you can even **@-mention the bot into a
+thread that's already going**, bringing the prior discussion and the people in it into the session. Crucially, the approval cards a human acts on
+render *in the channel*, next to the work, rather than in some separate console — and who is allowed to drive or
+approve is an authorization question, not "whoever can type."
+
+## Go deeper
+
+- **[Slack](#/slack)** — the richest surface: the app-provisioning wizard, threads, in-channel interactions, and
+  the App Home hub. (Most of the [Authorization](#/authorization) guides are shown through Slack.)
+- **[Browser web chat](#/browser-chat)** — the built-in `/sessions` chat served by the web daemon.
+- **[Local terminal](#/terminal-chat)** — a full-screen TUI (`oap agent chat`) with zero external setup.
+- **[Continuity & interactions](#/continuity-interactions)** — how threads persist and how approvals, notices, and status render across kinds.
+
+<Callout kind="security" title="How this addresses the OWASP Agentic Top 10">
+  <ul>
+    <li><a href="#/owasp-top10#asi09">ASI09 — Human-Agent Trust Exploitation</a> (substantial): the in-channel
+      approval design — explicit confirmation on risky actions, an injection-isolated summarizer, and the
+      approver derived from the session, not the sender.</li>
+    <li><a href="#/owasp-top10#asi07">ASI07 — Insecure Inter-Agent Communication</a> (N/A): OAP's channels are
+      human↔agent, not agent↔agent, so there is no inter-agent bus to secure.</li>
+  </ul>
+</Callout>

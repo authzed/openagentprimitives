@@ -1,0 +1,78 @@
+{
+  "name": "plangate-phase-approval",
+  "description": "The feature's namesake: a human approves the plan BEFORE it runs. The agent declares a phase that DOES hold the reach it needs, so the ceiling admits the call — but the phase is not cleared to run until somebody says so. The phase is then used TWICE, which is what makes the approval's durability visible: the gate folds its append-only log on every permissioned call, so a decision that never reaches that log leaves the phase unapproved and the second call asks the same human the same question again.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-enforcing"],
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["list the companies"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies", "toolOffered": "select_phase" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "list companies", "status": "pending", "phase": "recon" }
+              ],
+              "phases": [
+                {
+                  "id": "recon",
+                  "label": "List the companies",
+                  "why": "the user asked which companies exist",
+                  "permissions": [
+                    { "handle": "perm:list:crm_company", "why": "to list companies" },
+                    { "handle": "perm:contact_access:crm_company", "why": "to read who works there" }
+                  ],
+                  "slots": [
+                    { "type": "crm_company", "why": "which companies exist is not known until this phase has looked" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "re-reading the list to confirm it is genuinely empty", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [{ "text": "no companies found" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["no companies found"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 1,
+      "cardWhatContains": ["crm_company"],
+      "cardWhatOmits": ["://"]
+    }
+  }
+}

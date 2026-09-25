@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: spicebox-gateway
+  namespace: agentprimitives-system
+  labels:
+    app.kubernetes.io/name: spicebox-operator
+    app.kubernetes.io/component: gateway
+spec:
+  selector:
+    app.kubernetes.io/name: spicebox-operator
+  ports:
+    - name: gateway
+      port: 8443
+      targetPort: gateway
+      protocol: TCP
+---
+# spicebox-operator: exposes the operator's debug HTTP port (8082).
+# Hosts the bearer-authed /debug/artifact endpoint and the per-session
+# /memory/{ns}/{name}* endpoints used by AgentSession runner pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: spicebox-operator
+  namespace: agentprimitives-system
+  labels:
+    app.kubernetes.io/name: spicebox-operator
+    app.kubernetes.io/component: debug
+spec:
+  selector:
+    app.kubernetes.io/name: spicebox-operator
+  ports:
+    - name: debug
+      port: 8082
+      targetPort: debug
+      protocol: TCP

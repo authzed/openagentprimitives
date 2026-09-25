@@ -1,0 +1,43 @@
+{
+  "name": "preferences-save-and-recall",
+  "description": "The user asks for German replies; the agent saves the preference (one confirm card), and a later turn's get_preferences returns the saved value from durable storage — recall exercised on a separate turn so a per-turn re-grant cannot fake persistence.\n\nEach user turn is three LLM steps, not one: after respond_to_user the runner makes one more model call carrying that tool's own result, and only the model's agent_work_complete actually ends the turn — mirrors slot-approval-binds-one-company's documented shape for the same reason: fewer surprises about what a given Send actually carries.",
+
+  "agentDir": "testdata/agent-prefdemo",
+  "agentClass": "prefdemo",
+  "autoApprove": ["user_preference_confirm"],
+
+  "userTurns": ["please reply in German from now on", "what are my current preferences?"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "German", "toolOffered": "set_preference" },
+      "reply": [{ "toolUse": { "name": "set_preference", "args": { "key": "language", "value": "de" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "set_preference", "lastToolResultContains": "saved: language" },
+      "reply": [{ "text": "Gespeichert — I will reply in German." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "saved the language preference" } } }]
+    },
+    {
+      "expect": { "userTextContains": "current preferences", "toolOffered": "get_preferences" },
+      "reply": [{ "toolUse": { "name": "get_preferences", "args": {} } }]
+    },
+    {
+      "expect": { "lastToolResult": "get_preferences", "lastToolResultContains": "\"source\": \"user\"" },
+      "reply": [{ "text": "language is set to de" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "reported current preferences" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["German", "language is set to de"],
+    "approvalPrompts": 1,
+    "toolsCalled": ["set_preference", "get_preferences"]
+  }
+}

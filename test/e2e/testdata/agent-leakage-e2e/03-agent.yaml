@@ -1,0 +1,77 @@
+# AgentClass + Channel for the agent-leakage-e2e fixture.
+#
+# AgentClass.spec.authz.informationLeakage.mode: enforcing — the
+# canonical configuration the e2e tests exercise. Per-test overrides
+# (logging, disabled) come via ExtraManifests in the test setup.
+#
+# Channel kind=fake — the harness drives inbound messages through
+# the fake driver and observes outbound + leakage-approval prompts
+# through Driver.LeakageApprovalPrompts.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: leakage-e2e
+  namespace: default
+spec:
+  displayName: LeakageE2E
+  description: "E2E fixture for the information-leakage gate."
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: leakage-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      Available tools (LLM-facing prefixed names):
+        - leakage_get_record(id): fetch a record by id
+        - leakage_get_record_uuid(id): fetch a record; result carries the UUID
+        - leakage_unmapped_tool(id): NOT in toolResourceMap; fail-closed under enforcing
+
+      Operate based on the user's request — typically you'll call one
+      of the gated tools and respond with a summary of the result.
+  agentIdentity: leakage-identity
+  mcpServers:
+    - name: leakage
+      ref: leakage-records
+  authz:
+    # Consolidated approval-WAIT timeout (tool-call, leakage share, cold-start).
+    approvalTimeout: 30s
+    # Tool-call authz disabled — the leakage gate is the only authz
+    # layer the test exercises.
+    toolCalls:
+      mode: disabled
+      # Approver subject used by the leakage approval flow when leak
+      # is detected. The fixture seeds group:approvers#member with
+      # approver@example.com via SpiceDBBootstrap.
+      approver: "group:approvers#member"
+    informationLeakage:
+      mode: enforcing
+      approvalTTL: 1m
+      onUnsupportedChannel: blockBinding
+      # Single-user bypass off: even with a single-user channel the
+      # gate runs. This lets tests exercise the gate against the
+      # session initiator alone if needed.
+      singleUserBypass: false
+      loggingNoticeToRequester: false
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: leakage-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: leakage-e2e
+  credentialsRef:
+    secretName: leakage-fake-creds
+  fake:
+    echo: false

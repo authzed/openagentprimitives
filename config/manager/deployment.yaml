@@ -1,0 +1,274 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicebox-operator
+  namespace: agentprimitives-system
+  labels:
+    app.kubernetes.io/name: spicebox-operator
+spec:
+  replicas: 1
+  # RWO + replicas:1 with the default RollingUpdate strategy would deadlock on
+  # redeploy: the new pod can't attach spicebox-operator-memory (ReadWriteOnce)
+  # while the old pod still holds it, and the old pod is never torn down
+  # because the rollout waits on the new pod becoming Ready first. Recreate
+  # tears the old pod down before scheduling the new one.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spicebox-operator
+    spec:
+      serviceAccountName: spicebox-operator
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operator
+          image: spicebox-operator:dev
+          args:
+            - --runner-image=agentprimitives-runner:dev
+            - --sandbox-image=spicebox-sandbox:dev
+            - --leader-elect=true
+            - --metrics-bind-address=127.0.0.1:8080
+            - --health-probe-bind-address=:8081
+            - --debug-bind-address=:8082
+            - --gateway-bind-address=:8443
+            - --channelsd-memory-token-file=/var/run/operator/channelsd-memory-token
+            - --webd-memory-token-file=/var/run/operator/webd-memory-token
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # GOTRACEBACK=all ensures the Go runtime prints a stack trace
+            # from EVERY goroutine on panic — not just the panicking one.
+            # Without this, a panic in a goroutine the operator forgot
+            # to wrap with explicit recovery produces only the panicking
+            # frame, hiding the trigger. The slice-2 silent-crash
+            # incident motivated turning this on in production.
+            - name: GOTRACEBACK
+              value: all
+            # Guardian schema-composition controller activation: when set,
+            # the operator runs the AgentSessionGrants reconciler which
+            # composes the unified SpiceDB schema from MCPServer
+            # spiceDBSchema fragments + AgentSessionGrants pairs and
+            # writes it back. Unset → no-op (slice-2 behavior).
+            - name: SPICEDB_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: spicebox-spicedb-config
+                  key: endpoint
+                  optional: true
+            # Dev cluster runs SpiceDB plaintext on :50051; channelsd
+            # defaults its --spicedb-insecure flag to true. Mirror that
+            # for the operator's guardian client. Flip to "false" for
+            # TLS-fronted deployments.
+            - name: SPICEDB_INSECURE
+              value: "true"
+            # Preshared bearer token for the SpiceDB gRPC client. The
+            # secret is created by `oap init`; the optional flag lets
+            # the operator boot before init has run (the guardian
+            # controller will simply log unauthenticated errors until
+            # the secret exists and a pod restart picks it up).
+            - name: SPICEDB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: spicebox-spicedb-token
+                  key: token
+                  optional: true
+            - name: POSTGRES_URI
+              valueFrom:
+                secretKeyRef:
+                  name: spicebox-postgres-token
+                  key: uri
+                  optional: true
+            - name: GRAPHITI_ENDPOINT
+              value: "http://spicebox-graphiti.agentprimitives-system.svc:8000"
+            - name: EMBEDDING_ENDPOINT
+              value: "https://api.openai.com"
+            # extractord (config/extractord/) is part of the base bundle, not
+            # opt-in like graphiti/embedding — every install gets it, so this
+            # is a fixed in-cluster Service DNS name, not a configMapKeyRef.
+            # Matches config/networkpolicy/egress-external.yaml's operator
+            # egress rule for agentprimitives-extractord:8080.
+            - name: EXTRACTORD_ENDPOINT
+              value: "http://agentprimitives-extractord.agentprimitives-system.svc:8080"
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: spicebox-graphiti-config
+                  key: openai-api-key
+                  optional: true
+            # Explicit, fail-closed memory backend selector. The standard/
+            # cluster install bundles PostgreSQL, so the operator runs the
+            # shadow backend (inmem + postgres dual-write) and READS FROM
+            # POSTGRES (durable) — a pod roll no longer wipes what the admin
+            # UI / agents read. `oap init --local` overrides this to "sqlite".
+            # Unset would be a FATAL startup error (no silent inmem fallback).
+            - name: MEMORY_BACKEND
+              value: "postgres"
+            # MEMORY_READ_SOURCE is intentionally NOT set: under
+            # MEMORY_BACKEND=postgres the operator defaults reads to secondary
+            # (postgres). Set it to "primary" only to temporarily read the
+            # ephemeral inmem half for debugging.
+            # Path for the sqlite backend's single-file DB. Unused under the
+            # base MEMORY_BACKEND=postgres default; consumed when `oap init
+            # --local` overrides MEMORY_BACKEND to "sqlite". Lives on the
+            # spicebox-operator-memory PVC mounted below (readOnlyRootFilesystem
+            # means it can't live anywhere else).
+            - name: MEMORY_SQLITE_PATH
+              value: /var/lib/ap/memory.db
+            # NATS connection (TLS + user creds) for operator-published
+            # envelopes (monitoring watchers + the revocation bus). The bundled
+            # NATS server REQUIRES TLS; without the CA the operator's connect
+            # panicked a background goroutine (silent exit-2 on Autopilot).
+            # Reuses channelsd's broad-grant creds exactly as authzd does. The
+            # volume is optional → if the Secret is absent, ConnectFromEnv
+            # returns a clean error and the operator logs + continues (envelope
+            # publishers disabled) instead of crashing.
+            - name: NATS_CREDS_PATH
+              value: "/etc/nats/nats.creds"
+            - name: NATS_CA_PATH
+              value: "/etc/nats/ca.crt"
+            - name: NATS_URL
+              value: nats://spicebox-nats.agentprimitives-system.svc:4222
+            - name: ADMIND_TOKEN_PATH
+              value: /var/run/operator/admind-token/token
+            # Slack user-id of the metaagent bot, from the same optional
+            # Secret authzd and channelsd read. The operator is the sole
+            # writer of Channel.status's MetaagentChannelMembership
+            # condition, and the Slack channel kind resolves the id from
+            # this variable to answer it — without the stanza the operator
+            # process sees "" and the condition can only ever stamp
+            # False/MetaagentAppNotInstalled. optional: true so the operator
+            # boots before an admin creates the Secret; a pod restart picks
+            # the value up (same contract as SPICEDB_TOKEN above).
+            - name: METAAGENT_SLACK_BOT_USER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: agentprimitives-system-metaagent-config
+                  key: slack_bot_user_id
+                  optional: true
+          ports:
+            - containerPort: 8082
+              name: debug
+            - containerPort: 8443
+              name: gateway
+            - containerPort: 9443
+              name: webhook
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          # startupProbe suspends liveness until /healthz starts serving: the
+          # manager's HTTP handler only comes up after the pre-mgr.Start
+          # startup retries complete — probeArtifactStore (2m ceiling) then
+          # openPostgresWithRetry (4m ceiling), which run sequentially, so the
+          # worst case is 6m. 48×10s = 480s (8m) > 6m, so liveness can never
+          # fire mid-retry (with ~2m headroom for pod scheduling + the retries'
+          # per-attempt overshoot). os.Exit at each ceiling remains the loud
+          # fail-closed backstop.
+          startupProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            periodSeconds: 10
+            failureThreshold: 48
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8081 }
+          resources:
+            # The operator hosts the in-process memory HTTP server and the
+            # inmem/shadow search stack alongside every controller, so its working
+            # set sits near 200Mi and spikes across 256Mi under reconcile/search
+            # load — OOMKilling the pod. Each OOM empties the in-process memory
+            # token registry and opens a cold-start window in which a live runner's
+            # memory write is refused, failing that session; so this limit gates
+            # session survival, not just footprint. Request reserves the
+            # steady-state footprint; the limit gives headroom for the spikes.
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+          volumeMounts:
+            - name: channelsd-memory-token
+              mountPath: /var/run/operator/channelsd-memory-token
+              subPath: token
+              readOnly: true
+            - name: authzd-memory-token
+              mountPath: /var/run/operator/authzd-memory-token
+              subPath: token
+              readOnly: true
+            - name: webd-memory-token
+              mountPath: /var/run/operator/webd-memory-token
+              subPath: token
+              readOnly: true
+            - name: webhook-certs
+              mountPath: /var/run/operator/webhook-certs
+              readOnly: true
+            - name: nats-creds
+              mountPath: /etc/nats
+              readOnly: true
+            - name: admind-token
+              mountPath: /var/run/operator/admind-token
+              readOnly: true
+            - name: memory-data
+              mountPath: /var/lib/ap
+      volumes:
+        - name: channelsd-memory-token
+          secret:
+            secretName: spicebox-channelsd-memory-token
+            # optional so the operator can start on a fresh cluster before
+            # `oap init` creates the Secret. Once the Secret is created, a pod
+            # restart picks it up. oap install rolls the operator after creating
+            # the Secret to ensure it's loaded.
+            optional: true
+            items:
+              - key: token
+                path: token
+        - name: authzd-memory-token
+          secret:
+            secretName: agentprimitives-authzd-memory-token
+            optional: true
+            items:
+              - key: token
+                path: token
+        # Read-only webd memory token. The operator registers it as a valid
+        # system token (read-only) so webd's artifact-view reads authenticate.
+        # optional so the operator starts before `oap init`/`oap install` creates
+        # the Secret; a restart picks it up.
+        - name: webd-memory-token
+          secret:
+            secretName: spicebox-webd-memory-token
+            optional: true
+            items:
+              - key: token
+                path: token
+        - name: webhook-certs
+          secret:
+            secretName: spicebox-webhook-tls
+            optional: false
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        # Reuses channelsd's broad-grant NATS creds (same as authzd). optional
+        # so the operator boots before `oap init` creates the Secret; a restart
+        # picks it up. Until then ConnectFromEnv logs + continues (no crash).
+        - name: nats-creds
+          secret:
+            secretName: spicebox-channelsd-nats-creds
+            optional: true
+        - name: admind-token
+          secret:
+            secretName: spicebox-admind-token
+            optional: true
+            items:
+              - key: token
+                path: token
+        - name: memory-data
+          persistentVolumeClaim:
+            claimName: spicebox-operator-memory

@@ -1,0 +1,137 @@
+# sidecar_session_state scenario fixtures.
+#
+# Proves that a separate-pod SidecarToolbox's tools keep SERVER-SIDE per-session
+# state across tool calls — the property a stateful MCP sidecar (dedicated-mcp,
+# which keys its selected PermissionSystem by the MCP session id) depends on.
+#
+# The scenario's sidecar stub is a real MCP server whose `select`/`selected`
+# tools store and read a value keyed by req.Session.ID(). If the runner opens a
+# fresh MCP session per tool call, `selected` reports nothing selected even
+# though `select` just ran — the exact symptom this scenario guards against.
+#
+# The SidecarToolbox declares NO secretInputs, so the sidecar needs no producer:
+# the harness stamps it Ready mid-session (as the operator would once its pod is
+# up) and the runner's ToolRefresher synthesizes its tools on the next turn.
+#
+# authz.toolCalls.mode=disabled keeps the dispatcher from running a Check on the
+# synthesized sidecar tools, isolating session reuse from the authz round-trip.
+---
+# Placeholder Anthropic API key. provider=anthropic is accepted by the
+# AgentClass controller; the runtime LLM is the in-process ScriptedLLM.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sss-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Placeholder Channel credentials. The fake kind ignores them but
+# Channel.spec.credentialsRef is mandatory.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sss-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# The SpiceboxClass the SidecarToolbox references. The harness does not run the
+# SpiceboxClass controller; sidecar resolution tolerates a missing/non-Valid
+# class (mergeNetwork falls back) and MarkSidecarReady never consults it — it is
+# here only so the SidecarToolbox CR is shaped like a real one.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: sss-sandbox-default
+spec:
+  image: ""
+  resources:
+    cpu: "200m"
+    memory: "256Mi"
+    ephemeralStorage: "128Mi"
+    pidsLimit: 32
+  network:
+    mode: allowlist
+    allowedHosts: []
+---
+# The stateful SidecarToolbox. unconstrainedArgs mirrors the real dedicated-mcp
+# toolbox, whose tools take free-form args rather than an allowedFields list.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SidecarToolbox
+metadata:
+  name: state-tb
+  namespace: default
+spec:
+  name: k8s
+  version: "1"
+  intent: "Stateful MCP sidecar: selection is keyed by MCP session id. e2e fixture."
+  source:
+    inline:
+      baseImage: python:3.12-slim
+      script:
+        configMapRef:
+          name: state-mcp-src
+          key: server.py
+      entrypoint: ["python", "/app/server.py"]
+  sandbox:
+    class: sss-sandbox-default
+  transport:
+    port: 8080
+    healthcheck:
+      path: /healthz
+      timeoutSeconds: 30
+  upstreamAuth:
+    provider: ""
+  tools:
+    - name: select
+      intent: "Selects a value for this MCP session."
+      args:
+        unconstrainedArgs: true
+    - name: selected
+      intent: "Returns the value selected for this MCP session."
+      args:
+        unconstrainedArgs: true
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-sidecar-session-state
+  namespace: default
+spec:
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: sss-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a test agent that selects a value on a stateful sidecar and reads it back"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    # Generous turn budget: the sidecar's tools only become callable once the
+    # harness has stamped the sidecar Ready and the refresher has run, so the
+    # scripted LLM retries the not-yet-synthesized call for a few turns.
+    maxTurns: 500
+    maxTokens: 5000000
+    maxDuration: "1h"
+---
+# Channel for the channelsd pipeline to find. kind=fake is the in-process
+# transport the harness drives via SendUserMessage.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-sidecar-session-state-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-sidecar-session-state
+  credentialsRef:
+    secretName: sss-fake-creds
+  fake:
+    echo: false

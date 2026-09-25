@@ -1,0 +1,60 @@
+# AgentClass + Channel for the e2e round-trip scenarios
+# (test/e2e/scenarios/interaction_roundtrips, and
+# test/e2e/scenarios/subject_authority, which reuses the same parked
+# permission_request as the thing a forged subject must fail to
+# resolve): a lightweight fixture
+# proving the generic Interaction model's wire contract for two
+# categories — portal_access (request leg only) and permission_request
+# (request → decision → applied + SpiceDB grant) — WITHOUT the heavier
+# MCP-tool-declaring / multi-turn-authorship machinery the existing
+# passthrough_portal and sessioninteract_grant scenarios already cover.
+#
+# No mcpServers/agentIdentity — neither round trip calls a declared
+# tool; respond_to_user is a builtin meta tool available regardless.
+#
+# authz.session.interactPermission targets a SpiceDB group this fixture
+# never seeds a tuple for, so ANY non-owner inbound fails CheckInteract
+# and routes through the permission_request flow — the same technique
+# test/e2e/scenarios/centerdot/sessioninteract_grant's agentClassOverride
+# uses, scoped to this fixture's own unique group name so the two
+# fixtures can never collide if ever applied into the same namespace.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: interaction-roundtrip-agent
+  namespace: default
+spec:
+  displayName: InteractionRoundtripBot
+  description: "E2E fixture agent for the portal_access / permission_request interaction round trips. Do not deploy to a real cluster."
+  authz:
+    session:
+      interactPermission: "group:interaction-roundtrip-none#member"
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: interaction-roundtrip-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      Reply concisely to greetings.
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: interaction-roundtrip-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: interaction-roundtrip-agent
+  credentialsRef:
+    secretName: interaction-roundtrip-fake-creds
+  fake:
+    echo: false

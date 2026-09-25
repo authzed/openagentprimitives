@@ -1,0 +1,51 @@
+export const meta = {
+  title: 'User-passthrough vs. agent-identity',
+  section: 'Reference',
+  group: 'Identity',
+  order: 2220,
+  description:
+    "The two ways an agent authenticates: as an operator account it owns, or on the user's behalf with the user's own linked credentials.",
+}
+
+# User-passthrough vs. agent-identity
+
+<p className="doc-lede">
+  There are two fundamentally different answers to "whose credentials does this agent use." An agent can act as
+  <strong> itself</strong>, with an operator account the workspace configured, or it can act <strong>as
+  you</strong>, using the credentials you've personally linked. The difference decides whose name is on
+  everything the agent does.
+</p>
+
+<Screenshot name="id-badges" />
+
+Every agent surfaces which one it is. *"Uses an operator account — has its own credentials"* means agent
+identity: the agent authenticates as itself, and what it does is done by the agent. *"Uses YOUR account — calls
+services as you"* means user-passthrough: the agent borrows your identity, and what it does is done by *you*.
+
+## Agent identity — the agent's own account
+
+An **`agent`**-mode agent has its own `AgentIdentity` — a named set of credentials the workspace owner
+configured. Whatever it does downstream is attributed to that operator account, not to any particular person.
+This is the right model for an agent that acts on shared infrastructure the whole team relies on: a reviewer
+that posts a GitHub Check, an on-call agent that reads dashboards.
+
+## User-passthrough — acting as you
+
+A **`userPassthrough`** agent uses *your* credentials — the ones you've linked to your own identity. When
+`codebot` pushes to your fork and opens a PR, the commit and the PR are *yours*, because it's using your GitHub
+token, not an operator's.
+
+Behind that is a deliberate chain rather than a shared secret: your `UserIdentity` holds your credential catalog;
+a per-session `SessionUserIdentity` narrows it to just the credentials *this* agent asked for; and only those
+are projected into the session so its sandbox can use them. If the agent needs a credential you haven't linked,
+the session **pauses and asks you to connect it** — it never silently falls back to the agent's own account.
+
+<Callout kind="security" title="Why this isn't impersonation-by-secret">
+  Passthrough is not "share the agent's key and pretend to be the user." Each user's credentials are their own,
+  narrowed per session to exactly what the agent needs, and OAP's authorization model treats the *user* as the
+  subject — so an agent acting as you can never quietly become an agent acting as someone else. See
+  <a href="#/owasp-top10#asi03">ASI03 — Identity & Privilege Abuse</a>.
+</Callout>
+
+Which one an agent uses is fixed on the class (`agent` / `userPassthrough`) — or chosen per session, which is
+**Choosing identity per session**.

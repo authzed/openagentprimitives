@@ -1,0 +1,37 @@
+# SpiceDBBootstrap for the agent-leakage-e2e fixture. Seeds:
+#   - record:happy as viewable by alice@example.com (canonicalized)
+#     so the happy-path test sees audience ⊆ permitted (no leak).
+#   - record:leaky as viewable ONLY by alice@example.com (canonicalized);
+#     the leak-then-approve / leak-then-deny tests script audience=
+#     {alice, bob} so bob is the leak.
+#   - record_uuid:uuid-1 viewable by alice — covers the resultIDField
+#     extraction path.
+#   - group:approvers#member@approver@example.com (canonicalized) —
+#     the AgentClass's approver subject.
+#
+# Tests inject MORE relationships at runtime via the test helpers in
+# test/e2e/leakage_test.go (writeRel) for per-scenario shaping; this
+# CR carries the baseline that the agent-leakage-e2e/ fixture
+# guarantees.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: leakage-seed
+  namespace: default
+spec:
+  relationships:
+    - resource: { type: record, id: "happy" }
+      relation: viewer
+      subject:  { type: user, id: "alice@example.com", canonicalize: true }
+    - resource: { type: record, id: "happy" }
+      relation: viewer
+      subject:  { type: user, id: "bob@example.com", canonicalize: true }
+    - resource: { type: record, id: "leaky" }
+      relation: viewer
+      subject:  { type: user, id: "alice@example.com", canonicalize: true }
+    - resource: { type: record_uuid, id: "uuid-1" }
+      relation: viewer
+      subject:  { type: user, id: "alice@example.com", canonicalize: true }
+    - resource: { type: group, id: "approvers" }
+      relation: member
+      subject:  { type: user, id: "approver@example.com", canonicalize: true }

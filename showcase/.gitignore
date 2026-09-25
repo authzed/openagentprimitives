@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# All capture/render scratch (raw recordings, screenshots, transcodes).
+# Published media lives under docs/public/media/ and IS committed.
+out/
+**/_raw/
+
+# Per-scene render caches written next to a scenario (content-hash .hash sidecars).
+demos/scenarios/**/audio/
+demos/scenarios/**/media/
+
+# Vite / TS build noise
+*.tsbuildinfo
+.vite/

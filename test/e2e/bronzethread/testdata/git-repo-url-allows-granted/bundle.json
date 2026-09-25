@@ -1,0 +1,42 @@
+{
+  "name": "git-repo-url-allows-granted",
+  "description": "The ALLOW half. Same fixture, same subcommand, same phase as git-repo-url-required — the ONLY difference is that the remote is the granted URL instead of `origin`. Forcing a URL would be worthless if it only ever produced denials; this is what shows the mechanism has a way through.\n\nThe assertion is the authz decision, not the tool result. An allowed sandbox call still comes back an error here (bronze runs no ToolCall controller, so nothing executes), and a scripted transcript replies the same either way — only the decision log distinguishes \"authorized, then failed to run\" from \"never authorized\".\n\nThe decision key is the object id [normalize_url, spicedb_object_id] produces for the URL, which is also the id the fixture's grant is written on. Those two agreeing is the whole contract: a grant written by a human has to match an id derived from argv.",
+
+  "agentDir": "testdata/agent-gitscope",
+  "agentClass": "git-fetcher",
+
+  "userTurns": ["fetch the demo repo"],
+
+  "llm": [
+    { "expect": {"userTextContains": "fetch the demo repo"}, "reply": [{"toolUse":{"name":"update_plan","args":{"name":"main","items":[{"id":"s1","label":"fetch","status":"pending","phase":"sync"}],"phases":[{"id":"sync","label":"Fetch from the remote","why":"the user asked to fetch","permissions":[{"handle":"perm:fetch:git_repo","why":"to read the remote"}]}]}}}] },
+    {
+      "expect": {"lastToolResult": "update_plan"},
+      "reply": [{"toolUse": {"name": "gitlike_git", "args": {
+        "operation_id": "op-1", "_reason": "fetch the latest refs",
+        "args": ["fetch", "https://github.com/demo-org/demo-repo"]
+      }}}]
+    },
+    {
+      "expect": {
+        "lastToolResult": "gitlike_git",
+        "lastToolResultNotContains": "did not identify"
+      },
+      "reply": [{"text": "fetched from the demo repo"}]
+    },
+    {
+      "expect": {"lastToolResult": "respond_to_user"},
+      "reply": [{"toolUse": {"name": "agent_work_complete", "args": {"summary": "done"}}}]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["fetched from the demo repo"],
+    "authz": {
+      "decisions": {"git_repo:https=3A//github=2Ecom/demo-org/demo-repo#fetch": "allowed"}
+    },
+    "spicedb": [
+      {"resource": "git_repo:https=3A//github=2Ecom/demo-org/demo-repo", "permission": "fetch", "subject": "user:user@example.com", "want": true},
+      {"resource": "git_repo:https=3A//github=2Ecom/demo-org/demo-repo", "permission": "fetch", "subject": "user:stranger@example.com", "want": false}
+    ]
+  }
+}

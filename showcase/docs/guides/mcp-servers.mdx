@@ -1,0 +1,44 @@
+export const meta = {
+  title: 'MCP servers & sidecar toolboxes',
+  section: 'Reference',
+  group: 'Safe tools',
+  order: 2130,
+  description:
+    'Bringing external MCP tools under the same allowlist, validation, and authorization as native ones — remote or as a sidecar.',
+}
+
+# MCP servers & sidecar toolboxes
+
+<p className="doc-lede">
+  Not every tool is a CLI in a sandbox — an agent often needs an external <strong>MCP server</strong>. OAP
+  brings those under the <em>same</em> rules as native tools: a per-agent allowlist, per-tool authorization, and
+  argument validation. At the dispatch layer, an external tool is indistinguishable from a built-in one.
+</p>
+
+## MCPServer: an external tool surface, per agent
+
+An **MCPServer** is a per-agent resource — an AgentClass opts into it by name, it isn't a global registration.
+It declares the server's address and, critically, an **allowlist of tools**: a tool the MCPServer doesn't list
+is never callable. Each listed tool carries its own **authorization policy** (including its
+[`stateImpact`](#/toolspec-validation)) and an argument allowlist refined with CEL — so an MCP tool is gated
+exactly like a sandboxed CLI, not waved through because it came from "a real MCP server."
+
+## SidecarToolbox: your own MCP server, alongside the agent
+
+A **SidecarToolbox** runs a user-supplied MCP server as a sidecar next to the agent. It reuses the very same
+per-tool allowlist and policy shape as an MCPServer, so nothing about being local relaxes a gate. Its upstream
+credentials are resolved **controller-side** at pod-create time and frozen for the pod's life — there's no
+just-in-time refresh — and a toolbox that needs secrets runs in its own **separate per-session pod** rather than
+being injected into the agent's.
+
+## Same synthesizer, so the same rules
+
+Under the hood, a sidecar toolbox is synthesized into the *same* representation as a remote MCP server — the
+runner genuinely can't tell them apart at dispatch. That's the point: whether a tool is a sandboxed CLI, a
+remote MCP server, or a local sidecar, it arrives at the [pipeline](#/agent-loop) as a tool with a permission
+and an impact, and every gate — authorization, approval, content inspection, breakers — applies identically.
+
+<Callout kind="tip" title="Author and probe before you trust">
+  `oap tools mcp check` validates an MCP tool spec offline, and `oap tools mcp probe` / `explain` let you see a
+  server's real tool list and exactly how a given call would be authorized — before you bind it to an agent.
+</Callout>

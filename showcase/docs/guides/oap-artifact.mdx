@@ -1,0 +1,56 @@
+export const meta = {
+  title: 'oap artifact',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2720,
+  description: 'Inspect versioned artifacts and their revisions',
+}
+
+# oap artifact
+
+Inspect versioned artifacts and their revisions
+
+## `oap artifact get <session> <ref>`
+
+Download a revision's bytes (ref = artifact-ID, artifact-ID#tag, or artrev-ID)
+
+Flags:
+
+```text
+-o, --output string  Write output to this file instead of stdout
+```
+
+## `oap artifact list <session>`
+
+List logical artifacts in a session
+
+## `oap artifact revisions <session> <artifact>`
+
+Show an artifact's revision tree
+
+## `oap artifact store`
+
+Low-level artifactstore inspection (debug)
+
+### `oap artifact store get <ref>`
+
+Fetch an artifact by ArtifactStore ref
+
+Flags:
+
+```text
+-o, --output string  Write output to this file instead of stdout
+```
+
+### `oap artifact store list`
+
+List artifacts in the ArtifactStore
+
+Flags:
+
+```text
+--limit int      Maximum total items to return (0 = unlimited)
+--page-size int  Number of items per page (1-500) (default "100")
+--prefix string  Only show artifacts whose key starts with prefix
+```
+

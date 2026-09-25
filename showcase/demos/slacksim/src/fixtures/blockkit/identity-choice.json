@@ -1,0 +1,69 @@
+[
+  {
+    "type": "container",
+    "rich_text_title": {
+      "type": "rich_text",
+      "elements": [
+        {
+          "type": "rich_text_section",
+          "elements": [
+            {
+              "type": "emoji",
+              "name": "large_blue_circle"
+            },
+            {
+              "type": "text",
+              "text": "  "
+            },
+            {
+              "type": "text",
+              "text": "Which identity should codebot use for this session?",
+              "style": {
+                "bold": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "child_blocks": [
+      {
+        "type": "actions",
+        "block_id": "interaction_actions",
+        "elements": [
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Run as codebot",
+              "emoji": false
+            },
+            "action_id": "agent",
+            "value": "{\"v\":\"interaction\",\"r\":\"idc-1\",\"d\":\"agent\",\"s\":\"default/demo-sess\",\"c\":\"identity_choice\"}"
+          },
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Run as me",
+              "emoji": false
+            },
+            "action_id": "userPassthrough",
+            "value": "{\"v\":\"interaction\",\"r\":\"idc-1\",\"d\":\"userPassthrough\",\"s\":\"default/demo-sess\",\"c\":\"identity_choice\"}"
+          },
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Cancel",
+              "emoji": false
+            },
+            "action_id": "cancel",
+            "value": "{\"v\":\"interaction\",\"r\":\"idc-1\",\"d\":\"cancel\",\"s\":\"default/demo-sess\",\"c\":\"identity_choice\"}"
+          }
+        ]
+      }
+    ],
+    "has_header_divider": true
+  }
+]

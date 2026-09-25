@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="reviewbot code-review agent">
+  <defs>
+    <linearGradient id="rb-badge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8f7bee"/>
+      <stop offset="1" stop-color="#4f8ff0"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#rb-badge)"/>
+  <g fill="none" stroke="#0c050f" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <!-- magnifying glass: reading the diff, never writing it -->
+    <circle cx="54" cy="54" r="26"/>
+    <path d="M73 73 L100 100"/>
+    <!-- checkmark inside the lens: the review's verdict -->
+    <path d="M43 55 L51 63 L67 45"/>
+  </g>
+</svg>

@@ -1,0 +1,115 @@
+# Scenario: passthrough self-service (passthrough_selfservice_test.go).
+#
+# Drives the full Slice-2 user-passthrough flow end-to-end in a single
+# in-process process:
+#   1. Operator parks an identityMode=userPassthrough AgentSession in
+#      AwaitingCredentials and writes a SessionUserIdentity that
+#      enumerates the starter's missing credentials.
+#   2. A CredentialRequestWatcher (channelsd's E1 work, run in-test)
+#      mints a passthroughlink-signed deep-link and publishes a
+#      KindCredentialRequest envelope on the session's bound channel's
+#      credential_request sub-channel. The fake kind's sub-channel
+#      sender records it for the test to inspect.
+#   3. The test "drives the user" by minting an idd_session cookie with
+#      the same passthroughlink.Signer the watcher used, GETs /link,
+#      submits the form, and asserts identityd persisted the PAT.
+#   4. The operator's UserIdentity watch re-enqueues the parked session
+#      and un-parks it (CredentialsReady=True, SessionUserIdentity
+#      Ready=True).
+#
+# Token values are non-trivial hex/uuid strings chosen to avoid any
+# chance of false-positive matches with other env vars or test creds.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder. The fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pt-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# MCPServer the passthrough class needs a credential for. spec.auth.provider
+# becomes the user-visible service label in the explanation;
+# spec.auth.credential is the gate key on the SessionUserIdentity's
+# MissingCredentials list.
+#
+# spec.server.url is rewritten to {{MCP_URL}} by the test before apply so
+# the MCP probe (run by both the MCPServer controller and the
+# InProcessRunnerFactory's buildMCPTools) hits the in-process MCPStub.
+# The probe doesn't need any tools; the scenario asserts on the parking
+# gate, not on tool dispatch.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: linear-mcp
+  namespace: default
+spec:
+  name: linear-mcp
+  version: v1
+  intent: "Passthrough self-service e2e: drives the missing-credential park flow."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: linear-oauth
+    provider: Linear
+    title: Linear
+  tools: []
+---
+# AgentClass with identityMode: userPassthrough — every session parks on
+# the starter's UserIdentity until linear-oauth is linked.
+# authz.toolCalls.mode=disabled bypasses SpiceDB authz so no schema bootstrap
+# is required for the un-park assertion.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: triage-bot
+  namespace: default
+spec:
+  displayName: "Triage Bot"
+  identityMode: userPassthrough
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: pt-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a passthrough triage agent"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  mcpServers:
+    - name: linear
+      ref: linear-mcp
+---
+# Channel for the harness to drive inbound messages through.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: triage-bot-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: triage-bot
+  credentialsRef:
+    secretName: pt-fake-creds
+  fake:
+    echo: false

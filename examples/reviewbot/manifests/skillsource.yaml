@@ -1,0 +1,61 @@
+# Two SkillSources, not one: SkillSource.spec carries a single
+# repoURL/ref/subpath, and the two review methodologies reviewbot's inner
+# Claude Code loads live in two different upstream repositories, so one
+# SkillSource cannot discover both.
+#
+# ref is a BRANCH on both sources (master / main), not a tag or commit SHA.
+# That is a real, accepted trade-off, not an oversight — see the README's
+# "Pinning" note: a branch ref means the methodology a skill teaches can
+# change under a rerun of the exact same pull-request commit, so a review is
+# reproducible only as far as the upstream repository stays stable. `oap
+# agent lint` stays clean either way: ref still flows straight into the
+# discovered Skill's canonical name (pkg/controllers/skillsource/
+# controller.go's upsertSkill -> DesiredSkillSpec -> the canonical name's
+# "@ref" segment is literally src.Spec.Ref), and
+# pkg/tools/skills/canonical.Name.PinStrength treats a branch exactly like a
+# tag (PinNamed) — only an ABSENT ref is PinUnpinned, because a branch and a
+# tag are syntactically indistinguishable without querying the remote. A
+# production install should replace @master / @main with a tag or commit SHA
+# (see the README) for the same reason agentclass.yaml's spec.skills opts
+# into each skill BY its canonical name: the pin has to be set here, at the
+# source, not merely asserted where it is consumed.
+#
+# Both SkillSources are namespaced. metadata.namespace is intentionally
+# omitted on both — `oap agent install --namespace` stamps it, same as the
+# other reviewbot manifests.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SkillSource
+metadata:
+  name: context-engineering-kit
+spec:
+  # The general-purpose PR review methodology: what to look for, the
+  # severity rubric, when running tests is warranted, and the output format
+  # the review artifact expects. Discovered at
+  # plugins/review/skills/review-pr/SKILL.md. This is agentclass.yaml's
+  # spec.skills[0] (name: review-pr) — the default skill for an ordinary
+  # pull request; see the AgentClass system prompt's routing guidance for
+  # when differential-review (below) joins or replaces it.
+  repoURL: https://github.com/NeoLabHQ/context-engineering-kit
+  ref: master
+  subpath: plugins/review/skills/review-pr
+  sync:
+    interval: 1h
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SkillSource
+metadata:
+  name: trailofbits-skills
+spec:
+  # Trail of Bits' own differential-review methodology, for security-
+  # sensitive changes: it reviews what changed against what could go wrong,
+  # rather than the diff read in isolation, and produces a markdown report —
+  # a shape that maps directly onto this bundle's HTML artifact instead of
+  # inline PR comments. Discovered at
+  # plugins/differential-review/skills/differential-review/SKILL.md. This is
+  # agentclass.yaml's spec.skills[1] (name: differential-review); see the
+  # AgentClass system prompt for what makes a change security-sensitive.
+  repoURL: https://github.com/trailofbits/skills
+  ref: main
+  subpath: plugins/differential-review/skills/differential-review
+  sync:
+    interval: 1h

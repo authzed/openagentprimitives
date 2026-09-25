@@ -1,0 +1,6 @@
+oapFormatVersion: "1"
+agent:
+  version: "1.0.0"
+requires:
+  agents:
+    - path: dependencies/fixture-translator

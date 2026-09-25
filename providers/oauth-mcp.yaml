@@ -1,0 +1,44 @@
+id: oauth-mcp
+title: MCP server
+description: Sign in to the MCP server so the agent can call it as you.
+docsURL: https://modelcontextprotocol.io/docs/concepts/authentication
+shape: oauth
+builtin: oauth-mcp
+
+prompt: |
+  Drive the OAuth 2.0 authorization-code + PKCE flow against the MCP
+  server's authorization server. Discovery follows RFC 9728
+  (WWW-Authenticate resource_metadata) then falls back to
+  /.well-known/oauth-authorization-server (RFC 8414). Dynamic Client
+  Registration (RFC 7591) is used automatically when the auth server
+  advertises a registration_endpoint and no client_id was supplied.
+  After the callback returns, store access_token + refresh_token +
+  expires_at + token_endpoint + client_id via store_credential.
+
+oauth:
+  authorizationServer: discovery
+  defaultScope: ""
+  dynamicClientRegistration: true
+
+# What a real MCP auth failure looks like, so the platform can independently
+# corroborate an agent's claim that this credential died rather than taking the
+# agent's word. The MCP authorization spec mandates the status directly:
+# "Invalid or expired tokens MUST receive a HTTP 401 response" (matching
+# RFC 6750 §3.1 invalid_token → 401).
+#
+# There is deliberately no verify: block, and no builtin probe: the access token
+# is audience-bound (RFC 8707) to one MCP server, so there is no fixed endpoint
+# to check it against and a compliant resource server MUST NOT accept a token
+# issued for another resource. oauth_mcp.Flow.Verify therefore reports
+# unsupported — which makes this block the ONLY evidence that can ever open a
+# credential-update card for an MCP origin. It is load-bearing, not incremental.
+#
+# 401-only on purpose: the spec assigns 403 to "Invalid scopes or insufficient
+# permissions" on a VALID token, and an agent can provoke one on demand by
+# requesting something out of scope — manufacturing corroboration to pair with a
+# non-definitive probe. Only the server's own auth layer emits a 401. No
+# stderrPatterns and no exitCodes: this is an HTTP origin, and both of those
+# fields read program output the agent steers through argv. See AuthFailure's
+# doc comment in pkg/platform/identity/provider/types.go.
+authFailure:
+  httpStatuses: [401]

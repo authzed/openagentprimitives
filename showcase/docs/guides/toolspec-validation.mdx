@@ -1,0 +1,51 @@
+export const meta = {
+  title: 'Toolspec & validation',
+  section: 'Reference',
+  group: 'Safe tools',
+  order: 2110,
+  description:
+    'A tool is a specification, not a function: a deny-by-default allowlist refined with CEL and validated at both authoring and execution time.',
+}
+
+# Toolspec & validation
+
+<p className="doc-lede">
+  A tool in OAP isn't a function with process authority — it's a <strong>specification</strong>. It names the
+  exact command it wraps and a <strong>deny-by-default</strong> allowlist of the subcommands and fields that are
+  permitted; everything not on the list is refused.
+</p>
+
+## Deny-by-default, refined with CEL
+
+The allowlist starts closed: a tool can run only the subcommands and pass only the fields the spec explicitly
+permits. And the permission isn't a flat list — it's refined with **CEL**, so a spec can say "this flag is
+allowed only when that argument matches," expressing real conditions rather than a coarse yes/no. What isn't
+described can't be called.
+
+## Validated twice
+
+A toolspec is checked **at authoring time** — `oap tools lint` (or `oap tools toolspec check`) compiles every
+CEL constraint offline, so an over-broad or malformed spec is caught before it ships — and **again at execution
+time**, when every call is validated against the spec before it runs. The second check is the load-bearing one: a spec that drifts, or an argument that tries to reach past the
+allowlist, can't quietly widen the tool's surface. What was declared is what runs.
+
+## Every tool declares its impact
+
+Each tool carries a **`stateImpact`**:
+
+- **`readonly`** — it only looks; nothing changes.
+- **`readwrite`** — it changes state, but the change stays inside the session and is reversible.
+- **`external`** — the effect leaves the session and can't be undone.
+
+That one field drives two things: the [authorization](#/authorization) check that decides whether the call is
+allowed, and whether a human is [asked](#/plan-gating) before it runs. An `external` tool is the one you're most
+likely to be asked to approve.
+
+<Screenshot name="safe-tools-approval" />
+
+## Argv, never a shell
+
+Tools run as **argv arrays** — an explicit list of arguments handed to a process — never as a string passed to
+a shell or `eval`. There's no command line to inject into: an argument full of shell metacharacters is just an
+argument, not a new command. It's the difference between "run this program with these exact arguments" and
+"run whatever this string turns into."

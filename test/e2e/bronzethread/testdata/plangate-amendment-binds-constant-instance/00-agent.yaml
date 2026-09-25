@@ -1,0 +1,191 @@
+# Fixture agent for the amendment-binds-a-constant-instance scenario.
+#
+# amrepo_repo keys push on the remote URL (per call) and read on the literal
+# "workspace" (fixed by the toolkit). The plan declares a phase whose ceiling
+# holds ONLY push, so the first `inspect` call — which needs read — is outside
+# the approved ceiling and raises an amendment.
+#
+# The amendment is where this breaks. It adds a PERMISSION, and the instance
+# that permission reaches is a platform constant the agent cannot name: nothing
+# in a plan ever says "workspace", because the toolkit fixes it, not the author.
+# So the amendment's slot ref carries a bare type with an empty id,
+# narrowToApproved binds nothing, the type stays unnarrowed, and the very next
+# call escalates again — a human clicks Approve forever.
+#
+# Observed live 2026-08-21, with the runner saying so in one INFO line nobody
+# watching a chat window would ever see:
+#
+#   plan_gate: the approval was recorded but bound no instance; the phase may
+#   run and every named resource still escalates per instance
+#   phase=1 phaseKey="" requested=[git_repo] granted=[git_repo]
+#
+# The scenario calls `inspect` TWICE after one amendment approval. Counting
+# cards is the only thing that separates a bound approval from one re-granted
+# per call: both make the transcript read identically, and the run "works"
+# either way — the human just gets N cards instead of one.
+apiVersion: v1
+kind: Secret
+metadata: {name: amrepo-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: amrepo-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: amrepo-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: amrepo-identity, namespace: default}
+spec:
+  description: "Session-only-standing e2e fixture: static MCP bearer token."
+  credentials:
+    - name: amrepo-mcp-bearer
+      type: static
+      static: {secretRef: {name: amrepo-mcp-token, key: access_token}}
+---
+# Self-contained MCP fixture exposing one tool, "push", gated on
+# amrepo_repo#push.
+#
+# amrepo_repo declares NO `standing` — the field this whole feature adds —
+# so it resolves to StandingSessionOnly, the CRD default. Nothing else in this
+# file (or anywhere in this bundle) writes a tuple granting `owner` on
+# amrepo_repo to anybody, which is the condition this scenario exists to
+# prove works.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: amrepo-fixture, namespace: default}
+spec:
+  name: amrepo-fixture
+  version: v1
+  intent: "Self-contained git-push-shaped fixture for the e2e harness."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: amrepo-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: amrepo_repo
+        # Stated explicitly: nothing local governs who may approve.
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          # ComposeSlots rewrites this to slot_grant_push->interact + owner
+          # because the AgentClass below declares amrepo_repo as an authz
+          # slot.
+          #
+          # title is the human phrase the approval card shows instead of the
+          # wire handle (`perm:push:amrepo_repo`) — the fragment→controller
+          # →status→runner→card chain this whole bundle exists to prove.
+          - {name: push, expr: owner, title: "Push commits to the repository"}
+          # read keys on the LITERAL "workspace" (see the inspect tool
+          # below), the session's own checked-out copy — a different
+          # instance of the same type than the remote URL push keys on.
+          - {name: read, expr: owner, title: "Read the checked-out files"}
+  tools:
+    - name: status
+      intent: "Report whether the push tool is ready to use. Stateless — no SpiceDB check."
+      args:
+        allowedFields: []
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: inspect
+      intent: "Inspect the checked-out copy in this session."
+      args:
+        allowedFields: []
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: amrepo_repo
+          # A CONSTANT id: no {placeholder}, no CEL. It names the same
+          # object on every call, so it is knowable at PLAN time and the
+          # approval card can name it — which is the point of this bundle.
+          resourceIDTemplate: "workspace"
+          permission: read
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: push
+      intent: "Push locally committed changes to a remote repository."
+      args:
+        allowedFields: [repoUrl]
+      permission:
+        stateImpact: readwrite
+        check:
+          resourceType: amrepo_repo
+          resourceIDExpr: '"" + args.repoUrl'
+          # The same [normalize_url, spicedb_escape] chain the real git
+          # toolkit keys git_repo with — this is the exact chain the live bug
+          # (raw URL reaching SpiceDB unescaped) bypassed, so exercising it
+          # here is the point, not incidental.
+          resourceIDTransforms: [normalize_url, spicedb_escape]
+          resourceIDHint: "give the repository as a full https:// URL"
+          permission: push
+      effects:
+        readOnly: false
+        idempotent: false
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: amrepo-fixture, namespace: default}
+spec:
+  displayName: AmRepoBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: amrepo-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You push local changes to remote repositories. Available tools:
+        - amrepo_status(): check whether the push tool is ready
+        - amrepo_push(repoUrl): push committed changes to the named repository
+
+      When the user asks you to push, call update_plan first to declare a
+      phase naming the repository, then call amrepo_status, then call
+      amrepo_push.
+  agentIdentity: amrepo-identity
+  mcpServers:
+    - name: amrepo
+      ref: amrepo-fixture
+  authz:
+    slots:
+      - resourceType: amrepo_repo
+        # read is declared alongside push so the composed schema carries a
+        # slot_grant_read relation. Declaring it grants nothing — it is the
+        # CEILING of what an approval on this slot may ever bind.
+        permissions: [read]
+        description: "A remote repository, reached by its URL"
+        permission: push
+    planGate:
+      mode: enforcing
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: amrepo-fixture-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: amrepo-fixture
+  credentialsRef: {secretName: amrepo-fake-creds}
+  fake: {echo: false}

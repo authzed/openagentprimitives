@@ -1,0 +1,87 @@
+# Mutation from ok/: list_rows' allowedFields is ["other"] — a non-empty list
+# that omits "stage", which the table binding's args template still sends.
+# Trimmed to a single tool so exactly one finding fires.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: demo-crm
+spec:
+  name: demo-crm
+  version: v1
+  intent: "Fixture CRM MCP server for oap.LintAgentUIs's own test suite."
+  server:
+    url: "http://127.0.0.1:1"
+    transport: streamable-http
+  mcpUiAppTools:
+    enabled: true
+  spicedbSchema:
+    resources:
+      - name: demo_row
+        # Only a viewer relation exists; reading is not authority to approve, so
+        # nothing local governs approval here. Stated because there is no default.
+        standing: session-only
+        relations:
+          - name: viewer
+            subjectType: user
+            wildcard: true
+        permissions:
+          - name: view
+            expr: viewer
+  tools:
+    - name: list_rows
+      intent: "List demo rows."
+      visibility: [app]
+      args:
+        allowedFields: [other]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: demo_row
+          resourceIDExpr: '"rows"'
+          permission: view
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: demo-console
+spec:
+  description: "Fixture AgentClass for oap.LintAgentUIs's own test suite."
+  systemPrompt:
+    inline: "You are a fixture agent used only by oap.LintAgentUIs's own test suite."
+  mcpServers:
+    - name: demo
+      ref: demo-crm
+  agentUI:
+    ref: demo-console-ui
+    grantedTools: [demo_list_rows]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentUI
+metadata:
+  name: demo-console-ui
+spec:
+  displayName: Demo console
+  tools: [demo_list_rows]
+  slots:
+    - name: main
+      default:
+        component: ap:card
+        props:
+          title: Rows
+        children:
+          - component: ap:select
+            props:
+              param: stage
+              placeholder: Stage
+          - component: ap:table
+            props:
+              columns:
+                - {key: label, header: Label}
+            bindings:
+              rows:
+                source: tool
+                ref: demo_list_rows
+                args:
+                  stage: {"$param": "stage"}

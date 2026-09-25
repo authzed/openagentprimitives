@@ -1,0 +1,101 @@
+# Fixture agents for the subagent-artifact-delivery bronzethread bundle.
+#
+# demo-parent delegates and DELIVERS. It grants the subagents capability, names
+# demo-child on its roster, and raises that member's ceiling to `chat` in
+# spec.subagentModes -- all three are load-bearing and none implies the others:
+# roster membership alone permits single_turn, and a single_turn child is
+# headless (no channel binding at all), so the artifact meta tools would not be
+# offered to it and there would be no artifact to hand back.
+#
+# demo-parent deliberately does NOT grant the artifacts capability. It can
+# therefore render nothing itself, which is what makes the delivery it performs
+# unambiguous: the only artifact in the run is the one demo-child returned.
+# respond_to_user's `attached` field is unaffected by that, because the field is
+# gated on the OUTBOUND channel's asset:* capability rather than on the class --
+# the bundle opts into it with fakeDeliverySurfaces.
+#
+# demo-child RENDERS and RETURNS. It grants the artifacts capability, which is
+# what puts artifact_prepare in its catalog; it carries no roster and no
+# subagents capability, so delegation is not transitive here. It is never
+# offered respond_to_user -- there is no human on the far side of an `agent`
+# channel -- and that is precisely why an artifact it renders has to travel back
+# through return_result for its caller to deliver.
+#
+# The two inline system prompts are deliberately distinguishable, and that is a
+# requirement rather than a flourish: the bundle scopes its LLM steps per
+# session (LLMStep.AgentClass) and the driver derives the scope from
+# spec.systemPrompt.inline, which runner.ComposeSystem writes verbatim into the
+# prompt each session is actually sent. Two prompts where one contains the other
+# would make a request match both scopes, and resolveTranscriptScopes refuses
+# that rather than routing a turn to the wrong side.
+#
+# Both classes are otherwise toolless: no mcpServers, no agentIdentity, no
+# boundEntities. maxDelegatedAgents is unset -- this scenario is about an
+# artifact CROSSING the delegation boundary, not about the tree ceiling (that is
+# subagent-ceiling's), so it runs under the operator's built-in default.
+apiVersion: v1
+kind: Secret
+metadata: {name: subart-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: subart-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-parent, namespace: default}
+spec:
+  displayName: DemoParent
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: subart-placeholder, key: api-key}
+  capabilities:
+    subagents: {}
+  subagents: ["demo-child"]
+  subagentModes:
+    demo-child: ["chat"]
+  systemPrompt:
+    inline: |
+      You are the DELEGATING fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You hand rendering work to other agents and pass what they give back to
+      the person who asked for it.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-child, namespace: default}
+spec:
+  displayName: DemoChild
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: subart-placeholder, key: api-key}
+  # Opt in to the artifact meta tools. Without this grant artifact_prepare is
+  # not offered and there is nothing for the delegation to carry home.
+  capabilities:
+    artifacts: {}
+  systemPrompt:
+    inline: |
+      You are the RENDERING fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You build the file you were asked for and return its handle to whoever
+      delegated the work.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: demo-parent-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: demo-parent
+  credentialsRef: {secretName: subart-fake-creds}
+  fake: {echo: false}

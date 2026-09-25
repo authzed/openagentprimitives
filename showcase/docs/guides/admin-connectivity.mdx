@@ -1,0 +1,30 @@
+export const meta = {
+  title: 'Channels & directory',
+  section: 'Guides',
+  group: 'Admin console',
+  order: 192,
+  description:
+    "The dashboard's config views for how agents are reached and how the platform learns who belongs to what.",
+}
+
+# Channels & directory
+
+<p className="doc-lede">
+  Two config views cover the platform's edges: where agents are <strong>reachable</strong>, and how it keeps its
+  picture of <strong>who belongs to what</strong> current.
+</p>
+
+## Channels
+
+**Channels** shows where agents are reachable — each [channel](#/channels) binding (Slack, browser, a webhook),
+which agent it's bound to, its role, and its connection status. It's the console view of `oap channel`.
+
+<Screenshot name="admin-channels" />
+
+## Directory
+
+**Directory** shows the directory syncs feeding the [authorization graph](#/authorization) — Slack workspace and
+channel memberships, GitHub org membership, 1Password groups. These keep SpiceDB's picture of who's a member of
+what current, so an authorization check reflects reality rather than a stale snapshot.
+
+<Screenshot name="admin-directory" />

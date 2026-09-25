@@ -1,0 +1,34 @@
+name: gh-readonly
+version: "1"
+intent: "GitHub read-only for my repo"
+toolkit: {name: gh, revision: "2026-04-24"}
+allowSubcommands: [pr view]
+deny:
+  effects:
+    destructive: true
+    writes: [network, filesystem]
+    creds: {writes: true}
+allow:
+  network:
+    destinations: [api.github.com, github.com]
+constraints:
+  - cel: 'call.flag("repo") == "authzed/my-repo"'
+    message: "only the authzed/my-repo repo is allowed"
+generation:
+  source: "llm:gemini-3-flash-preview"
+  generatedAt: "2026-04-24T15:00:00Z"
+  descriptions:
+    allowSubcommands[0]: "Look at a single pull request you name"
+    deny.effects.destructive: "You said 'read-only', so nothing irreversible"
+    deny.effects.writes: "Read-only intent — no writes to network or disk"
+    deny.effects.creds.writes: "Read-only intent — never persist new credentials"
+    allow.network.destinations: "Only GitHub's own hosts"
+    constraints[0]: "You named this specific repo — only it is allowed"
+  warnings:
+    - "search subcommands are not allowed at all here — add them if you need them"
+  unmatched:
+    - request: "only during business hours"
+      reason: "spec schema does not support time-based constraints"
+  excluded:
+    - name: "pr comment"
+      reason: "writes a comment — excluded from read-only"

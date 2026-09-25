@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentprimitives-authzd
+  namespace: agentprimitives-system
+  labels:
+    app.kubernetes.io/name: agentprimitives-authzd
+    app.kubernetes.io/part-of: agentprimitives
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentprimitives-authzd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentprimitives-authzd
+    spec:
+      serviceAccountName: agentprimitives-authzd
+      containers:
+        - name: authzd
+          image: agentprimitives-authzd:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NATS_URL
+              # Must match the NATS service the runner/channelsd/operator use
+              # (spicebox-nats). A mismatch here silently breaks the metaagent
+              # flow: authzd connects to nothing and never receives
+              # metaagent_request, so cold-start times out and falls open.
+              value: "nats://spicebox-nats.agentprimitives-system.svc:4222"
+            - name: NATS_CREDS_PATH
+              value: "/etc/nats/nats.creds"
+            - name: NATS_CA_PATH
+              value: "/etc/nats/ca.crt"
+            - name: MEMORY_URL
+              value: "http://spicebox-operator.agentprimitives-system.svc:8082"
+            - name: MEMORY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: agentprimitives-authzd-memory-token
+                  key: token
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: spicebox-anthropic-api-key
+                  key: key
+                  optional: true
+            - name: SPICEDB_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: spicebox-spicedb-config
+                  key: endpoint
+                  optional: true
+            - name: SPICEDB_INSECURE
+              value: "true"
+            - name: SPICEDB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: spicebox-spicedb-token
+                  key: token
+                  optional: true
+            - name: METAAGENT_EXTRACTOR_MODEL
+              value: "claude-haiku-4-5-20251001"
+            - name: METAAGENT_COMPOSER_MODEL
+              value: "claude-haiku-4-5-20251001"
+            - name: METAAGENT_SLACK_BOT_USER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: agentprimitives-system-metaagent-config
+                  key: slack_bot_user_id
+                  optional: true
+            - name: AP_AUTHZD_EXTRACT_TIMEOUT
+              value: "10s"
+            - name: AP_AUTHZD_SESSION_IDLE
+              value: "10m"
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: nats-creds
+              mountPath: /etc/nats
+              readOnly: true
+          # startupProbe suspends liveness until /healthz returns 200: authzd's
+          # handler returns 503 until NATS connects (authzdDepCeiling = 2m).
+          # 15×10s = 150s (2.5m) > 2m, so liveness cannot fire mid-retry.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 15
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: nats-creds
+          secret:
+            secretName: spicebox-channelsd-nats-creds
+            optional: true

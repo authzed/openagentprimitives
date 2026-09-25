@@ -1,0 +1,19 @@
+# AgentIdentity for the agent-pr-identity-e2e fixture. One static credential
+# named "github-token" — the exact name toolkits/gh.yaml's env.allowed
+# declares for GITHUB_TOKEN — so the AgentClass's toolBundle credential
+# coverage check is satisfied. Nothing in this scenario ever dials a real gh
+# binary, so the value is cosmetic.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: pr-identity-gh
+  namespace: default
+spec:
+  description: "Agent-pr-identity-e2e fixture: static gh token credential."
+  credentials:
+    - name: github-token
+      type: static
+      static:
+        secretRef:
+          name: pr-identity-gh-token
+          key: token

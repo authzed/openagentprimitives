@@ -1,0 +1,68 @@
+[
+  {
+    "type": "container",
+    "rich_text_title": {
+      "type": "rich_text",
+      "elements": [
+        {
+          "type": "rich_text_section",
+          "elements": [
+            {
+              "type": "emoji",
+              "name": "large_blue_circle"
+            },
+            {
+              "type": "text",
+              "text": "  "
+            },
+            {
+              "type": "text",
+              "text": "Deploy `hotfix-1.4.2` to production?",
+              "style": {
+                "bold": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "child_blocks": [
+      {
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": "This restarts 12 pods and runs the post-deploy smoke suite.\n• *Cluster*: prod-us-east\n• *Pods*: 12"
+        }
+      },
+      {
+        "type": "actions",
+        "block_id": "interaction_actions",
+        "elements": [
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Approve",
+              "emoji": false
+            },
+            "action_id": "approve",
+            "value": "{\"v\":\"interaction\",\"r\":\"req-1\",\"d\":\"approve\",\"s\":\"default/demo-sess\",\"c\":\"tool_approval\"}",
+            "style": "primary"
+          },
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Deny",
+              "emoji": false
+            },
+            "action_id": "deny",
+            "value": "{\"v\":\"interaction\",\"r\":\"req-1\",\"d\":\"deny\",\"s\":\"default/demo-sess\",\"c\":\"tool_approval\"}",
+            "style": "danger"
+          }
+        ]
+      }
+    ],
+    "has_header_divider": true
+  }
+]

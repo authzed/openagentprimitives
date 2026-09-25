@@ -1,0 +1,38 @@
+{
+  "ns": "workshop",
+  "name": "sess-live",
+  "declaration": {
+    "view": {
+      "component": "ap:stack",
+      "children": [
+        {
+          "component": "oap:generative",
+          "props": {
+            "allowedComponents": [
+              "*"
+            ],
+            "name": "panel"
+          },
+          "children": [
+            {
+              "component": "ap:markdown",
+              "props": {
+                "body": "agent copy"
+              }
+            }
+          ]
+        },
+        {
+          "component": "ap:heading",
+          "props": {
+            "level": 2,
+            "text": "Notes"
+          }
+        }
+      ]
+    },
+    "agentComposed": [
+      "panel"
+    ]
+  }
+}

@@ -1,0 +1,344 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: spicebox-webhook
+  namespace: agentprimitives-system
+spec:
+  selector:
+    app.kubernetes.io/name: spicebox-operator
+  ports:
+    - port: 443
+      targetPort: 9443
+      name: webhook
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: spicebox-settings
+webhooks:
+  - name: agentclass.settings.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-agentclass
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["agentclasses"]
+        scope: Namespaced
+  - name: agentsession.settings.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-agentsession
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["agentsessions"]
+        scope: Namespaced
+  - name: clusteragentsettings.settings.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-clusteragentsettings
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["clusteragentsettings"]
+        scope: Cluster
+  - name: agentsettings.settings.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-agentsettings
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["agentsettings"]
+        scope: Namespaced
+  - name: skill.settings.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-skill
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["skills"]
+        scope: Namespaced
+  - name: clusterskill.settings.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-clusterskill
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["clusterskills"]
+        scope: Cluster
+  - name: clusteridentityprovider.settings.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-clusteridentityprovider
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["clusteridentityproviders"]
+        scope: Cluster
+  - name: agentsessionidentity.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # Fail closed. A session's runner SA holds `patch` on its own AgentSession
+    # AND on that session's /status subresource, and Kubernetes RBAC has no
+    # field granularity — so without this gate a compromised runner can rewrite
+    # its own started-by-canonical-id (making the operator project ANOTHER
+    # human's credentials and grant get+update on their OAuth master Secrets)
+    # or forge a status.pendingRestart takeover marker (which deliberately
+    # skips the SpiceDB fork gate, trusting channelsd as the choke point).
+    # `Ignore` would make the gate decorative: an attacker who crashes or
+    # saturates the webhook, or who waits for an operator rolling update,
+    # walks through it.
+    #
+    # matchConditions bounds the cost of `Fail`. They are evaluated INSIDE the
+    # API server before this webhook is dialed, so only runner ServiceAccounts
+    # ever reach it — the operator's own status writes, channelsd, webd, and
+    # humans are structurally exempt and cannot be wedged by a webhook outage.
+    # The suffix must stay in sync with pkg/controllers/webhooks/agentsession's
+    # runnerSASuffix and with BuildRunnerRBAC's `<session>-runner-sa`.
+    failurePolicy: Fail
+    matchConditions:
+      - name: only-session-runner-serviceaccounts
+        expression: "request.userInfo.username.startsWith('system:serviceaccount:') && request.userInfo.username.endsWith('-runner-sa')"
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-agentsession-identity
+        port: 443
+    rules:
+      # UPDATE only: no runner Role grants `create` on agentsessions, and a
+      # PATCH is presented to admission as an UPDATE. Both the main resource
+      # and the status subresource are listed — the original gap was that the
+      # existing agentsession webhook covers only `agentsessions`, so a status
+      # patch was never seen by admission at all.
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["UPDATE"]
+        resources: ["agentsessions", "agentsessions/status"]
+        scope: Namespaced
+  - name: workspacejob.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchConditions:
+      - name: only-session-runner-serviceaccounts
+        expression: "request.userInfo.username.startsWith('system:serviceaccount:') && request.userInfo.username.endsWith('-runner-sa')"
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-workspace-job
+        port: 443
+    rules:
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["jobs"]
+        scope: Namespaced
+  - name: subagentrequestparent.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # Fail closed. spec.parent is the whole basis of a delegated child's
+    # standing — read_transcript, approve and the pooled budget ceiling all
+    # resolve through it — and the runner's Role grants create on
+    # subagentrequests namespace-wide, unrestricted by resourceName because a
+    # CR's name is not knowable before it is created. `Ignore` would make this
+    # gate decorative: an attacker who crashes or saturates the webhook, or who
+    # waits for an operator rolling update, walks through it and claims any
+    # parent in the namespace — including a userPassthrough parent, which
+    # defeats monotonic identity attenuation outright.
+    #
+    # matchConditions bounds the cost of `Fail`. They are evaluated INSIDE the
+    # API server before this webhook is dialed, so only runner ServiceAccounts
+    # ever reach it — the operator's own writes and human administrators are
+    # structurally exempt and cannot be wedged by a webhook outage. The suffix
+    # must stay in sync with pkg/controllers/webhooks/subagentrequest's
+    # runnerSASuffix and with BuildRunnerRBAC's `<session>-runner-sa`.
+    failurePolicy: Fail
+    matchConditions:
+      - name: only-session-runner-serviceaccounts
+        expression: "request.userInfo.username.startsWith('system:serviceaccount:') && request.userInfo.username.endsWith('-runner-sa')"
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-subagentrequest-parent
+        port: 443
+    rules:
+      # CREATE is the operation that matters — spec.parent is set once, at
+      # creation. Unlike AgentSession.spec.parent, this CRD carries no CEL
+      # immutability rule on spec.parent, so UPDATE is listed too. Today's
+      # primary defense against post-creation tampering is RBAC:
+      # BuildRunnerRBAC (pkg/controllers/agentsession/rbac.go) grants runners
+      # only create and get on subagentrequests, no update, and runner SAs
+      # are the only principals matchConditions admits here in the first
+      # place. Listing UPDATE is a cheap backstop against a FUTURE grant
+      # widening that Role to include update — not a rule earning its keep
+      # against a gap that exists today.
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["subagentrequests"]
+        scope: Namespaced
+  - name: workshopobject.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # Fail closed. This is the heart of the agent-builder lockdown (spec
+    # layer 1.4): it attributes the calling ServiceAccount to a session,
+    # confirms that session's SpiceDB workshop#build tuple, then enforces the
+    # per-kind content rules RBAC cannot express — no fragment schema, no
+    # non-allowlisted sidecar image, no nested builder, no cross-namespace
+    # reference, and the per-kind/total object limits. `Ignore` would make
+    # every one of those checks decorative: an attacker who crashes or
+    # saturates the webhook, or who simply waits for an operator rolling
+    # update, walks straight through the ONE gate standing between a
+    # workshop sidecar and every object kind pkg/controllers/workshop's RBAC
+    # (workshop-agent Role) hands it create/update/patch on.
+    #
+    # matchConditions bounds the cost of `Fail` to workshop sidecar
+    # ServiceAccounts only — the operator's own writes and human
+    # administrators are structurally exempt and cannot be wedged by a
+    # webhook outage. The suffix must stay in sync with
+    # pkg/controllers/webhooks/workshop's workshopSASuffix and with
+    # spiceboxv1alpha1.WorkshopServiceAccountName's `<session>-workshop-sa`.
+    failurePolicy: Fail
+    matchConditions:
+      - name: only-workshop-sidecar-serviceaccounts
+        expression: "request.userInfo.username.startsWith('system:serviceaccount:') && request.userInfo.username.endsWith('-workshop-sa')"
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-workshop-object
+        port: 443
+    rules:
+      # The seven namespaced kinds pkg/controllers/workshop/rbac.go's
+      # workshop-agent Role grants the sidecar SA create/get/list/watch/
+      # update/patch/delete on, inside its own workshop namespace only.
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["agentclasses", "mcpservers", "sidecartoolboxes", "agentidentities", "skills", "agentuis", "subagentrequests"]
+        scope: Namespaced
+    # A workshop namespace is stamped with both session-attribution labels
+    # (pkg/controllers/workshop.BuildWorkshopNamespace) at provisioning; only
+    # dial into a namespace that IS a workshop namespace, so this Fail-policy
+    # webhook can never be wedged by writes into an ordinary namespace.
+    namespaceSelector:
+      matchExpressions:
+        - key: agentprimitives.authzed.com/workshop-session-name
+          operator: Exists
+  - name: workshoptool.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # Same gate as workshopobject.agentprimitives.authzed.com above, over the
+    # two CLUSTER-SCOPED tool kinds the shared spicebox-workshop-toolwriter
+    # ClusterRole grants create on (config/manager/workshop-toolwriter.yaml):
+    # that ClusterRole cannot scope `create` by resource NAME, so without
+    # this webhook a workshop sidecar could create a SpiceboxToolspec or
+    # SpiceboxToolkit named for or labeled as ANY workshop, not just its own.
+    # A separate webhook block because scope: Cluster cannot share a rule
+    # entry with scope: Namespaced, and a cluster-scoped object has no
+    # namespace for namespaceSelector to match against.
+    failurePolicy: Fail
+    matchConditions:
+      - name: only-workshop-sidecar-serviceaccounts
+        expression: "request.userInfo.username.startsWith('system:serviceaccount:') && request.userInfo.username.endsWith('-workshop-sa')"
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-workshop-object
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["spiceboxtoolspecs", "spiceboxtoolkits"]
+        scope: Cluster
+  - name: toolcall.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # Fail closed: a ToolCall is the privileged exec instruction the operator
+    # follows with cluster-wide Secret read. If the webhook (served by the same
+    # operator that runs the toolcall controller) is unreachable, refusing the
+    # call is correct — a forged/tampered ToolCall must never slip through.
+    failurePolicy: Fail
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-toolcall
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["toolcalls"]
+        scope: Namespaced

@@ -1,0 +1,9 @@
+name: allow-get-pods
+toolkit: toolkit.yaml
+spec: spec.yaml
+invocation:
+  command: kubectl
+  argv: [get, pods, -n, tenant-foo]
+  binaryVersion: "1.30.0"
+expect:
+  allow: true

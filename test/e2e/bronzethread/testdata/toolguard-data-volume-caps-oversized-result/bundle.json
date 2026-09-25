@@ -1,0 +1,35 @@
+{
+  "name": "toolguard-data-volume-caps-oversized-result",
+  "description": "Toolguard DATA-VOLUME cap, end to end. The class sets toolGuard dataLimit.maxIngressBytes=200 on tg_emit; the tool returns a ~300-byte result. The ingress byte guard in the runner hook pipeline withholds the oversized payload and hands the model an IsError instead of the content — the exfiltration / context-stuffing cap that turns an oversized tool result into a refusal.\n\nThe assertion is on the TOOL RESULT (lastToolResultIsError), not the reply: a scripted transcript says the same words whether the payload was withheld or delivered, so only the result distinguishes 'capped' from 'sailed through'. Of the four toolguard knobs only the origin breaker and credential-halt had a whole-session scenario before this; the data-volume cap was unit-only. Raise the limit (or shrink the output) and the result is delivered, lastToolResultIsError flips false, and this fails — which is the regression it exists to catch.",
+  "agentDir": "testdata/agent-toolguard",
+  "agentClass": "tg-agent",
+  "defaultUser": "user@example.com",
+  "toolOutputs": {
+    "emit": { "data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+    "fast": { "ok": true },
+    "flaky": { "ok": true }
+  },
+  "userTurns": ["read the big entry and report it"],
+  "llm": [
+    {
+      "expect": { "userTextContains": "big entry" },
+      "reply": [{ "toolUse": { "name": "tg_emit", "args": { "operation_id": "op-emit-1", "_reason": "the user asked to read the entry", "args": { "n": 1 } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "tg_emit",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "exceeded"
+      },
+      "reply": [{ "text": "The result was too large and was withheld by the data-volume limit." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "the payload exceeded the data-volume cap" } } }]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": ["withheld by the data-volume limit"],
+    "toolsCalled": ["tg_emit"]
+  }
+}

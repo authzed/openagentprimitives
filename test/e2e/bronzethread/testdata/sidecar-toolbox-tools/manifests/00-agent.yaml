@@ -1,0 +1,112 @@
+# Fixture agent for the sidecar-toolbox bronze bundle.
+#
+# The point of this fixture is the SIDECAR route specifically. A sidecar tool is
+# an MCP tool everywhere it matters — sidecartoolbox.Synthesize hands
+# mcptool.Synthesize a synthetic MCPServer built from this CR's own tools
+# allowlist — but it reaches the runner by a DIFFERENT path than an MCPServer CR
+# does: through AgentSession.status.resolvedSidecarToolboxes rather than through
+# AgentClass.spec.mcpServers. Nothing else in the bronze corpus exercises that
+# route, so nothing else notices when the threadrun driver stops making a
+# replayed sidecar reachable.
+#
+# Deliberately IN-POD (no spec.secretInputs): a separate-pod sidecar exists in
+# order to be secret-gated, and its tools are synthesized only once a producer
+# publishes the per-session secret-output Secret — which no bundle field can
+# express. See steelthread's secret-gated-sidecar finding.
+apiVersion: v1
+kind: Secret
+metadata: {name: sidecar-demo-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: sidecar-demo-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: sidecar-demo-identity, namespace: default}
+spec:
+  description: "Fixture identity for the sidecar-toolbox bundle; the toolbox needs no upstream credential."
+  credentials: []
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata: {name: sidecar-demo-sandbox}
+spec:
+  image: ""
+  resources: {cpu: "100m", memory: "64Mi", ephemeralStorage: "16Mi"}
+  network: {mode: allowlist, allowedHosts: []}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SidecarToolbox
+metadata: {name: kube-tb, namespace: default}
+spec:
+  name: kube
+  version: "1"
+  intent: "Fixture toolbox exposing read-only cluster listing tools."
+  source: {image: "registry.example.com/demo-kube-mcp:latest"}
+  sandbox: {class: sidecar-demo-sandbox}
+  transport:
+    port: 8080
+    healthcheck: {path: /healthz, timeoutSeconds: 30}
+  # provider is a REAL registered id (any would do — no envVar is set, so
+  # resolveSidecarCredential's ok=false short-circuit still fires and no
+  # credential is ever resolved) so the real SidecarToolbox controller's
+  # providerCheck phase, now wired in the harness, finds it in the
+  # /providers/ library. An empty string previously worked only because the
+  # driver's fake Valid=True stamp bypassed this check entirely.
+  upstreamAuth: {provider: kubectl-kubeconfig}
+  # TWO tools, and the transcript calls only `pods`. `nodes` is load-bearing:
+  # mcp.Synthesize returns an error when the allowlist names a tool the live
+  # server does not expose, so the bundle MUST carry a toolOutputs entry for
+  # `nodes` as well or synthesis of the WHOLE toolbox fails and `pods`
+  # disappears with it. That is exactly the placeholder entry a steelthread
+  # capture synthesizes for a declared-but-uncalled tool.
+  tools:
+    - name: pods
+      intent: "List pods."
+      # Required: with no allowedFields and no unconstrainedArgs the sidecar's
+      # CEL pre-call validation denies every named argument, so the tool
+      # dispatches and comes back "denied by allowedFields" instead of the
+      # canned output. The bundle's lastToolResultContains catches exactly that.
+      args: {allowedFields: [namespace]}
+    - name: nodes
+      intent: "List nodes."
+      args: {allowedFields: []}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: sidecar-demo, namespace: default}
+spec:
+  displayName: SidecarDemoBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: sidecar-demo-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      Your `kube` sidecar toolbox exposes kube_pods and kube_nodes.
+  agentIdentity: sidecar-demo-identity
+  authz:
+    # Disabled so this bundle isolates sidecar synthesis + dispatch rather than
+    # re-testing the authz round trip other bundles already cover.
+    toolCalls: {mode: disabled}
+  sidecarToolboxes:
+    - {name: kube, ref: kube-tb}
+  budget: {maxTurns: 20, maxTokens: 50000, maxDuration: 5m}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: sidecar-demo-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: sidecar-demo
+  credentialsRef: {secretName: sidecar-demo-fake-creds}
+  fake: {echo: false}

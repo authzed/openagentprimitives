@@ -1,0 +1,170 @@
+# Fixture agent for the session-only standing bronzethread scenario.
+#
+# The whole point of this fixture is what it does NOT ship: no SpiceDBBootstrap,
+# no `owner` relationship on reposcope_repo, nothing granting anything anywhere.
+# The MCPServer's spicedbSchema declares reposcope_repo with NO `standing`
+# field, so it resolves to the CRD default (session-only) — the approver's
+# decision on the plan-gate card is the authority, not a pre-existing SpiceDB
+# tuple. A push still writes a real slot_grant tuple (with a mandatory expiry,
+# session-scoped, revocable) and the tool-call Check still resolves
+# slot_grant_push->interact + owner; only the pre-check "did the approver
+# already hold this" is skipped.
+#
+# The resource type is named reposcope_repo, NOT git_repo: guardian composes
+# every builtin toolkit's spicedbSchema into ONE cluster-wide schema
+# unconditionally (BuiltinToolkits, not scoped per-AgentClass — see
+# pkg/controllers/guardian/agentsessiongrants_controller.go), and the real git
+# toolkit (toolkits/git.yaml) already declares git_repo with different
+# relations/permissions (read/write/fetch/push, all -> owner). Reusing that
+# name here made guardian refuse to write ANY schema at all ("conflicting
+# definitions for resource git_repo across MCPServers"), which cascades into
+# every AgentClass in the cluster failing Valid with a stale, misleading
+# "MCPServer is not Valid (AllowlistDrift)" message — the real failure is two
+# hops away from where it surfaces. A fixture-owned resource type must not
+# collide with a builtin toolkit's.
+#
+# planGate.mode is enforcing (not the logging used by other e2e fixtures)
+# because the claim under test is that an APPROVAL binds the slot — that only
+# happens on the plan-gate's plan_phase approval path.
+apiVersion: v1
+kind: Secret
+metadata: {name: reposcope-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: reposcope-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: reposcope-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: reposcope-identity, namespace: default}
+spec:
+  description: "Session-only-standing e2e fixture: static MCP bearer token."
+  credentials:
+    - name: reposcope-mcp-bearer
+      type: static
+      static: {secretRef: {name: reposcope-mcp-token, key: access_token}}
+---
+# Self-contained MCP fixture exposing one tool, "push", gated on
+# reposcope_repo#push.
+#
+# reposcope_repo declares NO `standing` — the field this whole feature adds —
+# so it resolves to StandingSessionOnly, the CRD default. Nothing else in this
+# file (or anywhere in this bundle) writes a tuple granting `owner` on
+# reposcope_repo to anybody, which is the condition this scenario exists to
+# prove works.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: reposcope-fixture, namespace: default}
+spec:
+  name: reposcope-fixture
+  version: v1
+  intent: "Self-contained git-push-shaped fixture for the e2e harness."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: reposcope-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: reposcope_repo
+        # Stated explicitly: nothing local governs who may approve, so the session's own approvers decide. There is no default.
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          # ComposeSlots rewrites this to slot_grant_push->interact + owner
+          # because the AgentClass below declares reposcope_repo as an authz
+          # slot.
+          #
+          # title is the human phrase the approval card shows instead of the
+          # wire handle (`perm:push:reposcope_repo`) — the fragment→controller
+          # →status→runner→card chain this whole bundle exists to prove.
+          - {name: push, expr: owner, title: "Push commits to the repository"}
+  tools:
+    - name: status
+      intent: "Report whether the push tool is ready to use. Stateless — no SpiceDB check."
+      args:
+        allowedFields: []
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: push
+      intent: "Push locally committed changes to a remote repository."
+      args:
+        allowedFields: [repoUrl]
+      permission:
+        stateImpact: readwrite
+        check:
+          resourceType: reposcope_repo
+          resourceIDExpr: '"" + args.repoUrl'
+          # The same [normalize_url, spicedb_escape] chain the real git
+          # toolkit keys git_repo with — this is the exact chain the live bug
+          # (raw URL reaching SpiceDB unescaped) bypassed, so exercising it
+          # here is the point, not incidental.
+          resourceIDTransforms: [normalize_url, spicedb_escape]
+          resourceIDHint: "give the repository as a full https:// URL"
+          permission: push
+      effects:
+        readOnly: false
+        idempotent: false
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: reposcope-fixture, namespace: default}
+spec:
+  displayName: RepoScopeBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: reposcope-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You push local changes to remote repositories. Available tools:
+        - reposcope_status(): check whether the push tool is ready
+        - reposcope_push(repoUrl): push committed changes to the named repository
+
+      When the user asks you to push, call update_plan first to declare a
+      phase naming the repository, then call reposcope_status, then call
+      reposcope_push.
+  agentIdentity: reposcope-identity
+  mcpServers:
+    - name: reposcope
+      ref: reposcope-fixture
+  authz:
+    slots:
+      - resourceType: reposcope_repo
+        description: "A remote repository, reached by its URL"
+        permission: push
+    planGate:
+      mode: enforcing
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: reposcope-fixture-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: reposcope-fixture
+  credentialsRef: {secretName: reposcope-fake-creds}
+  fake: {echo: false}

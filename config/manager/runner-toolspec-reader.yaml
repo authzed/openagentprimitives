@@ -1,0 +1,45 @@
+---
+# Shared ClusterRole granting the runner read access to the cluster-scoped,
+# non-secret descriptive CRDs it must look up at startup:
+#   - SpiceboxToolspec — tool subcommand allowlists, sensitive-flag patterns
+#     (the runner synthesizes sandbox tools from these).
+#   - ClusterSkill — cluster-scoped agent skills the runner resolves from
+#     AgentClass.Spec.Skills into the Agent Skills prompt section + load_skill
+#     (resolveSkills Lists ClusterSkills cluster-wide alongside namespaced
+#     Skills). Namespaced Skills are granted via the per-session Role; this
+#     CRD is cluster-scoped, so a namespaced Role cannot grant it.
+# Both are descriptive metadata, not secrets. Each is a cluster-scoped CRD, so
+# a namespaced Role cannot grant access; a ClusterRole is required. (The
+# ClusterRole keeps its historical -toolspec-reader name for binding
+# compatibility; its scope is "cluster-scoped CRDs the runner reads".)
+#
+# This ClusterRole is shared, but it is NOT bound to every ServiceAccount in
+# the cluster. The AgentSession controller creates one ClusterRoleBinding per
+# session — subject is exactly that session's runner ServiceAccount — and the
+# AgentSession finalizer deletes that ClusterRoleBinding when the session is
+# torn down. The per-session ClusterRoleBinding has no OwnerReferences (a
+# cluster-scoped object cannot be owned by a namespaced AgentSession), which is
+# why the finalizer reaps it explicitly by its deterministic name, derived from
+# the AgentSession UID ("toolspec-reader-<uid>" — a UID is used because a
+# namespace+name concatenation is collision-prone).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spicebox-toolspec-reader
+rules:
+  # The runner Gets each referenced toolspec by name at startup (no list/watch
+  # — it never enumerates or informs on them).
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["spiceboxtoolspecs"]
+    verbs: ["get"]
+  # resolveSkills Lists ClusterSkills cluster-wide (no by-name get, no watch).
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["clusterskills"]
+    verbs: ["list"]
+  # SpiceboxToolkit (cluster-scoped) — the runner Gets each referenced toolkit
+  # by name at startup to recover its PinnedBinaryHash for tool-pin audit
+  # provenance (internal/cmd/runner/main.go). Without this the Get 403s and silently
+  # downgrades the audit record's pin facts.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["spiceboxtoolkits"]
+    verbs: ["get"]

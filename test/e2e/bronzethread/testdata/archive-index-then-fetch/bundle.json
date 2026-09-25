@@ -1,0 +1,60 @@
+{
+  "name": "archive-index-then-fetch",
+  "description": "A support bundle arrives as a .zip. The agent gets ONE manifest line naming an index, reads the index, and then fetches one member named in it.\n\nThis is the whole point of fanning out behind an index rather than emitting a line per member: a real support bundle is dozens to hundreds of files, and a line each would flood the turn before the agent knows which ones matter. The index costs one line plus one read, and the agent opens the two or three files it actually needs — which is how a person triages one.\n\nAssertions are on TOOL RESULTS, never on the reply. The transcript is authored, so the reply says whatever this file says whether the fan-out ran or not; only a tool result proves the index exists and that a member handle read out of it resolves to that member's bytes.\n\nThe archive is BUILT from files/bundle-src at load time rather than committed. A binary archive in testdata cannot be reviewed — nobody can tell whether it holds what its filename claims — and the source files here stay plain text a reader can open.",
+
+  "agentDir": "testdata/agent-notebot-attachments",
+  "agentClass": "notebot-attachments",
+
+  "userTurns": [
+    {
+      "text": "Here's the support bundle from the cluster. What's failing?",
+      "attachments": [
+        {"filename": "bundle.zip", "mime": "application/zip", "zipFrom": "files/bundle-src"}
+      ]
+    }
+  ],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "use fetch_artifact to read it",
+        "toolOffered": "fetch_artifact",
+        "capture": {"indexHandle": "available at (mem://[^ ]+) — use fetch_artifact"}
+      },
+      "reply": [
+        {"toolUse": {"name": "fetch_artifact", "args": {"handle": "{{indexHandle}}"}}}
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "fetch_artifact",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "logs/spicedb.log",
+        "capture": {"memberHandle": "logs/spicedb\\.log.*?(mem://\\S+)"}
+      },
+      "reply": [
+        {"toolUse": {"name": "fetch_artifact", "args": {"handle": "{{memberHandle}}"}}}
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "fetch_artifact",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "connection reset by peer"
+      },
+      "reply": [
+        {"toolUse": {"name": "respond_to_user", "args": {"text": "The bundle has three files; spicedb.log shows a datastore connection reset by peer."}}}
+      ]
+    },
+    {
+      "expect": {"lastToolResult": "respond_to_user", "lastToolResultIsError": false},
+      "reply": [
+        {"toolUse": {"name": "agent_work_complete", "args": {"summary": "Read the bundle index, opened spicedb.log, reported the datastore error."}}}
+      ]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["datastore connection reset"]
+  }
+}

@@ -1,0 +1,15 @@
+# AgentUI fixture for the update_view/read_view meta-tool-capability e2e
+# scenario (Task 6): one slot, agentWritable, so update_view's writable-slot
+# enum is non-empty at capability-assembly time — see
+# view_capability_test.go. No spec.tools/spec.actions: this fixture never
+# exercises a browser-callable tool grant, only the two meta tools the LLM
+# itself may call.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentUI
+metadata:
+  name: uiviews-ui
+  namespace: default
+spec:
+  slots:
+    - name: panel
+      agentWritable: true

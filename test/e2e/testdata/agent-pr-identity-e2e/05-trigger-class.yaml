@@ -1,0 +1,68 @@
+# A THIRD AgentClass in this fixture directory, alongside pr-identity-e2e
+# (03-class.yaml). Same shape as agent-dossier-pool-e2e's read/write split
+# (test/e2e/testdata/agent-dossier-pool-e2e/03-agent.yaml): spec.authz.slots
+# admits at most one entry per resourceType, while slot composition is
+# global, so the only way github_pull_request can carry BOTH slot_grant_pin
+# (03-class.yaml) and slot_grant_write_memory (here) is two classes each
+# declaring one slot.
+#
+# fillFrom: ["trigger"] is the explicit opt-in trigger binding requires —
+# AuthzSlot.FillFrom's own doc comment: naming "trigger" is the ONE source
+# that is never implied by an unset list, however permissive the list reads
+# for every other source on the same slot. No triggerInstance expression: the
+# github channel kind's own TriggerSlotProvider derives the instance from the
+# pull_request payload's node_id, so the slot needs none — this is the exact
+# shape the shipped reviewbot demo's slot declares
+# (examples/reviewbot/manifests/agentclass.yaml).
+#
+# Reuses the SAME SpiceboxClass/SpiceboxToolspec/AgentIdentity as
+# pr-identity-e2e (03-class.yaml/00-secret.yaml/01-identity.yaml) — the gh
+# toolkit reachability standing/keying resolution needs is a property of the
+# toolkit, not of which class asks for it, the same reason
+# agent-dossier-pool-e2e's write-half class reuses its read-half's MCPServer
+# and AgentIdentity.
+#
+# model.provider=test is refused by the production operator; only the e2e
+# harness's reconciler (AllowTestProvider=true) admits it. No Channel: the
+# trigger binding this fixture exercises is driven directly through
+# pipeline.TriggerSlotRequestsFor/BindTriggerSlots against a Channel struct
+# built in Go (test/e2e/scenarios/resourcepool/trigger_slot_binding_test.go),
+# never through a real webhook delivery — so no Channel CR is needed for the
+# AgentClass to reach Valid=True.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: pr-identity-trigger-e2e
+  namespace: default
+spec:
+  displayName: PRIdentityTriggerE2E
+  description: "E2E fixture for trigger-time slot binding on github_pull_request/write_memory."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: pr-identity-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      This fixture exists for its SCHEMA, not its conversation: no scenario
+      using it drives a turn.
+  agentIdentity: pr-identity-gh
+  toolBundles:
+    - name: gh-review
+      class: pr-identity-sandbox
+      toolspecs:
+        - pr-identity-gh-review
+  authz:
+    slots:
+      - resourceType: github_pull_request
+        description: "The pull request this session was triggered for; binds at delivery time and opens its memory pool for the identity writes."
+        permission: write_memory
+        fillFrom: ["trigger"]
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m

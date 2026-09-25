@@ -1,0 +1,136 @@
+# Two SpiceboxClasses for codebot:
+#
+#   gitlike-bundle  — git + gh, allowlist-networked to GitHub only.
+#                     Shared /workspace volume allows git and gh to operate on
+#                     the same clone without extra copy steps.
+#
+#   codelike-bundle — claude binary (Claude Code), allowlist-networked to
+#                     Anthropic API + language registries. Reads/writes
+#                     /workspace via the shared mount.
+#
+# codelike-bundle statically composes the `claude` overlay (claude moved out of
+# the base sandbox image); the `toolchains` install question (oap.yaml) APPENDS
+# the language selection (default [go, node]) onto that via the `[]` append
+# marker. The registry hosts below are already allowlisted so a selected
+# toolchain's `go mod download` / `pnpm install` can reach them.
+#
+# SpiceboxClass is cluster-scoped (no metadata.namespace).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: gitlike-bundle
+spec:
+  resources:
+    cpu: "500m"
+    memory: "256Mi"
+    ephemeralStorage: "500Mi"
+    pidsLimit: 64
+  network:
+    mode: allowlist
+    allowedHosts:
+      - api.github.com
+      - github.com
+  # No static GIT_AUTHOR_* — committer identity is derived per-user at runtime
+  # from `gh api user` (see AgentClass systemPrompt).
+  tools:
+    - name: git
+      command: ["/usr/bin/git"]
+      expectedDuration: short
+    - name: gh
+      command: ["/usr/bin/gh"]
+      expectedDuration: short
+  toolspecs:
+    - name: git-rw
+    - name: gh-pr
+  sessionDefaults:
+    idleTTL: "30m"
+    maxDuration: "1h"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: codelike-bundle
+spec:
+  resources:
+    cpu: "1"
+    # Raised from 1Gi because tmpSize/workSize below are memory-backed tmpfs:
+    # their pages are charged against THIS limit as they are written. Raising the
+    # caps alone would buy nothing — the memory limit binds first and the pod is
+    # OOM-killed rather than told ENOSPC. (The caps are not reservations, so the
+    # operator does not reject a class whose caps exceed its memory; it just
+    # would not be able to use them.)
+    memory: "4Gi"
+    ephemeralStorage: "1Gi"
+    pidsLimit: 64
+    # A build box needs more scratch than the 50Mi/100Mi defaults: `claude`
+    # writes ~/.claude (HOME is /tmp), and any tool that ignores TMPDIR lands
+    # here. The large consumers are already redirected to the disk-backed
+    # /var/ap-cache by the toolchain env (GOCACHE, GOMODCACHE, PNPM_HOME,
+    # XDG_*, TMPDIR), so this is headroom, not the primary cache.
+    tmpSize: "512Mi"
+    workSize: "256Mi"
+    # The disk-backed /var/ap-cache holds GOCACHE + GOMODCACHE + PNPM_HOME while
+    # this box builds and tests the repo it is working on. The 2Gi default is
+    # too small for a large dependency graph — a Go dependency-bump against a
+    # big module tree (e.g. docker/docker) blows past 2Gi and the kubelet evicts
+    # the pod. Charged against node disk (the builder raises the container's
+    # ephemeral-storage limit to match), NOT against the 4Gi memory limit above.
+    cacheSize: "8Gi"
+  network:
+    # mode is the part the cluster ENFORCES today: `allowlist` emits DNS plus
+    # coarse TCP 443/80 to 0.0.0.0/0 (see cosidecar.AllowlistEgressRules), while
+    # `none` is deny-all. Vanilla NetworkPolicy cannot express hostnames.
+    #
+    # allowedHosts is RECORDED on
+    # AgentSession.status.resolvedSidecarToolboxes[].effectiveAllowedHosts and is
+    # NOT enforced by the operator. A DNS-aware policy controller (Cilium,
+    # Calico) consuming that snapshot is what would narrow egress to these names.
+    # Declare the truth here anyway: the day such a controller is installed, a
+    # stale list silently breaks `go mod download` and `pnpm install` in
+    # production and nowhere else.
+    #
+    # Anything the agent fetches over plain HTTPS works today. Anything on
+    # another port does not — git over SSH (22) is blocked; codebot clones over
+    # HTTPS, which is why GIT_ASKPASS exists.
+    mode: allowlist
+    allowedHosts:
+      # Claude Code (the inner agent's own LLM calls).
+      - api.anthropic.com
+      # Go modules + the checksum database. GOTOOLCHAIN=local means the `go`
+      # command never downloads a toolchain, only modules.
+      - proxy.golang.org
+      - sum.golang.org
+      # npm / pnpm, and yarn classic's registry.
+      - registry.npmjs.org
+      - registry.yarnpkg.com
+      # Source hosts: modules and packages that resolve to a git URL or a
+      # release tarball rather than to a registry.
+      - github.com
+      - api.github.com
+      - codeload.github.com
+      - objects.githubusercontent.com
+      - raw.githubusercontent.com
+  envDefaults:
+    HOME: /tmp
+  tools:
+    # The class tool name MUST equal the toolspec's toolkit name
+    # (claude-oauth) — the AgentClass validator matches them (the runtime
+    # tool the orchestrator calls is then codelike_claude-oauth).
+    - name: claude-oauth
+      # Absolute path into the claude overlay. claude moved out of the base
+      # sandbox image (it was /usr/local/bin/claude) into the oap-toolchain-claude
+      # overlay; pkg/tools/exec/remote requires an absolute cmd[0].
+      command: ["/opt/ap-toolchains/claude/bin/claude", "--dangerously-skip-permissions"]
+      expectedDuration: long
+  toolspecs:
+    - name: claude-oauth
+  # claude is mandatory infra for a code agent (its runtime lives in the claude
+  # overlay), so it is declared statically here. The `toolchains` install
+  # question (oap.yaml) APPENDS the user's language selection onto this list via
+  # the `#spec.toolchains[]` append marker — it does NOT replace it, so claude
+  # always survives.
+  toolchains:
+    - claude
+  sessionDefaults:
+    idleTTL: "30m"
+    maxDuration: "1h"

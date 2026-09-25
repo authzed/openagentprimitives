@@ -1,0 +1,52 @@
+export const meta = {
+  title: 'Skills',
+  section: 'Reference',
+  group: 'Agent definition',
+  order: 2030,
+  description:
+    'Reusable capabilities an agent can be granted — packaged, sourced from git with provenance, and part of the agent definition.',
+}
+
+# Skills
+
+<p className="doc-lede">
+  A <strong>skill</strong> is a reusable capability you can grant an agent — a packaged bundle of instructions
+  and the tools that go with it. Skills are part of the agent <em>definition</em>: they install with the agent,
+  they're allowlisted by name, and they carry provenance so a skill can't lie about where it came from.
+</p>
+
+## What a skill is
+
+Rather than copy the same instructions and tool wiring into every agent that needs them, you factor them into
+a skill and grant it. An AgentClass names the skills it's allowed to use; at run time the agent can draw on
+exactly those, and no others. Because a skill is part of the definition, it rides along when the agent is
+[packaged as a bundle](#/packaging-oap) — you don't wire it up again at each install.
+
+## Progressive disclosure
+
+An agent doesn't carry every skill's full instructions in its context. Each granted skill contributes only a
+short description — a sentence or two — that's always present. When the agent judges a skill relevant, it pulls
+the full body on demand with a `load_skill` call. So you can grant many skills without drowning the prompt: the
+names and descriptions are cheap, and the detail is loaded only when it's needed. (A loaded skill body is
+treated as untrusted content, like any tool output.)
+
+## Where skills come from
+
+Skills are materialized from a **`SkillSource`** (namespaced) or **`ClusterSkillSource`** (cluster-wide) — a
+declared, git-backed origin. You register one with `oap skill source create <name> --repo <url> --ref <tag>`;
+the controller clones the repo, finds every `SKILL.md` under it, and materializes one Skill per capability. The
+agent never gets a skill from a hand-edited blob.
+
+## Provenance: a skill can't claim an origin it doesn't have
+
+A skill's name encodes its authority — the source it came from — and the controller enforces that binding. A
+skill claiming to come from a trusted origin must be backed by an actual `SkillSource` whose repository
+normalizes to that same authority. You can't hand the cluster a skill with a forged "from a trusted org" label
+and an attacker-supplied body; the name and the source have to agree, and the check fails closed if they
+don't.
+
+<Callout kind="security" title="Name and source must agree">
+  This matters most in a multi-tenant cluster, where an allowlist might trust skills by name pattern. Because
+  the trusted name is bound to a real, owner-referenced source — not to a string a tenant can type — a tenant
+  can't mint a skill that impersonates a trusted publisher. Provenance is structural, not advisory.
+</Callout>

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ap-workspace-storage
+  labels:
+    app.kubernetes.io/name: ap-workspace-storage
+    agentprimitives.authzed.com/install-tier: workspace-provisioner-rwx

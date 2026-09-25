@@ -1,0 +1,38 @@
+{
+  "name": "toolguard-rate-limit-denies-second-call",
+  "description": "Toolguard RATE-LIMIT, end to end. The class sets toolGuard rateLimit.maxCallsPerTurn=1 on tg_fast; the model calls it TWICE in one turn. Exactly one call runs and one exceeds the per-turn cap and is denied — the runaway-loop / rabbit-holing cap. Distinct from plangate-call-budget (the plan-gate per-phase budget) and from the per-MCP-origin limiter.\n\nThe assertion is on the exact result population: two tg_fast results, exactly one an error. Calls from one scripted reply dispatch concurrently, so either authored block may reach the limiter first; result position is not execution order. Before this, the fixture inspected one positional result and flaked even though the rate_turn denial fired. Raise maxCallsPerTurn (or remove a call) and the exact total/error count changes and this fails.",
+  "agentDir": "testdata/agent-toolguard",
+  "agentClass": "tg-agent",
+  "defaultUser": "user@example.com",
+  "toolOutputs": {
+    "emit": { "ok": true },
+    "fast": { "ok": true },
+    "flaky": { "ok": true }
+  },
+  "userTurns": ["call fast twice in a row"],
+  "llm": [
+    {
+      "expect": { "userTextContains": "twice" },
+      "reply": [
+        { "toolUse": { "name": "tg_fast", "args": { "operation_id": "op-fast-1", "_reason": "first call", "args": { "n": 1 } } } },
+        { "toolUse": { "name": "tg_fast", "args": { "operation_id": "op-fast-2", "_reason": "second call in the same turn", "args": { "n": 2 } } } }
+      ]
+    },
+    {
+      "expect": {
+        "toolResultCounts": {
+          "tg_fast": {"total": 2, "errors": 1}
+        }
+      },
+      "reply": [{ "text": "The second call was denied by the per-turn rate limit." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "the second call hit the rate limit" } } }]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": ["denied by the per-turn rate limit"],
+    "toolsCalled": ["tg_fast"]
+  }
+}

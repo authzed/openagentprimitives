@@ -1,0 +1,144 @@
+{
+  "name": "plangate-amendment-binds-constant-instance",
+  "description": "An amendment that adds a permission keyed on a CONSTANT instance must bind that instance, or the approval buys nothing and the next call re-asks forever.\n\namrepo_repo keys push on the remote URL and read on the literal \"workspace\". The plan's phase holds only push, so the first inspect call is outside the ceiling and raises an amendment. The instance that permission reaches is a platform constant the AGENT CANNOT NAME -- nothing in a plan ever says \"workspace\", because the toolkit fixes it. So the amendment's slot ref carried a bare type with an empty id, narrowToApproved bound nothing, and every subsequent call escalated again.\n\nObserved live 2026-08-21, with the runner announcing it in a single INFO line no one watching a chat window would see: `plan_gate: the approval was recorded but bound no instance; the phase may run and every named resource still escalates per instance / phaseKey=\"\" requested=[git_repo] granted=[git_repo]`. The human clicked Approve on the same amendment repeatedly.\n\ninspect is called TWICE after ONE amendment approval, and approvalPrompts is the assertion that matters. A bound approval and one re-granted per call produce an identical transcript -- the run 'works' either way and the only difference is how many cards a human had to click. That is exactly the gap this counter exists to expose, and a boolean cannot see it.\n\napprovalPrompts is 2, and WHICH two is the point: ONE plan_amendment for the out-of-ceiling inspect, then ONE plan_phase for the push phase itself. A THIRD means the amendment bound nothing and inspect #2 re-escalated.\n\nIt asserted 1 until 2026-09-09, and that was the bug being encoded as intent. An approved amendment used to fall through to the legacy whole-phase grant in the fold -- so approving \"add Read the checked-out files\" ALSO cleared a push phase no human had ever seen a card for, and the second prompt simply never happened. The fold now records the amendment's own handle and stops, so the phase is asked about on its own terms. Two cards here is the fix, not a regression.\n\ntool_approval is deliberately NOT auto-approved. With the amendment bound there is nothing left to escalate, so a JIT tool_approval appearing at all IS the failure -- papering over it with an auto-approver would let the bug pass as a slower success. The bug shows up as the inspect call returning a SYSTEM_TIMEOUT instead of the tool output, because the per-instance escalation nobody answers is what an unbound approval degrades into.",
+  "agentDir": "testdata/plangate-amendment-binds-constant-instance",
+  "agentClass": "amrepo-fixture",
+  "autoApprove": [
+    "plan_phase",
+    "plan_amendment"
+  ],
+  "userTurns": [
+    "Check the working copy twice, then push my committed changes to https://github.com/fictional-forge/beacon-service"
+  ],
+  "toolOutputs": {
+    "status": {
+      "ready": true
+    },
+    "inspect": {
+      "clean": true,
+      "marker": "insp3ct3d"
+    },
+    "push": {
+      "status": "pushed",
+      "commitSha": "f00dfeed01cafe"
+    }
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Check the working copy twice"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "s1",
+                  "label": "push to the repository",
+                  "status": "pending",
+                  "phase": "push_phase"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "push_phase",
+                  "label": "Push to the repository",
+                  "why": "the user asked me to push their committed changes",
+                  "permissions": [
+                    {
+                      "handle": "perm:push:amrepo_repo",
+                      "why": "pushing requires write access to the remote"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "amrepo_repo",
+                      "id": "https://github.com/fictional-forge/beacon-service",
+                      "why": "the user named this repository"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "amrepo_inspect",
+            "args": {
+              "operation_id": "op-i1",
+              "_reason": "checking the working copy",
+              "args": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "amrepo_inspect",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "insp3ct3d"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "amrepo_inspect",
+            "args": {
+              "operation_id": "op-i2",
+              "_reason": "checking the working copy a second time",
+              "args": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "amrepo_inspect",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "insp3ct3d"
+      },
+      "reply": [
+        {
+          "text": "inspected the working copy twice"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "inspected twice"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "inspected the working copy twice"
+    ],
+    "planGate": {
+      "frozenPhases": 1,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 2
+    }
+  }
+}

@@ -1,0 +1,118 @@
+:root {
+  --background: 282 50% 4%;          /* stone-975 #0c050f — canonical dark-surface ground */
+  --foreground: 300 5% 91%;          /* stone-050 #e9e7e9 */
+  --card: 278 29% 11%;               /* stone-900 #1e1424 */
+  --card-foreground: 300 5% 91%;
+  --popover: 278 29% 11%;
+  --popover-foreground: 300 5% 91%;
+  --border: 279 11% 24%;             /* stone-800 #3f3644 */
+  --input: 279 11% 24%;
+  --primary: 269 2% 87%;             /* stone-100 #dedddf — ink, not a hue (palette round 4, N1) */
+  --primary-foreground: 282 50% 4%;
+  --secondary: 278 29% 11%;
+  --secondary-foreground: 300 5% 91%;
+  --muted: 278 29% 16%;
+  --muted-foreground: 279 11% 60%;
+  /* shadcn's --accent is a SURFACE (menu/select hover fills), not a hue; it
+     had been violet-400, which is why every hover in the app was a saturated
+     block. It is now the surface-2 rung. The hue that used to ride on it
+     (creative/working pills, the selected rule) is --state below. */
+  --accent: 278 24% 17%;             /* = --surface-2 #2e2136 */
+  --accent-foreground: 300 5% 91%;
+  /* The ONE hue on the page. It means state (selected, working, creative),
+     never action: buttons are ink, links are stone. Palette round 4 (N1) put
+     sand-400 here; round 5 (C1, 2026-09-16) moved it to teal-400 so the
+     palette reads cool while staying on canonical design rungs. */
+  --state: 176 29% 57%;              /* teal-400 #72b1ad */
+  --state-foreground: 282 50% 4%;
+  --destructive: 355 91% 74%;        /* red-400 #f9808a */
+  --destructive-foreground: 282 50% 4%;
+  /* Healthy/success is NEUTRAL now that teal is the state hue (C1): the
+     working dot is the only teal on the page, so health cannot share it. */
+  --success: 283 4% 66%;             /* stone-300 #aaa5ac */
+  --warning: 28 100% 72%;            /* sand-300 #ffb370 */
+  /* Five hue-separated chart series. Each clears 3:1 against --card in both themes. */
+  --chart-1: 25 88% 68%;
+  --chart-2: 82 55% 70%;
+  --chart-3: 205 85% 72%;
+  --chart-4: 265 75% 78%;
+  --chart-5: 330 70% 72%;
+
+  /* Surfaces. Pinned on CONTRAST RATIO against the surface beneath, not on an
+     opacity modifier, because on a dark ground alpha moves a color TOWARD the
+     background: `bg-muted/50` over --card lands 1.06:1 away from it, which is
+     nothing. A real rung moves toward light. Same reasoning as the chart series
+     above — the separation has to live in a channel every viewer retains — but
+     the failure mode differs: charts collapse in grayscale, surfaces collapse
+     into a single flat black.
+
+     Hue and saturation track design's stone ramp, which desaturates as it
+     lightens (stone-900 is 29%, stone-800 is 11%), so these read as members of
+     that ramp rather than as tinted grays dropped on top of it.
+
+     --surface-2/3 are elevation (a raised panel, an overlay). --surface-hover
+     and --surface-active are INTERACTION and deliberately step harder: an
+     elevation change is supported by a border and a shadow, a hover has only
+     itself. surface.test.tsx pins every ratio below; re-run it after touching
+     any value here. */
+  --surface-2: 278 24% 17%;          /* #2f2136 — 1.18:1 on --card */
+  --surface-3: 279 18% 21%;          /* #372b3e — 1.34:1 on --card */
+  --surface-hover: 278 22% 23%;      /* #3f2f49 — 1.45:1 on --card */
+  --surface-active: 279 16% 28%;     /* #4b3c53 — 1.75:1 on --card */
+  --ring: 269 2% 87%;                /* stone-100, matches --primary */
+
+  /* Links are NEUTRAL: stone-200, one rung below --foreground, with the
+     underline on hover as the affordance. Palette round 4 (N1) took colour off
+     everything you click; the only hue left on the page is --accent, and it
+     means state, never action. stone-200 clears 4.5:1 on every surface
+     including --surface-active (5.7:1), so there is no raised rung and no
+     surface override any more. link.test.tsx pins the ratios and the
+     link/primary separation. */
+  --link: 269 5% 78%;                /* stone-200 #c7c4ca */
+  --radius: 0.5rem;
+}
+
+/* Light theme. Same token SET as :root, opposite direction: the surface ladder
+   DESCENDS from the ground (a raised panel is darker), ink flips to stone-950,
+   and every hue moves two rungs toward its dark end because a light ground
+   eats saturation. Chart series uses darker versions of the same five hues.
+   theme.test.tsx pins that both blocks define the
+   same tokens, so a token added to one cannot silently fall back to the other
+   theme's value here. Selected with data-theme="light" on <html>; the shell
+   sets it from the viewer's choice. */
+:root[data-theme="light"] {
+  --background: 0 0% 98.8%;       /* site light ground #fcfcfc */
+  --foreground: 279 36% 8%;       /* stone-950 #170d1c */
+  --card: 299 6% 97%;             /* stone-025 #f8f7f8 */
+  --card-foreground: 279 36% 8%;  /* stone-950 #170d1c */
+  --popover: 299 6% 97%;          /* stone-025 #f8f7f8 */
+  --popover-foreground: 279 36% 8%;/* stone-950 #170d1c */
+  --border: 284 4% 82%;           /* stone-150 #d2cfd3 */
+  --input: 284 4% 82%;            /* stone-150 #d2cfd3 */
+  --primary: 279 36% 8%;          /* stone-950 ink #170d1c */
+  --primary-foreground: 299 6% 97%;/* stone-025 #f8f7f8 */
+  --secondary: 299 6% 97%;        /* stone-025 #f8f7f8 */
+  --secondary-foreground: 279 36% 8%;/* stone-950 #170d1c */
+  --muted: 299 3% 91%;            /* stone-050 #e9e7e9 */
+  --muted-foreground: 279 6% 39%; /* stone-600 — stone-500 is 4.35:1 on card, under AA #655d69 */
+  --accent: 299 3% 91%;           /* = --surface-2, stone-050 #e9e7e9 */
+  --accent-foreground: 279 36% 8%;/* stone-950 #170d1c */
+  --state: 177 26% 39%;           /* teal-600 #4a7d7b — C1; the light rung of the dark teal-400 (sand-600 before round 5) */
+  --state-foreground: 299 6% 97%; /* stone-025 #f8f7f8 */
+  --destructive: 351 55% 53%;     /* red-600 #c94559 */
+  --destructive-foreground: 299 6% 97%;/* stone-025 #f8f7f8 */
+  --success: 275 5% 47%;          /* stone-500 #79727e — neutral health, teal is state (C1) */
+  --warning: 20 36% 46%;          /* sand-600 #a0674b */
+  --chart-1: 25 80% 38%;
+  --chart-2: 82 65% 32%;
+  --chart-3: 205 85% 37%;
+  --chart-4: 265 65% 47%;
+  --chart-5: 330 75% 41%;
+  --surface-2: 299 3% 91%;        /* stone-050 #e9e7e9 */
+  --surface-3: 269 2% 87%;        /* stone-100 #dedddf */
+  --surface-hover: 269 2% 87%;    /* stone-100 #dedddf */
+  --surface-active: 269 5% 78%;   /* stone-200 — 1.61:1 on card, 1.27:1 on hover #c7c4ca */
+  --ring: 279 36% 8%;             /* stone-950 ink #170d1c */
+  --link: 278 9% 31%;             /* stone-700 — 8.15:1 on card, 5.64:1 on --surface-active #514856 */
+  --radius: 0.5rem;
+}

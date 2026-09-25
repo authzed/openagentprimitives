@@ -1,0 +1,26 @@
+name: kubectl-readonly-tenant-foo
+version: "1"
+
+intent: |
+  Read-only kubectl access restricted to the tenant-foo namespace.
+
+toolkit:
+  name: kubectl
+  revision: "2026-04-24"
+
+allowSubcommands:
+  - get
+  - describe
+  - logs
+
+deny:
+  effects:
+    destructive: true
+    writes: [network, filesystem]
+    creds: {writes: true}
+
+constraints:
+  - cel: 'call.flag("namespace") == "tenant-foo"'
+    message: "-n/--namespace must be tenant-foo"
+  - cel: '!call.hasFlag("all-namespaces")'
+    message: "--all-namespaces is not permitted"

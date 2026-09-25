@@ -1,0 +1,60 @@
+# AgentClass + Channel for the channel-history e2e fixture (Task 10:
+# proves the read_channel_history wiring end-to-end).
+#
+# No mcpServers/agentIdentity — this fixture only exercises the
+# read_channel_history meta tool round trip, so the minimal AgentClass
+# needed is model+systemPrompt+budget. spec.authz is left unset, which
+# resolves InformationLeakage to "disabled" (see
+# InformationLeakagePolicy.ResolvedMode's default) — the channel-history
+# gate then requires the session's output channel to equal its input
+# channel, which trivially holds here: the pipeline never sets
+# OutputChannel for a plain inbound-triggered session, and
+# ChannelBinding.SameChannelAs treats a nil OutputChannel as "same as
+# input".
+#
+# The Channel below has NO spec.channelHistory block — this fixture is
+# the base for the "not opted in" negative scenario
+# (TestChannelHistory_NotOptedIn_ToolNotOffered). The positive
+# round-trip scenario (TestChannelHistory_OptIn_RoundTrip) overrides it
+# via Options.ExtraManifests with spec.channelHistory.enabled: true
+# (same namespace/name) — see that test's channelHistoryEnabledOverride
+# constant.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: channelhist-agent
+  namespace: default
+spec:
+  displayName: ChannelHistoryBot
+  description: "E2E fixture agent for the channel-history round trip. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: channelhist-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      When asked what happened earlier in the channel, call
+      read_channel_history to retrieve it.
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: channelhist-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: channelhist-agent
+  credentialsRef:
+    secretName: channelhist-fake-creds
+  fake:
+    echo: false

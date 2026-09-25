@@ -1,0 +1,125 @@
+# AgentClasses + Channel for the agent-dossier-pool-e2e fixture.
+#
+# Each AgentClass exists for ONE reason: its spec.authz.slots entry is what
+# makes the AgentClass controller emit that class's AgentSessionGrants CR and
+# the guardian compose, into the live schema, the
+# `relation slot_grant_<perm>: agentsession with expiration` plus
+# `permission <perm> = slot_grant_<perm>->interact + owner` the scenarios write
+# their slot-grant tuples on.
+#
+#   dossier-pool-e2e        slots dossier/read         → slot_grant_read
+#   dossier-pool-write-e2e  slots dossier/write_memory → slot_grant_write_memory
+#
+# TWO classes for ONE resource type, deliberately. spec.authz.slots admits at
+# most one entry per resourceType — validateSlotDeclarations refuses a
+# duplicate, because two entries for one type leave it ambiguous which governs
+# when they disagree — while slot COMPOSITION is global across every class in
+# the cluster. So this is the only way `dossier` can carry both relations at
+# once, and carrying both is what lets the write scenario hold a READ grant and
+# a WRITE grant on instances of the same type, with nothing but the relation
+# name telling them apart. That is exactly the distinction pools.ForSession
+# makes (any slot_grant_* → Read; only slot_grant_write_memory → Write), so the
+# fixture has to be able to express both or the distinction cannot be tested.
+#
+# model.provider=test is refused by the production operator; only the e2e
+# harness's reconciler (AllowTestProvider=true) admits it. Channel kind=fake
+# is the in-process transport. Neither is ever appropriate on a real cluster.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: dossier-pool-e2e
+  namespace: default
+spec:
+  displayName: DossierPoolE2E
+  description: "E2E fixture for the resource-memory pool read path."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: dossier-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      This fixture exists for its SCHEMA, not its conversation: no scenario
+      using it drives a turn.
+  agentIdentity: dossier-identity
+  mcpServers:
+    - name: dossier
+      ref: dossier-records
+  authz:
+    slots:
+      - resourceType: dossier
+        description: "A dossier record the session may work with"
+        # `read`, NOT view_memory. A slot on the memory audience permission is
+        # refused by the composer — see 02-mcpserver.yaml.
+        permission: read
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+# The WRITE half of the pair. Same MCPServer, same AgentIdentity, same test
+# provider; the only thing it contributes is the `dossier/write_memory` slot,
+# and through it the composed `relation slot_grant_write_memory` that a
+# session's write grant is written on.
+#
+# No Channel of its own: nothing ever starts a session of this class. The
+# AgentClass reconciler does not require one to reach Valid=True, and adding a
+# second fake channel would suggest a conversation this fixture never has.
+#
+# It DOES need mcpServers: resolveStandingFor walks the fragments reachable
+# from THIS class, and a slot naming a type none of them declares is refused
+# with "declares no standing" rather than defaulted.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: dossier-pool-write-e2e
+  namespace: default
+spec:
+  displayName: DossierPoolWriteE2E
+  description: "E2E fixture for the resource-memory pool write path."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: dossier-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      This fixture exists for its SCHEMA, not its conversation: no scenario
+      using it drives a turn.
+  agentIdentity: dossier-identity
+  mcpServers:
+    - name: dossier
+      ref: dossier-records
+  authz:
+    slots:
+      - resourceType: dossier
+        description: "A dossier record the session may record observations about"
+        # write_memory: a `write_*` memory permission, so isSlottableMemoryPermission
+        # admits it — unlike view_memory, which it refuses outright.
+        permission: write_memory
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: dossier-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: dossier-pool-e2e
+  credentialsRef:
+    secretName: dossier-fake-creds
+  fake:
+    echo: false

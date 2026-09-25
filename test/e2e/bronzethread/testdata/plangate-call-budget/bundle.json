@@ -1,0 +1,76 @@
+{
+  "name": "plangate-call-budget",
+  "description": "The focus mechanism, end to end. A phase declares a budget of ONE governed call and then makes two. The second is refused — not because the ceiling denies it (the handle is squarely inside the approved ceiling and the first call proved it) but because the phase has spent what it asked for. This is the only mechanism that catches rabbit-holing: forty calls out of a perfectly legal readonly ceiling breaks no permission rule, so no permission model can see it.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-enforcing"],
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["list the companies"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies", "toolOffered": "select_phase" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "list companies", "status": "pending", "phase": "recon" }
+              ],
+              "phases": [
+                {
+                  "id": "recon",
+                  "label": "List the companies",
+                  "why": "the user asked which companies exist",
+                  "budget": { "calls": 1, "why": "one listing is all this needs" },
+                  "permissions": [
+                    { "handle": "perm:list:crm_company", "why": "to list companies" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list", "_reason": "re-reading the list", "args": {} } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "update_plan"
+      },
+      "reply": [{ "text": "I have used this phase's budget and need to re-plan" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["re-plan"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true,
+      "gatedAgainstFrozenPlan": true
+    }
+  }
+}

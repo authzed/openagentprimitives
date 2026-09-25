@@ -1,0 +1,68 @@
+[
+  {
+    "type": "container",
+    "rich_text_title": {
+      "type": "rich_text",
+      "elements": [
+        {
+          "type": "rich_text_section",
+          "elements": [
+            {
+              "type": "emoji",
+              "name": "large_purple_circle"
+            },
+            {
+              "type": "text",
+              "text": "  "
+            },
+            {
+              "type": "text",
+              "text": "Here's Circldot's current MRR and renewal date for the QBR deck.",
+              "style": {
+                "bold": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "child_blocks": [
+      {
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": "\n• *Would share with*: \u003c@U_GUEST\u003e"
+        }
+      },
+      {
+        "type": "actions",
+        "block_id": "interaction_actions",
+        "elements": [
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Approve",
+              "emoji": false
+            },
+            "action_id": "approve",
+            "value": "{\"v\":\"interaction\",\"r\":\"leak-1\",\"d\":\"approve\",\"s\":\"default/demo-sess\",\"c\":\"info_leakage\"}",
+            "style": "primary"
+          },
+          {
+            "type": "button",
+            "text": {
+              "type": "plain_text",
+              "text": "Deny",
+              "emoji": false
+            },
+            "action_id": "deny",
+            "value": "{\"v\":\"interaction\",\"r\":\"leak-1\",\"d\":\"deny\",\"s\":\"default/demo-sess\",\"c\":\"info_leakage\"}",
+            "style": "danger"
+          }
+        ]
+      }
+    ],
+    "has_header_divider": true
+  }
+]

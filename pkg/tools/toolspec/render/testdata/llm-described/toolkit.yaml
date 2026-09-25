@@ -1,0 +1,27 @@
+name: gh
+version: "1"
+toolkitRevision: "2026-04-24"
+target: {binary: gh}
+parser: {kind: declarative}
+env:
+  allowed:
+    - {name: GITHUB_TOKEN, description: "token", sensitive: true, credential: github-token}
+subcommands:
+  - path: [pr, view]
+    description: "View a pull request"
+    effects:
+      destructive: false
+      reads: [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+  - path: [pr, merge]
+    description: "Merge a pull request"
+    effects:
+      destructive: true
+      reads: [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}

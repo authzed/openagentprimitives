@@ -1,0 +1,204 @@
+{
+  "name": "plangate-authored-example-reaches-the-agent",
+  "description": "An AgentClass's own worked plan example reaches the agent that plans, alongside the one the runner derives.\n\nTwo examples now land in the same prompt by different routes, and either can break alone. The DERIVED one is built by the runner from this session's permission surface, so it always speaks handles the agent may actually declare. The AUTHORED one comes off spec.authz.planGate.examples, for a class whose good plan is not obvious from its surface. This bundle covers the second — the path that had none: the field is validated at admission and rendered at compose time, and nothing exercised CRD → prompt.\n\nWHY ASSERT ON THE PROMPT. The model here is scripted, so its reply says whatever the transcript says no matter what it was told — an agentReplyContains assertion would pass with the prompt empty. systemPromptContains reads the prompt the runner actually composed, off the request the provider received, which is the only place the composed prompt exists.\n\nTHE FIXTURE IS DELIBERATELY NOT REPO-SHAPED. desk_ticket, read and comment. The derived example is built from whatever the surface holds, so a git-shaped fixture could pass while the renderer still emitted the hardcoded git example it used to — the exact bug that removing the hardcode fixed. A type nothing in the prompt could have guessed is what makes the derived assertions load-bearing.\n\nWHAT EACH ASSERTION HOLDS. The authored strings (the task line and its phase ids) prove the CRD field travelled. `perm:comment:desk_ticket` beside `perm:read:desk_ticket` proves the derived acting phase carries the read it depends on — the shape whose absence made an agent stop mid-task for a read its plan should have had. The planningNote string proves the toolkit's own guidance travelled its separate route, toolkit → status.resolvedPermissionTitles → runner. And `OMIT id entirely` proves the slot placeholder states the RULE rather than where a value comes from: worded as \"the exact value the user gave\", every measured CRM planner stamped a company's display NAME in as its record id.\n\nMeasured 2026-08-23 across 28 planner trials: a worked example is transcribed closely — labels, justifications and all — so every string in one is load-bearing rather than illustrative. That is what makes rendering it correctly worth a scenario.",
+  "agentDir": "testdata/plangate-authored-example-reaches-the-agent",
+  "agentClass": "deskbot-fixture",
+  "autoApprove": [
+    "plan_phase",
+    "plan_amendment",
+    "tool_approval"
+  ],
+  "userTurns": [
+    "please read ticket T-77 and comment with the fix"
+  ],
+  "toolOutputs": {
+    "show": {
+      "id": "T-77",
+      "title": "login fails on retry",
+      "body": "steps attached"
+    },
+    "comment": {
+      "status": "commented",
+      "ticket": "T-77"
+    }
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "ticket T-77"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "s1",
+                  "label": "read the ticket",
+                  "status": "pending",
+                  "phase": "read_phase"
+                },
+                {
+                  "id": "s2",
+                  "label": "comment on it",
+                  "status": "pending",
+                  "phase": "answer_phase"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "read_phase",
+                  "label": "Read the ticket",
+                  "why": "the user named ticket T-77",
+                  "permissions": [
+                    {
+                      "handle": "perm:read:desk_ticket",
+                      "why": "read it before answering"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "desk_ticket",
+                      "id": "T-77",
+                      "why": "the ticket the user named"
+                    }
+                  ]
+                },
+                {
+                  "id": "answer_phase",
+                  "label": "Comment with the answer",
+                  "why": "the user asked for a comment with the fix",
+                  "permissions": [
+                    {
+                      "handle": "perm:read:desk_ticket",
+                      "why": "quote the ticket back"
+                    },
+                    {
+                      "handle": "perm:comment:desk_ticket",
+                      "why": "post the answer"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "desk_ticket",
+                      "id": "T-77",
+                      "why": "the same ticket"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "deskbot_show",
+            "args": {
+              "operation_id": "op-show",
+              "_reason": "reading the ticket the user named",
+              "args": {
+                "ticketID": "T-77"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "deskbot_show",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "select_phase",
+            "args": {
+              "index": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "select_phase",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "deskbot_comment",
+            "args": {
+              "operation_id": "op-comment",
+              "_reason": "posting the answer",
+              "args": {
+                "ticketID": "T-77",
+                "body": "fixed in the retry path"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "deskbot_comment",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "commented"
+      },
+      "reply": [
+        {
+          "text": "read T-77 and left the answer as a comment"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "answered T-77"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "left the answer as a comment"
+    ],
+    "systemPromptContains": [
+      "answer a ticket the user names",
+      "read-it",
+      "answer-it",
+      "perm:comment:desk_ticket",
+      "declare perm:read:desk_ticket in the same phase",
+      "OMIT id entirely"
+    ],
+    "systemPromptNotContains": ["## Your page"],
+    "authz": {
+      "decisions": {
+        "desk_ticket:T-77#comment": "allowed"
+      }
+    },
+    "planGate": {
+      "frozenPhases": 2,
+      "approvalPrompts": 1
+    }
+  }
+}

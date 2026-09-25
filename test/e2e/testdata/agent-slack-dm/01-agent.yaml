@@ -1,0 +1,67 @@
+# AgentClass + Channel for the slack-dm e2e fixture.
+#
+# AgentClass uses model.provider="test", which the production operator
+# REFUSES with Valid=False reason=TestProviderNotAllowed. Only the e2e
+# harness's reconciler (AllowTestProvider=true) admits it — see
+# test/e2e/harness.go's startManager.
+#
+# Deliberately toolless: no mcpServers, no agentIdentity, no authz.slots.
+# This fixture exists to exercise the REAL kind=slack listener/sender +
+# per-turn thread-anchor plumbing end to end (Plan-2 Task 6), not tool
+# dispatch — the ScriptedLLM just echoes text via respond_to_user.
+# buildMCPTools short-circuits cleanly on an empty MCPServers list (see
+# test/e2e/inprocess_runner_factory.go), and no AgentIdentity is needed
+# because no credentialed tool ever runs.
+#
+# Channel kind=slack (role: both) is the REAL Plan-2 transport — its
+# listener/sender are backed by the e2e harness's shared fakeslack.Client
+# (see slack.InstallTestTransport in test/e2e/harness.go), not the
+# in-process Plan-1 "fake" kind other centerdot fixtures use.
+#
+# No SpiceDBBootstrap is needed here: the session's agentsession#owner is
+# resolved from the channel-provided starting user (DM/mention sender) at
+# session-creation time (see pkg/controllers/agentsession/owner_resolve.go),
+# and agentsession#interact = owner + participant - denied — so the SAME
+# user's follow-up messages in an established DM/thread always pass the
+# pipeline's CheckInteract without any extra relationship seeding.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: slack-dm-agent
+  namespace: default
+spec:
+  displayName: SlackDMBot
+  description: "E2E fixture agent for real-slack-kind DM/mention threading. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: slack-dm-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You have no tools. Simply respond to the user's message directly
+      via respond_to_user.
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: slack-dm-channel
+  namespace: default
+spec:
+  kind: slack
+  role: both
+  agentClass: slack-dm-agent
+  sessionScope: auto
+  credentialsRef:
+    secretName: slack-dm-creds
+  slack:
+    mode: socket

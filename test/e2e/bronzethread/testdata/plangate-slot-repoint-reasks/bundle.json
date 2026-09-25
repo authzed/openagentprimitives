@@ -1,0 +1,90 @@
+{
+  "name": "plangate-slot-repoint-reasks",
+  "description": "An approval buys ONE instance. The agent is cleared for company 4210, then re-plans the SAME phase — same handles, same budget, same prerequisites — pointing at 4299, and must ask again. Two cards, not one.\n\nThe re-plan is deliberately a pure re-point: nothing widens except the instance. That isolates the axis. Approval keys on the plan digest, which changes on any edit, so the phase arrives unapproved and carry-over is consulted — and carry-over asks whether the human's earlier answer still covers what is being asked. It used to compare slots by TYPE alone, find crm_company on both sides, conclude nothing widened, and let the second company through on the first company's approval. An approval obtained for one target, spent on another.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-enforcing"],
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["check Northwind, then check Fabrikam"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "check Northwind", "toolOffered": "select_phase" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [{ "id": "s1", "label": "check a company", "status": "pending", "phase": "look" }],
+              "phases": [
+                {
+                  "id": "look",
+                  "label": "Look up the company",
+                  "why": "the user named Northwind first",
+                  "permissions": [{ "handle": "perm:list:crm_company", "why": "to find it" }],
+                  "slots": [{ "type": "crm_company", "id": "4210", "why": "Northwind is company 4210" }]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-northwind", "_reason": "looking up Northwind", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [{ "id": "s1", "label": "check a company", "status": "pending", "phase": "look" }],
+              "phases": [
+                {
+                  "id": "look",
+                  "label": "Look up the company",
+                  "why": "now the user wants Fabrikam",
+                  "permissions": [{ "handle": "perm:list:crm_company", "why": "to find it" }],
+                  "slots": [{ "type": "crm_company", "id": "4299", "why": "Fabrikam is company 4299" }]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-fabrikam", "_reason": "looking up Fabrikam", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [{ "text": "neither company is in the list" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["neither company is in the list"],
+    "planGate": {
+      "approvalPrompts": 2,
+      "cardWhatContains": ["4210", "4299"]
+    }
+  }
+}

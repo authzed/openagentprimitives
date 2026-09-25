@@ -1,0 +1,65 @@
+{
+  "name": "search-memory-reaches-the-session-scope",
+  "description": "The model calls search_memory for real and gets rows back. Until the harness grew a searcher, RunnerEnv.SearchAvailable was false and the memory capability withheld the tool entirely, so no bundle could reach this path at all — the tool was unreachable from e2e, not merely untested. Two calls, because one cannot tell a working search from a stub that echoes everything: the first narrows on kinds and must find the turn the session had already written before the model was asked anything, the second narrows on a tag nothing in the scope carries and must come back empty. A searcher that answered both the same way would fail the second step by name.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["memory-capability"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": ["remind me what this session already knows about the widget rollout"],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "what this session already knows",
+        "toolOffered": "search_memory"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "search_memory",
+            "args": { "text": "widget rollout", "kinds": ["turn"], "limit": 20 }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "search_memory",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "remind me what this session already knows about the widget rollout"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "search_memory",
+            "args": { "text": "widget rollout", "kinds": ["turn"], "tags": ["no-entry-in-this-scope-carries-this"], "limit": 20 }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "search_memory",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"count\":0"
+      },
+      "reply": [{ "text": "The only thing on record here is your own question about the widget rollout." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "searched this session's memory" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["widget rollout"],
+    "toolsCalled": ["search_memory"],
+    "planGate": { "noRecords": true }
+  }
+}

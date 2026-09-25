@@ -1,0 +1,13 @@
+name: redact-token
+toolkit: toolkit.yaml
+spec: spec.yaml
+invocation:
+  command: gh
+  argv: [pr, view, "1", -R, authzed/openagentprimitives]
+  binaryVersion: "2.53.1"
+  env:
+    GITHUB_TOKEN: "super-secret-ghp-value"
+expect:
+  allow: true
+  redactions:
+    "1": {kind: env, name: GITHUB_TOKEN}

@@ -1,0 +1,48 @@
+---
+# Shared ClusterRole granting a workshop sidecar identity write access to the
+# cluster-scoped tool CRDs a builder session authors while composing an
+# agent: SpiceboxToolspec and SpiceboxToolkit. Both are cluster-scoped, so a
+# namespaced Role cannot grant them — the workshop namespace's own Role
+# (pkg/controllers/workshop, "workshop-agent") covers the seven namespaced
+# kinds; this ClusterRole covers the two that cannot be namespaced.
+#
+# RBAC cannot scope `create` by resource NAME (only existing objects can be
+# pinned via resourceNames), so this grant alone would let a workshop sidecar
+# create a SpiceboxToolspec/SpiceboxToolkit named for or claiming ANY
+# workshop, not just its own. That narrowing is the admission webhook's job
+# (Task 9, spec §1.4): it attributes the calling SA to its one session, walks
+# the tuple, and refuses a create/update whose name or label does not match
+# that session's workshop. This ClusterRole is deliberately the coarse half
+# of the boundary; the webhook is the precise half.
+#
+# Only create/update/patch are granted — deliberately NOT delete or get. A
+# ValidatingWebhook can intercept CREATE/UPDATE (config/manager/webhook.yaml
+# dials exactly those two operations), so the coarse grant lines up with the
+# only operations the webhook can narrow. It cannot gate GET or DELETE, and
+# RBAC cannot scope those by name or label on a cluster-scoped kind, so
+# granting them would be an ungatable cluster-wide destructive/read reach: a
+# workshop sidecar could delete or read arbitrary production tool CRs and other
+# workshops' tool CRs. The sidecar never deletes its own tools either —
+# teardown reaps this workshop's labeled tool CRs via the operator's OWN
+# controller client (pkg/controllers/workshop, deleteLabeledToolCRs), never via
+# this SA — so no legitimate flow needs delete or get here.
+#
+# Shared but NOT bound to every ServiceAccount in the cluster: the Workshop
+# controller creates one ClusterRoleBinding per workshop (name
+# "workshop-toolwriter-<namespace>-<session>",
+# workshop.WorkshopToolwriterCRBName) — subject is exactly that workshop's
+# sidecar ServiceAccount — and the Workshop finalizer (Task 4) deletes that
+# ClusterRoleBinding when the workshop is torn down. The per-workshop
+# ClusterRoleBinding has no OwnerReferences (a cluster-scoped object cannot
+# be owned by a namespaced Workshop), which is why teardown reaps it
+# explicitly by its deterministic name — the same shape as the runner's
+# per-session spicebox-toolspec-reader ClusterRoleBinding
+# (config/manager/runner-toolspec-reader.yaml).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spicebox-workshop-toolwriter
+rules:
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["spiceboxtoolspecs", "spiceboxtoolkits"]
+    verbs: ["create", "update", "patch"]

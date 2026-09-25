@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The operator bundle installs into its OWN namespace (spicedb-operator) and
+# defines cluster-scoped objects (the SpiceDBCluster CRD + ClusterRole). Do NOT
+# set `namespace:` here — that would rewrite the operator into
+# agentprimitives-system and break the bundle's own namespace/RBAC wiring.
+resources:
+  - bundle.yaml

@@ -1,0 +1,62 @@
+export const meta = {
+  title: 'oap user-identity',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2980,
+  description: 'Manage UserIdentity resources (per-user credential catalogs)',
+}
+
+# oap user-identity
+
+Manage UserIdentity resources (per-user credential catalogs)
+
+## `oap user-identity apply <path>`
+
+Server-side apply a UserIdentity YAML
+
+## `oap user-identity delete <name>`
+
+Delete a UserIdentity
+
+Flags:
+
+```text
+--cascade-secrets  Also delete each credential's master Secret in the identities namespace (default: leave Secrets intact)
+```
+
+## `oap user-identity delete-token <name> <credential>`
+
+Remove the named credential from a UserIdentity's spec.credentials and
+delete that credential's backing Secret in the identities namespace, leaving
+the identity's other credentials (and their Secrets) intact.
+
+Use this to unlink a credential that was linked to the wrong account — for
+example an "anthropic-oauth" token captured against the wrong workspace — so
+it can be re-linked. The next agent session that needs this credential will
+re-prompt the user to re-link it via the "Connect your accounts" flow.
+
+&lt;name&gt; is the UserIdentity metadata.name (the "u-…" hash, as shown by
+"oap user-identity list"); &lt;credential&gt; is the credential name to remove.
+
+## `oap user-identity list`
+
+List UserIdentity CRs
+
+## `oap user-identity put-token`
+
+Seed a UserIdentity with a static token for one credential name
+
+Flags:
+
+```text
+--credential-name string  Credential name (must match what tools declare)
+--display-name string     Human-friendly label for the UserIdentity
+--skip-verify             Skip live verification of the token against the provider (format check still applies)
+--subject string          Canonical SpiceDB subject, e.g. user:<base64(email)>
+--token string            The token value
+```
+
+## `oap user-identity show <name>`
+
+Show details of a UserIdentity
+

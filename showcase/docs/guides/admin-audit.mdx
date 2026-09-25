@@ -1,0 +1,31 @@
+export const meta = {
+  title: 'Audit log & budget',
+  section: 'Guides',
+  group: 'Admin console',
+  order: 198,
+  description:
+    "The dashboard's accountability views — the cross-session, tamper-evident event log, and estimated spend.",
+}
+
+# Audit log & budget
+
+<p className="doc-lede">
+  When the question is "what happened, and what did it cost?", two console views answer it: the
+  <strong>Logs</strong> — the tamper-evident event record — and <strong>Budget</strong>, the spend it accrued.
+</p>
+
+## Logs
+
+**Logs** is the cross-session audit: approvals, authorization decisions, tool calls, and scope changes, filtered
+by kind, outcome, agent, or tool. It's the read side of the [tamper-evident log](#/audit-log) — the same signed,
+hash-chained records `oap audit verify` checks offline — surfaced for browsing rather than verification.
+
+<Screenshot name="admin-logs" />
+
+## Budget
+
+**Budget** breaks down estimated spend by model, agent, session, and user — a running total (list-price
+estimate) that resets daily. It's the console view of the same accounting the per-session
+[budgets](#/session-lifecycle) enforce.
+
+<Screenshot name="admin-budget" />

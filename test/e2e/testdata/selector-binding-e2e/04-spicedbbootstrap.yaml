@@ -1,0 +1,15 @@
+# SpiceDBBootstrap for the selector-binding-e2e fixture: seeds the wildcard
+# viewer tuple search_accounts' permission check needs. Same pattern as
+# leads-console-e2e/04-spicedbbootstrap.yaml — the relation's wildcard TYPE
+# (01-mcpserver.yaml) only permits writing a user:* tuple for it; this CR
+# writes that tuple so a check against it actually resolves true.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: acctbook-seed
+  namespace: default
+spec:
+  relationships:
+    - resource: { type: acctbook_account, id: "accounts" }
+      relation: viewer
+      subject: { type: user, wildcard: true }

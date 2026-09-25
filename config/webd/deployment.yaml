@@ -1,0 +1,201 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicebox-webd
+  namespace: agentprimitives-system
+  labels:
+    app.kubernetes.io/name: spicebox-webd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-webd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spicebox-webd
+    spec:
+      serviceAccountName: spicebox-webd
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webd
+          image: agentprimitives-webd:dev
+          imagePullPolicy: IfNotPresent
+          # No args by default: --allow-shared-origin (the INSECURE
+          # shared-origin debug mode) is NOT shipped on. `oap init --local`
+          # injects it into this Deployment at install time, since only that
+          # flow points both webd origins at one ngrok host. A production
+          # install never carries it, so the two-origin trust boundary that
+          # isolates untrusted artifact content from the auth cookie holds.
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: WEBD_TRUSTED_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: spicebox-webd-external-url
+                  key: trusted-url
+                  optional: true
+            - name: WEBD_SANDBOX_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: spicebox-webd-external-url
+                  key: sandbox-url
+                  optional: true
+            # Operator memory/artifact API the live-viewer reads render
+            # bytes + artifact metadata from.
+            - name: OPERATOR_MEMORY_URL
+              value: http://spicebox-operator.agentprimitives-system.svc:8082
+            - name: ADMIND_URL
+              value: http://spicebox-operator.agentprimitives-system.svc:8082
+            - name: ADMIND_TOKEN_PATH
+              value: /var/run/webd/admind-token/token
+            # Namespaces the session picker offers and webd may CREATE a
+            # session in. "default" is the ordinary user space; the agent
+            # builder is installed into agentprimitives-system (a fixed
+            # namespace) and a session must co-locate with its AgentClass,
+            # so the builder is startable from web chat only if its
+            # namespace is listed here AND spicebox-webd-builder grants the
+            # session-creation RBAC there (role-builder.yaml).
+            - name: AP_WEBD_SESSION_START_NAMESPACES
+              value: default,agentprimitives-system
+            # SpiceDB gate for the artifact-view authorization check. Mirror
+            # the operator/authzd env shape (LoadEnvConfig reads these). The
+            # viewer fails closed (503) if any are absent.
+            - name: SPICEDB_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: spicebox-spicedb-config
+                  key: endpoint
+                  optional: true
+            # Dev cluster runs SpiceDB plaintext on :50051. Flip to "false"
+            # for TLS-fronted deployments.
+            - name: SPICEDB_INSECURE
+              value: "true"
+            # Preshared bearer token for the SpiceDB gRPC client, delivered as
+            # a mounted file (LoadEnvConfig reads SPICEDB_TOKEN_PATH) rather
+            # than a plaintext env var — matches channelsd/operator/authzd and
+            # keeps the token out of `kubectl describe pod`. The secret volume
+            # is optional, so webd boots before `oap init` provisions it; the
+            # viewer stays disabled (503) until the token file exists + a pod
+            # restart picks it up.
+            - name: SPICEDB_TOKEN_PATH
+              value: /var/run/webd/spicedb-token/token
+            - name: WEBD_MEMORY_TOKEN_PATH
+              value: /var/run/webd/memory-token/token
+            # NATS powers the live-view status panel (session plan_update +
+            # notification events — the same status the Slack thread shows).
+            # Subscribe-only creds (spicebox-webd-nats-creds, minted by
+            # `oap install`). Best-effort: if NATS is unreachable, the live-view
+            # degrades to revisions-only rather than failing to start.
+            - name: NATS_URL
+              value: nats://spicebox-nats.agentprimitives-system.svc:4222
+            - name: NATS_CREDS_PATH
+              value: /var/run/webd/nats/nats.creds
+            - name: NATS_CA_PATH
+              value: /var/run/webd/nats/ca.crt
+          volumeMounts:
+            - name: signing-key
+              mountPath: /etc/passthrough-link-key
+              readOnly: true
+            # Slack OAuth creds for identityd's "Sign in with Slack" OIDC
+            # (hosted in-process). Default of internal/cmd/webd/main.go --slack-oauth-dir.
+            # Optional so webd boots without it; the Slack authenticator is
+            # simply not registered when the Secret is absent.
+            - name: slack-oauth
+              mountPath: /etc/slack-oauth
+              readOnly: true
+            # webd's dedicated READ-ONLY memory token authorizes the operator
+            # memory reads and the artifact-bytes endpoint. webd is browser-
+            # facing, so it must NOT hold the channelsd system token (which can
+            # write the audit log + register publisher keys). The secret's
+            # `items` projects its `token` key into this directory, so the file
+            # lands at /var/run/webd/memory-token/token.
+            - name: memory-token
+              mountPath: /var/run/webd/memory-token
+              readOnly: true
+            # SpiceDB bearer token, projected to /var/run/webd/spicedb-token/token.
+            - name: spicedb-token
+              mountPath: /var/run/webd/spicedb-token
+              readOnly: true
+            # NATS subscribe-only creds + CA for the live-view status panel.
+            - name: nats-creds
+              mountPath: /var/run/webd/nats
+              readOnly: true
+            - name: admind-token
+              mountPath: /var/run/webd/admind-token
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: signing-key
+          secret:
+            secretName: spicebox-passthrough-link-key
+            optional: true
+            defaultMode: 0444
+        - name: slack-oauth
+          secret:
+            secretName: spicebox-slack-oauth
+            optional: true
+            defaultMode: 0444
+        # webd's dedicated read-only memory token. Optional so webd boots
+        # before `oap install` provisions it; the live-viewer stays disabled
+        # (503) until the token file exists and a pod restart picks it up.
+        - name: memory-token
+          secret:
+            secretName: spicebox-webd-memory-token
+            optional: true
+            defaultMode: 0444
+            items:
+              - key: token
+                path: token
+        # SpiceDB bearer token. Optional so webd boots before `oap init`
+        # provisions it; the live-viewer stays disabled (503) until then.
+        - name: spicedb-token
+          secret:
+            secretName: spicebox-spicedb-token
+            optional: true
+            defaultMode: 0444
+            items:
+              - key: token
+                path: token
+        # NATS subscribe-only creds (nats.creds + ca.crt) for the live-view
+        # status panel, minted by `oap install`. Optional so webd boots before
+        # install provisions it; the status panel stays off until then.
+        - name: nats-creds
+          secret:
+            secretName: spicebox-webd-nats-creds
+            optional: true
+            defaultMode: 0444
+        - name: admind-token
+          secret:
+            secretName: spicebox-admind-token
+            optional: true
+            defaultMode: 0444
+            items:
+              - key: token
+                path: token

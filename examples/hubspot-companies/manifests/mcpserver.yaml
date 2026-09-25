@@ -1,0 +1,259 @@
+# Read-only HubSpot companies MCPServer.
+#
+# Pinned to objectType=companies; date filters are CEL-constrained to a
+# 30-day lower bound (now() - 744h) so the agent can never ask for older
+# records. Authored against https://mcp.hubspot.com/anthropic.
+#
+# Tool names match what the live HubSpot MCP server advertises as of
+# the authoring date. Run `oap tools mcp probe <url> --token …` to
+# confirm the live names; if HubSpot changes, update spec.tools[].name
+# (the controller surfaces drift via Valid=False reason=AllowlistDrift).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: hubspot-companies
+spec:
+  name: hubspot-companies
+  version: "4"
+  intent: |
+    Read-only access to HubSpot company records, their property
+    schema, and the related contacts and internal-user (owner)
+    directory needed to attribute each company to its owner. Any
+    date filter on record searches must be a forward-looking lower
+    bound (GTE/GT/EQ/BETWEEN) whose value is no older than ~30 days
+    ago, preventing lookups further back than that window.
+  server:
+    url: https://mcp.hubspot.com/anthropic
+    transport: streamable-http
+  auth:
+    provider: oauth-mcp
+    credential: hubspot-companies
+    header: Authorization
+    valuePrefix: "Bearer "
+  callTimeout: 60s
+  # Slice-4 SpiceDB schema fragment (see slice-4 design doc).
+  # The guardian's schema composer aggregates this with other MCPServers'
+  # fragments and emits the unified SpiceDB schema.
+  spicedbSchema:
+    resources:
+      - name: hubspot_owner
+        # A subject holder, never a thing an approval is routed against.
+        standing: session-only
+        relations:
+          - name: user
+            subjectType: user
+        permissions:
+          - name: resolve
+            expr: user
+      - name: crm_company
+        # Seeded owner tuples decide who may speak for a company.
+        standing: required
+        approverPermission: owner
+        relations:
+          - name: hubspot_owner_id_ref
+            subjectType: hubspot_owner
+        permissions:
+          - name: owner
+            expr: hubspot_owner_id_ref->user
+          # COMPOSER-OWNED: the schema composer replaces this line with
+          # `slot_grant_contact_access->interact + owner`, because the
+          # AgentClass declares crm_company as an authz slot.
+          #
+          # It used to read `any_user + grant_contact_access + owner`, and the
+          # wildcard was not a shortcut somebody took — it was structurally
+          # required. The approval tuple ran FROM the session TO the company, so
+          # evaluating it re-checked contact_access for the ORIGINAL user, who
+          # lacks it by construction (that is what raised the approval). Only a
+          # wildcard leaf could make that walk pass.
+          #
+          # The tuple now points the other way — crm_company:<id>#
+          # slot_grant_contact_access@agentsession:<s> — so it resolves the
+          # SESSION's member set. The check is per-requester, honours `denied`
+          # for free, and no wildcard is needed anywhere.
+          - name: contact_access
+            expr: owner
+  tools:
+    - name: search_crm_objects
+      intent: |
+        Search HubSpot records, restricted to objectType companies,
+        contacts, or users (the internal owner directory — used to
+        resolve a hubspot_owner_id to the owner's name and email).
+        Any date filter must be a GTE/GT/EQ/BETWEEN lower bound
+        within roughly the last 30 days.
+      # Slice-1 fallback: passthrough when no variant matches.
+      permission:
+        stateImpact: passthrough
+      # Slice-4 conditional permissions.
+      permissionVariants:
+        - when: 'args.objectType == "contacts"'
+          check:                     # PermissionVariant.Check (authz.Permission)
+            stateImpact: readonly
+            check:                   # Permission.Check (authz.PermissionCheck — nested)
+              resourceType: crm_company
+              # HubSpot's search API accepts TWO filter-group shapes for
+              # "contacts associated with company X":
+              #   - modern: filterGroups[0].associatedWith[0].objectIdValues[0]
+              #     (int, recommended by HubSpot's tool description)
+              #   - legacy: filterGroups[0].filters[].propertyName=="associations.company".value
+              #     (string)
+              # The agent may use either, so the CEL handles both. The
+              # integer leg goes int()→string() to avoid CEL's
+              # scientific-notation formatting for large doubles, which
+              # SpiceDB's object_id regex rejects.
+              resourceIDExpr: |
+                has(args.filterGroups[0].associatedWith) && size(args.filterGroups[0].associatedWith) > 0
+                  ? string(int(args.filterGroups[0].associatedWith[0].objectIdValues[0]))
+                  : args.filterGroups[0].filters.filter(f, f.propertyName == "associations.company")[0].value
+              permission: contact_access
+              enforceMode: always
+              # No routing indirection: this is the tool's NATURAL check,
+              # crm_company:<id>#contact_access@user:<requester>. Without a slot
+              # grant it denies → the approval fires; approving writes
+              # crm_company:<id>#slot_grant_contact_access@agentsession:<s>, and
+              # the same check then passes through the session's member set.
+              #
+              # The grant is per (session, company, PERMISSION) and expires. It
+              # is no longer bound to the exact filter args — a slot grant
+              # authorizes the COMPANY, and the per-permission relation is what
+              # stops a contact_access grant being usable for anything else.
+        - when: 'args.objectType == "companies"'
+          check:
+            stateImpact: passthrough
+      # Slice-4 JIT relationship writes from tool responses.
+      writesRelationships:
+        # Companies → hubspot_owner_id_ref: hubspot_owner. Written
+        # from the digest's primary companies query. Use
+        # `item.properties.hs_object_id` (HubSpot's string-typed
+        # mirror of the numeric `id`) — CEL's `string(double)` over
+        # the raw `item.id` formats large ids in scientific notation
+        # ("5.4912340491e+10"), and the dot+e fail SpiceDB's
+        # object_id regex.
+        - when: 'args.objectType == "companies" && has(result.results)'
+          forEach: 'result.results'
+          tuple:
+            resource: '"crm_company:" + item.properties.hs_object_id'
+            relation: '"hubspot_owner_id_ref"'
+            subject: '"hubspot_owner:" + item.properties.hubspot_owner_id'
+        # NOTE: this used to also seed crm_company:<id>#any_user@user:* — a
+        # wildcard leaf on EVERY company the agent listed. It was safe only
+        # while routeViaSessionGrant bypassed the direct check; the moment that
+        # indirection went away the wildcard would have granted contact_access
+        # to everyone. It is gone, along with the relation itself, because the
+        # reversed grant direction no longer needs a leaf for the walk to pass.
+        #
+        # Users (internal owner directory) → hubspot_owner#user:
+        # user@<email>. Written from the agent's owner-resolution
+        # call (search_crm_objects objectType=users), which is the
+        # only path that exposes hs_email today — HubSpot's
+        # search_owners no longer returns owner email. This
+        # completes the crm_company → hubspot_owner → user chain
+        # the contact_access permission depends on.
+        - when: 'args.objectType == "users" && has(result.results)'
+          forEach: 'result.results'
+          tuple:
+            resource: '"hubspot_owner:" + item.properties.hubspot_owner_id'
+            relation: '"user"'
+            subject: '"user:" + spicedb_user_id(item.properties.hs_email)'
+      # Labels CEL — extract (id → friendly name) pairs from search
+      # responses so the Slack approval *What* line can show
+      # "Acme Corp (1244565463)" instead of "crm_company:1244565463".
+      # The runner stamps these into an in-memory LabelStore; the
+      # summarizer LLM is NOT fed this map.
+      labels:
+        - when: 'args.objectType == "companies" && has(result.results)'
+          forEach: 'result.results'
+          label:
+            resourceType: '"crm_company"'
+            id:           'item.properties.hs_object_id'
+            name:         'item.properties.name'
+        - when: 'args.objectType == "users" && has(result.results)'
+          forEach: 'result.results'
+          label:
+            resourceType: '"hubspot_owner"'
+            id:           'item.properties.hubspot_owner_id'
+            name:         'item.properties.hs_searchable_calculated_name'
+      args:
+        allowedFields:
+          - objectType
+          - query
+          - properties
+          - sorts
+          - limit
+          - offset
+          - filterGroups
+        constraints:
+          - cel: 'args.objectType in ["companies", "contacts", "users"]'
+            message: Only the companies, contacts, or users objectType is allowed.
+          - cel: '!has(args.filterGroups) || args.filterGroups.all(g, !has(g.filters) || g.filters.all(f, !(f.propertyName in ["createdate", "hs_createdate", "hs_lastmodifieddate", "lastmodifieddate", "closedate", "hs_closedate"]) || (f.operator in ["GTE", "GT", "EQ", "BETWEEN"] && has(f.value) && timestamp(f.value) >= now() - duration("744h"))))'
+            message: Date filters on company records must use GTE/GT/EQ/BETWEEN with a value no older than 30 days ago.
+      effects:
+        readOnly: true
+        idempotent: true
+      deny:
+        effects:
+          creds: {}
+
+    - name: get_crm_objects
+      intent: |
+        Fetch one or more company records by ID. Restricted to
+        objectType=companies.
+      permission:
+        stateImpact: passthrough
+      args:
+        allowedFields:
+          - objectType
+          - objectIds
+          - properties
+        constraints:
+          - cel: args.objectType == "companies"
+            message: Only the companies objectType is allowed.
+      effects:
+        readOnly: true
+        idempotent: true
+        openWorld: true
+      deny:
+        effects:
+          creds: {}
+
+    - name: get_properties
+      intent: |
+        Read company property definitions (schema/metadata) to
+        understand available fields.
+      permission:
+        stateImpact: passthrough
+      args:
+        allowedFields:
+          - objectType
+          - propertyNames
+        constraints:
+          - cel: args.objectType == "companies"
+            message: Only the companies objectType is allowed.
+      effects:
+        readOnly: true
+        idempotent: true
+        openWorld: true
+      deny:
+        effects:
+          creds: {}
+
+    - name: search_properties
+      intent: |
+        Discover relevant company property definitions via keyword
+        search.
+      permission:
+        stateImpact: passthrough
+      args:
+        allowedFields:
+          - objectType
+          - query
+          - keywords
+        constraints:
+          - cel: args.objectType == "companies"
+            message: Only the companies objectType is allowed.
+      effects:
+        readOnly: true
+        idempotent: true
+        openWorld: true
+      deny:
+        effects:
+          creds: {}

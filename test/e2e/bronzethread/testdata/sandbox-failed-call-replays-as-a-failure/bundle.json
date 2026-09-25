@@ -1,0 +1,82 @@
+{
+  "name": "sandbox-failed-call-replays-as-a-failure",
+  "description": "One sandbox tool called twice with the SAME argv: the first call succeeds, the second exits non-zero. Both halves are the point.\n\nA FAILED sandbox call used to be uncapturable. composeToolCallResult drops stdout on the failure path and writes a summary of the ToolCall's terminal CONDITION instead ('ToolCall failed: NonZeroExit — exit code N', plus a stderr tail), so there was nothing for a capture to invert. There is now: the exit code is the one lever a replayed ToolCall can be driven into that condition with, and it round-trips exactly — the bundle carries the code and the stderr, the fake exec binder hands them back, and the sandbox tool re-composes the same summary line from the code under test. Nothing about the summary is canned; step 3 pins the composed text, which is the only thing that notices the exit code being dropped on the way through.\n\nThe SEQUENCE is the second half, and it is what makes the first half usable on a real session. A sandbox tool that failed on one call and succeeded on the others was refused outright, because the per-call sequence handler was an MCP-stub handler with no sandbox equivalent. sandboxResponder is that equivalent, and it keeps a cursor per class tool. The two calls carry the SAME argv on purpose: the responder dispatches on argv, so identical argv is what proves the cursor — and not the dispatch — is what tells the two calls apart.\n\nAssert on the RESULT, never on the reply: a scripted transcript says the same words whether the second call failed or succeeded, so lastToolResultContains and lastToolResultIsError are what distinguish them.\n\nThe plan gate is disabled in this fixture and the operation is minted through new_operation, because a sandbox call carrying an unregistered operation_id is refused BEFORE dispatch and never reaches the sandbox at all — which would make both steps pass for the wrong reason.",
+
+  "agentDir": "testdata/sandbox-failed-call-replays-as-a-failure/manifests",
+  "agentClass": "gh-failer",
+
+  "userTurns": ["check demo-repo twice"],
+
+  "mintedIDs": { "operation": ["op-b3c1d4e5f6a70819"] },
+
+  "toolOutputSequence": {
+    "gitlike_gh": [
+      { "stdout": "no open pull requests\n" },
+      { "stdout": "", "stderr": "fatal: repository not found\n", "exitCode": 128 }
+    ]
+  },
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "check demo-repo twice" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "new_operation",
+            "args": { "description": "check the repository twice" }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "new_operation" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_gh",
+            "args": {
+              "operation_id": "op-b3c1d4e5f6a70819",
+              "_reason": "reading the open pull requests the user asked about",
+              "args": ["pr", "view", "123", "--repo", "demo-org/demo-repo"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "gitlike_gh",
+        "lastToolResultContains": "no open pull requests",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_gh",
+            "args": {
+              "operation_id": "op-b3c1d4e5f6a70819",
+              "_reason": "reading the same pull request a second time",
+              "args": ["pr", "view", "123", "--repo", "demo-org/demo-repo"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "gitlike_gh",
+        "lastToolResultContains": "ToolCall failed: NonZeroExit — exit code 128",
+        "lastToolResultIsError": true
+      },
+      "reply": [{ "text": "the first lookup found no open PRs; the second one failed outright" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["the second one failed outright"]
+  }
+}

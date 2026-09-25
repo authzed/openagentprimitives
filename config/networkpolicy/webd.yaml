@@ -1,0 +1,44 @@
+# webd: who may reach webd's HTTP port in-cluster.
+#
+# webd is the browser host, and almost everything that reaches it arrives from
+# OUTSIDE the cluster — through the Gateway (allow-webd-envoy, and the
+# cloud-specific allow-webd-gateway ranges on GKE), or through a
+# `kubectl port-forward`, which arrives from the node/kubelet and is generally
+# not subject to NetworkPolicy at all.
+#
+# The operator is the one IN-CLUSTER caller, and it became one when the public
+# tunnel moved into it. pkg/controllers/publicendpoint holds the live tunnel in
+# the operator process and forwards it at
+# spicebox-webd.agentprimitives-system.svc.cluster.local:8080 (see
+# upstreamAddr) — a genuine pod-to-pod dial. It replaced an `oap init --local`
+# port-forward, whose traffic reached webd from the kubelet and so needed no
+# allow rule; nothing carried that exemption over to the new path.
+#
+# Without this rule the failure is silent and total, and it is worst where it
+# is least visible: the ngrok agent dials out on 443 (allowed by
+# egress-external), the tunnel opens, status.url goes Ready and the
+# external-URL ConfigMap advertises a working public address — while every
+# request arriving through it is dropped at the webd hop. Docker Desktop and
+# kind do not enforce NetworkPolicy, so it looks fine there; `ap desktop` runs
+# k3s, which does.
+#
+# NetworkPolicy is two-sided: the matching egress half lives in
+# egress-external.yaml, and TestNetworkPolicyAllowsTheOperatorToReachWebd
+# (pkg/platform/manifests) fails if either side is removed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: webd
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-webd
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-operator
+      ports:
+        - { protocol: TCP, port: 8080 }

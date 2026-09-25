@@ -1,0 +1,36 @@
+# Gives the plan-gate approver REAL standing on 4210, and on nothing else.
+#
+# Without this the scenario is green for the wrong reason. A plan-gate approval
+# only binds what its approver can personally speak for
+# (approverCanDelegateSlots), and the approver of a plan_phase card is the
+# session approve-set — which is the requester, `user@example.com`. That user
+# owns no company in the shared fixture seed, so the delegable set would be
+# EMPTY, no grant would be written for 4210 either, and the run would diverge on
+# 4210's own call rather than on 4299's.
+#
+# Two tuples, no more:
+#
+#   crm_company:4210 -> crm_owner:plan-approver -> user:user@example.com
+#
+# `owner_ref` is additive, so 4210 keeps the owner-1 chain that list_companies
+# JIT-writes; this only adds a second owner. 4299 is untouched and stays
+# owner-2's alone, which is what leaves the approver with nothing to delegate
+# for it.
+#
+# The owner_ref hop is seeded here rather than left to the JIT write because of
+# ORDER: the plan_phase card is raised on the first permissioned call, which is
+# list_companies itself, so at the moment the standing lookup runs no owner_ref
+# tuple exists yet and the approver would read as holding nothing.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: plangate-approver-standing
+  namespace: default
+spec:
+  relationships:
+    - resource: { type: crm_owner, id: "plan-approver" }
+      relation: user
+      subject:  { type: user, id: "user@example.com", canonicalize: true }
+    - resource: { type: crm_company, id: "4210" }
+      relation: owner_ref
+      subject:  { type: crm_owner, id: "plan-approver" }

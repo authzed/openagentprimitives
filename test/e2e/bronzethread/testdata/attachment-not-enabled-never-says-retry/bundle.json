@@ -1,0 +1,55 @@
+{
+  "name": "attachment-not-enabled-never-says-retry",
+  "description": "A user drops a file on an agent nobody granted the attachments capability to. The gate closes on its AgentClass leg, and the person must be told THAT — not told to try again.\n\nThis is the reported bug, reproduced end to end. Every attachment problem used to publish one category, attachment_read_failed, whose ToneDegraded row promises 'the user can usually get what they wanted by trying again'. For a capability that is switched off, nothing was attempted, nothing failed, and retrying can never work: the card led with advice that could not succeed and gave the real remedy — ask an administrator — second billing behind it.\n\nWhat makes this bundle able to catch that, when the previous ones could not: the claim is a NEGATIVE one. attachment_read_failed being ABSENT is the fix; its presence is the bug. Every positive assertion available before this passed while the bug shipped, because a wrong notice is still a notice. noticesNotPublished exists for exactly this shape of claim.\n\nThe Channel opts IN to attachments while the AgentClass does not, so the closed leg is unambiguously the capability. Had both legs been closed the bundle would pass identically with either one repaired, and would go green against a half-fixed gate.\n\nThe first expect matches the ATTACHMENT NOTE rather than the user's words, and that is not a workaround: on a session-creating message the text becomes spec.Prompt (turn 0) while attachments are written afterwards as a separate inbox turn, so the newest user content the model sees IS the note. Matching it asserts the agent-facing half of the same bug — that the agent was told the gate was closed, in the same run where the user was. Nothing is asserted about the agent's reply on purpose. The transcript is authored, so it says whatever this file says whether the gate ran or not; the interaction wire is the only place the user-facing truth shows up.",
+
+  "agentDir": "testdata/agent-notebot",
+  "agentClass": "notebot",
+
+  "userTurns": [
+    {
+      "text": "Here are my cluster notes, can you summarize them?",
+      "attachments": [
+        {"filename": "notes.txt", "mime": "text/plain", "file": "files/notes.txt"}
+      ]
+    }
+  ],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Attachment support is not enabled here"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "I can't open files here, so I haven't read your notes."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Told the user the file could not be read."
+            }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "noticesPublished": ["attachment_not_enabled"],
+    "noticesNotPublished": ["attachment_read_failed"]
+  }
+}

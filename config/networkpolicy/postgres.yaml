@@ -1,0 +1,37 @@
+# postgres: restricts who may reach the memory + skillbundle store.
+#
+# Ingress to spicebox-postgres on 5432, FROM:
+#   - the operator — the only client of the postgres memory/skillbundle
+#     backends. authzd, channelsd, and webd reach memory through the
+#     operator's HTTP API, not postgres directly.
+#   - everything under the spicedb-operator's ownership
+#     (authzed.com/cluster=spicebox-spicedb) — the postgres-backed datastore
+#     engine's serving pods, plus the migration Job and our own createdb Job,
+#     which the operator/we stamp with the same owner label.
+#
+# Omitting this policy (and the matching egress in egress-external /
+# spicedb-egress) made the operator hang at startup on an enforcing CNI (GKE
+# Autopilot/Cilium): the postgres connect timed out under default-deny.
+# Invisible on Docker Desktop, which does not enforce NetworkPolicy. Same
+# class of gap as the nats/spicedb ingress policies and the egress-external
+# allowlist.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-operator
+        - podSelector:
+            matchLabels:
+              authzed.com/cluster: spicebox-spicedb
+      ports:
+        - { protocol: TCP, port: 5432 }

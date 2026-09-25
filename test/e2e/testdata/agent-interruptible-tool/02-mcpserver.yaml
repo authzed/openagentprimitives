@@ -1,0 +1,93 @@
+# MCPServer for the agent-interruptible-tool e2e fixture.
+#
+# THE ONE THING THIS FIXTURE EXISTS TO PROVIDE: a single MCP tool whose
+# declared permission.stateImpact is `readonly`, so that
+# pkg/agent/runner/interrupt.go's interruptibleReason classifies an in-flight
+# call as truthfully cancellable:
+#
+#     if _, ok := t.(tool.Cancellable); !ok { ... }        // every MCP tool is
+#     switch t.Permission().StateImpact {
+#     case authz.Stateless, authz.Readonly: return true, ""  // <- readonly
+#     default: return false, "<tool> is changing state"      // <- passthrough
+#     }
+#
+# stateImpact therefore does double duty: it is an AUTHORIZATION input AND a
+# runtime INTERRUPTIBILITY input. That is why the interrupt round-trip tests
+# own this fixture instead of borrowing agent-centerdot-companies: centerdot's
+# stateImpact values are driven by its APPROVAL model, and a change there
+# (passthrough vs readonly, routed vs non-routed check) silently flips whether
+# an unrelated interrupt test can cancel anything. Nothing about approval
+# shape lives here, so nothing about approval shape can reach those tests.
+#
+# WHY readonly AND NOT stateless — stateless would also satisfy
+# interruptibleReason and would need no check at all, but it means "touches
+# nothing observable; NO PROVENANCE TAINT". This tool returns data fetched
+# from an external MCP server, which future provenance must treat as tainted.
+# readonly is the honest label, and "readonly implies interruptible" is
+# precisely the property the consuming tests assert — asserting it against a
+# stateless tool would test a weaker, different claim.
+#
+# WHY THE CHECK LOOKS LIKE THIS — readonly REQUIRES a non-nil check
+# (authz.StateImpact.CheckRequired). The check is deliberately the most
+# boring shape available:
+#
+#   * a resource type (`feed`) used by NOTHING else, so no other fixture,
+#     tool, or test shares its permission namespace;
+#   * a literal resourceIDTemplate, so the resolved resource never depends on
+#     tool args;
+#   * a plain `reader` relation seeded to ONE named subject in
+#     04-spicedbbootstrap.yaml — no wildcard (`user:*`) leaf anywhere.
+#
+# The absent wildcard is load-bearing, not incidental. The MCPServer
+# reconcile's routeViaSessionGrantCheck / wildcardLeafRouteCheck pair
+# constrains wildcard leaves and session-grant routing against each other; a
+# fragment with neither a wildcard leaf nor a routed check cannot trip either
+# half, in either direction, no matter how that admission rule evolves.
+# Consequently there is also no `routeViaSessionGrant` and no approval flow in
+# this fixture at all: the seeded subject is simply allowed, the call
+# dispatches, and the test gets its blocking in-flight tool.
+#
+# spec.server.url is the literal sentinel `{{MCP_URL}}` — the e2e harness
+# rewrites it to the httptest server URL before apply.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: slowfeed-tools
+  namespace: default
+spec:
+  name: slowfeed-tools
+  version: v1
+  intent: "Single blocking read-only tool for the interrupt round-trip e2e tests."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: interruptible-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: feed
+        # Only a reader relation exists; reading is not authority to approve.
+        standing: session-only
+        relations:
+          - name: reader
+            subjectType: user
+        permissions:
+          - name: read
+            expr: reader
+  tools:
+    - name: watch_feed
+      intent: "Long-poll the activity feed; blocks until new items arrive."
+      args:
+        allowedFields: [sinceSeconds]
+      permission:
+        # readonly => interruptible (see the header). The check is required
+        # by CheckRequired(); it resolves against the single literal resource
+        # 04-spicedbbootstrap.yaml seeds, so no arg influences authorization.
+        stateImpact: readonly
+        check:
+          resourceType: feed
+          resourceIDTemplate: "activity-stream"   # literal: no {arg} placeholders
+          permission: read
+      effects:
+        readOnly: true
+        idempotent: true

@@ -1,0 +1,95 @@
+# Three SpiceboxToolspecs for the codebot AgentClass:
+#
+#   git-rw       — clone, commit, push (uses git toolkit → GIT_TOKEN → git-token;
+#                  remapped to github-token by the gitlike bundle's credentialRemap)
+#   gh-pr        — PR-flow operations (uses gh toolkit → GITHUB_TOKEN → github-token)
+#   claude-oauth — interactive Claude Code authed by the user's Claude subscription
+#                  (uses claude-oauth toolkit → CLAUDE_CODE_OAUTH_TOKEN → anthropic-oauth)
+#
+# SpiceboxToolspec is cluster-scoped (no metadata.namespace).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: git-rw
+spec:
+  name: git-rw
+  version: "1"
+  intent: "git for clone, status, diff, add, commit, push, branch"
+  toolkit:
+    name: git
+    revision: "2026-04-24"
+  allowSubcommands:
+    - clone
+    - status
+    - diff
+    - log
+    - add
+    - commit
+    - push
+    - branch
+    - checkout
+  constraints:
+    # Reject a clone URL with an embedded userinfo@host credential component.
+    # Auth is supplied in-memory via GIT_TOKEN/GIT_ASKPASS; a token in the URL
+    # would persist into .git/config and the ToolCall CR.
+    - cel: "call.subcommand != 'clone' || !call.positional['repository'].contains('@')"
+      message: "Do not embed credentials in the clone URL. Auth is supplied automatically via GIT_TOKEN — clone with a plain URL such as https://github.com/owner/repo."
+    # Scope the global `-c <key>=<value>` override to identity only. The agent
+    # uses it to attribute commits to the user (git -c user.name=… -c
+    # user.email=… commit). An UNSCOPED -c is remote code execution /
+    # credential theft — core.sshCommand=, url.<base>.insteadOf=ext::sh -c …,
+    # http.<url>.extraHeader=, credential.helper=…, alias.*, include.path= —
+    # and would bypass the GIT_CONFIG_GLOBAL=/dev/null hardening. Require EVERY
+    # -c value to set user.name= or user.email= and nothing else. -c parses to
+    # a stringList, so call.flags['c'] is the list of all values; .all() must
+    # hold for every one. hasFlag('c') guards the empty-call (no -c) case.
+    - cel: "!call.hasFlag('c') || call.flags['c'].all(v, v.startsWith('user.name=') || v.startsWith('user.email='))"
+      message: "git -c may only set user.name= or user.email= (to attribute the commit to the user). Any other -c key — core.sshCommand, url.*.insteadOf, http.*.extraHeader, credential.helper, alias.*, include.path, … — is rejected."
+  sensitive:
+    env:
+      - GIT_TOKEN
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: gh-pr
+spec:
+  name: gh-pr
+  version: "1"
+  intent: "gh for PR flow: read repos, open PRs, view CI"
+  toolkit:
+    name: gh
+    revision: "2026-05-01"
+  allowSubcommands:
+    - "api"
+    - "repo view"
+    - "repo clone"
+    - "pr create"
+    - "pr view"
+    - "pr list"
+    - "pr checks"
+    - "pr comment"
+    - "auth status"
+  sensitive:
+    env:
+      - GITHUB_TOKEN
+      - GH_TOKEN
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: claude-oauth
+spec:
+  name: claude-oauth
+  version: "1"
+  intent: "interactive Claude Code with stream-json output, authed by the user's Claude subscription"
+  toolkit:
+    name: claude-oauth
+    revision: "2026-06-25"
+  # claude-oauth's root subcommand has path: [] (bare binary); "" is the
+  # allow-list key that admits it.
+  allowSubcommands:
+    - ""
+  sensitive:
+    env:
+      - CLAUDE_CODE_OAUTH_TOKEN

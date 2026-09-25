@@ -1,0 +1,66 @@
+# AgentClass + Channel for the ledger-records fixture.
+#
+# model.provider="test" is REFUSED by the production operator with
+# Valid=False/TestProviderNotAllowed; only the e2e harness's reconciler
+# (AllowTestProvider=true) admits it. Channel kind=fake is the in-process
+# transport the harness drives inbound messages through.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ledger-records
+  namespace: default
+spec:
+  displayName: LedgerBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: ledger-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You read ledger entries. Available tools:
+        - ledger_read_entry(id): fetch one ledger entry
+
+      # The "ledger_" prefix comes from mcpServers[0].name below; the
+      # runner synthesizes LLM-facing names as <prefix>_<tool>.
+  agentIdentity: ledger-identity
+  mcpServers:
+    - name: ledger
+      ref: ledger-records
+  authz:
+    # The info-leakage gate is what carries the mint. Enforcing rather
+    # than logging so the fixture runs the same path production does —
+    # the mint itself is mode-independent, but a bundle that only ever
+    # exercised logging mode would not notice the day that changed.
+    informationLeakage:
+      mode: enforcing
+      approvalTTL: 1m
+      onUnsupportedChannel: blockBinding
+      # Off, so the gate runs even on a single-user channel; otherwise
+      # the whole path this fixture exists for would be bypassed.
+      singleUserBypass: false
+      loggingNoticeToRequester: false
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ledger-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ledger-records
+  credentialsRef:
+    secretName: ledger-fake-creds
+  fake:
+    echo: false

@@ -1,0 +1,217 @@
+name: kubectl
+version: "1"
+toolkitRevision: "2026-09-09"
+target:
+  binary: kubectl
+  versionRange: ">=1.28.0 <2.0.0"
+  versionProbe:
+    args: ["version", "--client", "-o", "json"]
+    extract: {kind: regex, pattern: '"gitVersion":"v([0-9]+\.[0-9]+\.[0-9]+)'}
+parser:
+  kind: declarative
+
+env:
+  allowed:
+    - {name: KUBECONFIG, description: "Path to kubeconfig file"}
+    - {name: HTTPS_PROXY, description: "HTTP proxy"}
+
+globalFlags:
+  - {long: namespace, short: "n", type: string}
+  - {long: context,               type: string}
+  - {long: help,      short: "h", type: bool}
+
+# The toolkit-wide DEFAULT only. It applies to the read subcommands below and to
+# nothing else: every subcommand that acts declares its own permission block,
+# because inheriting this one is precisely the bug this file used to have.
+#
+# `passthrough` on a read is a real statement, not an oversight. The
+# k8s_namespace type below could carry a `read` permission too, but a checked
+# impact means every `kubectl get` that omits -n resolves to no instance and is
+# refused — a large behavioural change to the ordinary read path, and one worth
+# making deliberately rather than as a side effect of closing a write hole.
+permission:
+  stateImpact: passthrough
+
+# The SpiceDB resource type the checks below name. `owner` is the only relation
+# and every permission resolves to it — the minimum that makes the checks
+# answerable, not a recommendation. A real deployment redefines k8s_namespace
+# against its own tenancy model.
+#
+# It is no longer the shape gh.yaml's types have, and this comment used to say
+# it was: both github types there now carry forge-synced role relations
+# (github_repo's admin/maintain/write/triage/reader, github_repo_url's repo
+# join), and github_repo's own `owner` is an inert compatibility shim nothing
+# writes. Read gh.yaml before reaching for it as a model.
+#
+# The NAMESPACE, not the cluster, because it is the unit of tenancy Kubernetes
+# itself uses and the one an operator can already reason about. It is also the
+# only axis kubectl reliably puts in argv: an in-cluster kubectl has no context
+# name at all, so keying on --context would leave the common case unresolvable.
+#
+# Known limit, stated rather than papered over: a CLUSTER-SCOPED object ignores
+# -n, so `apply` of a ClusterRoleBinding authorizes against whatever namespace
+# the call names while creating something outside it. No resource id can fix
+# that — the manifest may arrive on stdin. What the external impact does fix is
+# that a human sees the call at all, which is the whole delta from a toolkit-wide
+# passthrough that showed them nothing.
+spicedbSchema:
+  resources:
+    - name: k8s_namespace
+      # Kubernetes governs this namespace, SpiceDB does not, so there is no
+      # local permission to consult for who may approve.
+      standing: session-only
+      relations:
+        - {name: owner, subjectType: user}
+      display: {name: "Kubernetes namespace", label: last_segment}
+      permissions:
+        - {name: write, expr: owner, title: "Change objects in this Kubernetes namespace, and run commands inside its pods"}
+
+subcommands:
+  - path: [get]
+    description: "Read resources"
+    positional:
+      - {name: resource, type: string, required: true}
+      - {name: name,     type: string, required: false}
+    flags:
+      - {long: output, short: o, type: string}
+      - {long: selector, short: l, type: string}
+      - {long: all-namespaces, short: A, type: bool}
+    effects:
+      destructive: false
+      # filesystem is in `reads` because -o is an arbitrary LOCAL FILE READ:
+      # `-o go-template-file=<path>` and `-o custom-columns-file=<path>` both
+      # read a file off the sandbox and render it to stdout, and text/template
+      # emits non-{{ bytes literally, so the file comes back as the tool
+      # result. Declared as `[network]` with `filesystem.paths: []`, both
+      # structural levers a tenant has were vacuous: a spec denying
+      # `reads: [filesystem]` did not fire because the intersection was against
+      # this list, and `allow.filesystem.pathsUnder` did not fire because
+      # notUnderAny was handed an empty paths list.
+      reads:  [network, filesystem]
+      writes: []
+      # The API server, not a path. `{env:KUBECONFIG}` was here and is a
+      # FILESYSTEM path: it can never match a hostname allowlist, so any
+      # `allow.network.destinations` a tenant wrote denied every legitimate
+      # call — and with KUBECONFIG unset (the in-cluster ServiceAccount case)
+      # resolution DROPPED the entry, leaving [], which notSubset satisfies
+      # vacuously. The gate was wrong in both directions and silent in both.
+      network: {destinations: ["{env:KUBERNETES_SERVICE_HOST}"]}
+      filesystem: {paths: ["{flag:output}"]}
+      creds: {required: [], writes: []}
+
+  - path: [describe]
+    description: "Describe a resource"
+    positional:
+      - {name: resource, type: string, required: true}
+      - {name: name,     type: string, required: false}
+    flags: []
+    effects:
+      destructive: false
+      reads: [network]
+      writes: []
+      network: {destinations: ["{env:KUBERNETES_SERVICE_HOST}"]}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [logs]
+    description: "Print pod logs"
+    positional:
+      - {name: pod, type: string, required: true}
+    flags:
+      - {long: container, short: c, type: string}
+      - {long: follow,    short: f, type: bool}
+      - {long: tail,                type: int}
+    effects:
+      destructive: false
+      reads: [network]
+      writes: []
+      network: {destinations: ["{env:KUBERNETES_SERVICE_HOST}"]}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [exec]
+    description: "Execute command in a pod"
+    # `kubectl exec <pod> -- <argv…>` runs arbitrary argv inside a cluster pod.
+    # No authorization model this toolkit can express bounds what that nested
+    # argv does, so it goes to a human, per call: external is satisfied only by
+    # a slot grant a person cleared for THIS namespace and THIS session.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: k8s_namespace
+        resourceIDTemplate: "{namespace}"
+        resourceIDHint: "pass -n NAMESPACE — kubectl takes the namespace from the kubeconfig context when it is omitted, and that is not visible to authorization"
+        resourceIDTransforms: [spicedb_escape]
+        permission: write
+    positional:
+      - {name: pod, type: string, required: true}
+      # `kubectl exec <pod> -- <cmd> [args…]`: here `--` introduces an argv
+      # vector for a nested program. Declaring it as a slot is what makes the
+      # command the agent runs inside the pod visible to a spec constraint —
+      # an undeclared tail would be unvalidated argv reaching the cluster.
+      - {name: command, type: stringList, required: false, afterDashDash: true}
+    flags:
+      - {long: container, short: c, type: string}
+      - {long: stdin,     short: i, type: bool}
+      - {long: tty,       short: t, type: bool}
+    effects:
+      # It was `false`, which defeated the one structural lever a tenant has:
+      # `deny.effects.destructive: true` is the most natural way to write
+      # "nothing dangerous", and it is what the shipped read-only example uses.
+      # Running arbitrary argv in a pod is destructive by any reading; saying
+      # otherwise meant a tenant had to separately deny network writes, which
+      # also blocks apply/delete and is not what "non-destructive" means.
+      destructive: true
+      reads: [network]
+      writes: [network]
+      network: {destinations: ["{env:KUBERNETES_SERVICE_HOST}"]}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [apply]
+    description: "Apply config from a file"
+    # Creates or mutates cluster objects, and the manifest may arrive on stdin,
+    # so nothing in argv bounds what it writes: `apply -f -` with a
+    # cluster-admin ClusterRoleBinding on stdin is one call. Cluster-scoped
+    # kinds ignore -n entirely, so a namespace flag constrains nothing either.
+    permission:
+      stateImpact: external
+      check:
+        resourceType: k8s_namespace
+        resourceIDTemplate: "{namespace}"
+        resourceIDHint: "pass -n NAMESPACE — kubectl takes the namespace from the kubeconfig context when it is omitted, and that is not visible to authorization"
+        resourceIDTransforms: [spicedb_escape]
+        permission: write
+    flags:
+      - {long: filename, short: f, type: string}
+      - {long: recursive, short: R, type: bool}
+    effects:
+      destructive: true
+      reads: [network, filesystem]
+      writes: [network]
+      network: {destinations: ["{env:KUBERNETES_SERVICE_HOST}"]}
+      filesystem: {paths: ["{flag:filename}"]}
+      creds: {required: [], writes: []}
+
+  - path: [delete]
+    description: "Delete resources"
+    permission:
+      stateImpact: external
+      check:
+        resourceType: k8s_namespace
+        resourceIDTemplate: "{namespace}"
+        resourceIDHint: "pass -n NAMESPACE — kubectl takes the namespace from the kubeconfig context when it is omitted, and that is not visible to authorization"
+        resourceIDTransforms: [spicedb_escape]
+        permission: write
+    positional:
+      - {name: resource, type: string, required: true}
+      - {name: name,     type: string, required: false}
+    flags:
+      - {long: filename, short: f, type: string}
+    effects:
+      destructive: true
+      reads: [network]
+      writes: [network]
+      network: {destinations: ["{env:KUBERNETES_SERVICE_HOST}"]}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}

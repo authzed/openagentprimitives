@@ -1,0 +1,133 @@
+# syntax=docker/dockerfile:1.6
+#
+# Dockerfile.services — every first-party Go service image.
+#
+# The nine services (operator, runner, channelsd, webd, authzd, extractord,
+# workshop, apiadapter, websearchd) share a ~2,300-package dependency graph.
+# Built as nine separate Dockerfiles they compiled far more packages between
+# them, roughly a multiple of the union, and running them concurrently from a
+# cold cache meant that many simultaneous misses. Here ONE `builder` stage
+# runs ONE `go build` over all nine commands, so Go's own scheduler compiles
+# the union once across all cores, and each service image is a thin final
+# stage that copies out its own binary.
+#
+# Build a single service with `--target <stage>`:
+#   docker build -f Dockerfile.services --target runner -t agentprimitives-runner:dev .
+#
+# `oap build` (cmd/oap/internal/installcmd/build.go) materializes the `builder` stage once as phase 0
+# before fanning out the images that COPY from it (when at least two are in the
+# build set), so phase 1 is a plain layer-cache hit rather than a bet on
+# BuildKit deduplicating identical vertices across concurrent solves.
+#
+# There is deliberately no root `Dockerfile`: this repo ships several images and
+# none of them is the default, so a bare `docker build .` should not resolve.
+
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+ARG TARGETARCH
+WORKDIR /src
+ENV GOFLAGS=-trimpath
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+# `go build -o /out/` with multiple packages names each output after its package
+# directory, so this emits /out/operator, /out/runner, /out/channelsd,
+# /out/webd, /out/authzd, /out/extractord, /out/workshop, /out/apiadapter,
+# /out/websearchd. The final stages rename on COPY to keep each image's
+# historical binary name and path.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
+    go build -o /out/ \
+        ./internal/cmd/operator \
+        ./internal/cmd/runner \
+        ./internal/cmd/channelsd \
+        ./internal/cmd/webd \
+        ./internal/cmd/authzd \
+        ./internal/cmd/extractord \
+        ./internal/cmd/workshop \
+        ./internal/cmd/apiadapter \
+        ./internal/cmd/websearchd
+
+# --- operator -----------------------------------------------------------------
+FROM gcr.io/distroless/static:nonroot AS operator
+WORKDIR /
+COPY --from=builder /out/operator /spicebox-operator
+USER 65532:65532
+ENTRYPOINT ["/spicebox-operator"]
+
+# --- runner -------------------------------------------------------------------
+# The runner keeps a NAMED `nonroot` user, unlike its siblings: the operator
+# synthesizes the runner Pod with an explicit numeric runAsUser (1000) that
+# overrides the image USER, so the kubelet never has to verify non-root from
+# the image alone. cmd/oap/internal/installcmd/dockerfile_user_test.go exempts it for that reason.
+FROM gcr.io/distroless/static:nonroot AS runner
+USER nonroot
+COPY --from=builder /out/runner /usr/local/bin/agentprimitives-runner
+ENTRYPOINT ["/usr/local/bin/agentprimitives-runner"]
+
+# --- channelsd ----------------------------------------------------------------
+# Numeric UID (distroless's "nonroot" user) so Kubernetes can verify the
+# container satisfies a pod-level runAsNonRoot=true without us having to set
+# runAsUser in every deployment manifest.
+FROM gcr.io/distroless/static:nonroot AS channelsd
+USER 65532:65532
+COPY --from=builder /out/channelsd /usr/local/bin/channelsd
+ENTRYPOINT ["/usr/local/bin/channelsd"]
+
+# --- webd ---------------------------------------------------------------------
+FROM gcr.io/distroless/static:nonroot AS webd
+USER 65532:65532
+COPY --from=builder /out/webd /usr/local/bin/webd
+COPY --from=builder /src/THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+COPY --from=builder /src/third_party/licenses/Inter-OFL.txt /licenses/Inter-OFL.txt
+COPY --from=builder /src/third_party/licenses/JetBrains-Mono-OFL.txt /licenses/JetBrains-Mono-OFL.txt
+ENTRYPOINT ["/usr/local/bin/webd"]
+
+# --- authzd -------------------------------------------------------------------
+FROM gcr.io/distroless/static:nonroot AS authzd
+USER 65532:65532
+COPY --from=builder /out/authzd /usr/local/bin/authzd
+ENTRYPOINT ["/usr/local/bin/authzd"]
+
+# --- extractord -----------------------------------------------------------
+# Deliberately powerless: distroless static + numeric nonroot USER, same as
+# every sibling here. Its no-egress/no-RBAC posture is enforced by the
+# Deployment's securityContext + the extractord NetworkPolicy
+# (config/networkpolicy/extractord.yaml), not by anything in this image.
+FROM gcr.io/distroless/static:nonroot AS extractord
+USER 65532:65532
+COPY --from=builder /out/extractord /usr/local/bin/extractord
+ENTRYPOINT ["/usr/local/bin/extractord"]
+
+# --- workshop -------------------------------------------------------------
+# The agent-builder sidecar (internal/cmd/workshop). Numeric nonroot USER for
+# the same reason as every sibling here: BuildSidecarPod's identity branch
+# sets a pod-level RunAsNonRoot=true with no explicit runAsUser
+# (pkg/controllers/agentsession/cosidecar's defaultSecurityContext), so the
+# kubelet must verify non-root from the image's own USER — it cannot verify a
+# named user.
+FROM gcr.io/distroless/static:nonroot AS workshop
+USER 65532:65532
+COPY --from=builder /out/workshop /usr/local/bin/ap-workshop
+ENTRYPOINT ["/usr/local/bin/ap-workshop"]
+
+# --- apiadapter -------------------------------------------------------------
+# The declarative HTTP→MCP adapter (internal/cmd/apiadapter). Numeric nonroot
+# USER for the same reason as every sibling here: it runs as a per-session
+# sidecar under a pod-level RunAsNonRoot=true with no explicit runAsUser, so
+# the kubelet must verify non-root from the image's own USER.
+FROM gcr.io/distroless/static:nonroot AS apiadapter
+USER 65532:65532
+COPY --from=builder /out/apiadapter /usr/local/bin/ap-api-adapter
+ENTRYPOINT ["/usr/local/bin/ap-api-adapter"]
+
+# --- websearchd ---------------------------------------------------------
+# The client-dispatched search+fetch sidecar (internal/cmd/websearchd).
+# Numeric nonroot USER for the same reason as every sibling here: it runs as
+# a per-session sidecar (design R5: isolation required, its own pod) under a
+# pod-level RunAsNonRoot=true with no explicit runAsUser, so the kubelet must
+# verify non-root from the image's own USER.
+FROM gcr.io/distroless/static:nonroot AS websearchd
+USER 65532:65532
+COPY --from=builder /out/websearchd /usr/local/bin/ap-websearchd
+ENTRYPOINT ["/usr/local/bin/ap-websearchd"]

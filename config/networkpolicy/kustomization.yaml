@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentprimitives-system
+resources:
+  - default-deny.yaml
+  - allow-dns.yaml
+  - nats.yaml
+  - spicedb.yaml
+  - spicedb-egress.yaml
+  - operator.yaml
+  - egress-external.yaml
+  - extractord.yaml
+  - postgres.yaml
+  - graphiti.yaml
+  - neo4j.yaml
+  - webd.yaml
+  - webd-envoy.yaml
+  - acme-solver.yaml

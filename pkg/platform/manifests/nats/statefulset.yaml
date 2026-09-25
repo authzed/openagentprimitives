@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: spicebox-nats
+  namespace: agentprimitives-system
+  labels:
+    app.kubernetes.io/name: spicebox-nats
+spec:
+  replicas: 1
+  serviceName: spicebox-nats
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-nats
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spicebox-nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.10-alpine
+          args:
+            - "-c"
+            - "/etc/nats/nats-server.conf"
+          ports:
+            - { name: client,  containerPort: 4222 }
+            - { name: monitor, containerPort: 8222 }
+          readinessProbe:
+            httpGet: { path: /, port: monitor }
+            initialDelaySeconds: 2
+          livenessProbe:
+            httpGet: { path: /, port: monitor }
+            initialDelaySeconds: 10
+          volumeMounts:
+            - { name: config, mountPath: /etc/nats }
+            - { name: tls,    mountPath: /etc/nats-tls,  readOnly: true }
+            - { name: auth,   mountPath: /etc/nats-auth, readOnly: true }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: config
+          configMap:
+            name: spicebox-nats-config
+        - name: tls
+          secret:
+            secretName: spicebox-nats-tls
+        - name: auth
+          secret:
+            secretName: spicebox-nats-identity
+            items:
+              - { key: auth.conf, path: auth.conf }

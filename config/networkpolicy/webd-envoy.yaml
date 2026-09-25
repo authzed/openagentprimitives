@@ -1,0 +1,26 @@
+# webd Gateway ingress, Envoy path: on non-GKE clouds (EKS/AKS/bare) oap runs Envoy
+# Gateway, whose proxy pods live in envoy-gateway-system and forward external
+# traffic to webd cross-namespace. Under the namespace-wide default-deny that
+# ingress is dropped, so webd returns 503 through the Gateway even though its pod
+# is Ready — the same failure GKE hits via the LB health-check ranges, which ap
+# handles separately with the cloud-specific allow-webd-gateway policy
+# (Cloud.GatewayBackendIngressCIDRs). This policy is a NO-OP on GKE and on any
+# cluster not running Envoy Gateway (the envoy-gateway-system namespace, and thus
+# the selector, matches nothing). Both are additive allows on top of default-deny.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-webd-envoy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-webd
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+      ports:
+        - { protocol: TCP, port: 8080 }

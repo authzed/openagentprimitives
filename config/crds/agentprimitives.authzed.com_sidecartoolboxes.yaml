@@ -1,0 +1,1417 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: sidecartoolboxes.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: SidecarToolbox
+    listKind: SidecarToolboxList
+    plural: sidecartoolboxes
+    shortNames:
+    - sbxtb
+    singular: sidecartoolbox
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Valid')].status
+      name: Valid
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Reachable')].status
+      name: Reachable
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SidecarToolbox declares a user-supplied MCP server that runs as a sidecar
+          container alongside the agent runner pod: its image, sandbox shape, tool
+          allowlist, CEL constraints and egress policy.
+
+          Namespaced. Reconciled by pkg/controllers/sidecartoolbox, which validates
+          the spec and runs a one-shot probe Pod to confirm the image is reachable and
+          its live tool list matches the allowlist. Upstream credentials are resolved
+          by the AgentSession reconciler at pod-create time and frozen for the life of
+          the pod -- there is no just-in-time refresh for a sidecar.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              config:
+                description: |-
+                  Config is an opaque configuration document for the sidecar image,
+                  delivered verbatim as the AP_SIDECAR_CONFIG environment variable. The
+                  platform does not interpret it; validation belongs to whoever admits the
+                  object (the workshop webhook parses it for first-party images known to
+                  consume one, e.g. ap-api-adapter). Bounded because it rides in the pod
+                  environment.
+
+                  MaxLength counts Unicode code points, not bytes — up to 4 bytes each in
+                  UTF-8 — so it alone admits up to 262144 bytes. The BYTE cap (what execve
+                  and apiadapter.MaxConfigBytes both count) is enforced by
+                  apiadapter.Parse, which both the workshop webhook (at admission) and the
+                  adapter binary (at boot) run. Deliberately NOT a CEL XValidation here:
+                  this spec type is embedded by value into AgentSession's
+                  status.resolvedSidecarToolboxes snapshot, and a CEL rule that reaches a
+                  status path both trips the status-CEL guard (pkg/platform/settings'
+                  TestNoUnguardedStatusCELRules) and blows the apiserver's CRD rule-cost
+                  budget inside that unbounded status array — the agentsessions CRD is
+                  then refused at install. Residual admin-path risk (no webhook, a
+                  >131072-byte multi-byte document): execve fails with E2BIG and the
+                  kubelet reports the container-start error on the Pod.
+                maxLength: 65536
+                type: string
+              intent:
+                description: Intent is the one-line purpose shown to authors and reviewers.
+                type: string
+              isolation:
+                description: |-
+                  Isolation declares that this toolbox must run in its own per-session pod
+                  even though it has no SecretInputs. A secret-gated toolbox (any
+                  SecretInputs) is ALREADY isolated for its own reason -- its gating
+                  secret only exists per-session, so it cannot be baked into the runner
+                  pod's spec -- regardless of this field; Isolation is for the toolbox
+                  that needs a separate pod's consequences WITHOUT a gating secret:
+
+                    - Its own NetworkPolicy, scoped to exactly this sidecar's ingress/
+                      egress, instead of inheriting the runner pod's shared policy (see
+                      pkg/controllers/agentsession/netpol.go: BuildRunnerNetworkPolicy vs
+                      BuildSidecarNetworkPolicy).
+                    - Eligibility for BuildSidecarPod's identity branch (a projected
+                      ServiceAccount token + operator env), which is reachable only in
+                      separate-pod mode -- an in-pod sidecar can never receive it.
+
+                  Absent (or "auto") never changes an existing toolbox's run mode:
+                  today's in-pod behavior is preserved exactly.
+                enum:
+                - auto
+                - isolated
+                type: string
+              mcpUiAppTools:
+                description: |-
+                  MCPUIAppTools is ACCEPTED BUT NOT CONSUMED: setting enabled: true changes
+                  nothing, and no error, log, or condition says so. It is typed identically
+                  to MCPServer's stanza so a toolbox can declare the intent to be an MCP-UI
+                  app-tool origin, but nothing reads it, so no sidecar tool is
+                  browser-callable. Recorded, not enforced — the same posture as this CRD's
+                  effectiveAllowedHosts.
+
+                  A toolbox tool named in AgentUI.spec.tools is therefore denied by the
+                  three-way grant's origin condition: the right fail-closed answer for an
+                  unwired origin, just not the one this field's name suggests.
+
+                  Absent ⇒ disabled: the permanent, fail-closed default.
+                properties:
+                  enabled:
+                    description: Enabled turns the capability on; no app-visible tool
+                      is callable without it.
+                    type: boolean
+                  maxCallsPerMin:
+                    description: |-
+                      MaxCallsPerMin optionally caps autonomous app-tool calls per minute.
+                      Enforced by a DEDICATED per-origin limiter on the app-tool call path
+                      (runner.AppToolRateLimiter, wired in internal/cmd/runner from this field) —
+                      deliberately NOT a toolguard rule, which would also gate this
+                      MCPServer's LLM-visible tools and strip its circuit breaker. Nil ⇒
+                      unlimited.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                required:
+                - enabled
+                type: object
+              name:
+                description: Name is the toolbox's toolspec-level name.
+                type: string
+              sandbox:
+                description: Sandbox is the SpiceboxClass shape and egress the sidecar
+                  runs under.
+                properties:
+                  class:
+                    description: |-
+                      Class names a SpiceboxClass (cluster-scoped) whose resources,
+                      runtimeClassName, default network mode, pidsLimit are inherited.
+                    type: string
+                  network:
+                    description: Network widens the class's egress for this toolbox.
+                    properties:
+                      allowedHosts:
+                        description: |-
+                          AllowedHosts merges with the SpiceboxClass's network.allowedHosts.
+                          If the class's mode is "none" and any AllowedHosts are supplied
+                          here, the effective sidecar network upgrades to "allowlist" with
+                          exactly these hosts.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                required:
+                - class
+                type: object
+              secretInputs:
+                description: |-
+                  SecretInputs binds secret-output handles (produced by an earlier tool
+                  call) to this toolbox. A toolbox with any SecretInput is "secret-gated":
+                  it is NOT injected into the agent pod; the operator runs it as a separate
+                  per-session pod once the bound secret is available.
+                items:
+                  properties:
+                    deliver:
+                      description: |-
+                        Deliver is how the value reaches the sidecar at startup: "env" (env var
+                        named Name) or "file:<path>" (mounted file at <path>).
+                      pattern: ^(env|file:/.+)$
+                      type: string
+                    from:
+                      description: |-
+                        From is the secret-output logical name the producer emitted (matches the
+                        producer's secretOutput.name / the per-session Secret key).
+                      type: string
+                    name:
+                      description: Name is the env-var name (when Deliver=="env")
+                        or the logical key.
+                      type: string
+                  required:
+                  - deliver
+                  - from
+                  - name
+                  type: object
+                type: array
+              source:
+                description: Source is where the sidecar's container image comes from.
+                properties:
+                  image:
+                    description: Image is a prebuilt container image reference.
+                    type: string
+                  inline:
+                    description: Inline builds the sidecar from a script layered onto
+                      a base image.
+                    properties:
+                      baseImage:
+                        description: BaseImage is the image the script runs on top
+                          of.
+                        type: string
+                      entrypoint:
+                        description: Entrypoint is the argv that starts the server
+                          inside the container.
+                        items:
+                          type: string
+                        type: array
+                      script:
+                        description: Script is where the server's source comes from.
+                        properties:
+                          configMapRef:
+                            description: ConfigMapRef names the ConfigMap key holding
+                              the script body.
+                            properties:
+                              key:
+                                description: Key is the data key within the ConfigMap.
+                                type: string
+                              name:
+                                description: Name is the ConfigMap's name, in the
+                                  toolbox's own namespace.
+                                type: string
+                            required:
+                            - key
+                            - name
+                            type: object
+                        required:
+                        - configMapRef
+                        type: object
+                    required:
+                    - baseImage
+                    - entrypoint
+                    - script
+                    type: object
+                type: object
+              spicedbSchema:
+                description: |-
+                  SpiceDBSchema declares the SpiceDB resource definitions this toolbox
+                  contributes — identical to MCPServer.spec.spicedbSchema. The guardian's
+                  schema composer concatenates fragments across every MCPServer AND
+                  SidecarToolbox in the cluster so the audiences the tags derive from
+                  resolve; identical declarations dedupe, conflicting ones fail the reconcile.
+                properties:
+                  rawZed:
+                    description: |-
+                      RawZed is appended verbatim to the composed schema after Resources
+                      are emitted. Use this for SpiceDB schema features the structured
+                      form can't represent: subject-relations (e.g. `slack_user#user`)
+                      and unions (e.g. `user | agent`). The composer does not parse or
+                      validate RawZed beyond schema-load time; malformed text fails the
+                      SpiceDB WriteSchema call.
+                    type: string
+                  resources:
+                    description: |-
+                      Resources lists structured SpiceDB definitions contributed by this
+                      fragment. Each resource is emitted with its declared relations and
+                      permissions; the composer dedupes by name across fragments.
+                    items:
+                      description: SpiceDBResource is one SpiceDB resource definition
+                        contributed by a fragment.
+                      properties:
+                        approverPermission:
+                          description: |-
+                            ApproverPermission names the permission an approver must hold on an
+                            instance for their approval to count. Required when Standing is `required`,
+                            and must be empty when it is `session-only` — a type nothing governs has no
+                            permission to name, and accepting one there would read as governance that
+                            is never consulted.
+
+                            Declared rather than assumed. This was hardcoded to "owner" at four call
+                            sites, which silently made two very different types look identical to the
+                            approval router: crm_company's `owner` is a real computed permission backed
+                            by seeded tuples, while git_repo's `owner` is a bare relation declared only
+                            so the checks are answerable and never populated by anything. The router
+                            could not tell governance from an artifact of schema shape, so a push to a
+                            git remote resolved to an empty owner-set and became unapprovable forever.
+
+                            Naming it also lifts the assumption that the approving permission is called
+                            "owner": a type may route approval through `maintainer`, `admin`, or any
+                            permission its own schema defines.
+                          type: string
+                        display:
+                          description: |-
+                            Display declares how an INSTANCE of this resource type presents on an
+                            approval card — an icon, and how to turn its raw value (a URL, typically)
+                            into a short label. Absent means the card falls back to the wire type
+                            name, exactly as before this field existed.
+                          properties:
+                            icon:
+                              description: |-
+                                Icon names a glyph from a CLOSED, code-defined registry — never a URL
+                                and never free-form. A vendor-specific type (github_repo) may name the
+                                vendor's own mark; a host-agnostic type (git_repo) must name a generic
+                                one, because claiming a vendor mark would lie the moment an instance
+                                points somewhere else (a self-hosted remote). An unrecognized name
+                                renders no icon — never a fallback image, never a guess.
+                              maxLength: 40
+                              type: string
+                            label:
+                              description: |-
+                                Label names a deriver from a CLOSED, code-defined set that turns an
+                                instance's raw value into a short display label — "url_path",
+                                "b64url_path", "last_segment", or "none" (the set registered in
+                                pkg/authz/plangate's labelDerivers, which is the authority; this list is
+                                prose and has drifted from it once). Not a template and not a regex: nothing here
+                                can produce a label the code did not author, and the deriver never sees
+                                anything an agent did not itself write into the plan (the instance
+                                value), so a declaration can shorten a value's presentation but can
+                                never fabricate one. An unrecognized name derives nothing, and the card
+                                falls back to Name.
+                              maxLength: 40
+                              type: string
+                            name:
+                              description: |-
+                                Name is the human name for this resource TYPE — "Git repository", never
+                                the wire handle "git_repo". Shown when no per-instance label can be
+                                derived (Label is "none", unset, or the deriver produces nothing for
+                                this instance's value).
+                              maxLength: 60
+                              type: string
+                          type: object
+                        name:
+                          description: Name is the SpiceDB definition name; the composer
+                            dedupes on it.
+                          type: string
+                        permissions:
+                          description: Permissions are the resource's computed permissions.
+                          items:
+                            description: |-
+                              SpiceDBPermission is one permission on a resource. Expr is
+                              the right-hand-side of the SpiceDB schema's `permission <name> = ...`
+                              statement; the composer pastes it verbatim.
+                            properties:
+                              expr:
+                                description: Expr is the right-hand side of `permission
+                                  <name> = …`, pasted verbatim.
+                                type: string
+                              name:
+                                description: Name is the permission name.
+                                type: string
+                              planningNote:
+                                description: |-
+                                  PlanningNote is one line of guidance the agent reads while DECLARING a
+                                  plan, rendered next to the handles it may declare.
+
+                                  The knowledge that shapes a good plan is toolkit-specific, so it lives
+                                  with the toolkit rather than in the runner's generic prompt. git_repo
+                                  splits its permissions across two instances — read/write key on the
+                                  checked-out copy, fetch/push on the remote URL — so a phase declaring
+                                  `write` without `read` can change files it cannot open, and the first
+                                  read interrupts the human with an amendment the plan should have carried
+                                  from the start.
+
+                                  It shapes what the agent DECLARES, never what anything grants: a note is
+                                  prose the model reads at plan time, and no authorization decision reads
+                                  it. A phase that ignores its guidance still gets the gate it earned.
+                                maxLength: 300
+                                type: string
+                              title:
+                                description: |-
+                                  Title is the phrase a human reads on an approval card instead of the
+                                  permission's handle. `perm:push:git_repo` is a WIRE FORMAT; asking
+                                  somebody to decide on it makes the decision slower and worse exactly
+                                  where care matters most.
+
+                                  Declared here because this is where the permission itself is declared, so
+                                  one declaration serves every channel and the CLI. Absent is fine and
+                                  common: the card detokenizes the handle instead, which shows no plumbing
+                                  and invents no English.
+                                maxLength: 120
+                                type: string
+                            required:
+                            - expr
+                            - name
+                            type: object
+                          type: array
+                        relations:
+                          description: Relations are the resource's relations, emitted
+                            verbatim.
+                          items:
+                            description: SpiceDBRelation is one relation on a resource.
+                            properties:
+                              name:
+                                description: Name is the relation name as it appears
+                                  in the composed schema.
+                                type: string
+                              subjectType:
+                                description: |-
+                                  SubjectType must be a bare resource-type name (e.g. "user",
+                                  "hubspot_owner") declared in this same SpiceDBSchema or the
+                                  implicit "user" type. Wildcards ("user:*") are expressed via
+                                  the separate Wildcard field. Subject-relation forms
+                                  ("team#member") are NOT representable. Exactly one
+                                  SubjectType per Relation — SpiceDB unions like
+                                  `relation viewer: user | team#member` cannot be modeled.
+                                type: string
+                              wildcard:
+                                description: |-
+                                  Wildcard, when true, makes the relation accept ANY subject
+                                  of SubjectType — emitted as `relation <name>: <subjectType>:*`
+                                  in the composed schema. Use sparingly: a wildcard relation
+                                  effectively grants the underlying-resource permission to
+                                  every subject of that type, so any per-call gating must come
+                                  from a different layer (e.g. `stateImpact: external` on the
+                                  tool, which routes every call through the approval flow
+                                  regardless of the SpiceDB Check result).
+                                type: boolean
+                            required:
+                            - name
+                            - subjectType
+                            type: object
+                          type: array
+                        standing:
+                          description: |-
+                            Standing declares whether SpiceDB is AUTHORITATIVE for this resource type —
+                            that is, whether an approver can be expected to already hold a permission on
+                            an instance of it. REQUIRED, with no default.
+
+                              - required      SpiceDB governs who may approve. The approver pool is
+                                              ApproverPermission on the named instance, and an EMPTY pool
+                                              is a final refusal — nobody can approve what nobody governs.
+                              - session-only  No local permission governs approval for this type, so the
+                                              session's own approvers decide and their decision IS the
+                                              authority. Everything downstream is unchanged: the grant is
+                                              still written, still expiring, still session-scoped and
+                                              revocable, and the tool-call Check still runs.
+
+                            There is deliberately NO default. A default is a hole you open by omission:
+                            defaulting to session-only silently widens who may approve a type somebody
+                            forgot to classify, and defaulting to required makes a forge-governed type
+                            permanently unbindable because nothing writes a SpiceDB tuple for every git
+                            remote. Neither failure announces itself, so the author states the answer.
+                            Same reasoning as AP_CLUSTER_KIND, which also refuses to default.
+
+                            Choosing is a question about the RESOURCE, not about convenience: does a
+                            permission on this instance already say who may speak for it? A CRM company
+                            with seeded owner tuples: yes, `required`. A git remote whose permissions
+                            live at the forge: no, `session-only`.
+
+                            A cluster or namespace admin can force any type to `required` with
+                            SettingsLimits.RequireStandingFor, which no fragment may widen past.
+                          enum:
+                          - session-only
+                          - required
+                          type: string
+                      required:
+                      - name
+                      - standing
+                      type: object
+                    type: array
+                type: object
+              toolResourceMap:
+                description: |-
+                  ToolResourceMap declares, per-tool, the SpiceDB resource a read accesses —
+                  identical semantics to MCPServer.spec.toolResourceMap. Consumed by the
+                  runner's information-leakage gate so a sidecar tool participates in
+                  per-datum egress (its result mints a pt-tag) instead of falling to the
+                  undeclared coarse floor.
+                items:
+                  description: |-
+                    ToolResourceMapping declares how a specific MCP tool relates to SpiceDB
+                    resources. Consumed by the runner's information-leakage gate.
+                  properties:
+                    noTaint:
+                      description: |-
+                        NoTaint marks the tool as a pure utility that reads no user data.
+                        Set true to opt out of taint capture and the requester view check.
+                      type: boolean
+                    reads:
+                      description: |-
+                        Reads declares the resource the tool reads. Set this OR NoTaint;
+                        unset both is treated as "unmapped" and may block tool dispatch
+                        depending on AgentClass.Authz.InformationLeakage.Mode.
+                      properties:
+                        bypassRequesterCheck:
+                          description: |-
+                            BypassRequesterCheck, when true, skips the requester view check.
+                            The taint is still recorded; this is useful for agents whose service
+                            identity legitimately has broader access than the requester.
+                          type: boolean
+                        idArg:
+                          description: |-
+                            IDArg names a top-level field inside the tool's args envelope
+                            whose string value is the SpiceDB resource ID. Mutually exclusive
+                            with ResultIDField.
+                          type: string
+                        permission:
+                          description: |-
+                            Permission is the SpiceDB permission checked against the requester
+                            (e.g. "view").
+                          type: string
+                        resourceType:
+                          description: ResourceType is the SpiceDB definition name
+                            (e.g. "linear_issue").
+                          type: string
+                        resultIDField:
+                          description: |-
+                            ResultIDField names a top-level field on the tool result's content
+                            (parsed as JSON) whose string value is the SpiceDB resource ID.
+                            Set this when the agent's input identifier differs from the
+                            SpiceDB resource ID (e.g. Linear `id: "L-140"` returns a UUID in
+                            the response). When set, the pre-execute requester view check
+                            happens AFTER the call against the response-extracted ID.
+                            Mutually exclusive with IDArg.
+                          type: string
+                      required:
+                      - permission
+                      - resourceType
+                      type: object
+                    tool:
+                      description: Tool is the MCP tool name this mapping applies
+                        to.
+                      type: string
+                  required:
+                  - tool
+                  type: object
+                type: array
+              tools:
+                description: |-
+                  Tools mirrors MCPServerTool field-for-field — same allowlist, CEL,
+                  deny effects, sensitive fields. See MCPServerTool for details.
+                items:
+                  properties:
+                    args:
+                      description: Args is the argument allowlist and CEL constraints
+                        for this tool.
+                      properties:
+                        allowedFields:
+                          description: |-
+                            AllowedFields lists the argument keys the agent may pass to this
+                            tool. Enforcement is fail-closed: an empty/unset AllowedFields
+                            DENIES any argument the agent passes (an arg-less tool still
+                            works). To accept free-form arguments, set UnconstrainedArgs=true
+                            instead of leaving this empty.
+                          items:
+                            type: string
+                          type: array
+                        constraints:
+                          description: Constraints are CEL predicates every call's
+                            args must satisfy (AND).
+                          items:
+                            properties:
+                              cel:
+                                description: CEL is a boolean expression over the
+                                  call's args; false denies the call.
+                                type: string
+                              message:
+                                description: Message is the denial text shown when
+                                  CEL evaluates false.
+                                type: string
+                            required:
+                            - cel
+                            type: object
+                          type: array
+                        sensitiveFields:
+                          description: SensitiveFields names arg keys to redact from
+                            logs and approval prompts.
+                          items:
+                            type: string
+                          type: array
+                        unconstrainedArgs:
+                          description: |-
+                            UnconstrainedArgs explicitly opts this tool out of AllowedFields
+                            enforcement, for a tool that legitimately accepts arbitrary
+                            arguments. Required to allow free-form args — an empty AllowedFields
+                            alone is fail-closed, not allow-all.
+                          type: boolean
+                      type: object
+                    deny:
+                      description: Deny lists effect and trust capabilities that refuse
+                        the call pre-dispatch.
+                      properties:
+                        effects:
+                          description: Effects denies calls by declared effect (destructive,
+                            reads, writes).
+                          properties:
+                            creds:
+                              description: Creds denies credential-touching effects.
+                              properties:
+                                writes:
+                                  description: Writes denies any tool that would write
+                                    credential material.
+                                  type: boolean
+                              type: object
+                            destructive:
+                              description: Destructive denies any tool the server
+                                marks destructive.
+                              type: boolean
+                            reads:
+                              description: Reads names resource kinds whose reads
+                                are denied.
+                              items:
+                                type: string
+                              type: array
+                            writes:
+                              description: Writes names resource kinds whose writes
+                                are denied.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        trust:
+                          description: Trust denies calls by asserted SEP-1913 trust
+                            capability.
+                          properties:
+                            destinationPublic:
+                              description: |-
+                                DestinationPublic denies the call when it would write somewhere publicly
+                                visible.
+                              type: boolean
+                            outcomesIrreversible:
+                              description: |-
+                                OutcomesIrreversible denies the call when the server declares its effects
+                                cannot be undone.
+                              type: boolean
+                            sourceUntrustedPublic:
+                              description: |-
+                                SourceUntrustedPublic denies the call when it would read untrusted public
+                                content into the agent's context.
+                              type: boolean
+                          type: object
+                      type: object
+                    descriptionOverride:
+                      description: |-
+                        DescriptionOverride replaces the server's own description in the prompt;
+                        empty keeps what the server sent.
+                      type: string
+                    effects:
+                      description: Effects is the declared effect profile used for
+                        approval and gating.
+                      properties:
+                        destructive:
+                          description: Destructive means a call can remove or overwrite
+                            upstream state.
+                          type: boolean
+                        idempotent:
+                          description: Idempotent means repeating a call has the same
+                            effect as making it once.
+                          type: boolean
+                        openWorld:
+                          description: OpenWorld means the call may reach systems
+                            beyond the named server.
+                          type: boolean
+                        readOnly:
+                          description: ReadOnly means a call mutates nothing upstream.
+                          type: boolean
+                      type: object
+                    intent:
+                      description: Intent is the one-line purpose shown to authors
+                        and reviewers.
+                      type: string
+                    labels:
+                      description: |-
+                        Labels declares per-tool CEL blocks extracting (resourceType, id, name)
+                        tuples from tool responses for approval-prompt rendering. Evaluated after
+                        a SUCCESSFUL call; failures are non-fatal (logged and skipped). Labels
+                        never reach any LLM context.
+                      items:
+                        description: |-
+                          MCPServerLabelExtract declares a per-tool labels-CEL block. Mirrors
+                          the writesRelationships shape: same when/forEach semantics, same
+                          (args, result, item) CEL bindings. Evaluated by the MCP dispatcher
+                          after every successful tool call; tuples land in the runner's
+                          in-memory LabelStore and are surfaced to channel renderers via the
+                          ToolApprovalRequestPayload.Labels field. Threat-model note: labels
+                          NEVER reach any LLM context.
+                        properties:
+                          forEach:
+                            description: |-
+                              ForEach is a CEL expression that must evaluate to a list. One
+                              label is emitted per element with `item` bound to that element.
+                              When unset, exactly one label is emitted with item=nil.
+                            type: string
+                          label:
+                            description: |-
+                              Label is the (resourceType, id, name) CEL triple. All three
+                              fields are required CEL string expressions.
+                            properties:
+                              id:
+                                description: ID is a CEL string expression yielding
+                                  the resource id.
+                                type: string
+                              name:
+                                description: |-
+                                  Name is a CEL string expression yielding the friendly label
+                                  shown to approvers. Capped + sanitized at extraction time.
+                                type: string
+                              resourceType:
+                                description: |-
+                                  ResourceType is a CEL string expression yielding the SpiceDB
+                                  definition name (e.g. `"crm_company"`).
+                                type: string
+                            required:
+                            - id
+                            - name
+                            - resourceType
+                            type: object
+                          when:
+                            description: |-
+                              When is a CEL boolean expression with `args`, `result` in
+                              scope; the block is skipped if it evaluates false.
+                            type: string
+                        required:
+                        - label
+                        type: object
+                      type: array
+                    name:
+                      description: Name is the tool name as the upstream server reports
+                        it.
+                      type: string
+                    observes:
+                      description: |-
+                        Observes declares facts this tool's result asserts about specific
+                        resource instances, co-derived with the subjects they are about.
+                        Evaluated after a SUCCESSFUL call.
+                      items:
+                        description: |-
+                          ObservesBlock is one observation declaration on a tool. The dispatcher
+                          evaluates it after tool.Execute succeeds.
+
+                          One block yields the SUBJECTS and the FACTS from the same `item`. They are
+                          not two declarations that happen to agree: a fact and the object it describes
+                          come out of one payload, which is what stops a fact about one instance from
+                          being made to answer for another.
+                        properties:
+                          facts:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              Facts maps a fact name to a CEL expression yielding its value, evaluated
+                              against the same `item` as Subjects.
+                            minProperties: 1
+                            type: object
+                          forEach:
+                            description: |-
+                              ForEach is a CEL expression yielding a list. One observation is emitted
+                              per element with `item` bound to it. Unset emits exactly one, with `item`
+                              bound to nil.
+                            type: string
+                          subjects:
+                            description: |-
+                              Subjects are the objects this observation is about, as CEL string
+                              expression pairs. At least one is REQUIRED: a block recording facts about
+                              nothing would produce a session-scoped boolean that answers for every
+                              instance at once.
+                            items:
+                              description: |-
+                                ObserveSubject is one subject as a (resourceType, resourceID) pair of CEL
+                                string expressions.
+                              properties:
+                                resourceID:
+                                  description: ResourceID is a CEL string expression
+                                    yielding the object id.
+                                  type: string
+                                resourceType:
+                                  description: |-
+                                    ResourceType is a CEL string expression yielding a SpiceDB definition
+                                    name (commonly a literal, e.g. `"github_pr"`).
+                                  type: string
+                              required:
+                              - resourceID
+                              - resourceType
+                              type: object
+                            minItems: 1
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          when:
+                            description: |-
+                              When is a CEL boolean over `args`, `result`; the block is skipped if it
+                              evaluates false. Unset means always taken.
+                            type: string
+                        required:
+                        - facts
+                        - subjects
+                        type: object
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    permission:
+                      description: |-
+                        Permission declares the per-tool authz policy. Optional in the schema
+                        only: a tool without one fails AgentClass-time validation.
+                      properties:
+                        check:
+                          description: |-
+                            PermissionCheck names the SpiceDB resource and permission to
+                            evaluate. Required when StateImpact is Readonly / Readwrite /
+                            External; forbidden when Stateless / Passthrough.
+                          properties:
+                            enforceMode:
+                              description: |-
+                                EnforceMode controls deny-finality under permissive toolAuthMode.
+                                Empty → EnforceInherit (slice-1 default).
+                              type: string
+                            extractionPrompt:
+                              description: |-
+                                ExtractionPrompt, when set, is an English fragment the runner
+                                includes in the extraction LLM's system prompt for this resource
+                                type. Tool spec authors write this once per toolspec/MCPServer
+                                file. The runner aggregates ExtractionPrompts across all tools
+                                whose Check targets the same resourceType (dedup'd, concatenated).
+                                The AgentClass's BoundEntityType.ExtractionPrompt overrides
+                                entirely if set.
+                              type: string
+                            grantBindsArgs:
+                              description: |-
+                                GrantBindsArgs, when set, restricts the slice-2 grant's
+                                arguments_hash caveat binding to only the listed top-level arg
+                                keys. Default (nil/empty) hashes the full arg map, meaning the
+                                grant satisfies only the exact same call. Setting it to e.g.
+                                ["repo"] lets a single approval cover every subsequent call
+                                against the same repo regardless of other args (pr number,
+                                etc.) — useful for readonly tools where the resource is the
+                                load-bearing input.
+
+                                The hash is an HMAC-SHA256 under the per-session args-hash key
+                                minted by the AgentSession reconciler into the per-session
+                                Secret and read by the runner at startup. Caveat contexts
+                                therefore cannot be predicted or minted outside the
+                                controller+runner trust domain — neither the agent nor a
+                                confused deputy with SpiceDB write access can forge a valid
+                                binding for arguments that were never requested. Note: hashes
+                                of previously-requested (including denied) calls remain
+                                observable in session status and channel payloads, so a
+                                SpiceDB-write attacker could still replay those; the keying
+                                narrows that surface to exactly the calls a human has already
+                                seen. See pkg/authz/guardian/grants.ArgsHashFiltered for the
+                                filtering contract.
+
+                                NOTE: the hash no longer BINDS the grant. A slot grant is keyed on
+                                (instance, permission), which is what makes it safe to reuse across
+                                calls: a grant shaped for one permission cannot be spent on another
+                                against the same id. The filtered hash is still computed and published
+                                on the approval request (ToolApprovalDetails.ArgsHash) so an approver —
+                                and the audit log — can see exactly which call was asked about.
+                              items:
+                                type: string
+                              type: array
+                            permission:
+                              description: |-
+                                Permission is the SpiceDB permission (or relation) name to
+                                Check (e.g. "read", "write", "admin"). Static.
+
+                                Pattern-validated at admission for the same reason as ResourceType.
+                                Mirrors BoundEntityType.Permission.
+                              pattern: ^[a-z][a-z0-9_]*$
+                              type: string
+                            resourceIDExpr:
+                              description: |-
+                                ResourceIDExpr is a CEL string expression evaluated against
+                                `args` that yields the SpiceDB resource id. Exactly one of
+                                ResourceIDTemplate or ResourceIDExpr must be set: the template
+                                form for simple `{arg}` interpolation, the Expr form for
+                                nested-arg extraction.
+                              type: string
+                            resourceIDHint:
+                              description: |-
+                                ResourceIDHint is shown to the AGENT when the resource id cannot be
+                                resolved from the call's arguments.
+
+                                That failure is usually the caller's to fix — it named no resource, or
+                                named it in a form the check cannot read — and the agent is the only
+                                party who can retry. Without a hint the message is the raw resolution
+                                error prefixed "internal:", which reads as a system fault and tells it
+                                not to bother.
+
+                                Written by whoever authors the check, because only they know what the
+                                call should have looked like. Example, for a git push whose remote must
+                                be a URL so the repository can be authorized: "name the remote as a full
+                                https:// URL, not a shorthand like `origin`".
+                              type: string
+                            resourceIDTemplate:
+                              description: |-
+                                ResourceIDTemplate is a string with {arg} placeholders that
+                                interpolate from the tool call's args (e.g. "{owner}/{repo}").
+                                Resolved at runtime by ResolveTemplate; validated at
+                                AgentClass-reconcile time so every {arg} matches a parameter
+                                the tool declares.
+                              type: string
+                            resourceIDTransforms:
+                              description: |-
+                                ResourceIDTransforms names registered transforms applied IN
+                                ORDER to the resolved template string before SpiceDB sees it:
+                                lowercase, remove_spaces, spicedb_object_id, basename, sha256.
+                                See transforms.go.
+                              items:
+                                type: string
+                              type: array
+                            resourceType:
+                              description: |-
+                                ResourceType is the SpiceDB definition the Check runs against
+                                (e.g. "github_repo", "channel"). Static — no template interpolation.
+
+                                Pattern-validated at admission because this value is a component of a
+                                permsurface.Handle, which appears in approved plan ceilings and audit
+                                records. Mirrors BoundEntityType.ResourceType.
+                              pattern: ^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$
+                              type: string
+                          required:
+                          - permission
+                          - resourceType
+                          type: object
+                        stateImpact:
+                          description: StateImpact describes the policy mode for a
+                            tool / subcommand.
+                          type: string
+                        toolName:
+                          description: |-
+                            ToolName lets Layer 2's CheckScope evaluate the tool allow/deny
+                            axis. Wire from the registered tool name. Empty string skips
+                            the Layer 2 tool check (existing behavior).
+                          type: string
+                      required:
+                      - stateImpact
+                      type: object
+                    permissionVariants:
+                      description: |-
+                        PermissionVariants are conditional Permission blocks, each carrying a CEL
+                        `When` predicate over the call's args. First match wins; Permission above
+                        is the fallback when none match.
+                      items:
+                        description: |-
+                          PermissionVariant is one branch of a conditional Permission. The
+                          dispatcher evaluates each variant's When against the tool-call
+                          args in order; the first that returns true wins.
+                        properties:
+                          check:
+                            description: |-
+                              Check is the Permission applied when When matches. Same shape
+                              as the slice-1 singular Permission's Check, plus the new
+                              EnforceMode and ResourceIDExpr fields.
+                            properties:
+                              check:
+                                description: |-
+                                  PermissionCheck names the SpiceDB resource and permission to
+                                  evaluate. Required when StateImpact is Readonly / Readwrite /
+                                  External; forbidden when Stateless / Passthrough.
+                                properties:
+                                  enforceMode:
+                                    description: |-
+                                      EnforceMode controls deny-finality under permissive toolAuthMode.
+                                      Empty → EnforceInherit (slice-1 default).
+                                    type: string
+                                  extractionPrompt:
+                                    description: |-
+                                      ExtractionPrompt, when set, is an English fragment the runner
+                                      includes in the extraction LLM's system prompt for this resource
+                                      type. Tool spec authors write this once per toolspec/MCPServer
+                                      file. The runner aggregates ExtractionPrompts across all tools
+                                      whose Check targets the same resourceType (dedup'd, concatenated).
+                                      The AgentClass's BoundEntityType.ExtractionPrompt overrides
+                                      entirely if set.
+                                    type: string
+                                  grantBindsArgs:
+                                    description: |-
+                                      GrantBindsArgs, when set, restricts the slice-2 grant's
+                                      arguments_hash caveat binding to only the listed top-level arg
+                                      keys. Default (nil/empty) hashes the full arg map, meaning the
+                                      grant satisfies only the exact same call. Setting it to e.g.
+                                      ["repo"] lets a single approval cover every subsequent call
+                                      against the same repo regardless of other args (pr number,
+                                      etc.) — useful for readonly tools where the resource is the
+                                      load-bearing input.
+
+                                      The hash is an HMAC-SHA256 under the per-session args-hash key
+                                      minted by the AgentSession reconciler into the per-session
+                                      Secret and read by the runner at startup. Caveat contexts
+                                      therefore cannot be predicted or minted outside the
+                                      controller+runner trust domain — neither the agent nor a
+                                      confused deputy with SpiceDB write access can forge a valid
+                                      binding for arguments that were never requested. Note: hashes
+                                      of previously-requested (including denied) calls remain
+                                      observable in session status and channel payloads, so a
+                                      SpiceDB-write attacker could still replay those; the keying
+                                      narrows that surface to exactly the calls a human has already
+                                      seen. See pkg/authz/guardian/grants.ArgsHashFiltered for the
+                                      filtering contract.
+
+                                      NOTE: the hash no longer BINDS the grant. A slot grant is keyed on
+                                      (instance, permission), which is what makes it safe to reuse across
+                                      calls: a grant shaped for one permission cannot be spent on another
+                                      against the same id. The filtered hash is still computed and published
+                                      on the approval request (ToolApprovalDetails.ArgsHash) so an approver —
+                                      and the audit log — can see exactly which call was asked about.
+                                    items:
+                                      type: string
+                                    type: array
+                                  permission:
+                                    description: |-
+                                      Permission is the SpiceDB permission (or relation) name to
+                                      Check (e.g. "read", "write", "admin"). Static.
+
+                                      Pattern-validated at admission for the same reason as ResourceType.
+                                      Mirrors BoundEntityType.Permission.
+                                    pattern: ^[a-z][a-z0-9_]*$
+                                    type: string
+                                  resourceIDExpr:
+                                    description: |-
+                                      ResourceIDExpr is a CEL string expression evaluated against
+                                      `args` that yields the SpiceDB resource id. Exactly one of
+                                      ResourceIDTemplate or ResourceIDExpr must be set: the template
+                                      form for simple `{arg}` interpolation, the Expr form for
+                                      nested-arg extraction.
+                                    type: string
+                                  resourceIDHint:
+                                    description: |-
+                                      ResourceIDHint is shown to the AGENT when the resource id cannot be
+                                      resolved from the call's arguments.
+
+                                      That failure is usually the caller's to fix — it named no resource, or
+                                      named it in a form the check cannot read — and the agent is the only
+                                      party who can retry. Without a hint the message is the raw resolution
+                                      error prefixed "internal:", which reads as a system fault and tells it
+                                      not to bother.
+
+                                      Written by whoever authors the check, because only they know what the
+                                      call should have looked like. Example, for a git push whose remote must
+                                      be a URL so the repository can be authorized: "name the remote as a full
+                                      https:// URL, not a shorthand like `origin`".
+                                    type: string
+                                  resourceIDTemplate:
+                                    description: |-
+                                      ResourceIDTemplate is a string with {arg} placeholders that
+                                      interpolate from the tool call's args (e.g. "{owner}/{repo}").
+                                      Resolved at runtime by ResolveTemplate; validated at
+                                      AgentClass-reconcile time so every {arg} matches a parameter
+                                      the tool declares.
+                                    type: string
+                                  resourceIDTransforms:
+                                    description: |-
+                                      ResourceIDTransforms names registered transforms applied IN
+                                      ORDER to the resolved template string before SpiceDB sees it:
+                                      lowercase, remove_spaces, spicedb_object_id, basename, sha256.
+                                      See transforms.go.
+                                    items:
+                                      type: string
+                                    type: array
+                                  resourceType:
+                                    description: |-
+                                      ResourceType is the SpiceDB definition the Check runs against
+                                      (e.g. "github_repo", "channel"). Static — no template interpolation.
+
+                                      Pattern-validated at admission because this value is a component of a
+                                      permsurface.Handle, which appears in approved plan ceilings and audit
+                                      records. Mirrors BoundEntityType.ResourceType.
+                                    pattern: ^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$
+                                    type: string
+                                required:
+                                - permission
+                                - resourceType
+                                type: object
+                              stateImpact:
+                                description: StateImpact describes the policy mode
+                                  for a tool / subcommand.
+                                type: string
+                              toolName:
+                                description: |-
+                                  ToolName lets Layer 2's CheckScope evaluate the tool allow/deny
+                                  axis. Wire from the registered tool name. Empty string skips
+                                  the Layer 2 tool check (existing behavior).
+                                type: string
+                            required:
+                            - stateImpact
+                            type: object
+                          when:
+                            description: When is a CEL boolean expression with `args`
+                              in scope.
+                            type: string
+                        required:
+                        - check
+                        - when
+                        type: object
+                      type: array
+                    trust:
+                      description: |-
+                        Trust is the SEP-1913 trust + action-security annotation snapshot.
+                        Mirrors mcpspec.Trust.
+                      properties:
+                        attribution:
+                          description: Attribution names the parties the server credits
+                            for the tool.
+                          items:
+                            type: string
+                          type: array
+                        inputMetadata:
+                          description: InputMetadata is the server's per-argument
+                            security annotations, verbatim.
+                          x-kubernetes-preserve-unknown-fields: true
+                        maliciousActivityHint:
+                          description: |-
+                            MaliciousActivityHint is the server's own admission that this tool can be
+                            abused; self-reported, so treat it as a signal, not a guarantee.
+                          type: boolean
+                        returnMetadata:
+                          description: ReturnMetadata is the server's per-result security
+                            annotations, verbatim.
+                          x-kubernetes-preserve-unknown-fields: true
+                      type: object
+                    visibility:
+                      description: "Visibility mirrors mcpspec.Tool.Visibility (MCP
+                        Apps' _meta.ui.visibility):\nwhich surfaces (\"model\" / \"app\")
+                        a tool is exposed to.\n\nThis repo's routing is an EXCLUSIVE
+                        split, not a fan-out (see\npkg/agent/tool/mcp/synthesize.go):
+                        a tool is browser-callable if and\nonly if this list contains
+                        \"app\" and does NOT contain \"model\", and the\nowning MCPServer
+                        sets mcpUiAppTools.enabled. Concretely:\n\n\tunset / []        ->
+                        model-visible only; never reaches the browser\n\t[\"app\"]
+                        \          -> browser-callable (with the opt-in); withheld
+                        from the model\n\t[\"app\"] no opt-in -> rejected by default:
+                        in NEITHER registry\n\t[\"model\"]         -> model-visible
+                        only\n\t[\"app\",\"model\"]   -> model-visible only; NOT browser-callable\n\nSo
+                        \"unset\" is not \"both\": it is the model surface. A tool
+                        intended for\nan agent UI must say [\"app\"] and nothing else.
+                        `oap agent lint` reports\nany other value for a tool an AgentUI
+                        binds to."
+                      items:
+                        type: string
+                      type: array
+                    writesRelationships:
+                      description: |-
+                        WritesRelationships declares JIT SpiceDB relationship writes the
+                        dispatcher performs after a successful tool call. `When` and `ForEach`
+                        are CEL over (args, result); the tuple fields are CEL string expressions.
+                      items:
+                        description: |-
+                          MCPServerRelationshipWrite is one JIT-write block on an MCPServer
+                          tool. The dispatcher invokes it after tool.Execute succeeds.
+                        properties:
+                          exclusive:
+                            description: |-
+                              Exclusive makes this write atomically write-once per subject: the write
+                              FAILS (no tuple written) if the subject already holds `relation` on ANY
+                              resource of the tuple's resource type. Used for session-pin semantics
+                              (a session may be pinned to exactly one cluster). Implemented as a
+                              SpiceDB MUST_NOT_MATCH precondition, so it is atomic under concurrent
+                              writers. Default false preserves the plain TOUCH-upsert behavior.
+                            type: boolean
+                          forEach:
+                            description: |-
+                              ForEach is a CEL expression that must evaluate to a list.
+                              One tuple is emitted per element, with `item` bound to that
+                              element. When unset, exactly one tuple is emitted.
+                            type: string
+                          requireSlotBound:
+                            description: |-
+                              RequireSlotBound refuses every tuple this block emits unless the calling
+                              session holds a SLOT GRANT on the tuple's RESOURCE — the instance a human
+                              (or the pool machinery acting on one's approval) named for this session.
+
+                              Declare it on a block that writes an identity or an authority tuple onto
+                              an instance the tool itself names. Without it, whatever id the tool's
+                              response happens to carry becomes the resource of a real SpiceDB write,
+                              so a response naming somebody else's instance writes there too. With it,
+                              the write can only ever land on an instance the session was already
+                              bound to.
+
+                              The grant's PERMISSION is deliberately not consulted: a grant is a human
+                              act naming the instance, and which permission it carries is the pool
+                              machinery's concern. Any slot_grant_* on the resource binds it.
+
+                              Default false is byte-identical to the previous behaviour — an unmarked
+                              block consults nothing. A marked block whose dispatcher has no checker
+                              wired is REFUSED, not written: see pkg/authz/relwrites.Run.
+                            type: boolean
+                          tuple:
+                            description: |-
+                              Tuple holds the CEL expressions that compose the SpiceDB
+                              relationship tuple.
+                            properties:
+                              relation:
+                                description: |-
+                                  Relation is a CEL string expression that must evaluate to a
+                                  relation name declared on the Resource's type.
+                                type: string
+                              resource:
+                                description: |-
+                                  Resource is a CEL string expression that must evaluate to a
+                                  SpiceDB object reference of the form "<type>:<id>".
+                                type: string
+                              subject:
+                                description: |-
+                                  Subject is a CEL string expression that must evaluate to a
+                                  SpiceDB object reference of the form "<type>:<id>".
+                                type: string
+                            required:
+                            - relation
+                            - resource
+                            - subject
+                            type: object
+                          when:
+                            description: |-
+                              When is a CEL boolean expression with `args`, `result` in
+                              scope; the block is skipped if it evaluates false.
+                              When unset, the block is always taken.
+                            type: string
+                        required:
+                        - tuple
+                        type: object
+                      type: array
+                  required:
+                  - name
+                  type: object
+                type: array
+              transport:
+                description: Transport is how the runner reaches the sidecar's MCP
+                  endpoint.
+                properties:
+                  healthcheck:
+                    description: Healthcheck is how the operator's probe decides the
+                      sidecar is up.
+                    properties:
+                      path:
+                        default: /healthz
+                        description: Path is the HTTP path probed for readiness.
+                        type: string
+                      timeoutSeconds:
+                        default: 30
+                        description: TimeoutSeconds bounds how long the probe waits
+                          for the sidecar to answer.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                    type: object
+                  path:
+                    description: |-
+                      Path is the HTTP path the sidecar's MCP Streamable-HTTP endpoint listens
+                      on (e.g. "/mcp"); empty means the pod root "/". The runner appends it to
+                      the pod URL for BOTH the tools/list reachability probe and tool-call
+                      dispatch, so it must match where the sidecar actually serves MCP. A
+                      leading slash is optional — the runner normalizes it.
+                    type: string
+                  port:
+                    default: 8080
+                    description: |-
+                      Port is advisory — the operator allocates a free port at pod-build
+                      time and sets MCP_PORT in the sidecar's env regardless. Sidecar
+                      code is required to read MCP_PORT to bind.
+                    format: int32
+                    type: integer
+                type: object
+              upstreamAuth:
+                description: UpstreamAuth is the credential the sidecar needs for
+                  its own upstream.
+                properties:
+                  envVar:
+                    description: |-
+                      EnvVar is the environment variable name the resolved upstream
+                      credential is injected into (in the per-session sidecar Secret).
+                      Empty means the sidecar needs no upstream credential (e.g. the echo
+                      example) — the per-session Secret is written empty.
+                    type: string
+                  provider:
+                    description: |-
+                      Provider names a provider in the /providers/ library, or the
+                      UpstreamAuthProviderNone sentinel ("none") for a controller-issued-token
+                      sidecar that needs no AgentIdentity credential. Drives
+                      `oap agent setup-identity` and projects the resolved credential
+                      into the sidecar's env at session boot via the toolbox: authkind.
+                    type: string
+                required:
+                - provider
+                type: object
+              version:
+                description: Version is the spec author's version of this declaration.
+                type: string
+            required:
+            - name
+            - sandbox
+            - source
+            - tools
+            - transport
+            - upstreamAuth
+            - version
+            type: object
+          status:
+            properties:
+              conditions:
+                description: Conditions carries Valid, Reachable and PinDrift.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastValidatedAt:
+                description: LastValidatedAt is when the spec last passed validation.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  reflects.
+                format: int64
+                type: integer
+              observedTools:
+                description: |-
+                  ObservedTools is the tool list the admission-time probe saw. Not read at
+                  runtime — the runner's live per-session probe is authoritative there.
+                items:
+                  type: string
+                type: array
+              pin:
+                description: |-
+                  Pin is the recorded pin baseline in the common PinRecord shape:
+                  Digest = kubelet-resolved image digest (sha256:…), Version = declared
+                  image tag (audit metadata). Strength reflects the declared ref: frozen
+                  iff the source image is by-digest, named iff by-tag, else unpinned.
+                properties:
+                  details:
+                    additionalProperties:
+                      type: string
+                    description: Details carries kind-specific extras (toolCount,
+                      registry host, …).
+                    type: object
+                  digest:
+                    description: |-
+                      Digest is the immutable identity: git sha, sha256:… image digest,
+                      canonical tool-manifest hash, or binary hash.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind is the pinning registry kind name (skill, image, mcp, cli, …).
+                      Validated against the registry by controllers, not by a CRD enum, so
+                      new kinds register without an API change.
+                    minLength: 1
+                    type: string
+                  observedAt:
+                    description: ObservedAt is when the recording controller observed
+                      this identity.
+                    format: date-time
+                    type: string
+                  strength:
+                    description: Strength is the syntactic pin strength of the declared
+                      ref.
+                    enum:
+                    - frozen
+                    - named
+                    - unpinned
+                    type: string
+                  version:
+                    description: |-
+                      Version is the human-readable identity: tag, serverInfo.version, or
+                      version-probe output.
+                    type: string
+                required:
+                - kind
+                - strength
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

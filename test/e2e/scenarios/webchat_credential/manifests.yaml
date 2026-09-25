@@ -1,0 +1,114 @@
+# Scenario: webchat credential-hang founding regression
+# (webchat_credential_test.go).
+#
+# Minimal fixture for TestCredentialPromptDeliveredOnClientHostedSession: a
+# single identityMode=userPassthrough session parks in AwaitingCredentials,
+# and the test asserts the CredentialRequestWatcher's credential_link
+# interaction_request actually reaches the bound channel's driver. Unlike
+# the passthrough_selfservice / passthrough_oauth / passthrough_portal /
+# passthrough_revoke scenarios, this one does NOT drive the /link web flow —
+# it exists solely to prove delivery is no longer silently dropped (the
+# bug this regression guards against), so no identityd server, no
+# identities namespace, and no cookie/link dance is needed.
+#
+# Token values are non-trivial hex strings chosen to avoid any chance of
+# false-positive matches with other env vars or test credentials.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wc-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Channel placeholder. The fake kind ignores credentials but
+# Channel.spec.credentialsRef.secretName is mandatory in the CRD schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wc-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# MCPServer the passthrough class needs a credential for. spec.auth.provider
+# becomes the user-visible service label in the explanation;
+# spec.auth.credential is the gate key on the SessionUserIdentity's
+# MissingCredentials list.
+#
+# spec.server.url is rewritten to {{MCP_URL}} by the test before apply so
+# the MCP probe hits the in-process MCPStub. The probe doesn't need any
+# tools; the scenario asserts on the parking gate + prompt delivery, not on
+# tool dispatch.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: notion-mcp
+  namespace: default
+spec:
+  name: notion-mcp
+  version: v1
+  intent: "Webchat credential-hang founding regression: drives the missing-credential park flow."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: notion-oauth
+    provider: Notion
+    title: Notion
+  tools: []
+---
+# AgentClass with identityMode: userPassthrough — every session parks on
+# the starter's UserIdentity until notion-oauth is linked.
+# authz.toolCalls.mode=disabled bypasses SpiceDB authz so no schema bootstrap
+# is required.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: helpdesk-bot
+  namespace: default
+spec:
+  displayName: "Helpdesk Bot"
+  identityMode: userPassthrough
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: wc-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a passthrough helpdesk agent"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  mcpServers:
+    - name: notion
+      ref: notion-mcp
+---
+# Channel for the harness to drive inbound messages through. The fake kind
+# stands in for a client-hosted surface (webchat/TUI) here — it is
+# RelayedByChannelsd()==true so the e2e harness's outbound relay (the same
+# NATS-subscribed relay production channelsd runs) can route the watcher's
+# published interaction_request to it; see the test file's top comment for
+# why this is the harness's sanctioned proxy for the actual client-hosted
+# builtin/local kinds.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: helpdesk-bot-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: helpdesk-bot
+  credentialsRef:
+    secretName: wc-fake-creds
+  fake:
+    echo: false

@@ -1,0 +1,187 @@
+# Fixture agents for the plangate-child-inherits-enforcing-ceiling bundle.
+#
+# The gap this closes: plangate-amendment-approves-the-spawn proves a delegated
+# child RUNS under an inherited root, but its child class is NOT enforcing, so
+# the inherited ceiling is inert — nothing ever consults it to DENY. No bundle
+# proved the projected ceiling actually BITES at the child. This one does.
+#
+#   1. pcc-lead runs the plan gate at LOGGING and declares a single-phase plan
+#      whose ceiling holds exactly `perm:list:pcc_widget`. Logging freezes the
+#      plan into the log (rebuildable) but blocks nothing and publishes no
+#      approval — so the parent's own delegate is never gated, and the ONLY
+#      enforcing gate in the run is the child's. That is what makes every
+#      child-side denial unambiguously the inherited ceiling, not the parent's.
+#   2. pcc-lead delegates to pcc-worker (single_turn). DeriveChildPlanRoot folds
+#      the parent's frozen plan and writes the child's root — ceiling
+#      {perm:list:pcc_widget}, at phase 0 — BEFORE the child CR exists.
+#   3. pcc-worker runs the plan gate at ENFORCING with that inherited root:
+#        - catalog_read_widget  -> perm:list:pcc_widget  IN  ceiling -> ALLOWED
+#        - catalog_read_gadget  -> perm:list:pcc_gadget  OUT of ceiling -> DENIED
+#      The worker has no update_plan of its own; its whole authority is what it
+#      inherited. If inheritance were broken the widget read would ALSO be
+#      denied (empty ceiling) and its scripted step would not match — the test
+#      fails loud rather than passing on an inert root.
+#
+# Both list permissions are wildcard-satisfiable (any_user@user:*), so the tool
+# CHECKER always allows both reads. The only thing that can deny the gadget read
+# is the plan gate — a denial here cannot be a SpiceDB refusal in disguise.
+apiVersion: v1
+kind: Secret
+metadata: {name: pcc-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: pcc-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: pcc-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: pcc-identity, namespace: default}
+spec:
+  description: "Plan-gate child-ceiling fixture: static MCP bearer token."
+  credentials:
+    - name: pcc-mcp-bearer
+      type: static
+      static:
+        secretRef: {name: pcc-mcp-token, key: access_token}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: pcc-catalog, namespace: default}
+spec:
+  name: pcc-catalog
+  version: v1
+  intent: "Two ungated read-only tools resolving to two distinct plan-gate handles."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth: {credential: pcc-mcp-bearer}
+  spicedbSchema:
+    resources:
+      # Two resource types, each with a genuinely-public `list` permission
+      # backed by a wildcard leaf. The point of two is that the child inherits
+      # ONE of their handles and not the other, so a per-handle ceiling can be
+      # shown to admit one read and refuse the other.
+      - name: pcc_widget
+        standing: session-only
+        relations:
+          - {name: any_user, subjectType: user, wildcard: true}
+        permissions:
+          - {name: list, expr: any_user}
+      - name: pcc_gadget
+        standing: session-only
+        relations:
+          - {name: any_user, subjectType: user, wildcard: true}
+        permissions:
+          - {name: list, expr: any_user}
+  tools:
+    - name: read_widget
+      intent: "List widgets. Ungated read; handle perm:list:pcc_widget."
+      args: {allowedFields: [sinceDays]}
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: pcc_widget
+          resourceIDTemplate: "any"
+          permission: list
+      effects: {readOnly: true, idempotent: true}
+    - name: read_gadget
+      intent: "List gadgets. Ungated read; handle perm:list:pcc_gadget."
+      args: {allowedFields: [sinceDays]}
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: pcc_gadget
+          resourceIDTemplate: "any"
+          permission: list
+      effects: {readOnly: true, idempotent: true}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: pcc-lead, namespace: default}
+spec:
+  displayName: PlanGateChildCeilingLead
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: pcc-placeholder, key: api-key}
+  agentIdentity: pcc-identity
+  mcpServers:
+    - {name: catalog, ref: pcc-catalog}
+  capabilities:
+    subagents: {}
+  subagents: ["pcc-worker"]
+  # LOGGING, deliberately: the parent must FREEZE a plan for the child to
+  # inherit, but must not itself gate — so its delegate runs unblocked and it
+  # publishes no approval. The one enforcing gate in the run is the child's.
+  authz:
+    planGate:
+      mode: logging
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You declare a plan, then delegate a bounded task to another agent.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: pcc-worker, namespace: default}
+spec:
+  displayName: PlanGateChildCeilingWorker
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: pcc-placeholder, key: api-key}
+  agentIdentity: pcc-identity
+  mcpServers:
+    - {name: catalog, ref: pcc-catalog}
+  # ENFORCING, with NO planning capability of its own: the worker holds exactly
+  # the ceiling it inherited and cannot re-plan its way wider. A broken
+  # inheritance therefore surfaces as the widget read being denied (empty
+  # ceiling), never masked by the worker declaring a fresh plan.
+  authz:
+    planGate:
+      mode: enforcing
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You receive a single delegated task with no conversation history and
+      complete it, using only the tools your approved plan allows.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: pcc-lead-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: pcc-lead
+  credentialsRef: {secretName: pcc-fake-creds}
+  fake: {echo: false}
+---
+# Wildcard leaves that make both `list` permissions genuinely public, so the
+# tool checker allows both reads and only the plan gate can deny one.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata: {name: pcc-seed, namespace: default}
+spec:
+  relationships:
+    - resource: {type: pcc_widget, id: "any"}
+      relation: any_user
+      subject: {type: user, wildcard: true}
+    - resource: {type: pcc_gadget, id: "any"}
+      relation: any_user
+      subject: {type: user, wildcard: true}

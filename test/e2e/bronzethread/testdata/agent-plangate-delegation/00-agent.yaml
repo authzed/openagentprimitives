@@ -1,0 +1,75 @@
+# Fixture agents for the plangate-governs-unplanned-delegation bundle.
+#
+# pgd-lead grants the subagents capability, names ONE class on its roster
+# (pgd-coder), AND runs the plan gate at ENFORCING. That combination is the
+# whole point: a delegated spawn must be governed by the gate. Defined
+# directly here (planGate enforcing baked into the class) rather than layered
+# via an ExtraManifests replacement, because Create-or-Update of the same class
+# name after the channel is wired bumps the class generation mid-setup and the
+# session is never created — a fixture-shape problem, not a product one.
+#
+# pgd-coder carries no subagents capability and no roster of its own —
+# delegation is not transitive in this fixture, and its class exists only so
+# pgd-lead's roster names a real target.
+apiVersion: v1
+kind: Secret
+metadata: {name: pgd-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: pgd-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: pgd-lead, namespace: default}
+spec:
+  displayName: PlanGateDelegationLead
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: pgd-placeholder, key: api-key}
+  capabilities:
+    subagents: {}
+  subagents: ["pgd-coder"]
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You delegate bounded tasks to other agents with the delegate tool.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  authz:
+    planGate:
+      mode: enforcing
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: pgd-coder, namespace: default}
+spec:
+  displayName: PlanGateDelegationCoder
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test
+    name: scripted
+    apiKey: {name: pgd-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You receive a single delegated task with no conversation history and
+      complete it.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: pgd-lead-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: pgd-lead
+  credentialsRef: {secretName: pgd-fake-creds}
+  fake: {echo: false}

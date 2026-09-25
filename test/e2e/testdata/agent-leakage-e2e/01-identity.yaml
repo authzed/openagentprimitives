@@ -1,0 +1,26 @@
+# AgentIdentity for the agent-leakage-e2e fixture. Single static
+# credential; fake MCP server ignores the bearer entirely.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: leakage-mcp-token
+  namespace: default
+type: Opaque
+stringData:
+  access_token: "unused-by-the-fake-mcp-server"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: leakage-identity
+  namespace: default
+spec:
+  description: "Agent-leakage-e2e fixture: static MCP bearer token."
+  credentials:
+    - name: leakage-mcp-bearer
+      type: static
+      static:
+        secretRef:
+          name: leakage-mcp-token
+          key: access_token

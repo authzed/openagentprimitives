@@ -1,0 +1,24 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spicebox-webd-system
+  namespace: agentprimitives-system
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames:
+      - spicebox-passthrough-link-key
+      # identityd's "Sign in with Slack" OAuth creds (hosted in-process).
+      - spicebox-slack-oauth
+      # IdP client-secret names created by `oap idp setup` wizards.
+      - idp-google
+      - idp-oidc
+      # Local password-IdP admin secret (oap idp setup password, and the
+      # macOS desktop bundle's first-run provisioning).
+      - idp-password
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+    resourceNames:
+      - spicebox-webd-external-url

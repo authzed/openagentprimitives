@@ -1,0 +1,62 @@
+{
+  "name": "per-datum-egress-post-allowed",
+  "description": "Per-datum EGRESS, allow path. The session (auditor-1) reads entry-100 — minting a pt_tag whose audience is exactly {auditor-1} — then posts the returned, pt-untrusted-wrapped content VERBATIM to board-solo, a board only auditor-1 can view. The egress gate must resolve this PER-DATUM: the posted datum's tag audience ({auditor-1}) covers the destination's audience (board-solo readers = {auditor-1}), so it is tool_call_no_leak_per_datum, NOT the coarse floor. This is the whole egress path the four live-only pt-tag bugs broke: mint (write-door + signing), the operator content-binding verify route, and OutboundContent unwrapping the MCP envelope. A regression in any of them drops the decision to *_coarse (visible in the golden) or fails the capture below (no wrapped region to reuse). The post reuses the wrapped region via Expect.Capture, exactly as a real model copies a tool result — the runtime nonce and tag id come from the run, never from this bundle.",
+  "agentDir": "../testdata/agent-ledger-egress",
+  "agentClass": "ledger-egress",
+  "defaultUser": "auditor-1@example.com",
+  "toolOutputs": {
+    "read_entry": { "id": "entry-100", "memo": "Q3 reconciliation", "amount": "4120.00" },
+    "post_to_board": { "board_id": "board-solo", "posted": true }
+  },
+  "userTurns": [
+    "read ledger entry entry-100 and post it to board-solo"
+  ],
+  "llm": [
+    {
+      "expect": { "userTextContains": "entry-100" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "ledger_read_entry",
+            "args": { "operation_id": "op-read-100", "_reason": "user asked to read a ledger entry before posting it", "args": { "id": "entry-100" } }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "ledger_read_entry",
+        "capture": { "wrapped": "(<pt-untrusted nonce=\"[^\"]+\" id=\"[^\"]+\">[\\s\\S]*</pt-untrusted nonce=\"[^\"]+\">)" }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "ledger_post_to_board",
+            "args": { "operation_id": "op-post-solo", "_reason": "user asked to post the entry's content to board-solo", "args": { "board_id": "board-solo", "text": "{{wrapped}}" } }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "ledger_post_to_board" },
+      "reply": [
+        { "text": "Posted entry-100 (Q3 reconciliation) to board-solo." }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [
+        { "toolUse": { "name": "agent_work_complete", "args": { "summary": "read entry-100 and posted it to board-solo" } } }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": ["Posted entry-100"],
+    "toolsCalled": ["ledger_read_entry", "ledger_post_to_board"],
+    "ptTags": {
+      "minted": 2,
+      "readersInclude": ["auditor-1@example.com"],
+      "readersExclude": ["auditor-9@example.com"]
+    }
+  }
+}

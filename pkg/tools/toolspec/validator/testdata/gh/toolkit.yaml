@@ -1,0 +1,305 @@
+name: gh
+version: "1"
+toolkitRevision: "2026-04-24"
+target:
+  binary: gh
+  versionRange: ">=2.40.0 <3.0.0"
+  versionProbe:
+    args: ["--version"]
+    extract:
+      kind: regex
+      pattern: 'gh version ([0-9]+\.[0-9]+\.[0-9]+)'
+docs: ./gh.md
+parser:
+  kind: declarative
+
+env:
+  allowed:
+    - {name: GITHUB_TOKEN, description: "GitHub access token", sensitive: true, credential: github-token}
+    - {name: GH_HOST,      description: "Enterprise GitHub host"}
+    - {name: HTTPS_PROXY,  description: "HTTP proxy"}
+
+globalFlags:
+  - {long: help,    short: h, type: bool}
+  - {long: version,           type: bool}
+
+subcommands:
+  - path: [pr, view]
+    description: "View a pull request"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo, short: R, type: string}
+      - {long: json,           type: string}
+      - {long: web,  short: w, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, merge]
+    description: "Merge a pull request"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,   short: R, type: string}
+      - {long: squash,           type: bool}
+      - {long: merge,            type: bool}
+      - {long: rebase,           type: bool}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, list]
+    description: "List pull requests"
+    flags:
+      - {long: repo,   short: R, type: string}
+      - {long: state,  short: s, type: string}
+      - {long: label,  short: l, type: string}
+      - {long: json,             type: string}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, comment]
+    description: "Add a comment to a pull request"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,      short: R, type: string}
+      - {long: body,      short: b, type: string}
+      - {long: body-file,           type: path}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, checks]
+    description: "Show CI status for a pull request"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo, short: R, type: string}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [pr, ready]
+    description: "Mark a pull request as ready for review"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo, short: R, type: string}
+      - {long: undo,           type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, view]
+    description: "View an issue"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo, short: R, type: string}
+      - {long: json,           type: string}
+      - {long: web,  short: w, type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, list]
+    description: "List issues"
+    flags:
+      - {long: repo,  short: R, type: string}
+      - {long: state, short: s, type: string}
+      - {long: label, short: l, type: string}
+      - {long: json,            type: string}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, comment]
+    description: "Add a comment to an issue"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,      short: R, type: string}
+      - {long: body,      short: b, type: string}
+      - {long: body-file,           type: path}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [issue, close]
+    description: "Close an issue"
+    positional:
+      - {name: idOrUrl, type: string, required: true}
+    flags:
+      - {long: repo,    short: R, type: string}
+      - {long: comment, short: c, type: string}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [repo, view]
+    description: "View repository information"
+    positional:
+      - {name: repo, type: string, required: false}
+    flags:
+      - {long: web,  short: w, type: bool}
+      - {long: json,           type: string}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [repo, clone]
+    description: "Clone a repository locally"
+    positional:
+      - {name: repo, type: string, required: true}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [filesystem]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [search, repos]
+    description: "Search for repositories"
+    positional:
+      - {name: query, type: string, required: true}
+    flags:
+      - {long: json,  type: string}
+      - {long: limit, type: int}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [search, issues]
+    description: "Search for issues"
+    positional:
+      - {name: query, type: string, required: true}
+    flags:
+      - {long: json,  type: string}
+      - {long: limit, type: int}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [search, prs]
+    description: "Search for pull requests"
+    positional:
+      - {name: query, type: string, required: true}
+    flags:
+      - {long: json,  type: string}
+      - {long: limit, type: int}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}
+
+  - path: [auth, login]
+    description: "Authenticate with a GitHub host"
+    flags:
+      - {long: hostname,   short: h, type: string}
+      - {long: with-token,           type: bool}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [filesystem]
+      network: {destinations: [api.github.com, "{flag:hostname}"]}
+      filesystem: {paths: ["~/.config/gh/hosts.yml"]}
+      creds: {required: [], writes: [GITHUB_TOKEN]}
+
+  - path: [auth, logout]
+    description: "Remove authentication for a GitHub host"
+    flags:
+      - {long: hostname, short: h, type: string}
+    effects:
+      destructive: true
+      reads:  [network]
+      writes: [filesystem]
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: ["~/.config/gh/hosts.yml"]}
+      creds: {required: [], writes: []}
+
+  - path: [auth, status]
+    description: "View authentication status"
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: []
+      network: {destinations: [api.github.com, github.com]}
+      filesystem: {paths: []}
+      creds: {required: [], writes: []}
+
+  - path: [api]
+    description: "Make authenticated API requests to the GitHub API"
+    positional:
+      - {name: endpoint, type: url, required: true}
+    flags:
+      - {long: method,      short: X, type: string}
+      - {long: field,       short: F, type: string}
+      - {long: raw-field,   short: f, type: string}
+      - {long: header,      short: H, type: string}
+      - {long: hostname,             type: string}
+    effects:
+      destructive: false
+      reads:  [network]
+      writes: [network]
+      network: {destinations: [api.github.com, "{flag:hostname}"]}
+      filesystem: {paths: []}
+      creds: {required: [GITHUB_TOKEN], writes: []}

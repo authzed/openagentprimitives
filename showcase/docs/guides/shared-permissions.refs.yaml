@@ -1,0 +1,27 @@
+page: concepts/shared-permissions
+updated: 2026-09-12T00:00:00Z
+refs:
+  - id: resource-owner-gated-category
+    claim: "A resource's data can be gated so only that resource's #owner may approve access — the tool_approval resource-owner-gated category."
+    symbol: pkg/channels/channelinteractions/categories/categories.go#ToolApproval
+  - id: decide-resource-owners
+    claim: "The DecideResourceOwners policy routes the decision to any #owner of a resource named in the request."
+    file: pkg/channels/channelinteractions/category.go
+    lines: 34-39
+  - id: resources-field
+    claim: "The Resources field names the source resource (type + id) whose #owner may decide the interaction."
+    file: pkg/channels/channelevents/interaction.go
+    lines: 178-197
+  - id: approver-is-resource-owner
+    claim: "At click time the clicker must be an #owner of the affected resource; the session approve-set is not consulted when resources are present."
+    symbol: pkg/authz/approve.go#CheckApproverAuthorized
+  - id: routes-to-owner-not-session
+    claim: "Eligible approvers are the union of the resource owner sets; the session approve-set is excluded, so a session owner cannot self-approve access to someone else's resource. Any one owner suffices (quorum = 1)."
+    symbol: pkg/authz/lookup.go#ResolveApprovers
+  - id: dm-to-owner
+    claim: "The approval is delivered as a DM to the resolved resource owners (delivery-only fan-out, never an authorization bound)."
+    symbol: pkg/channels/channelkinds/slack/interaction_fanout.go#capApproverFanout
+  - id: fail-closed-owner-check
+    claim: "The decision pipeline re-checks the clicker against the resource owner and fails closed if the resource set is unrecoverable — it never folds to the session gate."
+    file: pkg/channels/channelsd/pipeline/interaction_decision.go
+    lines: 185-212

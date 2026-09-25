@@ -1,0 +1,60 @@
+# spicedb: restricts who may reach the SpiceDB permission system.
+#
+# Pods are selected by authzed.com/cluster-component=spicedb — the label the
+# spicedb-operator stamps on its managed pods. It does NOT stamp
+# app.kubernetes.io/name=spicebox-spicedb (that label does not exist on the
+# operator-managed pods), so selecting by it here would leave the NetworkPolicy
+# matching nothing.
+#
+# Ingress to spicedb pods is allowed on the gRPC port 50051, and only FROM:
+#   - operator   (the guardian schema-composition + permission-check client)
+#   - channelsd  (permission checks on the inbound path)
+#   - runner pods, identified by the agentprimitives.authzed.com/agentsession
+#     label key — same cross-namespace peer pattern as the nats policy
+#     (namespaceSelector: {} + podSelector matchExpressions operator: Exists),
+#     because runner pods may live in arbitrary session namespaces.
+#
+# A second rule allows SpiceDB↔SpiceDB dispatch on 50053 — the cross-replica
+# gRPC dispatch port used for postgres-backed HA (2+ replicas); harmless with
+# the memory datastore (replicas forced to 1, so the rule simply goes unused).
+#
+# The SpiceDB HTTP port 8443 and metrics port 9090 are deliberately NOT
+# listed — default-deny keeps them unreachable.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spicedb
+spec:
+  podSelector:
+    matchLabels:
+      authzed.com/cluster-component: spicedb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-operator
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-channelsd
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: agentprimitives-authzd
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-webd
+        # Runner pods, in any namespace, identified by the agentsession label.
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - { key: agentprimitives.authzed.com/agentsession, operator: Exists }
+      ports:
+        - { protocol: TCP, port: 50051 }
+    # Cross-replica dispatch (postgres/HA): SpiceDB pods peer on 50053.
+    - from:
+        - podSelector:
+            matchLabels:
+              authzed.com/cluster-component: spicedb
+      ports:
+        - { protocol: TCP, port: 50053 }

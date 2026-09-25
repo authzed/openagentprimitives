@@ -1,0 +1,66 @@
+# AgentClass + Channel for the centerdot-companies e2e fixture.
+#
+# AgentClass uses model.provider="test", which the production
+# operator REFUSES with Valid=False/TestProviderNotAllowed. Only the
+# e2e harness's reconciler (AllowTestProvider=true) admits it.
+#
+# Channel kind=fake is the in-process Plan-1 transport — never
+# appropriate in production; the AgentClass binding is what the e2e
+# harness drives inbound messages through.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: centerdot-companies
+  namespace: default
+spec:
+  displayName: CenterdotBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: centerdot-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You operate on companies and contacts. Available tools:
+        - centerdot_list_companies(sinceDays): list companies created recently
+        - centerdot_list_contacts_for_company(companyId): list contacts; gated by owner approval
+
+      # NOTE: tool names above use the "centerdot_" prefix because the
+      # AgentClass declares mcpServers[0].name: centerdot below. The
+      # runner synthesizes LLM-facing tool names as <prefix>_<tool>.
+
+      When the user asks about contacts, call centerdot_list_contacts_for_company
+      with the company id from the prior centerdot_list_companies result.
+  agentIdentity: centerdot-identity
+  mcpServers:
+    - name: centerdot
+      ref: centerdot-companies
+  authz:
+    slots:
+      - resourceType: crm_company
+        description: "A CRM company record"
+        permission: contact_access
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: centerdot-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: centerdot-companies
+  credentialsRef:
+    secretName: centerdot-fake-creds
+  fake:
+    echo: false

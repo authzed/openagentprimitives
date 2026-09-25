@@ -1,0 +1,190 @@
+# Scenario (p2_interactive_stream_json) fixtures.
+#
+# Mirrors p2_interactive_happy_path's structure (single interactive bundle,
+# one Mode=interactive subcommand, scripted fake exec) but exercises the
+# Phase A stream-json path:
+#
+#   1. SpiceboxToolkit declares streamFormat=claude-stream-json. The sandbox
+#      tool's interactive dispatch consults this field, resolves a parser
+#      from pkg/tools/toolkitstream/registry, and wraps the bridge's stdout
+#      through it before firing InteractiveHooks.OnEvent.
+#   2. The scripted fake exec emits the canonical Claude stream-json
+#      NDJSON happy_path fixture (system init / assistant text / result).
+#   3. The runner's InteractiveHooks.OnEvent (wired in internal/cmd/runner/main.go
+#      and mirrored by the e2e InProcessRunnerFactory) publishes one
+#      KindToolSessionEvent envelope per parsed event on the OUT subject.
+#   4. The test subscribes to ap.session.*.*.out.tool_session_event and
+#      asserts text_delta + result events arrive. It also asserts no
+#      stdout-stream KindToolSessionDelta envelopes leak through (only
+#      the stderr deltas + terminal delta are allowed) — proving the
+#      parser is the active output path when a streamFormat is declared.
+#
+# Inherits the authz.toolCalls.mode=disabled rationale from Scenario 2/3: no
+# SpiceDB wired in the harness, so the default enforcing mode would deny
+# on the "external" stateImpact without a guardian grant tuple.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: codey-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# SpiceboxToolkit CR with streamFormat=claude-stream-json. Mirrors
+# test/e2e/testdata/fake-codey-toolkit.yaml's shape with the only
+# meaningful difference being the streamFormat declaration; the
+# subcommand still carries Interactive=true so the synthesizer's
+# single-allowed-interactive-subcommand detector wires Interactive=true
+# onto the Tool. The toolkit name is suffixed with "-stream-json" to
+# avoid colliding with p2_interactive_happy_path's "codey" toolkit when
+# both scenarios run in the same test binary process.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolkit
+metadata:
+  name: codey-stream-json
+spec:
+  name: codey-stream-json
+  version: "0.1.0"
+  toolkitRevision: "2026-05-19"
+  target:
+    binary: codey
+  parser:
+    kind: declarative
+  streamFormat: claude-stream-json
+  env:
+    allowed: []
+  permission:
+    stateImpact: external
+    check:
+      resourceType: codey_session
+      permission: run
+  subcommands:
+    - path: [run]
+      description: "Run an interactive codey session that streams claude-stream-json"
+      effects:
+        destructive: false
+        reads:  [filesystem]
+        writes: [filesystem]
+        network:    {destinations: []}
+        filesystem: {paths: ["{cwd}"]}
+        creds:      {required: [], writes: []}
+      mode: interactive
+      permission:
+        stateImpact: external
+        check:
+          resourceType: codey_session
+          permission: run
+---
+# Toolspec wrapping the toolkit's single `run` subcommand.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: ts-codey-stream-json
+spec:
+  name: ts-codey-stream-json
+  version: "1"
+  toolkit:
+    name: codey-stream-json
+    revision: "2026-05-19"
+  allowSubcommands:
+    - run
+---
+# SpiceboxClass. The class tool entry's name MUST equal the toolspec's
+# toolkit.name so the synthesizer matches; the resulting LLM-facing tool
+# name is "<bundle.name>_<class-tool.name>" = "codey_codey-stream-json".
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: cls-codey-stream-json
+spec:
+  image: registry.example.com/codey:latest
+  resources:
+    cpu: "100m"
+    memory: "64Mi"
+    ephemeralStorage: "16Mi"
+  tools:
+    - name: codey-stream-json
+      command: ["/usr/bin/codey"]
+  toolspecs:
+    - name: ts-codey-stream-json
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ai-test-creds
+  namespace: default
+type: Opaque
+stringData:
+  token: "unused-by-the-test-scenarios"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: ai-test
+  namespace: default
+spec:
+  description: "Identity for the p2_interactive_stream_json scenario."
+  credentials:
+    - name: noop
+      type: static
+      static:
+        secretRef:
+          name: ai-test-creds
+          key: token
+  bindings:
+    - match:
+        allows: [cli:codey-stream-json]
+      env: {}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-codey-stream-json
+  namespace: default
+spec:
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a test agent"
+  # See file header for the authz.toolCalls.mode=disabled rationale.
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  agentIdentity: ai-test
+  toolBundles:
+    - name: "codey"
+      class: "cls-codey-stream-json"
+      toolspecs: ["ts-codey-stream-json"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-codey-stream-json-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-codey-stream-json
+  credentialsRef:
+    secretName: codey-fake-creds
+  fake:
+    echo: false

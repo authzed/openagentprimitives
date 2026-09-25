@@ -1,0 +1,40 @@
+[
+  {
+    "type": "container",
+    "rich_text_title": {
+      "type": "rich_text",
+      "elements": [
+        {
+          "type": "rich_text_section",
+          "elements": [
+            {
+              "type": "emoji",
+              "name": "large_green_circle"
+            },
+            {
+              "type": "text",
+              "text": "  "
+            },
+            {
+              "type": "text",
+              "text": "codebot wants approval to open a pull request on acme/widget.",
+              "style": {
+                "bold": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "child_blocks": [
+      {
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": "*Approved* by \u003c@U_OWNER\u003e\n*What*:\n• Phase 1 — Clone the repository and read it\n    • _read:_ read files and history in the checkout\n    • _read:_ read the repository on GitHub\n    • reaches GitHub repository (acme/widget)\n• Phase 2 — Make the change and commit locally\n    • _write:_ write files in the checkout and commit\n    • reaches GitHub repository (acme/widget)\n• Phase 3 — Push the branch and open a pull request\n    • _write:_ push the branch to GitHub\n    • *external:* open a pull request on GitHub (leaves this session)\n    • reaches GitHub repository (acme/widget)\n• Approving covers every phase above.\n• *Why (the agent's words)*: Fixing the flaky test in the payments suite and opening a PR for review.\n• *When*: Now, for as long as this session runs.\n• *Who can approve*: An owner of this session."
+        }
+      }
+    ],
+    "has_header_divider": true
+  }
+]

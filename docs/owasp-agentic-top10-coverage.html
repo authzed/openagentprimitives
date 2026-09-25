@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OWASP Agentic Top 10 (2026) × agentprimitives — coverage map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* design dark palette (stone neutrals + jewel accents) */
+    --bg: #0c050f;
+    --panel: #1e1424;
+    --panel-2: #271a2e;
+    --panel-3: #2f2238;
+    --border: #3f3644;
+    --border-soft: #322a3a;
+    --fg: #e9e7e9;
+    --fg-dim: #a89fb0;
+    --fg-faint: #7b7185;
+    --code-bg: #150d1a;
+
+    --blue: #78d0ed;
+    --teal: #72b1ad;
+    --violet: #9278ed;
+    --magenta: #c270ab;
+    --sand: #ffb370;
+    --red: #f9808a;
+
+    /* coverage semantics */
+    --cov-full: #72b1ad;      /* substantially addressed */
+    --cov-partial: #ffb370;   /* partial */
+    --cov-minimal: #f9808a;   /* minimal */
+    --cov-na: #9278ed;        /* architectural N/A */
+
+    --radius: 0.5rem;
+  }
+
+  * { box-sizing: border-box; }
+  html { background: var(--bg); color: var(--fg); scroll-behavior: smooth; }
+  body {
+    margin: 0; padding: 40px 28px 120px;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 15px; line-height: 1.6; font-weight: 400;
+    max-width: 1180px; margin-inline: auto;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 { color: #fff; letter-spacing: -0.015em; font-weight: 650; }
+  h1 { font-size: 30px; margin: 0 0 6px; line-height: 1.2; }
+  h2 {
+    font-size: 21px; margin-top: 56px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 16px; margin: 26px 0 4px; }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  p { margin: 8px 0; }
+  .lede { color: var(--fg-dim); font-size: 16px; max-width: 88ch; }
+  .meta { color: var(--fg-faint); font-size: 12.5px; margin-top: 14px; }
+  .meta code { font-size: 12px; }
+
+  code, .mono {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+  }
+  code {
+    background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+    color: #d9d2e0; border: 1px solid var(--border-soft);
+  }
+  .ref { color: var(--fg-faint); font-family: "JetBrains Mono", monospace; font-size: 11.5px; }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+
+  /* ---- legend + distribution ---- */
+  .legend {
+    display: flex; gap: 22px; flex-wrap: wrap; margin: 22px 0 10px;
+    font-size: 13px;
+  }
+  .legend .item { display: inline-flex; align-items: center; gap: 8px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; flex: none; }
+  .dot.full { background: var(--cov-full); }
+  .dot.partial { background: var(--cov-partial); }
+  .dot.minimal { background: var(--cov-minimal); }
+  .dot.na { background: var(--cov-na); }
+
+  .distro {
+    display: flex; height: 30px; border-radius: 6px; overflow: hidden;
+    border: 1px solid var(--border); margin: 14px 0 6px; font-size: 11.5px; font-weight: 600;
+  }
+  .distro > div { display: flex; align-items: center; justify-content: center; color: #0c050f; }
+  .distro .s-full { background: var(--cov-full); flex: 4; }
+  .distro .s-partial { background: var(--cov-partial); flex: 5; }
+  .distro .s-minimal { background: var(--cov-minimal); flex: 1; }
+  .distro .s-na { background: var(--cov-na); flex: 1; }
+  .distro-note { color: var(--fg-faint); font-size: 12px; }
+
+  /* ---- scorecard grid ---- */
+  .scorecards {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 14px; margin: 18px 0;
+  }
+  .card {
+    position: relative;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 15px 16px 16px;
+    display: flex; flex-direction: column; gap: 9px;
+    border-left-width: 3px; transition: border-color .15s, transform .15s;
+  }
+  .card:hover { transform: translateY(-2px); border-color: var(--fg-faint); }
+  /* Stretch each card's title anchor over the whole card so the full box is clickable. */
+  .card h3 a::after { content: ""; position: absolute; inset: 0; }
+  .card.full { border-left-color: var(--cov-full); }
+  .card.partial { border-left-color: var(--cov-partial); }
+  .card.minimal { border-left-color: var(--cov-minimal); }
+  .card.na { border-left-color: var(--cov-na); }
+  .card .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .card .asi { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--fg-faint); font-weight: 500; }
+  .card h3 { margin: 0; font-size: 15.5px; line-height: 1.25; }
+  .card h3 a { color: #fff; }
+  .card h3 a:hover { color: var(--blue); text-decoration: none; }
+  .card .desc { font-size: 13px; color: var(--fg-dim); margin: 0; flex: 1; }
+
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 20px;
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    white-space: nowrap;
+  }
+  .badge.full { color: var(--cov-full); background: rgba(114,177,173,0.13); border: 1px solid rgba(114,177,173,0.4); }
+  .badge.partial { color: var(--cov-partial); background: rgba(255,179,112,0.12); border: 1px solid rgba(255,179,112,0.4); }
+  .badge.minimal { color: var(--cov-minimal); background: rgba(249,128,138,0.12); border: 1px solid rgba(249,128,138,0.4); }
+  .badge.na { color: var(--cov-na); background: rgba(146,120,237,0.12); border: 1px solid rgba(146,120,237,0.4); }
+
+  .meter { height: 6px; border-radius: 4px; background: var(--panel-3); overflow: hidden; }
+  .meter > span { display: block; height: 100%; border-radius: 4px; }
+  .meter.full > span { background: var(--cov-full); }
+  .meter.partial > span { background: var(--cov-partial); }
+  .meter.minimal > span { background: var(--cov-minimal); }
+  .meter.na > span { background: repeating-linear-gradient(45deg, var(--cov-na), var(--cov-na) 4px, transparent 4px, transparent 8px); }
+
+  .prim-tags { display: flex; gap: 5px; flex-wrap: wrap; }
+  .prim {
+    font-size: 10px; font-family: "JetBrains Mono", monospace; color: var(--fg-faint);
+    border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px;
+  }
+
+  /* ---- detail sections ---- */
+  .detail {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 4px 24px 22px; margin: 16px 0;
+    border-top: 3px solid var(--border);
+  }
+  .detail.full { border-top-color: var(--cov-full); }
+  .detail.partial { border-top-color: var(--cov-partial); }
+  .detail.minimal { border-top-color: var(--cov-minimal); }
+  .detail.na { border-top-color: var(--cov-na); }
+  .detail h3 { display: flex; align-items: center; gap: 12px; font-size: 18px; }
+  .detail h3 .asi { font-family: "JetBrains Mono", monospace; color: var(--fg-faint); font-size: 14px; }
+  .detail .risk { color: var(--fg-dim); font-size: 14px; max-width: 90ch; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 14px; }
+  @media (max-width: 820px) { .cols { grid-template-columns: 1fr; } .scorecards { grid-template-columns: 1fr; } }
+  .col h4 {
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 8px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .col.has h4 { color: var(--cov-full); }
+  .col.gap h4 { color: var(--cov-partial); }
+  .col ul { margin: 0; padding-left: 17px; }
+  .col li { margin: 6px 0; font-size: 13.5px; color: var(--fg); }
+  .col li .ref { display: block; margin-top: 1px; }
+  .col.gap li { color: var(--fg); }
+
+  .check::before { content: "✓"; color: var(--cov-full); font-weight: 700; }
+  .cross::before { content: "△"; color: var(--cov-partial); font-weight: 700; }
+  .col.gap li.note { color: var(--fg-dim); }
+  .note::before { content: "◇"; color: var(--cov-na); font-weight: 700; }
+
+  /* ---- roadmap / gaps table ---- */
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+  th, td { padding: 9px 11px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  th { color: var(--fg-dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td.mono { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--fg-dim); white-space: nowrap; }
+  tbody tr:hover { background: var(--panel-2); }
+
+  .callout {
+    border-left: 3px solid var(--sand); padding: 12px 16px; margin: 16px 0;
+    background: rgba(255,179,112,0.06); font-size: 13.5px; border-radius: 0 4px 4px 0;
+  }
+  .callout.info { border-left-color: var(--blue); background: rgba(120,208,237,0.06); }
+  .callout strong { color: var(--sand); }
+  .callout.info strong { color: var(--blue); }
+
+  .toc { columns: 2; column-gap: 36px; font-size: 13.5px; margin: 10px 0 0; }
+  @media (max-width: 640px) { .toc { columns: 1; } }
+  .toc a { display: block; padding: 3px 0; }
+  .toc .b { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: middle; }
+
+  .footer { color: var(--fg-faint); font-size: 12.5px; margin-top: 50px; border-top: 1px solid var(--border); padding-top: 18px; }
+  .footer p { margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<h1>OWASP Agentic Top 10 &times; <span style="color:var(--magenta)">agentprimitives</span></h1>
+<p class="lede">
+  A coverage map of the <strong>OWASP Top&nbsp;10 for Agentic Applications (2026)</strong> against what
+  the <code>ap</code> system actually implements today &mdash; which agentic risks are substantially
+  addressed, which are partial, and where the gaps are. Each verdict cites the code that mitigates the
+  risk and notes what is still missing.
+</p>
+<p class="meta">
+  Source: <em>OWASP Top 10 For Agentic Applications 2026</em> (OWASP GenAI Security Project &mdash; Agentic
+  Security Initiative, Dec&nbsp;2025, CC&nbsp;BY-SA&nbsp;4.0) &nbsp;·&nbsp;
+  Assessment scope: <code>agentprimitives</code> @ branch <code>master</code>,
+  point-in-time read of the codebase. &nbsp;·&nbsp; Not an official OWASP or AuthZed artifact.
+</p>
+
+<!-- ============ AT A GLANCE ============ -->
+<h2 id="glance">At a glance</h2>
+
+<div class="legend">
+  <span class="item"><span class="dot full"></span> <strong>Substantially addressed</strong> — core controls present</span>
+  <span class="item"><span class="dot partial"></span> <strong>Partial</strong> — meaningful coverage, real gaps</span>
+  <span class="item"><span class="dot minimal"></span> <strong>Minimal</strong> — little dedicated control</span>
+  <span class="item"><span class="dot na"></span> <strong>Architectural N/A</strong> — out of scope by design</span>
+</div>
+
+<div class="distro" aria-hidden="true">
+  <div class="s-full">4 · substantial</div>
+  <div class="s-partial">5 · partial</div>
+  <div class="s-na">1 · N/A</div>
+</div>
+<p class="distro-note">
+  <code>ap</code>'s defenses concentrate at the <strong>action boundary</strong> (tools, identity, authorization,
+  human approval) and the <strong>execution boundary</strong> (sandboxed, non-root, no-shell, default-on per-tool
+  circuit breakers / rate limits, and default-on runner + sandbox egress NetworkPolicies). They thin out at
+  the <strong>input / content-integrity boundary</strong> (memory poisoning, indirect injection of retrieved
+  content); <strong>supply-chain provenance</strong> now has content-hash pinning across dependency kinds but
+  still lacks signing / attestation. Multi-agent risks (ASI07/ASI08
+  fan-out) are mostly off the table because <code>ap</code> runs one agent per session.
+</p>
+
+<div class="scorecards">
+
+  <!-- ASI01 -->
+  <div class="card partial">
+    <div class="top"><span class="asi">ASI01</span><span class="badge partial">Partial</span></div>
+    <h3><a href="#asi01">Agent Goal Hijack</a></h3>
+    <p class="desc">Prompt injection / poisoned inputs redirect the agent's goals, task selection, or tool calls.</p>
+    <div class="meter partial"><span style="width:55%"></span></div>
+    <div class="prim-tags"><span class="prim">agent-def</span><span class="prim">safe-tools</span></div>
+  </div>
+
+  <!-- ASI02 -->
+  <div class="card full">
+    <div class="top"><span class="asi">ASI02</span><span class="badge full">Substantial</span></div>
+    <h3><a href="#asi02">Tool Misuse &amp; Exploitation</a></h3>
+    <p class="desc">Legitimate tools used unsafely — over-privileged scopes, shell injection, cost loops, tool poisoning.</p>
+    <div class="meter full"><span style="width:85%"></span></div>
+    <div class="prim-tags"><span class="prim">safe-tools</span><span class="prim">authz</span></div>
+  </div>
+
+  <!-- ASI03 -->
+  <div class="card full">
+    <div class="top"><span class="asi">ASI03</span><span class="badge full">Substantial</span></div>
+    <h3><a href="#asi03">Identity &amp; Privilege Abuse</a></h3>
+    <p class="desc">Delegation chains, inherited credentials, and confused-deputy escalation across trust boundaries.</p>
+    <div class="meter full"><span style="width:82%"></span></div>
+    <div class="prim-tags"><span class="prim">identity</span><span class="prim">authz</span></div>
+  </div>
+
+  <!-- ASI04 -->
+  <div class="card partial">
+    <div class="top"><span class="asi">ASI04</span><span class="badge partial">Partial</span></div>
+    <h3><a href="#asi04">Agentic Supply Chain</a></h3>
+    <p class="desc">Poisoned / typosquatted tools, MCP descriptor injection, compromised registries, no SBOM.</p>
+    <div class="meter partial"><span style="width:52%"></span></div>
+    <div class="prim-tags"><span class="prim">safe-tools</span></div>
+  </div>
+
+  <!-- ASI05 -->
+  <div class="card full">
+    <div class="top"><span class="asi">ASI05</span><span class="badge full">Substantial</span></div>
+    <h3><a href="#asi05">Unexpected Code Execution (RCE)</a></h3>
+    <p class="desc">Generated/reflected code escalates into host or container compromise and sandbox escape.</p>
+    <div class="meter full"><span style="width:80%"></span></div>
+    <div class="prim-tags"><span class="prim">safe-tools</span><span class="prim">agent-def</span></div>
+  </div>
+
+  <!-- ASI06 -->
+  <div class="card partial">
+    <div class="top"><span class="asi">ASI06</span><span class="badge partial">Partial</span></div>
+    <h3><a href="#asi06">Memory &amp; Context Poisoning</a></h3>
+    <p class="desc">Corrupted RAG / long-term memory propagates biased or malicious context across sessions.</p>
+    <div class="meter partial"><span style="width:50%"></span></div>
+    <div class="prim-tags"><span class="prim">memory</span><span class="prim">authz</span></div>
+  </div>
+
+  <!-- ASI07 -->
+  <div class="card na">
+    <div class="top"><span class="asi">ASI07</span><span class="badge na">Architectural N/A</span></div>
+    <h3><a href="#asi07">Insecure Inter-Agent Comms</a></h3>
+    <p class="desc">Tampered / spoofed / replayed messages between cooperating agents (A2A, MCP, message bus).</p>
+    <div class="meter na"><span style="width:100%"></span></div>
+    <div class="prim-tags"><span class="prim">single-agent</span></div>
+  </div>
+
+  <!-- ASI08 -->
+  <div class="card partial">
+    <div class="top"><span class="asi">ASI08</span><span class="badge partial">Partial</span></div>
+    <h3><a href="#asi08">Cascading Failures</a></h3>
+    <p class="desc">A single fault propagates and amplifies across agents, sessions, or workflows.</p>
+    <div class="meter partial"><span style="width:67%"></span></div>
+    <div class="prim-tags"><span class="prim">agent-def</span><span class="prim">isolation</span></div>
+  </div>
+
+  <!-- ASI09 -->
+  <div class="card full">
+    <div class="top"><span class="asi">ASI09</span><span class="badge full">Substantial</span></div>
+    <h3><a href="#asi09">Human-Agent Trust Exploitation</a></h3>
+    <p class="desc">Anthropomorphism, fake explainability, and missing confirmation turn user trust into action.</p>
+    <div class="meter full"><span style="width:80%"></span></div>
+    <div class="prim-tags"><span class="prim">channels</span><span class="prim">agent-def</span></div>
+  </div>
+
+  <!-- ASI10 -->
+  <div class="card partial">
+    <div class="top"><span class="asi">ASI10</span><span class="badge partial">Partial</span></div>
+    <h3><a href="#asi10">Rogue Agents</a></h3>
+    <p class="desc">Behavioral drift, reward hacking, self-replication — the agent deviates from its intended function.</p>
+    <div class="meter partial"><span style="width:45%"></span></div>
+    <div class="prim-tags"><span class="prim">authz</span><span class="prim">memory</span></div>
+  </div>
+
+</div>
+
+<div class="callout info">
+  <strong>How to read the meters.</strong> The fill levels are a qualitative judgment of how much of each
+  risk's mitigation surface <code>ap</code> covers today — not a precise score. They exist to show the
+  <em>shape</em> of coverage (where it is strong and where it thins out), and every claim below is backed by a
+  code reference so you can verify it directly.
+</div>
+
+<p style="margin-top:20px"><strong>Jump to a detailed assessment:</strong></p>
+<div class="toc">
+  <a href="#asi01"><span class="b" style="background:var(--cov-partial)"></span>ASI01 — Agent Goal Hijack</a>
+  <a href="#asi02"><span class="b" style="background:var(--cov-full)"></span>ASI02 — Tool Misuse &amp; Exploitation</a>
+  <a href="#asi03"><span class="b" style="background:var(--cov-full)"></span>ASI03 — Identity &amp; Privilege Abuse</a>
+  <a href="#asi04"><span class="b" style="background:var(--cov-partial)"></span>ASI04 — Agentic Supply Chain</a>
+  <a href="#asi05"><span class="b" style="background:var(--cov-full)"></span>ASI05 — Unexpected Code Execution</a>
+  <a href="#asi06"><span class="b" style="background:var(--cov-partial)"></span>ASI06 — Memory &amp; Context Poisoning</a>
+  <a href="#asi07"><span class="b" style="background:var(--cov-na)"></span>ASI07 — Insecure Inter-Agent Comms</a>
+  <a href="#asi08"><span class="b" style="background:var(--cov-partial)"></span>ASI08 — Cascading Failures</a>
+  <a href="#asi09"><span class="b" style="background:var(--cov-full)"></span>ASI09 — Human-Agent Trust Exploitation</a>
+  <a href="#asi10"><span class="b" style="background:var(--cov-partial)"></span>ASI10 — Rogue Agents</a>
+</div>
+
+<!-- ============ DETAIL SECTIONS ============ -->
+<h2 id="detail">Risk-by-risk assessment</h2>
+
+<!-- ASI01 -->
+<div class="detail partial" id="asi01">
+  <h3><span class="asi">ASI01</span> Agent Goal Hijack <span class="badge partial">Partial</span></h3>
+  <p class="risk">
+    Agents can't reliably separate instructions from content, so attackers redirect goals via indirect prompt
+    injection (hidden payloads in RAG documents, emails, calendar invites), deceptive tool outputs, or forged
+    messages. <code>ap</code> is strong at the <em>action</em> boundary but thinner at the <em>input-integrity</em> boundary.
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>What ap does</h4>
+      <ul>
+        <li class="check"> Every tool result is wrapped in an <strong>unpredictable per-result nonce</strong> (<code>&lt;untrusted-tool-output nonce="…"&gt;</code>) the output can't forge — and tool results are the <em>only</em> non-user ingress path: retrieval, web search, and even memory/KG recall arrive as wrapped tool output, and wrappers persist in the transcript across turns.<span class="ref">pkg/agent/runner/loop.go:59–98, 1561</span></li>
+        <li class="check"> System prompt rule: treat everything inside a matched pair strictly as <strong>data to observe, never instructions</strong> — even "ignore previous instructions" style text. This is delimiter-based spotlighting with unforgeable markers, and prompt-level <em>by design</em>: a general-purpose agent must reason over the content itself, so quarantining it behind a sub-LLM or paraphrasing it would strip or alter exactly the meaning the task needs. The rule's first line is model compliance; the enforcement backstop is structural at the <em>action</em> boundary — dual validation, approval gates, the isolated summarizer — not input isolation.<span class="ref">pkg/agent/runner/prompt.go:206</span></li>
+        <li class="check"> High-impact / <code>external</code> actions are <strong>gated by human approval</strong>, so a hijacked goal can't silently execute irreversible side effects.<span class="ref">pkg/authz/hooks/toolcallauthz.go</span></li>
+        <li class="check"> The approver's "What" is generated by an <strong>isolated summarizer LLM</strong> that never sees the (possibly-poisoned) primary chat — a hijacked agent can't talk its way past the gate (see ASI09).</li>
+        <li class="check"> Closed-world tools + least privilege bound the blast radius of any redirected goal.</li>
+        <li class="check"> <strong>A pluggable content-inspection seam now guards the tool-I/O ingress path</strong> — the only non-user ingress (see the nonce-wrap item above). Registry-keyed <code>contentguard</code> <em>Inspector</em> plugins examine the serialized tool args (<code>PreToolCall</code>) and the tool result (<code>PostToolCall</code>) and return pass / block / approve, mapped onto the existing pipeline (Block withholds the whole result from the model; Approve raises a human gate). Default-off, referenced from tiered settings by ID as a ceiling (lower tiers add, never weaken), and fail-closed: an inspector that errors blocks, an unregistered ID / unparseable config makes the settings object Invalid. The shipped example, <code>url-allowlist</code>, enforces an ordered domain-glob / regex / CEL URL policy (per-rule allow/deny/approve) over URLs found in tool I/O — blocking exfiltration / injection-carrier URLs in tool output before they reach the model.<span class="ref">pkg/authz/contentguard/; pkg/authz/contentguard/kinds/urlallowlist/; pkg/authz/contentguard/hook.go; pkg/apis/v1alpha1/settings_common_types.go (ContentInspectors)</span></li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What's missing</h4>
+      <ul>
+        <li class="cross"> <strong>No goal-lock / "intent capsule."</strong> The declared goal isn't bound into a signed envelope per cycle, so subtle goal drift isn't detected.</li>
+        <li class="cross"> <strong>No plan-divergence detection.</strong> The <code>plans</code> state tracks step status but never alerts when the agent deviates from its declared plan.<span class="ref">pkg/agent/session/state/plans/</span></li>
+        <li class="cross"> <strong>The content-inspection seam exists, but no prompt-injection / prompt-carrier <em>detector</em> ships in it yet.</strong> The <code>contentguard</code> framework + the <code>url-allowlist</code> example (see left) cover URL-policy exfil/injection-carrier guarding, but there is no built-in CDR (content disarm &amp; reconstruction) or injection-payload classifier inspector — that detector is the next inspector kind, not a new framework. Coverage is also tool-I/O-scoped: meta tools (<code>respond_to_user</code> et al.) bypass the gate pipeline, and memory/KG writes aren't inspected (ASI06).</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ASI02 -->
+<div class="detail full" id="asi02">
+  <h3><span class="asi">ASI02</span> Tool Misuse &amp; Exploitation <span class="badge full">Substantial</span></h3>
+  <p class="risk">
+    Agents misuse legitimate tools — over-privileged or over-scoped access, forwarding untrusted text to a shell,
+    loop amplification / cost spikes, tool poisoning, typosquatting. This is <code>ap</code>'s home turf: the
+    "safe tools" primitive is a closed-world, deny-by-default contract enforced twice.
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>What ap does</h4>
+      <ul>
+        <li class="check"> <strong>Dual validation</strong> (authoring-time + execution-time): the runner cannot invoke anything the toolspec doesn't allow, even if the LLM is compromised.<span class="ref">pkg/tools/toolspec/validator/, pkg/controllers/toolcall/</span></li>
+        <li class="check"> Deny-by-default <strong>subcommand / field allowlists + CEL constraints</strong> per tool; args passed as an <strong>argv array (no shell)</strong>, so <code>rm -rf /</code>-style injection has no interpreter.<span class="ref">pkg/tools/toolspec/validator/rules.go, pkg/tools/exec/remote/remote.go</span></li>
+        <li class="check"> Per-tool <strong><code>stateImpact</code></strong> (readonly / readwrite / external) drives both SpiceDB checks and approval gating; <code>external</code> always requires approval.<span class="ref">pkg/apis/v1alpha1/agentsession_types.go:305, pkg/authz/check_tool_call.go:80–84</span></li>
+        <li class="check"> <strong>SpiceDB per-action authorization</strong> scopes which resources a tool may touch.<span class="ref">pkg/authz/check_tool_call.go:55–235</span></li>
+        <li class="check"> <strong>Secret scrubbing + out-of-band <code>secretout</code></strong>: declared secrets in tool output are diverted to a session store and replaced with an opaque handle the LLM never reads.<span class="ref">pkg/tools/redact/, pkg/agent/secretout/</span></li>
+        <li class="check"> SSRF-guarded HTTP for MCP; turn / token / duration <strong>budgets</strong> bound runaway loops.<span class="ref">pkg/x/safehttp/, pkg/agent/runner/budget.go</span></li>
+        <li class="check"> <strong>Capability drift is enforced per the effective pinning mode</strong>: a <code>block</code> rule withholds drifted tools at session start, <code>approve</code> escalates their calls to human approval (an empty rule mode defaults to approve), and drift is recorded in <code>observedPins</code> + audit pin facts.<span class="ref">cmd/runner/pindrift.go:10–24; pkg/platform/settings/pinning.go:11–15</span></li>
+        <li class="check"> <strong>Per-tool rate limits are enforced at dispatch and default-on</strong>: a <code>toolguard</code> Guard hook runs at <code>PreToolCall</code> (before the SpiceDB check) and <em>denies</em> calls that exceed <code>maxCallsPerTurn</code> or <code>maxCalls</code>&nbsp;+&nbsp;<code>window</code>; even with no policy declared, a builtin rule applies. This directly bounds the OWASP "ping in a loop to exfiltrate via DNS" pattern (ASI02 scenario 7).<span class="ref">pkg/apis/v1alpha1/toolguard_types.go:87–101; pkg/authz/toolguard/state.go:217–239; pkg/authz/toolguard/hook_guard.go:45–102; pkg/agent/runner/pipeline_wiring.go:794–814</span></li>
+        <li class="check"> <strong>Per-call data-volume budgets are enforced in both directions.</strong> A <code>toolguard</code> <code>DataLimit</code> caps the serialized tool-args size at <code>PreToolCall</code> (<em>egress</em> — over-limit denies before the tool runs) and the tool-result size at <code>PostToolCall</code> (<em>ingress</em> — over-limit withholds the result, swapping in an <code>IsError</code> the model never reads), so a single call can't move an unbounded payload past its cap. The ingress cap applies to <em>error</em> results too — a tool can't mark an oversized exfil payload <code>IsError</code> to slip it through — and the limit is available per-tool and as a tiered, strictest-wins ceiling.<span class="ref">pkg/apis/v1alpha1/toolguard_types.go:105–132,164–172; pkg/authz/toolguard/hook_guard.go:58–62; pkg/authz/toolguard/hook_record.go; pkg/authz/toolguard/events.go</span></li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What's missing</h4>
+      <ul>
+        <li class="cross"> <strong>Egress enforcement is partial.</strong> Runner and sandbox pods now get default-on NetworkPolicies (ingress-deny + egress allowlist; sandbox network mode <code>none</code> or a missing class is a fail-closed full egress deny), but enforcement is L3/L4 only — label selectors, CIDRs, and ports. Allowlist-mode sandboxes get coarse TCP 443/80 to <em>any</em> address; the recorded <code>effectiveAllowedHosts</code> hostnames are not enforced without a DNS-aware CNI.<span class="ref">pkg/controllers/agentsession/netpol.go:167–180,323</span></li>
+        <li class="cross"> <strong>The data-volume budget is per-<em>call</em>, not cumulative</strong>, and opt-in (default-off, unlike the default-on rate/breaker rules). A per-call byte cap (see left) bounds any single payload, but a tool making many calls each under its egress cap can still move large total volume across a turn — there is no aggregate per-turn / per-session egress budget — and no byte limit binds at all unless a rule or ceiling configures one.<span class="ref">pkg/apis/v1alpha1/toolguard_types.go:105–112</span></li>
+        <li class="cross"> Typosquat protection only via toolkit-revision + manifest-hash pinning, not signed endpoints; drift enforcement is observe-only for kinds no pinning rule covers.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ASI03 -->
+<div class="detail full" id="asi03">
+  <h3><span class="asi">ASI03</span> Identity &amp; Privilege Abuse <span class="badge full">Substantial</span></h3>
+  <p class="risk">
+    Delegation chains, inherited credentials, confused-deputy relays, and TOCTOU drift let attackers escalate
+    access. <code>ap</code>'s identity primitive gives every agent a distinct, governed identity and resolves
+    credentials just-in-time — a valet key, not the keyring.
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>What ap does</h4>
+      <ul>
+        <li class="check"> <strong>Per-agent <code>AgentIdentity</code></strong> — no shared credential catalog across agents; namespace isolation prevents cross-agent cred sharing.<span class="ref">pkg/apis/v1alpha1/agentidentity_types.go</span></li>
+        <li class="check"> On-behalf-of via <code>UserIdentity → SessionUserIdentity</code> with <strong>credential narrowing</strong> to only what the session's tools declare.<span class="ref">pkg/apis/v1alpha1/sessionuseridentity_types.go:42–47</span></li>
+        <li class="check"> <strong>Token broker (valet-key)</strong> with JIT OAuth refresh, fail-closed on missing creds; tokens never land in the API, logs, or events.<span class="ref">pkg/platform/identity/broker/inproc/broker.go:177–196</span></li>
+        <li class="check"> <strong>Agents are not SpiceDB subjects — only users are.</strong> Every check is <code>resource#perm@user:…</code>, which structurally blocks the confused-deputy "relay under inherited trust" pattern.<span class="ref">pkg/authz/check_tool_call.go</span></li>
+        <li class="check"> <strong>AgentSessionGrants</strong> bind a post-approval grant to an <code>arguments_hash</code> caveat — an HMAC-SHA256 under a per-session key held only by the controller+runner trust domain, so neither the agent nor a confused deputy with SpiceDB write access can predict the binding for arguments that were never requested. (Hashes of previously-asked — including denied — calls remain observable in session status, so a SpiceDB-write attacker could replay those; the binding shrinks that surface to exactly the calls a human has already seen.)<span class="ref">pkg/authz/guardian/grants/grants.go</span></li>
+        <li class="check"> <strong>Credential revocation reaches in-flight sessions.</strong> Removing a credential from a <code>UserIdentity</code> <em>or</em> <code>AgentIdentity</code> publishes a <code>KindRevoked</code> envelope on the unified <code>ap.revocation</code> bus; the running runner's broker drops its cached token so the next resolve fails closed — no longer waiting for the session to end. One pluggable bus + registry covers credentials and tools alike.<span class="ref">pkg/authz/revocation/; pkg/controllers/{useridentity,agentidentity}/revoke_publisher.go</span></li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What's missing</h4>
+      <ul>
+        <li class="cross"> <strong>Sidecar credentials are frozen at pod-create time</strong> — no JIT refresh and no mid-session revocation, leaving a TOCTOU window for sidecar tools.<span class="ref">CLAUDE.md §SidecarToolbox</span></li>
+        <li class="cross"> <strong>No mid-execution re-authorization.</strong> Permission is checked at dispatch — and approved calls are re-validated just before execution — but never again <em>during</em> a long-running tool call. Revocation now reaches the <em>next</em> call (see left), but a request already in flight when the revoke lands still completes.<span class="ref">pkg/agent/runner/host_approval.go:648–671</span></li>
+        <li class="cross"> The grant binding is a <strong>symmetric HMAC within one trust domain</strong> — sufficient to stop forgery by the agent or other components, but not third-party-verifiable signed intent (no second verifier exists today to benefit from one).</li>
+        <li class="cross"> <strong>In-flight revocation delivery is at-most-once.</strong> A runner disconnected from NATS when the revoke is published catches up only on its next restart (which re-derives credentials/tools from effective settings); there is no durable (JetStream) redelivery yet, so the live nudge is best-effort until restart.<span class="ref">pkg/authz/revocation/subscriber.go</span></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ASI04 -->
+<div class="detail partial" id="asi04">
+  <h3><span class="asi">ASI04</span> Agentic Supply Chain Vulnerabilities <span class="badge partial">Partial</span></h3>
+  <p class="risk">
+    Tools, MCP servers, prompt templates, and agent cards come from third parties and may be poisoned,
+    typosquatted, or tampered with in transit. <code>ap</code>'s toolspec validation constrains <em>how</em> a
+    tool behaves, and content-hash pinning now verifies <em>that it hasn't changed</em> — but publisher
+    provenance (signing, attestation, SBOM) is still unverified.
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>What ap does</h4>
+      <ul>
+        <li class="check"> <strong>Content-hash pinning of the MCP tool manifest.</strong> <code>MCPServerSpec.pinnedManifestHash</code> asserts the sha256 of the canonical <code>tools/list</code> manifest the server must serve. Set before first run, a mismatch on the very first probe fails closed — catching a server poisoned before any baseline is recorded; left unset, the first observed manifest is recorded as a trust-on-first-use baseline in <code>status.pin</code>. Either way, later drift from the baseline flips the <code>PinDrift</code> condition.<span class="ref">pkg/controllers/mcpserver/controller.go:201–273; pkg/authz/pinning/kinds/mcp/manifest.go:31</span></li>
+        <li class="check"> <strong>Pluggable pinning kinds</strong> (<code>mcp</code>, <code>image</code>, <code>cli</code>, <code>skill</code>) behind a registry, with tiered <code>PinningPolicy</code> ceilings (mode folding cluster → namespace) and per-session <code>observedPins</code>; sidecar images launch by kubelet-resolved digest behind an image-pin block gate.<span class="ref">pkg/authz/pinning/kinds/; pkg/apis/v1alpha1/pinning_types.go:49–118</span></li>
+        <li class="check"> <strong>Drift is enforced, not just recorded:</strong> drifted tools are escalated at PreToolCall, pin facts land on authz-decision audit records, and rebaselining requires the operator-reviewed <code>pin-refreeze</code> annotation or <code>ap pin update</code>.<span class="ref">pkg/agent/runner/pindrift.go; pkg/agent/runner/provenance.go; cmd/ap/pin_status.go</span></li>
+        <li class="check"> <strong>Tiered <code>allowedMCPServers</code> allowlist</strong> (intersection of cluster ∩ namespace settings): only named servers — and optionally only named tools on them — may be used at all; an unlisted server is a fatal <code>MCPServerNotAllowed</code>, and removing one revokes it for every new session, platform-wide.<span class="ref">pkg/apis/v1alpha1/settings_common_types.go:57–66; pkg/platform/settings/types.go:140</span></li>
+        <li class="check"> Toolspec <strong>deny-by-default validation</strong> limits the damage a poisoned descriptor can authorize (allowlists + CEL still apply).<span class="ref">pkg/tools/toolspec/validator/</span></li>
+        <li class="check"> <strong>Toolkit-revision pinning</strong> ties a spec to a specific toolkit version; mismatch denies.<span class="ref">pkg/tools/toolspec/validator/phases.go:22–31</span></li>
+        <li class="check"> The approval summarizer reads the <strong>operator-signed</strong> tool description/schema, so a tampered descriptor at least surfaces to a human for high-impact calls.</li>
+        <li class="check"> Credentials can be revoked via the identityd portal (a partial kill-switch).<span class="ref">pkg/platform/identityd/handlers_portal.go</span></li>
+        <li class="check"> <strong>Revocation reaches in-flight sessions (surgical).</strong> Removing a server from <code>allowedMCPServers</code>/<code>allowedToolkits</code>, or deleting an <code>MCPServer</code>/<code>SidecarToolbox</code>/<code>SpiceboxToolkit</code> CR, publishes a <code>tool-origin</code> revoke on the unified <code>ap.revocation</code> bus; the running runner's PreToolCall guard denies the next call to that origin — the session keeps running, no hard evict. A restart re-derives the toolset from effective <code>allowed*</code>, so a missed (at-most-once) signal still can't resurrect the tool.<span class="ref">pkg/authz/revocation/; pkg/authz/hooks/revocation_guard.go; cmd/runner/allowfilter.go</span></li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What's missing</h4>
+      <ul>
+        <li class="cross"> <strong>No descriptor signing / attestation, no SBOM / AIBOM.</strong> A hash pins <em>content</em>, not <em>origin</em>: nothing attests who published the manifest or that it was built from trustworthy source. An <em>asserted</em> <code>spec.pinnedManifestHash</code> (committed before first run) does fail closed when the live manifest doesn't match on the very first probe — so it catches a server poisoned before baseline — but only against a hash the author wrote down by hand. With no asserted hash it's <em>trust-on-first-use</em>: the first manifest observed becomes the baseline, so a server poisoned before that first probe pins the poisoned manifest.<span class="ref">pkg/apis/v1alpha1/mcpserver_types.go:100–106; pkg/controllers/mcpserver/controller.go:201–273</span></li>
+        <li class="cross"> <strong>The authoring-time suggestion catalog (<code>ap tools gen</code>) is a hardcoded literal list</strong> — no config-driven registry; and while <code>allowedMCPServers</code> gates which servers may be <em>used</em>, no URL-level allowlist constrains what endpoint an MCPServer CR may <em>declare</em>.<span class="ref">pkg/tools/catalog/mcp_servers.go:1–12</span></li>
+        <li class="cross"> <strong>In-flight tool revocation is best-effort <em>delivery</em>, not a mid-call interrupt.</strong> The policy change is cluster-wide — pulling a server from <code>allowed*</code> blocks it for every new session platform-wide, and the restart backstop re-derives the toolset so a missed signal can't resurrect it. What's best-effort is only the live nudge to an <em>already-running</em> session: the surgical deny (see left) is at-most-once over core NATS — no durable JetStream redelivery yet, so a runner disconnected at publish time catches up on its next restart — and it denies the <em>next</em> call rather than interrupting one already in flight. (Auto-terminating the session on revoke is a deliberate non-feature, not a gap: sessions are isolated, so surgical-deny + restart re-derive is the design; an operator can still hard-terminate a session separately.)<span class="ref">pkg/authz/revocation/subscriber.go; cmd/runner/allowfilter.go</span></li>
+        <li class="cross"> <strong>No build provenance / SBOM / AIBOM for sidecar images.</strong> Dependency gatekeeping <em>is</em> enforced — a sidecar image ref is strength-classified (digest = frozen, tag = named, <code>:latest</code>/bare = unpinned) and gated by the tiered <code>PinningPolicy</code> for kind <code>image</code> (a <code>block</code>/<code>warn</code> floor at admission plus a drift gate, launched by kubelet-resolved digest) — and a by-digest (<code>@sha256</code>) ref is a hard content assertion the registry must satisfy exactly. But, as with MCP descriptors above, content is not <em>origin</em>: a tag-only ref is trust-on-first-use (baselined to whatever digest it first resolved), and nothing attests the image was built reproducibly from trustworthy source.<span class="ref">pkg/platform/settingswiring/wiring.go:128–153</span></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ASI05 -->
+<div class="detail full" id="asi05">
+  <h3><span class="asi">ASI05</span> Unexpected Code Execution (RCE) <span class="badge full">Substantial</span></h3>
+  <p class="risk">
+    Agents that generate and run code can be steered into RCE, deserialization attacks, or sandbox escape.
+    <code>ap</code>'s execution model is hardened by construction: no shell, non-root, read-only root,
+    per-session pods.
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>What ap does</h4>
+      <ul>
+        <li class="check"> <strong>Hardened pods</strong>: <code>RunAsNonRoot</code>, <code>ReadOnlyRootFilesystem</code>, all Linux capabilities dropped, seccomp <code>RuntimeDefault</code>, no privilege escalation, no service-account token.<span class="ref">pkg/platform/podspec/security.go:13–33</span></li>
+        <li class="check"> Tools execute via <strong>argv arrays over Kubernetes pods/exec — never a shell, never <code>eval</code></strong>; stdout/stderr bounded.<span class="ref">pkg/tools/exec/remote/remote.go</span></li>
+        <li class="check"> <strong>Closed-world tools</strong>: the agent can only invoke explicitly-declared binaries/subcommands, so reflected-prompt → arbitrary-command has no path.</li>
+        <li class="check"> Per-session sandbox pods isolate execution from the operator and from other sessions.</li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What's missing</h4>
+      <ul>
+        <li class="cross"> <strong>Egress only partly enforced</strong> — runner and sandbox pods now get default-on NetworkPolicies, but enforcement is L3/L4 only: allowlist-mode sandboxes get coarse TCP 443/80 to any address (hostname-level allowlisting needs a DNS-aware CNI), so a compromised tool process can still phone home within the coarse port allowance. Separate-pod sidecar pods now carry their own policy (runner-only ingress + mode-driven egress).<span class="ref">pkg/controllers/agentsession/netpol.go:167–180,323</span></li>
+        <li class="cross"> <strong>Tier-1 per-call isolation is deferred.</strong> Today all ToolCalls in a session share UID, <code>/proc</code>, <code>/tmp</code>, and <code>/work</code>, so concurrent calls can read each other's env / leftover creds.</li>
+        <li class="cross"> No static scan / taint-tracking gate on agent-generated code before it runs.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ASI06 -->
+<div class="detail partial" id="asi06">
+  <h3><span class="asi">ASI06</span> Memory &amp; Context Poisoning <span class="badge partial">Partial</span></h3>
+  <p class="risk">
+    Adversaries seed memory / RAG with malicious or misleading data so future reasoning becomes biased or unsafe.
+    <code>ap</code> nails the <em>access-control</em> half (who can read/write, tenant isolation) but has little
+    <em>content-integrity</em> defense (provenance, validation, anti-bootstrap-poisoning).
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>What ap does</h4>
+      <ul>
+        <li class="check"> <strong>Per-subject memory authorization via SpiceDB</strong>: read = session membership, write/delete = creator.<span class="ref">pkg/memory/spicedbauthorizer/authorizer.go:84–233</span></li>
+        <li class="check"> <strong>Tenant / scope isolation in Postgres pgvector</strong>: scope filters in the SQL WHERE; an empty scope returns FALSE — no cross-tenant vector bleed on misconfig.<span class="ref">pkg/memory/search/postgres/provider.go:170–182</span></li>
+        <li class="check"> Search results are <strong>post-filtered through SpiceDB</strong> after ranking.<span class="ref">pkg/memory/search/searcher.go:111–136</span></li>
+        <li class="check"> Scope is derived from the URL path, never the request body, so a caller can't inject a foreign scope.<span class="ref">pkg/memory/httpsrv/httpsrv.go:246</span></li>
+        <li class="check"> External-source entries are tagged <code>trust:untrusted</code>; artifact revisions are immutable/versioned.</li>
+        <li class="check"> <strong>Tamper-evident audit log.</strong> The transcript / authz-decision / tool-session / audit kinds are <strong>append-only and signed</strong>: each entry carries an Ed25519 <code>Provenance</code> envelope hash-chained per <code>(scope, publisher)</code>, the operator facade <em>verifies on write</em> (unsigned / forged append-only writes are rejected from token callers and in-process writers alike), and <code>ap audit verify &lt;session&gt;</code> walks every chain offline against the K8s-witnessed status pubkey + the <code>publisher-keys</code> ConfigMap — so a compromised backend or a hijacked session can't silently rewrite, fabricate, reorder, or delete memory history without detection.<span class="ref">pkg/memory/provenance/; pkg/memory/publisherkeys/</span></li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What's missing</h4>
+      <ul>
+        <li class="cross"> <strong>No content validation on memory writes</strong> — only ID/link prefixes are checked; no scan for poisoned/injection content before commit.<span class="ref">pkg/memory/facade.go:134–153</span></li>
+        <li class="cross"> <strong>Bootstrap poisoning risk</strong>: KG ingestion ingests <code>assistant</code>-role turns (the agent's own output) back into the graph without role filtering or human verification.<span class="ref">pkg/memory/kinds/kgingestion/hooks.go:42–70</span></li>
+        <li class="cross"> <strong>No provenance fields or trust scores</strong> on entries (only a binary tag); creator lives in SpiceDB, not on the entry.</li>
+        <li class="cross"> Graphiti <em>search</em> (facts, entity-facts, related-entities) keys tenant isolation on a <strong>scope-derived <code>group_id</code></strong> handed to the external service — so KG isolation is <em>delegated to Graphiti</em>, not SpiceDB-enforced like the rest of memory, and falls back to an empty <code>group_id</code> when no KG scope is in context.<span class="ref">pkg/memory/kg/graphiti/provider.go:94–149</span></li>
+        <li class="cross"> No quarantine / decay / rollback of suspected-poisoned entries.</li>
+        <li class="cross"> <strong>The tamper-evident log has honest edges.</strong> Append-only protection covers only the signed audit / transcript kinds — mutable kinds (<code>label</code>, <code>sessionscope</code>, …) are unsigned; retention-driven <code>DeleteScope</code> still erases a whole session's evidence wholesale (that's the retention policy, not an attack the chain guards); the operator + controller stay in the trust domain because they mint and hold the keys; and there's no external timestamping / transparency log, with key revocation being append-new-only.<span class="ref">pkg/memory/provenance/</span></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ASI07 -->
+<div class="detail na" id="asi07">
+  <h3><span class="asi">ASI07</span> Insecure Inter-Agent Communication <span class="badge na">Architectural N/A</span></h3>
+  <p class="risk">
+    Multi-agent systems are exposed to intercepted, spoofed, or replayed messages between cooperating agents
+    (A2A, MCP, message bus). <code>ap</code> runs <strong>one agent per session</strong>; channels are
+    human↔agent, not agent↔agent — so this class is largely out of scope today.
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>Why it's out of scope (and where the seam is)</h4>
+      <ul>
+        <li class="check"> Each <code>AgentSession</code> is a single runner pod with one LLM loop; there is no agent-to-agent delegation or A2A registry.</li>
+        <li class="check"> NATS carries human↔agent envelopes and operator↔runner control only — not cross-runner agent messaging.<span class="ref">README.md (architecture)</span></li>
+        <li class="check"> Per-session pods, per-session Secrets, and scoped RBAC keep one session's traffic off another's.</li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What to watch if multi-agent lands</h4>
+      <ul>
+        <li class="cross"> The transport that <em>does</em> exist isn't fully locked down: the channelsd <strong>NATS JWT subject scope is broad</strong> (<code>ap.&gt;</code> + <code>_INBOX.&gt;</code>), though runner per-session JWTs are already narrowly scoped.</li>
+        <li class="cross"> No mutual-auth / signed-message / anti-replay machinery exists to build on — it would be green-field if A2A is added.</li>
+        <li class="cross"> No attested agent registry or agent-card verification.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ASI08 -->
+<div class="detail partial" id="asi08">
+  <h3><span class="asi">ASI08</span> Cascading Failures <span class="badge partial">Partial</span></h3>
+  <p class="risk">
+    A single fault (hallucination, poisoned memory, tainted tool) propagates and amplifies across agents,
+    sessions, or workflows. With one agent per session, <code>ap</code> avoids the multi-agent fan-out scenario;
+    what remains is single-session containment, which is partial.
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>What ap does</h4>
+      <ul>
+        <li class="check"> <strong>Per-session isolation as blast-radius containment</strong>: separate pods, per-session credentials, scoped RBAC — a fault can't trivially spread to other sessions.</li>
+        <li class="check"> <strong>Silence watchdog</strong> (warn 60s / timeout 120s, capped extension) catches a hung or looping agent and surfaces it.<span class="ref">pkg/channels/channelsd/watchdog/machine.go:40–46</span></li>
+        <li class="check"> Turn / token / duration budgets bound a single runaway loop.<span class="ref">pkg/agent/runner/budget.go</span></li>
+        <li class="check"> <strong>Circuit breakers are enforced at dispatch and default-on.</strong> A <code>toolguard</code> Guard hook (three-state machine, exponential-backoff recovery, with a per-tool breaker and an <em>origin</em> breaker that subsumes the old sidecar degrade tracker) <em>denies</em> tool calls once the failure threshold trips — so a tight loop of <em>failing</em> tool calls is cut off, not just complete silence. Even with no policy declared, a builtin rule applies (failure 5 / origin 10 / deny).<span class="ref">pkg/authz/toolguard/state.go:196–319; pkg/authz/toolguard/policy.go:12–22; pkg/authz/toolguard/hook_guard.go:45–102; pkg/agent/runner/pipeline_wiring.go:794–814</span></li>
+        <li class="check"> <strong>Default-on runner + sandbox egress NetworkPolicies</strong> (ingress-deny + egress allowlist; a sandbox whose class declares network mode <code>none</code> — or has no class at all — gets a fail-closed full egress deny) contain a single session's outbound blast radius at the network layer.<span class="ref">pkg/controllers/agentsession/netpol.go:167–180,323; pkg/controllers/agentsession/sidecars.go:115–144</span></li>
+        <li class="check"> <strong>Separate-pod sidecar toolboxes get their own stamped policy</strong>: ingress only from the session's runner pod on the sidecar's MCP port; egress fail-closed from the merged <code>effectiveNetworkMode</code>.<span class="ref">pkg/controllers/agentsession/netpol.go</span></li>
+        <li class="check"> <strong>Operator Secret/ConfigMap reads are code-confined to <em>adopted</em> objects with a fail-loud tripwire.</strong> Every Secret/ConfigMap the operator reads goes through a guarded reader that <em>panics</em> on a non-adopted, non-allowlisted read (a CR-referenced object is SSA-labeled "adopted"; a tiny fixed-infra allowlist covers the operator's own startup secrets), and the informer cache is label-filtered so only adopted objects are watched/cached — so a compromised operator cannot silently read or enumerate arbitrary cluster secrets.<span class="ref">pkg/authz/adoptguard/; pkg/tools/adoptkit/; cmd/operator/main.go</span></li>
+        <li class="check"> <strong>The operator has no in-process untrusted-code surface.</strong> It runs only its own compiled Go — no shell-out, no plugin loading. The dynamic expressions it touches are not code-execution engines: CEL from CRDs is <em>compile</em>-validated only (evaluated in the runner/authzd, not the operator), and the one template it runs during ToolCall harvest is a <code>text/template</code> over structured tool output — field access + registered funcs, not arbitrary code, with its template text sourced from authored toolspec config rather than the agent. The command execution it does drive runs fixed commands inside isolated, dedicated pods (e.g. the busybox workspace-snapshot Job under its own <code>ap-snapshotter</code> SA), not in the operator's address space — so there is no classic RCE path that would turn its RBAC grant into secret exfiltration.<span class="ref">cmd/operator/main.go; pkg/platform/workspace/cpbypod.go; pkg/controllers/toolcall/harvest.go:116–121; pkg/controllers/{mcpserver,spiceboxtoolspec,sidecartoolbox}/ (Compile-only)</span></li>
+        <li class="check"> <strong>Cache scoping for per-namespace RBAC is available.</strong> An opt-in <code>--watch-namespaces</code> scopes the manager cache (informers + <code>Owns</code> watches) to a namespace set — always folding in the operator's own namespace — so on a multi-tenant cluster the operator can run under per-namespace <code>RoleBindings</code> instead of the cluster-wide <code>ClusterRoleBinding</code>. Default stays cluster-wide, matching most operators.<span class="ref">cmd/operator/main.go (cacheNamespaces)</span></li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What's missing</h4>
+      <ul>
+        <li class="cross"> <strong>The breaker is per-tool / per-origin, not a cross-cutting blast-radius guard.</strong> It trips on a tool's (or origin's) own failure count; there's no planner↔executor breaker and no digital-twin replay or blast-radius cap before a policy is expanded.</li>
+        <li class="note"> <em>Not a gap, by design:</em> there is no cross-<em>session</em> breaker because sessions are isolated by construction — separate pods, per-session credentials, scoped RBAC (see left) — so a fault has no cross-session path for a breaker to guard. Cross-session propagation isn't an unguarded risk here; it's an absent one.</li>
+        <li class="cross"> <strong>By default the operator's <code>secrets</code> RBAC grant is cluster-wide</strong> — but the practical exposure is small. Weaponizing the grant needs code execution <em>inside</em> the operator process, and it has no such surface (see left): reads are already code-confined to adopted objects with a fail-loud tripwire, and <code>--watch-namespaces</code> + per-namespace <code>RoleBindings</code> are available as opt-in hardening for multi-tenant clusters. The honest residual is a memory-safety / dependency-chain exploit in the operator binary or a compromised operator <em>image</em> — supply-chain risks that per-namespace RBAC narrowing would not fully address anyway.<span class="ref">config/manager/role.yaml:58–68</span></li>
+        <li class="cross"> <strong>Session policies enforce at L3/L4 only</strong> (hostname-level egress needs a DNS-aware CNI) — so coarse-port egress paths stay open.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ASI09 -->
+<div class="detail full" id="asi09">
+  <h3><span class="asi">ASI09</span> Human-Agent Trust Exploitation <span class="badge full">Substantial</span></h3>
+  <p class="risk">
+    Fluent, confident agents earn trust users shouldn't extend — fabricated rationales, missing confirmation,
+    "read-only" previews that trigger side effects. <code>ap</code>'s approval design is built around exactly
+    this threat, including a notable defense against <em>fake explainability</em>.
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>What ap does</h4>
+      <ul>
+        <li class="check"> <strong>Explicit confirmation</strong> on <code>external</code> and high-impact actions — the tool does not run until a human approves.<span class="ref">pkg/authz/hooks/toolcallauthz.go</span></li>
+        <li class="check"> <strong>Injection-isolated approval summarizer.</strong> The approver-facing "What" is produced by a second LLM that sees only the operator-signed schema + args — never the primary's chat — so a compromised agent can't fabricate the description it's approved on.<span class="ref">pkg/agent/runner/approval/summarizer/</span></li>
+        <li class="check"> "Why" (agent's stated reason) is shown <strong>separately</strong> from the mechanically-derived "What", letting the approver spot a mismatch.</li>
+        <li class="check"> A permanent <strong>"Show Details"</strong> escape hatch reveals the raw args / schema — ground truth, one click away.<span class="ref">pkg/channels/channelkinds/slack/sender_tool_approval.go:195–244</span></li>
+        <li class="check"> <strong>Preview is separated from effect</strong>: SVG previews render as a <code>data:</code> URI in <code>&lt;img&gt;</code> (no script, no network); the markup generator forbids <code>&lt;script&gt;</code> / event handlers.<span class="ref">pkg/channels/channelassets/svg/preview.go</span></li>
+        <li class="check"> userPassthrough sessions warn the approver "this uses <em>your</em> connected accounts."<span class="ref">pkg/channels/channelkinds/slack/permission_request.go</span></li>
+        <li class="check"> <strong>The approver is session-derived, not hard-coded on the AgentClass.</strong> The operator resolves each session's owner from per-<code>Channel</code> policy (starting user / explicit / output-channel group), and every approval click is authorized at click time as the session <code>owner</code> intersected with the acted-on resource's <code>owner</code> — through a single <code>CheckPermission</code> path shared by tool-call, info-leakage, join, and metaagent gates. So multi-tenant sessions route to the right approver, and the <code>@metaagent</code> approve/deny click (previously matched by request-id alone, approvable by any thread viewer) is now owner-gated.<span class="ref">pkg/authz/approve.go; pkg/controllers/agentsession/owner_resolve.go; cmd/authzd/main.go</span></li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What's missing</h4>
+      <ul>
+        <li class="cross"> <strong>No plan-divergence cross-check.</strong> Nothing verifies the approved action matches the agent's declared plan.</li>
+        <li class="cross"> No confidence-weighted UI cues ("low-certainty"/"unverified source") to actively counter automation bias.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ASI10 -->
+<div class="detail partial" id="asi10">
+  <h3><span class="asi">ASI10</span> Rogue Agents <span class="badge partial">Partial</span></h3>
+  <p class="risk">
+    A compromised or misaligned agent deviates from its intended function — goal drift, reward hacking,
+    self-replication, persistent unauthorized behavior. <code>ap</code> contains rogue behavior well (scoped,
+    disposable, audited) but lacks behavioral-integrity attestation to <em>detect</em> the drift itself.
+  </p>
+  <div class="cols">
+    <div class="col has">
+      <h4>What ap does</h4>
+      <ul>
+        <li class="check"> <strong>Disposable, scoped sessions</strong> + SpiceDB per-action checks bound what a drifting agent can reach.</li>
+        <li class="check"> <strong>The declared tool set IS an enforced behavioral manifest</strong>: an agent can only call tools its AgentClass explicitly opts into, validated at authoring time and again at execution time — undeclared tools are structurally uncallable, with <code>allowedMCPServers</code> ceilings narrowing the surface further per tier.<span class="ref">pkg/tools/toolspec/validator/, pkg/controllers/toolcall/; pkg/apis/v1alpha1/settings_common_types.go:66</span></li>
+        <li class="check"> <strong>The audit system is the audit trail</strong> — every <code>authz.Check</code> writes an <code>authz_decision</code> record (outcome, subject, resource, args hash, pin provenance) that <em>outlives the session</em> (archived on completion, 30-day TTL), alongside the gate-decision kinds <code>infoleakage_audit</code>, <code>toolguard_audit</code>, <code>scope_audit</code>, <code>metaagent_audit</code> (90-day TTL); agents get only read-only memory tools, so the trail isn't agent-tamperable.<span class="ref">pkg/memory/kinds/authzdecision/kind.go:56–63; pkg/memory/kinds/{infoleakageaudit,toolguardaudit,scopeaudit,metaagentaudit}/</span></li>
+        <li class="check"> <strong>That audit trail is now tamper-evident, not just durable.</strong> The audit / transcript / tool-session kinds are <strong>append-only and signed</strong>: each entry carries an Ed25519 <code>Provenance</code> envelope hash-chained per <code>(scope, publisher)</code>, the operator facade <em>verifies on write</em>, and <code>ap audit verify &lt;session&gt;</code> walks every chain offline (status pubkey + <code>publisher-keys</code> ConfigMap) — so an operator or a compromised backend can't silently rewrite, fabricate, reorder, or per-entry delete forensic records; modification, fabrication, gaps, and (with the anchored chain head) tail truncation all surface.<span class="ref">pkg/memory/provenance/; cmd/ap/audit_verify.go</span></li>
+        <li class="check"> <code>@metaagent</code> mentions trigger runtime <strong>scope narrowing</strong> via authzd — a watchdog-style meta layer.</li>
+        <li class="check"> Credential <em>and</em> tool revocation now reach in-flight sessions over the unified <code>ap.revocation</code> bus; with session termination they form a partial kill-switch, and budgets cap runaway loops.<span class="ref">pkg/authz/revocation/</span></li>
+      </ul>
+    </div>
+    <div class="col gap">
+      <h4>What's missing</h4>
+      <ul>
+        <li class="cross"> <strong>The tool manifest isn't cryptographically signed/attested, and drift <em>within</em> the allowed surface goes undetected.</strong> Goal drift expressed through permitted tools — unusual call patterns, sequences, or frequencies of calls the allowlist permits — has no anomaly detection.</li>
+        <li class="cross"> <strong>Tamper-<em>evidence</em>, not tamper-<em>proofing</em>.</strong> The signed hash chain detects mutation/fabrication/per-entry deletion but doesn't prevent it at the backend (no WORM / Postgres-trigger enforcement yet) or export to a SIEM; retention-driven <code>DeleteScope</code> still erases a whole session's records wholesale; the operator + controller stay in the trust domain (they mint and hold the keys); there's no external timestamping / transparency log; and the 30-day post-archive TTL still bounds forensic lookback.<span class="ref">pkg/memory/provenance/; pkg/memory/kinds/authzdecision/kind.go:58–63</span></li>
+        <li class="cross"> No self-replication guard (mitigated only incidentally by single-agent design).</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ============ GAPS ROADMAP ============ -->
+<h2 id="gaps">Where the gaps cluster</h2>
+<p class="lede">
+  The missing pieces aren't scattered randomly — they fall into four themes, laid out below as a roadmap
+  rather than a surprise list.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Theme</th><th>Gap</th><th>Hits</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Network egress</strong></td>
+      <td>Runner + sandbox NetworkPolicies now ship default-on, but enforcement is L3/L4 only (hostname-level allowlisting needs a DNS-aware CNI) and per-MCPServer egress ports aren't emitted.</td>
+      <td class="mono">ASI02 · ASI05 · ASI08</td>
+      <td class="mono">Open</td>
+    </tr>
+    <tr>
+      <td><strong>Input / content integrity</strong></td>
+      <td>A pluggable content-inspection seam (<code>contentguard</code>) now guards the tool-I/O ingress path with a <code>url-allowlist</code> example — but no prompt-injection/CDR detector inspector ships yet, meta tools bypass it, and memory/KG writes are still uninspected (no content validation on memory writes; bootstrap-poisoning via self-ingestion; no provenance scores).</td>
+      <td class="mono">ASI01 · ASI06</td>
+      <td class="mono">pkg/authz/contentguard/; facade.go:108–127, kgingestion/hooks.go</td>
+    </tr>
+    <tr>
+      <td><strong>Supply-chain provenance</strong></td>
+      <td>Content-hash pinning (mcp / image / cli / skill) landed — an asserted hash fails closed on first probe, but with no hash it's TOFU, and either way a hash is content, not origin: no descriptor signing / SBOM; authoring catalog hardcoded. (In-flight revocation now lands surgically via the <code>ap.revocation</code> bus — at-most-once, no hard-evict.)</td>
+      <td class="mono">ASI04</td>
+      <td class="mono">pkg/authz/pinning/</td>
+    </tr>
+    <tr>
+      <td><strong>Behavioral integrity &amp; time</strong></td>
+      <td>No plan-divergence / behavioral-attestation; no mid-execution re-auth (TOCTOU); sidecar creds frozen. The audit log is now tamper-<em>evident</em> (append-only + signed hash chains, <code>ap audit verify</code>) — but not backend-WORM-enforced, and <code>DeleteScope</code> still erases wholesale.</td>
+      <td class="mono">ASI03 · ASI09 · ASI10</td>
+      <td class="mono">Open</td>
+    </tr>
+    <tr>
+      <td><strong>Intra-session isolation</strong></td>
+      <td>Tier-1 sandbox isolation deferred — ToolCalls in a session share UID / <code>/proc</code> / <code>/work</code>. (Per-tool rate limits / circuit breakers are now enforced and default-on via <code>pkg/toolguard</code> in the dispatch pipeline.)</td>
+      <td class="mono">ASI05 · ASI08</td>
+      <td class="mono">Open</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>Net read.</strong> <code>ap</code>'s six primitives give it genuinely strong, code-enforced answers to the
+  classic agent-authorization risks — tool misuse, privilege abuse, unsafe execution, and human-approval
+  manipulation (ASI02/03/05/09). The work ahead is mostly at two frontiers the design hasn't reached yet:
+  <strong>content integrity</strong> (treating untrusted data and memory as adversarial, not just access-controlled) —
+  where a pluggable <code>contentguard</code> inspection seam over tool I/O is now the first foothold, awaiting a
+  prompt-injection/CDR detector and memory-write validation — and <strong>supply-chain provenance</strong>
+  (verifying where tools and descriptors come from). Multi-agent risks
+  (ASI07/08) stay parked until/unless <code>ap</code> grows agent-to-agent topology — at which point inter-agent
+  auth becomes green-field work, not a retrofit.
+</div>
+
+<!-- ============ MAPPING TO PRIMITIVES ============ -->
+<h2 id="primitives">Mapped to the six primitives</h2>
+<p>Each risk lands on one or more of <code>ap</code>'s primitives — a quick view of which building block carries the defense (and therefore where the gap-closing work belongs).</p>
+<table>
+  <thead><tr><th>Primitive</th><th>Carries the defense for</th><th>Coverage there</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Safe tools</strong></td><td class="mono">ASI02, ASI04, ASI05, ASI01</td><td>Strong on misuse/RCE; weak on supply-chain provenance.</td></tr>
+    <tr><td><strong>Identity &amp; credentials</strong></td><td class="mono">ASI03</td><td>Strong; TOCTOU + sidecar-freeze are the edges.</td></tr>
+    <tr><td><strong>Authorization</strong></td><td class="mono">ASI02, ASI03, ASI06, ASI10</td><td>Strong per-action checks; no behavioral attestation.</td></tr>
+    <tr><td><strong>Agent definition</strong></td><td class="mono">ASI01, ASI08, ASI09</td><td>Approval + budgets + isolation strong; no plan-divergence.</td></tr>
+    <tr><td><strong>Channels &amp; continuity</strong></td><td class="mono">ASI09, (ASI07)</td><td>Human approval strong; agent↔agent absent by design.</td></tr>
+    <tr><td><strong>Memory &amp; knowledge</strong></td><td class="mono">ASI06, ASI10</td><td>Access-control strong; content-integrity thin.</td></tr>
+  </tbody>
+</table>
+
+<div class="footer">
+  <p><strong>Methodology.</strong> Risk definitions are taken from the OWASP Top 10 for Agentic Applications 2026.
+  Coverage verdicts come from a point-in-time read of the <code>agentprimitives</code> codebase (branch
+  <code>master</code>): file references point at the mechanism that mitigates each risk,
+  Meter fills are a qualitative judgment of coverage breadth, not a quantitative score.</p>
+  <p><strong>Caveats.</strong> This is an internal mapping for orientation, not a formal security audit or a
+  penetration test. It does not certify that the cited controls are free of implementation bugs — only that the
+  control exists and is wired into the relevant path. "Architectural N/A" means a risk is out of scope for the
+  current single-agent design, not that it's impossible in any future configuration.</p>
+  <p>OWASP® and the OWASP GenAI Security Project materials are referenced under CC&nbsp;BY-SA&nbsp;4.0. This
+  document is not affiliated with or endorsed by OWASP or AuthZed.</p>
+</div>
+
+</body>
+</html>

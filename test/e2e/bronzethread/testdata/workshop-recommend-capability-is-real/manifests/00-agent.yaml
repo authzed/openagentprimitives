@@ -1,0 +1,429 @@
+# Fixture agent for the workshop-recommend-capability-is-real bronze bundle.
+#
+# The point of this fixture is proving TWO things the other two workshop
+# bundles (workshop-inventory-is-real, workshop-apply-earns-a-real-verdict)
+# do not exercise:
+#
+#  1. `recommend_capability` (pkg/tools/workshopmcp/tools_handoff.go's
+#     handleRecommendCapability) actually finds and writes its OWN session's
+#     real Workshop CR — not the placeholder namespace-string lookup that
+#     WorkshopIdentity is frozen to at mount time (see workshop_mcp.go's
+#     mountWorkshopMCP doc). That requires the driver to late-bind
+#     SessionNamespace/SessionName once the pipeline has created the real
+#     builder session (test/e2e/threadrun's bindWorkshopSessionOnce), which
+#     is why this bundle scripts TWO user turns instead of one: the first
+#     turn gives the driver a synchronized session to bind before the second
+#     turn's recommend_capability call needs it.
+#  2. The Workshop CR recommend_capability writes to is ITSELF real — created
+#     by the REAL pkg/controllers/agentsession.Reconciler's ensureWorkshop
+#     hook (spec §1.1), which this harness already runs for every session.
+#     ensureWorkshop only creates a Workshop when the session's class is
+#     SANCTIONED: a ClusterAgentSettings naming this exact (namespace, class,
+#     sidecarToolbox) triple in spec.limits.builderClasses. The two earlier
+#     workshop bundles never shipped that sanction, so ensureWorkshop no-oped
+#     for them and no Workshop CR ever existed — invisible only because
+#     neither bundle called a tool that needed one. This fixture's
+#     ClusterAgentSettings below adds the sanction so the REAL reconciler
+#     provisions the CR; nothing here hand-creates it.
+#
+#     What this does NOT prove: the workshop NAMESPACE/RBAC/sidecar-identity
+#     half of provisioning (pkg/controllers/workshop, which would set
+#     status.namespace and status.phase=Ready) is a SEPARATE controller this
+#     harness does not wire up at all — same disclosed gap as every other
+#     workshop bundle. The Workshop CR this bundle proves real therefore sits
+#     with an empty status forever; recommend_capability never reads status,
+#     only spec, so that gap does not block the tool this bundle exercises.
+#
+# The SidecarToolbox spec below is copied VERBATIM from
+# pkg/tools/workshopmcp/deploy/sidecartoolbox.yaml, same as the other two
+# workshop bundles — see TestWorkshopFixtures_MatchDeployToolSet
+# (test/e2e/bronzethread/workshop_toolbox_fixture_test.go), which this
+# fixture is registered against so it cannot drift uncompared.
+apiVersion: v1
+kind: Secret
+metadata: {name: workshop-demo-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: workshop-demo-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: workshop-demo-identity, namespace: default}
+spec:
+  description: "Fixture identity for the workshop-recommend-capability-is-real bundle; the toolbox needs no upstream credential (upstreamAuth.provider: none)."
+  credentials: []
+---
+# Sanctioning a class in ClusterAgentSettings.spec.limits.builderClasses (below)
+# trips a SEPARATE rule this bundle would otherwise never hit:
+# pkg/controllers/agentclass/builderclass.go's validateBuilderClass refuses
+# Valid=True for a sanctioned builder class with an EMPTY
+# spec.authz.session.allowedStarters ("a sanctioned builder agent must list
+# who may start it") — the other two workshop bundles never sanctioned their
+# class, so neither ever reached this check. Same pattern as the
+# agent-gatebot fixture: a group + SpiceDBBootstrap(canonicalize: true) so the
+# harness's default fake-channel user ("user@example.com") resolves to the
+# same canonical id the gate checks, without hand-computing the base64
+# encoding here.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: workshop-recommend-starters
+  namespace: default
+spec:
+  relationships:
+    - resource: { type: group, id: "workshop-recommend-starters" }
+      relation: member
+      subject:  { type: user, id: "user@example.com", canonicalize: true }
+---
+# Cluster-scoped ClusterAgentSettings singleton (name MUST be "cluster" —
+# spiceboxv1alpha1.ClusterAgentSettingsName). spec.limits.builderClasses is
+# THE sanction: pkg/controllers/agentsession's ensureWorkshop
+# (workshop_hook.go) only creates a Workshop CR for a session whose
+# (namespace, class) pair is listed here, naming the exact SidecarToolbox
+# that is meant to receive the workshop identity. Without this entry
+# ensureWorkshop no-ops (nil sanction, fail-closed) and no Workshop CR is
+# ever created — which is exactly the state the other two workshop bundles
+# ran in, invisibly, because neither called a tool that needed one.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: ClusterAgentSettings
+metadata: {name: cluster}
+spec:
+  limits:
+    builderClasses:
+      - {namespace: default, name: workshop-demo, sidecarToolbox: workshop}
+---
+# SpiceboxClass named to match the workshop toolbox's own sandbox.class
+# (pkg/tools/workshopmcp/deploy/sidecartoolbox.yaml). Required for the
+# SidecarToolbox/workshop below to reach Valid=True at all — the real
+# sidecartoolbox.Reconciler Gets this class and requires ITS Valid condition
+# True before continuing (see Harness.StampSpiceboxClassesValid's doc).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata: {name: workshop-sandbox}
+spec:
+  image: ""
+  resources: {cpu: "100m", memory: "64Mi", ephemeralStorage: "16Mi"}
+  network: {mode: allowlist, allowedHosts: []}
+---
+# Verbatim copy of pkg/tools/workshopmcp/deploy/sidecartoolbox.yaml's spec,
+# wrapped in CR metadata — see TestWorkshopFixtures_MatchDeployToolSet. CR
+# name "workshop" is load-bearing: it is both workshopSidecarToolboxRef
+# (test/e2e/threadrun/driver.go) — what routes this toolbox's dispatch to the
+# real server — and the deploy manifest's own documented CR name.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SidecarToolbox
+metadata: {name: workshop, namespace: default}
+spec:
+  name: workshop
+  version: "1"
+  intent: >-
+    The agent-builder's own MCP toolset: inventories the cluster's real
+    capabilities, probes candidate images/MCP servers, applies and inspects
+    draft agent-primitive CRs inside the caller's workshop namespace, renders
+    plain-language summaries for approval cards, and exports/loads a portable
+    .oap draft. Runs only inside a Ready, session-owned Workshop's provisioned
+    namespace — never a standing deployment.
+
+  source:
+    image: ap-workshop:dev
+
+  sandbox:
+    class: workshop-sandbox
+
+  transport:
+    port: 8080
+    path: /mcp
+    healthcheck:
+      path: /healthz
+      timeoutSeconds: 30
+
+  upstreamAuth:
+    provider: none
+
+  tools:
+    - name: inventory
+      intent: "Snapshot of this cluster's real capabilities, channel kinds, renderers, sandbox classes, MCP catalog, and the caller's effective settings ceilings, and the first-party sidecar images this cluster admits (with the reference to use), and the sign-in flows (providers) an account can be connected with."
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: probe_mcp
+      intent: "List the tools a candidate MCP server exposes (tools/list), through the SSRF-guarded client."
+      args:
+        allowedFields: ["url"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: probe_image
+      intent: "Run a candidate container image and discover the MCP tool surface it declares."
+      args:
+        allowedFields: ["image", "timeout_seconds"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: cli_help
+      intent: "Run a candidate container image's CLI binary with --help to discover its interface."
+      args:
+        allowedFields: ["image", "binary", "args", "timeout_seconds"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: validate_spec
+      intent: "Round-trip a candidate resource's spec content through the real toolspec/MCP/sidecar validators and CEL compile."
+      args:
+        allowedFields: ["kind", "manifest"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: apply
+      intent: "Server-side-apply a candidate custom resource into the workshop, under this sidecar's field manager."
+      args:
+        allowedFields: ["manifest"]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: workshop_draft
+          resourceIDTemplate: "draft"
+          permission: change
+
+    - name: get
+      intent: "Read one custom resource, by kind and name, from the workshop."
+      args:
+        allowedFields: ["kind", "name"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: list
+      intent: "List every custom resource of one kind in the workshop."
+      args:
+        allowedFields: ["kind"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: delete
+      intent: "Delete one custom resource, by kind and name, from the workshop."
+      args:
+        allowedFields: ["kind", "name"]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: workshop_draft
+          resourceIDTemplate: "draft"
+          permission: remove
+
+    - name: render_summary
+      intent: "Plain-language rendering of a custom resource, for approval cards and the running build summary."
+      args:
+        allowedFields: ["manifest", "kind", "name"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: export_draft
+      intent: "Bundle the agent this workshop's builder has authored into a portable .oap draft, stored as a builder-session artifact."
+      permission:
+        stateImpact: stateless
+
+    - name: load_draft
+      intent: "Re-apply a previously exported draft's bundle into this workshop, one apply per object, resuming a build."
+      args:
+        allowedFields: ["oap"]
+      permission:
+        stateImpact: passthrough
+
+    - name: test_tool
+      intent: "Run the agent under construction as a one-shot tester against a representative request and return its tool-results (never its prose). Read-only: use it automatically for read-only tools; get the person's OK before testing a side-effecting one."
+      args:
+        allowedFields: ["class", "request"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: test_link
+      intent: "The ap:agentlink props that send the person to try the agent under construction themselves, in the browser chat."
+      args:
+        allowedFields: ["class", "prompt"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: watch_test
+      intent: "Ask to be told when the person's own test of the agent starts, pauses, ends, or times out."
+      args:
+        allowedFields: ["class", "timeoutMinutes"]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: workshop_draft
+          resourceIDTemplate: "draft"
+          permission: test
+
+    - name: test_sessions
+      intent: "The person's own test sessions of an agent in this workshop, by name and phase."
+      args:
+        allowedFields: ["class"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: read_test_log
+      intent: "Read the current test session's tool-results and tool-errors."
+      args:
+        allowedFields: ["session"]
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: stop_test
+      intent: "Stop the person's test session; the conversation returns to the builder. Stopping deletes the test conversation and its log, so read the log first."
+      args:
+        allowedFields: ["session"]
+      permission:
+        stateImpact: passthrough
+
+    - name: request_credential
+      intent: "Ask the person to connect a bot/shared credential (an API key, PAT, or static secret to paste, or a shared OAuth-MCP account to authorize) for an AgentIdentity you authored in this workshop. A card with a secure link goes to the person; they enter or authorize it and it lands in the workshop."
+      args:
+        allowedFields: ["identity", "credential", "authKind"]
+      permission:
+        stateImpact: external
+
+    - name: request_install
+      intent: "Ask a platform admin to install the agent this workshop has built. Records the request on the workshop; an admin card (delivered by a later plan) is what the person sees. Once-only: a second call after an install has already been requested is refused, not overwritten."
+      args:
+        allowedFields: ["suggestedName", "bundleDigest"]
+      permission:
+        stateImpact: external
+
+    - name: recommend_capability
+      intent: "Recommend a platform capability this build surfaced a need for — something no existing tool or toolbox covers. Records the recommendation on the workshop for a platform admin to review. Once-only: a second call after one has already been recorded is refused, not overwritten. This tool does not end the session by itself — call agent_work_complete afterward to do that."
+      args:
+        allowedFields: ["summary", "artifactRef", "draftRef"]
+      permission:
+        stateImpact: external
+
+    - name: close_others
+      intent: "Close the person's other open builder workshops (all, or the ones named, by the name shown on the page or the workshop name). A platform admin may name anyone's. Never closes this one. Answers with what was closed, what was refused and why, and anything still being decided."
+      args:
+        allowedFields: ["workshops"]
+      permission:
+        stateImpact: external
+
+    - name: agents_in_thread
+      intent: "List the other agents that have already worked this conversation thread — participants and their own delegated subagents — so a builder picking up mid-thread knows who was here already."
+      effects:
+        readOnly: true
+      permission:
+        stateImpact: passthrough
+
+    - name: project_agent
+      intent: "Project a credential-free practice double of another agent's class — one reachable from this conversation thread — into the workshop, so a hand-off to it can be rehearsed without ever running the real agent."
+      args:
+        allowedFields: ["namespace", "name"]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: workshop_draft
+          resourceIDTemplate: "draft"
+          permission: project
+
+  spicedbSchema:
+    resources:
+      - name: workshop_draft
+        standing: session-only
+        display: {name: "the draft in this workshop"}
+        relations:
+          - {name: session, subjectType: agentsession}
+        permissions:
+          - name: change
+            expr: session
+            title: "Change this workshop's draft (any of its definitions)"
+            planningNote: >-
+              A phase that changes the draft lists this handle AND declares the
+              workshop_draft slot on the phase (no id needed); the handle alone is
+              refused, and the slot alone would quietly bind change.
+          - name: remove
+            expr: session
+            title: "Remove a definition from this workshop's draft"
+            planningNote: >-
+              List it beside change when a definition will be replaced; a remove
+              without it raises a card.
+          - name: test
+            expr: session
+            title: "Watch a test of this workshop's draft"
+            planningNote: >-
+              The test phase lists it with the slot declared; re-arming the watch
+              then needs no card.
+          - name: project
+            expr: session
+            title: "Project a practice double of another agent into this workshop"
+            planningNote: >-
+              One approval covers every projection in the phase; the platform
+              refuses any agent not already part of this conversation.
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: workshop-demo, namespace: default}
+spec:
+  displayName: WorkshopRecommendCapabilityDemoBot
+  description: "E2E fixture agent proving recommend_capability writes a REAL, session-bound Workshop CR. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: workshop-demo-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      Your `workshop` sidecar toolbox exposes recommend_capability and the
+      rest of the agent-builder's own MCP toolset.
+  agentIdentity: workshop-demo-identity
+  authz:
+    # toolCalls disabled so this bundle isolates the session-identity/
+    # Workshop-CR path rather than re-testing the tool-call approval round
+    # trip other bundles already cover — same posture as the other two
+    # workshop bundles. session.allowedStarters is REQUIRED the moment this
+    # class is sanctioned (see the SpiceDBBootstrap comment above) — the
+    # group + bootstrap above puts the harness's default fake-channel user in
+    # it, mirroring testdata/agent-gatebot's own fixture.
+    toolCalls: {mode: disabled}
+    session:
+      allowedStarters: ["group:workshop-recommend-starters#member"]
+      platformAdminsMayStart: false
+      onlyStartersInteract: true
+  sidecarToolboxes:
+    - {name: workshop, ref: workshop}
+  budget: {maxTurns: 30, maxTokens: 50000, maxDuration: 5m}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: workshop-demo-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: workshop-demo
+  credentialsRef: {secretName: workshop-demo-fake-creds}
+  fake: {echo: false}

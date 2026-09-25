@@ -1,0 +1,37 @@
+{
+  "name": "per-datum-egress-verbatim-reuse",
+  "description": "Opt-in per-datum egress end to end: reading an entry mints a pt-tag and the emitter wraps the result in a nonce'd pt-untrusted region; the model reuses that region VERBATIM in its reply; the egress content-binding check verifies the region's content against what the platform stored for its id and the PER-DATUM path allows it (the region's readers include the channel user). Proves emitter + content-binding + per-datum egress run in a live session, and that the markers are stripped before the human sees the reply.",
+  "agentDir": "../testdata/agent-pt-egress",
+  "agentClass": "ptdemo-records",
+  "defaultUser": "auditor-1@example.com",
+  "toolOutputs": {
+    "read_entry": { "id": "entry-100", "memo": "Q3 reconciliation", "amount": "4120.00" },
+    "read_public_note": { "id": "entry-100", "note": "unused by this scenario; declared so the probed server matches the spec's tool set" }
+  },
+  "userTurns": [
+    "open entry-100 and report it back to me"
+  ],
+  "llm": [
+    {
+      "expect": { "userTextContains": "entry-100" },
+      "reply": [{ "toolUse": { "name": "ptdemo_read_entry", "args": { "operation_id": "op-read-100", "_reason": "the user asked to open a specific entry", "args": { "id": "entry-100" } } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "ptdemo_read_entry",
+        "capture": { "region": "(<pt-untrusted nonce=\"[0-9a-f]+\" id=\"[^\"]+\">[\\s\\S]*?</pt-untrusted nonce=\"[0-9a-f]+\">)" }
+      },
+      "reply": [{ "toolUse": { "name": "respond_to_user", "args": { "text": "{{region}}" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "reported the entry" } } }]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": ["Q3 reconciliation"],
+    "agentReplyNotContains": ["pt-untrusted"],
+    "toolsCalled": ["ptdemo_read_entry"],
+    "ptTags": { "minted": 1, "readersInclude": ["auditor-1@example.com"] }
+  }
+}

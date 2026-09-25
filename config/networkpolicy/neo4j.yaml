@@ -1,0 +1,21 @@
+# neo4j: the graph database backing Graphiti's knowledge graph.
+#
+# Ingress on the bolt port 7687, only FROM graphiti. The HTTP port 7474 and
+# everything else stay closed under default-deny.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: neo4j
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-neo4j
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicebox-graphiti
+      ports:
+        - { protocol: TCP, port: 7687 }

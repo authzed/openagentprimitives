@@ -1,0 +1,32 @@
+name: cat
+version: "1"
+toolkitRevision: "2026-04-25"
+target:
+  binary: cat
+  versionRange: ""
+parser:
+  kind: declarative
+env:
+  allowed: []
+globalFlags:
+  - {long: help, type: bool}
+
+permission:
+  stateImpact: stateless
+
+subcommands:
+  - path: []
+    description: "Concatenate files (or stdin) to stdout"
+    positional:
+      - {name: files, type: stringList}
+    effects:
+      destructive: false
+      reads: ["filesystem"]
+      writes: []
+      network:
+        destinations: []
+      filesystem:
+        paths: []
+      creds:
+        required: []
+        writes: []

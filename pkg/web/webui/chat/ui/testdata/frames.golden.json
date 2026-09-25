@@ -1,0 +1,278 @@
+{
+  "frames": [
+    {
+      "type": "turn_activity",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "active": true
+      }
+    },
+    {
+      "type": "stream_delta",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "payload": {
+          "eventType": "tool_use_start",
+          "toolName": "update_view",
+          "toolId": "tu-1",
+          "blockIdx": 1
+        }
+      }
+    },
+    {
+      "type": "operation_activity",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "payload": {
+          "compactLine": "Connecting GitHub"
+        }
+      }
+    },
+    {
+      "type": "plan_update",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "payload": {
+          "planName": "build",
+          "items": [
+            {
+              "id": "intake",
+              "label": "Understand the brief",
+              "status": "done"
+            },
+            {
+              "id": "tools",
+              "label": "Connect tools",
+              "status": "in_progress"
+            },
+            {
+              "id": "perms",
+              "label": "Set permissions",
+              "status": "pending"
+            }
+          ],
+          "diff": {},
+          "updatedAt": "2026-01-02T15:04:05Z"
+        }
+      }
+    },
+    {
+      "type": "stream_delta",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "payload": {
+          "eventType": "tool_use_stop",
+          "toolId": "tu-1",
+          "blockIdx": 1
+        }
+      }
+    },
+    {
+      "type": "user_message",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "text": "Which repository should it watch?"
+      }
+    },
+    {
+      "type": "turn_activity",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "active": false,
+        "cause": "awaiting_reply"
+      }
+    },
+    {
+      "type": "user_echo",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "text": "org/repo",
+        "via": "urn:demo"
+      }
+    },
+    {
+      "type": "turn_activity",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "active": true
+      }
+    },
+    {
+      "type": "operation_activity",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "payload": {
+          "cleared": true
+        }
+      }
+    },
+    {
+      "type": "turn_activity",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "active": false,
+        "cause": "idle"
+      }
+    },
+    {
+      "type": "interaction_request",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "payload": {
+          "agentSessionRef": {
+            "ns": "workshop",
+            "name": "sess-live"
+          },
+          "category": "plan_amendment",
+          "requestRef": "req-1",
+          "lead": "The agent is asking to add workshop_apply to its approved plan.",
+          "actions": [
+            {
+              "id": "approve",
+              "label": "Approve",
+              "kind": "decision"
+            }
+          ],
+          "audience": {
+            "scope": ""
+          }
+        }
+      }
+    },
+    {
+      "type": "interaction_applied",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "payload": {
+          "agentSessionRef": {
+            "ns": "workshop",
+            "name": "sess-live"
+          },
+          "category": "plan_amendment",
+          "requestRef": "req-1",
+          "outcome": "approved"
+        }
+      }
+    },
+    {
+      "type": "session_ended",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "reason": "succeeded"
+      }
+    },
+    {
+      "type": "session_startup",
+      "session": {
+        "namespace": "workshop",
+        "name": "sess-live"
+      },
+      "payload": {
+        "session": {
+          "namespace": "workshop",
+          "name": "sess-live"
+        },
+        "text": "Starting up — your request will run once everything's ready…",
+        "stillTrying": true
+      }
+    }
+  ]
+}

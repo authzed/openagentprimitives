@@ -1,0 +1,74 @@
+name: claude
+version: "1"
+toolkitRevision: "2026-05-19"
+target:
+  binary: claude
+  versionRange: ">=2.0.0 <3.0.0"
+  versionProbe:
+    args: ["--version"]
+    extract:
+      kind: regex
+      # `claude --version` prints the semver possibly wrapped in other
+      # text (e.g. "2.1.89 (Claude Code)"); match the bare version so the
+      # probe is robust to the surrounding format.
+      pattern: '([0-9]+\.[0-9]+\.[0-9]+)'
+docs: ./claude.md
+parser:
+  kind: declarative
+
+streamFormat: claude-stream-json
+
+env:
+  allowed:
+    - {name: ANTHROPIC_API_KEY, description: "Claude API key", sensitive: true, provider: anthropic-api-key, credential: anthropic-api-key}
+
+# Static, non-secret hardening for the Claude Code CLI itself.
+#
+# CLAUDE_CODE_MAX_RETRIES caps the CLI's OWN retry loop. It defaults to ten
+# retries with exponential backoff and a 60s per-attempt ceiling, and the CLI's
+# retryability predicate treats HTTP 401 as retryable — so an invalid or revoked
+# credential does not fail, it spends roughly three minutes failing, once per
+# call, while the agent's turn loop keeps re-calling it. There is no
+# --max-retries flag; this env var is the only control.
+#
+# "1" rather than "0": one retry drops the worst case from ~3 minutes to a
+# single backoff, which is what makes a dead credential surface as an error the
+# agent can act on, while still absorbing a lone transient 429/5xx — the case
+# where retrying is correct. "0" would trade that away for no further benefit,
+# since AP's toolguard circuit breaker and the agent's own re-call already sit
+# above this. Raise it if an upstream turns flaky; never to paper over an auth
+# failure.
+envDefaults:
+  CLAUDE_CODE_MAX_RETRIES: "1"
+
+permission:
+  stateImpact: passthrough
+
+subcommands:
+  - path: []
+    description: "Run Claude Code with a prompt"
+    # claude --print is one-shot: it streams output, never reads channel
+    # input. Stream mode → closed stdin (no "no stdin data received"
+    # warning) + the generous spec.timeout deadline.
+    mode: stream
+    positional:
+      - {name: prompt, type: string, required: false}
+    flags:
+      - {long: print,                        short: p, type: bool}
+      - {long: verbose,                                type: bool}
+      - {long: continue,                     short: c, type: bool}
+      - {long: output-format,                          type: enum, values: [stream-json, text, json]}
+      - {long: input-format,                           type: enum, values: [text, stream-json]}
+      - {long: allowedTools,                           type: stringList}
+      - {long: disallowedTools,                        type: stringList}
+      - {long: dangerously-skip-permissions,           type: bool}
+      - {long: permission-mode,                        type: enum, values: [default, acceptEdits, plan, auto, dontAsk, bypassPermissions]}
+      - {long: model,                                  type: string}
+      - {long: include-partial-messages,               type: bool}
+    effects:
+      destructive: false
+      reads:  [filesystem, network]
+      writes: [filesystem]
+      network: {destinations: [api.anthropic.com]}
+      filesystem: {paths: ["{cwd}"]}
+      creds: {required: [ANTHROPIC_API_KEY], writes: []}

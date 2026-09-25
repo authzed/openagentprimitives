@@ -1,0 +1,106 @@
+export const meta = {
+  title: 'ToolCall',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3290,
+  description: 'ToolCall is one execution of one sandbox tool inside a SpiceboxSession: the',
+}
+
+# ToolCall
+
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `tc`
+
+ToolCall is one execution of one sandbox tool inside a SpiceboxSession: the
+tool name, its args, non-secret env, stdin, and credential references --
+never token bytes. The runner creates it; the outcome lands on status.
+
+Namespaced. Reconciled by pkg/controllers/toolcall, which validates the call
+against the session's resolved toolspecs, hands the credential descriptors
+to the token broker to materialize exec env, and runs the process. Secrets
+supplied through spec.env are rejected rather than passed through.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.args` | `[]string` | Args is the argv passed to the tool, after the class's DefaultArgs. |
+| `spec.captureOutputs` | `[]string` | CaptureOutputs lists paths (inside the pod) to harvest after exec. Supports template variables: &#123;&#123;.callId&#125;&#125;, &#123;&#123;.sessionName&#125;&#125;. |
+| `spec.credentials` | `[]object` | Credentials is the resolved credential descriptor set the runner stamps onto the ToolCall. The toolcall controller hands it to the token broker to materialize exec env vars. References only — never token bytes. When empty, no credentials are injected. |
+| `spec.credentials[].inject` \* | `object` | Inject describes how to project the resolved token. |
+| `spec.credentials[].inject.envVar` | `string` | EnvVar projects the token into this environment variable (CLI / toolspec tools). |
+| `spec.credentials[].inject.header` | `object` | Header projects the token into this HTTP header (MCP tools). |
+| `spec.credentials[].inject.header.name` \* | `string` | Name is the HTTP header the token is written to. |
+| `spec.credentials[].inject.header.valuePrefix` | `string` | ValuePrefix is prepended to the token in the header value (e.g. "Bearer "). |
+| `spec.credentials[].source` \* | `object` | Source locates the credential's backing Secret. |
+| `spec.credentials[].source.key` | `string` | Key is the Secret data key for type=static; ignored otherwise. |
+| `spec.credentials[].source.name` \* | `string` | Name is the Secret name. For type=federated it is the IdP-identity Secret (the subject token source), NOT the upstream token. |
+| `spec.credentials[].source.namespace` \* | `string` | Namespace is the Secret's namespace; must equal the ToolCall's own, which ToolCall.ValidateCredentialSourceNamespaces enforces. |
+| `spec.credentials[].source.resource` | `string` | Resource / ResourceServerURL / Scopes are set only for type=federated and drive the ID-JAG mint. |
+| `spec.credentials[].source.resourceServerURL` | `string` |  |
+| `spec.credentials[].source.scopes` | `[]string` |  |
+| `spec.credentials[].source.type` \* | `string` | Type drives the read and expiry rules; see the type doc. _(enum: static \| oauth \| federated \| githubApp)_ |
+| `spec.env` | `map[string]string` | Env is non-secret configuration for the tool process. Use a bound AgentIdentity for any secret material; supplying secrets here is an error — the operator rejects keys whose name matches the well-known secret-name pattern. |
+| `spec.idleTimeout` | `string` | IdleTimeout (interactive mode only) ends the session after this much wall-clock with no activity — no tool output and no human input. The runner-side bridge enforces it. Zero means a system default applies. |
+| `spec.inputArtifacts` | `[]object` | InputArtifacts are stored payloads materialized into the pod before exec. |
+| `spec.inputArtifacts[].artifactRef` \* | `string` | ArtifactRef is an opaque storage reference resolved by the operator's ArtifactStore. |
+| `spec.inputArtifacts[].path` \* | `string` | Path (relative) inside /work/in/&lt;callId&gt;/ where this artifact is materialized. |
+| `spec.maxDuration` | `string` | MaxDuration (interactive mode only) is a hard wall-clock cap on the whole session, enforced by the controller's exec deadline. Zero means a system safety ceiling applies. |
+| `spec.mode` | `string` | Mode selects the execution path. _(enum: sync \| stream \| interactive; default: sync)_ |
+| `spec.preDispatchSnapshot` | `object` | PreDispatchSnapshot, when non-nil, requests the operator's toolcall controller snapshot the bundle session's workspace PVC *before* dispatching the tool. Set by the runner when the tool's stateImpact is readwrite or external — enables fork- from-this-turn semantics. The controller writes the resulting tool_dispatch_snapshot memory entry after the snapshot Job completes. |
+| `spec.preDispatchSnapshot.sequence` \* | `integer (int32)` | Sequence is the within-turn ordering: 0 for the first stateful dispatch in the turn, 1 for the second, etc. |
+| `spec.preDispatchSnapshot.sessionUID` \* | `string` | SessionUID is the parent AgentSession's UID. Snapshot handles are addressed under this UID. |
+| `spec.preDispatchSnapshot.turnIndex` \* | `integer (int32)` | TurnIndex is the runner's current turn. |
+| `spec.session` \* | `string` | Session is the name of the SpiceboxSession (same namespace) this call targets. |
+| `spec.stdin` | `string` | Stdin is inline bytes piped to the tool's stdin. For large payloads, use InputArtifacts instead. |
+| `spec.streamTokenHash` | `string` | StreamTokenHash is the hex-encoded SHA-256 of the gateway stream token. The runner sets this at ToolCall creation and keeps the token preimage in memory; the raw token never touches the API server. Required for streaming ToolCalls (mode=stream or mode=interactive). |
+| `spec.timeout` | `string` | Timeout is the hard deadline for the tool process. _(default: 60s)_ |
+| `spec.tool` \* | `string` | Tool is the name of the tool from the session's class catalog. |
+| `spec.workspace` | `object` | Workspace selects which workspace volume the tool runs against. |
+| `spec.workspace.mode` | `string` | Mode is whether /workspace is a shared RWX volume or private to this sandbox. _(enum: shared \| isolated; default: shared)_ |
+| `spec.workspace.sharedClaimName` | `string` | SharedClaimName is the name of the RWX PersistentVolumeClaim to mount at /workspace. Set by the AgentSession controller for bundle sessions when a workspace StorageClass is configured. Ignored when Mode is isolated or this is empty. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.agent` | `object` | Agent reports the AgentIdentity binding that supplied env to this call. nil when no agent was bound. |
+| `status.agent.injected` \* | `[]object` | Injected lists the env keys that were materialized from credentials, each with a masked sample of the value. The masked field is defence-in-depth for casual inspection — anyone with `get` on this ToolCall already has access to the same namespace's Secrets. |
+| `status.agent.injected[].key` \* | `string` | Key is the environment variable name the credential filled. |
+| `status.agent.injected[].masked` \* | `string` | Masked is a redacted display form of the injected value: a recognised delimiter-terminated vendor prefix (e.g. ghp_) plus **** plus the last 4 characters, or **** alone for short or non-printable values. See pkg/x/credmask. |
+| `status.conditions` | `[]object` | Conditions carries Validated, Running, Succeeded, Failed, Timeout and Canceled. |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.exitCode` | `integer (int32)` | ExitCode is the process exit status; nil when it never ran or is running. |
+| `status.finishedAt` | `string (date-time)` | FinishedAt is when the tool process exited or was killed. |
+| `status.observedGeneration` | `integer (int64)` | ObservedGeneration is the spec generation this status reflects. |
+| `status.outputArtifacts` | `[]object` | OutputArtifacts are the files harvested per spec.captureOutputs. |
+| `status.outputArtifacts[].artifactRef` \* | `string` | ArtifactRef is the opaque storage reference the bytes landed under. |
+| `status.outputArtifacts[].path` \* | `string` | Path is the in-pod path this artifact was harvested from. |
+| `status.outputArtifacts[].size` \* | `integer (int64)` | Size is the stored artifact's size in bytes. |
+| `status.startedAt` | `string (date-time)` | StartedAt is when the tool process began. |
+| `status.stderrArtifactRef` | `string` | StderrArtifactRef points at the captured stderr in the artifact store. |
+| `status.stderrTruncated` | `boolean` | StderrTruncated means the capture hit its size cap and is incomplete. |
+| `status.stdoutArtifactRef` | `string` | StdoutArtifactRef points at the captured stdout in the artifact store. |
+| `status.stdoutTruncated` | `boolean` | StdoutTruncated means the capture hit its size cap and is incomplete. |
+| `status.streaming` | `object` | Streaming is where a stream/interactive call's live output can be read. |
+| `status.streaming.available` \* | `boolean` | Available is false until the gateway is ready to serve this call's stream. |
+| `status.streaming.gatewayEndpoint` | `string` | GatewayEndpoint is the URL the runner connects to for live output. |
+| `status.toolspec` | `object` | Toolspec carries the toolspec validation result, populated on every reconcile that ran the validator — which is whenever the session's class declares any toolspecs. |
+| `status.toolspec.acceptedBy` | `string` | AcceptedBy is the name of the SpiceboxToolspec that returned Allow=true. Mutually exclusive with Failures. |
+| `status.toolspec.failures` | `[]object` | Failures lists every candidate toolspec that denied this call. Empty when AcceptedBy is set; populated when no candidate allowed. |
+| `status.toolspec.failures[].failedOn` | `object` | FailedOn points at the specific rule that denied; nil when the spec denied without one. |
+| `status.toolspec.failures[].failedOn.message` | `string` | Message is that rule's own denial text. |
+| `status.toolspec.failures[].failedOn.path` \* | `string` | Path locates the failing rule inside the toolspec. |
+| `status.toolspec.failures[].reason` | `string` | Reason is the denial explanation, safe to show the agent. |
+| `status.toolspec.failures[].specName` \* | `string` | SpecName is the SpiceboxToolspec that denied the call. |
+
+<small>\* required</small>
+

@@ -1,0 +1,43 @@
+id: slack-bot-token
+title: Slack
+description: A Slack bot token so the agent can read your workspace's channels and their members.
+docsURL: https://api.slack.com/authentication/token-types#bot
+shape: bearer
+builtin: slack-bot-token
+
+instructions: |
+  Create a Slack bot token so this agent can read your workspace:
+
+    1. Open https://api.slack.com/apps and create (or open) an app.
+    2. Under "OAuth & Permissions", add the bot token scopes the agent
+       needs — channels:read, groups:read, users:read and
+       users:read.email cover reading channels and their members.
+    3. Install the app to your workspace.
+    4. Copy the "Bot User OAuth Token" (starts with xoxb-) and paste it
+       here.
+
+prompt: |
+  Walk the user through creating a Slack app and installing it to their
+  workspace. Open https://api.slack.com/apps. Bot token scopes are added
+  under "OAuth & Permissions"; for reading channels and their members the
+  scope set is channels:read, groups:read, users:read, users:read.email.
+  Posting messages additionally needs chat:write. The credential is the
+  "Bot User OAuth Token" shown on that page once the app is installed, and
+  it starts with xoxb-. After the user pastes it, validate the shape and
+  call store_credential.
+
+# Format gate — enforced at every entry point (paste forms, put-token CLI,
+# setup flow) via ValidateToken. Prefix-only, and xoxb- only: this provider
+# is the BOT token specifically, and the common mistake is pasting one of
+# the neighbouring tokens copied from the same app (xapp- app-level, xoxp-
+# user, xoxe.xoxp- configuration). Naming the prefix is what turns that into
+# "you pasted the other one" instead of an opaque invalid_auth later.
+tokenShape:
+  pattern: '^xoxb-'
+  description: 'a Slack bot token starting with xoxb-'
+
+# No verify: probe, deliberately. Slack's auth.test answers HTTP 200 even for
+# a token it rejects, carrying the verdict in the body as {"ok": false,
+# "error": "invalid_auth"} — so the declarative status-based probe
+# (VerifyHTTPBearer) would report a dead token as live, which is worse than
+# reporting nothing. The flow's Verify says "unsupported" instead.

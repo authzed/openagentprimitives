@@ -1,0 +1,53 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolchain
+metadata:
+  name: claude
+spec:
+  description: "Claude Code CLI (the inner coding agent), relocated out of the base sandbox image"
+  source:
+    kind: image
+    # Rewritten to <registry>/ap-toolchain-claude:dev@sha256:... by
+    # pkg/platform/manifests.Substitute on a registry install, because apimage.Catalog()
+    # includes this image.
+    image: ap-toolchain-claude:dev
+    prefix: /opt/ap-toolchains/claude
+  bin:
+    - bin
+  env:
+    # The auto-updater must never mutate the on-disk binary in a reproducible
+    # sandbox. We relocate only the versioned binary (not Anthropic's own
+    # updater launcher/versions scaffolding — see
+    # images/toolchain-claude/Dockerfile), so the updater cannot run anyway;
+    # this is defensive belt-and-braces. Writable state (~/.claude) is handled
+    # by the class HOME=/tmp, so no path redirect is needed here.
+    #
+    # Skill discovery is a separate bridge, not a path redirect: AP stages
+    # opted-in skill bundles read-only at /skills/<MountName>/ (see
+    # pkg/platform/podspec.applySkillBundles), but Claude Code only looks for
+    # user-level skills at $HOME/.claude/skills/. AP installs its OWN launcher
+    # at bin/claude — internal/cmd/claudeshim, a small static Go binary built
+    # by images/toolchain-claude/Dockerfile — which symlinks the former into
+    # the latter (pkg/tools/toolchain/claude.LinkStagedSkills) before exec'ing
+    # the real binary (installed alongside it as bin/claude.real). This is
+    # deliberately NOT in pkg/platform/podspec: the layout of ~/.claude is
+    # Claude Code's own convention, not something the generic pod builder
+    # should know.
+    DISABLE_AUTOUPDATER: "1"
+  provides:
+    - claude
+    - claude-code
+  detect: []
+  # On-disk usage measured via:
+  #   docker run --rm --entrypoint /bin/sh ap-toolchain-claude:dev \
+  #     -c 'du -sk /opt/ap-toolchains/claude'
+  # → 250236 KB = 256,241,664 bytes, measured when the payload was a single
+  # native binary (claude 2.1.207). NOT re-measured since: the payload now
+  # also carries bin/claude (the claudeshim launcher, a small static Go
+  # binary with no third-party dependencies — expected on the order of a few
+  # MB) alongside bin/claude.real. The existing ~28MB of headroom against
+  # 285,000,000 is expected to absorb it, but re-run the du -sk command above
+  # after the next image build and update this value and comment for real
+  # rather than trusting that estimate.
+  # Held at 285,000,000 so a patch bump doesn't require re-tuning;
+  # under-estimating evicts the pod mid-copy.
+  sizeBytes: 285000000

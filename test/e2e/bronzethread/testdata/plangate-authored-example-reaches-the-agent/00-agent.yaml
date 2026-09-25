@@ -1,0 +1,175 @@
+# Fixture agent for the AUTHORED-PLAN-EXAMPLE scenario.
+#
+# Two examples now reach an agent that is about to plan, and they come from
+# different places for different reasons:
+#
+#   the DERIVED example   built by the runner from this session's own
+#                         permission surface, so it always speaks handles the
+#                         agent may actually declare
+#   an AUTHORED example   written by this class's author on
+#                         spec.authz.planGate.examples, for a plan whose good
+#                         shape is not obvious from the surface alone
+#
+# This bundle covers the second. It is the path with no coverage: the field is
+# validated at admission and rendered at compose time, and nothing exercised
+# the chain from CRD to prompt.
+#
+# The resource type is deliberately NOT repo-shaped. The derived example is
+# built from whatever the surface holds, and a fixture using git types could
+# pass while the renderer emitted a hardcoded git example — which is the exact
+# bug removing the hardcoded one fixed.
+apiVersion: v1
+kind: Secret
+metadata: {name: deskbot-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: deskbot-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: deskbot-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: deskbot-identity, namespace: default}
+spec:
+  description: "Authored-plan-example e2e fixture: static MCP bearer token."
+  credentials:
+    - name: deskbot-mcp-bearer
+      type: static
+      static: {secretRef: {name: deskbot-mcp-token, key: access_token}}
+---
+# A ticket desk: read a ticket, comment on it. Two permissions on one type, so
+# the derived example has a look phase and an act phase to build from.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: deskbot-fixture, namespace: default}
+spec:
+  name: deskbot-fixture
+  version: v1
+  intent: "Self-contained ticket-desk fixture for the e2e harness."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: deskbot-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: desk_ticket
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        display: {name: "Ticket", icon: repository, label: none}
+        permissions:
+          - name: read
+            expr: owner
+            title: "Read the ticket"
+          - name: comment
+            expr: owner
+            title: "Comment on the ticket"
+            # Rendered into the prompt beside the declarable handles. Asserted
+            # by this bundle too: notes and authored examples travel different
+            # routes to the same prompt, and either can break alone.
+            planningNote: >-
+              Commenting quotes the ticket back, so declare perm:read:desk_ticket
+              in the same phase.
+  tools:
+    - name: show
+      intent: "Read one ticket."
+      args:
+        allowedFields: [ticketID]
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: desk_ticket
+          resourceIDExpr: '"" + args.ticketID'
+          resourceIDTransforms: [spicedb_escape]
+          permission: read
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: comment
+      intent: "Add a comment to one ticket."
+      args:
+        allowedFields: [ticketID, body]
+      permission:
+        stateImpact: readwrite
+        check:
+          resourceType: desk_ticket
+          resourceIDExpr: '"" + args.ticketID'
+          resourceIDTransforms: [spicedb_escape]
+          permission: comment
+      effects:
+        readOnly: false
+        idempotent: false
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: deskbot-fixture, namespace: default}
+spec:
+  displayName: DeskBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: deskbot-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`
+      and the production operator will reject this AgentClass.
+
+      You answer tickets. Available tools:
+        - deskbot_show(ticketID): read one ticket
+        - deskbot_comment(ticketID, body): comment on one ticket
+  agentIdentity: deskbot-identity
+  mcpServers:
+    - name: deskbot
+      ref: deskbot-fixture
+  authz:
+    slots:
+      - resourceType: desk_ticket
+        description: "One ticket, by its id"
+        permission: comment
+        permissions: [read]
+    planGate:
+      mode: enforcing
+      # The authored example under test. Every handle here is declarable on
+      # this class — validatePlanExamples refuses the class outright otherwise,
+      # which is why an admitted class can never be teaching a handle that
+      # would be silently dropped from its agent's phase.
+      #
+      # Slots carry TYPES and no ids: a planner that copied a concrete id would
+      # address a ticket belonging to whoever this example was written about.
+      examples:
+        - task: "answer a ticket the user names"
+          phases:
+            - id: read-it
+              label: "Read the ticket first"
+              permissions: [perm:read:desk_ticket]
+              slots: [desk_ticket]
+            - id: answer-it
+              label: "Comment with the answer"
+              permissions: [perm:read:desk_ticket, perm:comment:desk_ticket]
+              slots: [desk_ticket]
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: deskbot-fixture-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: deskbot-fixture
+  credentialsRef: {secretName: deskbot-fake-creds}
+  fake: {echo: false}

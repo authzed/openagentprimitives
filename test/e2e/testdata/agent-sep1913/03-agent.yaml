@@ -1,0 +1,51 @@
+# AgentClass + Channel for the SEP-1913 trust-enforcement e2e fixture.
+#
+# AgentClass uses model.provider="test" — production refuses it.
+# Channel kind=fake is the in-process transport.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: sep1913-agent
+  namespace: default
+spec:
+  displayName: SEP-1913 Fixture Agent
+  description: "E2E fixture for SEP-1913 trust-enforcement. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: sep1913-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the SEP-1913 trust-enforcement e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      Available tools:
+        - sep1913_irreversible_action(target): an action with irreversible outcomes
+        - sep1913_flagged_query(query): a query whose response may be flagged
+
+      # NOTE: tool names use the "sep1913_" prefix because the AgentClass
+      # declares mcpServers[0].name: sep1913 below.
+  agentIdentity: sep1913-identity
+  mcpServers:
+    - name: sep1913
+      ref: sep1913-tools
+  budget:
+    maxTurns: 5
+    maxTokens: 10000
+    maxDuration: 2m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: sep1913-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: sep1913-agent
+  credentialsRef:
+    secretName: sep1913-fake-creds
+  fake:
+    echo: false

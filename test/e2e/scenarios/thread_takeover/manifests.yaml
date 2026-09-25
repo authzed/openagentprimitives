@@ -1,0 +1,94 @@
+# Scenario: thread takeover (thread_takeover_test.go).
+#
+# A userPassthrough agent over a REAL slack channel. Alice @mentions the bot;
+# the session parks AwaitingCredentials (the MCP server needs a credential she
+# never links) and, after the short credentialLinkTimeout, fails. A DIFFERENT
+# user (bob) then @mentions the SAME thread and takes it over in a new session
+# he owns — the different-user takeover behavior.
+#
+# spec.server.url is rewritten to {{MCP_URL}} by the test before apply.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tk-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-test-provider"
+---
+# Slack credentials. The fake transport ignores the values but the keys must be
+# present for the Channel controller's kind=slack/role=both readiness check.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tk-slack-creds
+  namespace: default
+type: Opaque
+stringData:
+  bot-token: "xoxb-test"
+  app-token: "xapp-test"
+---
+# MCPServer the passthrough class needs a credential for. Its auth.credential is
+# the gate key on the starter's SessionUserIdentity MissingCredentials list, so
+# an un-linked session parks in AwaitingCredentials.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: tk-linear-mcp
+  namespace: default
+spec:
+  name: tk-linear-mcp
+  version: v1
+  intent: "Thread-takeover e2e: drives the missing-credential park then timeout."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: linear-oauth
+    provider: Linear
+    title: Linear
+  tools: []
+---
+# userPassthrough AgentClass with a SHORT credentialLinkTimeout so the parked
+# session fails quickly instead of the 30m default.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: tk-agent
+  namespace: default
+spec:
+  displayName: "Takeover Bot"
+  description: "E2E fixture for thread-takeover. Do not deploy to a real cluster."
+  identityMode: userPassthrough
+  credentialLinkTimeout: "5s"
+  model:
+    provider: test
+    name: scripted
+    apiKey:
+      name: tk-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a passthrough takeover-fixture agent"
+  budget:
+    maxTurns: 50
+    maxTokens: 100000
+    maxDuration: "1h"
+  mcpServers:
+    - name: linear
+      ref: tk-linear-mcp
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: tk-channel
+  namespace: default
+spec:
+  kind: slack
+  role: both
+  agentClass: tk-agent
+  sessionScope: auto
+  credentialsRef:
+    secretName: tk-slack-creds
+  slack:
+    mode: socket

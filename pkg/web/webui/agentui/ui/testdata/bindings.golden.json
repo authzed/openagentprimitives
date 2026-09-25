@@ -1,0 +1,90 @@
+{
+  "declaration": {
+    "view": {
+      "component": "ap:stack",
+      "children": [
+        {
+          "component": "ap:stack",
+          "children": [
+            {
+              "component": "ap:select",
+              "props": {
+                "param": "span",
+                "value": "7d",
+                "options": [
+                  { "value": "7d", "label": "7 days" },
+                  { "value": "30d", "label": "30 days" }
+                ]
+              }
+            },
+            {
+              "component": "ap:card",
+              "props": { "title": "Leads" },
+              "children": [
+                {
+                  "component": "ap:table",
+                  "props": {
+                    "columns": [{ "key": "name", "header": "Name" }],
+                    "rows": []
+                  },
+                  "bindings": {
+                    "rows": {
+                      "source": "tool",
+                      "ref": "golden_rows",
+                      "args": { "span": { "$param": "span" } }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "component": "ap:markdown",
+          "props": { "body": "loading..." },
+          "bindings": {
+            "body": { "source": "tool", "ref": "fail_ref", "args": {} }
+          }
+        },
+        {
+          "component": "oap:generative",
+          "props": {
+            "name": "data",
+            "allowedComponents": ["*"]
+          },
+          "children": [
+            {
+              "component": "ap:table",
+              "props": {
+                "columns": [{ "key": "name", "header": "Name" }],
+                "rows": []
+              },
+              "bindings": {
+                "rows": {
+                  "source": "tool",
+                  "ref": "golden_envelope",
+                  "select": "results[].properties"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "request": { "params": { "span": "7d" } },
+  "paths": ["/0.1.0#rows", "/1#body", "data/0#rows"],
+  "response": {
+    "bindings": {
+      "/0.1.0#rows": {
+        "status": "ok",
+        "value": [{ "name": "Acme" }, { "name": "Globex" }]
+      },
+      "/1#body": { "status": "error", "message": "this action failed" },
+      "data/0#rows": {
+        "status": "ok",
+        "value": [{ "name": "Initech" }, { "name": "Umbrella" }]
+      }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+export const meta = {
+  title: 'PublicEndpoint',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3150,
+  description: 'PublicEndpoint is how this cluster is reached from the public Internet.',
+}
+
+# PublicEndpoint
+
+**Group** `agentprimitives.authzed.com` · **Scope** Cluster · **Short names** `pubep`
+
+PublicEndpoint is how this cluster is reached from the public Internet.
+
+Cluster-scoped because it describes the cluster's own front door, not any
+one namespace's. status.url is the single source of truth for where this
+cluster is reachable; everything that needs a public address reads it,
+directly or through the ConfigMap the controller derives from it.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.authTokenRef` \* | `object` | AuthTokenRef names the Secret key holding the provider's auth token. |
+| `spec.authTokenRef.key` \* | `string` | Key is the data key within the Secret holding the value. |
+| `spec.authTokenRef.name` \* | `string` | Name is the Secret's name. |
+| `spec.authTokenRef.namespace` \* | `string` | Namespace is the Secret's namespace; required, since the referring CRD is cluster-scoped. |
+| `spec.localURL` \* | `string` | LocalURL is where the target is reachable FROM THE HOST while no tunnel is up — the address a port-forward binds, scheme and port included: "http://localhost:8080" for a `kubectl port-forward`-shaped install, "http://127.0.0.1:17080" for the desktop app's own forward. It is set by whoever creates this CR because the cluster cannot know it. The host half and the port half BOTH vary, and they vary independently: `oap install` seeds webd's external URL as "http://localhost:8080", while `oap desktop` binds 127.0.0.1 on a port it picks at runtime by scanning upward from a base. webd dispatches on an EXACT bare-host match, so "localhost" and "127.0.0.1" are different origins to it and guessing either one 404s the browser at the address the user was told to open. REQUIRED, and deliberately not defaulted: a default is what produced the bug this field exists to close — a plausible-looking address written by something that could not know the real one. The controller ALSO refuses an empty value at runtime, for a CR created against an earlier version of this CRD where the apiserver did not yet enforce it. |
+| `spec.provider` \* | `string` | Provider names a registered tunnel provider: "ngrok" today. Dispatched through pkg/web/localtunnel/registry; a new provider is a registration, never a branch in a consumer. |
+| `spec.reservedDomain` | `string` | ReservedDomain pins a stable hostname. Empty means the provider assigns one per session, which changes on every restart — see the repointing the channel controller does in response. |
+| `spec.target` \* | `object` | Target is the in-cluster Service the tunnel forwards to. |
+| `spec.target.namespace` \* | `string` | Namespace is the Service's namespace. |
+| `spec.target.port` \* | `integer (int32)` | Port is the Service port to forward to. |
+| `spec.target.service` \* | `string` | Service is the Service's name. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` |  |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.observedAt` | `string (date-time)` | ObservedAt is when the controller last CHANGED url, phase or the Ready condition. It is deliberately NOT a per-reconcile heartbeat: a freshly-stamped timestamp on every reconcile would make every reconcile a status write, churning the object and re-triggering every watcher for no new information. |
+| `status.phase` | `string` | Phase is Pending, Ready or Failed. |
+| `status.url` | `string` | URL is the live public address, empty until the tunnel is Ready. It is an OBSERVATION: only this controller writes it, and it is never mirrored into an applied field. |
+
+<small>\* required</small>
+

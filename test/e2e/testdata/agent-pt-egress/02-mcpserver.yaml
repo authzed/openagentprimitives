@@ -1,0 +1,95 @@
+# MCPServer for the ptdemo-records fixture.
+#
+# The fixture exists to exercise PER-DATUM PROVENANCE (pt-tags), so it is
+# stripped to the one thing that mints one: a tool whose toolResourceMap
+# declares a READ of a SpiceDB resource. The runner's info-leakage hook
+# fires at PostToolCall on that declaration and asks the operator to mint
+# a tag whose reader set is DERIVED from the resource named here.
+#
+# Two entries with deliberately different audiences (seeded in
+# 04-spicedbbootstrap.yaml) are what make the derivation assertable: a tag
+# minted from one entry must resolve to that entry's viewers and to nobody
+# else. With a single audience every subject would be a reader and the
+# scenario would pass whether the lattice worked or not.
+#
+# spec.server.url is the literal sentinel `{{MCP_URL}}` — the e2e harness
+# rewrites it to the httptest server URL before apply.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: ptdemo-records
+  namespace: default
+spec:
+  name: ptdemo-records
+  version: v1
+  intent: "Fixture for the per-datum provenance e2e bundle."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: ptdemo-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: ptdemo_entry
+        # session-only: reading an entry is not authority to approve
+        # anything about it. The fixture asserts on the tag's audience,
+        # never on an approval, so no approver permission is declared.
+        standing: session-only
+        relations:
+          - name: viewer
+            subjectType: user
+        permissions:
+          - name: view
+            expr: viewer
+  tools:
+    - name: read_entry
+      intent: "Fetch one ptdemo entry by its id."
+      args:
+        allowedFields: [id]
+      # stateImpact: stateless — opts out of the per-tool SpiceDB Check.
+      # Deliberate: this bundle's claim is about the TAG the read minted,
+      # and leaving the tool-call gate on would make a failure ambiguous
+      # between "the check denied" and "the mint never happened".
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: read_public_note
+      intent: "Fetch a note a ptdemo entry links to, from the open web."
+      args:
+        allowedFields: [id]
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+      # The INTEGRITY signal, declared by the server about itself: this
+      # tool's result may carry content the agent must not treat as
+      # instructions. SEP-1913 returnMetadata.source, the same annotation
+      # `deny.trust.sourceUntrustedPublic` consumes — but recorded on the
+      # minted tag whether or not any spec chose to deny on it, because a
+      # tag left unmarked would launder untrusted data into a handoff never
+      # allowed to carry it.
+      #
+      # Note this tool is otherwise IDENTICAL to read_entry: same permission,
+      # same effects, same declared read below. The only difference is the
+      # source declaration, which is what makes the pair a controlled
+      # comparison rather than two unrelated scenarios.
+      trust:
+        returnMetadata:
+          source: ["untrustedPublic"]
+  # The declaration the mint hangs off. `reads` means "after this call,
+  # record what it touched"; idArg names the argument carrying the id, so
+  # a call with id=entry-100 mints a tag derived from ptdemo_entry:entry-100.
+  toolResourceMap:
+    - tool: read_entry
+      reads:
+        resourceType: ptdemo_entry
+        idArg: id
+        permission: view
+    - tool: read_public_note
+      reads:
+        resourceType: ptdemo_entry
+        idArg: id
+        permission: view

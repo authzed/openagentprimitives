@@ -1,0 +1,144 @@
+# AgentUI/pipeline-desk-ui: the e2e fixture's mirror of
+# examples/leads-console's AgentUI — the SAME shape (5 slots, 1 action, 4
+# runtime parameter keys: window.from, window.to, stage, lead) under
+# fabricated names. Binding refs use the "deals_" prefix because the
+# AgentClass fixture (03-agentclass.yaml) names this MCPServer's entry
+# "deals" (spec.mcpServers[0].name) — the runner synthesizes browser-callable
+# tool names as <prefix>_<bare tool name>, normalized (see the standing
+# briefing's "Tool-name matching" note).
+#
+# This e2e harness does not register pkg/controllers/agentui's reconciler
+# (see view_capability_test.go's markAgentUIValid doc comment for why), so
+# nothing here relies on live reconciliation: every scenario built on this
+# fixture stamps AgentUI.Status.Conditions itself, computed the same way the
+# real reconciler would (see stampAgentUIValidity in browser_arm_test.go).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentUI
+metadata:
+  name: pipeline-desk-ui
+  namespace: default
+spec:
+  displayName: Pipeline desk
+  chrome:
+    initialState: expanded
+  tools: [deals_list_leads, deals_stage_breakdown, deals_advance_lead_stage]
+  actions:
+    - name: advance_stage
+      tool: deals_advance_lead_stage
+      inputs: [note]
+      args:
+        leadId: {"$param": "lead"}
+        note: {"$param": "note"}
+  slots:
+    - name: summary
+      agentWritable: true
+      default:
+        component: ap:markdown
+        props:
+          body: "No summary yet. Ask the agent to summarize this pipeline."
+
+    - name: filters
+      default:
+        component: ap:stack
+        props:
+          direction: horizontal
+          gap: md
+          align: end
+        children:
+          - component: ap:daterange
+            props:
+              param: window
+              from: "2026-05-15T00:00:00Z"
+              to: "2026-08-13T00:00:00Z"
+          - component: ap:select
+            props:
+              param: stage
+              value: ""
+              placeholder: All stages
+              options:
+                - {value: "", label: All stages}
+                - {value: "new", label: New}
+                - {value: "qualified", label: Qualified}
+                - {value: "proposal", label: Proposal}
+                - {value: "won", label: Won}
+
+    - name: pipeline
+      default:
+        component: ap:card
+        props:
+          title: Current leads
+        children:
+          - component: ap:table
+            props:
+              empty: No leads in this window.
+              columns:
+                - {key: label, header: Lead}
+                - {key: stage, header: Stage}
+                - {key: owner, header: Owner}
+                - {key: updated, header: Last touched, align: right}
+            bindings:
+              rows:
+                source: tool
+                ref: deals_list_leads
+                args:
+                  from: {"$param": "window.from"}
+                  to: {"$param": "window.to"}
+                  stage: {"$param": "stage"}
+
+    - name: breakdown
+      default:
+        component: ap:card
+        props:
+          title: Stage breakdown
+        children:
+          - component: ap:chart
+            props:
+              kind: bar
+              xKey: stage
+              series:
+                - {key: count, label: Leads}
+            bindings:
+              data:
+                source: tool
+                ref: deals_stage_breakdown
+                args:
+                  from: {"$param": "window.from"}
+                  to: {"$param": "window.to"}
+
+    - name: advance
+      default:
+        component: ap:card
+        props:
+          title: Advance a lead
+          description: "Moves one lead to its next stage. An approver decides."
+        children:
+          - component: ap:stack
+            props:
+              gap: sm
+            children:
+              - component: ap:select
+                props:
+                  param: lead
+                  placeholder: Choose a lead
+                bindings:
+                  options:
+                    source: tool
+                    ref: deals_list_leads
+                    args:
+                      from: {"$param": "window.from"}
+                      to: {"$param": "window.to"}
+                      stage: {"$param": "stage"}
+              - component: ap:form
+                props:
+                  action: advance_stage
+                  submitLabel: Advance stage
+                  fields:
+                    - {name: note, label: Note, kind: textarea}
+              - component: ap:alert
+                props:
+                  severity: info
+                  title: Last request
+                bindings:
+                  body:
+                    source: action
+                    ref: advance_stage

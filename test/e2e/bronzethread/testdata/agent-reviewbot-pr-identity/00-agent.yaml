@@ -1,0 +1,197 @@
+# Fixture agent for the trigger-started PR-identity-pause bundle: one
+# webhook delivery binds a pull request into a write_memory slot at session
+# mint, the session records identity relationships against it, and a second
+# pull request the delivery never named is refused. See the bundle's own
+# description for why this fixture carries no record_observation (pool-write)
+# leg.
+#
+# TWO Channels, and the pairing is not optional. github's ValidateSpec
+# rejects role=output|both (pkg/channels/channelkinds/github/kind.go), and
+# the pipeline's create path REFUSES to mint a session at all for a
+# role=input Channel whose AgentClass resolves no role=output Channel
+# (pipeline.go: "outbound binding unresolvable; refusing to create an
+# undeliverable session") — this is not about whether respond_to_user gets
+# called, it fires at session-mint time regardless. The output half here is
+# kind=fake rather than the reviewbot demo's slack, because nothing in this
+# scenario needs a rendered reply or a live-view offer: every assertion reads
+# a TOOL RESULT, never a delivered message, and fake's OutboundAnchor needs
+# no credential shape of its own (pkg/channels/channelkinds/fake/anchor.go).
+#
+# authz.toolCalls: {mode: permissive} sidesteps the toolkit's OWN
+# github_repo_url/read check on `gh pr view` (toolkits/gh.yaml) — this
+# fixture carries no ownership tuple for that resource, and permissive mode
+# is what sandbox-subcommand-permissions already proves lets a readonly call
+# dispatch without one. What is NOT bypassed is the writesRelationships
+# blocks' requireSlotBound gate below: that check is unconditional on the
+# authz.toolCalls mode, and is the one this bundle exists to exercise.
+apiVersion: v1
+kind: Secret
+metadata: {name: pr-pause-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+# The github App credentials verifying the webhook signature. private-key and
+# webhook-secret are PLACEHOLDERS the harness patches over with a real
+# generated key and its own signing secret (Harness.WireGitHubCredentials).
+apiVersion: v1
+kind: Secret
+metadata: {name: pr-pause-gh-creds, namespace: default}
+type: Opaque
+stringData:
+  app-id: "1"
+  installation-id: "1"
+  private-key: "patched-by-the-harness"
+  webhook-secret: "patched-by-the-harness"
+---
+# The agent's own gh CLI token, wired through AgentIdentity. Never dialed for
+# real — the sandbox call is served by the fake exec binder — but the
+# AgentIdentity reconciler validates the stored value against the
+# github-pat provider's token shape regardless, so it must carry the "ghp_"
+# prefix.
+apiVersion: v1
+kind: Secret
+metadata: {name: pr-pause-gh-token, namespace: default}
+type: Opaque
+stringData: {token: "ghp_fixtureplaceholder"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: pr-pause-gh-identity, namespace: default}
+spec:
+  description: "Fixture identity for the PR-identity-pause bundle: static gh token credential."
+  credentials:
+    - name: github-token
+      type: static
+      static:
+        secretRef: {name: pr-pause-gh-token, key: token}
+---
+# The two writesRelationships blocks are a byte-identical copy of
+# test/e2e/testdata/agent-pr-identity-e2e/02-toolspec.yaml, which is itself
+# kept in sync BY HAND with the shipped reviewbot demo's own toolspec — see
+# that file's header. Both declare requireSlotBound: true: github_user is a
+# reserved scaffold subject type (pkg/authz/relwrites/reserved_types.go) and
+# ValidateSlotBoundSubject refuses a github_user subject from any block that
+# doesn't.
+#
+# The no-jq/no-template constraint mirrors the same shipped toolspec: `gh pr
+# view --jq EXPR` would let the model reshape stdout before either block
+# reads result.stdoutJSON; --template is refused ahead of need (`pr view`
+# declares no such flag today, per toolkits/gh.yaml).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: pr-pause-gh-review
+spec:
+  name: pr-pause-gh-review
+  version: "1"
+  intent: "Fixture toolspec for the PR-identity-pause bundle: gh pr view, and nothing else."
+  toolkit:
+    name: gh
+    revision: "2026-05-01"
+  allowSubcommands:
+    - "pr view"
+  sensitive:
+    env:
+      - GITHUB_TOKEN
+  constraints:
+    - cel: call.subcommand != 'pr view' || (!call.hasFlag('jq') && !call.hasFlag('template'))
+      message: "gh pr view --jq/--template lets the model reshape the forge's own response; denied so the identity blocks below read result.stdoutJSON verbatim."
+  writesRelationships:
+    - when: 'size(args.argv) > 1 && args.argv[0] == "pr" && args.argv[1] == "view" && has(result.stdoutJSON) && has(result.stdoutJSON.id) && has(result.stdoutJSON.author)'
+      requireSlotBound: true
+      tuple:
+        resource: '"github_pull_request:" + result.stdoutJSON.id'
+        relation: '"author"'
+        subject: '"github_user:" + result.stdoutJSON.author.id'
+    - when: 'size(args.argv) > 1 && args.argv[0] == "pr" && args.argv[1] == "view" && has(result.stdoutJSON) && has(result.stdoutJSON.id) && has(result.stdoutJSON.isCrossRepository) && !result.stdoutJSON.isCrossRepository && has(result.stdoutJSON.headRepository) && has(result.stdoutJSON.headRepository.id)'
+      requireSlotBound: true
+      tuple:
+        resource: '"github_pull_request:" + result.stdoutJSON.id'
+        relation: '"repo"'
+        subject: '"github_repo:" + result.stdoutJSON.headRepository.id'
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata: {name: pr-pause-sandbox, namespace: default}
+spec:
+  resources: {cpu: 250m, memory: 128Mi, ephemeralStorage: 128Mi}
+  tools:
+    - {name: gh, command: ["/usr/bin/gh"]}
+  toolspecs:
+    - {name: pr-pause-gh-review}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-pr-pause, namespace: default}
+spec:
+  displayName: DemoPRPause
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: pr-pause-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      A signed webhook delivers a pull request; you read it with gh pr view
+      and answer nothing back to a channel.
+  agentIdentity: pr-pause-gh-identity
+  toolBundles:
+    - name: gh-review
+      class: pr-pause-sandbox
+      toolspecs: [pr-pause-gh-review]
+  authz:
+    session:
+      # github's input Channel has UserAttributable=false — the pull
+      # request's author has no AP identity — so the AgentClass controller
+      # REQUIRES this: without it agentsession#interact resolves to nothing
+      # for every session this class spawns.
+      interactPermission: "group:demo-pr-pause-maintainers#member"
+    toolCalls: {mode: permissive}
+    slots:
+      - resourceType: github_pull_request
+        description: "The pull request this session was triggered for; binds at delivery time and opens its memory pool for the identity writes."
+        permission: write_memory
+        fillFrom: ["trigger"]
+  budget: {maxTurns: 20, maxTokens: 100000, maxDuration: "30m"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: demo-pr-pause-gh, namespace: default}
+spec:
+  kind: github
+  role: input
+  agentClass: demo-pr-pause
+  sessionScope: thread
+  authzSubject: "service:demo-pr-pause"
+  owner:
+    explicit: "user:demo-pr-pause-owner"
+  credentialsRef:
+    secretName: pr-pause-gh-creds
+  github:
+    appSlug: demo-pr-pause
+    events: ["opened", "synchronize", "reopened", "ready_for_review"]
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: pr-pause-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+# The role=output half of the split-channel pair (see this file's header
+# comment). Never addressed by name in the bundle: it is reached only through
+# outputbind.Resolve, which finds the one role=output Channel bound to
+# demo-pr-pause and anchors this session's replies to it at mint time. No
+# reply is ever sent here — nothing in the transcript calls respond_to_user —
+# so its only job is to exist and resolve.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: demo-pr-pause-out, namespace: default}
+spec:
+  kind: fake
+  role: output
+  agentClass: demo-pr-pause
+  credentialsRef:
+    secretName: pr-pause-fake-creds
+  fake: {echo: false}

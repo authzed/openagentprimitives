@@ -1,0 +1,99 @@
+{
+  "name": "plangate-denial-streak-hold",
+  "description": "A plan-gate denial streak trips the forensic hold end to end. Phase 0 declares a budget of ONE governed call for perm:list:crm_company (mirrors plangate-call-budget's focus mechanism, deliberately: a budget-exhaustion denial needs no plan_amendment card and so no SpiceDB approver-resolution round trip inside the tool dispatch that the operator's reap could race and abort mid-flight, unlike an uncovered-permission denial). The agent lists the companies once (spends the budget), then keeps calling: three more attempts are refused by the exhausted budget, tripping the threshold=3 denial-streak tripper on the third, and a fifth attempt after that is STILL refused — proving the block outlives the exact three calls that tripped it, not a coincidence of the ceiling. The session's final phase (Held) is asserted at the Go level (checkSessionPhase in plangate_denial_streak_hold_test.go), since bt.Assertions carries no session-phase field.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+  "extraManifests": ["plangate-enforcing"],
+
+  "toolOutputs": {
+    "list_companies": { "results": [] },
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "userTurns": ["list the companies, then keep checking for new ones"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                { "id": "s1", "label": "list companies", "status": "pending", "phase": "recon" }
+              ],
+              "phases": [
+                {
+                  "id": "recon",
+                  "label": "List the companies",
+                  "why": "the user asked which companies exist",
+                  "budget": { "calls": 1, "why": "one listing is all this needs" },
+                  "permissions": [
+                    { "handle": "perm:list:crm_company", "why": "to list companies" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-1", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": { "lastToolResult": "centerdot_list_companies", "lastToolResultIsError": false },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-2", "_reason": "checking again", "args": {} } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "update_plan"
+      },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-3", "_reason": "checking again", "args": {} } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "update_plan"
+      },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-4", "_reason": "checking again", "args": {} } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "update_plan"
+      },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-5", "_reason": "one more try, well after the streak should have tripped", "args": {} } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "update_plan"
+      },
+      "reply": [{ "text": "I keep getting refused; giving up and waiting for a human." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "blocked" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["giving up"],
+    "planGate": {
+      "frozenPhases": 1,
+      "rebuildableFromLog": true
+    }
+  }
+}

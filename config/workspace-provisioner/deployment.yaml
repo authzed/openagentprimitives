@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ap-workspace-provisioner
+  namespace: ap-workspace-storage
+  labels:
+    app.kubernetes.io/name: ap-workspace-provisioner
+    agentprimitives.authzed.com/install-tier: workspace-provisioner-rwx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ap-workspace-provisioner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ap-workspace-provisioner
+        agentprimitives.authzed.com/install-tier: workspace-provisioner-rwx
+    spec:
+      serviceAccountName: ap-workspace-provisioner
+      containers:
+        - name: provisioner
+          image: rancher/local-path-provisioner:v0.0.32
+          imagePullPolicy: IfNotPresent
+          # Conservative hardening only: this is a THIRD-PARTY image
+          # (rancher/local-path-provisioner), so runAsNonRoot and
+          # readOnlyRootFilesystem are deliberately omitted — they depend on
+          # the image's user/filesystem behavior and could break it at deploy
+          # (the controller may run as root / write to its working dir). Drop
+          # ALL caps + no-privilege-escalation + seccomp RuntimeDefault are
+          # universally safe (the controller only talks to the apiserver; node
+          # mkdir runs in separate busybox helper pods). Promote to the full
+          # block once verified against a running provisioner.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          command:
+            - local-path-provisioner
+            - --debug
+            - start
+            - --provisioner-name=cluster.local/ap-workspace-provisioner
+            - --config=/etc/config/config.json
+            # The helper-pod template lives under the SAME mounted ConfigMap
+            # (helperPod.yaml key). Without this flag v0.0.32 falls back to the
+            # default ConfigMap name "local-path-config", which we don't ship,
+            # and crash-loops with "invalid empty flag helper-pod-file".
+            - --helper-pod-file=/etc/config/helperPod.yaml
+            # The setup/teardown SCRIPT volume injected into each create/delete
+            # helper pod is sourced from the ConfigMap named by this flag. Without
+            # it the provisioner defaults to "local-path-config" (which we don't
+            # ship), so every helper pod hangs in ContainerCreating on a missing
+            # ConfigMap mount and the create process times out after 120s — the
+            # StorageClass then never provisions. Point it at the ConfigMap we
+            # actually ship (it carries config.json + helperPod.yaml + setup +
+            # teardown). Must match the ConfigMap name in config.yaml.
+            - --configmap-name=ap-workspace-provisioner-config
+            - --service-account-name=ap-workspace-provisioner
+            - --helper-image=busybox
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config/
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CONFIG_MOUNT_PATH
+              value: /etc/config/
+      volumes:
+        - name: config-volume
+          configMap:
+            name: ap-workspace-provisioner-config

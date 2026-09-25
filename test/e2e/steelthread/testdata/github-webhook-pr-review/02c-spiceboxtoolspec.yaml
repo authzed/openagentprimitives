@@ -1,0 +1,102 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: demo-reviewbot-claude
+  namespace: default
+spec:
+  allow:
+    creds: {}
+    filesystem: {}
+    network: {}
+  allowSubcommands:
+  - ""
+  deny:
+    effects:
+      creds: {}
+  intent: the inner Claude Code that performs the review, loading the review-pr and/or
+    differential-review skill
+  name: demo-reviewbot-claude
+  require: {}
+  sensitive:
+    env:
+    - ANTHROPIC_API_KEY
+  toolkit:
+    name: claude
+    revision: "2026-05-19"
+  version: "1"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: demo-reviewbot-gh-review
+  namespace: default
+spec:
+  allow:
+    creds: {}
+    filesystem: {}
+    network: {}
+  allowSubcommands:
+  - api
+  - pr view
+  - pr checks
+  - auth status
+  constraints:
+  - cel: call.subcommand != 'api' || (!call.positional['endpoint'].contains('..')
+      && call.positional['endpoint'].matches('^repos/[^/]+/[^/]+/(check-runs|pulls/[0-9]+|pulls/[0-9]+/files|commits/[0-9a-f]+/check-runs)$'))
+    message: gh api is limited to check-runs and read-only PR/commit endpoints. reviewbot
+      does not comment on pull requests or modify repositories.
+  deny:
+    effects:
+      creds: {}
+  intent: gh, for reading a pull request and writing this agent's own Check Run
+  name: demo-reviewbot-gh-review
+  require: {}
+  sensitive:
+    env:
+    - GITHUB_TOKEN
+    - GH_TOKEN
+  toolkit:
+    name: gh
+    revision: "2026-05-01"
+  version: "1"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: demo-reviewbot-git-ro
+  namespace: default
+spec:
+  allow:
+    creds: {}
+    filesystem: {}
+    network: {}
+  allowSubcommands:
+  - clone
+  - fetch
+  - checkout
+  - diff
+  - log
+  - status
+  - show
+  constraints:
+  - cel: call.subcommand != 'clone' || !call.positional['repository'].contains('@')
+    message: Do not embed credentials in the clone URL. Auth is supplied automatically
+      via GIT_TOKEN — clone with a plain URL such as https://github.com/owner/repo.
+  - cel: '!call.hasFlag(''c'') || call.flags[''c''].all(v, v.startsWith(''user.name='')
+      || v.startsWith(''user.email=''))'
+    message: git -c may only set user.name= or user.email=. Any other -c key — core.sshCommand,
+      url.*.insteadOf, http.*.extraHeader, credential.helper, alias.*, include.path
+      — is rejected.
+  deny:
+    effects:
+      creds: {}
+  intent: 'git, read-only: clone a repo and inspect a pull request''s diff'
+  name: demo-reviewbot-git-ro
+  require: {}
+  sensitive:
+    env:
+    - GIT_TOKEN
+  toolkit:
+    name: git
+    revision: "2026-04-24"
+  version: "1"

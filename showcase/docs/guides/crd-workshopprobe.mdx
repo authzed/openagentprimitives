@@ -1,0 +1,60 @@
+export const meta = {
+  title: 'WorkshopProbe',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3320,
+  description: 'WorkshopProbe is the tool-discovery probe object for an agent-builder',
+}
+
+# WorkshopProbe
+
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `wprobe`
+
+WorkshopProbe is the tool-discovery probe object for an agent-builder
+workshop: the operator runs one pod against spec.image (or spec.script's
+baseImage, or spec.cliHelp's image) and records what it discovered — the
+probed tool set, help text, or a failure — on status. Namespaced to the
+workshop's own namespace; the sidecar SA creates it, the operator (never
+the sidecar) runs the pod and writes status.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.cliHelp` | `object` |  |
+| `spec.cliHelp.args` | `[]string` |  |
+| `spec.cliHelp.binary` \* | `string` |  |
+| `spec.cliHelp.image` \* | `string` |  |
+| `spec.image` | `string` |  |
+| `spec.script` | `object` |  |
+| `spec.script.baseImage` \* | `string` |  |
+| `spec.script.script` \* | `string` |  |
+| `spec.timeoutSeconds` | `integer (int32)` | _(default: 120; min 5; max 600)_ |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` |  |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.helpText` | `string` |  |
+| `status.observedGeneration` | `integer (int64)` |  |
+| `status.phase` | `string` |  |
+| `status.podFailure` | `string` |  |
+| `status.resolvedDigest` | `string` |  |
+| `status.tools` | `[]object` |  |
+| `status.tools[].description` | `string` |  |
+| `status.tools[].inputSchema` | `string` | InputSchema is JSON text (not json.RawMessage: a CRD status field serializes cleanly as a plain string). |
+| `status.tools[].name` \* | `string` |  |
+
+<small>\* required</small>
+

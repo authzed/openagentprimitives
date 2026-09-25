@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spicebox-webd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spicebox-webd
+subjects:
+  - kind: ServiceAccount
+    name: spicebox-webd
+    namespace: agentprimitives-system

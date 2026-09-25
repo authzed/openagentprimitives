@@ -1,0 +1,104 @@
+# MCPServer for the ledger-EGRESS fixture.
+#
+# A sibling of agent-ledger-records tuned for the per-datum EGRESS path: it adds
+# a post_to_board tool (an egress tool with a resolvable destination) and a
+# ledger_board resource so a read's minted tag can be measured against a
+# destination's readers. Kept as its OWN fixture rather than extending the
+# ledger-records one, because that fixture's read-only bundles would then declare
+# a post tool their fake servers never expose (AllowlistDrift) and carry an
+# egress capability their scenarios do not use.
+#
+# spec.server.url is the literal sentinel `{{MCP_URL}}` — the e2e harness
+# rewrites it to the httptest server URL before apply.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: ledger-egress
+  namespace: default
+spec:
+  name: ledger-egress
+  version: v1
+  intent: "Fixture for the per-datum EGRESS e2e bundle."
+  server:
+    url: "{{MCP_URL}}"
+    transport: http
+  auth:
+    credential: ledger-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: ledger_entry
+        standing: session-only
+        relations:
+          - name: viewer
+            subjectType: user
+          # owner: an info_leakage approval routes to the leaked datum's OWNER
+          # ("may my data be disclosed wider?"), so entry-100's owner (seeded) is
+          # who clears the leak-path bundle's approval. Checked directly as
+          # ledger_entry:<id>#owner, so it is a RELATION, not a same-named
+          # permission (which would collide). view includes it, so declaring it
+          # does not widen entry-100's audience (still {auditor-1}).
+          - name: owner
+            subjectType: user
+        permissions:
+          - name: view
+            expr: viewer + owner
+      # The egress DESTINATION. `view` is who a post reaches (who reads the
+      # board); `post` is what the caller needs to write. The egress gate
+      # resolves the board's `view` audience (from post_to_board's
+      # toolResourceMap.reads below) and measures the posted datum's tag
+      # audience against it.
+      - name: ledger_board
+        standing: session-only
+        relations:
+          - name: viewer
+            subjectType: user
+          - name: poster
+            subjectType: user
+        permissions:
+          - name: view
+            expr: viewer + poster
+          - name: post
+            expr: poster
+  tools:
+    - name: read_entry
+      intent: "Fetch one ledger entry by its id."
+      args:
+        allowedFields: [id]
+      # stateless: opts out of the per-tool Check, so a read always mints and
+      # the scenario's claim is about the egress that follows, not read-access.
+      permission:
+        stateImpact: stateless
+      effects:
+        readOnly: true
+        idempotent: true
+    # The EGRESS tool. stateImpact readwrite + a Check makes it an egress tool
+    # with a resolvable destination: the gate derives ledger_board:<board_id>#view
+    # (via the toolResourceMap below) as the audience the outgoing datum reaches.
+    - name: post_to_board
+      intent: "Post a message to a shared board (everyone who can view it sees it)."
+      args:
+        allowedFields: [board_id, text]
+      permission:
+        stateImpact: readwrite
+        check:
+          resourceType: ledger_board
+          resourceIDExpr: 'string(args.board_id)'
+          permission: post
+      effects:
+        readOnly: false
+  toolResourceMap:
+    - tool: read_entry
+      reads:
+        resourceType: ledger_entry
+        idArg: id
+        permission: view
+    # For post_to_board the `reads` mapping is what the egress gate uses to
+    # resolve the DESTINATION audience: the board's `view` readers. bypass the
+    # requester view-check — the claim is egress (who the post reaches), not
+    # read-access to the board.
+    - tool: post_to_board
+      reads:
+        resourceType: ledger_board
+        idArg: board_id
+        permission: view
+        bypassRequesterCheck: true

@@ -1,0 +1,161 @@
+# secret_gated_sidecar scenario fixtures.
+#
+# Proves the END-TO-END secret-gated separate-pod SidecarToolbox flow against
+# the in-process harness:
+#
+#   1. A producer tool emits a secret (Plan 1) → a so-... handle + the value
+#      lands in the per-session secret-output Secret. The producer is injected
+#      in-process via h.SetSecretOutputProducer (the SpiceboxToolspec CRD does
+#      not yet mirror the toolspec library's secretOutput field), driving the
+#      identical runner-side path a real sandbox producer would.
+#   2. The harness simulates the operator bringing up the secret-gated sidecar
+#      as a separate pod (h.MarkSidecarReady → status.resolvedSidecarToolboxes),
+#      pointing its SidecarPodIP:port at the in-process MCP stub.
+#   3. The runner's mid-session ToolRefresher synthesizes the sidecar's tools
+#      MID-session (they were NOT in the boot tool set — the AgentClass does NOT
+#      declare the sidecar; it appears only after the producer emits the secret).
+#
+# The AgentClass deliberately does NOT reference the SidecarToolbox in
+# sidecarToolboxes: a secret-gated sidecar declared on the class would park the
+# session (AwaitingSecret) before the runner ever boots, so the producer could
+# never run. Instead the harness stamps the resolved sidecar into status
+# mid-session — exactly the "operator brought the pod up after the secret
+# landed" event the real reconciler performs via pod-create. The SidecarToolbox
+# CR is still applied so MarkSidecarReady can snapshot its real Spec (Tools
+# allowlist + secretInputs) onto the resolved status entry.
+#
+# authz.toolCalls.mode=disabled keeps the dispatcher from running a Check on
+# the injected producer + the synthesized sidecar tool, isolating the
+# producer→secret→sidecar flow from the authz round-trip.
+---
+# Placeholder Anthropic API key. provider=anthropic is accepted by the
+# AgentClass controller; the runtime LLM is the in-process ScriptedLLM.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sgs-llm-creds
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-scripted-llm"
+---
+# Placeholder Channel credentials. The fake kind ignores them but
+# Channel.spec.credentialsRef is mandatory.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sgs-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+# The SpiceboxClass the SidecarToolbox references. The harness does NOT run the
+# SpiceboxClass controller; the sidecar-resolution path tolerates a missing /
+# non-Valid SpiceboxClass (mergeNetwork falls back), and MarkSidecarReady does
+# not consult it at all — it is here only so the SidecarToolbox CR is shaped
+# like a real one.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: sgs-sandbox-default
+spec:
+  image: ""
+  resources:
+    cpu: "200m"
+    memory: "256Mi"
+    ephemeralStorage: "128Mi"
+    pidsLimit: 32
+  network:
+    mode: allowlist
+    allowedHosts: []
+---
+# The secret-gated SidecarToolbox. secretInputs makes it secret-gated
+# (separate-pod): the bound secret-output `kubeconfig` (the producer's
+# secretOutput.name) is delivered to the sidecar as a file. The allowlist
+# exposes ONLY `whoami` (the stub also serves a `leak_probe` tool, deliberately
+# omitted to keep the surface tight). The harness snapshots this Spec onto the
+# resolved status entry via MarkSidecarReady.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SidecarToolbox
+metadata:
+  name: kube-tb
+  namespace: default
+spec:
+  name: kube
+  version: "1"
+  intent: "Talks to a cluster using a produced kubeconfig. e2e secret-gated fixture."
+  source:
+    inline:
+      baseImage: python:3.12-slim
+      script:
+        configMapRef:
+          name: kube-mcp-src
+          key: server.py
+      entrypoint: ["python", "/app/server.py"]
+  sandbox:
+    class: sgs-sandbox-default
+  transport:
+    port: 8080
+    healthcheck:
+      path: /healthz
+      timeoutSeconds: 30
+  upstreamAuth:
+    provider: ""
+  secretInputs:
+    # Binds the producer's secretOutput named `kubeconfig` (the per-session
+    # secret-output Secret key) into the sidecar as a mounted file.
+    - name: KUBECONFIG
+      deliver: file:/root/.kube/config
+      from: kubeconfig
+  tools:
+    # Allowlist exposes ONLY whoami. leak_probe (also served by the stub) is
+    # deliberately omitted.
+    - name: whoami
+      intent: "Returns a fingerprint of the kubeconfig the sidecar received."
+      args:
+        allowedFields: [_reason]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-secret-gated-sidecar
+  namespace: default
+spec:
+  model:
+    provider: anthropic
+    name: claude-opus-4-7
+    apiKey:
+      name: sgs-llm-creds
+      key: api-key
+  systemPrompt:
+    inline: "you are a test agent that produces a secret then uses a secret-gated sidecar"
+  authz:
+    toolCalls:
+      mode: disabled
+  budget:
+    # Generous turn budget: the secret-gated sidecar tool only becomes callable
+    # once the producer has published its secret AND the harness has stamped the
+    # sidecar Ready. Between those, the scripted LLM retries the (not-yet-
+    # synthesized) sidecar call each turn, so the loop can burn a handful of
+    # turns before synthesis lands. Headroom keeps that churn from tripping the
+    # budget kill-switch before the tool appears.
+    maxTurns: 500
+    maxTokens: 5000000
+    maxDuration: "1h"
+---
+# Channel for the channelsd pipeline to find. kind=fake is the in-process
+# transport the harness drives via SendUserMessage.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-secret-gated-sidecar-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-secret-gated-sidecar
+  credentialsRef:
+    secretName: sgs-fake-creds
+  fake:
+    echo: false

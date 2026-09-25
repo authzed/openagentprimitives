@@ -1,0 +1,19 @@
+{
+  "name": "guest-start-denied",
+  "description": "The DENY half of the guest session-start gate. Same parked create as guest-start-approved — the unstamped sender on an org-scoped channel is a guest with no start_session — but the platform admin clicks Deny: decideStartApproval writes the denied relation and the StartFailure signal, and the operator drives the session to Failed/StartDenied without a runner ever existing. The single LLM step is a canary that must never fire — if the session ran at all, the phase barrier (Failed, checked by name in wantSessionPhaseFor) would land on Idle instead and the run would diverge.",
+  "agentDir": "testdata/agent-guestgate",
+  "agentClass": "guestgate-bot",
+  "defaultUser": "guest@example.com",
+  "userTurns": ["please summarize the weekly numbers"],
+  "autoDeny": ["start_approval"],
+  "autoApproveAs": "admin@example.com",
+  "llm": [
+    {
+      "expect": {"userTextContains": "summarize the weekly numbers"},
+      "reply": [{"text": "THIS MUST NEVER RUN: a denied guest session must not reach the model."}]
+    }
+  ],
+  "assert": {
+    "approvalPrompts": 1
+  }
+}

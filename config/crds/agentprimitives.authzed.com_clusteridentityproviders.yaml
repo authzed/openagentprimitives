@@ -1,0 +1,208 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: clusteridentityproviders.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: ClusterIdentityProvider
+    listKind: ClusterIdentityProviderList
+    plural: clusteridentityproviders
+    shortNames:
+    - cidp
+    singular: clusteridentityprovider
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Valid')].status
+      name: Valid
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ClusterIdentityProvider configures cluster-wide human login: which
+          registered idp.Kind authenticates people (pkg/platform/identity/idp), its
+          OIDC client details, which email domains are admitted, and how long a
+          browser session lives.
+
+          Cluster-scoped singleton -- the only permitted name is "default"
+          (ClusterIdentityProviderName). Reconciled by
+          pkg/controllers/clusteridentityprovider, which shares its spec judgment with
+          the admission webhook so the two can never disagree, and refuses a
+          local-only kind on a non-local cluster.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ClusterIdentityProviderSpec configures the cluster's human-login
+              identity provider. The kind is dispatched through
+              pkg/platform/identity/idp/registry.
+            properties:
+              allowAnyEmail:
+                description: AllowAnyEmail must be set explicitly to run with no domain
+                  gate.
+                type: boolean
+              allowedEmailDomains:
+                description: |-
+                  AllowedEmailDomains gates who counts as logged in. Empty with
+                  AllowAnyEmail=false is invalid (fail closed) — enforced by webhook.
+                items:
+                  type: string
+                type: array
+              clientID:
+                description: ClientID is the OAuth client id (not secret; inline).
+                minLength: 1
+                type: string
+              clientSecretRef:
+                description: ClientSecretRef names the Secret key holding the client
+                  secret.
+                properties:
+                  key:
+                    description: Key is the data key within the Secret holding the
+                      value.
+                    type: string
+                  name:
+                    description: Name is the Secret's name.
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the Secret's namespace; required, since the referring CRD is
+                      cluster-scoped.
+                    type: string
+                required:
+                - key
+                - name
+                - namespace
+                type: object
+              federation:
+                description: |-
+                  Federation, when Enabled, turns this IdP into an EMA federation
+                  source: login requests offline_access so the user's refresh token is
+                  captured, and the broker mints upstream tokens via ID-JAG. Requires
+                  kind=oidc and a confidential client (see the webhook).
+                properties:
+                  enabled:
+                    description: Enabled turns this IdP into an EMA federation source.
+                    type: boolean
+                type: object
+              issuer:
+                description: |-
+                  Issuer is the OIDC issuer URL. Required for kind=oidc; must be
+                  empty for kind=google (the kind pins it). Enforced by webhook.
+                type: string
+              kind:
+                description: 'Kind names the registered idp kind: "oidc" or "google".'
+                minLength: 1
+                type: string
+              scopes:
+                description: Scopes are extra scopes beyond openid/email/profile.
+                items:
+                  type: string
+                type: array
+              sessionTTL:
+                description: |-
+                  SessionTTL is the idd_session cookie lifetime for IdP-verified
+                  logins (and the CLI assertion lifetime). Default 12h.
+                type: string
+            required:
+            - clientID
+            - clientSecretRef
+            - kind
+            type: object
+          status:
+            description: ClusterIdentityProviderStatus reports validity via conditions.
+            properties:
+              conditions:
+                description: Conditions carries Valid; identityd consults it before
+                  serving login.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the generation the conditions describe.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,60 @@
+{
+  "name": "subagent-ceiling",
+  "description": "demo-lead has budget.maxDelegatedAgents: 2 -- a pooled ceiling on the TOTAL number of sessions in its delegation tree, counting the root. demo-lead first delegates to demo-coder, its only roster member: before that call the tree has 1 member (the root alone), so the child brings it to exactly 2, at but not over the ceiling, and the SubagentRequest controller must allow it -- the delegation must reach the model as a real, non-error tool result whose content IS the child's return_result, not a scripted reply that merely describes success. demo-lead then delegates to demo-coder a second time: the tree already has 2 members (root + first child), so a third would exceed the ceiling, and the SubagentRequest controller must deny it BEFORE creating a second child -- there is no second child turn to script, mirroring subagent-delegation's off-roster denial. The refusal must reach the model as an error naming the ceiling (2), not a generic failure and not a success the transcript merely narrates as a refusal. A ceiling of 1 would only ever prove the denial; this value proves both directions in one run.",
+
+  "agentDir": "testdata/agent-subagent-ceiling",
+  "agentClass": "demo-lead",
+
+  "defaultUser": "user@example.com",
+
+  "userTurns": [
+    "have the coder write a retry helper",
+    "have the coder write a timeout helper"
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "retry helper" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": { "agent": "demo-coder", "task": "write a retry helper" } } }]
+    },
+    {
+      "expect": { "userTextContains": "write a retry helper" },
+      "reply": [{ "toolUse": { "name": "return_result", "args": { "result": "Wrote the retry helper." } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "Wrote the retry helper."
+      },
+      "reply": [{ "toolUse": { "name": "respond_to_user", "args": { "text": "The coder wrote the retry helper." } } }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "await_user_message", "args": {} } }]
+    },
+    {
+      "expect": { "userTextContains": "timeout helper" },
+      "reply": [{ "toolUse": { "name": "delegate", "args": { "agent": "demo-coder", "task": "write a timeout helper" } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "of 2 allowed agents"
+      },
+      "reply": [{ "text": "I can't delegate again -- the tree is already at its limit of 2 agents." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "done" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": [
+      "The coder wrote the retry helper.",
+      "already at its limit of 2 agents"
+    ]
+  }
+}

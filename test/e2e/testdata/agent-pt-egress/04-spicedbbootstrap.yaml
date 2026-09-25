@@ -1,0 +1,35 @@
+# SpiceDBBootstrap for the ptdemo-records fixture.
+#
+# Seeds the viewer sets the minted tags' audiences are DERIVED from. The
+# ptdemo_entry / viewer / view definitions come from the MCPServer
+# fragment in 02-mcpserver.yaml, so this CR is relationships-only.
+#
+# The two entries have DISJOINT audiences on purpose. That is the whole
+# assertable claim: a tag minted from entry-100 must resolve to
+# auditor-1 and must NOT resolve to auditor-9, because the audience is
+# read out of the source resource rather than named by the session. Seed
+# both to one viewer and every subject becomes a reader, at which point
+# the scenario passes with the lattice switched off.
+#
+# canonicalize: true runs each email through the same canonical encoding
+# the runtime Check uses, so the seeded tuple and the resolved subject
+# are the same string.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: ptdemo-seed
+  namespace: default
+spec:
+  relationships:
+    # The session's own user. Readable by them, and by nobody else.
+    - resource: { type: ptdemo_entry, id: "entry-100" }
+      relation: viewer
+      subject:  { type: user, id: "auditor-1@example.com", canonicalize: true }
+    # A second entry the session user cannot see. Never read in the
+    # scenario; it exists so auditor-9 is a real subject with real
+    # standing somewhere, rather than a name that resolves to nothing —
+    # an exclusion assertion against an unknown subject would pass
+    # trivially.
+    - resource: { type: ptdemo_entry, id: "entry-900" }
+      relation: viewer
+      subject:  { type: user, id: "auditor-9@example.com", canonicalize: true }

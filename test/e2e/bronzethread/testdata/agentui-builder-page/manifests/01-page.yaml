@@ -1,0 +1,30 @@
+# The builder-shaped page this bundle exercises: two agentWritable slots,
+# compiled by the spec.slots shim into hooks named "phase" and "brief" (see
+# pkg/web/uiview's CompileSlots doc). "phase" starts with a Tier-0 default so
+# a brand-new session paints a timeline before any agent turn runs; "brief"
+# starts empty and is where the agent places its ap:question instead of
+# asking in prose.
+#
+# This CR's own Valid condition is never set by a reconciler in this harness
+# — pkg/controllers/agentui is not registered here (see
+# test/e2e/scenarios/agentui/view_capability_test.go's markAgentUIValid) — so
+# test/e2e/threadrun's stampAgentUIsValid stands in for it, the same way
+# stampToolspecsValid already stands in for SpiceboxToolspec.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentUI
+metadata:
+  name: demo-builder-page-ui
+  namespace: default
+spec:
+  displayName: "Demo builder page"
+  slots:
+    - name: phase
+      agentWritable: true
+      default:
+        component: ap:steps
+        props:
+          steps:
+            - {label: "Intake", state: active}
+            - {label: "Tools", state: upcoming}
+    - name: brief
+      agentWritable: true
