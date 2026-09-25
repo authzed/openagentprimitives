@@ -3,13 +3,13 @@
 Turns an MCPServer CR into runner-side tools. Each allowlisted entry becomes one
 `tool.Tool` whose `Execute` issues a JSON-RPC `tools/call` against the server.
 
-| File | Holds |
-| ---- | ----- |
-| [`synthesize.go`](./synthesize.go) | `Synthesize(cr, live, opts…)` — CR + live probe results → `SynthesizeResult`. Options for HTTP client, origin name, session cache. |
-| [`mcp_tool.go`](./mcp_tool.go) | The `MCPTool` struct and its whole method set: identity, schema, permission variants, auth set/invalidate/reauth, label and relationship-write sinks, `UseTokenGate`. |
-| [`dispatch.go`](./dispatch.go) | `Execute` — the JSON-RPC round trip, result and annotation decoding. |
-| [`redact.go`](./redact.go) | `RedactSensitive` — strips declared sensitive arg paths before anything is logged or shown. |
-| [`uiresource.go`](./uiresource.go) | Recognizes MCP-UI resource blocks in a response and converts them to `tool.UIResourceSpec`. |
+| File                               | Holds                                                                                                                                                                 |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`synthesize.go`](./synthesize.go) | `Synthesize(cr, live, opts…)` — CR + live probe results → `SynthesizeResult`. Options for HTTP client, origin name, session cache.                                    |
+| [`mcp_tool.go`](./mcp_tool.go)     | The `MCPTool` struct and its whole method set: identity, schema, permission variants, auth set/invalidate/reauth, label and relationship-write sinks, `UseTokenGate`. |
+| [`dispatch.go`](./dispatch.go)     | `Execute` — the JSON-RPC round trip, result and annotation decoding.                                                                                                  |
+| [`redact.go`](./redact.go)         | `RedactSensitive` — strips declared sensitive arg paths before anything is logged or shown.                                                                           |
+| [`uiresource.go`](./uiresource.go) | Recognizes MCP-UI resource blocks in a response and converts them to `tool.UIResourceSpec`.                                                                           |
 
 ## Subpackages
 

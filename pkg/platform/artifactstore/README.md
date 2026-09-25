@@ -10,8 +10,8 @@ registry here, because the binary picks exactly one.
 
 ## Subpackages
 
-| Package | What it is |
-| ------- | ---------- |
+| Package         | What it is                                                                                                                                                  |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`blob`](blob/) | `Store` over `gocloud.dev/blob`: one implementation across `gs://`, `s3://`, `azblob://`, `file://` and `mem://`. The scheme is blank-imported per backend. |
 
 ## Constraints

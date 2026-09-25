@@ -4,7 +4,7 @@ The **closed, platform-owned vocabulary** an agent-defined UI may be written in,
 plus the parser, the validator, and the view-model resolution.
 
 A view model is LLM output. What makes it safe is validation against a schema
-the *platform* controls: the model can only select from this set and bind to
+the _platform_ controls: the model can only select from this set and bind to
 sources it was already authorized for. **It can never introduce script, widen a
 CSP, or open an egress path.**
 
@@ -15,18 +15,18 @@ drift.
 
 ## Layout
 
-| File | What it holds |
-| ---- | ------------- |
-| `component.go` | The package doc and the two aliases (`Component`, `ParamValue`) |
-| `components.go` | The v1 vocabulary: the Props structs and the single `init()` registration loop |
-| `declaration.go` | Wire types `Declaration`/`Action`/`Slot`/`Node`/`Binding`, `ParseDeclaration`, `ParamRefKey` |
-| `prompt.go` | The `{key}` placeholder grammar for a prompt action |
-| `schema.go` | `VocabularySchema()` — the whole vocabulary as JSON Schema, for the agent |
-| `validate.go` | `Validate` and its per-concern helpers |
-| `viewmodel.go` | Tier-1: `ParseNode`, `Fragment`, `Rejection`, `View`, `ResolveView` |
-| `walk.go` | `BindingPath`, `WalkBindings`, `ParamNames`/`ParamKeys`, `ParamStates`, `ActionRefs` |
+| File                      | What it holds                                                                                  |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `component.go`            | The package doc and the two aliases (`Component`, `ParamValue`)                                |
+| `components.go`           | The v1 vocabulary: the Props structs and the single `init()` registration loop                 |
+| `declaration.go`          | Wire types `Declaration`/`Action`/`Slot`/`Node`/`Binding`, `ParseDeclaration`, `ParamRefKey`   |
+| `prompt.go`               | The `{key}` placeholder grammar for a prompt action                                            |
+| `schema.go`               | `VocabularySchema()` — the whole vocabulary as JSON Schema, for the agent                      |
+| `validate.go`             | `Validate` and its per-concern helpers                                                         |
+| `viewmodel.go`            | Tier-1: `ParseNode`, `Fragment`, `Rejection`, `View`, `ResolveView`                            |
+| `walk.go`                 | `BindingPath`, `WalkBindings`, `ParamNames`/`ParamKeys`, `ParamStates`, `ActionRefs`           |
 | [`component/`](component) | The leaf `Component` type — a separate package purely to break an import cycle with `registry` |
-| [`registry/`](registry) | The vocabulary registry, over `pkg/x/kindregistry` |
+| [`registry/`](registry)   | The vocabulary registry, over `pkg/x/kindregistry`                                             |
 
 **`Component` must never grow a method needing `Node` or `Declaration`** — that
 is what would reintroduce the cycle the leaf package exists to avoid.
@@ -35,11 +35,11 @@ is what would reintroduce the cycle the leaf package exists to avoid.
 
 `Declaration` carries both. They differ only in **who wrote it and when**: a
 human/bundle author writes the CR, the agent writes per-slot fragments at
-runtime. A Tier-1 fragment rewrites a *slot*, which is why an agent can **name**
+runtime. A Tier-1 fragment rewrites a _slot_, which is why an agent can **name**
 an existing action but can never mint one.
 
 **An action is top-level, never on a node.** Three consequences follow from the
-shape of the document rather than from a check: the browser sends only a *name*;
+shape of the document rather than from a check: the browser sends only a _name_;
 an action can never appear in `Node.Bindings`, so **writes are never a data
 binding**; and exactly one of `Action.Tool` and `Action.Prompt` is set. A prompt
 action reaches no tool, so **no grant is checked** — it is bounded instead by
@@ -66,8 +66,8 @@ is in the runner, re-evaluated against the live tool on every call.
 ## Things that surprise people
 
 - **Enum tags tell, they do not enforce.** `jsonschema:"enum=…"`, `minimum=`,
-  `maximum=` land in the agent-facing schema, but `validateProps` does a *type*
-  check, not a *value* check — names enforced, values not. If a value ever
+  `maximum=` land in the agent-facing schema, but `validateProps` does a _type_
+  check, not a _value_ check — names enforced, values not. If a value ever
   becomes security-relevant, it needs a real check.
 - **Required-ness is advisory only.** The reflector marks several fields
   required and `validateProps` enforces none of it.
@@ -113,8 +113,8 @@ Note this one is **three duplicated literals** (Go registration, Go test, TS
 test), not a shared artifact — a coordinated sweep of all three would pass.
 
 **2. `BindingPath` must mirror its TypeScript twin — and this one is properly
-pinned**, by a **single shared golden file** that both suites read. A per-language
-literal would not count:
+pinned**, by a **single shared golden file** that both suites read. A
+per-language literal would not count:
 
 > a coordinated change sweeping both leaves both suites green while every
 > response key misses the browser's lookup, every bound prop falls back to its

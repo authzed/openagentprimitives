@@ -11,17 +11,17 @@ is how `cloud.Detect` selects it.
 
 ## Files
 
-| File | Aspect |
-| ---- | ------ |
-| `gke.go` | The `Strategy` value: keys, display name, DNS/Gateway CIDRs, address-wait budget, and the sub-interface accessors. |
-| `tls.go` | `GoogleManagedTLS` — Certificate Manager provisioning; `Complete` is a no-op because the cert attaches at Gateway program time. |
-| `gatewaycontroller.go` | Offers to enable the control-plane Gateway API on the connected cluster and waits until `gke-l7-global-external-managed` is served. |
-| `stateful.go` | RWO block-storage selection. Steers the bundled Postgres/Neo4j PVCs onto a Hyperdisk class on Hyperdisk-only node pools. |
-| `artifactstorage.go` | Consented GCS bucket create + workload-identity binding, and its teardown. |
-| `clusteridentity.go` | Best-effort cluster display name and console deep link, from the GCE metadata server with a node-name heuristic fallback. |
-| `ceiling.go` | Reports an **unknown** scheduling ceiling — GKE node pools autoscale, so no present node bounds what can be scheduled. |
-| `unwedge.go` | Clears `networking.gke.io` `ServiceNetworkEndpointGroup` finalizers (and the orphaned NEGs behind them) that leave a namespace stuck `Terminating`. |
-| `registry.go` | Artifact Registry prep for image push: `gcloud auth configure-docker` plus repository create. |
+| File                   | Aspect                                                                                                                                              |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gke.go`               | The `Strategy` value: keys, display name, DNS/Gateway CIDRs, address-wait budget, and the sub-interface accessors.                                  |
+| `tls.go`               | `GoogleManagedTLS` — Certificate Manager provisioning; `Complete` is a no-op because the cert attaches at Gateway program time.                     |
+| `gatewaycontroller.go` | Offers to enable the control-plane Gateway API on the connected cluster and waits until `gke-l7-global-external-managed` is served.                 |
+| `stateful.go`          | RWO block-storage selection. Steers the bundled Postgres/Neo4j PVCs onto a Hyperdisk class on Hyperdisk-only node pools.                            |
+| `artifactstorage.go`   | Consented GCS bucket create + workload-identity binding, and its teardown.                                                                          |
+| `clusteridentity.go`   | Best-effort cluster display name and console deep link, from the GCE metadata server with a node-name heuristic fallback.                           |
+| `ceiling.go`           | Reports an **unknown** scheduling ceiling — GKE node pools autoscale, so no present node bounds what can be scheduled.                              |
+| `unwedge.go`           | Clears `networking.gke.io` `ServiceNetworkEndpointGroup` finalizers (and the orphaned NEGs behind them) that leave a namespace stuck `Terminating`. |
+| `registry.go`          | Artifact Registry prep for image push: `gcloud auth configure-docker` plus repository create.                                                       |
 
 ## Constraints
 

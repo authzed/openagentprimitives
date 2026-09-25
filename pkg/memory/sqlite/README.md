@@ -4,13 +4,13 @@
 SQLite dialect and reports the **same** `Capabilities()` — it is a strict peer
 of postgres, not a degraded inmem.
 
-| File | Role |
-| ---- | ---- |
-| `backend.go` | The `memory.Backend` implementation and its `Capabilities()` |
-| `client.go` | Opens (creating if absent) the DB in WAL mode |
-| `query.go` | `Query` → SQL, using JSON1 and the link table |
-| `schema.go` | The migration |
-| `envconfig.go` | `MEMORY_SQLITE_PATH` |
+| File           | Role                                                         |
+| -------------- | ------------------------------------------------------------ |
+| `backend.go`   | The `memory.Backend` implementation and its `Capabilities()` |
+| `client.go`    | Opens (creating if absent) the DB in WAL mode                |
+| `query.go`     | `Query` → SQL, using JSON1 and the link table                |
+| `schema.go`    | The migration                                                |
+| `envconfig.go` | `MEMORY_SQLITE_PATH`                                         |
 
 ## Non-obvious constraints
 

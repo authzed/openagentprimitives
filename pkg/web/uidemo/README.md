@@ -10,17 +10,17 @@ on `examples/`).
 A fabricated CRM MCP server used to demonstrate the leads-console agent UI. It
 is an in-process MCP server exposed over Streamable HTTP.
 
-| File | What it holds |
-| ---- | ------------- |
-| `leadflow.go` | `Lead`, the stage list, the `Book` store, `Options`, and the `Server` |
-| `seed.go` | Twelve fixed leads with fixed timestamps and three owners — **deterministic, never `time.Now()`** |
-| `tools.go` | The four tools, their handlers, and the registration loop |
+| File          | What it holds                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------- |
+| `leadflow.go` | `Lead`, the stage list, the `Book` store, `Options`, and the `Server`                             |
+| `seed.go`     | Twelve fixed leads with fixed timestamps and three owners — **deterministic, never `time.Now()`** |
+| `tools.go`    | The four tools, their handlers, and the registration loop                                         |
 
 Four tools: `list_leads`, `stage_breakdown`, `advance_lead_stage`, and
 `search_accounts`. `stage_breakdown` always returns one entry per stage, in
 stage order; `search_accounts` deliberately answers with a nested envelope
-(`results[].properties`) so the demo exercises
-[`uiselect`](../uiselect)'s selector language.
+(`results[].properties`) so the demo exercises [`uiselect`](../uiselect)'s
+selector language.
 
 ## Where it runs
 

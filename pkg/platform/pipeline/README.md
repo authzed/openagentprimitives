@@ -6,26 +6,27 @@ hooks return **decisions as data**; an **executor** runs them and applies their
 effects through a `Host` port that each component implements.
 
 The package imports no domain packages. `pkg/authz/hooks` is one consumer;
-non-authz concerns (output secret scanning, budget gating) register the same way.
+non-authz concerns (output secret scanning, budget gating) register the same
+way.
 
 ## Files
 
-| File | What it holds |
-| ---- | ------------- |
-| `doc.go` | The package doc. |
-| `point.go` | `Point` — the data-plane points (`session_start`, `inbound_turn`, `pre_tool_call`, `post_tool_call`, `pre_response`, `session_end`), the four metaagent control-plane points, and `session_fork`. |
-| `hook.go` | The `Hook` and `Host` interfaces. |
-| `registry.go` | `Registry`, `NewRegistry`, and the process-global `Default`. |
-| `executor.go` | `Executor.Run` — ordering, Deny/Halt short-circuit, approval publish/await/timeout, notice and status delivery, audit, fail-closed-on-panic. |
-| `timeout.go` | `IsTimeout` — the shared classifier every `Host` uses so none can disagree about what "timed out" means. |
-| `types.go` | `SessionRef`, the per-point payloads, `Decision`, `Outcome`, `ApprovalAsk`. |
+| File            | What it holds                                                                                                                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `doc.go`        | The package doc.                                                                                                                                                                                                   |
+| `point.go`      | `Point` — the data-plane points (`session_start`, `inbound_turn`, `pre_tool_call`, `post_tool_call`, `pre_response`, `session_end`), the four metaagent control-plane points, and `session_fork`.                  |
+| `hook.go`       | The `Hook` and `Host` interfaces.                                                                                                                                                                                  |
+| `registry.go`   | `Registry`, `NewRegistry`, and the process-global `Default`.                                                                                                                                                       |
+| `executor.go`   | `Executor.Run` — ordering, Deny/Halt short-circuit, approval publish/await/timeout, notice and status delivery, audit, fail-closed-on-panic.                                                                       |
+| `timeout.go`    | `IsTimeout` — the shared classifier every `Host` uses so none can disagree about what "timed out" means.                                                                                                           |
+| `types.go`      | `SessionRef`, the per-point payloads, `Decision`, `Outcome`, `ApprovalAsk`.                                                                                                                                        |
 | `definition.go` | `DefinitionError` — plain-string vocabulary for "a piece of the agent's own definition could not be evaluated", so a hook can report one and a consumer can render it without either importing the other's domain. |
 
 ## Constraints
 
 - **Point string values are stable.** They appear in audit records and rendered
   views; renaming one rewrites history.
-- **The executor owns *all* orchestration.** A hook returns a `Decision` and
+- **The executor owns _all_ orchestration.** A hook returns a `Decision` and
   mutates only through handles it already holds. It does not publish, await, or
   short-circuit.
 - **A timeout is not a Halt.** When `AwaitDecision` returns `timedOut == true`,

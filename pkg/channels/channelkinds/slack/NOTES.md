@@ -17,12 +17,12 @@ trusting an entry that blocks something you want.
 
 ## Block availability
 
-| Block | In a message? | Notes |
-| ----- | ------------- | ----- |
-| `alert` | **No** | `Unsupported block type: alert`. Modal-only, despite being Slack's purpose-built severity block with exactly the levels you'd want. Usable in `views.open` — which is why Show-Details modals are where it belongs. |
-| `container` | **Yes** | Not in `slack-go` through v0.27.0 — hand-rolled in `block_container.go`. |
-| `card`, `carousel` | Yes | `card.body` caps at 200 chars and has **no colour field**, so severity would fall back to an emoji in the title. Not used here. |
-| `section`, `context`, `divider`, `actions`, `rich_text` | Yes | The long-stable set. |
+| Block                                                   | In a message? | Notes                                                                                                                                                                                                               |
+| ------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `alert`                                                 | **No**        | `Unsupported block type: alert`. Modal-only, despite being Slack's purpose-built severity block with exactly the levels you'd want. Usable in `views.open` — which is why Show-Details modals are where it belongs. |
+| `container`                                             | **Yes**       | Not in `slack-go` through v0.27.0 — hand-rolled in `block_container.go`.                                                                                                                                            |
+| `card`, `carousel`                                      | Yes           | `card.body` caps at 200 chars and has **no colour field**, so severity would fall back to an emoji in the title. Not used here.                                                                                     |
+| `section`, `context`, `divider`, `actions`, `rich_text` | Yes           | The long-stable set.                                                                                                                                                                                                |
 
 ## Colour and structure are mutually exclusive
 
@@ -35,11 +35,11 @@ only way to get a colour, and:
   structured detail" cannot be ordered correctly even as siblings.
 - Every attachment carries an **"Added by \<app\>" footer**. Two attachments
   means two footers.
-- `footer` and `blocks` cannot coexist on one attachment: `invalid_keys`. So
-  you cannot replace that footer with your own.
+- `footer` and `blocks` cannot coexist on one attachment: `invalid_keys`. So you
+  cannot replace that footer with your own.
 
-Consequence: this package uses top-level containers and encodes tone as an
-emoji chip. Colour was the first choice and is not available.
+Consequence: this package uses top-level containers and encodes tone as an emoji
+chip. Colour was the first choice and is not available.
 
 ## Container quirks
 
@@ -48,7 +48,7 @@ emoji chip. Colour was the first choice and is not available.
   `newCollapsibleContainerBlock` own this pair so the combination cannot be
   expressed.
 - **`title` does not render emoji.** A `plain_text` title containing an emoji
-  prints `:large_red_square:` literally — *even with `emoji: true`*. Only
+  prints `:large_red_square:` literally — _even with `emoji: true`_. Only
   `rich_text_title` with a `{"type":"emoji"}` element renders one. This is why
   every notice builds a rich-text title.
 - **`subtitle` renders emoji but drops mrkdwn code spans**, so a session ref
@@ -80,7 +80,7 @@ to whoever happened to read the message.
 
 ## Canvases
 
-Canvas *callouts* — the coloured admonition blocks — are a canvas text feature.
+Canvas _callouts_ — the coloured admonition blocks — are a canvas text feature.
 **Block Kit is not supported in canvases at all**, so there is no path from a
 message to a callout.
 

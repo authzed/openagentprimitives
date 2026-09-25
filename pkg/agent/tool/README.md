@@ -7,27 +7,27 @@ satisfy (`OriginTool`, `Cancellable`, `Introspectable`, …).
 
 Three `Kind`s exist, all live:
 
-| Kind | Where it runs | Synthesized from |
-| ---- | ------------- | ---------------- |
-| `KindMeta` | in-process in the runner | [`meta`](./meta/), assembled by [`meta/capability`](./meta/capability/) |
-| `KindSandbox` | a ToolCall CR the operator dispatches into the sandbox | a SpiceboxToolspec, via [`sandbox`](./sandbox/) |
-| `KindMCP` | JSON-RPC `tools/call` to an upstream server | an MCPServer CR, via [`mcp`](./mcp/) |
+| Kind          | Where it runs                                          | Synthesized from                                                        |
+| ------------- | ------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `KindMeta`    | in-process in the runner                               | [`meta`](./meta/), assembled by [`meta/capability`](./meta/capability/) |
+| `KindSandbox` | a ToolCall CR the operator dispatches into the sandbox | a SpiceboxToolspec, via [`sandbox`](./sandbox/)                         |
+| `KindMCP`     | JSON-RPC `tools/call` to an upstream server            | an MCPServer CR, via [`mcp`](./mcp/)                                    |
 
 Other files: [`errors.go`](./errors.go) (`ParseArgs`, `ArgParseError`),
 [`introspect.go`](./introspect.go), [`cancellable.go`](./cancellable.go).
 
 ## Subpackages
 
-| Package | Purpose |
-| ------- | ------- |
-| [`meta`](./meta/) | The in-process meta tools (`respond_to_user`, `update_plan`, `query_memory`, …) and the capability layer that decides which a session gets. |
-| [`sandbox`](./sandbox/) | Runner-side sandbox dispatch: SpiceboxToolspec → `Tool`, execution as a ToolCall CR, streaming/interactive mode, artifact fetch. |
-| [`mcp`](./mcp/) | MCPServer CR → `Tool`; JSON-RPC dispatch, auth refresh, sensitive-arg redaction, label extraction. |
-| [`sidecartoolbox`](./sidecartoolbox/) | Synthesizes tools from a `ResolvedSidecarToolbox`, reusing `mcp`'s dispatcher. |
-| [`synthesize`](./synthesize/) | Shared "iterate spec → emit `Tool`" machinery: name normalization, collision detection, factory call. Used by every kind's `Synthesize`. |
-| [`operations`](./operations/) | Per-session registry backing `new_operation` — every external call must be justified by a logical operation. In-process only; a restart loses mid-flight operations. |
-| [`authfail`](./authfail/) | Records "this call failed the way this provider's credentials fail" onto session status, for the CredentialUpdateRequest reconciler. |
-| [`originfmt`](./originfmt/) | The wire format of a tool's origin string (`mcpserver/…`, `toolkit/…`, `sidecartoolbox/…`). A leaf, so writer and reader cannot drift. |
+| Package                               | Purpose                                                                                                                                                              |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`meta`](./meta/)                     | The in-process meta tools (`respond_to_user`, `update_plan`, `query_memory`, …) and the capability layer that decides which a session gets.                          |
+| [`sandbox`](./sandbox/)               | Runner-side sandbox dispatch: SpiceboxToolspec → `Tool`, execution as a ToolCall CR, streaming/interactive mode, artifact fetch.                                     |
+| [`mcp`](./mcp/)                       | MCPServer CR → `Tool`; JSON-RPC dispatch, auth refresh, sensitive-arg redaction, label extraction.                                                                   |
+| [`sidecartoolbox`](./sidecartoolbox/) | Synthesizes tools from a `ResolvedSidecarToolbox`, reusing `mcp`'s dispatcher.                                                                                       |
+| [`synthesize`](./synthesize/)         | Shared "iterate spec → emit `Tool`" machinery: name normalization, collision detection, factory call. Used by every kind's `Synthesize`.                             |
+| [`operations`](./operations/)         | Per-session registry backing `new_operation` — every external call must be justified by a logical operation. In-process only; a restart loses mid-flight operations. |
+| [`authfail`](./authfail/)             | Records "this call failed the way this provider's credentials fail" onto session status, for the CredentialUpdateRequest reconciler.                                 |
+| [`originfmt`](./originfmt/)           | The wire format of a tool's origin string (`mcpserver/…`, `toolkit/…`, `sidecartoolbox/…`). A leaf, so writer and reader cannot drift.                               |
 
 ## Boundary
 

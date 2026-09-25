@@ -1,8 +1,8 @@
 # `pkg/agent/harness`
 
 The agent-harness seam: the swappable component that runs an AgentSession's
-outer loop. A harness answers one question — *what does the runner container
-look like?* — by contributing its own image, command, args, env and mounts.
+outer loop. A harness answers one question — _what does the runner container
+look like?_ — by contributing its own image, command, args, env and mounts.
 Everything else (memory token, NATS credentials, SpiceDB endpoint, signing keys)
 is platform wiring computed by
 [`pkg/controllers/agentsession`](../../controllers/agentsession/) and merged

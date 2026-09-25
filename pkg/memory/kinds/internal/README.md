@@ -3,10 +3,10 @@
 Boilerplate shared across the memory Kinds. Not importable outside
 `pkg/memory/kinds`.
 
-| Package | What it holds |
-| ------- | ------------- |
-| [`auditaccessor/`](auditaccessor/) | The append-one / list-all accessor body the simple per-scope audit Kinds share |
-| [`undecodable/`](undecodable/) | The operator-facing report every Kind accessor owes when a stored Entry will not decode |
+| Package                            | What it holds                                                                           |
+| ---------------------------------- | --------------------------------------------------------------------------------------- |
+| [`auditaccessor/`](auditaccessor/) | The append-one / list-all accessor body the simple per-scope audit Kinds share          |
+| [`undecodable/`](undecodable/)     | The operator-facing report every Kind accessor owes when a stored Entry will not decode |
 
 ## `auditaccessor`
 
@@ -26,10 +26,10 @@ afterwards: per-entry `Delete` is refused and `DeleteScope` skips it.
 
 Pick the disposition by what the row **means**:
 
-| Disposition | When | Why |
-| ----------- | ---- | --- |
-| **Skipped** | The row is part of a *record* — a transcript, an audit list, a rendering stream | Erroring instead wedges every read of the scope forever, with no operator remedy |
-| **Refused** | The row is an *input to a gate* — a taint, a denial, a recorded decision | Dropping it makes the gate forget what it recorded, re-opening exactly what it was written to close. Fail closed |
+| Disposition | When                                                                            | Why                                                                                                              |
+| ----------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **Skipped** | The row is part of a _record_ — a transcript, an audit list, a rendering stream | Erroring instead wedges every read of the scope forever, with no operator remedy                                 |
+| **Refused** | The row is an _input to a gate_ — a taint, a denial, a recorded decision        | Dropping it makes the gate forget what it recorded, re-opening exactly what it was written to close. Fail closed |
 
 Both report the entry **and** its publisher: the ID says which record is missing
 from a tamper-evident log, the publisher says who to go fix — the only remedy

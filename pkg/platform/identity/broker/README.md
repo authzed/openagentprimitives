@@ -11,8 +11,8 @@ registry: exactly one concrete is picked at startup.
 
 ## Subpackages
 
-| Package | What it is |
-| ------- | ---------- |
+| Package             | What it is                                                                                |
+| ------------------- | ----------------------------------------------------------------------------------------- |
 | [`inproc`](inproc/) | The in-process implementation. Reads the backing Secrets directly and caches resolutions. |
 
 ## Constraints
@@ -23,7 +23,7 @@ registry: exactly one concrete is picked at startup.
 - **`InvalidateSecret` is the credential-revocation entry point.** The
   `credential` invalidator on the `ap.revocation` bus calls it within tens of ms
   of the operator observing a credential removal or replacement. It covers
-  `UserIdentity` and `AgentIdentity` credentials alike, because both resolve to a
-  backing Secret. A no-op when nothing is cached.
+  `UserIdentity` and `AgentIdentity` credentials alike, because both resolve to
+  a backing Secret. A no-op when nothing is cached.
 - Keep inputs and outputs serializable. Adding a Kubernetes type to `Request` or
   `Resolution` closes the door on an out-of-process broker.

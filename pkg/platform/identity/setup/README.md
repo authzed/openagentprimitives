@@ -11,17 +11,17 @@ curated providers, and an LLM-driven agent for everything else.
 
 ## Subpackages
 
-| Package | What it is |
-| ------- | ---------- |
+| Package                 | What it is                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------------ |
 | [`builtins`](builtins/) | The `Flow` contract, the flow registry, live token verification, and the curated Go flows. |
-| [`llmagent`](llmagent/) | The LLM-driven setup agent used for any requirement with no builtin flow. |
+| [`llmagent`](llmagent/) | The LLM-driven setup agent used for any requirement with no builtin flow.                  |
 
 ## Files
 
-| File | What it holds |
-| ---- | ------------- |
+| File        | What it holds                                                                                                                                      |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `engine.go` | `Run` — the per-requirement loop, provider selection, the decline→re-prompt cycle (bounded by `maxVerifyAttempts`), and the builtin-vs-LLM branch. |
-| `store.go` | `Store` — **the single chokepoint** that writes credential bytes and mutates the `AgentIdentity`. |
+| `store.go`  | `Store` — **the single chokepoint** that writes credential bytes and mutates the `AgentIdentity`.                                                  |
 
 ## Constraints
 

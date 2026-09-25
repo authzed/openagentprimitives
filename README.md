@@ -75,9 +75,9 @@ authority over the resource.
   read-write for another, instead of building a separate agent per audience.
 - **Directory sync.** Group memberships from Slack, GitHub, and 1Password sync
   into SpiceDB, so permissions follow your organization automatically.
-- **Four identity modes.** An agent acts as itself or as the session's user,
-  and that choice can instead be made by the user when the session opens, with
-  or without a recommendation to confirm. Per-user credentials are held by the
+- **Four identity modes.** An agent acts as itself or as the session's user, and
+  that choice can instead be made by the user when the session opens, with or
+  without a recommendation to confirm. Per-user credentials are held by the
   platform.
 - **Multiplayer sessions.** Joining a session, directing it, and running
   sensitive tools can each require approval.
@@ -114,9 +114,9 @@ places the decision outside the model.
 
 ### 4. Least privilege by default
 
-- **Opt-in capabilities.** Every toolkit, tool spec, and capability an agent
-  has is one someone added deliberately, so a review covers what was added
-  rather than what was left enabled.
+- **Opt-in capabilities.** Every toolkit, tool spec, and capability an agent has
+  is one someone added deliberately, so a review covers what was added rather
+  than what was left enabled.
 - **A sandbox per tool.** Each tool holds only its own credentials, so a
   compromised tool cannot borrow another's access. The orchestrating agent never
   holds them at all.
@@ -159,10 +159,10 @@ are listed here so the set is complete.
 - **Channels.** Slack, browser, CLI, GitHub, or a signed webhook trigger.
 - **Memory and knowledge graph.** Structured recall, ranked search, and
   graph-native queries over what an agent has learned.
-- **Built in and swappable.** The runner, authorization,
-  approvals, sandboxing, credential handling, memory, and audit all ship built
-  in, and every one can be swapped for something your organization already runs
-  without rebuilding the platform around it.
+- **Built in and swappable.** The runner, authorization, approvals, sandboxing,
+  credential handling, memory, and audit all ship built in, and every one can be
+  swapped for something your organization already runs without rebuilding the
+  platform around it.
 
 ## Quick start
 
@@ -170,23 +170,23 @@ are listed here so the set is complete.
 
 Pick the path that fits where you want to run OAP.
 
-**Desktop (macOS, Apple Silicon)** is the fastest way to a working local
-OAP. It runs the whole project in a lightweight Linux VM, reachable only from
-your Mac, with a menubar app for chats, sessions, the admin dashboard, and
-agent installation. No Kubernetes to set up yourself.
+**Desktop (macOS, Apple Silicon)** is the fastest way to a working local OAP. It
+runs the whole project in a lightweight Linux VM, reachable only from your Mac,
+with a menubar app for chats, sessions, the admin dashboard, and agent
+installation. No Kubernetes to set up yourself.
 
 ```bash
 mage desktop:all
 open build/desktop/out/oap.app
 ```
 
-On first launch, pick a model provider, enter its API key, and set a local
-admin password. OAP provisions the VM, configures the platform, and installs
-a demo agent.
+On first launch, pick a model provider, enter its API key, and set a local admin
+password. OAP provisions the VM, configures the platform, and installs a demo
+agent.
 
-Desktop is single-player: good for trying OAP, developing and demoing
-agents, or running production agents one person owns and operates. Use
-Kubernetes when agents need a shared environment.
+Desktop is single-player: good for trying OAP, developing and demoing agents, or
+running production agents one person owns and operates. Use Kubernetes when
+agents need a shared environment.
 
 **Local Kubernetes** installs onto a `kind` cluster for development:
 
@@ -196,9 +196,8 @@ kind create cluster --name oap-dev
 ./bin/oap init --local --pinning-mode=warn --wizard
 ```
 
-`oap init` builds and loads images, installs OAP, waits for the platform to
-come up healthy, and walks you through security settings and model
-configuration.
+`oap init` builds and loads images, installs OAP, waits for the platform to come
+up healthy, and walks you through security settings and model configuration.
 
 ### 2. Install your first agent
 
@@ -211,26 +210,25 @@ credential to hand it:
 ./bin/oap agent chat pirate-captain
 ```
 
-`oap agent install` validates and installs the whole agent graph as one
-unit: definitions, dependency, configuration, and install-time questions. Then
-`oap agent chat` opens an interactive terminal conversation with the
-captain. Ask for both a pirate and a vampire response to see it delegate to
-the private child agent.
+`oap agent install` validates and installs the whole agent graph as one unit:
+definitions, dependency, configuration, and install-time questions. Then
+`oap agent chat` opens an interactive terminal conversation with the captain.
+Ask for both a pirate and a vampire response to see it delegate to the private
+child agent.
 
 ### 3. Pick a model provider
 
 OAP supports Anthropic, OpenAI, and OpenRouter. Set the default during
-`oap init --wizard`, or change it later through agent settings. Nothing
-about an agent's definition hardcodes a provider.
+`oap init --wizard`, or change it later through agent settings. Nothing about an
+agent's definition hardcodes a provider.
 
 ### 4. Move to a shared or managed cluster
 
-OAP installs into an existing shared or managed Kubernetes cluster the same
-way it installs locally. These profiles use durable Postgres-backed storage
-and images from your own registry. You'll need a registry, external routing
-with two distinct origins, and a durable artifact store (GKE can provision
-its own bucket; EKS, AKS, and others take an `s3://`, `azblob://`, or `gs://`
-URL).
+OAP installs into an existing shared or managed Kubernetes cluster the same way
+it installs locally. These profiles use durable Postgres-backed storage and
+images from your own registry. You'll need a registry, external routing with two
+distinct origins, and a durable artifact store (GKE can provision its own
+bucket; EKS, AKS, and others take an `s3://`, `azblob://`, or `gs://` URL).
 
 ```bash
 mage build:oap
@@ -249,23 +247,23 @@ infrastructure choices directly:
   --hostname-suffix=my.web.hostname
 ```
 
-See the [full deployment guide](docs/operating/deploy-to-a-cluster.md) for
-OIDC, existing TLS issuers, private routing, cloud-specific storage, and
-air-gapped registries.
+See the [full deployment guide](docs/operating/deploy-to-a-cluster.md) for OIDC,
+existing TLS issuers, private routing, cloud-specific storage, and air-gapped
+registries.
 
 ### 5. Bring your team in
 
 Agents run wherever your team already works: Slack, the browser, the CLI,
-GitHub, or triggered by a signed webhook from another system. Connect a
-channel with its own interactive wizard:
+GitHub, or triggered by a signed webhook from another system. Connect a channel
+with its own interactive wizard:
 
 ```bash
 ./bin/oap channel create --kind slack
 ```
 
-`oap agent install` walks the same wizard automatically for any channel a
-bundle declares, so installing an agent can connect its channel in one step.
-Once it's connected:
+`oap agent install` walks the same wizard automatically for any channel a bundle
+declares, so installing an agent can connect its channel in one step. Once it's
+connected:
 
 ```bash
 ./bin/oap channel list          # what's wired up
@@ -279,17 +277,16 @@ grant or deny an action.
 
 ### 6. Turn on the controls
 
-The security model above is configurable. Cluster-wide
-defaults (circuit breakers, rate limits, data-volume budgets, dependency
-pinning, prompt-injection detection, URL allow-listing) are set with their own
-wizard:
+The security model above is configurable. Cluster-wide defaults (circuit
+breakers, rate limits, data-volume budgets, dependency pinning, prompt-injection
+detection, URL allow-listing) are set with their own wizard:
 
 ```bash
 ./bin/oap settings wizard             # interactive; --defaults for a secure baseline, --dry-run to preview
 ```
 
-Dependencies (MCP servers, sidecar toolboxes, skills, toolkits) are pinned to
-a known-good identity, and drift is reported:
+Dependencies (MCP servers, sidecar toolboxes, skills, toolkits) are pinned to a
+known-good identity, and drift is reported:
 
 ```bash
 ./bin/oap pin status                  # every pinned dependency: strength, digest, drift, age
@@ -298,10 +295,10 @@ a known-good identity, and drift is reported:
 ```
 
 `--pinning-mode` (`off`, `warn`, `approve`, or `block`) sets how strictly
-`oap init` and `oap install` seed the cluster to hold agents and tools to
-their pinned versions, from not gating at all up to blocking a drifted
-dependency outright. And because the audit log is signed and hash-chained,
-not just written, you can check it independently of whoever wrote it:
+`oap init` and `oap install` seed the cluster to hold agents and tools to their
+pinned versions, from not gating at all up to blocking a drifted dependency
+outright. And because the audit log is signed and hash-chained, not just
+written, you can check it independently of whoever wrote it:
 
 ```bash
 ./bin/oap audit verify <session>      # recompute and verify a session's audit chain offline
@@ -310,15 +307,15 @@ not just written, you can check it independently of whoever wrote it:
 ## Build an agent by talking to an agent
 
 You don't have to start with manifest files. **Agent Builder is an OAP agent
-whose job is to create other agents.** Describe what you need in plain
-language and it identifies tools, connects accounts through the platform,
-defines what the new agent may do or must ask permission for, builds it, and
-lets you test it live.
+whose job is to create other agents.** Describe what you need in plain language
+and it identifies tools, connects accounts through the platform, defines what
+the new agent may do or must ask permission for, builds it, and lets you test it
+live.
 
 Each build happens in an isolated workshop. The draft can't touch your live
-agents, and the builder can't install it into the real environment. When
-you're satisfied, you get a portable `.oap` bundle and can submit an
-installation request for an administrator to review.
+agents, and the builder can't install it into the real environment. When you're
+satisfied, you get a portable `.oap` bundle and can submit an installation
+request for an administrator to review.
 
 `oap init` leaves Agent Builder off by default, because there is no safe default
 for who's allowed to start it. Enable it after initialization by naming the
@@ -342,8 +339,8 @@ pnpm docs:dev
 ```
 
 Then open [http://localhost:5179](http://localhost:5179) for installation
-guides, Agent Builder walkthroughs, security concepts, operations, and the
-CLI and CRD reference.
+guides, Agent Builder walkthroughs, security concepts, operations, and the CLI
+and CRD reference.
 
 For architecture and implementation:
 
@@ -355,16 +352,15 @@ For architecture and implementation:
   — this codebase mapped against the OWASP Top 10 for Agentic Applications.
 - [`docs/operating/deploy-to-a-cluster.md`](docs/operating/deploy-to-a-cluster.md)
   — production cluster deployment.
-- [`AGENTS.md`](AGENTS.md) — repository conventions and contributor
-  guidance.
+- [`AGENTS.md`](AGENTS.md) — repository conventions and contributor guidance.
 
 ## Defense in depth, enforced by code
 
 To misuse an OAP agent, an attacker has to get past a plan a human approved, a
 slot that cannot be reopened, a tool lens that cannot be widened, an
 authorization check on every call, and a sandbox that never held the credential
-in the first place. None of them is sufficient alone, and each is
-built on the assumption that the others may fail.
+in the first place. None of them is sufficient alone, and each is built on the
+assumption that the others may fail.
 
 ## Contributing
 

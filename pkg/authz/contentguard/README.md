@@ -7,26 +7,27 @@ The pluggable content-inspection seam over the tool-call hook pipeline. An
 returns a `Finding` (`Pass` | `Block` | `Approve`).
 
 Plugin authors implement only `Configure` + `Inspect`. The framework adapter in
-[`hook.go`](hook.go) maps `Finding`s onto pipeline `Decision`s, so no inspector deals with
-pipeline types.
+[`hook.go`](hook.go) maps `Finding`s onto pipeline `Decision`s, so no inspector
+deals with pipeline types.
 
 Content guards run at order 18 in [`../hooks/order.go`](../hooks/order.go):
 after the toolguard circuit breaker (content that would trip a breaker is
 already denied) and before the SpiceDB check (inspection runs before an approval
 ask is raised).
 
-| Package | What it does |
-| ------- | ------------ |
-| [`kinds`](kinds/) | The built-in inspectors. |
+| Package                 | What it does                                  |
+| ----------------------- | --------------------------------------------- |
+| [`kinds`](kinds/)       | The built-in inspectors.                      |
 | [`registry`](registry/) | The process-wide registry of inspector kinds. |
 
 ## The byte cap is a decorator, not a call-site check
 
-`MaxInspectBytes` (32 KiB) is enforced by `Capped(Instance)` ([`cap.go`](cap.go)) wrapping the
-instance, **not** by the callers. Both inspecting paths — the pipeline adapter
-for gated tools and the runner's meta-tool inspection — therefore cap
-identically, and no third caller can opt out by reaching for `Inspect` directly.
-Keep new call paths going through the decorator.
+`MaxInspectBytes` (32 KiB) is enforced by `Capped(Instance)`
+([`cap.go`](cap.go)) wrapping the instance, **not** by the callers. Both
+inspecting paths — the pipeline adapter for gated tools and the runner's
+meta-tool inspection — therefore cap identically, and no third caller can opt
+out by reaching for `Inspect` directly. Keep new call paths going through the
+decorator.
 
 ## Adding an inspector
 

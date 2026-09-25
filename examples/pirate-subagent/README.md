@@ -1,11 +1,10 @@
 # Pirate Captain — an agent that delegates to a private OAP
 
-This example contains two complete OAPs: `pirate-captain`, which translates
-into pirate dialect, and `vampire-speak`, the only class it is permitted to
-delegate to. The pirate explicitly embeds the vampire as a private dependency,
-so installing the captain automatically installs both AgentClasses and rewrites
-the captain's roster to the private class name
-`pirate-captain-vampire-speak`.
+This example contains two complete OAPs: `pirate-captain`, which translates into
+pirate dialect, and `vampire-speak`, the only class it is permitted to delegate
+to. The pirate explicitly embeds the vampire as a private dependency, so
+installing the captain automatically installs both AgentClasses and rewrites the
+captain's roster to the private class name `pirate-captain-vampire-speak`.
 
 The vampire remains a normal OAP in its own nested folder. You can lint,
 package, or install it independently when you want the translator without the
@@ -20,8 +19,8 @@ captain.
 
 No raw `kubectl apply` is required. Neither class names a model, so both inherit
 the cluster default — the `ClusterAgentSettings` model-catalog entry marked
-`default: true` and the token it already references, which `oap init` sets up.
-A cluster that can run any agent can run these.
+`default: true` and the token it already references, which `oap init` sets up. A
+cluster that can run any agent can run these.
 
 To validate or install only the child OAP:
 
@@ -64,37 +63,36 @@ you are never left guessing whether it quietly did the work itself.
 An AgentClass with none of these cannot delegate to anything, which is the
 default. `vampire-speak` has none of them, so the tree stops there.
 
-| Field | What it grants | Default |
-| --- | --- | --- |
-| `spec.capabilities.subagents` | the `delegate` tool itself | absent — no tool |
-| `spec.subagents` | the closed set of classes it may delegate TO | absent — nobody |
-| `spec.subagentModes` | per-member ceiling on how conversational the child may be | absent — `single_turn` only |
+| Field                         | What it grants                                            | Default                     |
+| ----------------------------- | --------------------------------------------------------- | --------------------------- |
+| `spec.capabilities.subagents` | the `delegate` tool itself                                | absent — no tool            |
+| `spec.subagents`              | the closed set of classes it may delegate TO              | absent — nobody             |
+| `spec.subagentModes`          | per-member ceiling on how conversational the child may be | absent — `single_turn` only |
 
 ## The modes
 
 Mode is an **attack-surface declaration**, not a preference.
 
-| Mode | The child can | Human-facing exchanges |
-| --- | --- | --- |
-| `single_turn` | one bounded task, then return | none — it is headless |
-| `task` | ask its parent ONE clarifying question | one |
-| `chat` | hold an open back-and-forth | unbounded |
+| Mode          | The child can                          | Human-facing exchanges |
+| ------------- | -------------------------------------- | ---------------------- |
+| `single_turn` | one bounded task, then return          | none — it is headless  |
+| `task`        | ask its parent ONE clarifying question | one                    |
+| `chat`        | hold an open back-and-forth            | unbounded              |
 
 The delegating agent **asks** for a mode; the roster is the **ceiling**. It may
 choose narrower than granted, never wider.
 
 ### Seeing the refusal
 
-The refusal is the half worth watching, because it is easy to get wrong and
-hard to notice. Edit
-`pirate-captain/manifests/agentclass.yaml` to drop `task`:
+The refusal is the half worth watching, because it is easy to get wrong and hard
+to notice. Edit `pirate-captain/manifests/agentclass.yaml` to drop `task`:
 
 ```yaml
-  subagentModes:
-    vampire-speak:
-      - single_turn
+subagentModes:
+  vampire-speak:
+    - single_turn
 ```
 
 Reinstall the pirate OAP and repeat the request. The same delegation now fails
-with a reason naming the mode it asked for and the modes it was allowed.
-Nothing is silently narrowed behind the agent's back.
+with a reason naming the mode it asked for and the modes it was allowed. Nothing
+is silently narrowed behind the agent's back.

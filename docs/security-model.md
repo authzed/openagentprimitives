@@ -24,8 +24,8 @@ to make the design decision legible, not to score competitors.
 
 ## 1. Every action is authorized
 
-*Agents follow your organization's real permissions on every call, not a single
-shared level of trust.*
+_Agents follow your organization's real permissions on every call, not a single
+shared level of trust._
 
 A permission check at the edge, deciding who may start an agent, stops helping
 the moment the agent is running and touching data with many different owners.
@@ -45,10 +45,10 @@ a check fails, the platform can convert the denial into an approval request
 routed to whoever actually holds the authority to grant it, rather than simply
 returning an error to the model.
 
-| Typical agent platform | OAP |
-| --- | --- |
-| Permissions checked when a session starts, if at all | Every action checked against the graph |
-| One trust level for the whole session | Authority resolved per action, per resource |
+| Typical agent platform                               | OAP                                         |
+| ---------------------------------------------------- | ------------------------------------------- |
+| Permissions checked when a session starts, if at all | Every action checked against the graph      |
+| One trust level for the whole session                | Authority resolved per action, per resource |
 
 Implemented in: `pkg/authz`, `pkg/authz/spicedb`, `pkg/authz/authzd`
 
@@ -63,10 +63,10 @@ require a role, a team membership, or an approval. The agent definition stays
 the same, and what each person can do with it follows their own authorization.
 An operations agent can be read-only for one team and read-write for another.
 
-| Typical agent platform | OAP |
-| --- | --- |
-| One agent, one permission level for all its users | Per-operation checks that follow each user's role |
-| Separate agents per audience to get separate permissions | One agent, many audiences |
+| Typical agent platform                                   | OAP                                               |
+| -------------------------------------------------------- | ------------------------------------------------- |
+| One agent, one permission level for all its users        | Per-operation checks that follow each user's role |
+| Separate agents per audience to get separate permissions | One agent, many audiences                         |
 
 Implemented in: `pkg/authz/permsurface`, `pkg/tools/toolspec`
 
@@ -82,8 +82,8 @@ access changes without anyone editing the agent platform. The same data tells
 the platform who can see a given channel, which the data-leakage controls in
 pillar 3 depend on.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                         | OAP                                        |
+| -------------------------------------------------------------- | ------------------------------------------ |
 | Permissions maintained by hand, separately from your directory | Existing groups become authorization facts |
 
 Implemented in: `cmd/oap/internal/directorycmd`,
@@ -108,8 +108,8 @@ tasks call for different answers, so `AgentClass.spec.identityMode` offers four:
   recommendation is advisory only; the agent cannot select the more privileged
   identity on its own.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                             | OAP                                                                   |
+| -------------------------------------------------- | --------------------------------------------------------------------- |
 | One hard-coded service token the framework runs as | Real per-user identity, four modes, user confirms the escalating ones |
 
 Implemented in: `pkg/apis/v1alpha1/agentclass_types.go` (`IdentityMode`),
@@ -125,8 +125,8 @@ question. OAP treats participation itself as something to authorize. Teams can
 work in one session without everyone effectively borrowing the access of the
 most privileged person in the room.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                     | OAP                                                          |
+| ---------------------------------------------------------- | ------------------------------------------------------------ |
 | Sessions are single-user, or anyone in one can do anything | Each participant's access is checked; approvals are built in |
 
 Implemented in: `pkg/authz/check_session.go`, `pkg/channels/channelinteractions`
@@ -141,8 +141,8 @@ same authorization checks as everything else, so one person's settings can never
 change how the agent behaves for someone else. Each agent declares which
 settings it offers.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform           | OAP                                                    |
+| -------------------------------- | ------------------------------------------------------ |
 | Settings are global to the agent | Settings belong to each user and are access-controlled |
 
 Implemented in: `pkg/agent/tool/meta/capability/preferences.go`,
@@ -152,8 +152,8 @@ Implemented in: `pkg/agent/tool/meta/capability/preferences.go`,
 
 ## 2. Prompt injection cannot take the wheel
 
-*Whatever an agent reads, it can only do what a person approved and what the
-platform enforces in code.*
+_Whatever an agent reads, it can only do what a person approved and what the
+platform enforces in code._
 
 A model cannot reliably tell instructions apart from data, so any external
 content it reads can attempt to redirect it. Every control in this section
@@ -169,11 +169,11 @@ Plan gating separates deciding from doing. The agent states up front what it
 intends, a person approves that scope, and from then on the platform checks each
 action against the approved plan rather than trusting the model's judgment in
 the moment. Actions outside the plan fail or require an amendment that a person
-approves. Injected text can still change what the model *wants* to do. It cannot
-change what the model is *allowed* to do.
+approves. Injected text can still change what the model _wants_ to do. It cannot
+change what the model is _allowed_ to do.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                            | OAP                                                             |
+| ----------------------------------------------------------------- | --------------------------------------------------------------- |
 | An injected instruction mid-session can redirect the next actions | The approved plan is the mandate; deviation needs a human's yes |
 
 Implemented in: `pkg/authz/plangate`, `pkg/agent/runner/plangate_*.go`,
@@ -193,8 +193,8 @@ filled slot, so a session cannot drift to another resource even when its
 credentials would allow it. The intended scope of a task becomes an enforced
 boundary.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                           | OAP                                                 |
+| ------------------------------------------------ | --------------------------------------------------- |
 | A session can act anywhere its credentials reach | A session acts only on the resource it committed to |
 
 Implemented in: `pkg/authz/slotspec`, `pkg/authz/slot_grant.go`,
@@ -213,12 +213,11 @@ call being made, and the model contributes only its reasoning. An approver can
 weigh the model's justification while knowing the description of the action
 itself is accurate.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                                | OAP                                                              |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | The model writes the whole approval prompt, including what it will do | The action is described by code; the model supplies only reasons |
 
-Implemented in: `pkg/authz/approve.go`,
-`pkg/agent/runner/approval/summarizer`
+Implemented in: `pkg/authz/approve.go`, `pkg/agent/runner/approval/summarizer`
 
 ### Tool specs, which lens an MCP server or CLI
 
@@ -231,14 +230,14 @@ only when the upstream offers fine-grained tokens, and many do not. A tool spec
 defines the narrower interface yourself, which operations and which resources,
 and the platform enforces it in code at the moment each call runs, where the
 model has no say. Because the restriction is independent of the token, it also
-acts as a second layer when scoped tokens *are* available. A read-write
+acts as a second layer when scoped tokens _are_ available. A read-write
 integration can be exposed to an agent as read-only without a read-only
 credential existing.
 
-| Typical agent platform | OAP |
-| --- | --- |
-| Whatever the MCP server exposes is what the agent can do | You declare the subset; the platform enforces it per call |
-| Restricting access requires the upstream to mint a narrow token | The restriction holds regardless of the token's scope |
+| Typical agent platform                                          | OAP                                                       |
+| --------------------------------------------------------------- | --------------------------------------------------------- |
+| Whatever the MCP server exposes is what the agent can do        | You declare the subset; the platform enforces it per call |
+| Restricting access requires the upstream to mint a narrow token | The restriction holds regardless of the token's scope     |
 
 Implemented in: `pkg/tools/toolspec`, `pkg/authz/toolguard`
 
@@ -246,8 +245,8 @@ Implemented in: `pkg/tools/toolspec`, `pkg/authz/toolguard`
 
 ## 3. Business data stays where it belongs
 
-*Customer context, internal information, and secrets cannot drift to the wrong
-people.*
+_Customer context, internal information, and secrets cannot drift to the wrong
+people._
 
 ### Information-leakage tracking
 
@@ -267,8 +266,8 @@ The read-side gate is fail-closed by design: every non-meta tool kind is gated
 by default, so a future tool kind inherits gating until it is proven safe rather
 than escaping it by omission.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                           | OAP                                                    |
+| ---------------------------------------------------------------- | ------------------------------------------------------ |
 | Once data is in the context window, nothing tracks where it goes | Provenance follows the data and is checked at the exit |
 
 Implemented in: `pkg/authz/untrusted/tags.go`, `pkg/agent/runner/leakage*.go`,
@@ -288,8 +287,8 @@ someone else's work. The options are no sharing (the default), sharing across
 all sessions of an agent, or sharing across sessions bound to the same resource
 slot.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                   | OAP                                                                      |
+| -------------------------------------------------------- | ------------------------------------------------------------------------ |
 | Memory is a broad pool any session of the agent can read | Memory follows the resource, so customer context never crosses customers |
 
 Implemented in: `pkg/memory`, `pkg/authz/scope`
@@ -306,8 +305,8 @@ workflow by passing that handle to the next tool, and the platform substitutes
 the real value outside the model. Handles are write-once per session. The
 default store is Kubernetes Secrets, and the store is pluggable.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                | OAP                                                  |
+| ----------------------------------------------------- | ---------------------------------------------------- |
 | Secrets returned by tools land in the model's context | The model holds a reference and never sees the value |
 
 Implemented in: `pkg/web/secretoutsrv`,
@@ -318,7 +317,7 @@ Implemented in: `pkg/web/secretoutsrv`,
 
 ## 4. Least privilege by default
 
-*Agents start with nothing, and every tool holds only the access it needs.*
+_Agents start with nothing, and every tool holds only the access it needs._
 
 ### Opt-in capabilities
 
@@ -331,8 +330,8 @@ what someone deliberately turned on. A new agent can run an LLM loop with
 session history and audit logging, and nothing else. Each capability added
 carries its own gating.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                       | OAP                                                   |
+| ------------------------------------------------------------ | ----------------------------------------------------- |
 | Agents start broad and teams try to remember what to disable | Agents start with nothing and gain only what is added |
 
 Implemented in: `pkg/agent/tool/meta/capability`
@@ -355,8 +354,8 @@ hostname-level allowlist is recorded on session status for a DNS-aware policy
 controller to consume, and is deliberately not claimed as enforced by OAP
 itself.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                             | OAP                                                        |
+| ------------------------------------------------------------------ | ---------------------------------------------------------- |
 | Tools share one sandbox, so every tool can reach every token in it | Each tool is walled off and cannot borrow another's access |
 
 Implemented in: `pkg/tools/sandboxkinds`,
@@ -373,8 +372,8 @@ explicitly, within what the plan allows, and each grant is recorded as a SpiceDB
 relationship like any other. Splitting work across sub-agents narrows access
 rather than copying it.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                          | OAP                                             |
+| ----------------------------------------------- | ----------------------------------------------- |
 | Sub-agents inherit everything the parent can do | Sub-agents get exactly what was granted to them |
 
 Implemented in: `pkg/controllers/subagentrequest`
@@ -395,8 +394,8 @@ that isolation explicitly. Concurrent sessions each get their own.
 Combining sidecars with separate tools also allows separation of duties, so the
 tool that obtains a credential is not the tool that uses it.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                     | OAP                                                                        |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------- |
 | Custom tools are ad hoc shell-outs in a shared environment | MCP, CLI, and sidecar tools are all first-class, isolated, and short-lived |
 
 Implemented in: `pkg/apis/v1alpha1/sidecartoolbox_types.go`,
@@ -406,7 +405,7 @@ Implemented in: `pkg/apis/v1alpha1/sidecartoolbox_types.go`,
 
 ## 5. Control and oversight for administrators
 
-*Set policy once, prove what happened, and pull access immediately.*
+_Set policy once, prove what happened, and pull access immediately._
 
 ### Inherited controls
 
@@ -415,13 +414,14 @@ level, and flow downward.**
 
 Security settings configured agent by agent drift apart, and one misconfigured
 agent is enough. Layered controls let an administrator set policy once, at the
-level where it belongs, and have it apply to everything beneath. Organization-wide
-rules live at the cluster, team-specific limits such as allowed models or budgets
-live at the Kubernetes namespace, and individual agents inherit both. Agent
-authors work within those bounds and cannot opt out of them.
+level where it belongs, and have it apply to everything beneath.
+Organization-wide rules live at the cluster, team-specific limits such as
+allowed models or budgets live at the Kubernetes namespace, and individual
+agents inherit both. Agent authors work within those bounds and cannot opt out
+of them.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                      | OAP                                                     |
+| ----------------------------------------------------------- | ------------------------------------------------------- |
 | Each agent is configured on its own and drift is inevitable | Policy flows downhill and is enforced deterministically |
 
 Implemented in: `pkg/apis/v1alpha1`, `cmd/oap/internal/settingscmd`
@@ -437,8 +437,8 @@ mechanism: remove the relationship and every subsequent check fails. There is no
 hunting down copies of a credential and no redeploying agents. A tool call
 already in flight is not interrupted, but nothing new starts.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                    | OAP                                             |
+| --------------------------------------------------------- | ----------------------------------------------- |
 | Pulling access means rotating credentials and redeploying | One revocation takes effect across the platform |
 
 Implemented in: `pkg/authz/revocation`,
@@ -467,16 +467,15 @@ witnessed trust root. Verification runs offline:
 oap audit verify <session>
 ```
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                          | OAP                                                         |
+| ----------------------------------------------- | ----------------------------------------------------------- |
 | Logs can be edited or deleted without detection | Modification, reordering, and truncation are all detectable |
 
 Implemented in: `pkg/memory/provenance`, `pkg/memory/publisherkeys`
 
 ### Pinning
 
-**Pin which skills, containers, and MCP servers are allowed, down to
-versions.**
+**Pin which skills, containers, and MCP servers are allowed, down to versions.**
 
 Skills, containers, and MCP servers are supply-chain dependencies. A changed or
 swapped dependency can change what an agent does without anyone editing the
@@ -485,8 +484,8 @@ It can be enforced strictly, so a non-compliant agent refuses to run, or set to
 warn while a policy is rolled out. `--pinning-mode` accepts `off`, `warn`,
 `approve`, or `block`.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                  | OAP                                                     |
+| --------------------------------------- | ------------------------------------------------------- |
 | Any skill or server version can slip in | Only approved components, at approved versions, can run |
 
 Implemented in: `pkg/authz/pinning`
@@ -502,8 +501,8 @@ duration, and a circuit breaker denies tool calls after repeated failures.
 Monitoring hooks can trip a breaker on a policy violation, so a misbehaving
 session stops itself rather than waiting to be caught.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                  | OAP                                             |
+| ------------------------------------------------------- | ----------------------------------------------- |
 | A looping agent keeps spending until a human intervenes | Hard limits stop runaway sessions automatically |
 
 Implemented in: `pkg/apis/v1alpha1/agentclass_types.go` (`BudgetConfig`),
@@ -520,8 +519,8 @@ use is restricting links in agent output to trusted domains, to blunt phishing.
 Because a hook can trip a circuit breaker, a violation can stop the session
 rather than only leaving a log entry.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform            | OAP                                                  |
+| --------------------------------- | ---------------------------------------------------- |
 | Output goes to the user unchecked | Custom policy runs on every call, in both directions |
 
 Implemented in: `pkg/authz/hooks`, `pkg/authz/toolguard/hook_guard.go`
@@ -530,7 +529,7 @@ Implemented in: `pkg/authz/hooks`, `pkg/authz/toolguard/hook_guard.go`
 
 ## 6. A hardened platform underneath
 
-*Defense in depth, so a failure in one component stays in that component.*
+_Defense in depth, so a failure in one component stays in that component._
 
 ### Typed input and output sanitization
 
@@ -545,8 +544,8 @@ exhaust resources. Rendered HTML runs inside an iframe under a Content Security
 Policy and without cookie access, so material that slipped through a sanitizer
 still cannot reach the viewer's session.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                                 | OAP                                                              |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | Generated HTML opens in your browser, where it can steal session state | Nothing reaches a user without passing a type-specific sanitizer |
 
 Implemented in: `pkg/channels/channelassets/html`,
@@ -570,8 +569,8 @@ backend targets the upstream `sigs.k8s.io/agent-sandbox` API, which on a
 supporting platform such as GKE backs workloads with micro-VMs. The isolation
 strength there is a property of that backend, not a claim OAP makes on its own.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                          | OAP                                 |
+| --------------------------------------------------------------- | ----------------------------------- |
 | The agent runtime and the control plane share a process or host | Every layer is its own blast radius |
 
 Implemented in: `pkg/controllers/agentsession`,
@@ -596,8 +595,8 @@ subject it must match cannot drift apart, and grants are asserted in tests by
 observation against a real server rather than by string matching, because an
 empty allow list means publish-anywhere rather than deny-all.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                  | OAP                                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------ |
 | Internal services trust anything on the cluster network | Every client proves identity and holds only its own subject grants |
 
 Implemented in: `pkg/platform/nats`, `pkg/platform/nats/subjects`
@@ -613,8 +612,8 @@ OCI-compliant package gives it a definite identity that works with existing
 container tooling, so installation can be gated by an administrator and reviewed
 like any other artifact.
 
-| Typical agent platform | OAP |
-| --- | --- |
+| Typical agent platform                                              | OAP                                                        |
+| ------------------------------------------------------------------- | ---------------------------------------------------------- |
 | An agent is a loose collection of config, prompts, and dependencies | One package per agent, with installation gated by an admin |
 
 Implemented in: `pkg/platform/oap`, `cmd/oap/internal/agentcmd`
@@ -634,7 +633,7 @@ the point: each assumes the others may fail.
 - [`README.md`](../README.md) — what OAP is and how to run it.
 - [`PRIMITIVES.md`](../PRIMITIVES.md) — the six primitives and where each one's
   code lives.
-- [`owasp-agentic-top10-coverage.html`](owasp-agentic-top10-coverage.html) — this
-  codebase mapped against the OWASP Top 10 for Agentic Applications.
+- [`owasp-agentic-top10-coverage.html`](owasp-agentic-top10-coverage.html) —
+  this codebase mapped against the OWASP Top 10 for Agentic Applications.
 - [`AGENTS.md`](../AGENTS.md) — repository conventions, including the
   authorization and audit invariants contributors must preserve.

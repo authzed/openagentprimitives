@@ -1,9 +1,9 @@
 # `config/spicedb-operator/` — vendored upstream operator
 
-SpiceDB is not deployed directly. `oap install` creates a `SpiceDBCluster` CR and
-lets authzed's spicedb-operator reconcile the actual Deployment, Service, and
-config. This directory vendors that operator so the whole thing installs from
-the embedded bundle with no network fetch.
+SpiceDB is not deployed directly. `oap install` creates a `SpiceDBCluster` CR
+and lets authzed's spicedb-operator reconcile the actual Deployment, Service,
+and config. This directory vendors that operator so the whole thing installs
+from the embedded bundle with no network fetch.
 
 ## Files
 

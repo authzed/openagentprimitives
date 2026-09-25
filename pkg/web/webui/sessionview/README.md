@@ -10,11 +10,11 @@ to verify. There is no send path here — that is [`interact`](../interact)'s jo
 
 ## Routes
 
-| Route | Origin | Auth |
-| ----- | ------ | ---- |
-| `GET /session-view/{ns}/{name}` | trusted | `AuthAuthenticated` (frames the sandbox) |
-| `GET /session-view/{ns}/{name}/live` | trusted | `AuthAuthenticated` (websocket) |
-| `GET /mcpui-content`, `/mcpui-host`, `/mcpui-host.js` | **sandbox** | `AuthNone` — the content token *is* the authorization |
+| Route                                                 | Origin      | Auth                                                  |
+| ----------------------------------------------------- | ----------- | ----------------------------------------------------- |
+| `GET /session-view/{ns}/{name}`                       | trusted     | `AuthAuthenticated` (frames the sandbox)              |
+| `GET /session-view/{ns}/{name}/live`                  | trusted     | `AuthAuthenticated` (websocket)                       |
+| `GET /mcpui-content`, `/mcpui-host`, `/mcpui-host.js` | **sandbox** | `AuthNone` — the content token _is_ the authorization |
 
 ## Authorization
 
@@ -31,24 +31,24 @@ into a session-scoped view as if they were a participant in it.
 Read this next to [`artifactview`](../artifactview), because the sandbox posture
 is deliberately **opposite**:
 
-| | Artifact content | MCP-UI widget |
-| --- | --- | --- |
-| Inner frame | `sandbox="allow-same-origin"` — no scripts | `sandbox="allow-scripts"` — no same-origin |
-| Effect | The bytes cannot execute | The bytes execute in a **unique opaque origin** |
+|             | Artifact content                           | MCP-UI widget                                   |
+| ----------- | ------------------------------------------ | ----------------------------------------------- |
+| Inner frame | `sandbox="allow-same-origin"` — no scripts | `sandbox="allow-scripts"` — no same-origin      |
+| Effect      | The bytes cannot execute                   | The bytes execute in a **unique opaque origin** |
 
 Widgets are interactive, so their script must run; safety comes from the opaque
 origin plus CSP instead of from script-disabling.
 
 **Widget bytes are served verbatim** — no sanitize, no transform, no ref
 rewriting. Safety comes entirely from the sandbox framing plus the response's
-own CSP, *never* from transforming the bytes. This is also why `script-src`
+own CSP, _never_ from transforming the bytes. This is also why `script-src`
 includes `'unsafe-inline'`: the markup is never nonced, so a nonce-based policy
 would simply block it.
 
 Two subtleties that are easy to break:
 
 - The widget CSP is `frame-ancestors 'self' <shellOrigin>` — **both** are
-  required, because CSP3 checks *every* ancestor, and the chain is two deep
+  required, because CSP3 checks _every_ ancestor, and the chain is two deep
   (shell → host → content).
 - `/mcpui-host`'s CSP is load-bearing because a `srcDoc` child with no CSP of
   its own **inherits its creator's**, so that header becomes the widget's
@@ -66,13 +66,13 @@ a fabricated one.
 
 ## Files
 
-| File | What it holds |
-| ---- | ------------- |
-| `sessionview.go` | Plug-in skeleton and routes |
-| `deps.go` | `Deps`, plus `WidgetRef` / `WidgetCSPMeta` / `WidgetMeta` |
-| `page.go` | The shell build, sandbox origin resolution, active-widget props |
-| `live.go` | The websocket mirror |
-| `widgets.go` | Sandbox-origin MCP-UI serving and its CSP construction |
+| File             | What it holds                                                   |
+| ---------------- | --------------------------------------------------------------- |
+| `sessionview.go` | Plug-in skeleton and routes                                     |
+| `deps.go`        | `Deps`, plus `WidgetRef` / `WidgetCSPMeta` / `WidgetMeta`       |
+| `page.go`        | The shell build, sandbox origin resolution, active-widget props |
+| `live.go`        | The websocket mirror                                            |
+| `widgets.go`     | Sandbox-origin MCP-UI serving and its CSP construction          |
 
 `widgets.go` builds its CSP by hand with `webui.SanitizeCSPSourceToken` rather
 than through [`cspassets`](../cspassets), because a legitimate widget domain may

@@ -6,8 +6,8 @@ per registered kind. [`registry.go`](./registry.go) holds all of it.
 
 ## Subpackages
 
-- [`plans`](./plans/) — the one registered kind: agent-declared multi-step plans,
-  mutated only by the `update_plan` meta tool.
+- [`plans`](./plans/) — the one registered kind: agent-declared multi-step
+  plans, mutated only by the `update_plan` meta tool.
 
 ## Replay
 

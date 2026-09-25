@@ -32,18 +32,18 @@ pkg/platform/manifests/install.yaml                    ← GENERATED, embedded
 
 ## Directories
 
-| Directory | Contributes |
-| --- | --- |
-| [`authzd/`](authzd/README.md) | The async authorization worker: entity extraction and metaagent scope orchestration. |
-| [`crds/`](crds/README.md) | All `agentprimitives.authzed.com` CustomResourceDefinitions. **Generated.** |
-| [`extractord/`](extractord/README.md) | The powerless attachment text-extraction service (no egress, no SA token). |
-| [`identities/`](identities/README.md) | The `agentprimitives-identities` Namespace, where per-user credential Secrets live. |
-| [`manager/`](manager/README.md) | The operator itself: namespace, RBAC, Deployment, memory PVC, Services, admission webhooks. |
-| [`networkpolicy/`](networkpolicy/README.md) | Default-deny + allowlist NetworkPolicies for `agentprimitives-system`. |
-| [`spicedb-operator/`](spicedb-operator/README.md) | The vendored upstream authzed spicedb-operator release bundle. |
-| [`toolchains/`](toolchains/README.md) | Built-in `SpiceboxToolchain` CRs (go, node, claude) mounted into sandboxes. |
-| [`webd/`](webd/README.md) | The browser-UI host and its four-namespace RBAC split. |
-| [`workspace-provisioner/`](workspace-provisioner/README.md) | Optional RWX workspace storage tier, applied separately by `oap install`. |
+| Directory                                                   | Contributes                                                                                 |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [`authzd/`](authzd/README.md)                               | The async authorization worker: entity extraction and metaagent scope orchestration.        |
+| [`crds/`](crds/README.md)                                   | All `agentprimitives.authzed.com` CustomResourceDefinitions. **Generated.**                 |
+| [`extractord/`](extractord/README.md)                       | The powerless attachment text-extraction service (no egress, no SA token).                  |
+| [`identities/`](identities/README.md)                       | The `agentprimitives-identities` Namespace, where per-user credential Secrets live.         |
+| [`manager/`](manager/README.md)                             | The operator itself: namespace, RBAC, Deployment, memory PVC, Services, admission webhooks. |
+| [`networkpolicy/`](networkpolicy/README.md)                 | Default-deny + allowlist NetworkPolicies for `agentprimitives-system`.                      |
+| [`spicedb-operator/`](spicedb-operator/README.md)           | The vendored upstream authzed spicedb-operator release bundle.                              |
+| [`toolchains/`](toolchains/README.md)                       | Built-in `SpiceboxToolchain` CRs (go, node, claude) mounted into sandboxes.                 |
+| [`webd/`](webd/README.md)                                   | The browser-UI host and its four-namespace RBAC split.                                      |
+| [`workspace-provisioner/`](workspace-provisioner/README.md) | Optional RWX workspace storage tier, applied separately by `oap install`.                   |
 
 ## Notes
 

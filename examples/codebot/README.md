@@ -35,22 +35,22 @@ codebot/
   | `anthropic-oauth` | Claude Code subscription token     | user at identityd |
 
   `git` declares `GIT_TOKEN → git-token`; the gitlike bundle remaps
-  `git-token → github-token` via `credentialRemap`, so git and gh share a
-  single GitHub PAT. Claude Code gets the user's own subscription token — the
-  platform API key is never used for the inner Claude process.
+  `git-token → github-token` via `credentialRemap`, so git and gh share a single
+  GitHub PAT. Claude Code gets the user's own subscription token — the platform
+  API key is never used for the inner Claude process.
 
   (`required_test.go` asserts the bundle resolves to exactly these two
   user-linked credentials.)
 
 - Under `userPassthrough` the session owner is forced to the person who started
-  the session. A plain Slack channel is sufficient — no per-user channel
-  routing needed.
+  the session. A plain Slack channel is sufficient — no per-user channel routing
+  needed.
 
 ## Prerequisites
 
 - A Kubernetes cluster with agentprimitives installed (`oap install`) and a
-  **cluster default model** configured (`oap init` / `oap settings wizard`) — this
-  agent pins no model, so the orchestrator uses the cluster's default-model
+  **cluster default model** configured (`oap init` / `oap settings wizard`) —
+  this agent pins no model, so the orchestrator uses the cluster's default-model
   token.
 - The `oap` CLI on your PATH.
 - Each user must have:
@@ -101,11 +101,11 @@ disk-backed cache at `/var/ap-cache`. This lets Claude Code actually
 build/vet/test the code it edits (`go build`, `pnpm install`, `tsc --noEmit`)
 instead of producing text that merely looks like it compiles.
 
-`go` and `node` ship by default with `oap install`; list what's available in your
-cluster with `kubectl get spiceboxtoolchains`. Toolchains **compose** — a
+`go` and `node` ship by default with `oap install`; list what's available in
+your cluster with `kubectl get spiceboxtoolchains`. Toolchains **compose** — a
 full-stack repo selects both, mounted side by side. They are frozen per-session
-at first bind, so changing the selection (re-install, or edit
-`spec.toolchains`) affects new sessions only.
+at first bind, so changing the selection (re-install, or edit `spec.toolchains`)
+affects new sessions only.
 
 ## Attach a channel
 
@@ -138,9 +138,9 @@ signed, "Unverified" label expected in v1).
 
 ## Deferred / known limitations
 
-- **Verified commits** — commits are attributed but not GPG/SSH-signed.
-  Signing requires either a user-supplied signing key (out of scope for v1) or
-  a signed-commit sidecar.
+- **Verified commits** — commits are attributed but not GPG/SSH-signed. Signing
+  requires either a user-supplied signing key (out of scope for v1) or a
+  signed-commit sidecar.
 - **AP-driven Anthropic OAuth** — `anthropic-oauth` is a user-supplied token
   from `claude setup-token`, not a server-side OAuth flow. Claude Code's OAuth
   client is loopback-only, audience-bound, and ToS-restricted to interactive

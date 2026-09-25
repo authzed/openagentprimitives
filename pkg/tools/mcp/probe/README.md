@@ -6,13 +6,13 @@ POST — which spec-compliant servers reject with "invalid during session
 initialization". Used by the runner (sidecar and `MCPServer` tool synthesis and
 dispatch), by the operator's reachability reconciles, and by the `oap` CLI.
 
-| File | Holds |
-| --- | --- |
-| [`client.go`](client.go) | `Client` — a server URL plus an HTTP client and a timeout. |
-| [`session.go`](session.go) | The go-sdk-backed session: `ListTools`, `CallTool`, SSE unwrapping, reconnects. Auth lives in a `RoundTripper` on the injected HTTP client, so the dispatcher's CEL / audit / toolguard middleware stays auth-agnostic. |
-| [`session_cache.go`](session_cache.go) | One persistent session per (server URL, credential), for an AgentSession's lifetime. |
-| [`types.go`](types.go) | `Tool`, `ServerInfo`, `Annotations`. Input and output schemas are kept as raw JSON rather than committing to a JSON Schema parser. |
-| [`errors.go`](errors.go) | `HTTPError`, with `IsAuth()` so a controller can distinguish 401/403 from other server errors when writing a condition. |
+| File                                   | Holds                                                                                                                                                                                                                   |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`client.go`](client.go)               | `Client` — a server URL plus an HTTP client and a timeout.                                                                                                                                                              |
+| [`session.go`](session.go)             | The go-sdk-backed session: `ListTools`, `CallTool`, SSE unwrapping, reconnects. Auth lives in a `RoundTripper` on the injected HTTP client, so the dispatcher's CEL / audit / toolguard middleware stays auth-agnostic. |
+| [`session_cache.go`](session_cache.go) | One persistent session per (server URL, credential), for an AgentSession's lifetime.                                                                                                                                    |
+| [`types.go`](types.go)                 | `Tool`, `ServerInfo`, `Annotations`. Input and output schemas are kept as raw JSON rather than committing to a JSON Schema parser.                                                                                      |
+| [`errors.go`](errors.go)               | `HTTPError`, with `IsAuth()` so a controller can distinguish 401/403 from other server errors when writing a condition.                                                                                                 |
 
 ## Constraints
 
@@ -25,7 +25,8 @@ dispatch), by the operator's reachability reconciles, and by the `oap` CLI.
   the MCP session id. Plain `CallTool` opens a fresh session per call and closes
   it, so a selection made on one call is invisible to the next. One session per
   AgentSession fixes that at the source. It is safe for concurrent use — the
-  runner dispatches tool calls in parallel — and is closed when the session ends.
+  runner dispatches tool calls in parallel — and is closed when the session
+  ends.
 - A tool's `Description` is the server's own prose and reaches the model
   verbatim unless a spec overrides it: **untrusted prompt text**.
 - `tools/list` ordering is not guaranteed by the SDK; assertions over it must be

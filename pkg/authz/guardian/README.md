@@ -6,12 +6,12 @@ produces, and orchestrating the pause while a human decides.
 
 This directory holds no code of its own — everything is in a subpackage.
 
-| Package | What it does |
-| ------- | ------------ |
-| [`schema`](schema/) | Composes the `agentsession` definition's grant-relation / check-permission block from the union of per-AgentClass `(resourceType, permission)` requirements, and validates/partitions the per-MCPServer schema fragments. |
-| [`grants`](grants/) | Writes, deletes, and checks the per-`(session, tool, args)` grant tuples. |
-| [`approval`](approval/) | The per-runner-process orchestrator for approval pauses, plus the info-leakage grant writer. |
-| [`leakage`](leakage/) | A leaf package holding only the types the runner's info-leakage gate and the `respond_to_user` meta tool both need — kept separate purely to break an import cycle between `pkg/agent/runner` and `pkg/agent/tool/meta`. |
+| Package                 | What it does                                                                                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`schema`](schema/)     | Composes the `agentsession` definition's grant-relation / check-permission block from the union of per-AgentClass `(resourceType, permission)` requirements, and validates/partitions the per-MCPServer schema fragments. |
+| [`grants`](grants/)     | Writes, deletes, and checks the per-`(session, tool, args)` grant tuples.                                                                                                                                                 |
+| [`approval`](approval/) | The per-runner-process orchestrator for approval pauses, plus the info-leakage grant writer.                                                                                                                              |
+| [`leakage`](leakage/)   | A leaf package holding only the types the runner's info-leakage gate and the `respond_to_user` meta tool both need — kept separate purely to break an import cycle between `pkg/agent/runner` and `pkg/agent/tool/meta`.  |
 
 ## The grant tuple shape
 
@@ -25,12 +25,12 @@ agentsession:<ns/name>#grant_<perm>_<resType>@<resType>:<resID>
 
 Three things are load-bearing:
 
-- **The args hash is keyed, not a bare digest.** `ArgsHash` /
-  `ArgsHashFiltered` are HMAC-SHA256 under a per-session key, so an approval
-  granted for one argument set cannot be replayed against another, and the hash
-  cannot be precomputed off-session.
-- **Every grant carries an expiration.** The schema declares the relation `with
-  check_hash and expiration`, so an indefinite tuple is not expressible.
+- **The args hash is keyed, not a bare digest.** `ArgsHash` / `ArgsHashFiltered`
+  are HMAC-SHA256 under a per-session key, so an approval granted for one
+  argument set cannot be replayed against another, and the hash cannot be
+  precomputed off-session.
+- **Every grant carries an expiration.** The schema declares the relation
+  `with check_hash and expiration`, so an indefinite tuple is not expressible.
   `TTL == 0` means "session-wide" and gets the `DefaultSessionGrantTTL` backstop
   (7 days) — long enough to outlast any reasonable session; `TTL > 0` (used for
   external-effect tools) stamps the shorter caller-supplied window. A grant

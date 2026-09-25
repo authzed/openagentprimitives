@@ -13,15 +13,15 @@ stdlib and CEL). The dispatch-time enforcer is the `Scope` hook in
 second caller is the tool-call pre-pass in
 [`../spicedb/toolcheck`](../spicedb/toolcheck/).
 
-| File | Owns |
-| ---- | ---- |
-| [`scope.go`](scope.go) | The `Scope` document: `ScopeTools`, `ScopeResource`, `ResourcePattern`, and the `Source` tag recording where each entry came from (`default`, `initial-ask`, `metaagent-approved`, `extracted`, `approver-deny-converted`). |
-| [`check_scope.go`](check_scope.go) | `CheckScope` (tool + args) and `CheckScopeWithRefs` (tool + args + resolved resource refs), returning `Result{OK, Reason, Message}`. **An empty `Scope` is the identity — it allows.** |
-| [`delta.go`](delta.go), [`apply_delta.go`](apply_delta.go) | `ScopeDelta` and `ApplyDelta` — the only way a `Scope` changes. |
-| [`classify.go`](classify.go) | `ClassifySkipped`: which fragments of a requested delta authzd refused to apply, each tagged with a deterministic `SkippedReason` (`out_of_envelope_tool`, `requester_lacks_perm`, `conflicts_with_existing_disallow`, …). |
-| [`caveats.go`](caveats.go) | `DetectCaveats`: fragments that *were* applied but are known-incomplete — a search tool that can still return the denied thing, a pattern that is not enumerable, an alias for a denied ID. |
-| [`cold_start.go`](cold_start.go) | The cold-start extraction shape. |
-| [`output.go`](output.go) | The metaagent's structured output and approval-payload shapes. |
+| File                                                       | Owns                                                                                                                                                                                                                        |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`scope.go`](scope.go)                                     | The `Scope` document: `ScopeTools`, `ScopeResource`, `ResourcePattern`, and the `Source` tag recording where each entry came from (`default`, `initial-ask`, `metaagent-approved`, `extracted`, `approver-deny-converted`). |
+| [`check_scope.go`](check_scope.go)                         | `CheckScope` (tool + args) and `CheckScopeWithRefs` (tool + args + resolved resource refs), returning `Result{OK, Reason, Message}`. **An empty `Scope` is the identity — it allows.**                                      |
+| [`delta.go`](delta.go), [`apply_delta.go`](apply_delta.go) | `ScopeDelta` and `ApplyDelta` — the only way a `Scope` changes.                                                                                                                                                             |
+| [`classify.go`](classify.go)                               | `ClassifySkipped`: which fragments of a requested delta authzd refused to apply, each tagged with a deterministic `SkippedReason` (`out_of_envelope_tool`, `requester_lacks_perm`, `conflicts_with_existing_disallow`, …).  |
+| [`caveats.go`](caveats.go)                                 | `DetectCaveats`: fragments that _were_ applied but are known-incomplete — a search tool that can still return the denied thing, a pattern that is not enumerable, an alias for a denied ID.                                 |
+| [`cold_start.go`](cold_start.go)                           | The cold-start extraction shape.                                                                                                                                                                                            |
+| [`output.go`](output.go)                                   | The metaagent's structured output and approval-payload shapes.                                                                                                                                                              |
 
 ## Constraints
 

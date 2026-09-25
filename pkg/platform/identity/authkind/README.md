@@ -11,22 +11,22 @@ broker's job ([`../broker`](../broker/)).
 
 ## Subpackages
 
-| Package | Prefix | What it resolves |
-| ------- | ------ | ---------------- |
-| [`cli`](cli/) | `cli` | A CLI toolkit. |
-| [`mcp`](mcp/) | `mcp` | An `MCPServer` CR. |
-| [`toolspec`](toolspec/) | `toolspec` | A `SpiceboxToolspec` CR. |
-| [`sidecartoolbox`](sidecartoolbox/) | `toolbox` | A `SidecarToolbox` CR. Note the package name and the prefix differ. |
-| [`registry`](registry/) | — | The process-wide registry plus `ParseBindingMatch`. Storage/mutex/dup-panic come from `pkg/x/kindregistry`. |
-| [`loader`](loader/) | — | Blank-imports every kind so a binary registers all of them with one import. **New kinds are added here.** |
+| Package                             | Prefix     | What it resolves                                                                                            |
+| ----------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------- |
+| [`cli`](cli/)                       | `cli`      | A CLI toolkit.                                                                                              |
+| [`mcp`](mcp/)                       | `mcp`      | An `MCPServer` CR.                                                                                          |
+| [`toolspec`](toolspec/)             | `toolspec` | A `SpiceboxToolspec` CR.                                                                                    |
+| [`sidecartoolbox`](sidecartoolbox/) | `toolbox`  | A `SidecarToolbox` CR. Note the package name and the prefix differ.                                         |
+| [`registry`](registry/)             | —          | The process-wide registry plus `ParseBindingMatch`. Storage/mutex/dup-panic come from `pkg/x/kindregistry`. |
+| [`loader`](loader/)                 | —          | Blank-imports every kind so a binary registers all of them with one import. **New kinds are added here.**   |
 
 ## Constraints
 
 - **Register from `init()`, resolve by prefix.** `registry.Register` panics on a
   duplicate prefix. Never branch on the prefix outside a `Kind`.
-- **`ResolveTarget` must return `ErrTargetNotFound`** when nothing by that suffix
-  exists; callers translate it into a setup error or a `Failed=True` condition.
-  Other errors mean transport/lookup failure and are distinguished.
+- **`ResolveTarget` must return `ErrTargetNotFound`** when nothing by that
+  suffix exists; callers translate it into a setup error or a `Failed=True`
+  condition. Other errors mean transport/lookup failure and are distinguished.
 - **`SetupRequirements` is a pure function of the target** — no I/O — so setup
   can be idempotent per requirement.
 - `Target.BindingMatchString()` is the inverse of `registry.ParseBindingMatch`;

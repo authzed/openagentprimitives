@@ -4,14 +4,14 @@ Two operator-side concerns live here: composing per-AgentClass authz
 requirements (`AgentSessionGrants` CRs) into the SpiceDB `agentsession`
 definition, and syncing `SpiceDBBootstrap` relationship tuples.
 
-| File | Role |
-| ---- | ---- |
-| `agentsessiongrants_controller.go` | The `AgentSessionGrants` reconciler — the schema composition itself |
-| `bootstrap_sync.go` | Wires `SpiceDBBootstrap` relationship sync into the reconciler |
-| `bootstrap_canonicalize.go` | `ResolveTuple` — a bootstrap relationship → the `spicedb.Tuple` the writer accepts |
-| `bootstrap_refcount.go` | `Owner` — which CRs claim a tuple, so a tuple survives until its last claimant is gone |
-| `bootstrap_validation.go` | Bootstrap spec validation |
-| `mcpserver_fragment_validation.go` | Validates an MCPServer's contributed schema fragment |
+| File                               | Role                                                                                   |
+| ---------------------------------- | -------------------------------------------------------------------------------------- |
+| `agentsessiongrants_controller.go` | The `AgentSessionGrants` reconciler — the schema composition itself                    |
+| `bootstrap_sync.go`                | Wires `SpiceDBBootstrap` relationship sync into the reconciler                         |
+| `bootstrap_canonicalize.go`        | `ResolveTuple` — a bootstrap relationship → the `spicedb.Tuple` the writer accepts     |
+| `bootstrap_refcount.go`            | `Owner` — which CRs claim a tuple, so a tuple survives until its last claimant is gone |
+| `bootstrap_validation.go`          | Bootstrap spec validation                                                              |
+| `mcpserver_fragment_validation.go` | Validates an MCPServer's contributed schema fragment                                   |
 
 ## Non-obvious constraints
 

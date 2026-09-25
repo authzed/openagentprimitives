@@ -30,7 +30,7 @@ The backing path is a per-node `hostPath` directory, not a shared filesystem.
 cluster a session's pods land on different nodes and see divergent (often empty)
 `/workspace`. `nodePathMap` pins each PV to the node its first consumer
 scheduled on. It provisions RWO only — which is fine, because RWO is
-single-*node*, so the co-located session pods still share the volume.
+single-_node_, so the co-located session pods still share the volume.
 
 Genuine shared RWX (Filestore / NFS / EFS) is the durable fix.
 

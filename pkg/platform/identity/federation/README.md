@@ -11,15 +11,16 @@ for tests.
 
 ## Subpackages
 
-| Package | What it is |
-| ------- | ---------- |
+| Package           | What it is                                                                                                                                                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`idjag`](idjag/) | The vendor-neutral ID-JAG minter. Leg 1: RFC 8693 token-exchange at the IdP yields an ID-JAG audienced to the resource. Leg 2: present it as a JWT authorization grant at the resource's AS (discovered via RFC 9728 → 8414). |
-| [`fake`](fake/) | A deterministic `Minter` for tests. Returns a token derived from the request, or a configured error. |
+| [`fake`](fake/)   | A deterministic `Minter` for tests. Returns a token derived from the request, or a configured error.                                                                                                                          |
 
 ## Constraints
 
-- **A nil `Minter` reaching a federated credential is a fail-closed configuration
-  error, never a panic.** Callers must check and surface, not assume.
+- **A nil `Minter` reaching a federated credential is a fail-closed
+  configuration error, never a panic.** Callers must check and surface, not
+  assume.
 - **Token bytes must never be logged.** The user's IdP token arrives wrapped in
   [`sensitive.SensitiveValue`](../sensitive/); keep it wrapped.
 - **Errors must name which leg failed.** A two-leg exchange that reports only

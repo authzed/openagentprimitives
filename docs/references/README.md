@@ -17,5 +17,5 @@ was written against.
 [`../owasp-agentic-top10-coverage.html`](../owasp-agentic-top10-coverage.html)
 (a coverage map of the ten risks against this codebase) is hand-maintained;
 there is no longer a command that regenerates it from this PDF. Update the
-coverage map by hand when the code it describes changes or a newer OWASP
-release supersedes this copy.
+coverage map by hand when the code it describes changes or a newer OWASP release
+supersedes this copy.

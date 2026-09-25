@@ -11,15 +11,15 @@ caveat that applies to one provider be shown only to the users who hit it.
 
 ## Subpackages
 
-| Package | Flow name |
-| ------- | --------- |
-| [`anthropic_oauth`](anthropic_oauth/) | `anthropic-oauth` |
-| [`github_pat`](github_pat/) | `github-pat` |
-| [`kubectl_kubeconfig`](kubectl_kubeconfig/) | `kubectl-kubeconfig` |
-| [`oauth_mcp`](oauth_mcp/) | `oauth-mcp` |
-| [`tailscale_authkey`](tailscale_authkey/) | `tailscale-authkey` |
-| [`flowscreens`](flowscreens/) | Not a flow — the screens more than one flow takes ("open the page where this is generated"), plus the per-provider vocabulary a question is configured with. |
-| [`loader`](loader/) | Not a flow — blank-imports every flow above so a binary registers all of them with one import. **New flows are added here.** |
+| Package                                     | Flow name                                                                                                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`anthropic_oauth`](anthropic_oauth/)       | `anthropic-oauth`                                                                                                                                            |
+| [`github_pat`](github_pat/)                 | `github-pat`                                                                                                                                                 |
+| [`kubectl_kubeconfig`](kubectl_kubeconfig/) | `kubectl-kubeconfig`                                                                                                                                         |
+| [`oauth_mcp`](oauth_mcp/)                   | `oauth-mcp`                                                                                                                                                  |
+| [`tailscale_authkey`](tailscale_authkey/)   | `tailscale-authkey`                                                                                                                                          |
+| [`flowscreens`](flowscreens/)               | Not a flow — the screens more than one flow takes ("open the page where this is generated"), plus the per-provider vocabulary a question is configured with. |
+| [`loader`](loader/)                         | Not a flow — blank-imports every flow above so a binary registers all of them with one import. **New flows are added here.**                                 |
 
 ## Constraints
 
@@ -31,8 +31,8 @@ caveat that applies to one provider be shown only to the users who hit it.
 - **`Result` is the fail-closed choke point.** It reads the answered `State` and
   persists through `req.Store` — the setup engine's single writer. It is called
   only after a successful screen run, on the same `Flow` value.
-- **A step lands in `flowscreens` when a *second* flow needs it.** Steps specific
-  to one provider stay in that provider's package.
+- **A step lands in `flowscreens` when a _second_ flow needs it.** Steps
+  specific to one provider stay in that provider's package.
 - `verify.go`'s `VerifyStatus` switches all carry a `default:` arm, so a newly
   added status cannot fall open at a consumer that has not been taught what it
   means. Note the split: 401 is `VerifyRejected` (the credential is bad); 403 is
