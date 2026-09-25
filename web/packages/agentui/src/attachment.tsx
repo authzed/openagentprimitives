@@ -9,7 +9,12 @@
 // Like question.tsx, this file must NOT import registry.tsx.
 import * as React from "react";
 import { Download } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle, buttonVariants } from "@ap/design";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  buttonVariants,
+} from "@ap/design";
 import { cn } from "@ap/design/lib/utils";
 import { s } from "./props";
 import type { Node } from "./types";
@@ -36,8 +41,18 @@ function kindLabel(mime: string): string {
 
 // formatSize renders bytes in the locale's unit style, one decimal at most.
 function formatSize(bytes: number): string {
-  const [value, unit] = bytes >= 1_000_000 ? [bytes / 1_000_000, "megabyte"] : bytes >= 1_000 ? [bytes / 1_000, "kilobyte"] : [bytes, "byte"];
-  return new Intl.NumberFormat(undefined, { style: "unit", unit, unitDisplay: "short", maximumFractionDigits: 1 }).format(value);
+  const [value, unit] =
+    bytes >= 1_000_000
+      ? [bytes / 1_000_000, "megabyte"]
+      : bytes >= 1_000
+        ? [bytes / 1_000, "kilobyte"]
+        : [bytes, "byte"];
+  return new Intl.NumberFormat(undefined, {
+    style: "unit",
+    unit,
+    unitDisplay: "short",
+    maximumFractionDigits: 1,
+  }).format(value);
 }
 
 function Unavailable({ reason }: { reason: string }): React.ReactElement {
@@ -59,8 +74,13 @@ export function AttachmentCard({ n }: { n: Node }): React.ReactElement {
   React.useEffect(() => {
     if (session === null || artifact === "") return;
     let cancelled = false;
-    const params = new URLSearchParams({ artifactId: artifact, sessionRef: `${session.ns}/${session.name}` });
-    fetch(`/artifact-view/meta?${params.toString()}`, { credentials: "same-origin" })
+    const params = new URLSearchParams({
+      artifactId: artifact,
+      sessionRef: `${session.ns}/${session.name}`,
+    });
+    fetch(`/artifact-view/meta?${params.toString()}`, {
+      credentials: "same-origin",
+    })
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
         return (await res.json()) as FileFacts;
@@ -72,28 +92,44 @@ export function AttachmentCard({ n }: { n: Node }): React.ReactElement {
         // The card is the user-visible half of no-silent-errors; this line
         // is the other half, for whoever is debugging why a file never showed.
         console.error("agentui: ap:attachment lookup failed", artifact, err);
-        if (!cancelled) setFailure("This file could not be found in this conversation.");
+        if (!cancelled)
+          setFailure("This file could not be found in this conversation.");
       });
     return () => {
       cancelled = true;
     };
   }, [session, artifact]);
 
-  if (session === null) return <Unavailable reason="This page is not attached to a conversation." />;
+  if (session === null)
+    return (
+      <Unavailable reason="This page is not attached to a conversation." />
+    );
   if (failure !== null) return <Unavailable reason={failure} />;
   if (facts === null) {
     return (
-      <div data-testid="ap-attachment-loading" className="text-sm text-muted-foreground">
+      <div
+        data-testid="ap-attachment-loading"
+        className="text-sm text-muted-foreground"
+      >
         Loading file…
       </div>
     );
   }
 
-  const download = new URLSearchParams({ artifactId: artifact, sessionRef: `${session.ns}/${session.name}`, fn: facts.filename || artifact });
+  const download = new URLSearchParams({
+    artifactId: artifact,
+    sessionRef: `${session.ns}/${session.name}`,
+    fn: facts.filename || artifact,
+  });
   return (
-    <div data-testid="ap-attachment" className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+    <div
+      data-testid="ap-attachment"
+      className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
+    >
       <div className="min-w-0">
-        <div className="truncate text-sm font-medium">{label || facts.filename || facts.name}</div>
+        <div className="truncate text-sm font-medium">
+          {label || facts.filename || facts.name}
+        </div>
         <div className="text-xs text-muted-foreground">
           {kindLabel(facts.mime)} · {formatSize(facts.size)}
         </div>
@@ -101,7 +137,10 @@ export function AttachmentCard({ n }: { n: Node }): React.ReactElement {
       <a
         href={`/artifact-download?${download.toString()}`}
         download={facts.filename || undefined}
-        className={cn(buttonVariants({ variant: "outline", size: "sm" }), "shrink-0")}
+        className={cn(
+          buttonVariants({ variant: "outline", size: "sm" }),
+          "shrink-0",
+        )}
         aria-label={`Download ${facts.filename || facts.name}`}
       >
         <Download className="mr-1.5 h-4 w-4" aria-hidden="true" />

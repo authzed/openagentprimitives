@@ -7,14 +7,33 @@ afterEach(cleanup);
 
 describe("ap:progress", () => {
   it("renders now, done and next", () => {
-    render(renderNode({ component: "ap:progress", props: { now: "Connecting GitHub", done: ["Understood the brief"], next: ["Set permissions", "Test"], step: "Tools" } }));
-    expect(screen.getByTestId("ap-progress-now")).toHaveTextContent("Connecting GitHub");
-    expect(screen.getByText("Understood the brief").closest("li")).toHaveAttribute("data-state", "done");
-    expect(screen.getByText("Set permissions").closest("li")).toHaveAttribute("data-state", "next");
+    render(
+      renderNode({
+        component: "ap:progress",
+        props: {
+          now: "Connecting GitHub",
+          done: ["Understood the brief"],
+          next: ["Set permissions", "Test"],
+          step: "Tools",
+        },
+      }),
+    );
+    expect(screen.getByTestId("ap-progress-now")).toHaveTextContent(
+      "Connecting GitHub",
+    );
+    expect(
+      screen.getByText("Understood the brief").closest("li"),
+    ).toHaveAttribute("data-state", "done");
+    expect(screen.getByText("Set permissions").closest("li")).toHaveAttribute(
+      "data-state",
+      "next",
+    );
     expect(screen.getByText("Tools")).toBeInTheDocument();
   });
   it("renders with only now", () => {
-    render(renderNode({ component: "ap:progress", props: { now: "Thinking" } }));
+    render(
+      renderNode({ component: "ap:progress", props: { now: "Thinking" } }),
+    );
     expect(screen.getByTestId("ap-progress-now")).toHaveTextContent("Thinking");
   });
 

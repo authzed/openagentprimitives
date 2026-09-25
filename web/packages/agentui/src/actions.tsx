@@ -46,7 +46,11 @@ export interface ActionState {
 // bug Task 4's mutation-failure message warns about: "without this,
 // uiaction.StateFor can never return expired and the control never
 // re-enables."
-const PENDING_PHASES: ReadonlySet<ActionPhase> = new Set(["submitted", "awaiting_approval", "running"]);
+const PENDING_PHASES: ReadonlySet<ActionPhase> = new Set([
+  "submitted",
+  "awaiting_approval",
+  "running",
+]);
 
 // isActionPending reports whether a control must stay disabled. Written as an
 // explicit list of the THREE in-flight phases rather than as "not terminal",
@@ -140,7 +144,8 @@ const defaultActionsValue: ActionsContextValue = {
   answer: () => Promise.reject(new Error("agentui: no ActionsProvider")),
 };
 
-const ActionsContext = React.createContext<ActionsContextValue>(defaultActionsValue);
+const ActionsContext =
+  React.createContext<ActionsContextValue>(defaultActionsValue);
 
 export function ActionsProvider({
   value,
@@ -149,7 +154,9 @@ export function ActionsProvider({
   value: ActionsContextValue;
   children: React.ReactNode;
 }): React.ReactElement {
-  return <ActionsContext.Provider value={value}>{children}</ActionsContext.Provider>;
+  return (
+    <ActionsContext.Provider value={value}>{children}</ActionsContext.Provider>
+  );
 }
 
 export function useActions(): ActionsContextValue {

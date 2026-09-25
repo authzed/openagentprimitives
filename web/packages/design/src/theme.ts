@@ -23,7 +23,9 @@ export function readThemeChoice(): ThemeChoice {
 export function resolveTheme(choice: ThemeChoice): Theme {
   if (choice !== "system") return choice;
   try {
-    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    return window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark";
   } catch {
     return "dark";
   }

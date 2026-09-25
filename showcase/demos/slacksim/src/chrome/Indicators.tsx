@@ -1,4 +1,4 @@
-import { useLookups } from '../runtime/context'
+import { useLookups } from "../runtime/context";
 
 // The assistant status caption (Slack assistant.threads.setStatus) — the subtle
 // shimmering "… is thinking" line an AI app shows while a turn is running.
@@ -12,12 +12,12 @@ export function AssistantStatus({ text }: { text: string }) {
         <span />
       </span>
     </div>
-  )
+  );
 }
 
 export function TypingIndicator({ userId }: { userId: string }) {
-  const { user } = useLookups()
-  const name = user(userId)?.name ?? userId
+  const { user } = useLookups();
+  const name = user(userId)?.name ?? userId;
   return (
     <div className="sk-typing">
       <span className="sk-typing-dots" aria-hidden>
@@ -27,5 +27,5 @@ export function TypingIndicator({ userId }: { userId: string }) {
       </span>
       <span className="sk-typing-name">{name} is typing…</span>
     </div>
-  )
+  );
 }

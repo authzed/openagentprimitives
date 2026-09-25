@@ -13,11 +13,13 @@ describe("parseModelDisplay", () => {
   });
 
   it("splits a routed OpenRouter id into via + underlying provider/name", () => {
-    expect(parseModelDisplay("openrouter/anthropic/claude-3.5-sonnet")).toEqual({
-      via: "openrouter",
-      provider: "anthropic",
-      name: "claude-3.5-sonnet",
-    });
+    expect(parseModelDisplay("openrouter/anthropic/claude-3.5-sonnet")).toEqual(
+      {
+        via: "openrouter",
+        provider: "anthropic",
+        name: "claude-3.5-sonnet",
+      },
+    );
   });
 
   it("mechanically re-applies the split rule to OpenRouter's own auto router", () => {
@@ -32,7 +34,10 @@ describe("parseModelDisplay", () => {
   });
 
   it("treats a routed id with no further slash as name-only", () => {
-    expect(parseModelDisplay("openrouter/auto")).toEqual({ via: "openrouter", name: "auto" });
+    expect(parseModelDisplay("openrouter/auto")).toEqual({
+      via: "openrouter",
+      name: "auto",
+    });
   });
 
   it("returns a plain name when there is no delimiter", () => {

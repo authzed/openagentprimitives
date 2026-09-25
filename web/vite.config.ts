@@ -10,15 +10,22 @@ const repoRoot = path.resolve(process.cwd(), "..");
 // plus the built-in `system` app. Throws on a missing key / index.tsx / duplicate.
 function discoverEntries(): Record<string, string> {
   const input: Record<string, string> = {};
-  for (const aj of fg.sync("pkg/**/ui/**/app.json", { cwd: repoRoot, absolute: true })) {
-    const key = (JSON.parse(fs.readFileSync(aj, "utf8")) as { key?: string }).key;
+  for (const aj of fg.sync("pkg/**/ui/**/app.json", {
+    cwd: repoRoot,
+    absolute: true,
+  })) {
+    const key = (JSON.parse(fs.readFileSync(aj, "utf8")) as { key?: string })
+      .key;
     if (!key) throw new Error(`app.json missing "key": ${aj}`);
     const entry = path.join(path.dirname(aj), "index.tsx");
     if (!fs.existsSync(entry)) throw new Error(`no index.tsx next to ${aj}`);
     if (input[key]) throw new Error(`duplicate appKey "${key}"`);
     input[key] = entry;
   }
-  input["system"] = path.resolve(process.cwd(), "packages/runtime/src/system/index.tsx");
+  input["system"] = path.resolve(
+    process.cwd(),
+    "packages/runtime/src/system/index.tsx",
+  );
   return input;
 }
 
@@ -30,7 +37,8 @@ function manifestPlugin(): Plugin {
     name: "ap-manifest",
     generateBundle(_opts, bundle) {
       const chunks: Record<string, any> = {};
-      for (const f of Object.values(bundle)) if ((f as any).type === "chunk") chunks[(f as any).fileName] = f;
+      for (const f of Object.values(bundle))
+        if ((f as any).type === "chunk") chunks[(f as any).fileName] = f;
       const out: Record<string, { scripts: string[]; css: string[] }> = {};
       for (const f of Object.values(bundle) as any[]) {
         if (f.type !== "chunk" || !f.isEntry) continue;
@@ -39,13 +47,18 @@ function manifestPlugin(): Plugin {
         const visit = (c: any) => {
           if (!c || seen.has(c.fileName)) return;
           seen.add(c.fileName);
-          for (const cssFile of c.viteMetadata?.importedCss ?? []) css.add("/assets/" + cssFile);
+          for (const cssFile of c.viteMetadata?.importedCss ?? [])
+            css.add("/assets/" + cssFile);
           for (const imp of c.imports ?? []) visit(chunks[imp]);
         };
         visit(f);
         out[f.name] = { scripts: ["/assets/" + f.fileName], css: [...css] };
       }
-      this.emitFile({ type: "asset", fileName: "manifest.json", source: JSON.stringify(out, null, 2) });
+      this.emitFile({
+        type: "asset",
+        fileName: "manifest.json",
+        source: JSON.stringify(out, null, 2),
+      });
     },
   };
 }
@@ -66,10 +79,16 @@ export default defineConfig({
       "@ap/runtime": path.resolve(process.cwd(), "packages/runtime/src"),
       react: path.resolve(process.cwd(), "node_modules/react"),
       "react-dom": path.resolve(process.cwd(), "node_modules/react-dom"),
-      "react/jsx-runtime": path.resolve(process.cwd(), "node_modules/react/jsx-runtime"),
+      "react/jsx-runtime": path.resolve(
+        process.cwd(),
+        "node_modules/react/jsx-runtime",
+      ),
       "lucide-react": path.resolve(process.cwd(), "node_modules/lucide-react"),
       anser: path.resolve(process.cwd(), "node_modules/anser"),
-      "@mcp-ui/client": path.resolve(process.cwd(), "node_modules/@mcp-ui/client"),
+      "@mcp-ui/client": path.resolve(
+        process.cwd(),
+        "node_modules/@mcp-ui/client",
+      ),
     },
   },
   build: {

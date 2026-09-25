@@ -49,10 +49,14 @@ export function agentLinkHref(n: Node): string {
   const agentClass = s(n, "agentClass");
   const label = s(n, "label");
   if (!isDNS1123Label(namespace)) {
-    throw new Error(`ap:agentlink: namespace ${JSON.stringify(namespace)} is not a DNS-1123 label`);
+    throw new Error(
+      `ap:agentlink: namespace ${JSON.stringify(namespace)} is not a DNS-1123 label`,
+    );
   }
   if (!isDNS1123Label(agentClass)) {
-    throw new Error(`ap:agentlink: agentClass ${JSON.stringify(agentClass)} is not a DNS-1123 label`);
+    throw new Error(
+      `ap:agentlink: agentClass ${JSON.stringify(agentClass)} is not a DNS-1123 label`,
+    );
   }
   if (label === "") {
     throw new Error("ap:agentlink: label is required");
@@ -81,7 +85,10 @@ function rememberedRef(key: string): string | null {
   try {
     return window.sessionStorage.getItem(key);
   } catch (err) {
-    console.error("agentui: ap:agentlink could not read the remembered test session", err);
+    console.error(
+      "agentui: ap:agentlink could not read the remembered test session",
+      err,
+    );
     return null;
   }
 }
@@ -97,7 +104,10 @@ function remember(key: string, ref: string): void {
   try {
     window.sessionStorage.setItem(key, ref);
   } catch (err) {
-    console.error("agentui: ap:agentlink could not remember the test session", err);
+    console.error(
+      "agentui: ap:agentlink could not remember the test session",
+      err,
+    );
   }
 }
 
@@ -105,7 +115,10 @@ function forget(key: string): void {
   try {
     window.sessionStorage.removeItem(key);
   } catch (err) {
-    console.error("agentui: ap:agentlink could not forget the remembered test session", err);
+    console.error(
+      "agentui: ap:agentlink could not forget the remembered test session",
+      err,
+    );
   }
 }
 
@@ -127,8 +140,15 @@ function sessionsTabHref(ref: string): string {
 // remembered ref and is not logged; a present-but-refused one is.
 function sameOriginPath(href: unknown): string | null {
   if (typeof href !== "string") return null;
-  if (!href.startsWith("/") || href.startsWith("//") || href.startsWith("/\\")) {
-    console.error("agentui: ap:agentlink refused a start href that is not a same-origin path; using the rebuilt address", href);
+  if (
+    !href.startsWith("/") ||
+    href.startsWith("//") ||
+    href.startsWith("/\\")
+  ) {
+    console.error(
+      "agentui: ap:agentlink refused a start href that is not a same-origin path; using the rebuilt address",
+      href,
+    );
     return null;
   }
   return href;
@@ -146,7 +166,8 @@ type startFailure = { text: string; retryable: boolean };
 // pkg/web/webui/sessions/ui/NewSessionDialog.tsx's own wording for the same
 // case, in this control's words.
 const startRefusedFallback = "The test could not start.";
-const startIndeterminate = "We could not confirm whether that session started. Reload before trying again.";
+const startIndeterminate =
+  "We could not confirm whether that session started. Reload before trying again.";
 
 export function EmbeddedAgentLink({ n }: { n: Node }): JSX.Element {
   // Builds the "open it in a tab" address the failure line falls back to, by
@@ -191,14 +212,20 @@ export function EmbeddedAgentLink({ n }: { n: Node }): JSX.Element {
     }
     void (async () => {
       try {
-        const res = await fetch(`/sessions/api/${encodeURIComponent(segs[0])}/${encodeURIComponent(segs[1])}/detail`, {
-          credentials: "same-origin",
-        });
+        const res = await fetch(
+          `/sessions/api/${encodeURIComponent(segs[0])}/${encodeURIComponent(segs[1])}/detail`,
+          {
+            credentials: "same-origin",
+          },
+        );
         // A 404 or a 403 IS the answer to "is it still mine to open" — the
         // expected shape of a session that was stopped, so it is not logged.
         if (!res.ok) drop();
       } catch (err) {
-        console.error("agentui: ap:agentlink could not check the remembered test session", err);
+        console.error(
+          "agentui: ap:agentlink could not check the remembered test session",
+          err,
+        );
         drop();
       }
     })();
@@ -211,7 +238,13 @@ export function EmbeddedAgentLink({ n }: { n: Node }): JSX.Element {
     return (
       <div className="flex flex-col gap-2">
         <ChatFrame sessionRef={ref} />
-        <a data-testid="ap-agentlink-open-tab" href={openHref ?? sessionsTabHref(ref)} target="_blank" rel="noopener noreferrer" className="self-end text-xs text-[hsl(var(--primary))]">
+        <a
+          data-testid="ap-agentlink-open-tab"
+          href={openHref ?? sessionsTabHref(ref)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="self-end text-xs text-[hsl(var(--primary))]"
+        >
           Open in a tab
         </a>
       </div>
@@ -227,7 +260,11 @@ export function EmbeddedAgentLink({ n }: { n: Node }): JSX.Element {
         method: "POST",
         credentials: "same-origin",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ns: namespace, agentClass, prompt: s(n, "prompt") }),
+        body: JSON.stringify({
+          ns: namespace,
+          agentClass,
+          prompt: s(n, "prompt"),
+        }),
       });
     } catch (err) {
       console.error("agentui: ap:agentlink embed start did not complete", err);
@@ -246,14 +283,21 @@ export function EmbeddedAgentLink({ n }: { n: Node }): JSX.Element {
       } catch {
         message = "";
       }
-      console.error("agentui: ap:agentlink embed start was refused", { status: res.status });
+      console.error("agentui: ap:agentlink embed start was refused", {
+        status: res.status,
+      });
       setFailure({ text: message || startRefusedFallback, retryable: true });
       setStarting(false);
       return;
     }
     try {
-      const body = (await res.json()) as { ns?: string; name?: string; href?: string };
-      if (!body.ns || !body.name) throw new Error("start answered without a session");
+      const body = (await res.json()) as {
+        ns?: string;
+        name?: string;
+        href?: string;
+      };
+      if (!body.ns || !body.name)
+        throw new Error("start answered without a session");
       const next = `${body.ns}/${body.name}`;
       remember(key, next);
       setOpenHref(sameOriginPath(body.href));
@@ -262,7 +306,10 @@ export function EmbeddedAgentLink({ n }: { n: Node }): JSX.Element {
       // A success whose body cannot be addressed. The session almost certainly
       // EXISTS — the server said so — so this is indeterminate, not a refusal,
       // and the button stays down for the same reason.
-      console.error("agentui: ap:agentlink embed start succeeded but its answer could not be addressed", err);
+      console.error(
+        "agentui: ap:agentlink embed start succeeded but its answer could not be addressed",
+        err,
+      );
       setFailure({ text: startIndeterminate, retryable: false });
     } finally {
       setStarting(false);
@@ -286,7 +333,16 @@ export function EmbeddedAgentLink({ n }: { n: Node }): JSX.Element {
           {failure.retryable && (
             <>
               {" "}
-              Try again, or <a href={tabHref} target="_blank" rel="noopener noreferrer" className="underline">open it in a tab</a>.
+              Try again, or{" "}
+              <a
+                href={tabHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                open it in a tab
+              </a>
+              .
             </>
           )}
         </p>

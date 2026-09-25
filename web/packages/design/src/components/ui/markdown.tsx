@@ -18,7 +18,13 @@ import { cn } from "../../lib/utils";
 // typography plugin, no inline styles) so it works under the artifact view's
 // strict style-src CSP. Wide tables and code blocks scroll inside their own
 // overflow-x container rather than widening the bubble.
-export function Markdown({ children, className }: { children: string; className?: string }) {
+export function Markdown({
+  children,
+  className,
+}: {
+  children: string;
+  className?: string;
+}) {
   return (
     <div
       className={cn(

@@ -40,7 +40,10 @@ function asChoices(v: unknown): Choice[] {
   // fields are load-bearing — `value` is what gets SENT (and the radio group's
   // key), and `label` is rendered as a text child, where a non-string throws
   // inside React's own render, past renderNode's try/catch.
-  return v.filter((c): c is Choice => !!c && typeof c.value === "string" && typeof c.label === "string");
+  return v.filter(
+    (c): c is Choice =>
+      !!c && typeof c.value === "string" && typeof c.label === "string",
+  );
 }
 
 // QuestionCard is the registry's entry point, and it exists to give the card's
@@ -64,7 +67,11 @@ export function QuestionCard({ n }: { n: Node }): JSX.Element {
   // questions different is what they ASK, which is exactly the props the body
   // reads. Stringified because the value has to compare by content — `choices`
   // is a fresh array on every parse of the declaration.
-  const identity = JSON.stringify([s(n, "prompt"), s(n, "kind"), p(n).choices ?? null]);
+  const identity = JSON.stringify([
+    s(n, "prompt"),
+    s(n, "kind"),
+    p(n).choices ?? null,
+  ]);
   return <QuestionCardBody key={identity} n={n} />;
 }
 
@@ -127,19 +134,29 @@ function QuestionCardBody({ n }: { n: Node }): JSX.Element {
   return (
     <Card>
       <CardContent className="pt-6">
-        <form data-testid="ap-question" onSubmit={handleSubmit} className="flex flex-col gap-3">
+        <form
+          data-testid="ap-question"
+          onSubmit={handleSubmit}
+          className="flex flex-col gap-3"
+        >
           {/* htmlFor only for kind=text, where the textarea below is the ONE
               control the prompt labels (the house pattern ActionForm's Label
               uses). A kind=choice prompt has no single control to point at —
               each option is already its own accessible label via its own
               wrapping Label below — so it renders unassociated there. */}
-          <Label htmlFor={kind === "text" ? groupName : undefined} className="font-normal text-foreground">
+          <Label
+            htmlFor={kind === "text" ? groupName : undefined}
+            className="font-normal text-foreground"
+          >
             {prompt}
           </Label>
           {kind === "choice" ? (
             <div className="flex flex-col gap-2">
               {choices.map((c) => (
-                <Label key={c.value} className="flex items-center gap-2 font-normal">
+                <Label
+                  key={c.value}
+                  className="flex items-center gap-2 font-normal"
+                >
                   <input
                     type="radio"
                     name={groupName}

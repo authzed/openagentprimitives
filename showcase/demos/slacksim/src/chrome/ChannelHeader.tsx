@@ -1,16 +1,25 @@
-import { Star, Hash, Lock, Users, Headphones, ChevronDown, Bell, MoreVertical } from 'lucide-react'
-import { useLookups } from '../runtime/context'
-import type { SimChannel } from '../store/types'
-import { Avatar } from './Avatar'
+import {
+  Star,
+  Hash,
+  Lock,
+  Users,
+  Headphones,
+  ChevronDown,
+  Bell,
+  MoreVertical,
+} from "lucide-react";
+import { useLookups } from "../runtime/context";
+import type { SimChannel } from "../store/types";
+import { Avatar } from "./Avatar";
 
 // The top bar of the message pane. Adapts to the channel kind: a regular/private
 // channel shows the star + #name + member tools; an app shows the app avatar +
 // Home/Messages/About tabs (the App Home surface).
 export function ChannelHeader({ channel }: { channel: SimChannel }) {
-  const { user } = useLookups()
+  const { user } = useLookups();
 
-  if (channel.kind === 'app') {
-    const app = user(channel.memberIds?.[0] ?? '')
+  if (channel.kind === "app") {
+    const app = user(channel.memberIds?.[0] ?? "");
     return (
       <header className="sk-header sk-header--app">
         <div className="sk-header-title">
@@ -24,25 +33,25 @@ export function ChannelHeader({ channel }: { channel: SimChannel }) {
           <button className="sk-app-tab">About</button>
         </nav>
       </header>
-    )
+    );
   }
 
-  const isDM = channel.kind === 'dm'
+  const isDM = channel.kind === "dm";
   const nameNode = isDM ? (
     <span className="sk-header-name">
-      {channel.memberIds?.map((id) => user(id)?.name ?? id).join(', ')}
+      {channel.memberIds?.map((id) => user(id)?.name ?? id).join(", ")}
     </span>
   ) : (
     <span className="sk-header-name">{channel.name}</span>
-  )
+  );
 
   return (
     <header className="sk-header">
       <div className="sk-header-title">
         {!isDM && <Star size={16} className="sk-header-star" />}
-        {channel.kind === 'private' ? (
+        {channel.kind === "private" ? (
           <Lock size={15} />
-        ) : channel.kind === 'channel' ? (
+        ) : channel.kind === "channel" ? (
           <Hash size={16} />
         ) : null}
         {nameNode}
@@ -65,5 +74,5 @@ export function ChannelHeader({ channel }: { channel: SimChannel }) {
         </button>
       </div>
     </header>
-  )
+  );
 }

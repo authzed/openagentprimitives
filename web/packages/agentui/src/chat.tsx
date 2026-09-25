@@ -17,7 +17,11 @@ export function chatSrc(ref: unknown): string | null {
   return `/chat-embed/${encodeURIComponent(segs[0])}/${encodeURIComponent(segs[1])}`;
 }
 
-export function ChatFrame({ sessionRef }: { sessionRef: unknown }): JSX.Element {
+export function ChatFrame({
+  sessionRef,
+}: {
+  sessionRef: unknown;
+}): JSX.Element {
   const src = chatSrc(sessionRef);
   if (src === null) {
     return <Alert>Chat unavailable: no valid session reference.</Alert>;

@@ -11,7 +11,11 @@ import { cn } from "../../lib/utils";
 
 // OapMark is the icon: the triangle with the cut-out. Use it wherever a square
 // slot wants the brand (header tile, favicon, sign-in card).
-export function OapMark({ className, title, ...props }: React.SVGProps<SVGSVGElement> & { title?: string }) {
+export function OapMark({
+  className,
+  title,
+  ...props
+}: React.SVGProps<SVGSVGElement> & { title?: string }) {
   return (
     <svg
       viewBox="0 0 345 305"
@@ -29,7 +33,11 @@ export function OapMark({ className, title, ...props }: React.SVGProps<SVGSVGEle
 
 // OapLogomark is the O·A·P letterforms as primitives (circle, triangle, bowl).
 // Wide (1000×393); use it where there is horizontal room and no wordmark text.
-export function OapLogomark({ className, title, ...props }: React.SVGProps<SVGSVGElement> & { title?: string }) {
+export function OapLogomark({
+  className,
+  title,
+  ...props
+}: React.SVGProps<SVGSVGElement> & { title?: string }) {
   return (
     <svg
       viewBox="0 0 1000 393"
@@ -89,12 +97,18 @@ export type OapMarkRelayProps = React.SVGProps<SVGSVGElement> & {
 };
 
 export function prefersReducedMotion(): boolean {
-  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+  return typeof window !== "undefined" &&
+    typeof window.matchMedia === "function"
     ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
     : false;
 }
 
-function setDash(el: SVGPathElement | null, start: number, len: number, color: string) {
+function setDash(
+  el: SVGPathElement | null,
+  start: number,
+  len: number,
+  color: string,
+) {
   if (!el) return;
   if (len <= 0.05) {
     el.style.opacity = "0";
@@ -132,7 +146,8 @@ export function OapMarkRelay({
       const crossings = Math.floor(lap * 3); // vertices the head has crossed (apex is 0)
       const hueIndex = Math.floor(crossings / handoverEvery);
       const hueNew = RELAY_HUES[hueIndex % RELAY_HUES.length];
-      const hueOld = RELAY_HUES[(hueIndex - 1 + RELAY_HUES.length) % RELAY_HUES.length];
+      const hueOld =
+        RELAY_HUES[(hueIndex - 1 + RELAY_HUES.length) % RELAY_HUES.length];
       const lastCross = ((crossings / 3) * 100) % 100;
       const sinceCross = (head - lastCross + 100) % 100;
       const splitting = crossings % handoverEvery === 0 && sinceCross < band;
@@ -149,7 +164,10 @@ export function OapMarkRelay({
       for (let k = 0; k < RELAY_TAIL_STEPS; k++) {
         const el = segT.current[k];
         setDash(el, (tail - step * (k + 1) + 100) % 100, step + 0.15, tailHue);
-        if (el) el.style.opacity = (RELAY_TAIL_OPACITY * Math.pow(1 - k / RELAY_TAIL_STEPS, 1.6)).toFixed(3);
+        if (el)
+          el.style.opacity = (
+            RELAY_TAIL_OPACITY * Math.pow(1 - k / RELAY_TAIL_STEPS, 1.6)
+          ).toFixed(3);
       }
       raf = requestAnimationFrame(tick);
     };
@@ -173,7 +191,10 @@ export function OapMarkRelay({
           as the subject and the mark as its track. */}
       <path
         d={MARK_OUTLINE + MARK_HOLE}
-        style={{ opacity: running ? RELAY_INK_OPACITY : 1, transition: "opacity 240ms ease-out" }}
+        style={{
+          opacity: running ? RELAY_INK_OPACITY : 1,
+          transition: "opacity 240ms ease-out",
+        }}
         data-ink
       />
       <g
@@ -181,7 +202,10 @@ export function OapMarkRelay({
         strokeWidth={bandWidth}
         strokeLinecap="round"
         strokeLinejoin="round"
-        style={{ opacity: running ? 1 : 0, transition: "opacity 240ms ease-out" }}
+        style={{
+          opacity: running ? 1 : 0,
+          transition: "opacity 240ms ease-out",
+        }}
       >
         {Array.from({ length: RELAY_TAIL_STEPS }, (_, k) => (
           <path
@@ -196,8 +220,20 @@ export function OapMarkRelay({
             data-seg="tail"
           />
         ))}
-        <path ref={segA} d={MARK_OUTLINE} pathLength={100} style={segStyle} data-seg="a" />
-        <path ref={segB} d={MARK_OUTLINE} pathLength={100} style={segStyle} data-seg="b" />
+        <path
+          ref={segA}
+          d={MARK_OUTLINE}
+          pathLength={100}
+          style={segStyle}
+          data-seg="a"
+        />
+        <path
+          ref={segB}
+          d={MARK_OUTLINE}
+          pathLength={100}
+          style={segStyle}
+          data-seg="b"
+        />
       </g>
     </svg>
   );

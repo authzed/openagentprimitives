@@ -14,12 +14,20 @@ import { compilePage } from "./compile";
 // the page and pins both files; this side compiles the page and requires the
 // same nodes back. Both read the committed pair, so the two halves cannot
 // drift apart unnoticed: a grammar change on either side fails here.
-const fixtureDir = new URL("../../../../pkg/web/uicomponents/testdata/", import.meta.url);
+const fixtureDir = new URL(
+  "../../../../pkg/web/uicomponents/testdata/",
+  import.meta.url,
+);
 
 describe("JSX ⇄ nodes round trip", () => {
   it("compiles the printer's page back to the printer's nodes", () => {
-    const page = readFileSync(new URL("roundtrip.page.tsx", fixtureDir), "utf8");
-    const nodes = JSON.parse(readFileSync(new URL("roundtrip.view.json", fixtureDir), "utf8"));
+    const page = readFileSync(
+      new URL("roundtrip.page.tsx", fixtureDir),
+      "utf8",
+    );
+    const nodes = JSON.parse(
+      readFileSync(new URL("roundtrip.view.json", fixtureDir), "utf8"),
+    );
     expect(compilePage(page, "roundtrip.page.tsx")).toEqual(nodes);
   });
 });

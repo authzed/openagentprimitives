@@ -1,10 +1,33 @@
 import * as React from "react";
-import { Card, CardHeader, CardTitle, CardContent, Button, cn } from "@ap/design";
-import { AlertTriangle, Ban, FileQuestion, Clock, Lock, Info } from "lucide-react";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardContent,
+  Button,
+  cn,
+} from "@ap/design";
+import {
+  AlertTriangle,
+  Ban,
+  FileQuestion,
+  Clock,
+  Lock,
+  Info,
+} from "lucide-react";
 
-export type SystemKind = "unauthorized" | "forbidden" | "notFound" | "expired" | "error" | "info";
+export type SystemKind =
+  | "unauthorized"
+  | "forbidden"
+  | "notFound"
+  | "expired"
+  | "error"
+  | "info";
 
-export interface SystemAction { label: string; href: string }
+export interface SystemAction {
+  label: string;
+  href: string;
+}
 export interface SystemPageProps {
   status: number;
   kind: SystemKind;
@@ -14,15 +37,29 @@ export interface SystemPageProps {
 }
 
 const ICONS: Record<SystemKind, React.ComponentType<{ className?: string }>> = {
-  unauthorized: Lock, forbidden: Ban, notFound: FileQuestion,
-  expired: Clock, error: AlertTriangle, info: Info,
+  unauthorized: Lock,
+  forbidden: Ban,
+  notFound: FileQuestion,
+  expired: Clock,
+  error: AlertTriangle,
+  info: Info,
 };
 const ACCENT: Record<SystemKind, string> = {
-  unauthorized: "text-warning", forbidden: "text-destructive", notFound: "text-muted-foreground",
-  expired: "text-warning", error: "text-destructive", info: "text-primary",
+  unauthorized: "text-warning",
+  forbidden: "text-destructive",
+  notFound: "text-muted-foreground",
+  expired: "text-warning",
+  error: "text-destructive",
+  info: "text-primary",
 };
 
-export function SystemPage({ status, kind, title, message, actions }: SystemPageProps) {
+export function SystemPage({
+  status,
+  kind,
+  title,
+  message,
+  actions,
+}: SystemPageProps) {
   const Icon = ICONS[kind] ?? Info;
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-background text-foreground">

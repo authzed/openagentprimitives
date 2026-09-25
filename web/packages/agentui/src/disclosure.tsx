@@ -39,7 +39,13 @@ export function Disclosure({
           setOpen((o) => !o);
         }}
       >
-        <ChevronRight className={cn("h-4 w-4 shrink-0 transition-transform", open && "rotate-90")} aria-hidden="true" />
+        <ChevronRight
+          className={cn(
+            "h-4 w-4 shrink-0 transition-transform",
+            open && "rotate-90",
+          )}
+          aria-hidden="true"
+        />
         {title}
       </summary>
       <div className="px-1 pb-2">{children}</div>

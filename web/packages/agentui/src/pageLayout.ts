@@ -18,7 +18,11 @@ export interface PageLayoutState {
 }
 
 // NO_PAGE is the context default: no page root, so no rail and no selection.
-const NO_PAGE: PageLayoutState = { layout: "column", selectedStep: null, selectStep: () => {} };
+const NO_PAGE: PageLayoutState = {
+  layout: "column",
+  selectedStep: null,
+  selectStep: () => {},
+};
 
 export const PageLayoutContext = React.createContext<PageLayoutState>(NO_PAGE);
 
@@ -32,5 +36,7 @@ export function usePageLayout(): PageLayoutState {
 // pageLayoutOf reads a declaration's layout from its root node, for callers
 // outside the rendered tree (the view root's width). "column" for no root.
 export function pageLayoutOf(view: Node | undefined): PageLayout {
-  return view?.component === "oap:page" && view.props?.layout === "rail" ? "rail" : "column";
+  return view?.component === "oap:page" && view.props?.layout === "rail"
+    ? "rail"
+    : "column";
 }

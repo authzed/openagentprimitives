@@ -1,6 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { describe, expect, it } from "vitest";
-import { PARAM_QUERY_PREFIX, paramsFromSearch, searchWithParams } from "./paramsUrl";
+import {
+  PARAM_QUERY_PREFIX,
+  paramsFromSearch,
+  searchWithParams,
+} from "./paramsUrl";
 
 // The query string is where a binding parameter LIVES. Before this, a filter
 // selection was React state and nothing else: it did not survive a reload, it
@@ -11,7 +15,9 @@ describe("paramsFromSearch", () => {
   it("reads namespaced parameters and ignores the shell's own keys", () => {
     // The namespace is load-bearing: `session` and `view` belong to the shell,
     // and a declaration is free to name a parameter anything at all.
-    const got = paramsFromSearch("?session=ns%2Fname&view=ui&p.window.from=2026-08-01&p.minScore=80");
+    const got = paramsFromSearch(
+      "?session=ns%2Fname&view=ui&p.window.from=2026-08-01&p.minScore=80",
+    );
     expect(got).toEqual({ "window.from": "2026-08-01", minScore: "80" });
   });
 
@@ -43,7 +49,9 @@ describe("searchWithParams", () => {
   it("preserves the shell's keys while writing parameters", () => {
     // Dropping `session` or `view` here would navigate the page as a side
     // effect of picking a date.
-    const got = searchWithParams("?session=ns%2Fname&view=ui", { minScore: "80" });
+    const got = searchWithParams("?session=ns%2Fname&view=ui", {
+      minScore: "80",
+    });
     const sp = new URLSearchParams(got);
     expect(sp.get("session")).toBe("ns/name");
     expect(sp.get("view")).toBe("ui");
@@ -54,7 +62,9 @@ describe("searchWithParams", () => {
     // A parameter the viewer cleared, or one a rewritten declaration no longer
     // declares, has to leave the address. Merging would strand it there and
     // the next reader would seed state from a filter with no control for it.
-    const got = searchWithParams("?view=ui&p.stale=1&p.minScore=0", { minScore: "80" });
+    const got = searchWithParams("?view=ui&p.stale=1&p.minScore=0", {
+      minScore: "80",
+    });
     const sp = new URLSearchParams(got);
     expect(sp.get("p.stale")).toBeNull();
     expect(sp.get("p.minScore")).toBe("80");
@@ -65,8 +75,14 @@ describe("searchWithParams", () => {
     // The caller compares the built string against the current one to decide
     // whether to touch history at all; an order-dependent result would make
     // that comparison spuriously unequal and rewrite history on every render.
-    const a = searchWithParams("?view=ui", { "window.to": "2026-08-18", "window.from": "2026-08-01" });
-    const b = searchWithParams("?view=ui", { "window.from": "2026-08-01", "window.to": "2026-08-18" });
+    const a = searchWithParams("?view=ui", {
+      "window.to": "2026-08-18",
+      "window.from": "2026-08-01",
+    });
+    const b = searchWithParams("?view=ui", {
+      "window.from": "2026-08-01",
+      "window.to": "2026-08-18",
+    });
     expect(a).toBe(b);
   });
 

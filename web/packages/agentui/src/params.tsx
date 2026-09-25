@@ -23,7 +23,8 @@ export interface BindingParams {
 // rather than the control failing to render at all.
 const defaultBindingParams: BindingParams = { params: {}, setParam: () => {} };
 
-const BindingParamsContext = React.createContext<BindingParams>(defaultBindingParams);
+const BindingParamsContext =
+  React.createContext<BindingParams>(defaultBindingParams);
 
 export function BindingParamsProvider({
   value,
@@ -32,7 +33,11 @@ export function BindingParamsProvider({
   value: BindingParams;
   children: React.ReactNode;
 }): React.ReactElement {
-  return <BindingParamsContext.Provider value={value}>{children}</BindingParamsContext.Provider>;
+  return (
+    <BindingParamsContext.Provider value={value}>
+      {children}
+    </BindingParamsContext.Provider>
+  );
 }
 
 export function useBindingParams(): BindingParams {
@@ -64,7 +69,9 @@ export function useBindingParams(): BindingParams {
 // leave the control displaying one thing while this map — the only thing the
 // server is told — said nothing, so display and resolution would diverge with
 // no signal.
-export function collectDefaultParams(decl: Declaration): Record<string, string> {
+export function collectDefaultParams(
+  decl: Declaration,
+): Record<string, string> {
   const params: Record<string, string> = {};
   // A declaration with no view is a session that has not produced one yet, not
   // an error: the view renders its own "nothing declared" state and the
@@ -92,7 +99,10 @@ export function collectDefaultParams(decl: Declaration): Record<string, string> 
 // second hand-rolled walk — a second walk here would be free to drift from
 // what the server (uicomponents.ParamNames) considers "declared" for the
 // identical declaration.
-export function reconcileParams(decl: Declaration, prev: Record<string, string>): Record<string, string> {
+export function reconcileParams(
+  decl: Declaration,
+  prev: Record<string, string>,
+): Record<string, string> {
   const defaults = collectDefaultParams(decl);
   const next: Record<string, string> = {};
   // Iterate DECLARED keys, not defaulted ones. These are different sets, and
@@ -154,7 +164,8 @@ function collectFromNode(n: Node, params: Record<string, string>): void {
     const props = n.props ?? {};
     for (const v of declared.spec.values) {
       const value = props[v.valueProp];
-      if (typeof value === "string" && value !== "") params[paramKey(declared.name, v.suffix)] = value;
+      if (typeof value === "string" && value !== "")
+        params[paramKey(declared.name, v.suffix)] = value;
     }
   }
   for (const child of n.children ?? []) collectFromNode(child, params);

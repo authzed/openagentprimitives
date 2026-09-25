@@ -1,14 +1,22 @@
-import type { ReactNode } from 'react'
+import type { ReactNode } from "react";
 
 const ICON: Record<string, string> = {
-  note: 'ℹ️',
-  tip: '💡',
-  warning: '⚠️',
-  security: '🔒',
-}
+  note: "ℹ️",
+  tip: "💡",
+  warning: "⚠️",
+  security: "🔒",
+};
 
 // A callout box. `kind` picks the accent + glyph.
-export function Callout({ kind = 'note', title, children }: { kind?: string; title?: string; children: ReactNode }) {
+export function Callout({
+  kind = "note",
+  title,
+  children,
+}: {
+  kind?: string;
+  title?: string;
+  children: ReactNode;
+}) {
   return (
     <aside className={`doc-callout doc-callout--${kind}`}>
       <div className="doc-callout-head">
@@ -17,5 +25,5 @@ export function Callout({ kind = 'note', title, children }: { kind?: string; tit
       </div>
       <div className="doc-callout-body">{children}</div>
     </aside>
-  )
+  );
 }

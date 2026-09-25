@@ -1,13 +1,18 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { readBootstrap } from "./bootstrap";
 
-afterEach(() => { document.body.innerHTML = ""; });
+afterEach(() => {
+  document.body.innerHTML = "";
+});
 
 describe("readBootstrap", () => {
   it("parses JSON from the #ap-bootstrap script element", () => {
     document.body.innerHTML =
       '<script id="ap-bootstrap" type="application/json">{"hello":"world","n":1}</script>';
-    expect(readBootstrap<{ hello: string; n: number }>()).toEqual({ hello: "world", n: 1 });
+    expect(readBootstrap<{ hello: string; n: number }>()).toEqual({
+      hello: "world",
+      n: 1,
+    });
   });
 
   it("returns an empty object when the element is absent", () => {

@@ -16,17 +16,25 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { compilePage } from "./compile";
 
-const dir = new URL("../../../../pkg/platform/builderbundle/src/ui/", import.meta.url);
+const dir = new URL(
+  "../../../../pkg/platform/builderbundle/src/ui/",
+  import.meta.url,
+);
 const page = () => readFileSync(new URL("page.tsx", dir), "utf8");
 
 describe("the builder page", () => {
   it("has a committed view that matches its source — run `mage ui:compile` if not", () => {
-    const committed = JSON.parse(readFileSync(new URL("page.view.json", dir), "utf8"));
+    const committed = JSON.parse(
+      readFileSync(new URL("page.view.json", dir), "utf8"),
+    );
     expect(compilePage(page(), "page.tsx")).toEqual(committed);
   });
 
   it("has a committed sha256 sidecar for that source — run `mage ui:compile` if not", () => {
-    const sidecar = readFileSync(new URL("page.view.sha256", dir), "utf8").trim();
+    const sidecar = readFileSync(
+      new URL("page.view.sha256", dir),
+      "utf8",
+    ).trim();
     expect(sidecar).toEqual(createHash("sha256").update(page()).digest("hex"));
   });
 });

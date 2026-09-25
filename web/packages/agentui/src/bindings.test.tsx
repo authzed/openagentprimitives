@@ -21,12 +21,22 @@ const hook = (name: string, children: Node[]): Node => ({
 const view: Node = {
   component: "ap:stack",
   children: [
-    { component: "ap:text", props: { text: "outside" }, bindings: { text: { source: "memory", ref: "m" } } },
+    {
+      component: "ap:text",
+      props: { text: "outside" },
+      bindings: { text: { source: "memory", ref: "m" } },
+    },
     hook("x", [
-      { component: "ap:table", props: { columns: [{ key: "name" }], rows: [] },
-        bindings: { rows: { source: "tool", ref: "crm_list_leads" } } },
-      { component: "ap:markdown", props: { body: "loading..." },
-        bindings: { body: { source: "artifact", ref: "artifact-x" } } },
+      {
+        component: "ap:table",
+        props: { columns: [{ key: "name" }], rows: [] },
+        bindings: { rows: { source: "tool", ref: "crm_list_leads" } },
+      },
+      {
+        component: "ap:markdown",
+        props: { body: "loading..." },
+        bindings: { body: { source: "artifact", ref: "artifact-x" } },
+      },
     ]),
   ],
 };
@@ -52,13 +62,17 @@ describe("bindingPath", () => {
 // measured from that region's root — the hook node, or the view root.
 describe("applyBindings addresses a node by its region, not by its depth", () => {
   it("addresses a node inside a hook from the HOOK, not from the view root", () => {
-    const out = applyBindings(view, { "x/0#rows": { status: "ok", value: [{ name: "Acme" }] } });
+    const out = applyBindings(view, {
+      "x/0#rows": { status: "ok", value: [{ name: "Acme" }] },
+    });
     render(renderNode(out));
     expect(screen.getByText("Acme")).toBeInTheDocument();
   });
 
   it("addresses a node outside every hook from the view root, with an empty region", () => {
-    const out = applyBindings(view, { "/0#text": { status: "ok", value: "resolved copy" } });
+    const out = applyBindings(view, {
+      "/0#text": { status: "ok", value: "resolved copy" },
+    });
     render(renderNode(out));
     expect(screen.getByText("resolved copy")).toBeInTheDocument();
   });
@@ -86,22 +100,33 @@ describe("applyBindings addresses a node by its region, not by its depth", () =>
           component: "oap:generative",
           props: { allowedComponents: ["*"] },
           children: [
-            { component: "ap:table", props: { columns: [{ key: "name" }], rows: [] },
-              bindings: { rows: { source: "tool", ref: "crm_list_leads" } } },
+            {
+              component: "ap:table",
+              props: { columns: [{ key: "name" }], rows: [] },
+              bindings: { rows: { source: "tool", ref: "crm_list_leads" } },
+            },
           ],
         },
       ],
     };
-    const out = applyBindings(nameless, { "/0#rows": { status: "ok", value: [{ name: "Acme" }] } });
+    const out = applyBindings(nameless, {
+      "/0#rows": { status: "ok", value: [{ name: "Acme" }] },
+    });
     render(renderNode(out));
     expect(screen.getByText("Acme")).toBeInTheDocument();
   });
 
   it("seeds the region from the view root when the root IS a hook", () => {
     const rootIsHook = hook("whole", [
-      { component: "ap:text", props: { text: "placeholder" }, bindings: { text: { source: "tool", ref: "t" } } },
+      {
+        component: "ap:text",
+        props: { text: "placeholder" },
+        bindings: { text: { source: "tool", ref: "t" } },
+      },
     ]);
-    const out = applyBindings(rootIsHook, { "whole/0#text": { status: "ok", value: "in the root hook" } });
+    const out = applyBindings(rootIsHook, {
+      "whole/0#text": { status: "ok", value: "in the root hook" },
+    });
     render(renderNode(out));
     expect(screen.getByText("in the root hook")).toBeInTheDocument();
   });
@@ -139,17 +164,24 @@ describe("applyBindings", () => {
   it("replaces only the failing node, and the rest of the view keeps working", () => {
     const out = applyBindings(view, {
       "x/0#rows": { status: "ok", value: [{ name: "Acme" }] },
-      "x/1#body": { status: "error", message: "This view's data is not available." },
+      "x/1#body": {
+        status: "error",
+        message: "This view's data is not available.",
+      },
     });
     render(renderNode(out));
     expect(screen.getByText("Acme")).toBeInTheDocument();
-    expect(screen.getByText("This view's data is not available.")).toBeInTheDocument();
+    expect(
+      screen.getByText("This view's data is not available."),
+    ).toBeInTheDocument();
     expect(screen.queryByText("loading...")).not.toBeInTheDocument();
   });
 
   it("is a pure function — the input view is not mutated", () => {
     const before = JSON.stringify(view);
-    applyBindings(view, { "x/0#rows": { status: "ok", value: [{ name: "Acme" }] } });
+    applyBindings(view, {
+      "x/0#rows": { status: "ok", value: [{ name: "Acme" }] },
+    });
     expect(JSON.stringify(view)).toBe(before);
   });
 
@@ -177,15 +209,24 @@ describe("applyBindings", () => {
   const controlView: Node = {
     component: "ap:stack",
     children: [
-      { component: "ap:select",
-        props: { param: "span", value: "7d", options: [{ value: "7d", label: "7 days" }] },
-        bindings: { options: { source: "tool", ref: "list_spans" } } },
+      {
+        component: "ap:select",
+        props: {
+          param: "span",
+          value: "7d",
+          options: [{ value: "7d", label: "7 days" }],
+        },
+        bindings: { options: { source: "tool", ref: "list_spans" } },
+      },
     ],
   };
 
   it("keeps a failed CONTROL rendered and interactive, showing the error beside it", () => {
     const out = applyBindings(controlView, {
-      "/0#options": { status: "error", message: "This view's data is not available." },
+      "/0#options": {
+        status: "error",
+        message: "This view's data is not available.",
+      },
     });
     render(renderNode(out));
 
@@ -195,13 +236,20 @@ describe("applyBindings", () => {
     // Its declared literal options survive, so the viewer has something to
     // pick and therefore something that triggers a re-evaluation.
     expect(screen.getByText("7 days")).toBeInTheDocument();
-    expect(screen.getByText("This view's data is not available.")).toBeVisible();
+    expect(
+      screen.getByText("This view's data is not available."),
+    ).toBeVisible();
   });
 });
 
 describe("applyBindings — waiting on the viewer is not a failure", () => {
   const bound = (): Node =>
-    hook("companies", [{ component: "ap:table", bindings: { rows: { source: "tool", ref: "t" } } }]);
+    hook("companies", [
+      {
+        component: "ap:table",
+        bindings: { rows: { source: "tool", ref: "t" } },
+      },
+    ]);
 
   // A control with no literal default — a date range that must be picked live,
   // because a baked-in default would go stale — leaves its binding unsatisfied
@@ -211,15 +259,23 @@ describe("applyBindings — waiting on the viewer is not a failure", () => {
   // touched yet, announcing a problem the viewer had not caused.
   it("stands in with ap:empty, never ap:error", () => {
     const out = applyBindings(bound(), {
-      "companies/0#rows": { status: "needs_input", message: "Choose a value above to load this data." },
+      "companies/0#rows": {
+        status: "needs_input",
+        message: "Choose a value above to load this data.",
+      },
     });
     expect(out.children?.[0]?.component).toBe("ap:empty");
-    expect(out.children?.[0]?.props?.body).toBe("Choose a value above to load this data.");
+    expect(out.children?.[0]?.props?.body).toBe(
+      "Choose a value above to load this data.",
+    );
   });
 
   it("still uses ap:error for a genuine failure", () => {
     const out = applyBindings(bound(), {
-      "companies/0#rows": { status: "error", message: "this view's data could not be loaded" },
+      "companies/0#rows": {
+        status: "error",
+        message: "this view's data could not be loaded",
+      },
     });
     expect(out.children?.[0]?.component).toBe("ap:error");
   });
@@ -231,7 +287,10 @@ describe("applyBindings — waiting on the viewer is not a failure", () => {
     const twoBindings: Node = hook("companies", [
       {
         component: "ap:table",
-        bindings: { rows: { source: "tool", ref: "t" }, footer: { source: "tool", ref: "u" } },
+        bindings: {
+          rows: { source: "tool", ref: "t" },
+          footer: { source: "tool", ref: "u" },
+        },
       },
     ]);
     const out = applyBindings(twoBindings, {
@@ -254,7 +313,10 @@ describe("applyBindings — waiting on the viewer is not a failure", () => {
       },
     ]);
     const out = applyBindings(control, {
-      "filters/0#options": { status: "needs_input", message: "Choose a value above to load this data." },
+      "filters/0#options": {
+        status: "needs_input",
+        message: "Choose a value above to load this data.",
+      },
     });
     expect(out.children?.[0]?.component).toBe("ap:stack");
     expect(out.children?.[0]?.children?.[0]?.component).toBe("ap:select");

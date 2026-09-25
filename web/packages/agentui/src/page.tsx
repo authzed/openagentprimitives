@@ -28,7 +28,11 @@
 // in the middle of).
 import * as React from "react";
 import { GENERATIVE, hookNameOf, useHookState } from "./hooks";
-import { type PageLayout, PageLayoutContext, type PageLayoutState } from "./pageLayout";
+import {
+  type PageLayout,
+  PageLayoutContext,
+  type PageLayoutState,
+} from "./pageLayout";
 import { timelineSteps } from "./tree";
 import type { Node } from "./types";
 
@@ -99,10 +103,16 @@ export function PageNode({
   return (
     <PageLayoutContext.Provider value={state}>
       <div className="grid gap-6 md:grid-cols-[220px_minmax(0,1fr)]">
-        <div data-testid="agent-ui-page-rail" className="md:sticky md:top-4 md:self-start">
+        <div
+          data-testid="agent-ui-page-rail"
+          className="md:sticky md:top-4 md:self-start"
+        >
           {rail ? renderChild(rail, "rail") : null}
         </div>
-        <div data-testid="agent-ui-page-stage" className="flex min-w-0 flex-col gap-3">
+        <div
+          data-testid="agent-ui-page-stage"
+          className="flex min-w-0 flex-col gap-3"
+        >
           {/* Keyed by a child's ORIGINAL index, never by its position in the
               staged subset: React reconciles by key, so a key that moved with
               the selection would hand one step's component instances — a

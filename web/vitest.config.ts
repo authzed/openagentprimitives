@@ -21,7 +21,9 @@ export default defineConfig({
       "@mcp-ui/client": r("node_modules/@mcp-ui/client"),
       "@testing-library/react": r("node_modules/@testing-library/react"),
       "@testing-library/jest-dom": r("node_modules/@testing-library/jest-dom"),
-      "@testing-library/user-event": r("node_modules/@testing-library/user-event"),
+      "@testing-library/user-event": r(
+        "node_modules/@testing-library/user-event",
+      ),
     },
   },
   // Allow Vite's dev server to serve files from outside the web/ project root

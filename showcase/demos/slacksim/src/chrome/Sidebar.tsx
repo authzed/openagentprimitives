@@ -1,22 +1,32 @@
-import { ChevronDown, Hash, Lock, Search, Edit, MessageSquareText, Headphones, Send } from 'lucide-react'
-import { useLookups, useScenario, useStore } from '../runtime/context'
-import type { SidebarSection, SimChannel } from '../store/types'
-import { Avatar } from './Avatar'
+import {
+  ChevronDown,
+  Hash,
+  Lock,
+  Search,
+  Edit,
+  MessageSquareText,
+  Headphones,
+  Send,
+} from "lucide-react";
+import { useLookups, useScenario, useStore } from "../runtime/context";
+import type { SidebarSection, SimChannel } from "../store/types";
+import { Avatar } from "./Avatar";
 
 const SECTION_LABELS: Record<SidebarSection, string> = {
-  starred: 'Starred',
-  channels: 'Channels',
-  dms: 'Direct messages',
-  apps: 'Agents & apps',
-}
-const SECTION_ORDER: SidebarSection[] = ['starred', 'channels', 'dms', 'apps']
+  starred: "Starred",
+  channels: "Channels",
+  dms: "Direct messages",
+  apps: "Agents & apps",
+};
+const SECTION_ORDER: SidebarSection[] = ["starred", "channels", "dms", "apps"];
 
 export function Sidebar() {
-  const scenario = useScenario()
-  const store = useStore()
-  const { workspace, channels, view } = scenario
+  const scenario = useScenario();
+  const store = useStore();
+  const { workspace, channels, view } = scenario;
 
-  const bySection = (s: SidebarSection) => channels.filter((c) => c.section === s)
+  const bySection = (s: SidebarSection) =>
+    channels.filter((c) => c.section === s);
 
   return (
     <div className="sk-sidebar">
@@ -43,8 +53,8 @@ export function Sidebar() {
         </ul>
 
         {SECTION_ORDER.map((section) => {
-          const items = bySection(section)
-          if (items.length === 0) return null
+          const items = bySection(section);
+          if (items.length === 0) return null;
           return (
             <section className="sk-sidebar-section" key={section}>
               <div className="sk-section-header">
@@ -57,16 +67,20 @@ export function Sidebar() {
                     key={c.id}
                     channel={c}
                     active={view.activeChannelId === c.id}
-                    onClick={() => (c.kind === 'app' ? store.appHome(c.id) : store.switchChannel(c.id))}
+                    onClick={() =>
+                      c.kind === "app"
+                        ? store.appHome(c.id)
+                        : store.switchChannel(c.id)
+                    }
                   />
                 ))}
               </ul>
             </section>
-          )
+          );
         })}
       </nav>
     </div>
-  )
+  );
 }
 
 function NavItem({ icon, label }: { icon: React.ReactNode; label: string }) {
@@ -75,7 +89,7 @@ function NavItem({ icon, label }: { icon: React.ReactNode; label: string }) {
       <span className="sk-nav-icon">{icon}</span>
       <span className="sk-nav-label">{label}</span>
     </li>
-  )
+  );
 }
 
 function ChannelItem({
@@ -83,31 +97,36 @@ function ChannelItem({
   active,
   onClick,
 }: {
-  channel: SimChannel
-  active: boolean
-  onClick: () => void
+  channel: SimChannel;
+  active: boolean;
+  onClick: () => void;
 }) {
-  const { user } = useLookups()
-  const cls = `sk-channel-item ${active ? 'is-active' : ''} ${channel.unread ? 'is-unread' : ''}`.trim()
+  const { user } = useLookups();
+  const cls =
+    `sk-channel-item ${active ? "is-active" : ""} ${channel.unread ? "is-unread" : ""}`.trim();
 
-  let icon: React.ReactNode
-  let label = channel.name
-  if (channel.kind === 'private') icon = <Lock size={15} />
-  else if (channel.kind === 'channel') icon = <Hash size={15} />
-  else if (channel.kind === 'app') {
-    const u = user(channel.memberIds?.[0] ?? '')
-    icon = <Avatar user={u} size={20} />
-    label = u?.name ?? channel.name
+  let icon: React.ReactNode;
+  let label = channel.name;
+  if (channel.kind === "private") icon = <Lock size={15} />;
+  else if (channel.kind === "channel") icon = <Hash size={15} />;
+  else if (channel.kind === "app") {
+    const u = user(channel.memberIds?.[0] ?? "");
+    icon = <Avatar user={u} size={20} />;
+    label = u?.name ?? channel.name;
   } else {
     // DM: show the other member's avatar + presence
-    const other = user(channel.memberIds?.[0] ?? '')
+    const other = user(channel.memberIds?.[0] ?? "");
     icon = (
       <span className="sk-dm-avatar">
         <Avatar user={other} size={20} />
-        <span className={`sk-presence ${other?.presence === 'active' ? 'is-active' : ''}`} />
+        <span
+          className={`sk-presence ${other?.presence === "active" ? "is-active" : ""}`}
+        />
       </span>
-    )
-    label = channel.memberIds?.map((id) => user(id)?.name ?? id).join(', ') ?? channel.name
+    );
+    label =
+      channel.memberIds?.map((id) => user(id)?.name ?? id).join(", ") ??
+      channel.name;
   }
 
   return (
@@ -115,8 +134,10 @@ function ChannelItem({
       <button className={cls} onClick={onClick} data-channel={channel.id}>
         <span className="sk-channel-icon">{icon}</span>
         <span className="sk-channel-name">{label}</span>
-        {channel.mentionCount ? <span className="sk-mention-badge">{channel.mentionCount}</span> : null}
+        {channel.mentionCount ? (
+          <span className="sk-mention-badge">{channel.mentionCount}</span>
+        ) : null}
       </button>
     </li>
-  )
+  );
 }
