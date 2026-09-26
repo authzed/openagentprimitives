@@ -29,6 +29,21 @@ func monitoringChannel(channelID string) *spiceboxv1alpha1.Channel {
 	return ch
 }
 
+// footerText returns the concatenated text of the card's trailing muted context
+// footer — the "level · transition · category · condition[: reason]" line.
+func footerText(t *testing.T, cont containerBlock) string {
+	t.Helper()
+	last, ok := cont.ChildBlocks[len(cont.ChildBlocks)-1].(*slackapi.ContextBlock)
+	require.True(t, ok, "the final child is the muted context footer, got %T", cont.ChildBlocks[len(cont.ChildBlocks)-1])
+	var s string
+	for _, e := range last.ContextElements.Elements {
+		if tb, ok := e.(*slackapi.TextBlockObject); ok {
+			s += tb.Text
+		}
+	}
+	return s
+}
+
 func TestRenderMonitoringText(t *testing.T) {
 	cases := []struct {
 		name string
@@ -95,22 +110,17 @@ func TestBuildMonitoringBlocks_ContainerShape(t *testing.T) {
 	assert.Contains(t, title, ":large_orange_circle:", "warning tone draws the orange circle chip")
 	assert.Contains(t, title, "MCPServer default/hubspot-companies", "the source ref is the lead")
 
-	// Body section: condition, reason, summary, hint — all present, section-tier.
+	// Body section: leads with the human summary, then the italic hint. The raw
+	// condition type does NOT headline the body anymore (it moved to the footer).
 	text := concatBlockText(blocks)
-	assert.Contains(t, text, "*Valid*: WildcardLeafNotRouted", "condition and reason lead the body")
-	assert.Contains(t, text, "> tools[search_crm_objects]", "the summary rides a blockquote")
+	assert.Contains(t, text, "tools[search_crm_objects].permissionVariants[0].check", "the human summary leads the body")
+	assert.NotContains(t, text, "*Valid*", "the raw condition type must not headline the body")
 	assert.Contains(t, text, "_set routeViaSessionGrant: true_", "the hint is italicised")
 
-	// Muted footer carries the machine metadata the chip and body do not.
-	last, ok := cont.ChildBlocks[len(cont.ChildBlocks)-1].(*slackapi.ContextBlock)
-	require.True(t, ok, "the final child is the muted context footer, got %T", cont.ChildBlocks[len(cont.ChildBlocks)-1])
-	footer := ""
-	for _, e := range last.ContextElements.Elements {
-		if tb, ok := e.(*slackapi.TextBlockObject); ok {
-			footer += tb.Text
-		}
-	}
-	assert.Equal(t, "warning · failed · reconcile", footer, "footer is the muted level · transition · category line")
+	// Muted footer carries the machine metadata the chip and body do not,
+	// including the demoted condition[: reason] machine ref.
+	assert.Equal(t, "warning · failed · reconcile · Valid: WildcardLeafNotRouted", footerText(t, cont),
+		"footer is the muted level · transition · category · condition[: reason] line")
 }
 
 // TestBuildMonitoringBlocks_Recovered pins the good-news path: a recovered
@@ -127,6 +137,44 @@ func TestBuildMonitoringBlocks_Recovered(t *testing.T) {
 	cont := blocks[0].(containerBlock)
 	assert.Contains(t, richTextPlain(cont.RichTextTitle), ":large_green_circle:",
 		"a recovery is good news and draws green even at error level")
+	// The body leads with the reason (there is no message here), not the raw
+	// condition type, and the type is demoted to the footer.
+	assert.Contains(t, concatBlockText(blocks), "RefreshSucceeded", "the body leads with the human-facing reason")
+	assert.Equal(t, "error · recovered · credential · Refresh", footerText(t, cont))
+}
+
+// TestBuildMonitoringBlocks_RecoveredDoesNotReadAsFailure is the regression test
+// for the reported card: a RelationshipSource whose PartialFailure condition
+// CLEARS (True→False) fires a "recovered" event whose condition TYPE still
+// literally says "PartialFailure". The old body headlined *PartialFailure*:
+// AllScopesSynced under a green chip — every other signal (green, "recovered",
+// "AllScopesSynced") says good news, so the failure-named type read as a
+// contradiction. The body must now lead with the human-facing reason and the
+// raw condition type must be demoted to the muted footer.
+func TestBuildMonitoringBlocks_RecoveredDoesNotReadAsFailure(t *testing.T) {
+	// Mirrors what pkg/controllers/relationshipsource/controller.go writes on the
+	// good arm: PartialFailure=False, Reason=AllScopesSynced, and an EMPTY
+	// message — which is why the lead must fall back to the reason.
+	blocks := buildMonitoringBlocks(channelevents.MonitoringEvent{
+		Level: channelevents.MonitoringLevelWarning, Category: "reconcile",
+		Transition: channelevents.MonitoringTransitionRecovered,
+		Source:     channelevents.MonitoringSourceRef{Kind: "RelationshipSource", Namespace: "default", Name: "slack"},
+		Condition:  "PartialFailure", Reason: "AllScopesSynced",
+	})
+	require.Len(t, blocks, 1)
+	cont := blocks[0].(containerBlock)
+
+	// The green chip already says good news; the body must not fight it.
+	assert.Contains(t, richTextPlain(cont.RichTextTitle), ":large_green_circle:")
+
+	text := concatBlockText(blocks)
+	assert.NotContains(t, text, "*PartialFailure*", "the body must not headline the failure-named condition type")
+	assert.NotContains(t, text, "PartialFailure: AllScopesSynced", "the contradictory headline must be gone")
+	assert.Contains(t, text, "AllScopesSynced", "the body leads with the human-facing reason instead")
+
+	// The raw condition type is demoted to the muted footer, with no reason
+	// appended (the reason is already the body lead, so it is not printed twice).
+	assert.Equal(t, "warning · recovered · reconcile · PartialFailure", footerText(t, cont))
 }
 
 // TestBuildMonitoringBlocks_ClusterScopedSource: a source with no namespace
