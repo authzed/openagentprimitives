@@ -2,10 +2,21 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
+# On a PR branch, a push fires both `push` and `pull_request` for the same
+# commit; scoping `push` to `main` leaves PRs covered by `pull_request` alone
+# and keeps `main` validated after merges — no duplicate runs.
 permissions:
   contents: read
+
+# Cancel superseded runs on the same ref so a rapid re-push doesn't pile up
+# duplicate PR runs. Never cancels `main` (push) runs, so every merge commit is
+# fully validated.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   unit:
