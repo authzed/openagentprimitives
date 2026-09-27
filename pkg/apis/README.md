@@ -1,11 +1,11 @@
 # `pkg/apis`
 
-The CRD types. **Everything depends on this group; it depends on nothing else
-in the repo.** Keep it that way — an import from `pkg/apis` into any other
-`pkg/` group would make the dependency graph cyclic at the root.
+The CRD types. **Everything depends on this group; it depends on nothing else in
+the repo.** Keep it that way — an import from `pkg/apis` into any other `pkg/`
+group would make the dependency graph cyclic at the root.
 
-| Package | Contents |
-| ------- | -------- |
+| Package                 | Contents                                                                                                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`v1alpha1`](v1alpha1/) | The single API version: 27 CRD kinds in group `agentprimitives.authzed.com`, plus the shared sub-types, condition/reason constants, and the generated deepcopy methods. |
 
 ## These types are generator input, not just Go structs
@@ -49,13 +49,13 @@ bundle disagrees with `config/` — `TestInstallYAMLMatchesKustomize` in
 The file carries two `+kubebuilder:validation:XValidation` CEL rules whose
 expressions contain paired single quotes — `self.identityMode == 'ask'` and the
 empty-string literal `self.agentIdentity != ''`. gofmt applies its smart-quote
-transformation to comment text and rewrites `''` into a single `”`
-(U+201D RIGHT DOUBLE QUOTATION MARK). controller-gen then emits that character
-into the CRD's `x-kubernetes-validations` rule, and the CRD **fails to install**:
-the API server cannot compile the CEL expression.
+transformation to comment text and rewrites `''` into a single `”` (U+201D RIGHT
+DOUBLE QUOTATION MARK). controller-gen then emits that character into the CRD's
+`x-kubernetes-validations` rule, and the CRD **fails to install**: the API
+server cannot compile the CEL expression.
 
-The breakage is invisible locally — the Go code still builds and unit tests still
-pass; it surfaces only when the regenerated CRD is applied to a cluster. If you
-must reformat the file, re-run `mage gen:api` and confirm the rule text in
-`config/crds/agentprimitives.authzed.com_agentclasses.yaml` still contains plain
-ASCII apostrophes before committing.
+The breakage is invisible locally — the Go code still builds and unit tests
+still pass; it surfaces only when the regenerated CRD is applied to a cluster.
+If you must reformat the file, re-run `mage gen:api` and confirm the rule text
+in `config/crds/agentprimitives.authzed.com_agentclasses.yaml` still contains
+plain ASCII apostrophes before committing.

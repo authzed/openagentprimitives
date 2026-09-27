@@ -14,8 +14,8 @@ The shape is publish/subscribe over NATS:
 Adding a revocable kind = register one `Invalidator` + add a publisher trigger
 in that CR's controller. **No consumer edits.**
 
-| Package | What it does |
-| ------- | ------------ |
+| Package           | What it does                 |
+| ----------------- | ---------------------------- |
 | [`kinds`](kinds/) | The registered invalidators. |
 
 ## Fan-out, not cache-drop

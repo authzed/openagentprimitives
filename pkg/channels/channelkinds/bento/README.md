@@ -5,14 +5,14 @@ Schedules inbound messages from an embedded
 triggers with **no human user** behind them. Pairs with a sibling `role=output`
 Channel that provides the response surface.
 
-| File | Role |
-| ---- | ---- |
-| `kind.go` | The `channelkinds.Kind` implementation |
-| `listener.go` | Runs the embedded Bento pipeline and delivers each generated message inbound |
-| `config.go` | Spec parsing — the schedule and the Bloblang mapping |
-| `forward_output.go` | Forwards the agent's reply to the bound output Channel |
-| `wizard.go` | `oap channel create --kind bento` |
-| `init.go` | Registry registration |
+| File                | Role                                                                         |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `kind.go`           | The `channelkinds.Kind` implementation                                       |
+| `listener.go`       | Runs the embedded Bento pipeline and delivers each generated message inbound |
+| `config.go`         | Spec parsing — the schedule and the Bloblang mapping                         |
+| `forward_output.go` | Forwards the agent's reply to the bound output Channel                       |
+| `wizard.go`         | `oap channel create --kind bento`                                            |
+| `init.go`           | Registry registration                                                        |
 
 ## Non-obvious constraints
 

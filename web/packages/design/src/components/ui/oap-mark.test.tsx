@@ -18,7 +18,9 @@ describe("OapMark", () => {
     const svg = container.querySelector("svg")!;
     expect(svg.getAttribute("role")).toBe("img");
     expect(svg.getAttribute("aria-hidden")).toBeNull();
-    expect(svg.querySelector("title")?.textContent).toBe("Open Agent Primitives");
+    expect(svg.querySelector("title")?.textContent).toBe(
+      "Open Agent Primitives",
+    );
   });
 
   it("renders the three letterform primitives in the logomark", () => {
@@ -41,7 +43,9 @@ describe("OapMarkRelay", () => {
     expect(svg.getAttribute("fill")).toBe("currentColor");
     expect(svg.getAttribute("data-relay")).toBe("off");
     expect(svg.querySelector("g")!.style.opacity).toBe("0");
-    expect(svg.querySelector<SVGPathElement>("[data-ink]")!.style.opacity).toBe("1");
+    expect(svg.querySelector<SVGPathElement>("[data-ink]")!.style.opacity).toBe(
+      "1",
+    );
     expect(raf).not.toHaveBeenCalled();
   });
 
@@ -51,12 +55,16 @@ describe("OapMarkRelay", () => {
       frame = cb;
       return 1;
     });
-    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const cancel = vi
+      .spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => {});
     const { container, rerender } = render(<OapMarkRelay active />);
     const svg = container.querySelector("svg")!;
     expect(svg.getAttribute("data-relay")).toBe("on");
     expect(svg.querySelector("g")!.style.opacity).toBe("1");
-    expect(svg.querySelector<SVGPathElement>("[data-ink]")!.style.opacity).toBe("0.35");
+    expect(svg.querySelector<SVGPathElement>("[data-ink]")!.style.opacity).toBe(
+      "0.35",
+    );
     expect(frame).not.toBeNull();
     // Five sixths of a lap in: the head has crossed two corners (Y2 hands over
     // every second corner) and is clear of the handover split, so the whole
@@ -70,14 +78,20 @@ describe("OapMarkRelay", () => {
     expect(cancel).toHaveBeenCalled();
     expect(svg.getAttribute("data-relay")).toBe("off");
     expect(svg.querySelector("g")!.style.opacity).toBe("0");
-    expect(svg.querySelector<SVGPathElement>("[data-ink]")!.style.opacity).toBe("1");
+    expect(svg.querySelector<SVGPathElement>("[data-ink]")!.style.opacity).toBe(
+      "1",
+    );
   });
 
   it("never starts under prefers-reduced-motion", () => {
-    window.matchMedia = vi.fn().mockReturnValue({ matches: true }) as unknown as typeof window.matchMedia;
+    window.matchMedia = vi.fn().mockReturnValue({
+      matches: true,
+    }) as unknown as typeof window.matchMedia;
     const raf = vi.spyOn(window, "requestAnimationFrame");
     const { container } = render(<OapMarkRelay active />);
-    expect(container.querySelector("svg")!.getAttribute("data-relay")).toBe("off");
+    expect(container.querySelector("svg")!.getAttribute("data-relay")).toBe(
+      "off",
+    );
     expect(raf).not.toHaveBeenCalled();
   });
 });

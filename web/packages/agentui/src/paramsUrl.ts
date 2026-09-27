@@ -55,7 +55,10 @@ export function paramsFromSearch(search: string): Record<string, string> {
 // Non-parameter keys are preserved because the shell's own state lives beside
 // these — dropping `session` or `view` while writing a filter would navigate
 // the page as a side effect of picking a date.
-export function searchWithParams(search: string, params: Record<string, string>): string {
+export function searchWithParams(
+  search: string,
+  params: Record<string, string>,
+): string {
   const sp = new URLSearchParams(search);
   for (const key of Array.from(sp.keys())) {
     if (key.startsWith(PARAM_QUERY_PREFIX)) sp.delete(key);

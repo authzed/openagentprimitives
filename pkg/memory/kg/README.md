@@ -2,8 +2,8 @@
 
 Implementations of `memory.KGProvider`.
 
-| Package | Backend |
-| ------- | ------- |
+| Package                  | Backend                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------- |
 | [`graphiti/`](graphiti/) | [Graphiti](https://github.com/getzep/graphiti) over its REST API, backed by Neo4j |
 
 **The `KGProvider` interface itself is not here** — it lives at
@@ -14,8 +14,8 @@ Implementations of `memory.KGProvider`.
 
 Chosen by dependency injection in `internal/cmd/operator`, gated on
 `GRAPHITI_ENDPOINT`. When that variable is unset there is no KG provider, no
-graphiti search provider, and no ingestion — the rest of the memory framework
-is unaffected.
+graphiti search provider, and no ingestion — the rest of the memory framework is
+unaffected.
 
 Graphiti runs as a sidecar and handles entity extraction, dedup and
 contradiction detection **asynchronously**. Ingestion is signal-driven: the

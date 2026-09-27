@@ -1,14 +1,24 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { BindingParamsProvider, collectDeclaredParamKeys, collectDefaultParams, reconcileParams, useBindingParams } from "./params";
+import {
+  BindingParamsProvider,
+  collectDeclaredParamKeys,
+  collectDefaultParams,
+  reconcileParams,
+  useBindingParams,
+} from "./params";
 import { PARAM_SPECS } from "./paramSpecs";
 import { renderNode } from "./renderNode";
 import type { Declaration, Node } from "./types";
 
 afterEach(cleanup);
 
-const node = (component: string, props: Record<string, unknown> = {}, children: Node[] = []): Node => ({
+const node = (
+  component: string,
+  props: Record<string, unknown> = {},
+  children: Node[] = [],
+): Node => ({
   component,
   props,
   children,
@@ -17,23 +27,36 @@ const node = (component: string, props: Record<string, unknown> = {}, children: 
 describe("collectDefaultParams", () => {
   it("reads ap:select's declared value into <param>", () => {
     const decl: Declaration = {
-      view: node("ap:select", { param: "span", value: "7d", options: [{ value: "7d" }] }),
+      view: node("ap:select", {
+        param: "span",
+        value: "7d",
+        options: [{ value: "7d" }],
+      }),
     };
     expect(collectDefaultParams(decl)).toEqual({ span: "7d" });
   });
 
   it("reads ap:daterange's declared from/to into <param>.from and <param>.to", () => {
     const decl: Declaration = {
-      view: node("ap:daterange", { param: "window", from: "2026-01-01", to: "2026-01-31" }),
+      view: node("ap:daterange", {
+        param: "window",
+        from: "2026-01-01",
+        to: "2026-01-31",
+      }),
     };
-    expect(collectDefaultParams(decl)).toEqual({ "window.from": "2026-01-01", "window.to": "2026-01-31" });
+    expect(collectDefaultParams(decl)).toEqual({
+      "window.from": "2026-01-01",
+      "window.to": "2026-01-31",
+    });
   });
 
   it("descends into children and skips a control with no declared param name", () => {
     const decl: Declaration = {
       view: node("ap:stack", {}, [
         node("ap:select", { value: "unbound" }), // no `param` — contributes nothing
-        node("ap:card", {}, [node("ap:select", { param: "region", value: "us-east" })]),
+        node("ap:card", {}, [
+          node("ap:select", { param: "region", value: "us-east" }),
+        ]),
       ]),
     };
     expect(collectDefaultParams(decl)).toEqual({ region: "us-east" });
@@ -53,7 +76,11 @@ describe("collectDefaultParams", () => {
     const decl: Declaration = {
       view: node("ap:stack", {}, [
         node("oap:generative", { name: "filters", allowedComponents: ["*"] }, [
-          node("ap:select", { param: "region", value: "us-east", options: [{ value: "us-east" }] }),
+          node("ap:select", {
+            param: "region",
+            value: "us-east",
+            options: [{ value: "us-east" }],
+          }),
         ]),
       ]),
     };
@@ -80,13 +107,23 @@ describe("collectDefaultParams", () => {
   it("picks up a control registered at runtime, with no consumer edit — the walk is table-driven, not a type switch", () => {
     PARAM_SPECS["ap:fixture_slider"] = {
       prop: "param",
-      values: [{ suffix: "min", valueProp: "low" }, { suffix: "max", valueProp: "high" }],
+      values: [
+        { suffix: "min", valueProp: "low" },
+        { suffix: "max", valueProp: "high" },
+      ],
     };
     try {
       const decl: Declaration = {
-        view: node("ap:fixture_slider", { param: "range", low: "10", high: "90" }),
+        view: node("ap:fixture_slider", {
+          param: "range",
+          low: "10",
+          high: "90",
+        }),
       };
-      expect(collectDefaultParams(decl)).toEqual({ "range.min": "10", "range.max": "90" });
+      expect(collectDefaultParams(decl)).toEqual({
+        "range.min": "10",
+        "range.max": "90",
+      });
     } finally {
       // The table is module state; leaving a fixture type in it would change
       // the vocabulary every later test sees.
@@ -100,12 +137,24 @@ describe("reconcileParams", () => {
   // is the seam that decides what happens to the viewer's CURRENT parameter
   // choices when that happens.
   it("keeps the viewer's existing value for a key BOTH the old and new declaration declare", () => {
-    const decl: Declaration = { view: node("ap:select", { param: "span", value: "7d", options: [{ value: "7d" }] }) };
+    const decl: Declaration = {
+      view: node("ap:select", {
+        param: "span",
+        value: "7d",
+        options: [{ value: "7d" }],
+      }),
+    };
     expect(reconcileParams(decl, { span: "90d" })).toEqual({ span: "90d" });
   });
 
   it("seeds a key the NEW declaration declares for the first time from its own default", () => {
-    const decl: Declaration = { view: node("ap:select", { param: "region", value: "us-east", options: [{ value: "us-east" }] }) };
+    const decl: Declaration = {
+      view: node("ap:select", {
+        param: "region",
+        value: "us-east",
+        options: [{ value: "us-east" }],
+      }),
+    };
     expect(reconcileParams(decl, {})).toEqual({ region: "us-east" });
   });
 
@@ -117,14 +166,24 @@ describe("reconcileParams", () => {
   it("does all three at once, over a declaration with two controls", () => {
     const decl: Declaration = {
       view: node("ap:stack", {}, [
-        node("ap:select", { param: "span", value: "7d", options: [{ value: "7d" }] }), // survives
-        node("ap:select", { param: "region", value: "us-east", options: [{ value: "us-east" }] }), // new
+        node("ap:select", {
+          param: "span",
+          value: "7d",
+          options: [{ value: "7d" }],
+        }), // survives
+        node("ap:select", {
+          param: "region",
+          value: "us-east",
+          options: [{ value: "us-east" }],
+        }), // new
       ]),
     };
     // "stale" is not declared by this decl at all — must be dropped.
-    expect(reconcileParams(decl, { span: "90d", stale: "gone" })).toEqual({ span: "90d", region: "us-east" });
+    expect(reconcileParams(decl, { span: "90d", stale: "gone" })).toEqual({
+      span: "90d",
+      region: "us-east",
+    });
   });
-
 
   // Every case above drives a control that carries a literal default, which is
   // why this whole class of bug stayed invisible: for those, "declared" and
@@ -142,7 +201,12 @@ describe("reconcileParams", () => {
       // declared/defaulted split this returned {} — the picker reset to empty
       // and every binding under it fell back to "choose a value for this
       // view's settings", one agent turn after the viewer chose.
-      expect(reconcileParams(dateOnly, { "window.from": "2026-08-01", "window.to": "2026-08-18" })).toEqual({
+      expect(
+        reconcileParams(dateOnly, {
+          "window.from": "2026-08-01",
+          "window.to": "2026-08-18",
+        }),
+      ).toEqual({
         "window.from": "2026-08-01",
         "window.to": "2026-08-18",
       });
@@ -157,14 +221,21 @@ describe("reconcileParams", () => {
     });
 
     it("keeps one half of a range when only one end is picked", () => {
-      expect(reconcileParams(dateOnly, { "window.from": "2026-08-01" })).toEqual({ "window.from": "2026-08-01" });
+      expect(
+        reconcileParams(dateOnly, { "window.from": "2026-08-01" }),
+      ).toEqual({ "window.from": "2026-08-01" });
     });
 
     it("still drops a key this declaration does not declare at all", () => {
       // The third rule must survive the fix: a genuinely undeclared key is
       // still dropped, so a parameter a rewritten declaration removed cannot
       // linger in a request it can no longer affect.
-      expect(reconcileParams(dateOnly, { "window.from": "2026-08-01", stale: "gone" })).toEqual({
+      expect(
+        reconcileParams(dateOnly, {
+          "window.from": "2026-08-01",
+          stale: "gone",
+        }),
+      ).toEqual({
         "window.from": "2026-08-01",
       });
     });
@@ -175,10 +246,16 @@ describe("reconcileParams", () => {
       const mixed: Declaration = {
         view: node("ap:stack", {}, [
           node("ap:daterange", { param: "window" }),
-          node("ap:select", { param: "minScore", value: "0", options: [{ value: "0" }] }),
+          node("ap:select", {
+            param: "minScore",
+            value: "0",
+            options: [{ value: "0" }],
+          }),
         ]),
       };
-      expect(reconcileParams(mixed, { "window.from": "2026-08-01", minScore: "80" })).toEqual({
+      expect(
+        reconcileParams(mixed, { "window.from": "2026-08-01", minScore: "80" }),
+      ).toEqual({
         "window.from": "2026-08-01",
         minScore: "80",
       });
@@ -194,17 +271,28 @@ describe("reconcileParams", () => {
       // the distinction the fix rests on; asserting both together is what
       // stops a future edit collapsing them back into one.
       expect(collectDefaultParams(decl)).toEqual({});
-      expect(collectDeclaredParamKeys(decl)).toEqual(["window.from", "window.to"]);
+      expect(collectDeclaredParamKeys(decl)).toEqual([
+        "window.from",
+        "window.to",
+      ]);
     });
 
     it("reports both keys of a range and the single key of a select", () => {
       const decl: Declaration = {
         view: node("ap:stack", {}, [
           node("ap:daterange", { param: "window" }),
-          node("ap:select", { param: "minScore", value: "0", options: [{ value: "0" }] }),
+          node("ap:select", {
+            param: "minScore",
+            value: "0",
+            options: [{ value: "0" }],
+          }),
         ]),
       };
-      expect(collectDeclaredParamKeys(decl)).toEqual(["window.from", "window.to", "minScore"]);
+      expect(collectDeclaredParamKeys(decl)).toEqual([
+        "window.from",
+        "window.to",
+        "minScore",
+      ]);
     });
 
     it("reports nothing for a declaration with no parameterizing control", () => {
@@ -223,7 +311,10 @@ describe("ap:select — live when bound to a parameter", () => {
           node("ap:select", {
             param: "span",
             value: "7d",
-            options: [{ value: "7d", label: "7 days" }, { value: "30d", label: "30 days" }],
+            options: [
+              { value: "7d", label: "7 days" },
+              { value: "30d", label: "30 days" },
+            ],
           }),
         )}
       </BindingParamsProvider>,
@@ -237,7 +328,9 @@ describe("ap:select — live when bound to a parameter", () => {
   it("stays disabled when the declaration gives it no param name — a control that looks live but drives nothing is worse than one that reads as not-yet-wired", () => {
     render(
       <BindingParamsProvider value={{ params: {}, setParam: vi.fn() }}>
-        {renderNode(node("ap:select", { value: "7d", options: [{ value: "7d" }] }))}
+        {renderNode(
+          node("ap:select", { value: "7d", options: [{ value: "7d" }] }),
+        )}
       </BindingParamsProvider>,
     );
     expect(screen.getByRole("combobox")).toBeDisabled();
@@ -245,7 +338,15 @@ describe("ap:select — live when bound to a parameter", () => {
 
   it("renders and does not throw with NO provider at all — the standalone @ap/agentui case Plan 1's fixtures exercise", () => {
     expect(() =>
-      render(renderNode(node("ap:select", { param: "span", value: "7d", options: [{ value: "7d" }] }))),
+      render(
+        renderNode(
+          node("ap:select", {
+            param: "span",
+            value: "7d",
+            options: [{ value: "7d" }],
+          }),
+        ),
+      ),
     ).not.toThrow();
     // Still not disabled — a missing provider degrades to an inert no-op
     // setParam (params.tsx's context default), not to the old blanket-disabled
@@ -265,13 +366,31 @@ describe("ap:daterange — live when bound to a parameter", () => {
   it("calls setParam with RFC3339 instants, not the input's raw date-only value", () => {
     const setParam = vi.fn();
     render(
-      <BindingParamsProvider value={{ params: { "window.from": "2026-01-01", "window.to": "2026-01-31" }, setParam }}>
-        {renderNode(node("ap:daterange", { param: "window", from: "2026-01-01", to: "2026-01-31" }))}
+      <BindingParamsProvider
+        value={{
+          params: { "window.from": "2026-01-01", "window.to": "2026-01-31" },
+          setParam,
+        }}
+      >
+        {renderNode(
+          node("ap:daterange", {
+            param: "window",
+            from: "2026-01-01",
+            to: "2026-01-31",
+          }),
+        )}
       </BindingParamsProvider>,
     );
-    fireEvent.change(screen.getByLabelText("From date"), { target: { value: "2026-02-01" } });
-    fireEvent.change(screen.getByLabelText("To date"), { target: { value: "2026-02-28" } });
-    expect(setParam).toHaveBeenCalledWith("window.from", "2026-02-01T00:00:00Z");
+    fireEvent.change(screen.getByLabelText("From date"), {
+      target: { value: "2026-02-01" },
+    });
+    fireEvent.change(screen.getByLabelText("To date"), {
+      target: { value: "2026-02-28" },
+    });
+    expect(setParam).toHaveBeenCalledWith(
+      "window.from",
+      "2026-02-01T00:00:00Z",
+    );
     expect(setParam).toHaveBeenCalledWith("window.to", "2026-02-28T00:00:00Z");
   });
 
@@ -284,7 +403,13 @@ describe("ap:daterange — live when bound to a parameter", () => {
   it("displays an RFC3339 parameter as a date the input can actually render", () => {
     render(
       <BindingParamsProvider
-        value={{ params: { "window.from": "2026-02-01T00:00:00Z", "window.to": "2026-02-28T00:00:00Z" }, setParam: vi.fn() }}
+        value={{
+          params: {
+            "window.from": "2026-02-01T00:00:00Z",
+            "window.to": "2026-02-28T00:00:00Z",
+          },
+          setParam: vi.fn(),
+        }}
       >
         {renderNode(node("ap:daterange", { param: "window" }))}
       </BindingParamsProvider>,
@@ -303,7 +428,12 @@ describe("ap:daterange — live when bound to a parameter", () => {
   it("renders a declared RFC3339 default as a date the input accepts", () => {
     render(
       <BindingParamsProvider value={{ params: {}, setParam: vi.fn() }}>
-        {renderNode(node("ap:daterange", { param: "window", from: "2026-02-01T09:30:00Z" }))}
+        {renderNode(
+          node("ap:daterange", {
+            param: "window",
+            from: "2026-02-01T09:30:00Z",
+          }),
+        )}
       </BindingParamsProvider>,
     );
     expect(screen.getByLabelText("From date")).toHaveValue("2026-02-01");
@@ -315,16 +445,24 @@ describe("ap:daterange — live when bound to a parameter", () => {
   it("sends an empty value unchanged when the viewer clears the field", () => {
     const setParam = vi.fn();
     render(
-      <BindingParamsProvider value={{ params: { "window.from": "2026-02-01T00:00:00Z" }, setParam }}>
+      <BindingParamsProvider
+        value={{ params: { "window.from": "2026-02-01T00:00:00Z" }, setParam }}
+      >
         {renderNode(node("ap:daterange", { param: "window" }))}
       </BindingParamsProvider>,
     );
-    fireEvent.change(screen.getByLabelText("From date"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("From date"), {
+      target: { value: "" },
+    });
     expect(setParam).toHaveBeenCalledWith("window.from", "");
   });
 
   it("stays disabled (the pre-existing button rendering) when the declaration gives it no param name", () => {
-    render(renderNode(node("ap:daterange", { from: "2026-01-01", to: "2026-01-31" })));
+    render(
+      renderNode(
+        node("ap:daterange", { from: "2026-01-01", to: "2026-01-31" }),
+      ),
+    );
     expect(screen.getByRole("button")).toBeDisabled();
   });
 });

@@ -29,7 +29,11 @@ export function parseModelDisplay(model: string): ParsedModelDisplay {
   if (provider !== "openrouter") return { provider, name: rest };
   const j = rest.indexOf("/");
   if (j < 0) return { via: "openrouter", name: rest };
-  return { via: "openrouter", provider: rest.slice(0, j), name: rest.slice(j + 1) };
+  return {
+    via: "openrouter",
+    provider: rest.slice(0, j),
+    name: rest.slice(j + 1),
+  };
 }
 
 // ModelName renders a uniform model display id with provider badges — the one
@@ -40,13 +44,22 @@ export function parseModelDisplay(model: string): ParsedModelDisplay {
 // once. Presentational only: no fetching, no state. An empty `model` renders
 // nothing — callers own their own empty-state text ("—", "not resolved",
 // "(unknown)"), same contract as KindBadge (pkg/web/adminui/ui/lib/KindBadge.tsx).
-export function ModelName({ model, className }: { model: string; className?: string }) {
+export function ModelName({
+  model,
+  className,
+}: {
+  model: string;
+  className?: string;
+}) {
   if (!model) return null;
   const { via, provider, name } = parseModelDisplay(model);
   return (
     <span className={cn("inline-flex items-center gap-1.5", className)}>
       {via && (
-        <Badge variant="secondary" className="rounded-full px-2 py-0 text-[10px] font-normal">
+        <Badge
+          variant="secondary"
+          className="rounded-full px-2 py-0 text-[10px] font-normal"
+        >
           {via}
         </Badge>
       )}

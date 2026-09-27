@@ -1,6 +1,7 @@
 # Prompt Injection Detector
 
-A zero-egress FastAPI service that detects prompt-injection attacks in tool input using an ONNX-optimized transformer model.
+A zero-egress FastAPI service that detects prompt-injection attacks in tool
+input using an ONNX-optimized transformer model.
 
 ## HTTP Contract
 
@@ -10,14 +11,15 @@ A zero-egress FastAPI service that detects prompt-injection attacks in tool inpu
 - **POST `/`** — Classification endpoint
   - Request body: `{"text": "<tool input text>"}`
   - Response: `{"score": <float 0..1>, "label": "injection" | "benign"}`
-  - The `score` is the softmax probability of the injection class; `label` is `"injection"` if score ≥ 0.5, else `"benign"`.
+  - The `score` is the softmax probability of the injection class; `label` is
+    `"injection"` if score ≥ 0.5, else `"benign"`.
 
 ## Model Selection
 
-The default model is `testsavantai/prompt-injection-defender-base-v2-onnx`
-at commit `a2109a5d583963f4962a9796d35315bdfed7c294`. An alternative
-must be a compatible ONNX sequence classifier with `model.onnx`, `config.json`,
-and tokenizer files at the model repository root. Set both its ID and immutable
+The default model is `testsavantai/prompt-injection-defender-base-v2-onnx` at
+commit `a2109a5d583963f4962a9796d35315bdfed7c294`. An alternative must be a
+compatible ONNX sequence classifier with `model.onnx`, `config.json`, and
+tokenizer files at the model repository root. Set both its ID and immutable
 revision when building:
 
 ```bash
@@ -38,21 +40,28 @@ uv pip compile images/promptinjection-detector/requirements.txt \
 
 ### Lakera PINT Validation
 
-Before deploying any model, validate it against the Lakera PINT benchmark to ensure it reliably detects common prompt-injection techniques. The reference model has been validated; any custom model should undergo the same gate before being trusted in production.
+Before deploying any model, validate it against the Lakera PINT benchmark to
+ensure it reliably detects common prompt-injection techniques. The reference
+model has been validated; any custom model should undergo the same gate before
+being trusted in production.
 
 ## Zero-Egress Design
 
-Model weights are baked into the image at build time via the RUN step in the Dockerfile. The runtime container requires NO network access after startup and emits NO egress traffic.
+Model weights are baked into the image at build time via the RUN step in the
+Dockerfile. The runtime container requires NO network access after startup and
+emits NO egress traffic.
 
 ## Digest Pinning
 
-In production (e.g., in the inspector's configuration or the operator's pod spec), always reference this image by its content digest:
+In production (e.g., in the inspector's configuration or the operator's pod
+spec), always reference this image by its content digest:
 
 ```
 <registry>/pi-detector@sha256:<full-digest>
 ```
 
-Digest pinning ensures reproducible, auditable deployments and prevents silent model updates.
+Digest pinning ensures reproducible, auditable deployments and prevents silent
+model updates.
 
 ## Manual Smoke Test
 

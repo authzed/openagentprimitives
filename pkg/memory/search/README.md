@@ -1,23 +1,23 @@
 # `search` — ranked retrieval
 
 `Memory.Search` delegates to `CompositeSearcher`, which fans out to every
-registered `SearchProvider` **concurrently**, merges the results with
-Reciprocal Rank Fusion, and post-filters through SpiceDB.
+registered `SearchProvider` **concurrently**, merges the results with Reciprocal
+Rank Fusion, and post-filters through SpiceDB.
 
-| File | Role |
-| ---- | ---- |
+| File          | Role                                                                                  |
+| ------------- | ------------------------------------------------------------------------------------- |
 | `searcher.go` | `CompositeSearcher` and its `WithProviders` / `WithRanker` / `WithAuthorizer` options |
-| `rrf.go` | `RRFRanker` — Reciprocal Rank Fusion (Cormack et al., 2009). `K` defaults to 60 |
+| `rrf.go`      | `RRFRanker` — Reciprocal Rank Fusion (Cormack et al., 2009). `K` defaults to 60       |
 
 ## Providers
 
-| Package | Capabilities |
-| ------- | ------------ |
-| [`inmem/`](inmem/) | Structured filters only (tags, time range); every hit scores 1.0 |
-| [`postgres/`](postgres/) | tsvector FTS + pgvector cosine similarity + structured filters + link traversal |
-| [`sqlite/`](sqlite/) | FTS + tags + time range. **No** field-content predicates — those are reported back via `SearchResult.DroppedFilters` |
-| [`graphiti/`](graphiti/) | Graph-aware search over the Graphiti REST API, plus the ingest client |
-| [`embedding/`](embedding/) | Not a provider — the OpenAI-compatible embedder the postgres provider uses for vector search |
+| Package                    | Capabilities                                                                                                         |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| [`inmem/`](inmem/)         | Structured filters only (tags, time range); every hit scores 1.0                                                     |
+| [`postgres/`](postgres/)   | tsvector FTS + pgvector cosine similarity + structured filters + link traversal                                      |
+| [`sqlite/`](sqlite/)       | FTS + tags + time range. **No** field-content predicates — those are reported back via `SearchResult.DroppedFilters` |
+| [`graphiti/`](graphiti/)   | Graph-aware search over the Graphiti REST API, plus the ingest client                                                |
+| [`embedding/`](embedding/) | Not a provider — the OpenAI-compatible embedder the postgres provider uses for vector search                         |
 
 ## Non-obvious constraints
 

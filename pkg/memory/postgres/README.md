@@ -5,13 +5,13 @@
 `TIMESTAMPTZ`, tags are `TEXT[]`, and the append-only provenance envelope is a
 `JSONB` column.
 
-| File | Role |
-| ---- | ---- |
-| `backend.go` | The `memory.Backend` implementation and its `Capabilities()` |
-| `client.go` | The `pgxpool` connection wrapper |
-| `query.go` | `Query` → SQL, incl. tag/field/time/link predicates |
-| `schema.go` | The `CREATE TABLE`/`CREATE INDEX` migration, applied on connect |
-| `envconfig.go` | `POSTGRES_URI` |
+| File           | Role                                                            |
+| -------------- | --------------------------------------------------------------- |
+| `backend.go`   | The `memory.Backend` implementation and its `Capabilities()`    |
+| `client.go`    | The `pgxpool` connection wrapper                                |
+| `query.go`     | `Query` → SQL, incl. tag/field/time/link predicates             |
+| `schema.go`    | The `CREATE TABLE`/`CREATE INDEX` migration, applied on connect |
+| `envconfig.go` | `POSTGRES_URI`                                                  |
 
 ## Non-obvious constraints
 

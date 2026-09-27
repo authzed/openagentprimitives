@@ -4,13 +4,13 @@ The declarative rows registered into the process-wide
 [`channelinteractions`](../) registry. Blank-importing this package from a
 binary that renders or decides interactions is all the wiring there is.
 
-| File | Role |
-| ---- | ---- |
-| `categories.go` | The 10 **prompt** categories and their name constants |
-| `notices.go` | The 24 **notice** categories (zero-action, one-way) and their name constants |
-| `register.go` | `init` → `RegisterAll` → `registerPrompts` + `registerNotices` |
-| `outcome_label.go` | The user-facing label for a settled interaction |
-| `identity_choice_labels.go` | Per-option copy for the `identity_choice` prompt |
+| File                        | Role                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| `categories.go`             | The 10 **prompt** categories and their name constants                        |
+| `notices.go`                | The 24 **notice** categories (zero-action, one-way) and their name constants |
+| `register.go`               | `init` → `RegisterAll` → `registerPrompts` + `registerNotices`               |
+| `outcome_label.go`          | The user-facing label for a settled interaction                              |
+| `identity_choice_labels.go` | Per-option copy for the `identity_choice` prompt                             |
 
 ## Prompt categories
 

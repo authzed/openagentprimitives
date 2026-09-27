@@ -1,6 +1,6 @@
 # `pkg/agent/modality`
 
-A *modality* is a capability-aware surface that plugs into a turn: given what
+A _modality_ is a capability-aware surface that plugs into a turn: given what
 the resolved model can do and what the session opted into, it contributes meta
 tools and prompt instructions. The runner asks the registry for all of them
 rather than branching on which one is active.

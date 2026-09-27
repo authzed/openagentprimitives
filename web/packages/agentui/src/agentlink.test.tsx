@@ -1,5 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentLink } from "./agentlink";
 import { renderNode } from "./renderNode";
@@ -7,7 +13,10 @@ import type { Node } from "./types";
 
 afterEach(cleanup);
 
-const agentLinkNode = (props: Record<string, unknown>): Node => ({ component: "ap:agentlink", props });
+const agentLinkNode = (props: Record<string, unknown>): Node => ({
+  component: "ap:agentlink",
+  props,
+});
 
 describe("ap:agentlink", () => {
   it("opens the new-session dialog for exactly that agent, in a new tab", () => {
@@ -15,12 +24,19 @@ describe("ap:agentlink", () => {
       <AgentLink
         n={{
           component: "ap:agentlink",
-          props: { namespace: "ws-demo", agentClass: "demo-agent", label: "Try it as yourself", prompt: "linear issues for PR #1234" },
+          props: {
+            namespace: "ws-demo",
+            agentClass: "demo-agent",
+            label: "Try it as yourself",
+            prompt: "linear issues for PR #1234",
+          },
         }}
       />,
     );
     const a = screen.getByTestId("ap-agentlink") as HTMLAnchorElement;
-    expect(a.getAttribute("href")).toBe("/sessions?new=1&ns=ws-demo&agentClass=demo-agent&prompt=linear+issues+for+PR+%231234");
+    expect(a.getAttribute("href")).toBe(
+      "/sessions?new=1&ns=ws-demo&agentClass=demo-agent&prompt=linear+issues+for+PR+%231234",
+    );
     expect(a.getAttribute("target")).toBe("_blank");
     expect(a.getAttribute("rel")).toContain("noopener");
     expect(a.textContent).toBe("Try it as yourself");
@@ -32,12 +48,22 @@ describe("ap:agentlink", () => {
   it("omits an empty prompt and never reads an href prop", () => {
     render(
       <AgentLink
-        n={{ component: "ap:agentlink", props: { namespace: "ws-demo", agentClass: "demo-agent", label: "Try it", href: "/admin" } }}
+        n={{
+          component: "ap:agentlink",
+          props: {
+            namespace: "ws-demo",
+            agentClass: "demo-agent",
+            label: "Try it",
+            href: "/admin",
+          },
+        }}
       />,
     );
-    expect((screen.getByTestId("ap-agentlink") as HTMLAnchorElement).getAttribute("href")).toBe(
-      "/sessions?new=1&ns=ws-demo&agentClass=demo-agent",
-    );
+    expect(
+      (screen.getByTestId("ap-agentlink") as HTMLAnchorElement).getAttribute(
+        "href",
+      ),
+    ).toBe("/sessions?new=1&ns=ws-demo&agentClass=demo-agent");
   });
 });
 
@@ -59,9 +85,26 @@ describe("ap:agentlink fails closed on an address-unsafe value", () => {
   });
 
   const cases: { name: string; props: Record<string, unknown> }[] = [
-    { name: "namespace is not a DNS-1123 label", props: { namespace: "Not_Valid!", agentClass: "demo-agent", label: "Try it" } },
-    { name: "agentClass is not a DNS-1123 label", props: { namespace: "ws-demo", agentClass: "Not_Valid!", label: "Try it" } },
-    { name: "label is empty", props: { namespace: "ws-demo", agentClass: "demo-agent", label: "" } },
+    {
+      name: "namespace is not a DNS-1123 label",
+      props: {
+        namespace: "Not_Valid!",
+        agentClass: "demo-agent",
+        label: "Try it",
+      },
+    },
+    {
+      name: "agentClass is not a DNS-1123 label",
+      props: {
+        namespace: "ws-demo",
+        agentClass: "Not_Valid!",
+        label: "Try it",
+      },
+    },
+    {
+      name: "label is empty",
+      props: { namespace: "ws-demo", agentClass: "demo-agent", label: "" },
+    },
   ];
   for (const tc of cases) {
     it(`renders the fail-visible card when ${tc.name}`, () => {
@@ -73,7 +116,15 @@ describe("ap:agentlink fails closed on an address-unsafe value", () => {
 
   // The good case, through the same renderNode path, is unaffected.
   it("still renders normally through renderNode when every value is valid", () => {
-    render(renderNode(agentLinkNode({ namespace: "ws-demo", agentClass: "demo-agent", label: "Try it" })));
+    render(
+      renderNode(
+        agentLinkNode({
+          namespace: "ws-demo",
+          agentClass: "demo-agent",
+          label: "Try it",
+        }),
+      ),
+    );
     expect(screen.getByTestId("ap-agentlink")).toBeInTheDocument();
   });
 });
@@ -83,11 +134,18 @@ describe("ap:agentlink fails closed on an address-unsafe value", () => {
 // route the mount-time check reads (the same one the framed chat itself uses).
 const embedRef = "ws-abc123456789/demo-haiku-1a2b3c4d";
 const embedKey = "ap-agentlink:ws-abc123456789/demo-haiku";
-const embedDetailURL = "/sessions/api/ws-abc123456789/demo-haiku-1a2b3c4d/detail";
+const embedDetailURL =
+  "/sessions/api/ws-abc123456789/demo-haiku-1a2b3c4d/detail";
 
 const embedNode = (extra: Record<string, unknown> = {}): Node => ({
   component: "ap:agentlink",
-  props: { namespace: "ws-abc123456789", agentClass: "demo-haiku", label: "Start the test", embed: true, ...extra },
+  props: {
+    namespace: "ws-abc123456789",
+    agentClass: "demo-haiku",
+    label: "Start the test",
+    embed: true,
+    ...extra,
+  },
 });
 
 describe("embed mode", () => {
@@ -99,18 +157,43 @@ describe("embed mode", () => {
   });
 
   it("embed: the click starts the session as the viewer, mounts the chat in place, and opens the tab at the server's own address", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ns: "ws-abc123456789", name: "demo-haiku-1a2b3c4d", href: "/sessions?session=ws-abc123456789%2Fdemo-haiku-1a2b3c4d&view=chat" }), { status: 200, headers: { "content-type": "application/json" } }));
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ns: "ws-abc123456789",
+          name: "demo-haiku-1a2b3c4d",
+          href: "/sessions?session=ws-abc123456789%2Fdemo-haiku-1a2b3c4d&view=chat",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchSpy);
     render(renderNode(embedNode({ prompt: "cherry blossoms" })));
     fireEvent.click(screen.getByTestId("ap-agentlink-embed"));
-    await waitFor(() => expect(screen.getByTestId("ap-chat")).toBeInTheDocument());
-    expect(fetchSpy).toHaveBeenCalledWith("/sessions/api/start", expect.objectContaining({ method: "POST" }));
-    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
-    expect(body).toEqual({ ns: "ws-abc123456789", agentClass: "demo-haiku", prompt: "cherry blossoms" });
-    expect(screen.getByTestId("ap-chat").getAttribute("src")).toBe("/chat-embed/ws-abc123456789/demo-haiku-1a2b3c4d");
+    await waitFor(() =>
+      expect(screen.getByTestId("ap-chat")).toBeInTheDocument(),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/sessions/api/start",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const body = JSON.parse(
+      (fetchSpy.mock.calls[0][1] as RequestInit).body as string,
+    );
+    expect(body).toEqual({
+      ns: "ws-abc123456789",
+      agentClass: "demo-haiku",
+      prompt: "cherry blossoms",
+    });
+    expect(screen.getByTestId("ap-chat").getAttribute("src")).toBe(
+      "/chat-embed/ws-abc123456789/demo-haiku-1a2b3c4d",
+    );
     // The server said where this session lives; the rebuilt string is only the
     // fallback for a ref that arrived with no start response behind it.
-    expect(screen.getByTestId("ap-agentlink-open-tab")).toHaveAttribute("href", "/sessions?session=ws-abc123456789%2Fdemo-haiku-1a2b3c4d&view=chat");
+    expect(screen.getByTestId("ap-agentlink-open-tab")).toHaveAttribute(
+      "href",
+      "/sessions?session=ws-abc123456789%2Fdemo-haiku-1a2b3c4d&view=chat",
+    );
     expect(screen.queryByTestId("ap-agentlink-embed")).toBeNull();
     expect(window.sessionStorage.getItem(embedKey)).toBe(embedRef);
   });
@@ -119,25 +202,57 @@ describe("embed mode", () => {
     ["protocol-relative", "//evil.example/sessions"],
     ["backslash-spelled", "/\\evil.example/sessions"],
     ["absolute", "https://evil.example/sessions"],
-  ])("embed: a start href that would leave the origin (%s) is refused, logged, and the tab opens at the rebuilt address", async (_kind, href) => {
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ns: "ws-abc123456789", name: "demo-haiku-1a2b3c4d", href }), { status: 200, headers: { "content-type": "application/json" } })));
-    render(renderNode(embedNode()));
-    fireEvent.click(screen.getByTestId("ap-agentlink-embed"));
-    await waitFor(() => expect(screen.getByTestId("ap-chat")).toBeInTheDocument());
-    expect(screen.getByTestId("ap-agentlink-open-tab")).toHaveAttribute("href", "/sessions?session=ws-abc123456789%2Fdemo-haiku-1a2b3c4d");
-    expect(err).toHaveBeenCalledTimes(1);
-  });
+  ])(
+    "embed: a start href that would leave the origin (%s) is refused, logged, and the tab opens at the rebuilt address",
+    async (_kind, href) => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              ns: "ws-abc123456789",
+              name: "demo-haiku-1a2b3c4d",
+              href,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+      );
+      render(renderNode(embedNode()));
+      fireEvent.click(screen.getByTestId("ap-agentlink-embed"));
+      await waitFor(() =>
+        expect(screen.getByTestId("ap-chat")).toBeInTheDocument(),
+      );
+      expect(screen.getByTestId("ap-agentlink-open-tab")).toHaveAttribute(
+        "href",
+        "/sessions?session=ws-abc123456789%2Fdemo-haiku-1a2b3c4d",
+      );
+      expect(err).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("embed: a remembered session still reachable keeps its chat, offers no second Start, and opens the tab at the rebuilt address", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ phase: "Running" }), { status: 200, headers: { "content-type": "application/json" } }));
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ phase: "Running" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
     vi.stubGlobal("fetch", fetchSpy);
     window.sessionStorage.setItem(embedKey, embedRef);
     render(renderNode(embedNode()));
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(embedDetailURL, { credentials: "same-origin" }));
+    await waitFor(() =>
+      expect(fetchSpy).toHaveBeenCalledWith(embedDetailURL, {
+        credentials: "same-origin",
+      }),
+    );
     expect(screen.getByTestId("ap-chat")).toBeInTheDocument();
     expect(screen.queryByTestId("ap-agentlink-embed")).toBeNull();
-    expect(screen.getByTestId("ap-agentlink-open-tab")).toHaveAttribute("href", "/sessions?session=ws-abc123456789%2Fdemo-haiku-1a2b3c4d");
+    expect(screen.getByTestId("ap-agentlink-open-tab")).toHaveAttribute(
+      "href",
+      "/sessions?session=ws-abc123456789%2Fdemo-haiku-1a2b3c4d",
+    );
     expect(window.sessionStorage.getItem(embedKey)).toBe(embedRef);
   });
 
@@ -145,7 +260,10 @@ describe("embed mode", () => {
   // until it answers would flicker the chat on every reload of a session that
   // is fine, which is the common case.
   it("embed: a remembered session mounts its chat immediately, before the check has answered", () => {
-    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
     window.sessionStorage.setItem(embedKey, embedRef);
     render(renderNode(embedNode()));
     expect(screen.getByTestId("ap-chat")).toBeInTheDocument();
@@ -157,10 +275,15 @@ describe("embed mode", () => {
   // and never offers Start again.
   it("embed: a remembered session the server no longer serves is forgotten, and Start comes back", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("gone", { status: 404 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("gone", { status: 404 })),
+    );
     window.sessionStorage.setItem(embedKey, embedRef);
     render(renderNode(embedNode()));
-    await waitFor(() => expect(screen.getByTestId("ap-agentlink-embed")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId("ap-agentlink-embed")).toBeInTheDocument(),
+    );
     expect(screen.queryByTestId("ap-chat")).toBeNull();
     expect(window.sessionStorage.getItem(embedKey)).toBeNull();
     // A 404/403 IS the answer to "is it still there" — expected, not an error.
@@ -172,17 +295,24 @@ describe("embed mode", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     window.sessionStorage.setItem(embedKey, embedRef);
     render(renderNode(embedNode()));
-    await waitFor(() => expect(screen.getByTestId("ap-agentlink-embed")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId("ap-agentlink-embed")).toBeInTheDocument(),
+    );
     expect(window.sessionStorage.getItem(embedKey)).toBeNull();
     expect(err).toHaveBeenCalled();
   });
 
   it("embed: a failed start says so and keeps the button", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("nope", { status: 403 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("nope", { status: 403 })),
+    );
     render(renderNode(embedNode()));
     fireEvent.click(screen.getByTestId("ap-agentlink-embed"));
-    await waitFor(() => expect(screen.getByText(/could not start/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/could not start/i)).toBeInTheDocument(),
+    );
     expect(screen.getByTestId("ap-agentlink-embed")).toBeEnabled();
     expect(err).toHaveBeenCalled();
   });
@@ -192,10 +322,26 @@ describe("embed mode", () => {
   // line cannot.
   it("embed: a refused start shows the server's own reason and leaves Start pressable", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "That agent is not available to start a session with." }), { status: 403, headers: { "content-type": "application/json" } })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: "That agent is not available to start a session with.",
+          }),
+          { status: 403, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
     render(renderNode(embedNode()));
     fireEvent.click(screen.getByTestId("ap-agentlink-embed"));
-    await waitFor(() => expect(screen.getByText(/That agent is not available to start a session with\./)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          /That agent is not available to start a session with\./,
+        ),
+      ).toBeInTheDocument(),
+    );
     expect(screen.getByTestId("ap-agentlink-embed")).toBeEnabled();
     expect(err).toHaveBeenCalled();
   });
@@ -207,7 +353,11 @@ describe("embed mode", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     render(renderNode(embedNode()));
     fireEvent.click(screen.getByTestId("ap-agentlink-embed"));
-    await waitFor(() => expect(screen.getByText(/could not confirm whether that session started/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText(/could not confirm whether that session started/i),
+      ).toBeInTheDocument(),
+    );
     expect(screen.getByTestId("ap-agentlink-embed")).toBeDisabled();
     expect(screen.queryByText(/Try again/)).toBeNull();
     expect(err).toHaveBeenCalled();

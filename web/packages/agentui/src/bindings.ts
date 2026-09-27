@@ -43,7 +43,11 @@ export type BindingState =
 // function. A literal spelled out in each language's own test is NOT a pin —
 // sweeping both together leaves both suites green while every binding in the
 // shipped page silently sticks on its declared placeholder.
-export function bindingPath(region: string, nodePath: number[], prop: string): string {
+export function bindingPath(
+  region: string,
+  nodePath: number[],
+  prop: string,
+): string {
   return `${region}/${nodePath.join(".")}#${prop}`;
 }
 
@@ -75,7 +79,10 @@ export function bindingPath(region: string, nodePath: number[], prop: string): s
 // would re-run the same failing source. So a failed control is rendered
 // ALONGSIDE its error, still interactive, with its declared literal props
 // intact — the page keeps a way out.
-export function applyBindings(view: Node, states: Record<string, BindingState>): Node {
+export function applyBindings(
+  view: Node,
+  states: Record<string, BindingState>,
+): Node {
   // Seeding from the view's own root applies the SAME classification the child
   // walk applies to every other node: if the root IS a hook — a legal authored
   // page — everything under it, including a binding on the root node itself, is
@@ -85,7 +92,12 @@ export function applyBindings(view: Node, states: Record<string, BindingState>):
   return applyNode(view, hookNameOf(view) ?? "", [], states);
 }
 
-function applyNode(n: Node, region: string, nodePath: number[], states: Record<string, BindingState>): Node {
+function applyNode(
+  n: Node,
+  region: string,
+  nodePath: number[],
+  states: Record<string, BindingState>,
+): Node {
   // The REGION rule, mirroring uicomponents.regionCursor: a child that is
   // itself a hook OPENS a new region rooted at it, so its own subtree is
   // numbered from zero again; any other child stays in this region, one level
@@ -94,7 +106,12 @@ function applyNode(n: Node, region: string, nodePath: number[], states: Record<s
   // declared placeholder, on a clean 200.
   const children = n.children?.map((child, i) => {
     const childName = hookNameOf(child);
-    return applyNode(child, childName ?? region, childName !== null ? [] : [...nodePath, i], states);
+    return applyNode(
+      child,
+      childName ?? region,
+      childName !== null ? [] : [...nodePath, i],
+      states,
+    );
   });
 
   if (!n.bindings) {
@@ -113,8 +130,12 @@ function applyNode(n: Node, region: string, nodePath: number[], states: Record<s
   let failure: string | null = null;
   let awaiting: string | null = null;
   let working: string | null = null;
-  for (const prop of Object.keys(n.bindings as Record<string, Binding>).sort()) {
-    const state = states[bindingPath(region, nodePath, prop)] ?? { status: "loading" };
+  for (const prop of Object.keys(
+    n.bindings as Record<string, Binding>,
+  ).sort()) {
+    const state = states[bindingPath(region, nodePath, prop)] ?? {
+      status: "loading",
+    };
     if (state.status === "error") {
       if (failure === null) failure = state.message;
       continue;
@@ -143,7 +164,8 @@ function applyNode(n: Node, region: string, nodePath: number[], states: Record<s
     props[prop] = state.value;
   }
 
-  if (failure === null && awaiting === null && working === null) return { ...n, props, children };
+  if (failure === null && awaiting === null && working === null)
+    return { ...n, props, children };
 
   // One stand-in per outcome, all from components already in the vocabulary,
   // so this introduces no new type:
@@ -157,10 +179,19 @@ function applyNode(n: Node, region: string, nodePath: number[], states: Record<s
   // announces nothing at all.
   const stand: Node =
     failure !== null
-      ? { component: "ap:error", props: { title: "Cannot load this section", body: failure } }
+      ? {
+          component: "ap:error",
+          props: { title: "Cannot load this section", body: failure },
+        }
       : working !== null
-        ? { component: "ap:skeleton", props: working === "" ? {} : { label: working } }
-        : { component: "ap:empty", props: { title: "Nothing to show yet", body: awaiting } };
+        ? {
+            component: "ap:skeleton",
+            props: working === "" ? {} : { label: working },
+          }
+        : {
+            component: "ap:empty",
+            props: { title: "Nothing to show yet", body: awaiting },
+          };
   const errorNode: Node = stand;
   // Not a control: the node is only a view of data that failed to arrive, so
   // the card stands in for it entirely.
@@ -169,5 +200,9 @@ function applyNode(n: Node, region: string, nodePath: number[], states: Record<s
   // already in the vocabulary and already renders children, so this introduces
   // no new component type — and the resolved-and-successful props above are
   // still applied to the surviving control.
-  return { component: "ap:stack", props: { gap: "sm" }, children: [{ ...n, props, children }, errorNode] };
+  return {
+    component: "ap:stack",
+    props: { gap: "sm" },
+    children: [{ ...n, props, children }, errorNode],
+  };
 }

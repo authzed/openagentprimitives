@@ -1,4 +1,12 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 // No existing test in this package uses jest-dom matchers, and the project
 // doesn't wire a global setupFile for it (see packages/design's installs.test.tsx).
@@ -17,7 +25,11 @@ import type { Node } from "./types";
 // this; see packages/design's markdown.test.tsx for the same repo pattern.
 afterEach(cleanup);
 
-const node = (component: string, props: Record<string, unknown> = {}, children: Node[] = []): Node => ({
+const node = (
+  component: string,
+  props: Record<string, unknown> = {},
+  children: Node[] = [],
+): Node => ({
   component,
   props,
   children,
@@ -30,7 +42,9 @@ describe("renderNode", () => {
   });
 
   it("renders children of a container component", () => {
-    render(renderNode(node("ap:stack", {}, [node("ap:text", { text: "inner" })])));
+    render(
+      renderNode(node("ap:stack", {}, [node("ap:text", { text: "inner" })])),
+    );
     expect(screen.getByText("inner")).toBeInTheDocument();
   });
 
@@ -40,7 +54,11 @@ describe("renderNode", () => {
   });
 
   it("renders markdown prose as formatted text", () => {
-    render(renderNode(node("ap:markdown", { body: "# Title\n\nsome **bold** text" })));
+    render(
+      renderNode(
+        node("ap:markdown", { body: "# Title\n\nsome **bold** text" }),
+      ),
+    );
     expect(screen.getByRole("heading", { name: "Title" })).toBeInTheDocument();
     expect(screen.getByText("bold")).toBeInTheDocument();
   });
@@ -60,7 +78,15 @@ describe("renderNode", () => {
   });
 
   it("renders an empty-state message when a table has no rows", () => {
-    render(renderNode(node("ap:table", { columns: [{ key: "name" }], rows: [], empty: "no leads yet" })));
+    render(
+      renderNode(
+        node("ap:table", {
+          columns: [{ key: "name" }],
+          rows: [],
+          empty: "no leads yet",
+        }),
+      ),
+    );
     expect(screen.getByText("no leads yet")).toBeInTheDocument();
   });
 
@@ -68,15 +94,25 @@ describe("renderNode", () => {
   // With no title and no description there is no header, and the content sat
   // flush on the card's top border.
   it("pads the top of an untitled card's content, which has no header above it", () => {
-    const { container } = render(renderNode(node("ap:card", {}, [node("ap:text", { text: "flush" })])));
-    const content = (container.firstElementChild as HTMLElement).lastElementChild as HTMLElement;
+    const { container } = render(
+      renderNode(node("ap:card", {}, [node("ap:text", { text: "flush" })])),
+    );
+    const content = (container.firstElementChild as HTMLElement)
+      .lastElementChild as HTMLElement;
     expect(content).toHaveTextContent("flush");
     expect(content.className).toContain("pt-6");
   });
 
   it("leaves a titled card's content alone: its header already holds the top padding", () => {
-    const { container } = render(renderNode(node("ap:card", { title: "Titled" }, [node("ap:text", { text: "under" })])));
-    const content = (container.firstElementChild as HTMLElement).lastElementChild as HTMLElement;
+    const { container } = render(
+      renderNode(
+        node("ap:card", { title: "Titled" }, [
+          node("ap:text", { text: "under" }),
+        ]),
+      ),
+    );
+    const content = (container.firstElementChild as HTMLElement)
+      .lastElementChild as HTMLElement;
     expect(content).toHaveTextContent("under");
     expect(content.className).not.toContain("pt-6");
   });
@@ -95,10 +131,38 @@ describe("renderNode", () => {
 // render, and a page whose regions rendered as "Unknown component" is a page
 // with no agent-written content at all.
 const VOCABULARY = [
-  "ap:agentlink", "ap:alert", "ap:attachment", "ap:badge", "ap:button", "ap:card", "ap:chart", "ap:chat", "ap:collapsible", "ap:daterange",
-  "ap:empty", "ap:error", "ap:form", "ap:grid", "ap:heading", "ap:markdown",
-  "ap:metric", "ap:notice", "ap:progress", "ap:question", "ap:raw_html", "ap:select", "ap:session_view", "ap:skeleton",
-  "ap:stack", "ap:status", "ap:steps", "ap:table", "ap:tabs", "ap:text", "oap:generative", "oap:page",
+  "ap:agentlink",
+  "ap:alert",
+  "ap:attachment",
+  "ap:badge",
+  "ap:button",
+  "ap:card",
+  "ap:chart",
+  "ap:chat",
+  "ap:collapsible",
+  "ap:daterange",
+  "ap:empty",
+  "ap:error",
+  "ap:form",
+  "ap:grid",
+  "ap:heading",
+  "ap:markdown",
+  "ap:metric",
+  "ap:notice",
+  "ap:progress",
+  "ap:question",
+  "ap:raw_html",
+  "ap:select",
+  "ap:session_view",
+  "ap:skeleton",
+  "ap:stack",
+  "ap:status",
+  "ap:steps",
+  "ap:table",
+  "ap:tabs",
+  "ap:text",
+  "oap:generative",
+  "oap:page",
 ];
 
 describe("renderer coverage", () => {
@@ -108,13 +172,18 @@ describe("renderer coverage", () => {
   });
 
   it("registers no renderer for a type the server does not know", () => {
-    const extra = Object.keys(COMPONENTS).filter((t) => !VOCABULARY.includes(t));
+    const extra = Object.keys(COMPONENTS).filter(
+      (t) => !VOCABULARY.includes(t),
+    );
     expect(extra).toEqual([]);
   });
 
   it("renders every vocabulary type without throwing on empty props", () => {
     for (const type of VOCABULARY) {
-      expect(() => render(renderNode({ component: type })), `${type} must render with no props`).not.toThrow();
+      expect(
+        () => render(renderNode({ component: type })),
+        `${type} must render with no props`,
+      ).not.toThrow();
     }
   });
 });
@@ -128,20 +197,37 @@ describe("renderer coverage", () => {
 describe("ap:raw_html security", () => {
   it("never inlines the declared HTML into the DOM, even when it carries a payload", () => {
     const { container } = render(
-      renderNode(node("ap:raw_html", { html: '<img src=x onerror="alert(1)"><b>PWNED</b>' })),
+      renderNode(
+        node("ap:raw_html", {
+          html: '<img src=x onerror="alert(1)"><b>PWNED</b>',
+        }),
+      ),
     );
     expect(container.innerHTML).not.toContain("PWNED");
     expect(container.innerHTML).not.toContain("<img");
-    expect(screen.getByText(/renders once the sandboxed content view is available/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/renders once the sandboxed content view is available/),
+    ).toBeInTheDocument();
   });
 });
 
 describe("behavioral coverage: leaf and container logic", () => {
   it("renders a metric's label, value, and a trend-colored delta", () => {
-    render(renderNode(node("ap:metric", { label: "MRR", value: "$12k", delta: "+4%", trend: "up" })));
+    render(
+      renderNode(
+        node("ap:metric", {
+          label: "MRR",
+          value: "$12k",
+          delta: "+4%",
+          trend: "up",
+        }),
+      ),
+    );
     expect(screen.getByText("MRR")).toBeInTheDocument();
     expect(screen.getByText("$12k")).toBeInTheDocument();
-    expect(screen.getByText("+4%").className).toContain("text-[hsl(var(--success))]");
+    expect(screen.getByText("+4%").className).toContain(
+      "text-[hsl(var(--success))]",
+    );
   });
 
   // ap:metric declares value/delta/caption BINDABLE (pkg/web/uicomponents), and a
@@ -151,12 +237,16 @@ describe("behavioral coverage: leaf and container logic", () => {
   // then silently dropping it: the metric rendered blank, indistinguishable
   // from genuinely empty, with nothing anywhere saying a value had arrived.
   it("renders a numeric bound value rather than dropping it for not being a string", () => {
-    render(renderNode(node("ap:metric", { label: "Companies matched", value: 42 })));
+    render(
+      renderNode(node("ap:metric", { label: "Companies matched", value: 42 })),
+    );
     expect(screen.getByText("42")).toBeInTheDocument();
   });
 
   it("renders a zero, which is the one number most easily mistaken for absent", () => {
-    render(renderNode(node("ap:metric", { label: "Companies matched", value: 0 })));
+    render(
+      renderNode(node("ap:metric", { label: "Companies matched", value: 0 })),
+    );
     expect(screen.getByText("0")).toBeInTheDocument();
   });
 
@@ -165,9 +255,13 @@ describe("behavioral coverage: leaf and container logic", () => {
   // still fall back — the coercion is for scalars a viewer can read, not a
   // license to stringify anything.
   it("still falls back for a value no text slot can honestly display", () => {
-    const { container } = render(renderNode(node("ap:metric", { label: "Broken", value: { a: 1 } })));
+    const { container } = render(
+      renderNode(node("ap:metric", { label: "Broken", value: { a: 1 } })),
+    );
     expect(container.textContent).not.toContain("object Object");
-    const { container: arr } = render(renderNode(node("ap:metric", { label: "Broken", value: [1, 2] })));
+    const { container: arr } = render(
+      renderNode(node("ap:metric", { label: "Broken", value: [1, 2] })),
+    );
     expect(arr.textContent).not.toContain("1,2");
   });
 
@@ -178,7 +272,14 @@ describe("behavioral coverage: leaf and container logic", () => {
 
   it("renders one <option> per declared ap:select option", () => {
     const { container } = render(
-      renderNode(node("ap:select", { options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] })),
+      renderNode(
+        node("ap:select", {
+          options: [
+            { value: "a", label: "Alpha" },
+            { value: "b", label: "Beta" },
+          ],
+        }),
+      ),
     );
     const options = container.querySelectorAll("option");
     expect(options).toHaveLength(2);
@@ -197,7 +298,16 @@ describe("behavioral coverage: leaf and container logic", () => {
   });
 
   it("renders one trigger per declared ap:tabs tab", () => {
-    render(renderNode(node("ap:tabs", { tabs: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] })));
+    render(
+      renderNode(
+        node("ap:tabs", {
+          tabs: [
+            { value: "a", label: "Alpha" },
+            { value: "b", label: "Beta" },
+          ],
+        }),
+      ),
+    );
     expect(screen.getByRole("tab", { name: "Alpha" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Beta" })).toBeInTheDocument();
   });
@@ -234,21 +344,39 @@ describe("a shape-mismatched node fails alone, not the whole tree", () => {
   });
 
   const cases: { name: string; bad: Node }[] = [
-    { name: "ap:table with columns as an object", bad: node("ap:table", { columns: {}, rows: [{ a: 1 }] }) },
-    { name: "ap:chart with series as a string", bad: node("ap:chart", { series: "revenue", data: [{ x: 1 }] }) },
-    { name: "ap:tabs with tabs as a number", bad: node("ap:tabs", { tabs: 3 }) },
+    {
+      name: "ap:table with columns as an object",
+      bad: node("ap:table", { columns: {}, rows: [{ a: 1 }] }),
+    },
+    {
+      name: "ap:chart with series as a string",
+      bad: node("ap:chart", { series: "revenue", data: [{ x: 1 }] }),
+    },
+    {
+      name: "ap:tabs with tabs as a number",
+      bad: node("ap:tabs", { tabs: 3 }),
+    },
     // A null STEP, not a null steps prop: the array is the right shape and one
     // of its elements is not an object. StepsNode is a mounted component, so a
     // throw from inside it would escape this catch entirely and unmount the
     // page — the entry has to refuse the element before React sees it.
-    { name: "ap:steps with a null step in the list", bad: node("ap:steps", { steps: [null, { id: "tools", label: "Tools", state: "active" }] }) },
+    {
+      name: "ap:steps with a null step in the list",
+      bad: node("ap:steps", {
+        steps: [null, { id: "tools", label: "Tools", state: "active" }],
+      }),
+    },
   ];
 
   for (const tc of cases) {
     it(`renders the surrounding siblings when a node is malformed: ${tc.name}`, () => {
       render(
         renderNode(
-          node("ap:stack", {}, [node("ap:text", { text: "before" }), tc.bad, node("ap:text", { text: "after" })]),
+          node("ap:stack", {}, [
+            node("ap:text", { text: "before" }),
+            tc.bad,
+            node("ap:text", { text: "after" }),
+          ]),
         ),
       );
       expect(screen.getByText("before")).toBeInTheDocument();
@@ -282,13 +410,23 @@ describe("render failures are reported to an onError sink, not only drawn", () =
 
   it("reports an unknown component's type", () => {
     const seen: string[] = [];
-    render(renderNode(node("ap:not-a-real-component"), undefined, (c) => seen.push(c)));
+    render(
+      renderNode(node("ap:not-a-real-component"), undefined, (c) =>
+        seen.push(c),
+      ),
+    );
     expect(seen).toEqual(["ap:not-a-real-component"]);
   });
 
   it("reports a known component whose props are the wrong shape", () => {
     const seen: string[] = [];
-    render(renderNode(node("ap:table", { columns: {}, rows: [{ a: 1 }] }), undefined, (c) => seen.push(c)));
+    render(
+      renderNode(
+        node("ap:table", { columns: {}, rows: [{ a: 1 }] }),
+        undefined,
+        (c) => seen.push(c),
+      ),
+    );
     expect(seen).toEqual(["ap:table"]);
   });
 
@@ -299,7 +437,10 @@ describe("render failures are reported to an onError sink, not only drawn", () =
     const seen: string[] = [];
     render(
       renderNode(
-        node("ap:stack", {}, [node("ap:text", { text: "fine" }), node("ap:card", {}, [node("ap:nope")])]),
+        node("ap:stack", {}, [
+          node("ap:text", { text: "fine" }),
+          node("ap:card", {}, [node("ap:nope")]),
+        ]),
         undefined,
         (c) => seen.push(c),
       ),
@@ -309,7 +450,13 @@ describe("render failures are reported to an onError sink, not only drawn", () =
 
   it("reports nothing when every node renders", () => {
     const seen: string[] = [];
-    render(renderNode(node("ap:stack", {}, [node("ap:text", { text: "fine" })]), undefined, (c) => seen.push(c)));
+    render(
+      renderNode(
+        node("ap:stack", {}, [node("ap:text", { text: "fine" })]),
+        undefined,
+        (c) => seen.push(c),
+      ),
+    );
     expect(seen).toEqual([]);
   });
 
@@ -318,7 +465,13 @@ describe("render failures are reported to an onError sink, not only drawn", () =
     // other container gets, so a renderer that rendered them by some other
     // route would report nothing here while the rows above still passed.
     const seen: string[] = [];
-    render(renderNode(node("oap:generative", { name: "region" }, [node("ap:nope")]), undefined, (c) => seen.push(c)));
+    render(
+      renderNode(
+        node("oap:generative", { name: "region" }, [node("ap:nope")]),
+        undefined,
+        (c) => seen.push(c),
+      ),
+    );
     expect(seen).toEqual(["ap:nope"]);
   });
 
@@ -336,13 +489,21 @@ describe("render failures are reported to an onError sink, not only drawn", () =
 // owns everything the region's own state adds on top.
 describe("oap:generative is reached through renderNode", () => {
   it("renders a hook's children, tagged with its name", () => {
-    const { container } = render(renderNode(node("oap:generative", { name: "header" }, [node("ap:text", { text: "hook content" })])));
+    const { container } = render(
+      renderNode(
+        node("oap:generative", { name: "header" }, [
+          node("ap:text", { text: "hook content" }),
+        ]),
+      ),
+    );
     expect(screen.getByText("hook content")).toBeInTheDocument();
     expect(container.querySelector('[data-hook="header"]')).toBeInTheDocument();
   });
 
   it("renders a present-but-empty region when the hook has no children", () => {
-    const { container } = render(renderNode(node("oap:generative", { name: "footer" })));
+    const { container } = render(
+      renderNode(node("oap:generative", { name: "footer" })),
+    );
     const el = container.querySelector('[data-hook="footer"]');
     expect(el).toBeInTheDocument();
     expect(el).toBeEmptyDOMElement();
@@ -358,7 +519,9 @@ describe("oap:generative is reached through renderNode", () => {
 // the ones where "accepted but ignored" is possible.
 describe("every declared vocabulary prop has a visible effect", () => {
   it("gives ap:alert severity=warning a distinct treatment from info and error", () => {
-    render(renderNode(node("ap:alert", { severity: "warning", title: "Heads up" })));
+    render(
+      renderNode(node("ap:alert", { severity: "warning", title: "Heads up" })),
+    );
     const alert = screen.getByRole("alert");
     expect(alert.className).toContain("text-warning");
     expect(alert.className).not.toContain("text-destructive");
@@ -397,20 +560,35 @@ describe("every declared vocabulary prop has a visible effect", () => {
         node("ap:form", {
           action: "describe_agent",
           submitLabel: "Save",
-          fields: [{ name: "description", kind: "textarea", label: "What should it do?" }],
+          fields: [
+            {
+              name: "description",
+              kind: "textarea",
+              label: "What should it do?",
+            },
+          ],
           values: { description: "a haiku on any topic" },
         }),
       ),
     );
-    const ta = screen.getByLabelText("What should it do?") as HTMLTextAreaElement;
+    const ta = screen.getByLabelText(
+      "What should it do?",
+    ) as HTMLTextAreaElement;
     expect(ta.value).toBe("a haiku on any topic");
-    fireEvent.change(ta, { target: { value: "a haiku on any topic, in chat" } });
+    fireEvent.change(ta, {
+      target: { value: "a haiku on any topic, in chat" },
+    });
     expect(ta.value).toBe("a haiku on any topic, in chat");
   });
 
   it("renders ap:select's placeholder as the empty-value option", () => {
     const { container } = render(
-      renderNode(node("ap:select", { placeholder: "Choose one", options: [{ value: "a", label: "Alpha" }] })),
+      renderNode(
+        node("ap:select", {
+          placeholder: "Choose one",
+          options: [{ value: "a", label: "Alpha" }],
+        }),
+      ),
     );
     const options = container.querySelectorAll("option");
     expect(options).toHaveLength(2);
@@ -420,14 +598,19 @@ describe("every declared vocabulary prop has a visible effect", () => {
 
   it("maps ap:stack align=center to an items-center class", () => {
     const { container } = render(
-      renderNode(node("ap:stack", { align: "center" }, [node("ap:text", { text: "x" })])),
+      renderNode(
+        node("ap:stack", { align: "center" }, [node("ap:text", { text: "x" })]),
+      ),
     );
     expect(container.firstElementChild?.className).toContain("items-center");
   });
 
   it("clamps ap:grid columns to the documented 1..12 range", () => {
-    const { container } = render(renderNode(node("ap:grid", { columns: 10000 })));
-    const style = (container.firstElementChild as HTMLElement).style.gridTemplateColumns;
+    const { container } = render(
+      renderNode(node("ap:grid", { columns: 10000 })),
+    );
+    const style = (container.firstElementChild as HTMLElement).style
+      .gridTemplateColumns;
     expect(style).toBe("repeat(12, minmax(0, 1fr))");
   });
 });
@@ -452,9 +635,20 @@ describe("ap:chart kind dispatch", () => {
       unobserve() {}
       disconnect() {}
     }
-    globalThis.ResizeObserver = StubResizeObserver as unknown as typeof ResizeObserver;
+    globalThis.ResizeObserver =
+      StubResizeObserver as unknown as typeof ResizeObserver;
     Element.prototype.getBoundingClientRect = () =>
-      ({ width: 300, height: 200, top: 0, left: 0, bottom: 200, right: 300, x: 0, y: 0, toJSON() {} }) as DOMRect;
+      ({
+        width: 300,
+        height: 200,
+        top: 0,
+        left: 0,
+        bottom: 200,
+        right: 300,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
   });
 
   afterAll(() => {
@@ -467,7 +661,10 @@ describe("ap:chart kind dispatch", () => {
       ...(kind ? { kind } : {}),
       xKey: "x",
       series: [{ key: "y" }],
-      data: [{ x: 1, y: 2 }, { x: 2, y: 3 }],
+      data: [
+        { x: 1, y: 2 },
+        { x: 2, y: 3 },
+      ],
     });
 
   it("renders Recharts' bar layer for kind=bar", () => {
@@ -496,7 +693,11 @@ describe("ap:chart kind dispatch", () => {
 // exists to avoid for unknown types.
 describe("ap:tabs renders every child", () => {
   it("renders children unwrapped when no tabs are declared", () => {
-    render(renderNode(node("ap:tabs", {}, [node("ap:text", { text: "orphaned content" })])));
+    render(
+      renderNode(
+        node("ap:tabs", {}, [node("ap:text", { text: "orphaned content" })]),
+      ),
+    );
     expect(screen.getByText("orphaned content")).toBeInTheDocument();
   });
 
@@ -505,8 +706,18 @@ describe("ap:tabs renders every child", () => {
       renderNode(
         node(
           "ap:tabs",
-          { tabs: [{ value: "a", label: "A" }, { value: "b", label: "B" }], value: "b" },
-          [node("ap:text", { text: "first" }), node("ap:text", { text: "second" }), node("ap:text", { text: "third" })],
+          {
+            tabs: [
+              { value: "a", label: "A" },
+              { value: "b", label: "B" },
+            ],
+            value: "b",
+          },
+          [
+            node("ap:text", { text: "first" }),
+            node("ap:text", { text: "second" }),
+            node("ap:text", { text: "third" }),
+          ],
         ),
       ),
     );
@@ -556,10 +767,22 @@ describe("ap:steps timeline", () => {
   });
 
   it("pins the timeline in a sticky wrapper only when asked", () => {
-    render(renderNode({ component: "ap:steps", props: { pinned: true, steps: [{ label: "Intake", state: "active" }] } }));
-    expect(screen.getByTestId("agent-ui-steps-pinned").className).toContain("sticky");
+    render(
+      renderNode({
+        component: "ap:steps",
+        props: { pinned: true, steps: [{ label: "Intake", state: "active" }] },
+      }),
+    );
+    expect(screen.getByTestId("agent-ui-steps-pinned").className).toContain(
+      "sticky",
+    );
     cleanup();
-    render(renderNode({ component: "ap:steps", props: { steps: [{ label: "Intake", state: "active" }] } }));
+    render(
+      renderNode({
+        component: "ap:steps",
+        props: { steps: [{ label: "Intake", state: "active" }] },
+      }),
+    );
     expect(screen.queryByTestId("agent-ui-steps-pinned")).toBeNull();
   });
 });

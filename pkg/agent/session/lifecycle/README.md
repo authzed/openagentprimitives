@@ -3,16 +3,16 @@
 The session state machine, as a pure function. Events go in, a `State` and a
 list of `Effect`s come out; the caller performs the effects.
 
-| File | Holds |
-| ---- | ----- |
-| [`state.go`](./state.go) | `State`, `Phase`, `Region`, `DecisionKind`, `PendingDecision`. |
-| [`event.go`](./event.go) | The `Event` interface and every event type (`PodReady`, `RunnerClaimed`, `DecisionAsked`, `Revoked`, `Expired`, …). |
-| [`effect.go`](./effect.go) | The `Effect` interface and every effect (`AppendLog`, `ArmTimer`, `Notify`, `ProjectStatus`, …). |
-| [`transition.go`](./transition.go) | `Transition(state, event) → (State, []Effect)` — the single-step rule. |
-| [`fold.go`](./fold.go) | `Fold` / `FoldWithReissue` — replay a log of events into the current state, reissuing effects that must still happen. |
-| [`decision.go`](./decision.go) | Per-decision-kind timeout policy: `FailsClosedOnTimeout`, and the pending-decision add/remove helpers. |
-| [`continuation.go`](./continuation.go) | `Disposition` / `ContinuationDisposition` — what a resumed runner should do next; `IsPolicyHalt`. |
-| [`project.go`](./project.go) | `Project` → `StatusView` / `ConditionView`: state as CRD status conditions. |
+| File                                   | Holds                                                                                                                 |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [`state.go`](./state.go)               | `State`, `Phase`, `Region`, `DecisionKind`, `PendingDecision`.                                                        |
+| [`event.go`](./event.go)               | The `Event` interface and every event type (`PodReady`, `RunnerClaimed`, `DecisionAsked`, `Revoked`, `Expired`, …).   |
+| [`effect.go`](./effect.go)             | The `Effect` interface and every effect (`AppendLog`, `ArmTimer`, `Notify`, `ProjectStatus`, …).                      |
+| [`transition.go`](./transition.go)     | `Transition(state, event) → (State, []Effect)` — the single-step rule.                                                |
+| [`fold.go`](./fold.go)                 | `Fold` / `FoldWithReissue` — replay a log of events into the current state, reissuing effects that must still happen. |
+| [`decision.go`](./decision.go)         | Per-decision-kind timeout policy: `FailsClosedOnTimeout`, and the pending-decision add/remove helpers.                |
+| [`continuation.go`](./continuation.go) | `Disposition` / `ContinuationDisposition` — what a resumed runner should do next; `IsPolicyHalt`.                     |
+| [`project.go`](./project.go)           | `Project` → `StatusView` / `ConditionView`: state as CRD status conditions.                                           |
 
 ## Constraints
 

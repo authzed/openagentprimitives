@@ -12,16 +12,16 @@ The parent is blank-imported by `admind.go`, which is what runs those `init()`s.
 
 Eight slugs cover **thirteen CRD types** — several slugs fold more than one.
 
-| Slug | CRDs | Primary condition → status word |
-| ---- | ---- | ------------------------------- |
-| `agents` | AgentClass | Valid |
-| `tools` | MCPServer, SidecarToolbox, SpiceboxToolkit, SpiceboxToolspec | Reachable / folded Valid+Reachable / Valid / Valid |
-| `skills` | Skill, ClusterSkill | Valid |
-| `sources` | SkillSource, ClusterSkillSource | Ready |
-| `channels` | Channel | Connected |
-| `identities` | AgentIdentity | Valid |
-| `users` | UserIdentity | Valid |
-| `providers` | ClusterIdentityProvider | Valid |
+| Slug         | CRDs                                                         | Primary condition → status word                    |
+| ------------ | ------------------------------------------------------------ | -------------------------------------------------- |
+| `agents`     | AgentClass                                                   | Valid                                              |
+| `tools`      | MCPServer, SidecarToolbox, SpiceboxToolkit, SpiceboxToolspec | Reachable / folded Valid+Reachable / Valid / Valid |
+| `skills`     | Skill, ClusterSkill                                          | Valid                                              |
+| `sources`    | SkillSource, ClusterSkillSource                              | Ready                                              |
+| `channels`   | Channel                                                      | Connected                                          |
+| `identities` | AgentIdentity                                                | Valid                                              |
+| `users`      | UserIdentity                                                 | Valid                                              |
+| `providers`  | ClusterIdentityProvider                                      | Valid                                              |
 
 The same eight slugs have detail projectors: `agentdetail.go` and
 `tooldetail.go` register one each, and `configdetail.go` registers the remaining

@@ -2,7 +2,9 @@
 // and dynamically imports the matching plugin entry (or the system app), pairing
 // each pkg/**/ui/app.json key with its sibling index.tsx.
 const apps = import.meta.glob("../../pkg/**/ui/**/index.tsx");
-const metas = import.meta.glob("../../pkg/**/ui/**/app.json", { eager: true }) as Record<string, { default?: { key?: string }; key?: string }>;
+const metas = import.meta.glob("../../pkg/**/ui/**/app.json", {
+  eager: true,
+}) as Record<string, { default?: { key?: string }; key?: string }>;
 const system = import.meta.glob("../packages/runtime/src/system/index.tsx");
 
 const key = document.getElementById("root")?.dataset.app ?? "";

@@ -11,7 +11,8 @@ import { renderNode } from "./renderNode";
 // querySelector runs — see renderNode.test.tsx for the same repo pattern.
 afterEach(cleanup);
 
-const md = (body: string) => renderNode({ component: "ap:markdown", props: { body } });
+const md = (body: string) =>
+  renderNode({ component: "ap:markdown", props: { body } });
 
 // This suite asserts a guarantee @ap/design's Markdown already provides (see
 // markdown.tsx: rehype-raw is deliberately absent, urlTransform strips
@@ -25,16 +26,22 @@ describe("ap:markdown never renders markup from an agent-authored body", () => {
   it("renders a script tag as inert text, not as a script element", () => {
     const { container } = render(md("<script>window.__pwned = true</script>"));
     expect(container.querySelector("script")).toBeNull();
-    expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
+    expect(
+      (window as unknown as { __pwned?: boolean }).__pwned,
+    ).toBeUndefined();
   });
 
   it("renders an img onerror payload as inert text, not as an element", () => {
-    const { container } = render(md('<img src="x" onerror="window.__pwned = true">'));
+    const { container } = render(
+      md('<img src="x" onerror="window.__pwned = true">'),
+    );
     expect(container.querySelector("img")).toBeNull();
   });
 
   it("strips a javascript: URL from a markdown link", () => {
-    const { container } = render(md("[click me](javascript:window.__pwned=true)"));
+    const { container } = render(
+      md("[click me](javascript:window.__pwned=true)"),
+    );
     const anchor = container.querySelector("a");
     expect(anchor?.getAttribute("href") ?? "").not.toContain("javascript:");
   });

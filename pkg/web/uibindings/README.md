@@ -23,25 +23,25 @@ request body**. `Subject` is the cookie-verified viewer.
 Dispatch goes through [`registry`](registry); **a consumer must never grow a
 source-name switch of its own.** The live set is `registry.Keys()`.
 
-| Package | `Source()` | What it resolves |
-| ------- | ---------- | ---------------- |
-| [`actionstate`](actionstate) | `"action"` | A declared action's current lifecycle **for this viewer**, read out of memory records. A read of a lifecycle — never an invoke. |
-| [`artifactref`](artifactref) | `"artifact"` | An artifact handle (head, `#tag`, or revision) to its rendered bytes, scoped to the viewer's own session. |
-| [`memoryref`](memoryref) | `"memory"` | A read-only memory query for the kind named in `Ref`, always scoped to the session from the URL path. |
-| [`tool`](tool) | `"tool"` | A wire adapter turning the binding into an app-tool call answered over NATS by the runner. All authorization lives there, not here. |
+| Package                      | `Source()`   | What it resolves                                                                                                                    |
+| ---------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| [`actionstate`](actionstate) | `"action"`   | A declared action's current lifecycle **for this viewer**, read out of memory records. A read of a lifecycle — never an invoke.     |
+| [`artifactref`](artifactref) | `"artifact"` | An artifact handle (head, `#tag`, or revision) to its rendered bytes, scoped to the viewer's own session.                           |
+| [`memoryref`](memoryref)     | `"memory"`   | A read-only memory query for the kind named in `Ref`, always scoped to the session from the URL path.                               |
+| [`tool`](tool)               | `"tool"`     | A wire adapter turning the binding into an app-tool call answered over NATS by the runner. All authorization lives there, not here. |
 
 Each subpackage is the same three lines: a `source` const, a `New()`, and
 `func init() { registry.Register(New()) }`. Registration panics on an empty or
 duplicate key.
 
 **`internal/cmd/webd` is the only binary that uses these**, and it blank-imports
-all four. Forgetting one is the silent-404 class of bug — the handler logs
-"no resolver registered for source" rather than ever reaching a switch.
+all four. Forgetting one is the silent-404 class of bug — the handler logs "no
+resolver registered for source" rather than ever reaching a switch.
 
 ## Writes are never a data binding
 
 This is the property the whole layer exists to hold, and it is enforced by
-*shape*: an action is top-level in a declaration and can never appear in a
+_shape_: an action is top-level in a declaration and can never appear in a
 node's bindings. `actionstate` reinforces it at call time by refusing any
 binding with non-empty `Args`.
 
@@ -64,11 +64,11 @@ silently disables it.
 
 ## `Deps` has three different nil-check shapes, deliberately
 
-| Accessor | Returns | Nil check |
-| -------- | ------- | --------- |
-| `Memory()` | an **interface** | A typed-nil `*memory.Local` assigned into it makes `!= nil` report **true**, the fail-closed check passes, and the resolver panics on first call. **Declare the variable as the interface and assign only once a real value exists.** |
-| `Artifacts()` | a concrete pointer | Nil means what it says. |
-| `NATSRequest()`, `ArtifactRenderBytes()` | func types | No interface wrapper for a typed-nil to hide behind. |
+| Accessor                                 | Returns            | Nil check                                                                                                                                                                                                                             |
+| ---------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Memory()`                               | an **interface**   | A typed-nil `*memory.Local` assigned into it makes `!= nil` report **true**, the fail-closed check passes, and the resolver panics on first call. **Declare the variable as the interface and assign only once a real value exists.** |
+| `Artifacts()`                            | a concrete pointer | Nil means what it says.                                                                                                                                                                                                               |
+| `NATSRequest()`, `ArtifactRenderBytes()` | func types         | No interface wrapper for a typed-nil to hide behind.                                                                                                                                                                                  |
 
 `ArtifactRenderBytesFunc` sits on `Deps` rather than being resolver-constructed
 because the bytes live behind an operator route only `webd` holds a token for,

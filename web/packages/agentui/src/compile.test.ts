@@ -49,13 +49,19 @@ describe("compilePage", () => {
           component: "oap:generative",
           props: {
             name: "phase",
-            intent: "The stage timeline. Advance the active step as you progress.",
+            intent:
+              "The stage timeline. Advance the active step as you progress.",
             allowedComponents: ["ap:steps"],
           },
           children: [
             {
               component: "ap:steps",
-              props: { steps: [{ label: "Intake", state: "active" }, { label: "Tools", state: "upcoming" }] },
+              props: {
+                steps: [
+                  { label: "Intake", state: "active" },
+                  { label: "Tools", state: "upcoming" },
+                ],
+              },
             },
           ],
         },
@@ -65,7 +71,11 @@ describe("compilePage", () => {
           children: [
             {
               component: "oap:generative",
-              props: { name: "brief", intent: "The running summary.", allowedComponents: ["*"] },
+              props: {
+                name: "brief",
+                intent: "The running summary.",
+                allowedComponents: ["*"],
+              },
             },
           ],
         },
@@ -81,13 +91,22 @@ describe("compilePage", () => {
               component: "ap:card",
               props: { title: "Describe the agent you want to build" },
               children: [
-                { component: "ap:markdown", props: { body: "Tell me what this agent should do." } },
+                {
+                  component: "ap:markdown",
+                  props: { body: "Tell me what this agent should do." },
+                },
                 {
                   component: "ap:form",
                   props: {
                     action: "describe_agent",
                     submitLabel: "Start building",
-                    fields: [{ name: "description", kind: "textarea", label: "What should this agent do?" }],
+                    fields: [
+                      {
+                        name: "description",
+                        kind: "textarea",
+                        label: "What should this agent do?",
+                      },
+                    ],
                   },
                 },
               ],
@@ -107,7 +126,9 @@ describe("compilePage", () => {
     expect(node).toEqual({
       component: "oap:page",
       props: { layout: "rail" },
-      children: [{ component: "ap:heading", props: { text: "Agent Builder", level: 2 } }],
+      children: [
+        { component: "ap:heading", props: { text: "Agent Builder", level: 2 } },
+      ],
     });
   });
 
@@ -129,24 +150,32 @@ describe("compilePage", () => {
         obj: { quoted: [true], plain: null },
       },
     });
-    expect(compilePage(`export default <ap:empty />;`)).toEqual({ component: "ap:empty" });
-    expect(compilePage(`export default (<ap:stack></ap:stack>);`)).toEqual({ component: "ap:stack" });
+    expect(compilePage(`export default <ap:empty />;`)).toEqual({
+      component: "ap:empty",
+    });
+    expect(compilePage(`export default (<ap:stack></ap:stack>);`)).toEqual({
+      component: "ap:stack",
+    });
   });
 
   it("does not mistake an Object.prototype member name for an already-seen attribute", () => {
     // toEqual on an object with an own `toString` string property is fine —
     // it compares own enumerable properties, not the prototype chain.
-    expect(compilePage(`export default <ap:x toString="hi" constructor={1} />;`)).toEqual({
+    expect(
+      compilePage(`export default <ap:x toString="hi" constructor={1} />;`),
+    ).toEqual({
       component: "ap:x",
       props: { toString: "hi", constructor: 1 },
     });
   });
 
   it("keeps a plain string attribute verbatim, entities included", () => {
-    expect(compilePage(`export default <ap:text text="a &amp; b" />;`)).toEqual({
-      component: "ap:text",
-      props: { text: "a &amp; b" },
-    });
+    expect(compilePage(`export default <ap:text text="a &amp; b" />;`)).toEqual(
+      {
+        component: "ap:text",
+        props: { text: "a &amp; b" },
+      },
+    );
     expect(compilePage(`export default <ap:text text={"a & b"} />;`)).toEqual({
       component: "ap:text",
       props: { text: "a & b" },
@@ -161,15 +190,24 @@ describe("compilePage", () => {
     ).toEqual({
       component: "ap:table",
       props: { columns: ["name"] },
-      bindings: { rows: { source: "tool", ref: "crm_list", args: { limit: 5 }, select: "results[]" } },
+      bindings: {
+        rows: {
+          source: "tool",
+          ref: "crm_list",
+          args: { limit: 5 },
+          select: "results[]",
+        },
+      },
     });
   });
 
   it("treats an empty bindings object as absent, the same as empty props", () => {
-    expect(compilePage(`export default <ap:x a="1" bindings={{}} />;`)).toEqual({
-      component: "ap:x",
-      props: { a: "1" },
-    });
+    expect(compilePage(`export default <ap:x a="1" bindings={{}} />;`)).toEqual(
+      {
+        component: "ap:x",
+        props: { a: "1" },
+      },
+    );
   });
 
   it("ignores comments, including the printer's markers", () => {
@@ -180,55 +218,174 @@ describe("compilePage", () => {
         <ap:text text="t" />
       </oap:generative>
     );`);
-    expect(node.children).toEqual([{ component: "ap:text", props: { text: "t" } }]);
-    expect(compilePage(`export default (<ap:x>{/* empty */}</ap:x>);`)).toEqual({ component: "ap:x" });
+    expect(node.children).toEqual([
+      { component: "ap:text", props: { text: "t" } },
+    ]);
+    expect(compilePage(`export default (<ap:x>{/* empty */}</ap:x>);`)).toEqual(
+      { component: "ap:x" },
+    );
   });
 
   const refusals: [string, string, RegExp][] = [
-    ["an identifier", `export default <ap:x a={foo} />;`, /`foo` is an identifier, not a literal/],
-    ["undefined", `export default <ap:x a={undefined} />;`, /`undefined` is an identifier, not a literal/],
-    ["a shorthand object property", `export default <ap:x a={{ label }} />;`, /`label` is an identifier, not a literal/],
-    ["a call (a hook)", `export default <ap:x a={useState(0)} />;`, /call expressions are not allowed \(`useState`\)/],
-    ["member access", `export default <ap:x a={config.title} />;`, /member expressions are not allowed/],
-    ["a template literal", "export default <ap:x a={`t`} />;", /template literals are not allowed/],
-    ["a conditional", `export default <ap:x a={true ? 1 : 2} />;`, /conditionals are not allowed/],
-    ["a function", `export default <ap:x a={() => 1} />;`, /functions are not allowed/],
-    ["a spread attribute", `export default <ap:x {...props} />;`, /spread attributes are not allowed/],
-    ["an array spread", `export default <ap:x a={[...rows]} />;`, /spreads are not allowed/],
-    ["an object spread", `export default <ap:x a={{ ...base }} />;`, /spreads are not allowed/],
-    ["a computed key", `export default <ap:x a={{ [k]: 1 }} />;`, /computed keys are not allowed/],
-    ["a __proto__ key", `export default <ap:x a={{ __proto__: { b: 1 } }} />;`, /`__proto__` is not allowed as a key/],
-    ["a __proto__ attribute", `export default <ap:x __proto__="1" />;`, /`__proto__` is not allowed as an attribute name/],
-    ["an import", `import React from "react";\nexport default <ap:x />;`, /imports are not allowed/],
-    ["a second top-level statement", `const t = 1;\nexport default <ap:x />;`, /only `export default <element>` is allowed at the top level/],
-    ["no default export", `const page = <ap:x />;`, /only `export default <element>` is allowed at the top level/],
-    ["a non-element default export", `export default 1;`, /the default export must be a single element/],
-    ["a fragment", `export default <><ap:x /></>;`, /fragments are not allowed/],
-    ["a tag outside the vocabulary's namespaces", `export default <div />;`, /`div` is not a platform element/],
-    ["a React-style component tag", `export default <Card />;`, /`Card` is not a platform element/],
-    ["a member-expression tag", `export default <Foo.Bar />;`, /`Foo\.Bar` is not a platform element/],
-    ["type arguments", `export default <ap:x<string> />;`, /type arguments are not allowed/],
-    ["a text child", `export default <ap:card>hello</ap:card>;`, /text children are not supported/],
-    ["an expression child", `export default <ap:card>{title}</ap:card>;`, /expression children are not allowed/],
-    ["a spread child", `export default <ap:card>{...items}</ap:card>;`, /spread children are not allowed/],
-    ["a duplicate attribute", `export default <ap:x a="1" a="2" />;`, /attribute `a` is given twice/],
-    ["bindings that are not an object literal", `export default <ap:x bindings="rows" />;`, /`bindings` must be an object literal/],
+    [
+      "an identifier",
+      `export default <ap:x a={foo} />;`,
+      /`foo` is an identifier, not a literal/,
+    ],
+    [
+      "undefined",
+      `export default <ap:x a={undefined} />;`,
+      /`undefined` is an identifier, not a literal/,
+    ],
+    [
+      "a shorthand object property",
+      `export default <ap:x a={{ label }} />;`,
+      /`label` is an identifier, not a literal/,
+    ],
+    [
+      "a call (a hook)",
+      `export default <ap:x a={useState(0)} />;`,
+      /call expressions are not allowed \(`useState`\)/,
+    ],
+    [
+      "member access",
+      `export default <ap:x a={config.title} />;`,
+      /member expressions are not allowed/,
+    ],
+    [
+      "a template literal",
+      "export default <ap:x a={`t`} />;",
+      /template literals are not allowed/,
+    ],
+    [
+      "a conditional",
+      `export default <ap:x a={true ? 1 : 2} />;`,
+      /conditionals are not allowed/,
+    ],
+    [
+      "a function",
+      `export default <ap:x a={() => 1} />;`,
+      /functions are not allowed/,
+    ],
+    [
+      "a spread attribute",
+      `export default <ap:x {...props} />;`,
+      /spread attributes are not allowed/,
+    ],
+    [
+      "an array spread",
+      `export default <ap:x a={[...rows]} />;`,
+      /spreads are not allowed/,
+    ],
+    [
+      "an object spread",
+      `export default <ap:x a={{ ...base }} />;`,
+      /spreads are not allowed/,
+    ],
+    [
+      "a computed key",
+      `export default <ap:x a={{ [k]: 1 }} />;`,
+      /computed keys are not allowed/,
+    ],
+    [
+      "a __proto__ key",
+      `export default <ap:x a={{ __proto__: { b: 1 } }} />;`,
+      /`__proto__` is not allowed as a key/,
+    ],
+    [
+      "a __proto__ attribute",
+      `export default <ap:x __proto__="1" />;`,
+      /`__proto__` is not allowed as an attribute name/,
+    ],
+    [
+      "an import",
+      `import React from "react";\nexport default <ap:x />;`,
+      /imports are not allowed/,
+    ],
+    [
+      "a second top-level statement",
+      `const t = 1;\nexport default <ap:x />;`,
+      /only `export default <element>` is allowed at the top level/,
+    ],
+    [
+      "no default export",
+      `const page = <ap:x />;`,
+      /only `export default <element>` is allowed at the top level/,
+    ],
+    [
+      "a non-element default export",
+      `export default 1;`,
+      /the default export must be a single element/,
+    ],
+    [
+      "a fragment",
+      `export default <><ap:x /></>;`,
+      /fragments are not allowed/,
+    ],
+    [
+      "a tag outside the vocabulary's namespaces",
+      `export default <div />;`,
+      /`div` is not a platform element/,
+    ],
+    [
+      "a React-style component tag",
+      `export default <Card />;`,
+      /`Card` is not a platform element/,
+    ],
+    [
+      "a member-expression tag",
+      `export default <Foo.Bar />;`,
+      /`Foo\.Bar` is not a platform element/,
+    ],
+    [
+      "type arguments",
+      `export default <ap:x<string> />;`,
+      /type arguments are not allowed/,
+    ],
+    [
+      "a text child",
+      `export default <ap:card>hello</ap:card>;`,
+      /text children are not supported/,
+    ],
+    [
+      "an expression child",
+      `export default <ap:card>{title}</ap:card>;`,
+      /expression children are not allowed/,
+    ],
+    [
+      "a spread child",
+      `export default <ap:card>{...items}</ap:card>;`,
+      /spread children are not allowed/,
+    ],
+    [
+      "a duplicate attribute",
+      `export default <ap:x a="1" a="2" />;`,
+      /attribute `a` is given twice/,
+    ],
+    [
+      "bindings that are not an object literal",
+      `export default <ap:x bindings="rows" />;`,
+      /`bindings` must be an object literal/,
+    ],
     ["a syntax error", `export default <ap:x>;`, /./],
   ];
-  it.each(refusals)("refuses %s by name, with a position", (_name, src, want) => {
-    let err: unknown;
-    try {
-      compilePage(src, "page.tsx");
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(CompileError);
-    const ce = err as CompileError;
-    expect(ce.message).toMatch(want);
-    expect(ce.message).toMatch(/^\d+:\d+: /);
-    expect(ce.line).toBeGreaterThan(0);
-    expect(ce.column).toBeGreaterThan(0);
-  });
+  it.each(refusals)(
+    "refuses %s by name, with a position",
+    (_name, src, want) => {
+      let err: unknown;
+      try {
+        compilePage(src, "page.tsx");
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(CompileError);
+      const ce = err as CompileError;
+      expect(ce.message).toMatch(want);
+      expect(ce.message).toMatch(/^\d+:\d+: /);
+      expect(ce.line).toBeGreaterThan(0);
+      expect(ce.column).toBeGreaterThan(0);
+    },
+  );
 
   it("reports the position of the offending construct, not the file start", () => {
     const src = `export default (\n  <ap:stack>\n    <ap:x a={foo} />\n  </ap:stack>\n);`;

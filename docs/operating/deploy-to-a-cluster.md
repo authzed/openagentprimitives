@@ -13,9 +13,9 @@ from a browser on a real cluster with TLS.
 
 webd uses a **two-origin model**:
 
-| Origin | Purpose |
-|--------|---------|
-| **Trusted** (`--trusted-hostname`) | Auth callbacks, the portal UI, sensitive browser state |
+| Origin                             | Purpose                                                 |
+| ---------------------------------- | ------------------------------------------------------- |
+| **Trusted** (`--trusted-hostname`) | Auth callbacks, the portal UI, sensitive browser state  |
 | **Sandbox** (`--sandbox-hostname`) | Untrusted artifact-viewer content rendered in an iframe |
 
 The two hostnames **must be different** (e.g. `webd.example.com` and
@@ -57,8 +57,8 @@ scheme, port, or path. For example, `webd.example.com` not
 
 2. **GatewayClass resolution**
 
-   - **GKE**: uses the built-in GKE managed Gateway controller; no controller
-     is installed.
+   - **GKE**: uses the built-in GKE managed Gateway controller; no controller is
+     installed.
    - **EKS / AKS / bare**: `oap` offers to install
      [Envoy Gateway](https://gateway.envoyproxy.io/) (a maintained Gateway API
      implementation) and then creates an `eg` GatewayClass. See
@@ -71,8 +71,8 @@ scheme, port, or path. For example, `webd.example.com` not
    ClusterIssuer using `--acme-email`.
 
 5. **Gateway and HTTPRoutes** — `oap` synthesizes:
-   - A `Gateway` resource with one HTTPS listener per hostname and one HTTP `:80`
-     listener for the ACME challenge.
+   - A `Gateway` resource with one HTTPS listener per hostname and one HTTP
+     `:80` listener for the ACME challenge.
    - One `HTTPRoute` per hostname routing to the webd Service.
 
 6. **Wait for load-balancer address** — `oap` watches the Gateway until the
@@ -98,8 +98,8 @@ Install cert-manager? [y/N]
 - **CI / non-interactive runs**: pass `--assume-yes` (or `-y`) to accept all
   prompts automatically.
 - **Declining**: `oap` prints the exact `kubectl apply -f <pinned-url>` command
-  to run manually. Install the component, then re-run `oap install` — it
-  skips steps that are already satisfied.
+  to run manually. Install the component, then re-run `oap install` — it skips
+  steps that are already satisfied.
 
 ---
 
@@ -146,10 +146,10 @@ oap install \
 ### `--manual-webd-routing`
 
 Skip all Gateway / HTTPRoute / TLS setup. Use this when you bring your own
-Gateway or Ingress, run webd internal-only, or use a Slack-only deployment
-where browser access is not required. Running `oap install` on a non-local
-cluster **without** either `--trusted-hostname` or `--manual-webd-routing` is
-an error — `oap` will not leave webd silently unreachable.
+Gateway or Ingress, run webd internal-only, or use a Slack-only deployment where
+browser access is not required. Running `oap install` on a non-local cluster
+**without** either `--trusted-hostname` or `--manual-webd-routing` is an error —
+`oap` will not leave webd silently unreachable.
 
 ```bash
 oap install --manual-webd-routing
@@ -170,9 +170,8 @@ oap install \
 
 ### `--tls-issuer=<name>`
 
-Use an existing cert-manager ClusterIssuer instead of creating the Let's
-Encrypt one. Skips `--acme-email` (it is not used when a ClusterIssuer is
-supplied).
+Use an existing cert-manager ClusterIssuer instead of creating the Let's Encrypt
+one. Skips `--acme-email` (it is not used when a ClusterIssuer is supplied).
 
 ```bash
 oap install \
@@ -185,16 +184,16 @@ oap install \
 
 ## Per-cloud notes
 
-| Cloud | Gateway controller | TLS |
-|-------|--------------------|-----|
-| **GKE** | Built-in GKE managed Gateway — no install step | cert-manager + Let's Encrypt HTTP-01 |
-| **EKS** | `oap` offers to install Envoy Gateway (`eg` GatewayClass) | cert-manager + Let's Encrypt HTTP-01 |
-| **AKS** | `oap` offers to install Envoy Gateway (`eg` GatewayClass) | cert-manager + Let's Encrypt HTTP-01 |
+| Cloud          | Gateway controller                                        | TLS                                  |
+| -------------- | --------------------------------------------------------- | ------------------------------------ |
+| **GKE**        | Built-in GKE managed Gateway — no install step            | cert-manager + Let's Encrypt HTTP-01 |
+| **EKS**        | `oap` offers to install Envoy Gateway (`eg` GatewayClass) | cert-manager + Let's Encrypt HTTP-01 |
+| **AKS**        | `oap` offers to install Envoy Gateway (`eg` GatewayClass) | cert-manager + Let's Encrypt HTTP-01 |
 | **Bare metal** | `oap` offers to install Envoy Gateway (`eg` GatewayClass) | cert-manager + Let's Encrypt HTTP-01 |
 
-TLS uses Let's Encrypt HTTP-01 on all clouds — no cloud-provider credentials
-are needed for certificate issuance. The only requirement is that the
-load-balancer be internet-reachable on port 80 and that DNS be pointed at it.
+TLS uses Let's Encrypt HTTP-01 on all clouds — no cloud-provider credentials are
+needed for certificate issuance. The only requirement is that the load-balancer
+be internet-reachable on port 80 and that DNS be pointed at it.
 
 ---
 
@@ -206,10 +205,11 @@ the Gateway path described in this guide.
 
 If you run the cluster install path against kind:
 
-- You need [`cloud-provider-kind`](https://github.com/kubernetes-sigs/cloud-provider-kind)
+- You need
+  [`cloud-provider-kind`](https://github.com/kubernetes-sigs/cloud-provider-kind)
   to obtain a load-balancer address.
-- Let's Encrypt cannot validate a non-public host, so TLS via the
-  HTTP-01 challenge will not work. Use `oap init --local` for local TLS.
+- Let's Encrypt cannot validate a non-public host, so TLS via the HTTP-01
+  challenge will not work. Use `oap init --local` for local TLS.
 
 ---
 
@@ -233,7 +233,7 @@ Check that certificates have been issued:
 kubectl get certificate -n agentprimitives-system
 ```
 
-The `READY` column should show `True` for each certificate once DNS resolves
-and the HTTP-01 challenge completes.
+The `READY` column should show `True` for each certificate once DNS resolves and
+the HTTP-01 challenge completes.
 
 Finally, browse to `https://webd.example.com` and confirm the portal loads.

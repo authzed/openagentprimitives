@@ -37,7 +37,10 @@ export const PARAM_SPECS: Record<string, ParamSpec> = {
   "ap:select": { prop: "param", values: [{ valueProp: "value" }] },
   "ap:daterange": {
     prop: "param",
-    values: [{ suffix: "from", valueProp: "from" }, { suffix: "to", valueProp: "to" }],
+    values: [
+      { suffix: "from", valueProp: "from" },
+      { suffix: "to", valueProp: "to" },
+    ],
   },
 };
 
@@ -52,7 +55,9 @@ export function paramKey(name: string, suffix?: string): string {
 // above. Returns null for a node whose component drives no parameter, or whose
 // param prop is absent, empty, or not a string — the same three rejections
 // pkg/web/uicomponents' declaredParam makes.
-export function declaredParam(n: Node): { name: string; spec: ParamSpec } | null {
+export function declaredParam(
+  n: Node,
+): { name: string; spec: ParamSpec } | null {
   const spec = PARAM_SPECS[n.component];
   if (!spec) return null;
   const name = (n.props ?? {})[spec.prop];

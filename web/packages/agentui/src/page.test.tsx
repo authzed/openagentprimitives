@@ -1,5 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { EMPTY_HOOK_STATE, HookStateProvider, type HookState } from "./hooks";
 import { renderNode } from "./renderNode";
@@ -7,28 +13,55 @@ import type { Node } from "./types";
 
 afterEach(cleanup);
 
-function node(component: string, props?: Record<string, unknown>, children?: Node[]): Node {
-  return { component, ...(props ? { props } : {}), ...(children ? { children } : {}) };
+function node(
+  component: string,
+  props?: Record<string, unknown>,
+  children?: Node[],
+): Node {
+  return {
+    component,
+    ...(props ? { props } : {}),
+    ...(children ? { children } : {}),
+  };
 }
 
-const timeline = node("oap:generative", { name: "phase", allowedComponents: ["ap:steps"] }, [
-  node("ap:steps", {
-    pinned: true,
-    steps: [
-      { id: "assess", label: "Intake", state: "done", summary: "demo-haiku · a haiku on any topic" },
-      { id: "tools", label: "Tools", state: "active", summary: "none" },
-      { id: "deliver", label: "Deliver", state: "upcoming" },
-    ],
-  }),
-]);
+const timeline = node(
+  "oap:generative",
+  { name: "phase", allowedComponents: ["ap:steps"] },
+  [
+    node("ap:steps", {
+      pinned: true,
+      steps: [
+        {
+          id: "assess",
+          label: "Intake",
+          state: "done",
+          summary: "demo-haiku · a haiku on any topic",
+        },
+        { id: "tools", label: "Tools", state: "active", summary: "none" },
+        { id: "deliver", label: "Deliver", state: "upcoming" },
+      ],
+    }),
+  ],
+);
 
 function railPage(): Node {
   return node("oap:page", { layout: "rail" }, [
     node("ap:heading", { text: "Agent Builder", level: 2 }),
     timeline,
-    node("oap:generative", { name: "questions", allowedComponents: ["*"] }, [node("ap:markdown", { body: "always shown" })]),
-    node("oap:generative", { name: "agent", step: "assess", allowedComponents: ["*"] }, [node("ap:markdown", { body: "the agent panel" })]),
-    node("oap:generative", { name: "tools", step: "tools", allowedComponents: ["*"] }, [node("ap:markdown", { body: "tools panel" })]),
+    node("oap:generative", { name: "questions", allowedComponents: ["*"] }, [
+      node("ap:markdown", { body: "always shown" }),
+    ]),
+    node(
+      "oap:generative",
+      { name: "agent", step: "assess", allowedComponents: ["*"] },
+      [node("ap:markdown", { body: "the agent panel" })],
+    ),
+    node(
+      "oap:generative",
+      { name: "tools", step: "tools", allowedComponents: ["*"] },
+      [node("ap:markdown", { body: "tools panel" })],
+    ),
   ]);
 }
 
@@ -42,18 +75,39 @@ function steppedPage(active: string, summary?: string): Node {
     node("oap:generative", { name: "phase", allowedComponents: ["ap:steps"] }, [
       node("ap:steps", {
         steps: [
-          { id: "tools", label: "Tools", state: active === "tools" ? "active" : "done", ...(summary ? { summary } : {}) },
-          { id: "permissions", label: "Permissions", state: active === "permissions" ? "active" : "upcoming" },
+          {
+            id: "tools",
+            label: "Tools",
+            state: active === "tools" ? "active" : "done",
+            ...(summary ? { summary } : {}),
+          },
+          {
+            id: "permissions",
+            label: "Permissions",
+            state: active === "permissions" ? "active" : "upcoming",
+          },
         ],
       }),
     ]),
-    node("oap:generative", { name: "tools", step: "tools", allowedComponents: ["*"] }, [node("ap:markdown", { body: "tools panel" })]),
-    node("oap:generative", { name: "permissions", step: "permissions", allowedComponents: ["*"] }, [node("ap:markdown", { body: "permissions panel" })]),
+    node(
+      "oap:generative",
+      { name: "tools", step: "tools", allowedComponents: ["*"] },
+      [node("ap:markdown", { body: "tools panel" })],
+    ),
+    node(
+      "oap:generative",
+      { name: "permissions", step: "permissions", allowedComponents: ["*"] },
+      [node("ap:markdown", { body: "permissions panel" })],
+    ),
   ]);
 }
 
 function pageTree(n: Node, partial: Partial<HookState> = {}) {
-  return <HookStateProvider value={{ ...EMPTY_HOOK_STATE, ...partial }}>{renderNode(n)}</HookStateProvider>;
+  return (
+    <HookStateProvider value={{ ...EMPTY_HOOK_STATE, ...partial }}>
+      {renderNode(n)}
+    </HookStateProvider>
+  );
 }
 
 function renderPage(n: Node, partial: Partial<HookState> = {}) {
@@ -63,7 +117,9 @@ function renderPage(n: Node, partial: Partial<HookState> = {}) {
 // The rail step whose data-step-id is `id`, and the click that selects it —
 // the same route a person takes, rather than reaching into the page's state.
 function railStep(id: string): HTMLElement {
-  const li = screen.getAllByTestId("agent-ui-rail-step").find((el) => el.getAttribute("data-step-id") === id);
+  const li = screen
+    .getAllByTestId("agent-ui-rail-step")
+    .find((el) => el.getAttribute("data-step-id") === id);
   if (!li) throw new Error(`no rail step with data-step-id="${id}"`);
   return li;
 }
@@ -114,30 +170,68 @@ describe("oap:page layout=rail", () => {
     // leave a screen-reader user who clicked back with no way to hear the
     // first.
     renderPage(railPage());
-    expect(within(railStep("tools")).getByRole("button")).toHaveAttribute("aria-current", "step");
-    expect(within(railStep("tools")).getByRole("button")).toHaveAttribute("aria-pressed", "true");
+    expect(within(railStep("tools")).getByRole("button")).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    expect(within(railStep("tools")).getByRole("button")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     selectStep("assess");
-    expect(within(railStep("tools")).getByRole("button")).toHaveAttribute("aria-current", "step");
-    expect(within(railStep("assess")).getByRole("button")).not.toHaveAttribute("aria-current");
-    expect(within(railStep("assess")).getByRole("button")).toHaveAttribute("aria-pressed", "true");
-    expect(within(railStep("tools")).getByRole("button")).toHaveAttribute("aria-pressed", "false");
+    expect(within(railStep("tools")).getByRole("button")).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
+    expect(within(railStep("assess")).getByRole("button")).not.toHaveAttribute(
+      "aria-current",
+    );
+    expect(within(railStep("assess")).getByRole("button")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(railStep("tools")).getByRole("button")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("names the rail itself, so its steps are not an unlabelled list", () => {
     renderPage(railPage());
-    expect(within(screen.getByTestId("agent-ui-page-rail")).getByRole("list")).toHaveAttribute("aria-label", "Steps");
+    expect(
+      within(screen.getByTestId("agent-ui-page-rail")).getByRole("list"),
+    ).toHaveAttribute("aria-label", "Steps");
   });
 
   it("with no active step, shows the last finished step's hooks instead of nothing", () => {
     const allDone = node("oap:page", { layout: "rail" }, [
-      node("oap:generative", { name: "phase", allowedComponents: ["ap:steps"] }, [
-        node("ap:steps", { steps: [
-          { id: "assess", label: "Intake", state: "done" },
-          { id: "deliver", label: "Deliver", state: "done", summary: "draft saved" },
-        ] }),
-      ]),
-      node("oap:generative", { name: "agent", step: "assess", allowedComponents: ["*"] }, [node("ap:markdown", { body: "the agent panel" })]),
-      node("oap:generative", { name: "deliver", step: "deliver", allowedComponents: ["*"] }, [node("ap:markdown", { body: "the outcome" })]),
+      node(
+        "oap:generative",
+        { name: "phase", allowedComponents: ["ap:steps"] },
+        [
+          node("ap:steps", {
+            steps: [
+              { id: "assess", label: "Intake", state: "done" },
+              {
+                id: "deliver",
+                label: "Deliver",
+                state: "done",
+                summary: "draft saved",
+              },
+            ],
+          }),
+        ],
+      ),
+      node(
+        "oap:generative",
+        { name: "agent", step: "assess", allowedComponents: ["*"] },
+        [node("ap:markdown", { body: "the agent panel" })],
+      ),
+      node(
+        "oap:generative",
+        { name: "deliver", step: "deliver", allowedComponents: ["*"] },
+        [node("ap:markdown", { body: "the outcome" })],
+      ),
     ]);
     renderPage(allDone);
     const stage = screen.getByTestId("agent-ui-page-stage");
@@ -148,14 +242,28 @@ describe("oap:page layout=rail", () => {
 
   it("with every step upcoming, stages the first step's hook rather than an empty stage", () => {
     const untouched = node("oap:page", { layout: "rail" }, [
-      node("oap:generative", { name: "phase", allowedComponents: ["ap:steps"] }, [
-        node("ap:steps", { steps: [
-          { id: "assess", label: "Intake", state: "upcoming" },
-          { id: "deliver", label: "Deliver", state: "upcoming" },
-        ] }),
-      ]),
-      node("oap:generative", { name: "agent", step: "assess", allowedComponents: ["*"] }, [node("ap:markdown", { body: "the agent panel" })]),
-      node("oap:generative", { name: "deliver", step: "deliver", allowedComponents: ["*"] }, [node("ap:markdown", { body: "the outcome" })]),
+      node(
+        "oap:generative",
+        { name: "phase", allowedComponents: ["ap:steps"] },
+        [
+          node("ap:steps", {
+            steps: [
+              { id: "assess", label: "Intake", state: "upcoming" },
+              { id: "deliver", label: "Deliver", state: "upcoming" },
+            ],
+          }),
+        ],
+      ),
+      node(
+        "oap:generative",
+        { name: "agent", step: "assess", allowedComponents: ["*"] },
+        [node("ap:markdown", { body: "the agent panel" })],
+      ),
+      node(
+        "oap:generative",
+        { name: "deliver", step: "deliver", allowedComponents: ["*"] },
+        [node("ap:markdown", { body: "the outcome" })],
+      ),
     ]);
     renderPage(untouched);
     const stage = screen.getByTestId("agent-ui-page-stage");
@@ -172,14 +280,28 @@ describe("oap:page layout=rail", () => {
 describe("oap:page layout=rail — a waiting hook is always on the stage", () => {
   function askingLater(): Node {
     return node("oap:page", { layout: "rail" }, [
-      node("oap:generative", { name: "phase", allowedComponents: ["ap:steps"] }, [
-        node("ap:steps", { steps: [
-          { id: "assess", label: "Intake", state: "active" },
-          { id: "tools", label: "Tools", state: "upcoming" },
-        ] }),
-      ]),
-      node("oap:generative", { name: "agent", step: "assess", allowedComponents: ["*"] }, [node("ap:markdown", { body: "the agent panel" })]),
-      node("oap:generative", { name: "tools", step: "tools", allowedComponents: ["*"] }, [node("ap:markdown", { body: "tools panel" })]),
+      node(
+        "oap:generative",
+        { name: "phase", allowedComponents: ["ap:steps"] },
+        [
+          node("ap:steps", {
+            steps: [
+              { id: "assess", label: "Intake", state: "active" },
+              { id: "tools", label: "Tools", state: "upcoming" },
+            ],
+          }),
+        ],
+      ),
+      node(
+        "oap:generative",
+        { name: "agent", step: "assess", allowedComponents: ["*"] },
+        [node("ap:markdown", { body: "the agent panel" })],
+      ),
+      node(
+        "oap:generative",
+        { name: "tools", step: "tools", allowedComponents: ["*"] },
+        [node("ap:markdown", { body: "tools panel" })],
+      ),
     ]);
   }
 
@@ -205,18 +327,36 @@ describe("oap:page layout=rail — a waiting hook is always on the stage", () =>
 describe("oap:page layout=rail — each step keeps its own component state", () => {
   function foldedSteps(): Node {
     return node("oap:page", { layout: "rail" }, [
-      node("oap:generative", { name: "phase", allowedComponents: ["ap:steps"] }, [
-        node("ap:steps", { steps: [
-          { id: "tools", label: "Tools", state: "active" },
-          { id: "permissions", label: "Permissions", state: "upcoming" },
-        ] }),
-      ]),
-      node("oap:generative", { name: "tools", step: "tools", allowedComponents: ["*"] }, [
-        node("ap:collapsible", { title: "Tools", collapsed: true }, [node("ap:markdown", { body: "tools detail" })]),
-      ]),
-      node("oap:generative", { name: "permissions", step: "permissions", allowedComponents: ["*"] }, [
-        node("ap:collapsible", { title: "Permissions", collapsed: true }, [node("ap:markdown", { body: "permissions detail" })]),
-      ]),
+      node(
+        "oap:generative",
+        { name: "phase", allowedComponents: ["ap:steps"] },
+        [
+          node("ap:steps", {
+            steps: [
+              { id: "tools", label: "Tools", state: "active" },
+              { id: "permissions", label: "Permissions", state: "upcoming" },
+            ],
+          }),
+        ],
+      ),
+      node(
+        "oap:generative",
+        { name: "tools", step: "tools", allowedComponents: ["*"] },
+        [
+          node("ap:collapsible", { title: "Tools", collapsed: true }, [
+            node("ap:markdown", { body: "tools detail" }),
+          ]),
+        ],
+      ),
+      node(
+        "oap:generative",
+        { name: "permissions", step: "permissions", allowedComponents: ["*"] },
+        [
+          node("ap:collapsible", { title: "Permissions", collapsed: true }, [
+            node("ap:markdown", { body: "permissions detail" }),
+          ]),
+        ],
+      ),
     ]);
   }
 
@@ -260,15 +400,29 @@ describe("oap:page layout=rail — the selection follows the default step, and o
 
 describe("oap:page layout=column and no page", () => {
   it("renders children in a single column, the timeline horizontal, exactly as without a page root", () => {
-    const columnPage = node("oap:page", {}, [timeline, node("ap:markdown", { body: "below" })]);
+    const columnPage = node("oap:page", {}, [
+      timeline,
+      node("ap:markdown", { body: "below" }),
+    ]);
     const { container: withRoot } = renderPage(columnPage);
     // Assert on withRoot before tearing it down: cleanup() unmounts every
     // render()ed root (not only the next one's), which would otherwise empty
     // withRoot's container before its own assertions ran.
-    expect(withRoot.querySelector('[data-testid="agent-ui-steps"]')).not.toBeNull();
-    expect(withRoot.querySelector('[data-testid="agent-ui-page-rail"]')).toBeNull();
+    expect(
+      withRoot.querySelector('[data-testid="agent-ui-steps"]'),
+    ).not.toBeNull();
+    expect(
+      withRoot.querySelector('[data-testid="agent-ui-page-rail"]'),
+    ).toBeNull();
     cleanup();
-    const { container: withoutRoot } = renderPage(node("ap:stack", { direction: "vertical", gap: "sm" }, [timeline, node("ap:markdown", { body: "below" })]));
-    expect(withoutRoot.querySelector('[data-testid="agent-ui-steps"]')).not.toBeNull();
+    const { container: withoutRoot } = renderPage(
+      node("ap:stack", { direction: "vertical", gap: "sm" }, [
+        timeline,
+        node("ap:markdown", { body: "below" }),
+      ]),
+    );
+    expect(
+      withoutRoot.querySelector('[data-testid="agent-ui-steps"]'),
+    ).not.toBeNull();
   });
 });

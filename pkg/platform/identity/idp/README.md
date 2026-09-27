@@ -10,20 +10,20 @@ enforces email-verified plus allowed-domain policy on the result.
 
 ## Subpackages
 
-| Package | Kind name | What it is |
-| ------- | --------- | ---------- |
-| [`oidckind`](oidckind/) | `oidc` | The generic OIDC kind — issuer discovery, code exchange, ID-token verification via go-oidc. Has its own README. |
-| [`googlekind`](googlekind/) | `google` | `oidckind` preset with Google's pinned issuer and an `hd=` login hint, plus a server-side re-check of the `hd` claim. The hint is UX; the claim check is the enforcement. |
-| [`passwordkind`](passwordkind/) | `password` | A non-federated, password-only local IdP for the single-user macOS desktop's `/admin` console. |
-| [`fakekind`](fakekind/) | — | An in-process kind for tests and the e2e harness. |
-| [`idpscreens`](idpscreens/) | — | The wizard questions more than one kind asks — which client was registered, its secret, who may sign in — described once. |
-| [`registry`](registry/) | — | The process-wide kind registry over `pkg/x/kindregistry`. |
+| Package                         | Kind name  | What it is                                                                                                                                                                |
+| ------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`oidckind`](oidckind/)         | `oidc`     | The generic OIDC kind — issuer discovery, code exchange, ID-token verification via go-oidc. Has its own README.                                                           |
+| [`googlekind`](googlekind/)     | `google`   | `oidckind` preset with Google's pinned issuer and an `hd=` login hint, plus a server-side re-check of the `hd` claim. The hint is UX; the claim check is the enforcement. |
+| [`passwordkind`](passwordkind/) | `password` | A non-federated, password-only local IdP for the single-user macOS desktop's `/admin` console.                                                                            |
+| [`fakekind`](fakekind/)         | —          | An in-process kind for tests and the e2e harness.                                                                                                                         |
+| [`idpscreens`](idpscreens/)     | —          | The wizard questions more than one kind asks — which client was registered, its secret, who may sign in — described once.                                                 |
+| [`registry`](registry/)         | —          | The process-wide kind registry over `pkg/x/kindregistry`.                                                                                                                 |
 
 ## Constraints
 
 - **`Complete` must verify the ID token** — signature, issuer, audience, nonce.
-  Never trust the userinfo endpoint alone. `EmailVerified` mirrors the provider's
-  claim; policy enforcement is identityd's job, not the kind's.
+  Never trust the userinfo endpoint alone. `EmailVerified` mirrors the
+  provider's claim; policy enforcement is identityd's job, not the kind's.
 - **`ValidateSpec` and `DiscoveryURL` exist so the validity controller has no
   per-kind branching.** A new kind adds its spec validation and readiness probe
   here, once; the controller reaches both through `registry.Get`. A `""`
@@ -37,5 +37,5 @@ enforces email-verified plus allowed-domain policy on the result.
 - **`PasswordVerifier` is type-asserted and fails closed.** identityd asserts a
   resolved `Provider` to it at the password-verify endpoint; a missed assertion
   denies rather than falls through.
-- A `Wizard` *describes* its questions and reads answers back out of `State`;
+- A `Wizard` _describes_ its questions and reads answers back out of `State`;
   `cmd/oap` owns presentation. Same two-call shape as `channelkinds.Wizard`.

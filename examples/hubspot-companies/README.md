@@ -30,8 +30,8 @@ oap agent lint    examples/hubspot-companies
 oap agent install examples/hubspot-companies --namespace default
 ```
 
-Install applies the bundled manifests, then drives each required channel's wizard
-(bento input + Slack output). It does **not** collect the HubSpot OAuth
+Install applies the bundled manifests, then drives each required channel's
+wizard (bento input + Slack output). It does **not** collect the HubSpot OAuth
 credential — that is minted separately by the identity setup flow below, and the
 agent inherits the cluster's default model (no per-agent API key).
 
@@ -42,11 +42,11 @@ oap agent setup-identity hubspot-companies
 ```
 
 This runs the `oauth-mcp` browser handshake for the HubSpot MCP server. The CLI
-announces the redirect URI it will use; whitelist that URI on your pre-registered
-HubSpot OAuth app first (HubSpot → Settings → Integrations), then paste the app's
-`client_id` / `client_secret`. The browser opens for the consent click and the
-resulting access/refresh tokens are written into the `hubspot-creds`
-AgentIdentity. Refresh later without the full flow:
+announces the redirect URI it will use; whitelist that URI on your
+pre-registered HubSpot OAuth app first (HubSpot → Settings → Integrations), then
+paste the app's `client_id` / `client_secret`. The browser opens for the consent
+click and the resulting access/refresh tokens are written into the
+`hubspot-creds` AgentIdentity. Refresh later without the full flow:
 
 ```bash
 oap agent setup-identity hubspot-companies --only mcp:hubspot-companies --force
@@ -89,8 +89,8 @@ On each firing (or a direct message like "what was added in the past 14 days?"):
    side effect the call's `writesRelationships` block writes
    `hubspot_owner:<id>#user@user:<email>` into SpiceDB — the second hop the
    `contact_access` permission needs.
-4. Composes one chat message: a header naming the resolved window, one bullet per
-   company, owner rendered inline (`managed by <mention>` on a lookup hit,
+4. Composes one chat message: a header naming the resolved window, one bullet
+   per company, owner rendered inline (`managed by <mention>` on a lookup hit,
    `managed by <owner name>` when known but unmatched, omitted when unknown).
 
 Contacts on a named company run a separate, explicit flow (mode B in the system
@@ -102,13 +102,13 @@ contacts — which a non-owner can only see after the owner approves.
 - Ships `authz.toolCalls.mode: permissive` so the agent runs before any SpiceDB
   grants are seeded. The MCPServer's `writesRelationships` blocks build the
   `crm_company → hubspot_owner → user` chain as the agent observes records; once
-  those are populated, flip to `enforcing` and every contacts query is gated by a
-  `contact_access` Check, with a non-owner query routed to the company owner as
-  an approval request.
-- `authz.session.interactPermission` names who may interact with the cron-spawned
-  digest threads (the bento input has no per-user attribution). Replace
-  `group:hubspot-ops#member` with a SpiceDB subject-set that exists on your
-  cluster.
+  those are populated, flip to `enforcing` and every contacts query is gated by
+  a `contact_access` Check, with a non-owner query routed to the company owner
+  as an approval request.
+- `authz.session.interactPermission` names who may interact with the
+  cron-spawned digest threads (the bento input has no per-user attribution).
+  Replace `group:hubspot-ops#member` with a SpiceDB subject-set that exists on
+  your cluster.
 
 ## Caveats
 
@@ -118,5 +118,6 @@ contacts — which a non-owner can only see after the owner approves.
   companies render with no owner clause.
 - The 30-day window cap is enforced both in the prompt (UX) and in the MCPServer
   CR's CEL constraint (`now() - 744h`) — the CEL is the load-bearing limit.
-- `search_crm_objects` returns at most 50 results per call; multi-page pagination
-  is intentionally out of scope. The agent mentions the cap when it hits it.
+- `search_crm_objects` returns at most 50 results per call; multi-page
+  pagination is intentionally out of scope. The agent mentions the cap when it
+  hits it.

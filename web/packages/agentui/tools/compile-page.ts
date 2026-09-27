@@ -25,7 +25,10 @@ const shaPath = outPath.replace(/\.json$/, "") + ".sha256";
 try {
   const node = compilePage(source.toString("utf8"), inPath);
   writeFileSync(outPath, JSON.stringify(node, null, 2) + "\n");
-  writeFileSync(shaPath, createHash("sha256").update(source).digest("hex") + "\n");
+  writeFileSync(
+    shaPath,
+    createHash("sha256").update(source).digest("hex") + "\n",
+  );
 } catch (e) {
   if (e instanceof CompileError) {
     console.error(`${inPath}:${e.message}`);

@@ -18,9 +18,21 @@
 // or written never hides a notice — fail visible.
 import * as React from "react";
 import { X } from "lucide-react";
-import { Button, Card, CardContent, CardHeader, CardTitle, Markdown } from "@ap/design";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Markdown,
+} from "@ap/design";
 import { cn } from "@ap/design/lib/utils";
-import { actionCaption, isActionPending, useActions, type ActionState } from "./actions";
+import {
+  actionCaption,
+  isActionPending,
+  useActions,
+  type ActionState,
+} from "./actions";
 import { p, s } from "./props";
 import type { Node } from "./types";
 
@@ -51,7 +63,13 @@ const MAX_BUTTONS = 4;
 function asButtons(v: unknown): NoticeButton[] {
   if (!Array.isArray(v)) return [];
   return v
-    .filter((b): b is NoticeButton => !!b && typeof b.label === "string" && typeof b.action === "string" && b.action !== "")
+    .filter(
+      (b): b is NoticeButton =>
+        !!b &&
+        typeof b.label === "string" &&
+        typeof b.action === "string" &&
+        b.action !== "",
+    )
     .slice(0, MAX_BUTTONS);
 }
 
@@ -65,7 +83,12 @@ function toneOf(n: Node): Tone {
 // React key that remounts the card for a different notice (question.tsx's
 // argument, verbatim) and the dismissal key.
 export function noticeIdentity(n: Node): string {
-  return JSON.stringify([s(n, "title"), s(n, "body"), toneOf(n), asButtons(p(n).buttons)]);
+  return JSON.stringify([
+    s(n, "title"),
+    s(n, "body"),
+    toneOf(n),
+    asButtons(p(n).buttons),
+  ]);
 }
 
 const DISMISSED_PREFIX = "agentui:notice:dismissed:";
@@ -94,9 +117,17 @@ export function NoticeCard({ n }: { n: Node }): JSX.Element {
   return <NoticeCardBody key={identity} n={n} identity={identity} />;
 }
 
-function NoticeCardBody({ n, identity }: { n: Node; identity: string }): JSX.Element | null {
+function NoticeCardBody({
+  n,
+  identity,
+}: {
+  n: Node;
+  identity: string;
+}): JSX.Element | null {
   const { states, invoke, busy } = useActions();
-  const [dismissed, setDismissed] = React.useState(() => readDismissed(identity));
+  const [dismissed, setDismissed] = React.useState(() =>
+    readDismissed(identity),
+  );
   // The action the person clicked, if any. Terminal for the buttons: a
   // second click would be a second message or a second tool call.
   const [sent, setSent] = React.useState<string | null>(null);
@@ -105,12 +136,19 @@ function NoticeCardBody({ n, identity }: { n: Node; identity: string }): JSX.Ele
   const tone = toneOf(n);
   const title = s(n, "title");
   const buttons = asButtons(p(n).buttons);
-  const anyPending = buttons.some((b) => isActionPending((states[b.action] ?? { phase: "idle" }).phase));
+  const anyPending = buttons.some((b) =>
+    isActionPending((states[b.action] ?? { phase: "idle" }).phase),
+  );
   const disabled = sent !== null || anyPending || Boolean(busy);
-  const sentState: ActionState | null = sent !== null ? (states[sent] ?? { phase: "submitted" }) : null;
+  const sentState: ActionState | null =
+    sent !== null ? (states[sent] ?? { phase: "submitted" }) : null;
 
   return (
-    <Card data-testid="ap-notice" data-tone={tone} className={cn("relative", TONE_CLASS[tone])}>
+    <Card
+      data-testid="ap-notice"
+      data-tone={tone}
+      className={cn("relative", TONE_CLASS[tone])}
+    >
       <button
         type="button"
         aria-label="Dismiss"
@@ -148,7 +186,10 @@ function NoticeCardBody({ n, identity }: { n: Node; identity: string }): JSX.Ele
           </div>
         )}
         {sentState !== null && (
-          <p data-testid="ap-notice-sent" className="text-xs text-muted-foreground">
+          <p
+            data-testid="ap-notice-sent"
+            className="text-xs text-muted-foreground"
+          >
             {actionCaption(sentState) ?? "Sent."}
           </p>
         )}

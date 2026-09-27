@@ -14,7 +14,10 @@ import type { Node } from "./types";
 // rendered tree, author defaults included. The view derives its fallbacks
 // from it (spec §7): a question on screen is a question on screen whoever
 // wrote it, so the modal must not appear beside one.
-export function treeContains(view: Node | undefined, component: string): boolean {
+export function treeContains(
+  view: Node | undefined,
+  component: string,
+): boolean {
   if (!view) return false;
   if (view.component === component) return true;
   return (view.children ?? []).some((c) => treeContains(c, component));
@@ -23,7 +26,10 @@ export function treeContains(view: Node | undefined, component: string): boolean
 // hooksContaining names the hooks whose subtree holds `component` — what the
 // page marks "waiting on you" (a hook with an ap:question inside). Computed
 // here from the tree, never claimed by a node about itself.
-export function hooksContaining(view: Node | undefined, component: string): Set<string> {
+export function hooksContaining(
+  view: Node | undefined,
+  component: string,
+): Set<string> {
   const out = new Set<string>();
   const walk = (n: Node, hook: string | null) => {
     const name = hookNameOf(n) ?? hook;
@@ -93,10 +99,17 @@ export function timelineSteps(view: Node | undefined): TimelineStep[] {
   if (timelines.length !== 1) return [];
   const raw = timelines[0].props?.steps;
   const out: TimelineStep[] = [];
-  for (const st of Array.isArray(raw) ? (raw as { id?: unknown; label?: unknown; state?: unknown }[]) : []) {
+  for (const st of Array.isArray(raw)
+    ? (raw as { id?: unknown; label?: unknown; state?: unknown }[])
+    : []) {
     if (!st || typeof st.id !== "string" || st.id === "") continue;
-    const state = st.state === "done" || st.state === "active" ? st.state : "upcoming";
-    out.push({ id: st.id, label: typeof st.label === "string" ? st.label : st.id, state });
+    const state =
+      st.state === "done" || st.state === "active" ? st.state : "upcoming";
+    out.push({
+      id: st.id,
+      label: typeof st.label === "string" ? st.label : st.id,
+      state,
+    });
   }
   return out;
 }
@@ -124,7 +137,10 @@ export function stepBindings(view: Node | undefined): Map<string, StepBinding> {
       const b = byId.get(step);
       if (b) {
         const title = n.props?.title;
-        out.set(name, typeof title === "string" && title !== "" ? { ...b, title } : b);
+        out.set(
+          name,
+          typeof title === "string" && title !== "" ? { ...b, title } : b,
+        );
       }
     }
     for (const c of n.children ?? []) walk(c);

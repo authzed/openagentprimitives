@@ -71,3 +71,18 @@ jobs:
           go-version-file: go.mod
       - run: go install github.com/magefile/mage@v1.17.2 && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: mage web:check
+
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.34.5
+          run_install: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go install github.com/magefile/mage@v1.17.2 && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: mage fmt:check

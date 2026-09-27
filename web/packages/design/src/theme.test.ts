@@ -1,12 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyStoredTheme, readThemeChoice, resolveTheme, setThemeChoice, THEME_STORAGE_KEY } from "./theme";
+import {
+  applyStoredTheme,
+  readThemeChoice,
+  resolveTheme,
+  setThemeChoice,
+  THEME_STORAGE_KEY,
+} from "./theme";
 
 function mockMatchMedia(lightMatches: boolean) {
   const listeners: Array<() => void> = [];
   const mq = {
     matches: lightMatches,
     addEventListener: (_: string, fn: () => void) => listeners.push(fn),
-    removeEventListener: (_: string, fn: () => void) => listeners.splice(listeners.indexOf(fn), 1),
+    removeEventListener: (_: string, fn: () => void) =>
+      listeners.splice(listeners.indexOf(fn), 1),
   };
   vi.stubGlobal("matchMedia", () => mq);
   return { mq, fire: () => listeners.forEach((l) => l()) };
@@ -26,7 +33,10 @@ function mockStorage() {
 
 describe("theme", () => {
   let store: Map<string, string>;
-  beforeEach(() => { store = mockStorage(); delete document.documentElement.dataset.theme; });
+  beforeEach(() => {
+    store = mockStorage();
+    delete document.documentElement.dataset.theme;
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it("defaults to system when nothing is stored, and system follows the OS", () => {
@@ -49,7 +59,8 @@ describe("theme", () => {
     setThemeChoice("system");
     const off = applyStoredTheme();
     expect(document.documentElement.dataset.theme).toBe("light");
-    m.mq.matches = false; m.fire();
+    m.mq.matches = false;
+    m.fire();
     expect(document.documentElement.dataset.theme).toBe("dark");
     off();
   });

@@ -3,12 +3,12 @@
 Every other channel kind connects an AgentSession to something outside the
 cluster: Slack, a Bento scheduler, a browser tab, a terminal. `agent` connects
 it to **another AgentSession** — the counterparty is named directly on
-`Channel.spec.authzSubject`, as an `agentsession:<namespace>/<name>` value,
-not resolved through any external directory. `agentsession:` is admitted only
-on a Channel of this kind; every other kind's `authzSubject` still accepts
-only `service:`. This is what a `task` or `chat` mode subagent
-(`v1alpha1.SubagentRequestSpec.Mode`) is bound to so it has somewhere to talk;
-a `single_turn` child stays headless and is never given one.
+`Channel.spec.authzSubject`, as an `agentsession:<namespace>/<name>` value, not
+resolved through any external directory. `agentsession:` is admitted only on a
+Channel of this kind; every other kind's `authzSubject` still accepts only
+`service:`. This is what a `task` or `chat` mode subagent
+(`v1alpha1.SubagentRequestSpec.Mode`) is bound to so it has somewhere to talk; a
+`single_turn` child stays headless and is never given one.
 
 The counterparty is **required**: `ValidateSpec` refuses a Channel of this kind
 with an empty or malformed `spec.authzSubject`, because both halves of the kind
@@ -18,9 +18,9 @@ the only check that demands it; the AgentClass controller's
 `userLessChannelMissingAuthz` rule skips every kind whose
 `SpawnsSessionOnInbound()` is `false`, which includes this one.
 
-Because the counterparty lives in the same cluster, delivery is a write onto
-the AP bus rather than a call to a third-party API — but the write still
-happens inside a channelsd pod, not inside the runner or the CLI, so
+Because the counterparty lives in the same cluster, delivery is a write onto the
+AP bus rather than a call to a third-party API — but the write still happens
+inside a channelsd pod, not inside the runner or the CLI, so
 `RelayedByChannelsd()` is `true` here just like every other channelsd-hosted
 kind. Do not read "the destination is internal" as "the transport is
 client-hosted" — those are independent questions, and this kind answers them
@@ -32,24 +32,23 @@ can't run inside channelsd).
 arm today.** It publishes a `KindAgentMessageSend` envelope
 (`pkg/channels/channelevents`) onto the **sending** session's own inbound bus
 subject (`ap.session.<sender-ns>.<sender-name>.in.agent_message_send`) via
-`Deps.NATSPublish`, carrying the message text and naming the counterparty in
-the payload. See `sender.go`'s file comment for why it uses `NATSPublish`
-rather than `Deps.Inbound` (the short version: channelsd wires `Deps.Inbound`
-to nil for every Sender it builds, and a raw NATS publish is fire-and-forget,
-so this Sender's delivery step cannot block on, or be blocked by, anything
-downstream).
+`Deps.NATSPublish`, carrying the message text and naming the counterparty in the
+payload. See `sender.go`'s file comment for why it uses `NATSPublish` rather
+than `Deps.Inbound` (the short version: channelsd wires `Deps.Inbound` to nil
+for every Sender it builds, and a raw NATS publish is fire-and-forget, so this
+Sender's delivery step cannot block on, or be blocked by, anything downstream).
 
 **Why the sender's subject, when this Sender could use either.** It runs inside
 channelsd, which holds a cluster-wide NATS credential, so it is the one
 publisher that COULD address the counterparty's subject directly. Publishing on
-the sender's is what makes the sender *authenticated*: channelsd's
+the sender's is what makes the sender _authenticated_: channelsd's
 `envelopeHandler` cross-checks `Envelope.Session` against the subject the
 publisher was authorized on, so whichever end the subject names is the end the
 bus proved. Naming the counterparty instead would leave the SENDER as a payload
 claim with nothing but this Sender's own good behaviour behind it — the one
 direction of traffic in the system not authenticated by its subject. It is also
-the only subject a runner can publish on, so `reply_to_subagent` and this
-Sender now emit the same envelope onto the same subscription.
+the only subject a runner can publish on, so `reply_to_subagent` and this Sender
+now emit the same envelope onto the same subscription.
 
 The reason that arm has no producer is a security decision one layer up, not
 
@@ -108,24 +107,24 @@ every other inbound kind — and delivers through
 resolves the Channel for the `(target, sender)` PAIR and reaches `Deliver`
 through it. The subject-authorized sender becomes `InboundEvent.AuthzSubject`,
 carried through with no per-user identity attached — the monotonic-identity
-property the whole delegation design rests on: a child must never be able to
-act as its parent's human.
+property the whole delegation design rests on: a child must never be able to act
+as its parent's human.
 
 **One Channel, two ends.** A delegation edge gets exactly one `agent` Channel:
 it is bound to the CHILD as `spec.inputChannel`, and its `spec.authzSubject`
-names the PARENT. Both directions of the conversation ride it, and which end
-is the bound one is the only thing that differs between them — parent→child
+names the PARENT. Both directions of the conversation ride it, and which end is
+the bound one is the only thing that differs between them — parent→child
 resolves the Channel from the target's own binding, child→parent from the
-SENDER's. Resolving from the target's own binding in both directions is what
-the handler used to do, and it is why a child could never answer a root
-parent: a root's binding is `slack` or the local TUI, which admits no
-`agentsession:` subject at all.
+SENDER's. Resolving from the target's own binding in both directions is what the
+handler used to do, and it is why a child could never answer a root parent: a
+root's binding is `slack` or the local TUI, which admits no `agentsession:`
+subject at all.
 
 **This Sender publishes one of those two directions, not both.** It is built
-from a session's own `spec.inputChannel` (`internal/cmd/channelsd/
-sender_resolver.go`), and only the CHILD is bound to the pair Channel, so
-child→parent is the only direction it can originate. The other one comes from
-the parent's runner instead — `reply_to_subagent`
+from a session's own `spec.inputChannel`
+(`internal/cmd/channelsd/ sender_resolver.go`), and only the CHILD is bound to
+the pair Channel, so child→parent is the only direction it can originate. The
+other one comes from the parent's runner instead — `reply_to_subagent`
 (`pkg/agent/tool/meta/delegate_reply.go`), which publishes the same
 `KindAgentMessageSend` envelope on the parent's own subject, because a runner's
 per-session NATS grant authorizes publishing on its own prefix and nowhere else
@@ -135,19 +134,18 @@ same handler; only which session's subject carries them differs.
 
 Because the Channel is bound to the child, its correlation labels
 (`LabelChannelName` + `LabelChannelKey`) are on the child too. A child→parent
-message therefore cannot be routed by those labels, and
-`HandleAgentMessageSend` names the session explicitly via
-`InboundEvent.TargetSession` — sound because the destination is corroborated
-against the pair Channel before anything is delivered.
+message therefore cannot be routed by those labels, and `HandleAgentMessageSend`
+names the session explicitly via `InboundEvent.TargetSession` — sound because
+the destination is corroborated against the pair Channel before anything is
+delivered.
 
 ## Authorization
 
-**These gates are not this Sender's.** They live below
-`HandleAgentMessageSend`, in `deliverAgentMessage`
-(`pkg/channels/channelsd/pipeline/agent_message.go`), and run once for every
-session-to-session message whichever producer published it. Read this as the
-gate on session-to-session delivery, not as a gate on a publish path nothing
-drives.
+**These gates are not this Sender's.** They live below `HandleAgentMessageSend`,
+in `deliverAgentMessage` (`pkg/channels/channelsd/pipeline/agent_message.go`),
+and run once for every session-to-session message whichever producer published
+it. Read this as the gate on session-to-session delivery, not as a gate on a
+publish path nothing drives.
 
 One end is proved and the other is claimed, always the same way round: the
 SUBJECT names the sender (only that session's JWT may publish there, and
@@ -155,11 +153,11 @@ SUBJECT names the sender (only that session's JWT may publish there, and
 is the claim the pair lookup corroborates.
 
 0. **Is this claimed sender really the other end?** `resolvePairChannel`
-   resolves a real, K8s-witnessed Channel whose two ends are exactly the
-   target and the claimed sender — one end named on `spec.authzSubject`, the
-   other witnessed by that session's own `spec.inputChannel`. Nothing is
-   synthesized and no pair is inferred from the payload, so a session holding
-   an `agent` Channel to somebody else reaches nobody through this.
+   resolves a real, K8s-witnessed Channel whose two ends are exactly the target
+   and the claimed sender — one end named on `spec.authzSubject`, the other
+   witnessed by that session's own `spec.inputChannel`. Nothing is synthesized
+   and no pair is inferred from the payload, so a session holding an `agent`
+   Channel to somebody else reaches nobody through this.
 1. **May this Channel carry a session subject at all?** `Deliver` asks the
    RESOLVED Channel's own kind, through `channelkinds.SessionCounterparty` — a
    K8s-witnessed fact, never the payload's word. A Channel whose kind never
@@ -174,9 +172,9 @@ is the claim the pair lookup corroborates.
    permission converse = parent + child
    ```
 
-   It is exactly one hop in each direction, matching the transport: one
-   Channel exists per parent/child pair, so a grandparent, a sibling and a
-   stranger are all refused. The two relations are written together by
+   It is exactly one hop in each direction, matching the transport: one Channel
+   exists per parent/child pair, so a grandparent, a sibling and a stranger are
+   all refused. The two relations are written together by
    `spicedb.Client.TouchLineage` when the delegation is created.
 
 `converse` is a separate permission from `interact` on purpose, and separate in
@@ -197,7 +195,7 @@ nobody reads, or a permission prompt to an agent that is then positioned to
 answer it.
 
 **That split is not implemented in this package, and cannot be.**
-`Kind.SubChannelSender(name string, deps Deps) Sender` is handed a *Channel*,
+`Kind.SubChannelSender(name string, deps Deps) Sender` is handed a _Channel_,
 never a session — so a kind has nothing to resolve a lineage against, no matter
 which sub-channel it is asked for. It lives in the outbound relay
 (`pkg/channels/channelsd/outbound`), which loads the AgentSession before

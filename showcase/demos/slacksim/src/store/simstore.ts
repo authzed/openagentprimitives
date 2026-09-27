@@ -1,6 +1,6 @@
-import { deriveRollups, type MessageBody } from './scenario'
-import type { Scenario, SimMessage } from './types'
-import type { OverlayControl } from '../runtime/overlay'
+import { deriveRollups, type MessageBody } from "./scenario";
+import type { Scenario, SimMessage } from "./types";
+import type { OverlayControl } from "../runtime/overlay";
 
 // A small observable store over a Scenario. Mutations are immutable (each
 // produces a new Scenario reference) so React's useSyncExternalStore re-renders.
@@ -12,48 +12,51 @@ import type { OverlayControl } from '../runtime/overlay'
 // message count, so a scripted sequence of driver calls is byte-stable.
 
 export class SimStore {
-  private scenario: Scenario
-  private listeners = new Set<() => void>()
-  private cursorSecs: number
+  private scenario: Scenario;
+  private listeners = new Set<() => void>();
+  private cursorSecs: number;
 
   constructor(scenario: Scenario) {
-    this.scenario = scenario
+    this.scenario = scenario;
     // Continue runtime timestamps from the last message in the built scenario,
     // so driver-posted messages stay on the same day (no date-divider jump).
-    const maxSecs = scenario.messages.reduce((m, msg) => Math.max(m, Math.floor(Number(msg.ts))), 0)
-    this.cursorSecs = maxSecs || 1_756_500_000
+    const maxSecs = scenario.messages.reduce(
+      (m, msg) => Math.max(m, Math.floor(Number(msg.ts))),
+      0,
+    );
+    this.cursorSecs = maxSecs || 1_756_500_000;
   }
 
   subscribe = (fn: () => void): (() => void) => {
-    this.listeners.add(fn)
-    return () => this.listeners.delete(fn)
-  }
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  };
 
-  getSnapshot = (): Scenario => this.scenario
+  getSnapshot = (): Scenario => this.scenario;
 
   private commit(next: Scenario): void {
-    this.scenario = next
-    for (const fn of this.listeners) fn()
+    this.scenario = next;
+    for (const fn of this.listeners) fn();
   }
 
   private nextTs(): string {
     // Advance from the last message so runtime posts stay on the same day.
-    this.cursorSecs += 37
-    return `${this.cursorSecs}.000000`
+    this.cursorSecs += 37;
+    return `${this.cursorSecs}.000000`;
   }
 
   private appendMessage(msg: SimMessage): void {
     // Keep the runtime clock ahead of any explicitly-timestamped message so a
     // later auto-timestamped post never sorts before an earlier explicit one.
-    this.cursorSecs = Math.max(this.cursorSecs, Math.floor(Number(msg.ts)))
-    const messages = deriveRollups([...this.scenario.messages, msg])
-    this.commit({ ...this.scenario, messages })
+    this.cursorSecs = Math.max(this.cursorSecs, Math.floor(Number(msg.ts)));
+    const messages = deriveRollups([...this.scenario.messages, msg]);
+    this.commit({ ...this.scenario, messages });
   }
 
   // ---- driver API (window.__showcase) ------------------------------------
 
   postMessage(channelId: string, userId: string, body: MessageBody): string {
-    const ts = body.ts ?? this.nextTs()
+    const ts = body.ts ?? this.nextTs();
     this.appendMessage({
       id: `${channelId}:${ts}`,
       channelId,
@@ -64,8 +67,8 @@ export class SimStore {
       attachments: body.attachments,
       subtype: body.subtype,
       reactions: body.reactions,
-    })
-    return ts
+    });
+    return ts;
   }
 
   /** Update a message in place (Slack chat.update) — e.g. an approval card
@@ -73,18 +76,25 @@ export class SimStore {
   editMessage(
     channelId: string,
     ts: string,
-    patch: Partial<Pick<SimMessage, 'text' | 'blocks' | 'attachments' | 'reactions'>>,
+    patch: Partial<
+      Pick<SimMessage, "text" | "blocks" | "attachments" | "reactions">
+    >,
   ): void {
     const messages = deriveRollups(
       this.scenario.messages.map((m) =>
         m.ts === ts && m.channelId === channelId ? { ...m, ...patch } : m,
       ),
-    )
-    this.commit({ ...this.scenario, messages })
+    );
+    this.commit({ ...this.scenario, messages });
   }
 
-  postReply(channelId: string, parentTs: string, userId: string, body: MessageBody): string {
-    const ts = body.ts ?? this.nextTs()
+  postReply(
+    channelId: string,
+    parentTs: string,
+    userId: string,
+    body: MessageBody,
+  ): string {
+    const ts = body.ts ?? this.nextTs();
     this.appendMessage({
       id: `${channelId}:${ts}`,
       channelId,
@@ -95,30 +105,46 @@ export class SimStore {
       blocks: body.blocks,
       attachments: body.attachments,
       reactions: body.reactions,
-    })
-    return ts
+    });
+    return ts;
   }
 
   openThread(parentTs: string): void {
-    this.commit({ ...this.scenario, view: { ...this.scenario.view, openThreadTs: parentTs } })
+    this.commit({
+      ...this.scenario,
+      view: { ...this.scenario.view, openThreadTs: parentTs },
+    });
   }
 
   closeThread(): void {
-    this.commit({ ...this.scenario, view: { ...this.scenario.view, openThreadTs: undefined } })
+    this.commit({
+      ...this.scenario,
+      view: { ...this.scenario.view, openThreadTs: undefined },
+    });
   }
 
   switchChannel(channelId: string): void {
     this.commit({
       ...this.scenario,
-      view: { ...this.scenario.view, activeChannelId: channelId, openThreadTs: undefined, appHomeChannelId: undefined },
-    })
+      view: {
+        ...this.scenario.view,
+        activeChannelId: channelId,
+        openThreadTs: undefined,
+        appHomeChannelId: undefined,
+      },
+    });
   }
 
   appHome(appId: string): void {
     this.commit({
       ...this.scenario,
-      view: { ...this.scenario.view, activeChannelId: appId, appHomeChannelId: appId, openThreadTs: undefined },
-    })
+      view: {
+        ...this.scenario.view,
+        activeChannelId: appId,
+        appHomeChannelId: appId,
+        openThreadTs: undefined,
+      },
+    });
   }
 
   /** Slack assistant.threads.setStatus — the "is thinking…" caption on a thread. */
@@ -127,13 +153,19 @@ export class SimStore {
       ...this.scenario,
       view: {
         ...this.scenario.view,
-        assistantStatus: { ...this.scenario.view.assistantStatus, [threadTs]: text },
+        assistantStatus: {
+          ...this.scenario.view.assistantStatus,
+          [threadTs]: text,
+        },
       },
-    })
+    });
   }
 
   typing(userId: string | undefined): void {
-    this.commit({ ...this.scenario, view: { ...this.scenario.view, typingUserId: userId } })
+    this.commit({
+      ...this.scenario,
+      view: { ...this.scenario.view, typingUserId: userId },
+    });
   }
 }
 
@@ -142,25 +174,22 @@ export class SimStore {
 // the overlay controls (pointer / highlight / caption) are merged into one
 // object so the engine has a single handle.
 export interface ShowcaseControl extends OverlayControl {
-  postMessage: SimStore['postMessage']
-  postReply: SimStore['postReply']
-  editMessage: SimStore['editMessage']
-  openThread: SimStore['openThread']
-  closeThread: SimStore['closeThread']
-  switchChannel: SimStore['switchChannel']
-  appHome: SimStore['appHome']
-  setStatus: SimStore['setStatus']
-  typing: SimStore['typing']
+  postMessage: SimStore["postMessage"];
+  postReply: SimStore["postReply"];
+  editMessage: SimStore["editMessage"];
+  openThread: SimStore["openThread"];
+  closeThread: SimStore["closeThread"];
+  switchChannel: SimStore["switchChannel"];
+  appHome: SimStore["appHome"];
+  setStatus: SimStore["setStatus"];
+  typing: SimStore["typing"];
 }
 
-declare global {
-  interface Window {
-    __showcase?: ShowcaseControl
-  }
-}
-
-export function bindControl(store: SimStore, overlay: OverlayControl): void {
-  window.__showcase = {
+export function bindControl(
+  store: SimStore,
+  overlay: OverlayControl,
+): ShowcaseControl {
+  const control: ShowcaseControl = {
     postMessage: store.postMessage.bind(store),
     postReply: store.postReply.bind(store),
     editMessage: store.editMessage.bind(store),
@@ -171,5 +200,7 @@ export function bindControl(store: SimStore, overlay: OverlayControl): void {
     setStatus: store.setStatus.bind(store),
     typing: store.typing.bind(store),
     ...overlay,
-  }
+  };
+  window.__showcase = control;
+  return control;
 }

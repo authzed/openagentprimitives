@@ -8,8 +8,8 @@ the session scope.
 The root defines only `Provider`, `ExtractInput`, `ExtractedEntity`, and
 `SessionBinding` — no LLM SDK.
 
-| Package | Backend |
-| ------- | ------- |
+| Package                   | Backend                                                                                                                                                                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [`anthropic`](anthropic/) | The default. Backed by the shared `pkg/agent/llm` `Provider` seam rather than a direct SDK call, so it reuses the agent loop's provider wiring. Defaults to Claude Haiku for low-latency extraction; the model is configurable per `New()` call. |
 
 Extraction is not free, so the runner does not always call it: `authz.Prefilter`

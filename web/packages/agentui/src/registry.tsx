@@ -1,5 +1,15 @@
 import * as React from "react";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  XAxis,
+  YAxis,
+} from "recharts";
 import {
   Alert,
   AlertDescription,
@@ -33,7 +43,12 @@ import {
 // badge.tsx, …) — kept here for the same reason: it resolves through the same
 // tsconfig/vite path alias without going through the barrel export.
 import { cn } from "@ap/design/lib/utils";
-import { actionCaption, isActionPending, useActions, type ActionState } from "./actions";
+import {
+  actionCaption,
+  isActionPending,
+  useActions,
+  type ActionState,
+} from "./actions";
 import { agentLinkHref, AgentLink } from "./agentlink";
 import { AttachmentCard } from "./attachment";
 import { ChatNode } from "./chat";
@@ -55,7 +70,10 @@ import type { Node } from "./types";
 // node given an explicit key, and is passed in rather than imported, so
 // registry.tsx and renderNode.tsx do not import each other — the recursion
 // (walking n.children) lives in exactly one place: renderNode.tsx.
-export type Renderer = (n: Node, renderChild: (n: Node, key: React.Key) => React.ReactElement) => React.ReactElement;
+export type Renderer = (
+  n: Node,
+  renderChild: (n: Node, key: React.Key) => React.ReactElement,
+) => React.ReactElement;
 
 // p/s (the prop readers every entry below uses) live in props.ts, not here —
 // question.tsx and progress.tsx need the identical string-coercion behavior
@@ -70,14 +88,37 @@ export type Renderer = (n: Node, renderChild: (n: Node, key: React.Key) => React
 // `defaultVariants` (because the prop is present, just unmatched), so an
 // agent typo or an unsupported value silently renders an uncolored,
 // unstyled component instead of falling back to "default".
-function pickVariant<T extends string>(value: string, allowed: readonly T[], fallback: T): T {
-  return (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+function pickVariant<T extends string>(
+  value: string,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  return (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : fallback;
 }
 
-const BADGE_VARIANTS = ["default", "secondary", "destructive", "outline"] as const;
-const BUTTON_VARIANTS = ["default", "secondary", "destructive", "outline", "ghost", "link"] as const;
+const BADGE_VARIANTS = [
+  "default",
+  "secondary",
+  "destructive",
+  "outline",
+] as const;
+const BUTTON_VARIANTS = [
+  "default",
+  "secondary",
+  "destructive",
+  "outline",
+  "ghost",
+  "link",
+] as const;
 
-const GAP: Record<string, string> = { none: "gap-0", sm: "gap-2", md: "gap-4", lg: "gap-6" };
+const GAP: Record<string, string> = {
+  none: "gap-0",
+  sm: "gap-2",
+  md: "gap-4",
+  lg: "gap-6",
+};
 const ALIGN: Record<string, string> = {
   start: "items-start",
   center: "items-center",
@@ -98,9 +139,17 @@ const fieldID = (name: string): string => `apui-${name}`;
 // because a right-aligned data cell also wants tabular-nums (it holds a
 // number), but a right-aligned header cell — plain label text — does not.
 const headAlign = (align?: string): string | undefined =>
-  align === "right" ? "text-right" : align === "center" ? "text-center" : undefined;
+  align === "right"
+    ? "text-right"
+    : align === "center"
+      ? "text-center"
+      : undefined;
 const cellAlign = (align?: string): string | undefined =>
-  align === "right" ? "text-right tabular-nums" : align === "center" ? "text-center" : undefined;
+  align === "right"
+    ? "text-right tabular-nums"
+    : align === "center"
+      ? "text-center"
+      : undefined;
 
 // ParamSelect is ap:select's live renderer: a control is "live" exactly when
 // the declaration gave it a `param` name to drive (SelectProps.Param,
@@ -137,11 +186,13 @@ function ParamSelect({ n }: { n: Node }) {
             {placeholder}
           </option>
         )}
-        {((p(n).options as { value: string; label?: string }[]) ?? []).map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label ?? o.value}
-          </option>
-        ))}
+        {((p(n).options as { value: string; label?: string }[]) ?? []).map(
+          (o) => (
+            <option key={o.value} value={o.value}>
+              {o.label ?? o.value}
+            </option>
+          ),
+        )}
       </select>
     </div>
   );
@@ -236,7 +287,10 @@ function ParamDateRange({ n }: { n: Node }) {
 function ActionStatus({ text }: { text: string | null }) {
   if (!text) return null;
   return (
-    <span data-testid="agent-ui-action-status" className="text-xs text-muted-foreground">
+    <span
+      data-testid="agent-ui-action-status"
+      className="text-xs text-muted-foreground"
+    >
       {text}
     </span>
   );
@@ -284,11 +338,17 @@ function DataTable({
   const { states, invoke } = useActions();
   const actionName = s(n, "rowAction");
   const live = actionName !== "";
-  const state: ActionState = live ? (states[actionName] ?? { phase: "idle" }) : { phase: "idle" };
+  const state: ActionState = live
+    ? (states[actionName] ?? { phase: "idle" })
+    : { phase: "idle" };
   const pending = isActionPending(state.phase);
 
   if (rows.length === 0) {
-    return <p className="py-6 text-center text-sm text-muted-foreground">{s(n, "empty", "Nothing to show.")}</p>;
+    return (
+      <p className="py-6 text-center text-sm text-muted-foreground">
+        {s(n, "empty", "Nothing to show.")}
+      </p>
+    );
   }
   return (
     <div className="overflow-x-auto">
@@ -369,14 +429,20 @@ function ActionButton({ n }: { n: Node }) {
   const { states, invoke, busy } = useActions();
   const action = s(n, "action");
   const live = action !== "";
-  const state: ActionState = live ? (states[action] ?? { phase: "idle" }) : { phase: "idle" };
+  const state: ActionState = live
+    ? (states[action] ?? { phase: "idle" })
+    : { phase: "idle" };
   // The OR with the declared/bound `disabled` prop matters because
   // ap:button.disabled is bindable (components.go) and applyBindings may
   // already have set it — a control that is only ever LIVE-disabled would
   // silently drop an author's own disabled binding. `busy` is the page's
   // "the agent is working" (see ActionsContextValue.busy): its own lifecycle
   // cannot see the agent's turn, this can.
-  const disabled = !live || isActionPending(state.phase) || Boolean(busy) || Boolean(p(n).disabled);
+  const disabled =
+    !live ||
+    isActionPending(state.phase) ||
+    Boolean(busy) ||
+    Boolean(p(n).disabled);
   return (
     <div className="flex flex-col gap-1">
       <Button
@@ -399,12 +465,24 @@ function ActionForm({ n }: { n: Node }) {
   const { states, invoke, busy } = useActions();
   const action = s(n, "action");
   const live = action !== "";
-  const state: ActionState = live ? (states[action] ?? { phase: "idle" }) : { phase: "idle" };
+  const state: ActionState = live
+    ? (states[action] ?? { phase: "idle" })
+    : { phase: "idle" };
   // Same four reasons as ActionButton, including the page's `busy`: a form
   // whose Prompt action just settled to "Asked the agent." must stay disabled
   // while the agent works on that very message.
-  const disabled = !live || isActionPending(state.phase) || Boolean(busy) || Boolean(p(n).disabled);
-  const fields = (p(n).fields as { name: string; label?: string; kind?: string; placeholder?: string }[]) ?? [];
+  const disabled =
+    !live ||
+    isActionPending(state.phase) ||
+    Boolean(busy) ||
+    Boolean(p(n).disabled);
+  const fields =
+    (p(n).fields as {
+      name: string;
+      label?: string;
+      kind?: string;
+      placeholder?: string;
+    }[]) ?? [];
   const initial = (p(n).values as Record<string, string> | undefined) ?? {};
   // `values` seeds the state ONCE, on mount: the lazy initializer runs on the
   // first render and never again, so a repaint that carries different
@@ -414,7 +492,9 @@ function ActionForm({ n }: { n: Node }) {
   // genuinely must SHOW new text replaces the node (a different component or
   // a different position remounts the form), rather than expecting a new
   // `values` to land in a form already on screen.
-  const [values, setValues] = React.useState<Record<string, string>>(() => ({ ...initial }));
+  const [values, setValues] = React.useState<Record<string, string>>(() => ({
+    ...initial,
+  }));
   return (
     <form
       className="flex flex-col gap-3"
@@ -427,7 +507,13 @@ function ActionForm({ n }: { n: Node }) {
         // so SubstituteParams returns ErrUnknownParam and the viewer is told
         // "this view is missing a setting it needs; reload the page" for the
         // ordinary act of leaving a field blank.
-        if (live) invoke(action, Object.fromEntries(fields.map((f) => [f.name, values[f.name] ?? ""])));
+        if (live)
+          invoke(
+            action,
+            Object.fromEntries(
+              fields.map((f) => [f.name, values[f.name] ?? ""]),
+            ),
+          );
       }}
     >
       {fields.map((f) => (
@@ -440,7 +526,9 @@ function ActionForm({ n }: { n: Node }) {
               placeholder={f.placeholder}
               disabled={disabled}
               value={values[f.name] ?? ""}
-              onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
+              onChange={(e) =>
+                setValues((v) => ({ ...v, [f.name]: e.target.value }))
+              }
               className="flex min-h-16 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
             />
           ) : (
@@ -451,7 +539,9 @@ function ActionForm({ n }: { n: Node }) {
               placeholder={f.placeholder}
               disabled={disabled}
               value={values[f.name] ?? ""}
-              onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
+              onChange={(e) =>
+                setValues((v) => ({ ...v, [f.name]: e.target.value }))
+              }
             />
           )}
         </div>
@@ -479,20 +569,30 @@ function sessionViewSrc(ref: unknown): string | null {
 // before it done (filled, checked), the ones after upcoming (muted). It is
 // what StepsNode draws under a column layout (this repo's default, and every
 // layout before this one existed).
-function renderHorizontalSteps(n: Node, steps: { label?: string; state?: string }[]): React.ReactElement {
+function renderHorizontalSteps(
+  n: Node,
+  steps: { label?: string; state?: string }[],
+): React.ReactElement {
   const list = (
     <ol className="flex w-full items-center" data-testid="agent-ui-steps">
       {steps.map((st, i) => {
-        const state = st.state === "done" || st.state === "active" ? st.state : "upcoming";
+        const state =
+          st.state === "done" || st.state === "active" ? st.state : "upcoming";
         const isLast = i === steps.length - 1;
         return (
-          <li key={i} className={cn("flex items-center", !isLast && "flex-1")} aria-current={state === "active" ? "step" : undefined}>
+          <li
+            key={i}
+            className={cn("flex items-center", !isLast && "flex-1")}
+            aria-current={state === "active" ? "step" : undefined}
+          >
             <div className="flex flex-col items-center gap-1.5">
               <span
                 className={cn(
                   "flex h-7 w-7 items-center justify-center rounded-full border text-xs font-semibold tabular-nums transition-colors",
-                  state === "done" && "border-[hsl(var(--primary))] bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]",
-                  state === "active" && "border-[hsl(var(--primary))] text-[hsl(var(--primary))] ring-2 ring-[hsl(var(--primary))]/30",
+                  state === "done" &&
+                    "border-[hsl(var(--primary))] bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]",
+                  state === "active" &&
+                    "border-[hsl(var(--primary))] text-[hsl(var(--primary))] ring-2 ring-[hsl(var(--primary))]/30",
                   state === "upcoming" && "border-border text-muted-foreground",
                 )}
               >
@@ -501,7 +601,9 @@ function renderHorizontalSteps(n: Node, steps: { label?: string; state?: string 
               <span
                 className={cn(
                   "whitespace-nowrap text-xs",
-                  state === "active" ? "font-medium text-foreground" : "text-muted-foreground",
+                  state === "active"
+                    ? "font-medium text-foreground"
+                    : "text-muted-foreground",
                 )}
               >
                 {st.label ?? ""}
@@ -527,7 +629,10 @@ function renderHorizontalSteps(n: Node, steps: { label?: string; state?: string 
   // keeps scrolled content from showing through.
   if (!p(n).pinned) return list;
   return (
-    <div data-testid="agent-ui-steps-pinned" className="sticky top-0 z-10 -mx-4 bg-background px-4 py-2">
+    <div
+      data-testid="agent-ui-steps-pinned"
+      className="sticky top-0 z-10 -mx-4 bg-background px-4 py-2"
+    >
       {list}
     </div>
   );
@@ -555,13 +660,24 @@ function StepsNode({
     return renderHorizontalSteps(n, steps); // the column layout's horizontal timeline
   }
   return (
-    <ol className="flex flex-col" data-testid="agent-ui-steps" aria-label="Steps">
+    <ol
+      className="flex flex-col"
+      data-testid="agent-ui-steps"
+      aria-label="Steps"
+    >
       {steps.map((st, i) => {
-        const state = st.state === "done" || st.state === "active" ? st.state : "upcoming";
+        const state =
+          st.state === "done" || st.state === "active" ? st.state : "upcoming";
         const id = typeof st.id === "string" && st.id !== "" ? st.id : null;
         const selected = id !== null && id === selectedStep;
         return (
-          <li key={i} data-testid="agent-ui-rail-step" data-step-id={id ?? undefined} data-selected={selected ? "true" : undefined} className="relative">
+          <li
+            key={i}
+            data-testid="agent-ui-rail-step"
+            data-step-id={id ?? undefined}
+            data-selected={selected ? "true" : undefined}
+            className="relative"
+          >
             <button
               type="button"
               onClick={() => id !== null && selectStep(id)}
@@ -580,21 +696,41 @@ function StepsNode({
               <span
                 className={cn(
                   "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold tabular-nums",
-                  state === "done" && "border-[hsl(var(--primary))] bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]",
-                  state === "active" && "border-[hsl(var(--primary))] text-[hsl(var(--primary))] ring-2 ring-[hsl(var(--primary))]/30",
+                  state === "done" &&
+                    "border-[hsl(var(--primary))] bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]",
+                  state === "active" &&
+                    "border-[hsl(var(--primary))] text-[hsl(var(--primary))] ring-2 ring-[hsl(var(--primary))]/30",
                   state === "upcoming" && "border-border text-muted-foreground",
                 )}
               >
                 {state === "done" ? "✓" : i + 1}
               </span>
               <span className="min-w-0">
-                <span className={cn("block text-sm", state === "active" ? "font-medium text-foreground" : state === "upcoming" ? "text-muted-foreground" : "text-foreground")}>
+                <span
+                  className={cn(
+                    "block text-sm",
+                    state === "active"
+                      ? "font-medium text-foreground"
+                      : state === "upcoming"
+                        ? "text-muted-foreground"
+                        : "text-foreground",
+                  )}
+                >
                   {st.label ?? ""}
                 </span>
-                {st.summary ? <span className="block truncate text-xs text-muted-foreground">{st.summary}</span> : null}
+                {st.summary ? (
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {st.summary}
+                  </span>
+                ) : null}
               </span>
             </button>
-            {i < steps.length - 1 && <span className="ml-[18px] block h-2 border-l border-border" aria-hidden="true" />}
+            {i < steps.length - 1 && (
+              <span
+                className="ml-[18px] block h-2 border-l border-border"
+                aria-hidden="true"
+              />
+            )}
           </li>
         );
       })}
@@ -634,7 +770,10 @@ export const COMPONENTS: Record<string, Renderer> = {
       <div
         className={cn("grid", GAP[s(n, "gap", "md")] ?? GAP.md)}
         style={{
-          gridTemplateColumns: columns > 0 ? `repeat(${columns}, minmax(0, 1fr))` : "repeat(auto-fit, minmax(16rem, 1fr))",
+          gridTemplateColumns:
+            columns > 0
+              ? `repeat(${columns}, minmax(0, 1fr))`
+              : "repeat(auto-fit, minmax(16rem, 1fr))",
         }}
       >
         {(n.children ?? []).map(renderChild)}
@@ -649,19 +788,27 @@ export const COMPONENTS: Record<string, Renderer> = {
         {header && (
           <CardHeader>
             {s(n, "title") && <CardTitle>{s(n, "title")}</CardTitle>}
-            {s(n, "description") && <CardDescription>{s(n, "description")}</CardDescription>}
+            {s(n, "description") && (
+              <CardDescription>{s(n, "description")}</CardDescription>
+            )}
           </CardHeader>
         )}
         {/* @ap/design's CardContent is `p-6 pt-0`: it assumes a header above
             it holds the top padding. An untitled card has no header, so its
             content sat flush on the card's own top border. */}
-        <CardContent className={header ? undefined : "pt-6"}>{(n.children ?? []).map(renderChild)}</CardContent>
+        <CardContent className={header ? undefined : "pt-6"}>
+          {(n.children ?? []).map(renderChild)}
+        </CardContent>
       </Card>
     );
   },
 
   "ap:collapsible": (n, renderChild) => (
-    <Disclosure title={s(n, "title")} collapsed={Boolean(p(n).collapsed)} testId="ap-collapsible">
+    <Disclosure
+      title={s(n, "title")}
+      collapsed={Boolean(p(n).collapsed)}
+      testId="ap-collapsible"
+    >
       {(n.children ?? []).map(renderChild)}
     </Disclosure>
   ),
@@ -669,8 +816,14 @@ export const COMPONENTS: Record<string, Renderer> = {
   "ap:heading": (n) => {
     const level = Math.min(Math.max(Number(p(n).level) || 2, 1), 4);
     const Tag = `h${level}` as "h1" | "h2" | "h3" | "h4";
-    const size = { 1: "text-2xl", 2: "text-xl", 3: "text-lg", 4: "text-base" }[level] ?? "text-xl";
-    return <Tag className={cn(size, "font-semibold text-foreground")}>{s(n, "text")}</Tag>;
+    const size =
+      { 1: "text-2xl", 2: "text-xl", 3: "text-lg", 4: "text-base" }[level] ??
+      "text-xl";
+    return (
+      <Tag className={cn(size, "font-semibold text-foreground")}>
+        {s(n, "text")}
+      </Tag>
+    );
   },
 
   "ap:text": (n) => (
@@ -692,21 +845,29 @@ export const COMPONENTS: Record<string, Renderer> = {
 
   "ap:metric": (n) => (
     <div className="flex flex-col gap-1">
-      <span className="text-xs uppercase tracking-wide text-muted-foreground">{s(n, "label")}</span>
-      <span className="text-2xl font-semibold tabular-nums">{s(n, "value")}</span>
+      <span className="text-xs uppercase tracking-wide text-muted-foreground">
+        {s(n, "label")}
+      </span>
+      <span className="text-2xl font-semibold tabular-nums">
+        {s(n, "value")}
+      </span>
       {s(n, "delta") && (
         <span
           className={cn(
             "text-xs tabular-nums",
             s(n, "trend") === "up" && "text-[hsl(var(--success))]",
             s(n, "trend") === "down" && "text-destructive",
-            s(n, "trend") !== "up" && s(n, "trend") !== "down" && "text-muted-foreground",
+            s(n, "trend") !== "up" &&
+              s(n, "trend") !== "down" &&
+              "text-muted-foreground",
           )}
         >
           {s(n, "delta")}
         </span>
       )}
-      {s(n, "caption") && <span className="text-xs text-muted-foreground">{s(n, "caption")}</span>}
+      {s(n, "caption") && (
+        <span className="text-xs text-muted-foreground">{s(n, "caption")}</span>
+      )}
     </div>
   ),
 
@@ -733,12 +894,23 @@ export const COMPONENTS: Record<string, Renderer> = {
   // throw on a bad shape happens on this line, and DataTable only ever
   // receives arrays.
   "ap:table": (n) => {
-    const columns = requireArray(p(n).columns, "ap:table.columns") as { key: string; header?: string; align?: string }[];
-    const rows = requireArray(p(n).rows, "ap:table.rows") as Record<string, unknown>[];
+    const columns = requireArray(p(n).columns, "ap:table.columns") as {
+      key: string;
+      header?: string;
+      align?: string;
+    }[];
+    const rows = requireArray(p(n).rows, "ap:table.rows") as Record<
+      string,
+      unknown
+    >[];
     return <DataTable n={n} columns={columns} rows={rows} />;
   },
 
-  "ap:badge": (n) => <Badge variant={pickVariant(s(n, "variant"), BADGE_VARIANTS, "default")}>{s(n, "text")}</Badge>,
+  "ap:badge": (n) => (
+    <Badge variant={pickVariant(s(n, "variant"), BADGE_VARIANTS, "default")}>
+      {s(n, "text")}
+    </Badge>
+  ),
 
   "ap:alert": (n) => {
     const severity = s(n, "severity");
@@ -749,7 +921,11 @@ export const COMPONENTS: Record<string, Renderer> = {
         // rides on top of "default" with the design system's --warning token
         // rather than a third cva branch, so info/warning/error each read as
         // visually distinct instead of warning silently collapsing into info.
-        className={severity === "warning" ? "border-warning/50 text-warning [&>svg]:text-warning" : undefined}
+        className={
+          severity === "warning"
+            ? "border-warning/50 text-warning [&>svg]:text-warning"
+            : undefined
+        }
       >
         {s(n, "title") && <AlertTitle>{s(n, "title")}</AlertTitle>}
         {s(n, "body") && <AlertDescription>{s(n, "body")}</AlertDescription>}
@@ -760,7 +936,9 @@ export const COMPONENTS: Record<string, Renderer> = {
   "ap:empty": (n) => (
     <div className="flex flex-col items-center gap-1 py-10 text-center">
       <p className="text-sm font-medium">{s(n, "title", "Nothing here yet")}</p>
-      {s(n, "body") && <p className="text-xs text-muted-foreground">{s(n, "body")}</p>}
+      {s(n, "body") && (
+        <p className="text-xs text-muted-foreground">{s(n, "body")}</p>
+      )}
     </div>
   ),
 
@@ -782,9 +960,22 @@ export const COMPONENTS: Record<string, Renderer> = {
   "ap:steps": (n) => {
     const steps = requireArray(p(n).steps, "ap:steps.steps");
     steps.forEach((st, i) => {
-      if (typeof st !== "object" || st === null) throw new TypeError(`ap:steps.steps[${i}] must be an object`);
+      if (typeof st !== "object" || st === null)
+        throw new TypeError(`ap:steps.steps[${i}] must be an object`);
     });
-    return <StepsNode node={n} steps={steps as { id?: string; label?: string; state?: string; summary?: string }[]} />;
+    return (
+      <StepsNode
+        node={n}
+        steps={
+          steps as {
+            id?: string;
+            label?: string;
+            state?: string;
+            summary?: string;
+          }[]
+        }
+      />
+    );
   },
 
   // ap:skeleton is the in-progress stand-in applyBindings substitutes for a
@@ -805,8 +996,15 @@ export const COMPONENTS: Record<string, Renderer> = {
   // and going through the same table keeps the renderer's contract ("turn a
   // Node into React") unbroken.
   "ap:skeleton": (n) => (
-    <div className="flex flex-col gap-2 py-4" data-testid="ap-skeleton" aria-busy="true" aria-live="polite">
-      {s(n, "label") && <p className="text-xs text-muted-foreground">{s(n, "label")}</p>}
+    <div
+      className="flex flex-col gap-2 py-4"
+      data-testid="ap-skeleton"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      {s(n, "label") && (
+        <p className="text-xs text-muted-foreground">{s(n, "label")}</p>
+      )}
       <div className="h-4 w-1/3 animate-pulse rounded bg-muted" />
       <div className="h-4 w-full animate-pulse rounded bg-muted" />
       <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
@@ -832,11 +1030,35 @@ export const COMPONENTS: Record<string, Renderer> = {
     const xKey = s(n, "xKey");
     const kind = s(n, "kind", "line");
     if (data.length === 0 || series.length === 0) {
-      return <p className="py-6 text-center text-sm text-muted-foreground">No data to chart.</p>;
+      return (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          No data to chart.
+        </p>
+      );
     }
-    const grid = <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />;
-    const xAxis = <XAxis dataKey={xKey} stroke="hsl(var(--muted-foreground))" tickLine={false} axisLine={false} />;
-    const yAxis = <YAxis stroke="hsl(var(--muted-foreground))" tickLine={false} axisLine={false} width={40} />;
+    const grid = (
+      <CartesianGrid
+        stroke="hsl(var(--border))"
+        strokeDasharray="3 3"
+        vertical={false}
+      />
+    );
+    const xAxis = (
+      <XAxis
+        dataKey={xKey}
+        stroke="hsl(var(--muted-foreground))"
+        tickLine={false}
+        axisLine={false}
+      />
+    );
+    const yAxis = (
+      <YAxis
+        stroke="hsl(var(--muted-foreground))"
+        tickLine={false}
+        axisLine={false}
+        width={40}
+      />
+    );
     const tooltip = <ChartTooltip />;
     if (kind === "bar") {
       return (
@@ -847,7 +1069,12 @@ export const COMPONENTS: Record<string, Renderer> = {
             {yAxis}
             {tooltip}
             {series.map((sr, i) => (
-              <Bar key={sr.key} dataKey={sr.key} name={sr.label ?? sr.key} fill={seriesColor(i)} />
+              <Bar
+                key={sr.key}
+                dataKey={sr.key}
+                name={sr.label ?? sr.key}
+                fill={seriesColor(i)}
+              />
             ))}
           </BarChart>
         </ChartContainer>
@@ -951,7 +1178,9 @@ export const COMPONENTS: Record<string, Renderer> = {
   "ap:raw_html": () => (
     <Alert>
       <AlertTitle>Embedded content</AlertTitle>
-      <AlertDescription>This section renders once the sandboxed content view is available.</AlertDescription>
+      <AlertDescription>
+        This section renders once the sandboxed content view is available.
+      </AlertDescription>
     </Alert>
   ),
 
@@ -965,7 +1194,9 @@ export const COMPONENTS: Record<string, Renderer> = {
     if (src === null) {
       // Mirrors ap:raw_html's inert placeholder — never an iframe with an
       // unvalidated/absolute src.
-      return <Alert>Session view unavailable: no valid session reference.</Alert>;
+      return (
+        <Alert>Session view unavailable: no valid session reference.</Alert>
+      );
     }
     return (
       <iframe
@@ -1027,12 +1258,17 @@ export const COMPONENTS: Record<string, Renderer> = {
   // a heading under a rail layout, which only the hook itself can draw — so it
   // is passed through here rather than read from the tree twice.
   "oap:generative": (n, renderChild) => (
-    <GenerativeHook name={s(n, "name")} title={typeof n.props?.title === "string" ? n.props.title : undefined}>
+    <GenerativeHook
+      name={s(n, "name")}
+      title={typeof n.props?.title === "string" ? n.props.title : undefined}
+    >
       {(n.children ?? []).map(renderChild)}
     </GenerativeHook>
   ),
 
   // oap:page is the layout root; see page.tsx. The registry entry only hands
   // the node over — a renderer is a plain function and the page needs state.
-  "oap:page": (n, renderChild) => <PageNode node={n} renderChild={renderChild} />,
+  "oap:page": (n, renderChild) => (
+    <PageNode node={n} renderChild={renderChild} />
+  ),
 };

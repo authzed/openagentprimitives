@@ -5,10 +5,10 @@ different audiences: `tui` is the terminal design system every `oap` wizard,
 list and detail view renders through; `clikit` is the typed flag↔environment
 binding the long-running server binaries use at startup.
 
-| Package | Purpose | Consumed by |
-| --- | --- | --- |
-| [`clikit`](clikit/) | A cobra `PreRunE` that fills flags from the environment through pflag's typed parsers, so a malformed env value fails closed at startup. Plus the canonical names of env vars read by more than one binary. | the six binaries under `internal/cmd/` |
-| [`tui`](tui/) | The terminal design system: screens, drivers, theme, chrome, tables, summaries. | [`cmd/oap`](../../cmd/oap/) and the packages that supply wizard screens |
+| Package             | Purpose                                                                                                                                                                                                     | Consumed by                                                             |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| [`clikit`](clikit/) | A cobra `PreRunE` that fills flags from the environment through pflag's typed parsers, so a malformed env value fails closed at startup. Plus the canonical names of env vars read by more than one binary. | the six binaries under `internal/cmd/`                                  |
+| [`tui`](tui/)       | The terminal design system: screens, drivers, theme, chrome, tables, summaries.                                                                                                                             | [`cmd/oap`](../../cmd/oap/) and the packages that supply wizard screens |
 
 ## Boundary
 

@@ -32,8 +32,19 @@ const rootView: Node = {
           component: "ap:grid",
           props: { columns: 2 },
           children: [
-            { component: "ap:metric", props: { label: "Open", value: "42", delta: "+3", trend: "up" } },
-            { component: "ap:metric", props: { label: "Closed", value: "17", delta: "-1", trend: "down" } },
+            {
+              component: "ap:metric",
+              props: { label: "Open", value: "42", delta: "+3", trend: "up" },
+            },
+            {
+              component: "ap:metric",
+              props: {
+                label: "Closed",
+                value: "17",
+                delta: "-1",
+                trend: "down",
+              },
+            },
           ],
         },
         {
@@ -65,7 +76,9 @@ describe("a Tier-0 declaration renders end to end", () => {
   it("renders every node in the tree", () => {
     render(renderNode(rootView));
 
-    expect(screen.getByRole("heading", { name: "Demo Console" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Demo Console" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Open")).toBeInTheDocument();
     expect(screen.getByText("42")).toBeInTheDocument();
     // ap:grid's SECOND child — without this, a renderer bug that mapped only

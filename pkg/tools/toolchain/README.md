@@ -3,10 +3,10 @@
 The seam by which a resolved **toolchain payload** is delivered into a sandbox
 pod, plus the resolution that produces it.
 
-| Package | Purpose |
-| --- | --- |
-| [`kinds`](kinds/) | The delivery mechanisms and their registry. |
-| [`resolve`](resolve/) | Turns a class's toolchain *names* into self-contained, frozen mounts plus a set digest. |
+| Package               | Purpose                                                                                 |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| [`kinds`](kinds/)     | The delivery mechanisms and their registry.                                             |
+| [`resolve`](resolve/) | Turns a class's toolchain _names_ into self-contained, frozen mounts plus a set digest. |
 
 [`toolchain.go`](toolchain.go) holds the `Kind` interface, dispatched by
 `SpiceboxToolchain.spec.source.kind`, and `ApplyParams`. The pod builder owns
@@ -25,10 +25,10 @@ read-only.
   same digest. That purity is what lets more than one controller call it without
   either importing the other.
 - `Resolve` **fails closed** on a missing or `Valid=False` toolchain, wrapping
-  `ErrToolchainMissing` / `ErrToolchainNotValid` so the caller can pick the right
-  `Ready=False` reason. Any other error — a transient apiserver failure — is
-  returned wrapped by neither sentinel, so the caller propagates it instead of
-  persisting a misleading condition.
+  `ErrToolchainMissing` / `ErrToolchainNotValid` so the caller can pick the
+  right `Ready=False` reason. Any other error — a transient apiserver failure —
+  is returned wrapped by neither sentinel, so the caller propagates it instead
+  of persisting a misleading condition.
 
 Part of [`pkg/tools`](../README.md). See the root
 [`README.md`](../../../README.md) and [`AGENTS.md`](../../../AGENTS.md).

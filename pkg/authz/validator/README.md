@@ -3,8 +3,8 @@
 The shared outcome surface that the repo's two tool-argument validators return.
 This directory holds no code of its own.
 
-| Package | What it does |
-| ------- | ------------ |
+| Package         | What it does                                                                                                            |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | [`core`](core/) | The `Decision` / `Trace` / `CheckRef` types and their helpers, generic over the per-validator "parsed invocation" type. |
 
 ## Why it exists

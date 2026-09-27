@@ -7,17 +7,17 @@ allowlisted shell command, ask the user, and finally store the credential.
 
 ## Files
 
-| File | What it holds |
-| ---- | ------------- |
-| `agent.go` | The loop: builds the tool set, drives the provider, enforces the turn budget. |
-| `prompt.go` | `BuildSystemPrompt` — role, provider prompt, docs URL, user intent, token shape, shell allowlist, stop conditions, in that order. Also serves the inline-prompt path where a toolkit supplies its own prompt instead of a provider. |
-| `seams.go` | `LLMProviderFactory` — the DI seam. Production is `pkg/agent/llm/anthropic`; tests inject a fake and restore `DefaultProviderFactory`. |
-| `verifystore.go` | The verify-then-store callback the `store_credential` tool lands in, shared with [`../builtins`](../builtins/)'s verification. |
+| File             | What it holds                                                                                                                                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent.go`       | The loop: builds the tool set, drives the provider, enforces the turn budget.                                                                                                                                                       |
+| `prompt.go`      | `BuildSystemPrompt` — role, provider prompt, docs URL, user intent, token shape, shell allowlist, stop conditions, in that order. Also serves the inline-prompt path where a toolkit supplies its own prompt instead of a provider. |
+| `seams.go`       | `LLMProviderFactory` — the DI seam. Production is `pkg/agent/llm/anthropic`; tests inject a fake and restore `DefaultProviderFactory`.                                                                                              |
+| `verifystore.go` | The verify-then-store callback the `store_credential` tool lands in, shared with [`../builtins`](../builtins/)'s verification.                                                                                                      |
 
 ## Subpackages
 
-| Package | What it is |
-| ------- | ---------- |
+| Package           | What it is                                                      |
+| ----------------- | --------------------------------------------------------------- |
 | [`tools`](tools/) | The tool implementations the agent exposes. Has its own README. |
 
 ## Constraints

@@ -6,9 +6,16 @@ import { Card } from "@ap/design";
 import { p, s } from "./props";
 import type { Node } from "./types";
 
-const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 
-function ProgressItem({ label, state }: { label: string; state: "done" | "next" }) {
+function ProgressItem({
+  label,
+  state,
+}: {
+  label: string;
+  state: "done" | "next";
+}) {
   return (
     <li data-state={state} className="flex items-center gap-2 text-sm">
       {/* The checkmark is its OWN element, aria-hidden and outside the label's
@@ -19,7 +26,13 @@ function ProgressItem({ label, state }: { label: string; state: "done" | "next" 
           ✓
         </span>
       )}
-      <span className={state === "done" ? "text-muted-foreground line-through" : undefined}>{label}</span>
+      <span
+        className={
+          state === "done" ? "text-muted-foreground line-through" : undefined
+        }
+      >
+        {label}
+      </span>
     </li>
   );
 }

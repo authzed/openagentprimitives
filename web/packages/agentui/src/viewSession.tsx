@@ -12,8 +12,18 @@ export interface ViewSession {
 
 const ViewSessionContext = React.createContext<ViewSession | null>(null);
 
-export function ViewSessionProvider({ value, children }: { value: ViewSession; children: React.ReactNode }): React.ReactElement {
-  return <ViewSessionContext.Provider value={value}>{children}</ViewSessionContext.Provider>;
+export function ViewSessionProvider({
+  value,
+  children,
+}: {
+  value: ViewSession;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <ViewSessionContext.Provider value={value}>
+      {children}
+    </ViewSessionContext.Provider>
+  );
 }
 
 // useViewSession returns the host's session, or null when rendered outside any

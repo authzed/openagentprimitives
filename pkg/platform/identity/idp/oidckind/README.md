@@ -10,15 +10,15 @@ preset, not a fork.
 
 ## Files
 
-| File | What it holds |
-| ---- | ------------- |
-| `oidc.go` | The `Kind`, `Options`, and the `Provider` implementing `Begin`/`Complete`. |
+| File        | What it holds                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oidc.go`   | The `Kind`, `Options`, and the `Provider` implementing `Begin`/`Complete`.                                                                            |
 | `wizard.go` | The `oap idp setup oidc` flow, built on shared screens from [`../idpscreens`](../idpscreens/). `KeyIssuer` is part of the wizard's public vocabulary. |
 
 ## Subpackages
 
-| Package | What it is |
-| ------- | ---------- |
+| Package                 | What it is                                                                                                                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`oidctest`](oidctest/) | A fake OIDC issuer over `httptest.Server` — discovery, JWKS, token exchange with a test RSA key — used by both this kind's and google's tests. **Not production-safe**: it panics rather than returning errors. |
 
 ## Constraints

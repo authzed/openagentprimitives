@@ -1,8 +1,9 @@
 # validator
 
 Per-tool-call validation of an MCP invocation against an `MCPServer` spec.
-Deliberately parallel to [`pkg/tools/toolspec/validator`](../../toolspec/validator/);
-the two share their `Decision` / `Trace` / redaction machinery through
+Deliberately parallel to
+[`pkg/tools/toolspec/validator`](../../toolspec/validator/); the two share their
+`Decision` / `Trace` / redaction machinery through
 [`pkg/authz/validator/core`](../../../authz/validator/core/).
 
 The pipeline, each phase short-circuiting on the first deny:
@@ -11,15 +12,15 @@ The pipeline, each phase short-circuiting on the first deny:
 tool → allowedFields → deny.effects → deny.trust → constraints → allow
 ```
 
-| File | Holds |
-| --- | --- |
-| [`validator.go`](validator.go) | `Check` — the pipeline — and `Invocation` (tool name plus JSON args). |
-| [`phases.go`](phases.go) | One helper per phase. Each returns pass / recorded-failure / internal-error. |
-| [`decision.go`](decision.go) | Aliases re-exporting the shared `core` types, plus the MCP-specific `ParsedArgs`. |
-| [`trace.go`](trace.go) | Trace append, and `finalize`, which redacts every user-visible string before the Decision leaves the package. |
-| [`redact.go`](redact.go) | Walks `sensitiveFields` and replaces the whole value at each path with a single token. |
-| [`constrainterror.go`](constrainterror.go) | `ConstraintError` — the typed error for CEL that could not be *evaluated*. |
-| [`helpers.go`](helpers.go) | Tool lookup and SEP-1913 enum containment. |
+| File                                       | Holds                                                                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| [`validator.go`](validator.go)             | `Check` — the pipeline — and `Invocation` (tool name plus JSON args).                                         |
+| [`phases.go`](phases.go)                   | One helper per phase. Each returns pass / recorded-failure / internal-error.                                  |
+| [`decision.go`](decision.go)               | Aliases re-exporting the shared `core` types, plus the MCP-specific `ParsedArgs`.                             |
+| [`trace.go`](trace.go)                     | Trace append, and `finalize`, which redacts every user-visible string before the Decision leaves the package. |
+| [`redact.go`](redact.go)                   | Walks `sensitiveFields` and replaces the whole value at each path with a single token.                        |
+| [`constrainterror.go`](constrainterror.go) | `ConstraintError` — the typed error for CEL that could not be _evaluated_.                                    |
+| [`helpers.go`](helpers.go)                 | Tool lookup and SEP-1913 enum containment.                                                                    |
 
 ## Fail-closed rules
 

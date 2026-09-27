@@ -7,14 +7,14 @@ invariants; this file carries the argument behind them.
 
 The `local` kind's surface is an ANSI terminal driven by lipgloss, which
 **preserves** ANSI in the strings it renders. Untrusted text handed to the sink
-verbatim is therefore not merely displayed — it is *executed* by the terminal.
+verbatim is therefore not merely displayed — it is _executed_ by the terminal.
 
 Two consequences make this a forged-action defect rather than a cosmetic one,
 both of them on the surface a decision is made from:
 
 - `"\x1b[1A\x1b[2K"` (cursor up, erase line), repeated, overwrites the lines the
   consumer authored. The decision modal's keybinding hints are drawn one line
-  *below* the payload text, and a tool block's outcome trailer one line *above*
+  _below_ the payload text, and a tool block's outcome trailer one line _above_
   the tool's own bytes. Whoever controls the untrusted text controls what the
   user believes those keys do.
 - `"\x1b]0;…\x07"` (OSC) sets the terminal **window title**, outside the app's
@@ -26,10 +26,10 @@ is the one component that knows its surface. A consumer that interpolates these
 strings into a frame cannot be expected to re-derive it, and there is more than
 one consumer.
 
-The browser surface settles the right treatment rather than leaving it to
-taste: it folds these identical `tool_session` bytes through Anser into
-structured colour spans precisely because they are untrusted tool output. It
-keeps colour and keeps no cursor control at all. This kind draws the same line.
+The browser surface settles the right treatment rather than leaving it to taste:
+it folds these identical `tool_session` bytes through Anser into structured
+colour spans precisely because they are untrusted tool output. It keeps colour
+and keeps no cursor control at all. This kind draws the same line.
 
 ## Why the sweep is a door, not an enumeration
 
@@ -51,7 +51,7 @@ out, all built from one `Host.sink`, and `NewHost` wraps the caller's
 `EventSink` exactly once. From there:
 
 - a new sender is swept, because it is built from the same wrapped sink;
-- a new render event *type* is swept, because the sweep walks **values**, not a
+- a new render event _type_ is swept, because the sweep walks **values**, not a
   list of types;
 - a new **field** on an existing payload is swept, because it is reached by the
   same walk.
@@ -66,7 +66,7 @@ guard ends up exercised only on the paths that never needed it.
 Sweeping by shape rather than by a list of known message types is the whole
 point: the default for a field nobody has thought about is "swept", so
 forgetting is safe. The single exception — a tool's own output, which keeps SGR
-— is named in `keepsToolSGR`, and forgetting an entry *there* loses colour on
+— is named in `keepsToolSGR`, and forgetting an entry _there_ loses colour on
 one field rather than opening a hole. That asymmetry in the failure direction is
 what an enumeration could never give.
 
@@ -99,7 +99,7 @@ to close a hole that neither opens.
 `inertToolOutput` keeps SGR. `ToolSessionDeltaPayload.Data` is by contract the
 raw bytes the tool emitted, so a coloured test summary or diff is content the
 user chose to run and wants to see, while cursor movement, erase, scroll and OSC
-are the *surface's* own controls and are not the tool's to use. Dropping colour
+are the _surface's_ own controls and are not the tool's to use. Dropping colour
 would be a real regression on every ordinary tool run; keeping cursor control
 would leave the defect open.
 
@@ -153,7 +153,7 @@ Category, RequestRef and IDs are skipped there because they are matched rather
 than displayed, so pre-rendering does not need them. The door still sweeps them,
 and that is the right call: the sweep is a provable no-op on every well-formed
 ref (none contains an ESC, a C0/C1 control or DEL), so nothing that correlates
-today stops correlating. On a ref that is *not* well-formed the sweep changes it
+today stops correlating. On a ref that is _not_ well-formed the sweep changes it
 and the decision reply fails to match — fail-closed, and strictly better than
 carrying a live escape sequence to a terminal on the theory that a malformed
 identifier deserves byte-exact preservation.

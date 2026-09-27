@@ -3,10 +3,10 @@
 Toolchain **delivery mechanisms**, dispatched by
 `SpiceboxToolchain.spec.source.kind`.
 
-| Package | Kind | Mechanism |
-| --- | --- | --- |
-| [`image`](image/) | `image` | Runs the toolchain's own OCI image as an init container that copies the payload into a shared `emptyDir`, which the sandbox container then mounts read-only. |
-| [`registry`](registry/) | — | The process-local registry. Kinds self-register from `init()`; binaries blank-import the ones they support. |
+| Package                 | Kind    | Mechanism                                                                                                                                                    |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`image`](image/)       | `image` | Runs the toolchain's own OCI image as an init container that copies the payload into a shared `emptyDir`, which the sandbox container then mounts read-only. |
+| [`registry`](registry/) | —       | The process-local registry. Kinds self-register from `init()`; binaries blank-import the ones they support.                                                  |
 
 ## Constraints
 
@@ -16,8 +16,8 @@ Toolchain **delivery mechanisms**, dispatched by
   cost is one copy and transient disk.
 - `image.Validate` re-checks that the mount name is a DNS-1123 label even though
   CR admission checks the same invariant: the Kind builds `"toolchain-"+name`
-  into a container name and is reachable independently, so it cannot rely on
-  the admission caller having run first.
+  into a container name and is reachable independently, so it cannot rely on the
+  admission caller having run first.
 - `registry.Register` **panics on a name collision**, so an init-ordering bug is
   loud at startup rather than a silently-shadowed delivery mechanism at
   pod-create time. `Names()` exists so an unknown-kind error can list the known

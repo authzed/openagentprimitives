@@ -13,8 +13,8 @@ function UnknownComponent({ type }: { type: string }) {
     <Alert variant="destructive">
       <AlertTitle>Cannot render this section</AlertTitle>
       <AlertDescription>
-        Unknown component <code className="font-mono">{type}</code>. Reload the page; if it persists, this view needs an
-        update.
+        Unknown component <code className="font-mono">{type}</code>. Reload the
+        page; if it persists, this view needs an update.
       </AlertDescription>
     </Alert>
   );
@@ -39,8 +39,8 @@ function FailedComponent({ type }: { type: string }) {
     <Alert variant="destructive">
       <AlertTitle>Cannot render this section</AlertTitle>
       <AlertDescription>
-        The <code className="font-mono">{type}</code> section could not be displayed. The rest of this view is
-        unaffected.
+        The <code className="font-mono">{type}</code> section could not be
+        displayed. The rest of this view is unaffected.
       </AlertDescription>
     </Alert>
   );
@@ -79,7 +79,11 @@ const childRenderer =
 // renderNode turns one declaration node into React. Recursion lives here and
 // nowhere else: registry.tsx's container renderers receive a child-renderer as
 // their second argument, so the two modules never import each other.
-export function renderNode(n: Node, key?: React.Key, onError?: RenderErrorSink): React.ReactElement {
+export function renderNode(
+  n: Node,
+  key?: React.Key,
+  onError?: RenderErrorSink,
+): React.ReactElement {
   const renderer = COMPONENTS[n.component];
   if (!renderer) {
     onError?.(n.component);

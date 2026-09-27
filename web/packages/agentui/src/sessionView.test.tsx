@@ -6,7 +6,11 @@ function renderNode(props: Record<string, unknown>) {
   const El = COMPONENTS["ap:session_view"];
   // Renderer's second param (renderChild) is unused by this leaf renderer;
   // `undefined as never` satisfies the type's arity without a real one.
-  return render(<>{El({ component: "ap:session_view", props } as never, undefined as never)}</>);
+  return render(
+    <>
+      {El({ component: "ap:session_view", props } as never, undefined as never)}
+    </>,
+  );
 }
 
 describe("ap:session_view", () => {
@@ -19,10 +23,20 @@ describe("ap:session_view", () => {
 
   it("url-encodes each segment", () => {
     const { container } = renderNode({ sessionRef: "ns x/a b" });
-    expect(container.querySelector("iframe")!.getAttribute("src")).toBe("/session-view/ns%20x/a%20b");
+    expect(container.querySelector("iframe")!.getAttribute("src")).toBe(
+      "/session-view/ns%20x/a%20b",
+    );
   });
 
-  for (const bad of ["", "a/b/c", "../x", "x/..", "/x", "x/", "http://evil/x"]) {
+  for (const bad of [
+    "",
+    "a/b/c",
+    "../x",
+    "x/..",
+    "/x",
+    "x/",
+    "http://evil/x",
+  ]) {
     it(`renders a placeholder (no iframe) for malformed ref ${JSON.stringify(bad)}`, () => {
       const { container } = renderNode({ sessionRef: bad });
       expect(container.querySelector("iframe")).toBeNull();

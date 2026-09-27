@@ -7,12 +7,12 @@ implementation.
 
 ## Two registries, two interfaces
 
-| | List | Detail |
-| --- | --- | --- |
+|           | List                                                   | Detail                                                            |
+| --------- | ------------------------------------------------------ | ----------------------------------------------------------------- |
 | Interface | `Projector` — `Resource() string`, `List(ctx, client)` | `DetailProjector` — `Resource()`, `Detail(ctx, client, ns, name)` |
-| Returns | `[]ResourceRow` | `*ResourceDetail` (sections of fields/text/list) |
-| Register | `Register` / `Get` / `All` / `Reset` | `RegisterDetail` / `GetDetail` / `AllDetail` / `ResetDetail` |
-| File | `registry.go` | `detail.go` |
+| Returns   | `[]ResourceRow`                                        | `*ResourceDetail` (sections of fields/text/list)                  |
+| Register  | `Register` / `Get` / `All` / `Reset`                   | `RegisterDetail` / `GetDetail` / `AllDetail` / `ResetDetail`      |
+| File      | `registry.go`                                          | `detail.go`                                                       |
 
 Both are backed by [`pkg/x/kindregistry`](../../../x/kindregistry), keyed on the
 URL slug. **A duplicate or empty slug panics at process start** — a programmer

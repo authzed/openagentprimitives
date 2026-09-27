@@ -16,9 +16,9 @@ reports how the work in flight aligns with stated product goals.
 
 ## Configuration
 
-| Question | Purpose |
-| --- | --- |
-| `repos` | Which GitHub repositories the agent may read. |
+| Question      | Purpose                                                |
+| ------------- | ------------------------------------------------------ |
+| `repos`       | Which GitHub repositories the agent may read.          |
 | `githubToken` | The read-only GitHub PAT the agent authenticates with. |
 
 This agent applies no privileged resources; it is safe to install into a shared

@@ -13,7 +13,12 @@ describe("ap:status", () => {
     ["ended", "Ended at"],
     ["unwatched", "Still running; I stopped watching at"],
   ])("renders state %s with its text and a matching dot", (state, text) => {
-    render(renderNode({ component: "ap:status", props: { state, text, since: "2026-09-13T12:52:00Z" } }));
+    render(
+      renderNode({
+        component: "ap:status",
+        props: { state, text, since: "2026-09-13T12:52:00Z" },
+      }),
+    );
     const el = screen.getByTestId("ap-status");
     expect(el).toHaveAttribute("data-state", state);
     expect(el).toHaveTextContent(text);
@@ -25,7 +30,12 @@ describe("ap:status", () => {
   // wrong time for every viewer outside that zone.
   it("draws the moment in the viewer's own clock, keeping the moment itself on the element", () => {
     const since = "2026-09-13T12:52:00Z";
-    render(renderNode({ component: "ap:status", props: { state: "running", text: "Running since", since } }));
+    render(
+      renderNode({
+        component: "ap:status",
+        props: { state: "running", text: "Running since", since },
+      }),
+    );
     const el = screen.getByTestId("ap-status");
     const time = el.querySelector("time") as HTMLTimeElement;
     expect(time).not.toBeNull();
@@ -37,7 +47,12 @@ describe("ap:status", () => {
   });
 
   it("draws no time for a since that is not a moment: there is nothing to localize", () => {
-    render(renderNode({ component: "ap:status", props: { state: "running", text: "Running since", since: "12:52" } }));
+    render(
+      renderNode({
+        component: "ap:status",
+        props: { state: "running", text: "Running since", since: "12:52" },
+      }),
+    );
     const el = screen.getByTestId("ap-status");
     expect(el.querySelector("time")).toBeNull();
     expect(el).toHaveTextContent("Running since");

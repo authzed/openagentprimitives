@@ -33,9 +33,13 @@ function echo(bundle: { annotations: Array<{ elementPath: string }> }): void {
       if (el instanceof win.HTMLElement) {
         el.style.outline = "3px solid #16a34a";
         el.style.transition = "outline .2s";
-        win.setTimeout(() => { el.style.outline = ""; }, 900);
+        win.setTimeout(() => {
+          el.style.outline = "";
+        }, 900);
       }
-    } catch { /* invalid/unmatched selector — ignore */ }
+    } catch {
+      /* invalid/unmatched selector — ignore */
+    }
   }
 }
 
@@ -54,8 +58,15 @@ window.addEventListener("message", (e: MessageEvent) => {
 });
 
 // DOM contract the annotator reads, then boot the real annotator.
-(window as unknown as { __AP_ANNOT?: { shell: string } }).__AP_ANNOT = { shell: location.origin };
-bootAnnotator({ hostDoc: document, innerFrame: frame, shellOrigin: location.origin, artifactId: "dev" });
+(window as unknown as { __AP_ANNOT?: { shell: string } }).__AP_ANNOT = {
+  shell: location.origin,
+};
+bootAnnotator({
+  hostDoc: document,
+  innerFrame: frame,
+  shellOrigin: location.origin,
+  artifactId: "dev",
+});
 
 picker.addEventListener("change", () => load(picker.value as Fixture));
 swapBtn.addEventListener("click", () => load(picker.value as Fixture));

@@ -8,9 +8,7 @@ import { readBootstrap } from "./bootstrap";
 // P is constrained to `object` (not Record<string, unknown>) so plugin authors
 // can type their props as an interface — interfaces lack the implicit index
 // signature Record<string, unknown> would require.
-export function mount<P extends object>(
-  App: React.ComponentType<P>,
-): void {
+export function mount<P extends object>(App: React.ComponentType<P>): void {
   const el = document.getElementById("root");
   if (!el) return;
   const props = readBootstrap<P>();

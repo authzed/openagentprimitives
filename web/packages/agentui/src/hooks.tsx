@@ -81,7 +81,11 @@ export function HookStateProvider({
   value: HookState;
   children: React.ReactNode;
 }): React.ReactElement {
-  return <HookStateContext.Provider value={value}>{children}</HookStateContext.Provider>;
+  return (
+    <HookStateContext.Provider value={value}>
+      {children}
+    </HookStateContext.Provider>
+  );
 }
 
 export function useHookState(): HookState {
@@ -203,11 +207,13 @@ export function GenerativeHook({
   const foldTitle = collapsed.get(name);
   // Under a rail layout the rail IS the fold: a finished step's hook is hidden
   // by the page until its step is selected, and shown open when it is.
-  const isCollapsed = layout !== "rail" && foldTitle !== undefined && hasContent;
+  const isCollapsed =
+    layout !== "rail" && foldTitle !== undefined && hasContent;
   // A heading needs both a title and something to head, for the same reason
   // the fold needs content: a header over nothing is chrome the region has no
   // use for.
-  const showTitle = layout === "rail" && title !== undefined && title !== "" && hasContent;
+  const showTitle =
+    layout === "rail" && title !== undefined && title !== "" && hasContent;
   // Under a rail the chip is redundant: the staged card IS the ask — a hook
   // the agent is waiting on is the one the page stages — so a label saying so
   // repeats what the person is already reading. The attribute is unaffected;
@@ -229,7 +235,11 @@ export function GenerativeHook({
       // — the attribute above says so — but washing nothing paints a stray
       // tinted box on the page, so the wash needs content as well as the
       // mark.
-      className={cn("relative w-full", isComposed && hasContent && COMPOSED_CLASS, isStale && "opacity-60 transition-opacity")}
+      className={cn(
+        "relative w-full",
+        isComposed && hasContent && COMPOSED_CLASS,
+        isStale && "opacity-60 transition-opacity",
+      )}
     >
       {(showWaiting || isUpdated || isStale) && (
         // The cues sit ABOVE the content, in flow, so they reserve their own
@@ -239,7 +249,10 @@ export function GenerativeHook({
         // "waiting" and "updated" are often true at once and must never hide
         // one another. pointer-events-none so a cue can never eat a click
         // meant for a control beneath it.
-        <div data-testid="agent-ui-hook-cues" className="pointer-events-none mb-1 flex min-h-5 items-center justify-between gap-2 text-[11px]">
+        <div
+          data-testid="agent-ui-hook-cues"
+          className="pointer-events-none mb-1 flex min-h-5 items-center justify-between gap-2 text-[11px]"
+        >
           <span>
             {showWaiting && (
               <span
@@ -251,7 +264,10 @@ export function GenerativeHook({
             )}
           </span>
           {isUpdated ? (
-            <span data-testid="agent-ui-hook-updated" className="rounded bg-accent/10 px-1.5 py-0.5 text-muted-foreground">
+            <span
+              data-testid="agent-ui-hook-updated"
+              className="rounded bg-accent/10 px-1.5 py-0.5 text-muted-foreground"
+            >
               Updated
             </span>
           ) : isStale ? (
@@ -259,21 +275,38 @@ export function GenerativeHook({
             // which is the point — the previous answer is still the best
             // available one until the next arrives. It yields to the updated
             // cue, which reports the newer, larger fact.
-            <div data-testid="agent-ui-hook-refreshing" className="flex items-center gap-1.5 text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            <div
+              data-testid="agent-ui-hook-refreshing"
+              className="flex items-center gap-1.5 text-muted-foreground"
+            >
+              <Loader2
+                className="h-3.5 w-3.5 animate-spin"
+                aria-hidden="true"
+              />
               <span>Updating…</span>
             </div>
           ) : null}
         </div>
       )}
       <EnclosingHook.Provider value={name}>
-        {showTitle && <h3 data-testid="agent-ui-hook-title" className="mb-2 text-sm font-medium text-foreground">{title}</h3>}
+        {showTitle && (
+          <h3
+            data-testid="agent-ui-hook-title"
+            className="mb-2 text-sm font-medium text-foreground"
+          >
+            {title}
+          </h3>
+        )}
         {isCollapsed ? (
           // The page closed this region because its phase ended. Always
           // `collapsed`: a hook leaves this map — and this fold — when its
           // step is no longer done, so the person's reopen survives exactly
           // until the page has a new reason to say otherwise.
-          <Disclosure title={foldTitle} collapsed testId="agent-ui-hook-collapsed">
+          <Disclosure
+            title={foldTitle}
+            collapsed
+            testId="agent-ui-hook-collapsed"
+          >
             {children}
           </Disclosure>
         ) : (

@@ -9,15 +9,15 @@ decisions and applied events coming back off the bus.
 **This is where channel-kind-neutral policy lives.** A kind's listener supplies
 raw transport facts and decides nothing.
 
-| Concern | Files |
-| ------- | ----- |
-| **Core** | `pipeline.go` (`NewPipeline`, `Deliver`, `ResubmitAuthorized`) |
-| **Session correlation** | `backfill.go`, `thread_owner.go`, `resolved_cache.go`, `statusapply.go`, `startup_status.go` |
-| **Interaction legs** | `interaction_request.go` (`HandleInteractionRequest` / `HandleInteractionApplied`), `interaction_decision.go` (`HandleInteractionDecision`) |
+| Concern                     | Files                                                                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Core**                    | `pipeline.go` (`NewPipeline`, `Deliver`, `ResubmitAuthorized`)                                                                                                             |
+| **Session correlation**     | `backfill.go`, `thread_owner.go`, `resolved_cache.go`, `statusapply.go`, `startup_status.go`                                                                               |
+| **Interaction legs**        | `interaction_request.go` (`HandleInteractionRequest` / `HandleInteractionApplied`), `interaction_decision.go` (`HandleInteractionDecision`)                                |
 | **Bound decision handlers** | `permission_interaction.go`, `tool_approval_interaction.go`, `provider_retry_interaction.go`, `queued_interrupt.go`, `approval_decision.go`, `identity_choice_decision.go` |
-| **Credentials** | `credential_request.go`, `credential_linked.go`, `credential_update.go`, `identitylink.go`, `portal_access.go` |
-| **Resurface** | `resurface.go`, `resurface_request.go` |
-| **Other legs** | `decision.go` (permission-request TTL expiry), `restart_publish.go`, `view_message.go`, `viewdedup.go`, `attachments.go`, `agent_unavailable.go` |
+| **Credentials**             | `credential_request.go`, `credential_linked.go`, `credential_update.go`, `identitylink.go`, `portal_access.go`                                                             |
+| **Resurface**               | `resurface.go`, `resurface_request.go`                                                                                                                                     |
+| **Other legs**              | `decision.go` (permission-request TTL expiry), `restart_publish.go`, `view_message.go`, `viewdedup.go`, `attachments.go`, `agent_unavailable.go`                           |
 
 ## Non-obvious constraints
 
@@ -35,9 +35,9 @@ raw transport facts and decides nothing.
   marker and the `permission_request` publish are in the pipeline's
   `handlePermissionDeny` branch; [`../pipelinehost`](../pipelinehost/) is a thin
   log adapter.
-- **The pipeline is reachable from browser-facing code** via
-  `pipelinehost` ← `pkg/web/webui/chat`. That constrains its import graph:
-  a guard test fails the unit suite if `pkg/web/webui/chat` transitively
-  imports `pkg/memory/provenance`, which is why the shared attachment size
-  ceiling lives in the dependency-free `pkg/memory/assetlimits` rather than in
+- **The pipeline is reachable from browser-facing code** via `pipelinehost` ←
+  `pkg/web/webui/chat`. That constrains its import graph: a guard test fails the
+  unit suite if `pkg/web/webui/chat` transitively imports
+  `pkg/memory/provenance`, which is why the shared attachment size ceiling lives
+  in the dependency-free `pkg/memory/assetlimits` rather than in
   `pkg/memory/httpsrv`.

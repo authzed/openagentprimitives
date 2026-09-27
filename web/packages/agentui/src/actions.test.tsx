@@ -9,15 +9,30 @@ import type { Node } from "./types";
 
 afterEach(cleanup);
 
-const buttonNode: Node = { component: "ap:button", props: { label: "Advance", action: "advance" } };
+const buttonNode: Node = {
+  component: "ap:button",
+  props: { label: "Advance", action: "advance" },
+};
 
 const formNode: Node = {
   component: "ap:form",
-  props: { action: "advance", submitLabel: "Send", fields: [{ name: "why", label: "Why" }] },
+  props: {
+    action: "advance",
+    submitLabel: "Send",
+    fields: [{ name: "why", label: "Why" }],
+  },
 };
 
-function withActions(n: Node, states: Record<string, ActionState>, invoke = vi.fn()) {
-  render(<ActionsProvider value={{ states, invoke, answer: vi.fn() }}>{renderNode(n)}</ActionsProvider>);
+function withActions(
+  n: Node,
+  states: Record<string, ActionState>,
+  invoke = vi.fn(),
+) {
+  render(
+    <ActionsProvider value={{ states, invoke, answer: vi.fn() }}>
+      {renderNode(n)}
+    </ActionsProvider>,
+  );
   return invoke;
 }
 
@@ -48,26 +63,41 @@ describe("ap:button", () => {
   });
 
   it("re-enables on denied, and says so", () => {
-    withActions(buttonNode, { advance: { phase: "denied", message: "You cannot do that." } });
+    withActions(buttonNode, {
+      advance: { phase: "denied", message: "You cannot do that." },
+    });
     expect(screen.getByRole("button", { name: /Advance/ })).toBeEnabled();
     expect(screen.getByText("You cannot do that.")).toBeVisible();
   });
 
   it("distinguishes an approval the viewer must act on from one they cannot", () => {
-    withActions(buttonNode, { advance: { phase: "awaiting_approval", approvalAddressedToViewer: true } });
+    withActions(buttonNode, {
+      advance: { phase: "awaiting_approval", approvalAddressedToViewer: true },
+    });
     const mine = screen.getByTestId("agent-ui-action-status").textContent;
     cleanup();
-    withActions(buttonNode, { advance: { phase: "awaiting_approval", approvalAddressedToViewer: false } });
-    expect(screen.getByTestId("agent-ui-action-status").textContent).not.toBe(mine);
+    withActions(buttonNode, {
+      advance: { phase: "awaiting_approval", approvalAddressedToViewer: false },
+    });
+    expect(screen.getByTestId("agent-ui-action-status").textContent).not.toBe(
+      mine,
+    );
   });
 
   it("surfaces a rate limit with a retry hint rather than going silent", () => {
-    withActions(buttonNode, { advance: { phase: "rate_limited", message: "Too fast; try again shortly." } });
+    withActions(buttonNode, {
+      advance: {
+        phase: "rate_limited",
+        message: "Too fast; try again shortly.",
+      },
+    });
     expect(screen.getByText(/try again shortly/i)).toBeVisible();
   });
 
   it("never renders an internal identifier", () => {
-    withActions(buttonNode, { advance: { phase: "awaiting_approval", requestId: "req-abc123" } });
+    withActions(buttonNode, {
+      advance: { phase: "awaiting_approval", requestId: "req-abc123" },
+    });
     expect(document.body.textContent).not.toContain("req-abc123");
   });
 
@@ -75,7 +105,9 @@ describe("ap:button", () => {
   // succeeded" contract isActionPending's sibling table below pins.
   it("shows no status caption once the action has succeeded", () => {
     withActions(buttonNode, { advance: { phase: "succeeded" } });
-    expect(screen.queryByTestId("agent-ui-action-status")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("agent-ui-action-status"),
+    ).not.toBeInTheDocument();
   });
 
   // Guards WHAT MUST BE TRUE #5: "a failed action degrades ONE control, not
@@ -88,12 +120,24 @@ describe("ap:button", () => {
     const twoButtons: Node = {
       component: "ap:stack",
       children: [
-        { component: "ap:button", props: { label: "Advance", action: "advance" } },
-        { component: "ap:button", props: { label: "Cancel", action: "cancel" } },
+        {
+          component: "ap:button",
+          props: { label: "Advance", action: "advance" },
+        },
+        {
+          component: "ap:button",
+          props: { label: "Cancel", action: "cancel" },
+        },
       ],
     };
     render(
-      <ActionsProvider value={{ states: { advance: { phase: "failed", message: "Broke." } }, invoke, answer: vi.fn() }}>
+      <ActionsProvider
+        value={{
+          states: { advance: { phase: "failed", message: "Broke." } },
+          invoke,
+          answer: vi.fn(),
+        }}
+      >
         {renderNode(twoButtons)}
       </ActionsProvider>,
     );
@@ -167,7 +211,12 @@ describe("ap:form", () => {
   });
 
   it("stays inert when the declaration names no action", () => {
-    render(renderNode({ component: "ap:form", props: { fields: [{ name: "why" }] } }));
+    render(
+      renderNode({
+        component: "ap:form",
+        props: { fields: [{ name: "why" }] },
+      }),
+    );
     expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
   });
 });
@@ -176,10 +225,19 @@ describe("isActionPending", () => {
   it("treats idle as NOT pending, so an unclicked control stays clickable", () => {
     expect(isActionPending("idle")).toBe(false);
   });
-  it.each(["submitted", "awaiting_approval", "running"] as const)("treats %s as pending", (p) => {
-    expect(isActionPending(p)).toBe(true);
-  });
-  it.each(["succeeded", "failed", "denied", "expired", "rate_limited"] as const)("treats %s as settled", (p) => {
+  it.each(["submitted", "awaiting_approval", "running"] as const)(
+    "treats %s as pending",
+    (p) => {
+      expect(isActionPending(p)).toBe(true);
+    },
+  );
+  it.each([
+    "succeeded",
+    "failed",
+    "denied",
+    "expired",
+    "rate_limited",
+  ] as const)("treats %s as settled", (p) => {
     expect(isActionPending(p)).toBe(false);
   });
 });
@@ -192,13 +250,25 @@ describe("isActionPending", () => {
 // second message mid-turn.
 describe("busy (the agent's turn is active)", () => {
   const busyProvider = (n: Node, busy: boolean) =>
-    render(<ActionsProvider value={{ states: {}, invoke: vi.fn(), answer: vi.fn(), busy }}>{renderNode(n)}</ActionsProvider>);
+    render(
+      <ActionsProvider
+        value={{ states: {}, invoke: vi.fn(), answer: vi.fn(), busy }}
+      >
+        {renderNode(n)}
+      </ActionsProvider>,
+    );
 
   it("disables a form's fields and submit while busy, and re-enables when the turn ends", () => {
     const { rerender } = busyProvider(formNode, true);
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(screen.getByLabelText("Why")).toBeDisabled();
-    rerender(<ActionsProvider value={{ states: {}, invoke: vi.fn(), answer: vi.fn(), busy: false }}>{renderNode(formNode)}</ActionsProvider>);
+    rerender(
+      <ActionsProvider
+        value={{ states: {}, invoke: vi.fn(), answer: vi.fn(), busy: false }}
+      >
+        {renderNode(formNode)}
+      </ActionsProvider>,
+    );
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
     expect(screen.getByLabelText("Why")).toBeEnabled();
   });

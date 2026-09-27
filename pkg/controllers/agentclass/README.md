@@ -1,16 +1,16 @@
 # `agentclass` — the AgentClass reconciler
 
-Reconciles `AgentClass` CRs. Validates the spec shape, confirms every
-referenced Secret and ConfigMap exists **without reading their bytes**, and
-surfaces `Valid=True/False` with a reason.
+Reconciles `AgentClass` CRs. Validates the spec shape, confirms every referenced
+Secret and ConfigMap exists **without reading their bytes**, and surfaces
+`Valid=True/False` with a reason.
 
-| File | Role |
-| ---- | ---- |
-| `controller.go` | `Reconcile` + `SetupWithManager`, and the `+kubebuilder:rbac` markers |
-| `grants.go` | Composes the class's authz requirements into an `AgentSessionGrants` CR for [`../guardian`](../guardian/) |
-| `permission_validation.go` | Per-tool permission declarations |
-| `schema_validation.go` | Contributed SpiceDB schema fragments |
-| `skills_validation.go` | Referenced Skill / ClusterSkill resolution |
+| File                       | Role                                                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `controller.go`            | `Reconcile` + `SetupWithManager`, and the `+kubebuilder:rbac` markers                                     |
+| `grants.go`                | Composes the class's authz requirements into an `AgentSessionGrants` CR for [`../guardian`](../guardian/) |
+| `permission_validation.go` | Per-tool permission declarations                                                                          |
+| `schema_validation.go`     | Contributed SpiceDB schema fragments                                                                      |
+| `skills_validation.go`     | Referenced Skill / ClusterSkill resolution                                                                |
 
 ## Non-obvious constraints
 

@@ -32,8 +32,17 @@ export function StatusLine({ n }: { n: Node }): JSX.Element {
   const since = s(n, "since");
   const local = localTime(since);
   return (
-    <div data-testid="ap-status" data-state={state} role="status" title={since || undefined} className="flex items-center gap-2 text-sm font-medium">
-      <span aria-hidden="true" className={cn("inline-block h-2 w-2 shrink-0 rounded-full", dot)} />
+    <div
+      data-testid="ap-status"
+      data-state={state}
+      role="status"
+      title={since || undefined}
+      className="flex items-center gap-2 text-sm font-medium"
+    >
+      <span
+        aria-hidden="true"
+        className={cn("inline-block h-2 w-2 shrink-0 rounded-full", dot)}
+      />
       <span>
         {s(n, "text")}
         {local !== null && (
