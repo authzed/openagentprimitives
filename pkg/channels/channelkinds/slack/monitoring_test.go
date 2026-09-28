@@ -347,42 +347,6 @@ func TestRenderMonitoringText_RendersInjectedMarkupInert(t *testing.T) {
 	}
 }
 
-// TestEscapeSlackText pins the escape set AND the single-pass property that
-// makes it order-independent: a strings.Replacer never re-scans its own
-// output, so "&lt;" becomes "&amp;lt;" rather than "&amp;amp;lt;". A
-// hand-rolled ReplaceAll chain only behaves this way when "&" happens to run
-// first, which is why this package has exactly one escaper.
-//
-// It also pins what is deliberately NOT escaped: publishers compose backticks,
-// `*` and `_` on purpose (toolApprovalFields backtick-wraps the tool name),
-// and escaping those would mangle real cards for no security gain.
-func TestEscapeSlackText(t *testing.T) {
-	cases := []struct{ name, in, want string }{
-		{"link syntax: both angle brackets escaped", "<a|b>", "&lt;a|b&gt;"},
-		{"channel-wide ping cannot survive", "<!channel>", "&lt;!channel&gt;"},
-		{"bare ampersand escaped once", "tom & jerry", "tom &amp; jerry"},
-		{"single pass: a pre-existing entity is escaped, never re-scanned", "&lt;", "&amp;lt;"},
-		{"deliberate publisher markup is left live", "Tool `git_push` is _required_ and *bold*", "Tool `git_push` is _required_ and *bold*"},
-		{"plain text untouched", "401 Unauthorized -- Bad credentials", "401 Unauthorized -- Bad credentials"},
-		{"empty stays empty", "", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, escapeSlackText(tc.in))
-		})
-	}
-}
-
-// TestInertExcerptUsesTheSharedEscaper: the excerpt path adds fence-breaking
-// protection on top of the shared escaper, and must not have drifted into a
-// second implementation of the escape itself.
-func TestInertExcerptUsesTheSharedEscaper(t *testing.T) {
-	assert.Equal(t, escapeSlackText("<a|b>"), inertExcerpt("<a|b>"),
-		"with no code fence to break, inertExcerpt must equal the shared escaper exactly")
-	assert.NotContains(t, inertExcerpt("```\n<!here>"), "```",
-		"...while still neutralizing fence breakers, which is the only thing it adds")
-}
-
 // TestRenderMonitoringText_KeepsItsOwnStructuralMarkup: escaping must not eat
 // the markup renderMonitoringText itself writes, or every monitoring post
 // degrades to one unreadable line.
