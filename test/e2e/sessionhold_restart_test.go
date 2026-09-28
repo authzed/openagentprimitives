@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
@@ -93,13 +94,23 @@ func createManualHold(t *testing.T, h *e2e.Harness, ns, name, holdName string) {
 // not a route into reconcile at all).
 func touchSession(t *testing.T, h *e2e.Harness, ns, name string) {
 	t.Helper()
-	var sess spiceboxv1alpha1.AgentSession
-	require.NoError(t, h.K8s.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: name}, &sess))
-	if sess.Annotations == nil {
-		sess.Annotations = map[string]string{}
-	}
-	sess.Annotations["e2e-restart-test/touch"] = time.Now().Format(time.RFC3339Nano)
-	require.NoError(t, h.K8s.Update(context.Background(), &sess))
+	// Get + mutate + Update is wrapped in RetryOnConflict: this touch exists
+	// precisely to provoke the AgentSession reconciler, which is concurrently
+	// writing the same object's status (the hold reap bumps resourceVersion),
+	// so an unretried Update races that write and fails with a spurious
+	// optimistic-concurrency conflict — same reason harness.go wraps its own
+	// read-modify-write.
+	require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var sess spiceboxv1alpha1.AgentSession
+		if err := h.K8s.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: name}, &sess); err != nil {
+			return err
+		}
+		if sess.Annotations == nil {
+			sess.Annotations = map[string]string{}
+		}
+		sess.Annotations["e2e-restart-test/touch"] = time.Now().Format(time.RFC3339Nano)
+		return h.K8s.Update(context.Background(), &sess)
+	}))
 	// Give the watch-triggered reconcile a moment to actually run before the
 	// caller inspects anything.
 	time.Sleep(200 * time.Millisecond)
