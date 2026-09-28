@@ -219,16 +219,16 @@ credential to hand it:
 ```
 
 `oap agent install` validates and installs the whole agent graph as one unit:
-definitions, dependency, configuration, and install-time questions. Then `oap
-agent chat` opens an interactive terminal conversation with the captain. Ask for
-both a pirate and a vampire response to see it delegate to the private child
-agent.
+definitions, dependency, configuration, and install-time questions. Then
+`oap agent chat` opens an interactive terminal conversation with the captain.
+Ask for both a pirate and a vampire response to see it delegate to the private
+child agent.
 
 ### 3. Pick a model provider
 
-OAP supports Anthropic, OpenAI, and OpenRouter. Set the default during `oap init
---wizard`, or change it later through agent settings. Nothing about an agent's
-definition hardcodes a provider.
+OAP supports Anthropic, OpenAI, and OpenRouter. Set the default during
+`oap init --wizard`, or change it later through agent settings. Nothing about an
+agent's definition hardcodes a provider.
 
 ### 4. Move to a shared or managed cluster
 
@@ -302,8 +302,8 @@ known-good identity, and drift is reported:
 ./bin/oap pin update <kind> <name>    # accept a new baseline after you've reviewed it
 ```
 
-`--pinning-mode` (`off`, `warn`, `approve`, or `block`) sets how strictly `oap
-init` and `oap install` seed the cluster to hold agents and tools to their
+`--pinning-mode` (`off`, `warn`, `approve`, or `block`) sets how strictly
+`oap init` and `oap install` seed the cluster to hold agents and tools to their
 pinned versions, from not gating at all up to blocking a drifted dependency
 outright. And because the audit log is signed and hash-chained, not just
 written, you can check it independently of whoever wrote it:
