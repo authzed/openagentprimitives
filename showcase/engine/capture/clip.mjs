@@ -1,23 +1,23 @@
-// Clip capture: play a Story's beats in a real browser, recording a narrated
-// (caption-driven) webm, then transcode to mp4 + extract a poster with ffmpeg.
+// Clip capture: play a Story's beats in a real browser, then render captioned,
+// voiced webm/mp4 clips and a poster.
 //
 // The Story's beats + captions ARE the script: each beat sets its caption on the
 // in-page overlay, optionally animates the cursor to click a target, mutates the
-// sim, then holds for a reading-time-derived dwell. A pluggable TTS layer can
-// later replace captions with narration audio; the timing model is the same.
+// sim, then holds long enough for the narration to finish.
 //
 // Usage: node engine/capture/clip.mjs <scenario> <outBasePath> [theme] [WxH]
 import { chromium } from 'playwright'
-import { spawnSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
+import { narrate } from '../tts/narrate.mjs'
+import { encodeClip, remainingSceneHoldMs } from '../tts/mux.mjs'
 
 const scenario = process.argv[2] || 'multiplayer-approval'
 const outBase = process.argv[3] || `out/clips/${scenario}`
 const theme = process.argv[4] || 'dark'
 const [W, H] = (process.argv[5] || '1600x900').split('x').map(Number)
 const PORT = process.env.SIM_PORT || process.env.SLACKSIM_PORT || '5178'
-const url = `http://localhost:${PORT}/?scenario=${scenario}&theme=${theme}`
+const url = `http://127.0.0.1:${PORT}/?scenario=${scenario}&theme=${theme}`
 
 const outDir = path.dirname(outBase)
 mkdirSync(outDir, { recursive: true })
@@ -28,14 +28,35 @@ const rawDir = path.join('out', '_raw')
 mkdirSync(rawDir, { recursive: true })
 
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
-const readingMs = (text) => Math.min(6500, 1500 + (text ? text.length : 0) * 42)
-
 const browser = await chromium.launch()
+// Synthesize before the recorded context starts: an API call can take seconds,
+// and that wait must never become dead air at the front of the finished clip.
+const probeContext = await browser.newContext({ viewport: { width: W, height: H } })
+const probePage = await probeContext.newPage()
+await probePage.goto(url, { waitUntil: 'networkidle' })
+await probePage.waitForFunction(() => !!window.__showcaseStory && !!window.__showcase)
+const meta = await probePage.evaluate(() => ({
+  count: window.__showcaseStory.count,
+  intro: window.__showcaseStory.intro,
+  captions: window.__showcaseStory.captions,
+  holds: window.__showcaseStory.holds,
+  clicks: window.__showcaseStory.clicks,
+  ids: window.__showcaseStory.ids,
+}))
+await probeContext.close()
+const introText = meta.intro || 'A demo of an OAP agent in Slack.'
+const voice = await narrate([
+  { id: 'intro', text: introText },
+  ...meta.ids.map((id, i) => ({ id, text: meta.captions[i] })),
+], path.join('out', 'audio', scenario))
+const scenes = []
+
 const context = await browser.newContext({
   viewport: { width: W, height: H },
   deviceScaleFactor: 1,
   recordVideo: { dir: rawDir, size: { width: W, height: H } },
 })
+const T0 = Date.now()
 const page = await context.newPage()
 await page.goto(url, { waitUntil: 'networkidle' })
 await page.waitForFunction(() => !!window.__showcaseStory && !!window.__showcase)
@@ -73,18 +94,10 @@ async function clickHere() {
   await page.waitForTimeout(120)
 }
 
-const meta = await page.evaluate(() => ({
-  count: window.__showcaseStory.count,
-  intro: window.__showcaseStory.intro,
-  captions: window.__showcaseStory.captions,
-  holds: window.__showcaseStory.holds,
-  clicks: window.__showcaseStory.clicks,
-  ids: window.__showcaseStory.ids,
-}))
-
 // Intro title card — the story's own caption, or a generic fallback.
-await caption(meta.intro || 'A demo of an OAP agent in Slack.')
-await page.waitForTimeout(2800)
+await caption(introText)
+scenes.push({ path: voice[0].path, startMs: Date.now() - T0 })
+await page.waitForTimeout(Math.max(2800, voice[0].durationMs + 500))
 
 for (let i = 0; i < meta.count; i++) {
   const cap = meta.captions[i]
@@ -107,7 +120,11 @@ for (let i = 0; i < meta.count; i++) {
   }
 
   await runBeat(i)
-  await page.waitForTimeout(Math.max(meta.holds[i] ?? 0, readingMs(cap)))
+  const startMs = Date.now() - T0
+  scenes.push({ path: voice[i + 1].path, startMs })
+  await page.waitForTimeout(remainingSceneHoldMs({
+    caption: cap, audioDurationMs: voice[i + 1].durationMs, holdMs: meta.holds[i] ?? 0,
+  }))
 }
 
 await caption(null)
@@ -118,17 +135,5 @@ await context.close() // flushes the webm
 const rawPath = await video.path()
 await browser.close()
 
-// ffmpeg post: a clean webm (VP9), an mp4 (H.264) for broad compat, and a poster.
-const webmOut = `${outBase}.webm`
-const mp4Out = `${outBase}.mp4`
-const posterOut = `${outBase}.png`
-
-function ff(args, label) {
-  const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', ...args], { stdio: 'inherit' })
-  if (r.status !== 0) throw new Error(`ffmpeg ${label} failed (${r.status})`)
-}
-ff(['-i', rawPath, '-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '32', '-an', webmOut], 'webm')
-ff(['-i', rawPath, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', '-movflags', '+faststart', '-an', mp4Out], 'mp4')
-ff(['-ss', '3', '-i', rawPath, '-frames:v', '1', posterOut], 'poster')
-
-console.log(`wrote:\n  ${webmOut}\n  ${mp4Out}\n  ${posterOut}\n(raw: ${rawPath})`)
+encodeClip(rawPath, outBase, scenes)
+console.log(`wrote:\n  ${outBase}.webm\n  ${outBase}.mp4\n  ${outBase}.png\n(raw: ${rawPath}; voice: ${voice[0].provider})`)

@@ -26,7 +26,7 @@ showcase/
 │   ├── capture/      Playwright drivers: shot.mjs (still), still.mjs (beat still),
 │   │                 clip.mjs (narrated webm+mp4+poster), webshot.mjs (real product login)
 │   ├── mocks/        authored HTML mocks for surfaces we can't capture (artifact viewer)
-│   └── tts/          pluggable TTS seam (stubbed; clips are caption-driven for now)
+│   └── tts/          ElevenLabs/OpenAI narration, per-scene cache, and audio/video muxing
 └── out/              gitignored render scratch (raw videos, throwaway shots)
 ```
 
@@ -72,8 +72,14 @@ The engine reads `SIM_PORT` (default 5178; set `SIM_PORT=5180` for consolesim).
 # a still of a scenario played to beat N (caption-free)
 SIM_PORT=5178 node engine/capture/still.mjs <scenario> <beatIndex> out/x.png dark 1600x900
 
-# a narrated clip: plays every beat, records webm+mp4+poster
+# a captioned clip: plays every beat, records webm+mp4+poster
 SIM_PORT=5180 node engine/capture/clip.mjs <scenario> out/clips/<name> dark 1120x780
+
+# with ElevenLabs narration (put ELEVENLABS_API_KEY=... in ignored .env.local)
+SIM_PORT=5178 node --env-file=.env.local engine/capture/clip.mjs <scenario> out/clips/<name> dark 1280x720
+
+# narrate the existing Agent Builder web UI recording without a new live session
+node --env-file=.env.local engine/capture/narrate-builder.mjs out/clips/builder-first-agent
 
 # a one-off still of any URL (5th arg is JS run against window.__showcase)
 node engine/capture/shot.mjs "http://localhost:5178/?scenario=…" out/x.png 1600x900
@@ -82,7 +88,10 @@ node engine/capture/shot.mjs "http://localhost:5178/?scenario=…" out/x.png 160
 Then copy the output into `site/public/media/`, add an entry to
 `site/content/_manifest.json`, and reference it from a page with
 `<Clip name="…" />` or `<Screenshot name="…" />` — see
-[`site/AGENTS.md`](../site/AGENTS.md).
+[`site/AGENTS.md`](../site/AGENTS.md). MP4, WebM, and PNG files in
+`site/public/media/` use Git LFS. Run `git lfs pull` after checkout before
+building or publishing the site so those media files contain playable assets
+rather than LFS pointers.
 
 ## Generated content (run from the repo root)
 
