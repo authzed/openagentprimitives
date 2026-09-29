@@ -559,8 +559,8 @@ export function Landing() {
           Six concerns every agent has to solve.
         </SectionHead>
         <p className="lp-lede">
-          OAP ships a working implementation of each. Any agent can be built
-          from them, using only the ones it needs.
+          A primitive is a basic building block that agents rely on, whatever
+          they do. OAP ships a working implementation of every one.
         </p>
         <div className="lp-prims">
           {PRIMITIVES.map((p, i) => (
