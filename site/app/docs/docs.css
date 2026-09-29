@@ -155,6 +155,24 @@ body:has(.doc-app) {
   font: inherit;
   font-size: 14px;
 }
+.doc-search-field { position: relative; }
+.doc-search-field .doc-search-input { padding-right: 56px; }
+.doc-search-kbd {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 1px 6px;
+  border: 1px solid var(--doc-border);
+  border-radius: 4px;
+  color: var(--doc-muted);
+  font-family: var(--doc-font);
+  font-size: 11.5px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+/* The hint is for finding the box; once you're in it, it's noise. */
+.doc-search-field:focus-within .doc-search-kbd { display: none; }
 .doc-search-input:focus-visible { outline: 2px solid var(--doc-accent); outline-offset: 1px; }
 .doc-search-note { color: var(--doc-muted); font-size: 13px; margin: 8px 2px 0; }
 .doc-search-results { list-style: none; margin: 8px 0 0; padding: 0; font-size: 13.5px; }

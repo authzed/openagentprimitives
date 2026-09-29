@@ -1,7 +1,17 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import {
+  isApplePlatform,
+  isSearchShortcut,
+  searchShortcutLabel,
+} from "@/lib/shortcut";
 import {
   loadPagefind,
   toPath,
@@ -21,7 +31,38 @@ export function Search() {
   // is dropped instead of overwriting a newer call's state.
   const gen = useRef(0);
   const [state, setState] = useState<State>({ kind: "idle" });
+  // Unknown until mount: the server can't know the visitor's platform, so the
+  // shortcut hint renders only on the client and never mismatches hydration.
+  const [apple, setApple] = useState<boolean | null>(null);
   const pathname = usePathname();
+
+  // ⌘K / Ctrl K focuses search from anywhere on a docs page.
+  useEffect(() => {
+    const nav = navigator as Navigator & {
+      userAgentData?: { platform?: string };
+    };
+    const isApple = isApplePlatform(
+      nav.userAgentData?.platform ?? nav.platform ?? "",
+    );
+    setApple(isApple);
+    const onKey = (e: KeyboardEvent) => {
+      if (!isSearchShortcut(e, isApple)) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Escape closes the search: clear it and give focus back to the page.
+  function onKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (e.key !== "Escape") return;
+    gen.current++;
+    setState({ kind: "idle" });
+    e.currentTarget.value = "";
+    e.currentTarget.blur();
+  }
 
   // Search lives in the docs layout, which persists across navigations.
   // Picking a result routes to a new page without remounting this
@@ -55,15 +96,26 @@ export function Search() {
 
   return (
     <div className="doc-search" role="search">
-      <input
-        ref={inputRef}
-        className="doc-search-input"
-        type="search"
-        placeholder="Search docs"
-        aria-label="Search docs"
-        onFocus={ensure}
-        onChange={(e) => void onInput(e.target.value)}
-      />
+      <div className="doc-search-field">
+        <input
+          ref={inputRef}
+          className="doc-search-input"
+          type="search"
+          placeholder="Search docs"
+          aria-label="Search docs"
+          aria-keyshortcuts={
+            apple === null ? undefined : apple ? "Meta+K" : "Control+K"
+          }
+          onFocus={ensure}
+          onKeyDown={onKeyDown}
+          onChange={(e) => void onInput(e.target.value)}
+        />
+        {apple !== null && (
+          <kbd className="doc-search-kbd" aria-hidden="true">
+            {searchShortcutLabel(apple)}
+          </kbd>
+        )}
+      </div>
       {state.kind === "unavailable" && (
         <p className="doc-search-note">
           Search is available after <code>pnpm build</code>.
