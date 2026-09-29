@@ -31,15 +31,31 @@ oap check --watch     # keep checking every couple of seconds
 `oap install` needs either `--builder-starters` (who may start Agent Builder) or `--without-builder`; see
 [Agent Builder](/docs/agent-builder-install).
 
-## Prerequisites
+<h2 id="prerequisites">Prerequisites</h2>
 
-- A reachable **Kubernetes cluster** — a local one (kind, Docker Desktop) for development, or a managed cluster
-  for production. Everything runs off your kubeconfig.
-- **Docker + buildx** only if you're building images locally (the `oap init` / `oap build` path). A cluster that
-  pulls prebaked images doesn't need Docker on your machine.
+OAP builds from source. Each tool's own page covers installing it.
+
+- **[Git](https://git-scm.com/downloads)**, to clone the repository.
+- **[Go](https://go.dev/doc/install)** 1.26 or later.
+- **[Mage](https://magefile.org/)**, which runs the build targets (`mage build:oap`, `mage desktop:all`).
+- **[Docker](https://docs.docker.com/get-started/get-docker/)** with
+  **[buildx](https://docs.docker.com/build/concepts/overview/)**, to build the images (the `oap init` /
+  `oap build` path). A cluster that pulls prebaked images doesn't need Docker on your machine.
+- A reachable **Kubernetes cluster** — a local one for development (for example
+  **[kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation)**), or a managed cluster for
+  production. Everything runs off your kubeconfig.
+
+Then clone the repository and build the CLI:
+
+```bash
+git clone https://github.com/authzed/openagentprimitives
+cd openagentprimitives
+mage build:oap        # writes ./bin/oap
+```
 
 If you're on a Mac and don't want to manage a cluster at all, skip straight to
-**[Desktop](/docs/install-desktop)** — it runs the whole thing in a local VM.
+**[Desktop](/docs/install-desktop)** — it runs the whole thing in a local VM, and
+[lists the few extra tools it needs](/docs/install-desktop#before-you-start).
 
 ## What gets stood up
 

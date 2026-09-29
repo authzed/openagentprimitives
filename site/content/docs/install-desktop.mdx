@@ -15,6 +15,17 @@ export const meta = {
   reachable from outside your machine.
 </div>
 
+<h2 id="before-you-start">Before you start</h2>
+
+Desktop builds on the Mac it runs on, so it needs:
+
+- An **Apple Silicon Mac** (the VM is arm64 and uses Apple's Virtualization framework).
+- **[Xcode Command Line Tools](https://developer.apple.com/xcode/resources/)**, for `codesign`.
+- **[Docker](https://docs.docker.com/get-started/get-docker/)** with
+  **[buildx](https://docs.docker.com/build/concepts/overview/)**, plus `curl` and
+  **[zstd](https://github.com/facebook/zstd)**, to build the VM's images.
+- The common tools and a clone of the repository: see [Prerequisites](/docs/install-overview#prerequisites).
+
 ## First run, step by step
 
 Build the app, then open it:
