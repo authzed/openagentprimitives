@@ -230,8 +230,10 @@ body:has(.lp) {
   margin-right: auto;
 }
 
-.lp-nav-brand svg {
-  height: 28px;
+/* The full wordmark: the one place on the page the logo names the project.
+   Which ink shows is left to components/wordmark.css. */
+.lp-nav-wordmark {
+  height: 38px;
   width: auto;
 }
 

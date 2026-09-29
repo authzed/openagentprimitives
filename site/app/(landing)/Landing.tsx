@@ -6,7 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { OapMark } from "@/components/OapMark";
+import { Wordmark } from "@/components/Wordmark";
 import { SiteFooter } from "@/components/SiteFooter";
 import { OWASP } from "./owasp";
 
@@ -450,8 +450,12 @@ export function Landing() {
   return (
     <div className="lp">
       <nav className="lp-nav">
-        <a className="lp-nav-brand" href="/">
-          <OapMark />
+        <a
+          className="lp-nav-brand"
+          href="/"
+          aria-label="Open Agent Primitives home"
+        >
+          <Wordmark className="lp-nav-wordmark" />
         </a>
         <div className="lp-nav-links">
           <a href="/docs/what-is-oap">Docs</a>
