@@ -417,9 +417,8 @@ func (Test) Unit() error {
 }
 
 // defaultWebCheckDiffBase is the git ref checkWebBundleFreshness diffs
-// against by default, mirroring auditgen's DiffBase convention
-// (AUDIT_DIFF_BASE, defaulting to "master").
-const defaultWebCheckDiffBase = "master"
+// against by default: this repo's base branch.
+const defaultWebCheckDiffBase = "main"
 
 // checkWebBundleFreshness runs `mage web:check` when this branch's diff
 // touches pkg/**/ui/** — the TypeScript source web/vite.config.ts's
@@ -443,7 +442,7 @@ const defaultWebCheckDiffBase = "master"
 // already needs node to have made that edit, so paying it here costs them
 // nothing new.
 //
-// WEB_CHECK_DIFF_BASE overrides the default "master" base. A diff-computation
+// WEB_CHECK_DIFF_BASE overrides the default "main" base. A diff-computation
 // failure (no such ref, a shallow clone missing history) is logged and SKIPS
 // the check rather than failing test:unit outright — test:unit is the fast
 // gate every developer runs constantly (see (Test).Postgres's own doc), and a
