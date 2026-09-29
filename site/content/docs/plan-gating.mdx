@@ -9,13 +9,13 @@ export const meta = {
 
 # Plan gating & approvals
 
-<p className="doc-lede">
+<div className="doc-lede">
   For anything more than a single step, an OAP agent doesn't just start calling tools — it proposes a
   <strong> plan</strong>: a short list of phases, each declaring what it will do. A human approves the whole
   plan <em>once</em>, and that approval is scoped to exactly the plan it saw — to those phases, and to the
   specific resources named in them. Approve "open a PR on <code>acme/widget</code>" and the agent can act on
   <code> acme/widget</code>, and nothing else.
-</p>
+</div>
 
 <Clip name="codebot-plangate" />
 

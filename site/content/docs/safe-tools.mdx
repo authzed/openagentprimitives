@@ -9,12 +9,12 @@ export const meta = {
 
 # Safe tools
 
-<p className="doc-lede">
+<div className="doc-lede">
   An LLM agent is only as safe as the tools you hand it. When the thing that runs a tool call is a Python
   function with full process authority, the tool surface is whatever code happens to expose, arguments go
   unvalidated, and every tool runs with ambient authority. OAP restricts an agent to <strong>sandboxed CLI
   tools and MCP servers, validated against a toolspec</strong> — it can only do what was written down.
-</p>
+</div>
 
 <Clip name="safe-tools-demo" />
 
