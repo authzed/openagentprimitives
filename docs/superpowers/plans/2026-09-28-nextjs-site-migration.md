@@ -15,8 +15,8 @@ the directory and dynamically imports each guide. A shared root layout carries
 HTML after `next build`.
 
 **Tech Stack:** Next.js 16.3.6 (Turbopack), React 19, `@next/mdx` 16.3.6,
-`remark-gfm`, `next-themes` 0.4.x, `posthog-js` 1.434.x, Pagefind 1.5.x,
-vitest, tsx, pnpm.
+`remark-gfm`, `next-themes` 0.4.x, `posthog-js` 1.434.x, Pagefind 1.5.x, vitest,
+tsx, pnpm.
 
 **Spec:** `docs/superpowers/specs/2026-09-28-nextjs-site-migration-design.md`
 
@@ -26,41 +26,43 @@ vitest, tsx, pnpm.
   `pnpm-lock.yaml`. It joins no workspace.
 - Docs URLs are `/docs/<slug>` and `/docs/<slug>#<anchor>`. When this plan is
   finished, no `#/` link remains anywhere.
-- Guide metadata stays `export const meta = { title, section, group, order, description }`.
-  Do not introduce YAML frontmatter.
+- Guide metadata stays
+  `export const meta = { title, section, group, order, description }`. Do not
+  introduce YAML frontmatter.
 - MDX plugins are given to `@next/mdx` as strings (`'remark-gfm'`); Turbopack
   cannot take functions.
 - `suppressHydrationWarning` appears on `<html>` and nowhere else.
 - PostHog: `api_host: 'https://i.authzed.com'`, `cookieless_mode: 'always'` for
   every visitor, `person_profiles: 'never'`; initialize only when
-  `NEXT_PUBLIC_POSTHOG_KEY` is set and `NEXT_PUBLIC_VERCEL_ENV === 'production'`.
-  No Next.js rewrites.
-- Build script: `pnpm check && next build && pagefind --site .next/server/app --output-path public/_pagefind`.
+  `NEXT_PUBLIC_POSTHOG_KEY` is set and
+  `NEXT_PUBLIC_VERCEL_ENV === 'production'`. No Next.js rewrites.
+- Build script:
+  `pnpm check && next build && pagefind --site .next/server/app --output-path public/_pagefind`.
 - Brand files stay single-sourced in `docs/assets/brand/`.
-- Tests: vitest with `describe`/`it` and `expect`; table-driven (`it.each`)
-  when four or more cases share shape.
+- Tests: vitest with `describe`/`it` and `expect`; table-driven (`it.each`) when
+  four or more cases share shape.
 - Never push; commit on the current branch (`landing-page`) after each task.
 - The uncommitted landing-page work in `showcase/docs/app` is the port source.
   Do not commit it on its own; Task 9 deletes it.
 
 ## Review Focus
 
-1. **A `#/` or `/docs/` string inside a code fence or inline code** must be
-   left alone by the link checker (the guides document CLI output and URLs).
-   Test: Task 5, `extractDocLinks` ignores fenced and inline code.
+1. **A `#/` or `/docs/` string inside a code fence or inline code** must be left
+   alone by the link checker (the guides document CLI output and URLs). Test:
+   Task 5, `extractDocLinks` ignores fenced and inline code.
 2. **Same-page anchors, `mailto:`, and relative hrefs in MDX** must render as
    plain `<a>` without `target="_blank"`, and `/docs` links must go through
    `next/link`. Test: Task 4, `linkKind` table.
 3. **The landing page's templated OWASP links**
-   (`` `/docs/owasp-top10#${id.toLowerCase()}` ``) cannot be checked
-   statically. Every id must match an `id=` in `owasp-top10.mdx`. Test: Task 6,
+   (`` `/docs/owasp-top10#${id.toLowerCase()}` ``) cannot be checked statically.
+   Every id must match an `id=` in `owasp-top10.mdx`. Test: Task 6,
    `owasp.test.ts`.
 4. **Search when the Pagefind bundle is missing** (every `next dev` session)
-   must show a message, not throw. Test: Task 7, `loadPagefind` returns
-   `null` when the import rejects, and `toPath` strips `.html`.
-5. **Analytics gating across environments**: no key, a preview deploy, and
-   local dev must all send nothing. Only production with a key initializes.
-   Test: Task 8, `posthogOptions` table.
+   must show a message, not throw. Test: Task 7, `loadPagefind` returns `null`
+   when the import rejects, and `toPath` strips `.html`.
+5. **Analytics gating across environments**: no key, a preview deploy, and local
+   dev must all send nothing. Only production with a key initializes. Test: Task
+   8, `posthogOptions` table.
 
 ---
 
@@ -122,8 +124,8 @@ site/
 
 ### Task 1: Scaffold `site/` and settle the brand-asset import
 
-Settles the spec's one open risk first: importing SVGs from
-`docs/assets/brand` across the site root under Turbopack.
+Settles the spec's one open risk first: importing SVGs from `docs/assets/brand`
+across the site root under Turbopack.
 
 **Files:**
 
@@ -197,7 +199,8 @@ const nextConfig = {
 export default withMDX(nextConfig);
 ```
 
-- [ ] **Step 4: Create `site/tsconfig.json`, `site/mdx.d.ts`, `site/.gitignore`**
+- [ ] **Step 4: Create `site/tsconfig.json`, `site/mdx.d.ts`,
+      `site/.gitignore`**
 
 ```json
 {
@@ -228,14 +231,21 @@ export default withMDX(nextConfig);
 declare module "*.mdx" {
   import type { ComponentType } from "react";
   export const meta:
-    | { title: string; section?: string; group?: string; order?: number; description?: string }
+    | {
+        title: string;
+        section?: string;
+        group?: string;
+        order?: number;
+        description?: string;
+      }
     | undefined;
   const MDXComponent: ComponentType;
   export default MDXComponent;
 }
 ```
 
-The type is inlined because `next build` typechecks and `@/lib/nav` doesn't exist yet. Task 2 replaces it with an import of `GuideMeta`.
+The type is inlined because `next build` typechecks and `@/lib/nav` doesn't
+exist yet. Task 2 replaces it with an import of `GuideMeta`.
 
 ```
 # site/.gitignore
@@ -253,7 +263,11 @@ import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL(".", import.meta.url)) } },
-  test: { environment: "node", include: ["**/*.test.ts"], exclude: ["node_modules/**", ".next/**"] },
+  test: {
+    environment: "node",
+    include: ["**/*.test.ts"],
+    exclude: ["node_modules/**", ".next/**"],
+  },
 });
 ```
 
@@ -267,7 +281,8 @@ describe("vitest wiring", () => {
 
 Run: `pnpm test` → Expected: 1 passed.
 
-- [ ] **Step 6: Create a minimal layout, an MDX component map, and a page that imports a brand SVG**
+- [ ] **Step 6: Create a minimal layout, an MDX component map, and a page that
+      imports a brand SVG**
 
 ```tsx
 // site/mdx-components.tsx
@@ -304,8 +319,9 @@ export default function Page() {
 
 - [ ] **Step 7: Build and confirm the cross-root import**
 
-Run: `pnpm build` (from `site/`)
-Expected: `▲ Next.js 16.3.6 (Turbopack)`, route `/` listed as static, Pagefind finds no `data-pagefind-body` yet, so it indexes every HTML file, and its page count here doesn't matter. Then:
+Run: `pnpm build` (from `site/`) Expected: `▲ Next.js 16.3.6 (Turbopack)`, route
+`/` listed as static, Pagefind finds no `data-pagefind-body` yet, so it indexes
+every HTML file, and its page count here doesn't matter. Then:
 
 ```bash
 grep -o '/_next/static/media/oap-wordmark-light[^"]*\.svg' .next/server/app/index.html
@@ -313,10 +329,10 @@ grep -o '/_next/static/media/oap-wordmark-light[^"]*\.svg' .next/server/app/inde
 
 Expected: one match.
 
-**If the build fails on the import** ("outside of the project root", a
-lockfile warning that selects the wrong root, or a tracing error), switch to
-the fallback. Add `"prebrand": "node scripts/copy-brand.mjs"` and run it as
-the first command in both `dev` and `build`. The script copies
+**If the build fails on the import** ("outside of the project root", a lockfile
+warning that selects the wrong root, or a tracing error), switch to the
+fallback. Add `"prebrand": "node scripts/copy-brand.mjs"` and run it as the
+first command in both `dev` and `build`. The script copies
 `../docs/assets/brand/*.svg` into `public/brand/`. Add `public/brand/` to
 `site/.gitignore`, reference `/brand/<file>.svg` by URL, remove `turbopack.root`
 and `outputFileTracingRoot`, and note the switch in `site/README.md`. Every
@@ -348,7 +364,8 @@ pure, tested functions.
   - `interface GuideMeta { title: string; section?: string; group?: string; order?: number; description?: string }`
   - `interface Guide { slug: string; title: string; section: string; group: string; order: number; description?: string }`
   - `normalizeGuide(slug: string, meta: GuideMeta | undefined): Guide`
-  - `sortGuides(guides: Guide[]): Guide[]` (new array: `order` ascending, then `title` via `localeCompare`)
+  - `sortGuides(guides: Guide[]): Guide[]` (new array: `order` ascending, then
+    `title` via `localeCompare`)
   - `interface NavBlock { group: string; guides: Guide[] }`
   - `interface NavSection { section: string; blocks: NavBlock[] }`
   - `buildNav(sorted: Guide[]): NavSection[]`
@@ -364,19 +381,37 @@ pure, tested functions.
 import { describe, expect, it } from "vitest";
 import { buildNav, normalizeGuide, sortGuides, type Guide } from "./nav";
 
-const g = (slug: string, order: number, section = "Guides", group = "", title = slug): Guide => ({
-  slug, title, section, group, order,
+const g = (
+  slug: string,
+  order: number,
+  section = "Guides",
+  group = "",
+  title = slug,
+): Guide => ({
+  slug,
+  title,
+  section,
+  group,
+  order,
 });
 
 describe("normalizeGuide", () => {
   it("missing meta: title=slug, section=Guides, group='', order=100", () => {
     expect(normalizeGuide("x", undefined)).toEqual({
-      slug: "x", title: "x", section: "Guides", group: "", order: 100, description: undefined,
+      slug: "x",
+      title: "x",
+      section: "Guides",
+      group: "",
+      order: 100,
+      description: undefined,
     });
   });
   it("partial meta: fills only the absent fields", () => {
     expect(normalizeGuide("x", { title: "X", order: 5 })).toMatchObject({
-      title: "X", section: "Guides", group: "", order: 5,
+      title: "X",
+      section: "Guides",
+      group: "",
+      order: 5,
     });
   });
 });
@@ -384,14 +419,22 @@ describe("normalizeGuide", () => {
 describe("sortGuides", () => {
   it("orders by `order`, then title on ties, without mutating input", () => {
     const input = [g("b", 2), g("zeta", 1), g("alpha", 1)];
-    expect(sortGuides(input).map((x) => x.slug)).toEqual(["alpha", "zeta", "b"]);
+    expect(sortGuides(input).map((x) => x.slug)).toEqual([
+      "alpha",
+      "zeta",
+      "b",
+    ]);
     expect(input.map((x) => x.slug)).toEqual(["b", "zeta", "alpha"]);
   });
 });
 
 describe("buildNav", () => {
   it("sections appear in first-seen order of the sorted list", () => {
-    const nav = buildNav([g("a", 1, "Guides"), g("b", 2, "Reference"), g("c", 3, "Guides")]);
+    const nav = buildNav([
+      g("a", 1, "Guides"),
+      g("b", 2, "Reference"),
+      g("c", 3, "Guides"),
+    ]);
     expect(nav.map((s) => s.section)).toEqual(["Guides", "Reference"]);
   });
   it("an ungrouped guide is its own block at its own position; a group anchors at its lowest-order child", () => {
@@ -401,7 +444,9 @@ describe("buildNav", () => {
       g("mid", 3),
       g("c2", 4, "Guides", "Concepts"),
     ]);
-    expect(nav[0].blocks.map((b) => [b.group, b.guides.map((x) => x.slug)])).toEqual([
+    expect(
+      nav[0].blocks.map((b) => [b.group, b.guides.map((x) => x.slug)]),
+    ).toEqual([
       ["", ["intro"]],
       ["Concepts", ["c1", "c2"]],
       ["", ["mid"]],
@@ -436,7 +481,10 @@ export interface Guide {
   description?: string;
 }
 
-export function normalizeGuide(slug: string, meta: GuideMeta | undefined): Guide {
+export function normalizeGuide(
+  slug: string,
+  meta: GuideMeta | undefined,
+): Guide {
   return {
     slug,
     title: meta?.title ?? slug,
@@ -448,7 +496,9 @@ export function normalizeGuide(slug: string, meta: GuideMeta | undefined): Guide
 }
 
 export function sortGuides(guides: Guide[]): Guide[] {
-  return [...guides].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
+  return [...guides].sort(
+    (a, b) => a.order - b.order || a.title.localeCompare(b.title),
+  );
 }
 
 // A nav block is one rendered unit: a single ungrouped guide, or a titled group.
@@ -466,7 +516,10 @@ export interface NavSection {
 }
 
 export function buildNav(sorted: Guide[]): NavSection[] {
-  const sections = new Map<string, { blocks: NavBlock[]; byGroup: Map<string, NavBlock> }>();
+  const sections = new Map<
+    string,
+    { blocks: NavBlock[]; byGroup: Map<string, NavBlock> }
+  >();
   for (const guide of sorted) {
     let s = sections.get(guide.section);
     if (!s) {
@@ -489,7 +542,8 @@ export function buildNav(sorted: Guide[]): NavSection[] {
 }
 ```
 
-Run: `pnpm test` → Expected: all nav tests PASS. Delete `site/lib/smoke.test.ts`.
+Run: `pnpm test` → Expected: all nav tests PASS. Delete
+`site/lib/smoke.test.ts`.
 
 - [ ] **Step 3: Implement `site/lib/guides.ts`**
 
@@ -511,22 +565,30 @@ interface GuideModule {
 }
 
 export const guideSlugs = cache(async (): Promise<string[]> =>
-  (await readdir(GUIDES_DIR)).filter((f) => f.endsWith(".mdx")).map((f) => f.slice(0, -".mdx".length)),
+  (await readdir(GUIDES_DIR))
+    .filter((f) => f.endsWith(".mdx"))
+    .map((f) => f.slice(0, -".mdx".length)),
 );
 
-export async function loadGuide(slug: string): Promise<{ Component: ComponentType; guide: Guide }> {
+export async function loadGuide(
+  slug: string,
+): Promise<{ Component: ComponentType; guide: Guide }> {
   const mod = (await import(`@/content/docs/${slug}.mdx`)) as GuideModule;
   return { Component: mod.default, guide: normalizeGuide(slug, mod.meta) };
 }
 
 export const allGuides = cache(async (): Promise<Guide[]> => {
   const slugs = await guideSlugs();
-  const guides = await Promise.all(slugs.map(async (slug) => (await loadGuide(slug)).guide));
+  const guides = await Promise.all(
+    slugs.map(async (slug) => (await loadGuide(slug)).guide),
+  );
   return sortGuides(guides);
 });
 ```
 
-Replace the inline `meta` type in `site/mdx.d.ts` with `import type { GuideMeta } from "@/lib/nav";` and `export const meta: GuideMeta | undefined;`.
+Replace the inline `meta` type in `site/mdx.d.ts` with
+`import type { GuideMeta } from "@/lib/nav";` and
+`export const meta: GuideMeta | undefined;`.
 
 Run: `pnpm typecheck` → Expected: exit 0.
 
@@ -545,8 +607,8 @@ git commit -m "Add the docs guide index and nav model"
 
 - Move: `showcase/docs/guides/*` → `site/content/docs/`;
   `showcase/docs/_manifest.json` → `site/content/_manifest.json`;
-  `showcase/docs/public/media` → `site/public/media`;
-  `showcase/docs/check.ts` → `site/scripts/check.ts`
+  `showcase/docs/public/media` → `site/public/media`; `showcase/docs/check.ts` →
+  `site/scripts/check.ts`
 - Modify: `site/scripts/check.ts:15-20`, `site/package.json`,
   `magefiles/clidocs.go:16-18`
 
@@ -580,7 +642,7 @@ const manifestPath = path.join(siteDir, "content/_manifest.json");
 ```
 
 Change the header comment's first line to
-`// Static docs validator. Runs before \`next build\` (via \`pnpm check\`).`
+``// Static docs validator. Runs before `next build` (via `pnpm check`).``
 Replace every `docs:check` string in messages with `check`, and change
 `docs/public` in the header comment to `public/`.
 
@@ -590,8 +652,8 @@ In `site/package.json`, add `"check": "tsx scripts/check.ts"`, and change
 `build` to
 `"pnpm check && next build && pagefind --site .next/server/app --output-path public/_pagefind"`.
 
-Run: `pnpm check` (in `site/`)
-Expected: `check OK — 129 guide(s), 3 refs sidecar(s), 59 media entr(ies).`
+Run: `pnpm check` (in `site/`) Expected:
+`check OK — 129 guide(s), 3 refs sidecar(s), 59 media entr(ies).`
 
 - [ ] **Step 4: Point the generators at the new directory**
 
@@ -603,9 +665,9 @@ In `magefiles/clidocs.go`:
 const cliDocsDir = "site/content/docs"
 ```
 
-Run: `mage docs:crd && git status --short site/content/docs`
-Expected: no output. The generator rewrote the files it owns byte for byte,
-because only their location changed.
+Run: `mage docs:crd && git status --short site/content/docs` Expected: no
+output. The generator rewrote the files it owns byte for byte, because only
+their location changed.
 
 - [ ] **Step 5: Commit**
 
@@ -623,9 +685,11 @@ git commit -m "Move docs content and checker into site/"
 
 **Files:**
 
-- Move: `showcase/docs/app/components/{media.tsx,Callout.tsx,Coverage.tsx,ThemeToggle.tsx,theme-toggle.css}` → `site/components/`;
-  `showcase/docs/app/manifest.ts` → `site/lib/manifest.ts`;
-  `showcase/docs/app/styles.css` → `site/app/docs/docs.css`
+- Move:
+  `showcase/docs/app/components/{media.tsx,Callout.tsx,Coverage.tsx,ThemeToggle.tsx,theme-toggle.css}`
+  → `site/components/`; `showcase/docs/app/manifest.ts` →
+  `site/lib/manifest.ts`; `showcase/docs/app/styles.css` →
+  `site/app/docs/docs.css`
 - Create: `site/components/Wordmark.tsx`, `site/components/NavLink.tsx`,
   `site/lib/links.ts` (the `linkKind` part), `site/lib/links.test.ts`,
   `site/app/docs/layout.tsx`, `site/app/docs/page.tsx`,
@@ -637,7 +701,8 @@ These files are uncommitted port sources, so copy them with `cp` rather than
 
 **Interfaces:**
 
-- Consumes: `allGuides`, `guideSlugs`, `loadGuide` (Task 2); `buildNav`, `Guide` (Task 2).
+- Consumes: `allGuides`, `guideSlugs`, `loadGuide` (Task 2); `buildNav`, `Guide`
+  (Task 2).
 - Produces:
   - `linkKind(href: string): "docs" | "external" | "plain"` in `@/lib/links`
   - `<ThemeToggle className?: string />`, `<Wordmark className?: string />`
@@ -681,7 +746,12 @@ Run: `pnpm test lib/links.test.ts` → Expected: FAIL (no `./links`).
 export type LinkKind = "docs" | "external" | "plain";
 
 export function linkKind(href: string): LinkKind {
-  if (href === "/docs" || href.startsWith("/docs/") || href.startsWith("/docs#")) return "docs";
+  if (
+    href === "/docs" ||
+    href.startsWith("/docs/") ||
+    href.startsWith("/docs#")
+  )
+    return "docs";
   if (/^https?:\/\//.test(href)) return "external";
   return "plain";
 }
@@ -702,12 +772,14 @@ Then edit:
 
 - `site/lib/manifest.ts`: change the import to
   `import manifest from "@/content/_manifest.json";`
-- `site/components/media.tsx`: add `"use client";` as the first line, and
-  change `from "../manifest"` to `from "@/lib/manifest"`.
+- `site/components/media.tsx`: add `"use client";` as the first line, and change
+  `from "../manifest"` to `from "@/lib/manifest"`.
 
 - [ ] **Step 4: Rewrite `ThemeToggle` on `next-themes`**
 
-Replace `site/components/ThemeToggle.tsx`. The icons are unchanged from the original. `JSX` is imported from `react` because React 19 has no global `JSX` namespace.
+Replace `site/components/ThemeToggle.tsx`. The icons are unchanged from the
+original. `JSX` is imported from `react` because React 19 has no global `JSX`
+namespace.
 
 ```tsx
 "use client";
@@ -721,7 +793,7 @@ type Mode = "light" | "dark" | "system";
 // arrow-key navigation, roving focus and the correct grouping semantics for
 // free, and the three options are genuinely mutually exclusive.
 const MODES: { id: Mode; label: string; icon: JSX.Element }[] = [
-    {
+  {
     id: "light",
     label: "Light",
     icon: (
@@ -780,10 +852,10 @@ export function ThemeToggle({ className }: { className?: string }) {
 }
 ```
 
- In `site/components/theme-toggle.css`, delete the
-`:root[data-theme-switching]` rule and its comment (lines 6-14);
-`disableTransitionOnChange` replaces it. Update the file's header comment to
-say the palettes come from `.lp` and `.doc-app`.
+In `site/components/theme-toggle.css`, delete the `:root[data-theme-switching]`
+rule and its comment (lines 6-14); `disableTransitionOnChange` replaces it.
+Update the file's header comment to say the palettes come from `.lp` and
+`.doc-app`.
 
 - [ ] **Step 5: Add `Wordmark`**
 
@@ -799,8 +871,16 @@ import darkInk from "../../docs/assets/brand/oap-wordmark-dark.svg";
 export function Wordmark({ className = "" }: { className?: string }) {
   return (
     <>
-      <img className={`${className} wordmark--on-dark`} src={lightInk.src} alt="" />
-      <img className={`${className} wordmark--on-light`} src={darkInk.src} alt="" />
+      <img
+        className={`${className} wordmark--on-dark`}
+        src={lightInk.src}
+        alt=""
+      />
+      <img
+        className={`${className} wordmark--on-light`}
+        src={darkInk.src}
+        alt=""
+      />
     </>
   );
 }
@@ -828,8 +908,16 @@ export const metadata: Metadata = {
   // follows the OS scheme rather than the site's toggle.
   icons: {
     icon: [
-      { url: iconDarkInk.src, type: "image/svg+xml", media: "(prefers-color-scheme: light)" },
-      { url: iconLightInk.src, type: "image/svg+xml", media: "(prefers-color-scheme: dark)" },
+      {
+        url: iconDarkInk.src,
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: iconLightInk.src,
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: dark)",
+      },
     ],
   },
 };
@@ -848,7 +936,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     // element whose attributes are allowed to differ from the server render.
     <html lang="en" suppressHydrationWarning>
       <body>
-        <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem disableTransitionOnChange>
+        <ThemeProvider
+          attribute="data-theme"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
           {children}
         </ThemeProvider>
       </body>
@@ -865,9 +958,9 @@ In `site/app/docs/docs.css`:
 
 - Replace the `html, body, #root { margin: 0; height: 100%; }` rule with
   `html, body { margin: 0; }`.
-- Change the `body { background… }` selector to `body:has(.doc-app)`. That
-  keeps the page background on the document (overscroll included) only when
-  the docs are mounted.
+- Change the `body { background… }` selector to `body:has(.doc-app)`. That keeps
+  the page background on the document (overscroll included) only when the docs
+  are mounted.
 - Move the `--tt-*` declarations out of `:root` into a new `.doc-app { … }`
   block, and the light-theme `--tt-*` (if any) into
   `:root[data-theme='light'] .doc-app`.
@@ -886,7 +979,11 @@ export function NavLink({ slug, title }: { slug: string; title: string }) {
   const href = `/docs/${slug}`;
   const active = usePathname() === href;
   return (
-    <Link className={`doc-nav-link${active ? " is-active" : ""}`} href={href} aria-current={active ? "page" : undefined}>
+    <Link
+      className={`doc-nav-link${active ? " is-active" : ""}`}
+      href={href}
+      aria-current={active ? "page" : undefined}
+    >
       {title}
     </Link>
   );
@@ -903,14 +1000,22 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { Wordmark } from "@/components/Wordmark";
 import "./docs.css";
 
-export default async function DocsLayout({ children }: { children: ReactNode }) {
+export default async function DocsLayout({
+  children,
+}: {
+  children: ReactNode;
+}) {
   const nav = buildNav(await allGuides());
   return (
     <div className="doc-app">
       <aside className="doc-nav" data-pagefind-ignore>
         <div className="doc-brand-row">
           {/* A plain <a>: the landing page is a different stylesheet, so leave by full load. */}
-          <a className="doc-brand" href="/" aria-label="Open Agent Primitives home">
+          <a
+            className="doc-brand"
+            href="/"
+            aria-label="Open Agent Primitives home"
+          >
             <Wordmark className="doc-brand-wordmark" />
           </a>
           <div className="doc-brand-meta">
@@ -922,8 +1027,13 @@ export default async function DocsLayout({ children }: { children: ReactNode }) 
           <div className="doc-nav-section" key={section}>
             <div className="doc-nav-section-title">{section}</div>
             {blocks.map((block, i) => (
-              <div className="doc-nav-group" key={`${section}/${block.group}/${i}`}>
-                {block.group && <div className="doc-nav-group-title">{block.group}</div>}
+              <div
+                className="doc-nav-group"
+                key={`${section}/${block.group}/${i}`}
+              >
+                {block.group && (
+                  <div className="doc-nav-group-title">{block.group}</div>
+                )}
                 <ul>
                   {block.guides.map((g) => (
                     <li key={g.slug}>
@@ -1027,8 +1137,8 @@ export function useMDXComponents(): MDXComponents {
 
 - [ ] **Step 10: Build and verify the routes**
 
-Run: `pnpm typecheck && pnpm test && pnpm build`
-Expected: the route list shows `● /docs/[slug]` with 129 prerendered paths:
+Run: `pnpm typecheck && pnpm test && pnpm build` Expected: the route list shows
+`● /docs/[slug]` with 129 prerendered paths:
 
 ```bash
 ls .next/server/app/docs/*.html | wc -l   # 129
@@ -1066,9 +1176,9 @@ git commit -m "Serve the docs from Next.js routes with next-themes"
 **Interfaces:**
 
 - Produces in `@/lib/links`:
-  - `extractDocLinks(src: string): string[]`: every `](href)` and
-    `href="href"` target starting with `/docs` or `#/`, skipping fenced code
-    blocks and inline code spans.
+  - `extractDocLinks(src: string): string[]`: every `](href)` and `href="href"`
+    target starting with `/docs` or `#/`, skipping fenced code blocks and inline
+    code spans.
   - `anchorIds(src: string): Set<string>`: every `id="…"` value.
   - `interface LinkProblem { file: string; href: string; reason: string }`
   - `checkLinks(files: { file: string; src: string }[], guides: Map<string, Set<string>>): LinkProblem[]`,
@@ -1088,8 +1198,8 @@ In `pkg/gen/crddocs/crddocs_test.go:70`:
 assert.Contains(t, over, "[Widget](/docs/crd-widget)", "kind listed in the overview")
 ```
 
-Run: `go test ./pkg/gen/clidocs/ ./pkg/gen/crddocs/`
-Expected: FAIL on both assertions.
+Run: `go test ./pkg/gen/clidocs/ ./pkg/gen/crddocs/` Expected: FAIL on both
+assertions.
 
 - [ ] **Step 2: Go: change the format strings**
 
@@ -1111,26 +1221,37 @@ Run: `go test ./pkg/gen/...` → Expected: PASS.
 
 Append to `site/lib/links.test.ts`:
 
-```ts
+````ts
 import { anchorIds, checkLinks, extractDocLinks } from "./links";
 
 describe("extractDocLinks", () => {
   it("finds markdown and JSX doc links, with and without anchors", () => {
-    const src = 'See [a](/docs/a) and [b](/docs/b#x). <a href="/docs/c">c</a> [old](#/d)';
-    expect(extractDocLinks(src)).toEqual(["/docs/a", "/docs/b#x", "/docs/c", "#/d"]);
+    const src =
+      'See [a](/docs/a) and [b](/docs/b#x). <a href="/docs/c">c</a> [old](#/d)';
+    expect(extractDocLinks(src)).toEqual([
+      "/docs/a",
+      "/docs/b#x",
+      "/docs/c",
+      "#/d",
+    ]);
   });
   it("skips external links, same-page anchors, and mailto", () => {
-    expect(extractDocLinks("[e](https://x.io/docs/a) [h](#top) [m](mailto:a@b.c)")).toEqual([]);
+    expect(
+      extractDocLinks("[e](https://x.io/docs/a) [h](#top) [m](mailto:a@b.c)"),
+    ).toEqual([]);
   });
   it("ignores links inside fenced code blocks and inline code", () => {
-    const src = "```\n[a](/docs/nope)\n```\nand `[b](#/nope)` but [c](/docs/yes)";
+    const src =
+      "```\n[a](/docs/nope)\n```\nand `[b](#/nope)` but [c](/docs/yes)";
     expect(extractDocLinks(src)).toEqual(["/docs/yes"]);
   });
 });
 
 describe("anchorIds", () => {
   it("collects id attributes", () => {
-    expect(anchorIds('<h3 id="asi01">x</h3> <span id="b" />')).toEqual(new Set(["asi01", "b"]));
+    expect(anchorIds('<h3 id="asi01">x</h3> <span id="b" />')).toEqual(
+      new Set(["asi01", "b"]),
+    );
   });
 });
 
@@ -1151,7 +1272,7 @@ describe("checkLinks", () => {
     expect(got).toEqual(reason ? [{ file: "f.mdx", href, reason }] : []);
   });
 });
-```
+````
 
 Run: `pnpm test lib/links.test.ts` → Expected: FAIL (exports missing).
 
@@ -1159,7 +1280,7 @@ Run: `pnpm test lib/links.test.ts` → Expected: FAIL (exports missing).
 
 Append to `site/lib/links.ts`:
 
-```ts
+````ts
 // Code samples may legitimately show a URL or an old link; blank them out
 // (keeping length, so nothing downstream shifts) before looking for links.
 function stripCode(src: string): string {
@@ -1174,7 +1295,8 @@ export function extractDocLinks(src: string): string[] {
   const out: string[] = [];
   for (const m of stripCode(src).matchAll(LINK_RE)) {
     const href = m[1] ?? m[2];
-    if (href === "/docs" || href.startsWith("/docs/") || href.startsWith("#/")) out.push(href);
+    if (href === "/docs" || href.startsWith("/docs/") || href.startsWith("#/"))
+      out.push(href);
   }
   return out;
 }
@@ -1189,24 +1311,32 @@ export interface LinkProblem {
   reason: string;
 }
 
-export function checkLinks(files: { file: string; src: string }[], guides: Map<string, Set<string>>): LinkProblem[] {
+export function checkLinks(
+  files: { file: string; src: string }[],
+  guides: Map<string, Set<string>>,
+): LinkProblem[] {
   const problems: LinkProblem[] = [];
   for (const { file, src } of files) {
     for (const href of extractDocLinks(src)) {
       if (href.startsWith("#/")) {
-        problems.push({ file, href, reason: `hash route; use /docs/${href.slice(2)}` });
+        problems.push({
+          file,
+          href,
+          reason: `hash route; use /docs/${href.slice(2)}`,
+        });
         continue;
       }
       if (href === "/docs" || href === "/docs/") continue;
       const [slug, anchor] = href.slice("/docs/".length).split("#");
       const ids = guides.get(slug);
       if (!ids) problems.push({ file, href, reason: `no guide '${slug}'` });
-      else if (anchor && !ids.has(anchor)) problems.push({ file, href, reason: `no id '${anchor}' in '${slug}'` });
+      else if (anchor && !ids.has(anchor))
+        problems.push({ file, href, reason: `no id '${anchor}' in '${slug}'` });
     }
   }
   return problems;
 }
-```
+````
 
 Run: `pnpm test` → Expected: PASS.
 
@@ -1221,19 +1351,37 @@ import { anchorIds, checkLinks } from "../lib/links";
 // 4: every /docs link names a guide, and every #anchor names an id in it. The
 // landing page is plain TSX, so it is scanned the same way; a templated href
 // (the OWASP table) cannot be, and is covered by app/(landing)/owasp.test.ts.
-const guideSources = new Map(mdxFiles.map((f) => [f.slice(0, -4), readFileSync(path.join(guidesDir, f), "utf8")]));
-const guideAnchors = new Map([...guideSources].map(([slug, src]) => [slug, anchorIds(src)]));
+const guideSources = new Map(
+  mdxFiles.map((f) => [
+    f.slice(0, -4),
+    readFileSync(path.join(guidesDir, f), "utf8"),
+  ]),
+);
+const guideAnchors = new Map(
+  [...guideSources].map(([slug, src]) => [slug, anchorIds(src)]),
+);
 const linkFiles = [
-  ...[...guideSources].map(([slug, src]) => ({ file: `content/docs/${slug}.mdx`, src })),
-  ...readdirSync(path.join(siteDir, "app"), { recursive: true, encoding: "utf8" })
+  ...[...guideSources].map(([slug, src]) => ({
+    file: `content/docs/${slug}.mdx`,
+    src,
+  })),
+  ...readdirSync(path.join(siteDir, "app"), {
+    recursive: true,
+    encoding: "utf8",
+  })
     .filter((f) => f.endsWith(".tsx"))
-    .map((f) => ({ file: `app/${f}`, src: readFileSync(path.join(siteDir, "app", f), "utf8") })),
+    .map((f) => ({
+      file: `app/${f}`,
+      src: readFileSync(path.join(siteDir, "app", f), "utf8"),
+    })),
 ];
-for (const p of checkLinks(linkFiles, guideAnchors)) err(`${p.file}: ${p.href}: ${p.reason}`);
+for (const p of checkLinks(linkFiles, guideAnchors))
+  err(`${p.file}: ${p.href}: ${p.reason}`);
 ```
 
-Run: `pnpm check`
-Expected: FAIL with about 292 `hash route` problems. This confirms the check sees the old links. `app/` has none yet: the Task 1 placeholder page has no links, and Task 6 ports the landing page.
+Run: `pnpm check` Expected: FAIL with about 292 `hash route` problems. This
+confirms the check sees the old links. `app/` has none yet: the Task 1
+placeholder page has no links, and Task 6 ports the landing page.
 
 - [ ] **Step 6: Run the one-off codemod (not committed)**
 
@@ -1247,7 +1395,9 @@ let changed = 0;
 for (const f of readdirSync(dir).filter((f) => f.endsWith(".mdx"))) {
   const p = `${dir}/${f}`;
   const before = readFileSync(p, "utf8");
-  const after = before.replaceAll("](#/", "](/docs/").replaceAll('href="#/', 'href="/docs/');
+  const after = before
+    .replaceAll("](#/", "](/docs/")
+    .replaceAll('href="#/', 'href="/docs/');
   if (after !== before) {
     writeFileSync(p, after);
     changed++;
@@ -1256,13 +1406,13 @@ for (const f of readdirSync(dir).filter((f) => f.endsWith(".mdx"))) {
 console.log(`rewrote ${changed} file(s)`);
 ```
 
-Run: `node $SCRATCH/rewrite-links.mjs` → Expected: `rewrote 58 file(s)`.
-Then run `(cd site && pnpm check)` → Expected: `check OK`.
+Run: `node $SCRATCH/rewrite-links.mjs` → Expected: `rewrote 58 file(s)`. Then
+run `(cd site && pnpm check)` → Expected: `check OK`.
 
 - [ ] **Step 7: Cross-check against the generators**
 
-The generators now emit `/docs/` links, so regenerating over the codemodded
-tree must change nothing:
+The generators now emit `/docs/` links, so regenerating over the codemodded tree
+must change nothing:
 
 ```bash
 git diff site/content/docs > "$SCRATCH/after-codemod.patch"
@@ -1271,8 +1421,8 @@ git diff site/content/docs > "$SCRATCH/after-regen.patch"
 cmp "$SCRATCH/after-codemod.patch" "$SCRATCH/after-regen.patch" && echo SAME
 ```
 
-Expected: `SAME`. A difference means the codemod and the generators disagree
-on the link format. Fix whichever one is wrong before continuing.
+Expected: `SAME`. A difference means the codemod and the generators disagree on
+the link format. Fix whichever one is wrong before continuing.
 
 - [ ] **Step 8: Commit**
 
@@ -1287,14 +1437,16 @@ git commit -m "Link docs by path instead of hash route; check links in the build
 
 **Files:**
 
-- Copy: `showcase/docs/app/landing/{Landing.tsx,landing.css,OapMark.tsx}` → `site/app/(landing)/`
+- Copy: `showcase/docs/app/landing/{Landing.tsx,landing.css,OapMark.tsx}` →
+  `site/app/(landing)/`
 - Create: `site/app/(landing)/owasp.ts`, `site/app/(landing)/owasp.test.ts`
 - Modify: `site/app/(landing)/page.tsx` (replaces the Task 1 placeholder)
 
 **Interfaces:**
 
 - Consumes: `ThemeToggle` (Task 4); `anchorIds` (Task 5).
-- Produces: `OWASP: readonly (readonly [id: string, title: string, level: CoverageLevel, gap: string])[]`
+- Produces:
+  `OWASP: readonly (readonly [id: string, title: string, level: CoverageLevel, gap: string])[]`
   and `CoverageLevel` exported from `owasp.ts`.
 
 - [ ] **Step 1: Copy and rewrite links**
@@ -1305,16 +1457,16 @@ sed -i '' 's#/docs/\#/#/docs/#g' "site/app/(landing)/Landing.tsx"
 grep -c '#/' "site/app/(landing)/Landing.tsx"   # 0
 ```
 
-In `Landing.tsx`, add `"use client";` as the first line (it uses `useState`
-and `navigator.clipboard`), change `from "../components/ThemeToggle"` to
+In `Landing.tsx`, add `"use client";` as the first line (it uses `useState` and
+`navigator.clipboard`), change `from "../components/ThemeToggle"` to
 `from "@/components/ThemeToggle"`, and replace any `JSX.Element` with
 `React.JSX.Element` (or import `type JSX` from `react`).
 
 - [ ] **Step 2: Extract the OWASP rows and write the failing anchor test**
 
-Move the `OWASP` array (and its tuple and level types) from `Landing.tsx`
-into `site/app/(landing)/owasp.ts` as named exports, unchanged, and import it
-back into `Landing.tsx`.
+Move the `OWASP` array (and its tuple and level types) from `Landing.tsx` into
+`site/app/(landing)/owasp.ts` as named exports, unchanged, and import it back
+into `Landing.tsx`.
 
 ```ts
 // site/app/(landing)/owasp.test.ts
@@ -1327,7 +1479,14 @@ import { OWASP } from "./owasp";
 // The landing table builds each row's link as /docs/owasp-top10#<id>, which
 // the static link check cannot follow. Pin it here instead.
 describe("landing OWASP links", () => {
-  const ids = anchorIds(readFileSync(fileURLToPath(new URL("../../content/docs/owasp-top10.mdx", import.meta.url)), "utf8"));
+  const ids = anchorIds(
+    readFileSync(
+      fileURLToPath(
+        new URL("../../content/docs/owasp-top10.mdx", import.meta.url),
+      ),
+      "utf8",
+    ),
+  );
   it.each(OWASP.map(([id]) => id))("%s has an anchor in owasp-top10", (id) => {
     expect(ids.has(id.toLowerCase())).toBe(true);
   });
@@ -1346,10 +1505,13 @@ import { Landing } from "./Landing";
 import "./landing.css";
 
 export const metadata: Metadata = {
-  title: { absolute: "Open Agent Primitives — the agent proposes, SpiceDB decides" },
+  title: {
+    absolute: "Open Agent Primitives — the agent proposes, SpiceDB decides",
+  },
   openGraph: {
     title: "Open Agent Primitives",
-    description: "A Kubernetes-native runtime for LLM agents, with authorization decided outside the model.",
+    description:
+      "A Kubernetes-native runtime for LLM agents, with authorization decided outside the model.",
     type: "website",
   },
 };
@@ -1362,8 +1524,8 @@ export default function Page() {
 In `landing.css`, make the same scoping changes as Task 4 Step 7:
 
 - change `body { … }` to `body:has(.lp)`;
-- move the `--tt-*` declarations from `:root` to `.lp` (and the light-theme
-  ones to `:root[data-theme='light'] .lp`);
+- move the `--tt-*` declarations from `:root` to `.lp` (and the light-theme ones
+  to `:root[data-theme='light'] .lp`);
 - delete any `data-theme-switching` rule.
 
 Then `import "./landing.css";` must not also be imported by `Landing.tsx`;
@@ -1396,8 +1558,8 @@ git commit -m "Port the landing page to the Next.js site"
 
 - Create: `site/lib/pagefind.ts`, `site/lib/pagefind.test.ts`,
   `site/components/Search.tsx`
-- Modify: `site/app/docs/layout.tsx` (mount `<Search />` under the brand
-  row), `site/app/docs/docs.css` (search styles)
+- Modify: `site/app/docs/layout.tsx` (mount `<Search />` under the brand row),
+  `site/app/docs/docs.css` (search styles)
 
 **Interfaces:**
 
@@ -1425,7 +1587,9 @@ describe("toPath", () => {
 
 describe("loadPagefind", () => {
   it("returns null when the bundle is missing (next dev)", async () => {
-    expect(await loadPagefind(() => Promise.reject(new Error("404")))).toBeNull();
+    expect(
+      await loadPagefind(() => Promise.reject(new Error("404"))),
+    ).toBeNull();
   });
   it("returns the module when the import succeeds", async () => {
     const pf = { search: async () => ({ results: [] }) };
@@ -1449,14 +1613,21 @@ export interface PagefindResult {
 }
 
 export interface Pagefind {
-  search(q: string): Promise<{ results: { data(): Promise<PagefindResult> }[] }>;
+  search(
+    q: string,
+  ): Promise<{ results: { data(): Promise<PagefindResult> }[] }>;
 }
 
 const BUNDLE = "/_pagefind/pagefind.js";
 
-const importBundle = () => import(/* webpackIgnore: true */ /* turbopackIgnore: true */ BUNDLE) as Promise<Pagefind>;
+const importBundle = () =>
+  import(
+    /* webpackIgnore: true */ /* turbopackIgnore: true */ BUNDLE
+  ) as Promise<Pagefind>;
 
-export async function loadPagefind(importer: () => Promise<Pagefind> = importBundle): Promise<Pagefind | null> {
+export async function loadPagefind(
+  importer: () => Promise<Pagefind> = importBundle,
+): Promise<Pagefind | null> {
   try {
     return await importer();
   } catch {
@@ -1482,9 +1653,17 @@ Run: `pnpm test` → Expected: PASS.
 "use client";
 import Link from "next/link";
 import { useRef, useState } from "react";
-import { loadPagefind, toPath, type Pagefind, type PagefindResult } from "@/lib/pagefind";
+import {
+  loadPagefind,
+  toPath,
+  type Pagefind,
+  type PagefindResult,
+} from "@/lib/pagefind";
 
-type State = { kind: "idle" } | { kind: "unavailable" } | { kind: "results"; items: PagefindResult[] };
+type State =
+  | { kind: "idle" }
+  | { kind: "unavailable" }
+  | { kind: "results"; items: PagefindResult[] };
 
 export function Search() {
   const pf = useRef<Pagefind | null | undefined>(undefined);
@@ -1501,7 +1680,10 @@ export function Search() {
     if (!engine) return;
     if (!q.trim()) return setState({ kind: "idle" });
     const { results } = await engine.search(q);
-    setState({ kind: "results", items: await Promise.all(results.slice(0, 8).map((r) => r.data())) });
+    setState({
+      kind: "results",
+      items: await Promise.all(results.slice(0, 8).map((r) => r.data())),
+    });
   }
 
   return (
@@ -1515,11 +1697,15 @@ export function Search() {
         onChange={(e) => void onInput(e.target.value)}
       />
       {state.kind === "unavailable" && (
-        <p className="doc-search-note">Search is available after <code>pnpm build</code>.</p>
+        <p className="doc-search-note">
+          Search is available after <code>pnpm build</code>.
+        </p>
       )}
       {state.kind === "results" && (
         <ul className="doc-search-results">
-          {state.items.length === 0 && <li className="doc-search-note">No matches.</li>}
+          {state.items.length === 0 && (
+            <li className="doc-search-note">No matches.</li>
+          )}
           {state.items.map((r) => (
             <li key={r.url}>
               <Link href={toPath(r.url)}>{r.meta.title ?? toPath(r.url)}</Link>
@@ -1538,7 +1724,9 @@ Mount it in `site/app/docs/layout.tsx` right after the `doc-brand-row` div:
 `<Search />` (import from `@/components/Search`). Add to `docs.css`:
 
 ```css
-.doc-search { margin-bottom: 20px; }
+.doc-search {
+  margin-bottom: 20px;
+}
 .doc-search-input {
   width: 100%;
   padding: 7px 10px;
@@ -1549,12 +1737,33 @@ Mount it in `site/app/docs/layout.tsx` right after the `doc-brand-row` div:
   font: inherit;
   font-size: 14px;
 }
-.doc-search-input:focus-visible { outline: 2px solid var(--doc-accent); outline-offset: 1px; }
-.doc-search-note { color: var(--doc-muted); font-size: 13px; margin: 8px 2px 0; }
-.doc-search-results { list-style: none; margin: 8px 0 0; padding: 0; font-size: 13.5px; }
-.doc-search-results li { padding: 6px 4px; border-bottom: 1px solid var(--doc-border); }
-.doc-search-results p { margin: 2px 0 0; color: var(--doc-muted); }
-.doc-search-results mark { background: var(--doc-accent-soft); color: inherit; }
+.doc-search-input:focus-visible {
+  outline: 2px solid var(--doc-accent);
+  outline-offset: 1px;
+}
+.doc-search-note {
+  color: var(--doc-muted);
+  font-size: 13px;
+  margin: 8px 2px 0;
+}
+.doc-search-results {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 13.5px;
+}
+.doc-search-results li {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--doc-border);
+}
+.doc-search-results p {
+  margin: 2px 0 0;
+  color: var(--doc-muted);
+}
+.doc-search-results mark {
+  background: var(--doc-accent-soft);
+  color: inherit;
+}
 ```
 
 - [ ] **Step 4: Verify the index**
@@ -1567,12 +1776,13 @@ decode one fragment and confirm the title and URL:
 f=$(ls public/_pagefind/fragment | head -1); gzip -dc "public/_pagefind/fragment/$f" | tail -c +13 | head -c 300
 ```
 
-Expected: `"url":"/docs/<slug>.html"`, and `"meta":{"title":"<the guide's meta.title>"`.
+Expected: `"url":"/docs/<slug>.html"`, and
+`"meta":{"title":"<the guide's meta.title>"`.
 
 Then run `pnpm start &`, open `localhost:5179/docs/safe-tools`, and type
-`sandbox` in the search box. Expected: results appear, and clicking one lands
-on `/docs/<slug>` (no `.html`). Under `pnpm dev`, focusing the box shows "Search
-is available after `pnpm build`." Stop the servers.
+`sandbox` in the search box. Expected: results appear, and clicking one lands on
+`/docs/<slug>` (no `.html`). Under `pnpm dev`, focusing the box shows "Search is
+available after `pnpm build`." Stop the servers.
 
 - [ ] **Step 5: Commit**
 
@@ -1678,9 +1888,9 @@ export function posthogOptions(env: {
 }
 ```
 
-Run: `pnpm test` → Expected: PASS. If `tsc` rejects a key (the option names
-were checked against `@posthog/types` 1.412 on 2026-09-28), fix it against
-the installed types rather than casting it away.
+Run: `pnpm test` → Expected: PASS. If `tsc` rejects a key (the option names were
+checked against `@posthog/types` 1.412 on 2026-09-28), fix it against the
+installed types rather than casting it away.
 
 - [ ] **Step 3: The client component**
 
@@ -1709,9 +1919,8 @@ inlines those references at build time. Render `<Analytics />` in
 
 - [ ] **Step 4: Verify in a browser**
 
-Build with no key: run `pnpm build && pnpm start`. In Chrome DevTools
-(Network), load `/` and `/docs/safe-tools`. Expected: no request to
-`i.authzed.com`.
+Build with no key: run `pnpm build && pnpm start`. In Chrome DevTools (Network),
+load `/` and `/docs/safe-tools`. Expected: no request to `i.authzed.com`.
 
 Build as production with a throwaway key:
 `NEXT_PUBLIC_POSTHOG_KEY=phc_test NEXT_PUBLIC_VERCEL_ENV=production pnpm build && pnpm start`.
@@ -1758,16 +1967,15 @@ Expected: `ls showcase/docs` → "No such file or directory".
 
 - [ ] **Step 2: Trim `showcase/`**
 
-In `showcase/package.json`, remove the `docs:dev`, `docs:build`,
-`docs:preview` and `docs:check` scripts. For each of `@mdx-js/react`,
-`@mdx-js/rollup`, `@types/mdx`, `remark-gfm` and `react-markdown`, run
+In `showcase/package.json`, remove the `docs:dev`, `docs:build`, `docs:preview`
+and `docs:check` scripts. For each of `@mdx-js/react`, `@mdx-js/rollup`,
+`@types/mdx`, `remark-gfm` and `react-markdown`, run
 `grep -rl "<name>" showcase/demos showcase/engine`. Remove it with
 `pnpm remove <name>` (in `showcase/`) only if the grep prints nothing. In
 `showcase/tsconfig.json`, remove `"docs"` and `"vite.docs.config.ts"` from
 `include`.
 
-Run: `(cd showcase && pnpm typecheck && pnpm test)`
-Expected: both exit 0.
+Run: `(cd showcase && pnpm typecheck && pnpm test)` Expected: both exit 0.
 
 - [ ] **Step 3: Formatter targets**
 
@@ -1779,20 +1987,20 @@ exits 0. Commit the reformat together with this task's changes.
 
 `site/README.md` must contain:
 
-- the commands: `pnpm dev` (localhost:5179; search needs a build),
-  `pnpm build`, `pnpm start`, `pnpm check`, `pnpm test`;
+- the commands: `pnpm dev` (localhost:5179; search needs a build), `pnpm build`,
+  `pnpm start`, `pnpm check`, `pnpm test`;
 - the layout, one line per top-level directory from the File Structure above;
-- an **Analytics** section: "The site records page views and page leaves
-  through PostHog's cookieless mode, via `i.authzed.com`. It sets no cookies,
-  writes no browser storage, and does not identify visitors. Autocapture,
-  session replay, heatmaps, surveys and feature flags are off. Nothing is sent
-  unless `NEXT_PUBLIC_POSTHOG_KEY` is set on a production Vercel deploy. The
-  whole configuration is `lib/analytics.ts`."
-- **Deploying:** Vercel project root `site`, with source files outside the
-  root included (the brand SVGs come from `docs/assets/brand`).
+- an **Analytics** section: "The site records page views and page leaves through
+  PostHog's cookieless mode, via `i.authzed.com`. It sets no cookies, writes no
+  browser storage, and does not identify visitors. Autocapture, session replay,
+  heatmaps, surveys and feature flags are off. Nothing is sent unless
+  `NEXT_PUBLIC_POSTHOG_KEY` is set on a production Vercel deploy. The whole
+  configuration is `lib/analytics.ts`."
+- **Deploying:** Vercel project root `site`, with source files outside the root
+  included (the brand SVGs come from `docs/assets/brand`).
 
-For `site/AGENTS.md`, move the authoring sections of `showcase/AGENTS.md`
-here. Replace `[text](#/other-slug)` with `[text](/docs/other-slug)` and
+For `site/AGENTS.md`, move the authoring sections of `showcase/AGENTS.md` here.
+Replace `[text](#/other-slug)` with `[text](/docs/other-slug)` and
 `pnpm docs:check` with `pnpm check`. Replace
 `vite build --config vite.docs.config.ts` with `pnpm build`, and delete the
 manual dead-link shell loop, since `pnpm check` now does that. Media now goes
@@ -1840,7 +2048,8 @@ re-run this whole task from the top.
 
 - [ ] **Step 1: Site gates**
 
-Run (in `site/`): `pnpm install --frozen-lockfile && pnpm typecheck && pnpm test && pnpm build`
+Run (in `site/`):
+`pnpm install --frozen-lockfile && pnpm typecheck && pnpm test && pnpm build`
 Expected: all exit 0; `check OK — 129 guide(s)…`; 129 `/docs/[slug]` paths;
 Pagefind `Indexed 129 pages`.
 
@@ -1857,26 +2066,26 @@ Expected: no output.
 Check each item and record the evidence:
 
 1. `/` renders in dark and light. Take a screenshot of each.
-2. `/docs/safe-tools` renders in dark and light, with the wordmark matching
-   the theme.
+2. `/docs/safe-tools` renders in dark and light, with the wordmark matching the
+   theme.
 3. Choose Light on `/`, then open `/docs/…`. The page is light on its first
    paint (no flash), and the toggle shows Light. Reload, and it's still Light.
 4. After all of the above, the console has **no hydration warnings or errors**
    (use `list_console_messages`).
-5. Navigating between two guides through the sidebar is client-side (the
-   network shows no document request), and the active link highlight moves.
+5. Navigating between two guides through the sidebar is client-side (the network
+   shows no document request), and the active link highlight moves.
 6. `/docs/owasp-top10#asi03` scrolls to ASI03. The landing page's ASI03 link
    lands at the same place.
-7. A `Screenshot` lightbox opens on click and closes on Escape and on a
-   backdrop click. A `Clip` plays.
+7. A `Screenshot` lightbox opens on click and closes on Escape and on a backdrop
+   click. A `Clip` plays.
 8. Search returns results, and a result link opens the guide without `.html`.
 9. An external link in a guide opens in a new tab. A `/docs/…` link does not.
 10. `/docs/nope` shows the 404 page.
 
 - [ ] **Step 4: Ship gate**
 
-Check that the machine isn't overloaded first (`uptime`). Then run from the
-repo root:
+Check that the machine isn't overloaded first (`uptime`). Then run from the repo
+root:
 
 ```bash
 mage test:unit
@@ -1894,8 +2103,8 @@ it's a flake, as `CLAUDE.md` requires.
 
 Report to the user, without performing any of it:
 
-- Create the Vercel project with root directory `site` and source files
-  outside the root directory included.
+- Create the Vercel project with root directory `site` and source files outside
+  the root directory included.
 - Set `NEXT_PUBLIC_POSTHOG_KEY` for production only.
 - Enable "Cookieless server hash mode" in the PostHog project.
 - After the first preview deploy, confirm that

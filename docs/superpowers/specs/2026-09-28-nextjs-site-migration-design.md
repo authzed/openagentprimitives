@@ -1,7 +1,7 @@
 # Migrate the landing page and docs site to Next.js
 
-Date: 2026-09-28
-Status: approved design, pending implementation plan
+- Date: 2026-09-28
+- Status: approved design, pending implementation plan
 
 ## Goal
 
@@ -12,8 +12,8 @@ root layout, which is where analytics and other site-wide concerns live.
 
 ## Context
 
-Today the site is a Vite build in `showcase/docs/app` with two HTML entries:
-`/` (landing, `landing/main.tsx`) and `/docs/` (the MDX app, a `#/<slug>` hash
+Today the site is a Vite build in `showcase/docs/app` with two HTML entries: `/`
+(landing, `landing/main.tsx`) and `/docs/` (the MDX app, a `#/<slug>` hash
 router over `import.meta.glob("../guides/*.mdx")`). Nothing builds, checks, or
 deploys it in CI, and it has no hosting.
 
@@ -34,26 +34,25 @@ Facts the design depends on:
 
 ## Decisions
 
-| Question | Decision | Why |
-| --- | --- | --- |
-| Host | Vercel | Existing resources; easy deploys. |
-| Location | New top-level `site/`, its own `package.json` and pnpm lockfile | Keeps Next.js dependencies apart from the Vite sims in `showcase/`. |
-| Framework | Plain Next.js 16 App Router, no docs framework | Fumadocs, Nextra, Docusaurus, Starlight, and hosted options each cost a frontmatter conversion or a theme fight. omnigent.ai runs this same shape on Vercel. |
-| MDX pipeline | `@next/mdx` (bundler-compiled) | Reads `export const meta` natively, hot-reloads, and is the Next 16 recommendation for local content. `authzed/web` compiles at runtime with `next-mdx-remote`, which HashiCorp archived and which cannot read ESM exports. |
-| Search | Pagefind over the prerendered HTML | Static, no service; indexes rendered text, not MDX source. |
-| Old `#/` links | Rewrite everywhere; no redirect | Nothing is deployed, so no external link depends on them. |
-| Theme | `next-themes` | The Next.js-native toggle. Needs `suppressHydrationWarning` on `<html>` only; every alternative that keeps a toggle and static pages needs the same. |
-| Analytics | `posthog-js`, cookieless for every visitor, via `https://i.authzed.com` | Public repo: collect usage counts only, no identity or lead data, and say so. |
+| Question       | Decision                                                                | Why                                                                                                                                                                                                                         |
+| -------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host           | Vercel                                                                  | Existing resources; easy deploys.                                                                                                                                                                                           |
+| Location       | New top-level `site/`, its own `package.json` and pnpm lockfile         | Keeps Next.js dependencies apart from the Vite sims in `showcase/`.                                                                                                                                                         |
+| Framework      | Plain Next.js 16 App Router, no docs framework                          | Fumadocs, Nextra, Docusaurus, Starlight, and hosted options each cost a frontmatter conversion or a theme fight. omnigent.ai runs this same shape on Vercel.                                                                |
+| MDX pipeline   | `@next/mdx` (bundler-compiled)                                          | Reads `export const meta` natively, hot-reloads, and is the Next 16 recommendation for local content. `authzed/web` compiles at runtime with `next-mdx-remote`, which HashiCorp archived and which cannot read ESM exports. |
+| Search         | Pagefind over the prerendered HTML                                      | Static, no service; indexes rendered text, not MDX source.                                                                                                                                                                  |
+| Old `#/` links | Rewrite everywhere; no redirect                                         | Nothing is deployed, so no external link depends on them.                                                                                                                                                                   |
+| Theme          | `next-themes`                                                           | The Next.js-native toggle. Needs `suppressHydrationWarning` on `<html>` only; every alternative that keeps a toggle and static pages needs the same.                                                                        |
+| Analytics      | `posthog-js`, cookieless for every visitor, via `https://i.authzed.com` | Public repo: collect usage counts only, no identity or lead data, and say so.                                                                                                                                               |
 
 A throwaway spike (Next 16.3.6, Turbopack, three sample guides) confirmed:
-dynamic `import(\`@/content/docs/${slug}.mdx\`)` returns `{ default, meta }`;
+dynamic ``import(`@/content/docs/${slug}.mdx`)`` returns `{ default, meta }`;
 the docs layout can build its nav from every guide's `meta`;
 `generateStaticParams` plus `dynamicParams = false` prerenders every slug;
-`remark-gfm` works as a string plugin; server and `'use client'` components
-both render through `mdx-components.tsx`; and
-`pagefind --site .next/server/app` indexes only `data-pagefind-body` pages.
-Pagefind reports URLs with a `.html` suffix, and takes the first heading as the
-result title unless told otherwise.
+`remark-gfm` works as a string plugin; server and `'use client'` components both
+render through `mdx-components.tsx`; and `pagefind --site .next/server/app`
+indexes only `data-pagefind-body` pages. Pagefind reports URLs with a `.html`
+suffix, and takes the first heading as the result title unless told otherwise.
 
 ## Architecture
 
@@ -154,12 +153,12 @@ section's wrapper element.
 
 ### Moves (`git mv`, preserving history)
 
-| From | To |
-| --- | --- |
-| `showcase/docs/guides/*` | `site/content/docs/` |
-| `showcase/docs/_manifest.json` | `site/content/_manifest.json` |
-| `showcase/docs/public/media/` | `site/public/media/` |
-| `showcase/docs/check.ts` | `site/scripts/check.ts`, path math fixed for the new depth |
+| From                           | To                                                         |
+| ------------------------------ | ---------------------------------------------------------- |
+| `showcase/docs/guides/*`       | `site/content/docs/`                                       |
+| `showcase/docs/_manifest.json` | `site/content/_manifest.json`                              |
+| `showcase/docs/public/media/`  | `site/public/media/`                                       |
+| `showcase/docs/check.ts`       | `site/scripts/check.ts`, path math fixed for the new depth |
 
 Then port the landing and docs components into `site/`, and delete
 `showcase/docs/`, `showcase/vite.docs.config.ts`, the `docs:*` scripts, and any
@@ -170,8 +169,8 @@ dependencies only the docs used. Trim `showcase/tsconfig.json`'s `include`.
 - A one-off codemod (run, not committed) rewrites `](#/slug…)` and
   `href="#/slug…"` in the guides, and `/docs/#/slug` on the landing page
   (including the templated OWASP link), to `/docs/slug…`.
-- Change the generator format strings to `/docs/oap-%s` and `/docs/crd-%s`,
-  and update their test assertions.
+- Change the generator format strings to `/docs/oap-%s` and `/docs/crd-%s`, and
+  update their test assertions.
 - Point `cliDocsDir` (`magefiles/clidocs.go:18`) at `site/content/docs`.
 - Cross-check: after the codemod, `mage docs:cli docs:crd` must leave the
   generated files unchanged in `git diff`.
@@ -190,9 +189,9 @@ enforces them. No separate CI job.
 
 ## Testing
 
-- **Unit (vitest):** `lib/guides.ts` index — section order by first
-  appearance, groups anchored at their lowest-order child, defaults for missing
-  `meta` fields, and sort ties.
+- **Unit (vitest):** `lib/guides.ts` index — section order by first appearance,
+  groups anchored at their lowest-order child, defaults for missing `meta`
+  fields, and sort ties.
 - **Go:** the updated `clidocs` and `crddocs` tests, via `mage test:unit`.
 - **Build:** all 129 routes prerender as static; an unknown slug returns 404;
   `/docs` redirects.
@@ -218,9 +217,9 @@ enforces them. No separate CI job.
 ## Sequencing
 
 The landing-page work on the `landing-page` branch is uncommitted and is not
-committed on its own. It is the source the new `site/` ports from. Once
-`site/` renders the landing page and the docs, the Vite app (committed and
-uncommitted parts alike) is deleted.
+committed on its own. It is the source the new `site/` ports from. Once `site/`
+renders the landing page and the docs, the Vite app (committed and uncommitted
+parts alike) is deleted.
 
 ## Outside the repo (owner action)
 
