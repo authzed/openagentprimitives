@@ -1,0 +1,107 @@
+/* The theme toggle, shared by the landing page and the docs app. Those two have
+ * different palettes (.lp and .doc-app), so this file styles itself from a
+ * small set of its own variables and each stylesheet maps them. The fallbacks
+ * below are the dark landing values, so the control is never unstyled. */
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin: 0;
+  padding: 1px;
+  border: 1px solid var(--tt-line, #3f3644);
+  border-radius: 999px;
+  background: var(--tt-bg, transparent);
+  /* A <fieldset> carries min-inline-size: min-content, which keeps it from
+     shrinking inside a flex row the way the other nav items do. */
+  min-inline-size: 0;
+}
+
+.theme-toggle .tt-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--tt-fg, #9a94a0);
+  transition: color 0.12s ease-out, background 0.12s ease-out;
+}
+
+.theme-toggle .tt-opt:hover {
+  color: var(--tt-fg-hover, #e9e7e9);
+}
+
+/* The radio itself is removed from view but NOT from the accessibility tree or
+   the focus order, so arrow-key navigation within the group still works. */
+.theme-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.theme-toggle .tt-opt:has(input:checked) {
+  background: var(--tt-bg-active, #2f2136);
+  color: var(--tt-fg-active, #f8f7f8);
+}
+
+/* :focus-visible on the input, ring on the label it is inside. */
+.theme-toggle .tt-opt:has(input:focus-visible) {
+  outline: 2px solid var(--tt-ring, #c7c4ca);
+  outline-offset: 1px;
+}
+
+.theme-toggle .tt-icon {
+  display: block;
+  line-height: 0;
+}
+
+.theme-toggle svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The moon is a filled shape; the sun and monitor are strokes. */
+.theme-toggle .tt-opt:nth-of-type(2) svg path {
+  fill: currentColor;
+  stroke-width: 1;
+}
+
+.tt-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A fieldset's legend participates in its layout even when visually hidden;
+   taking it out of flow keeps the pill from gaining a phantom first row. */
+.theme-toggle > legend {
+  float: left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle .tt-opt {
+    transition: none;
+  }
+}
