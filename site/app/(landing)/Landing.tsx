@@ -320,7 +320,7 @@ const EVERYTHING = [
   },
   {
     title: "Channels",
-    body: "Slack, browser, CLI, GitHub and signed webhooks.",
+    body: "Slack, the browser, the CLI and GitHub, plus signed webhooks, scheduled runs and sub-agent conversations. Transports are pluggable, so you can add your own.",
   },
   {
     title: "Memory and knowledge graph",
