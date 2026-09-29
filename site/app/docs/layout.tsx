@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { allGuides } from "@/lib/guides";
 import { buildNav } from "@/lib/nav";
+import { DocNav } from "@/components/DocNav";
 import { NavLink } from "@/components/NavLink";
 import { Search } from "@/components/Search";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -15,21 +16,26 @@ export default async function DocsLayout({
   const nav = buildNav(await allGuides());
   return (
     <div className="doc-app">
-      <aside className="doc-nav" data-pagefind-ignore>
-        <div className="doc-brand-row">
-          {/* A plain <a>: the landing page is a different stylesheet, so leave by full load. */}
-          <a
-            className="doc-brand"
-            href="/"
-            aria-label="Open Agent Primitives home"
-          >
-            <Wordmark className="doc-brand-wordmark" />
-          </a>
-          <div className="doc-brand-meta">
-            <span className="doc-brand-sub">docs</span>
-          </div>
-        </div>
-        <Search />
+      <DocNav
+        header={
+          <>
+            <div className="doc-brand-row">
+              {/* A plain <a>: the landing page is a different stylesheet, so leave by full load. */}
+              <a
+                className="doc-brand"
+                href="/"
+                aria-label="Open Agent Primitives home"
+              >
+                <Wordmark className="doc-brand-wordmark" />
+              </a>
+              <div className="doc-brand-meta">
+                <span className="doc-brand-sub">docs</span>
+              </div>
+            </div>
+            <Search />
+          </>
+        }
+      >
         {nav.map(({ section, blocks }) => (
           <div className="doc-nav-section" key={section}>
             <div className="doc-nav-section-title">{section}</div>
@@ -52,7 +58,7 @@ export default async function DocsLayout({
             ))}
           </div>
         ))}
-      </aside>
+      </DocNav>
       <main className="doc-main">
         <article className="doc-article" data-pagefind-body>
           {children}

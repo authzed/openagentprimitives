@@ -489,9 +489,105 @@ body:has(.doc-app) {
   margin-bottom: 0;
 }
 
+/* The Menu button only exists for the narrow layout below. */
+.doc-nav-toggle {
+  display: none;
+}
+
+/* Under 900px the sidebar becomes a sticky top bar (brand, search, Menu), and
+   the guide list opens as an overlay filling the viewport beneath it. Search
+   results drop down over the page rather than growing the bar. */
 @media (max-width: 900px) {
+  .doc-app {
+    flex-direction: column;
+  }
   .doc-nav {
+    --doc-bar-h: 56px;
+    width: 100%;
+    height: var(--doc-bar-h);
+    padding: 0 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--doc-border);
+    overflow: visible;
+    z-index: 20;
+  }
+  .doc-nav-bar {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .doc-brand-row {
+    margin: 0;
+    flex-shrink: 0;
+  }
+  .doc-brand-wordmark {
+    width: 118px;
+  }
+  .doc-brand-meta {
     display: none;
+  }
+  /* Static, so the results below anchor to the whole bar rather than to
+     this narrow field. */
+  .doc-search {
+    position: static;
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+  }
+  /* Phones have no keyboard shortcut to hint at, and the field needs the room. */
+  .doc-search-kbd {
+    display: none;
+  }
+  .doc-search-field .doc-search-input {
+    padding-right: 10px;
+  }
+  .doc-search-results,
+  .doc-search > .doc-search-note {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 12px;
+    right: 12px;
+    margin: 0;
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 6px 10px;
+    background: var(--doc-nav);
+    border: 1px solid var(--doc-border);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px var(--doc-shadow);
+  }
+  .doc-nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border: 1px solid var(--doc-border);
+    border-radius: 6px;
+    background: var(--doc-bg);
+    color: var(--doc-text);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .doc-nav-toggle:focus-visible {
+    outline: 2px solid var(--doc-accent);
+    outline-offset: 1px;
+  }
+  .doc-nav-list {
+    display: none;
+  }
+  .doc-nav[data-open="true"] .doc-nav-list {
+    display: block;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    height: calc(100dvh - var(--doc-bar-h));
+    overflow-y: auto;
+    padding: 8px 16px 32px;
+    background: var(--doc-nav);
+    border-top: 1px solid var(--doc-border);
   }
   .doc-series {
     grid-template-columns: 1fr;
