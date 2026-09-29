@@ -181,6 +181,13 @@ body:has(.lp) {
   color: var(--lp-heading);
   margin: 0 0 18px;
   max-width: 22ch;
+  /* Even lines rather than one stranded word on the last. */
+  text-wrap: balance;
+}
+
+/* Keeps a phrase whole when balanced wrapping would split it badly. */
+.lp-nowrap {
+  white-space: nowrap;
 }
 
 .lp-h2 em {
@@ -321,6 +328,7 @@ body:has(.lp) {
   letter-spacing: -0.038em;
   color: var(--lp-heading);
   margin: 0 0 24px;
+  text-wrap: balance;
 }
 
 .lp-hero h1 em {
@@ -524,6 +532,7 @@ body:has(.lp) {
   letter-spacing: -0.012em;
   color: var(--lp-heading);
   margin: 0 0 10px;
+  text-wrap: balance;
 }
 
 .lp-slab p:not(.lp-prim-eyebrow) {
@@ -707,6 +716,7 @@ body:has(.lp) {
   letter-spacing: -0.015em;
   color: var(--lp-heading);
   margin: 0 0 10px;
+  text-wrap: balance;
 }
 
 /* Links are neutral and carry a rule on hover, never the accent: teal means

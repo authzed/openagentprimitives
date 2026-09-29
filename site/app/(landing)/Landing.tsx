@@ -648,7 +648,8 @@ export function Landing() {
       {/* ---------------------------------------------------- 03 secure --- */}
       <section className="lp-section" id="secure">
         <SectionHead kicker="What makes it secure">
-          Twenty-seven controls, in six areas.
+          <span className="lp-nowrap">Twenty-seven controls,</span> in six
+          areas.
         </SectionHead>
         <p className="lp-lede">
           Each control is enforced by the platform, not requested of the model.
@@ -731,8 +732,10 @@ export function Landing() {
       {/* ------------------------------------------------------- 06 owasp --- */}
       <section className="lp-section" id="owasp">
         <SectionHead kicker="Security posture">
-          Coverage of the OWASP Agentic Top 10.
-          <span className="lp-draft">Draft</span>
+          Coverage of the OWASP{" "}
+          <span className="lp-nowrap">
+            Agentic Top 10.<span className="lp-draft">Draft</span>
+          </span>
         </SectionHead>
         <p className="lp-lede">
           How OAP maps to each risk in the OWASP Top 10 for Agentic
