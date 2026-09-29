@@ -7,6 +7,9 @@ type State = { kind: "idle" } | { kind: "unavailable" } | { kind: "results"; ite
 
 export function Search() {
   const pf = useRef<Pagefind | null | undefined>(undefined);
+  // Bumped at the start of each onInput call; a stale (slower) call's result
+  // is dropped instead of overwriting a newer call's state.
+  const gen = useRef(0);
   const [state, setState] = useState<State>({ kind: "idle" });
 
   async function ensure() {
@@ -16,11 +19,16 @@ export function Search() {
   }
 
   async function onInput(q: string) {
+    const my = ++gen.current;
     const engine = await ensure();
     if (!engine) return;
-    if (!q.trim()) return setState({ kind: "idle" });
+    if (!q.trim()) {
+      if (my === gen.current) setState({ kind: "idle" });
+      return;
+    }
     const { results } = await engine.search(q);
-    setState({ kind: "results", items: await Promise.all(results.slice(0, 8).map((r) => r.data())) });
+    const items = await Promise.all(results.slice(0, 8).map((r) => r.data()));
+    if (my === gen.current) setState({ kind: "results", items });
   }
 
   return (
