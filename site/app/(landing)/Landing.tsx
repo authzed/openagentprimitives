@@ -1,5 +1,11 @@
 "use client";
-import { useCallback, useState } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import { OapMark } from "./OapMark";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { OWASP } from "./owasp";
@@ -9,24 +15,105 @@ import { OWASP } from "./owasp";
  * a real guide on this site and is written inline. */
 const TODO = {
   repo: "https://example.invalid/PLACEHOLDER-repo",
-  clone: "https://example.invalid/PLACEHOLDER-repo.git",
   discuss: "https://example.invalid/PLACEHOLDER-community",
   owaspFull: "https://example.invalid/PLACEHOLDER-owasp-coverage",
-  paper: (slug: string) =>
-    `https://example.invalid/PLACEHOLDER-whitepaper-${slug}`,
 };
 
-const INSTALL = `git clone ${TODO.clone}
-cd agentprimitives && mage build
-./bin/oap install`;
+/* The page's copy follows the repository README: its order, its emphasis and
+ * its claims. When the README's story changes, change this page to match. */
 
 /* ------------------------------------------------------------------ data --- */
+
+interface Step {
+  cmd: string;
+  note?: string;
+}
+
+const INSTALL: {
+  id: string;
+  label: string;
+  steps: Step[];
+  comment: string[];
+}[] = [
+  {
+    id: "desktop",
+    label: "Desktop · macOS",
+    steps: [
+      { cmd: "mage desktop:all" },
+      { cmd: "open build/desktop/out/oap.app" },
+    ],
+    comment: [
+      "# runs OAP in a lightweight Linux VM reachable only from",
+      "# your Mac, with a menubar app for chats, sessions, the",
+      "# admin dashboard and agent installation.",
+    ],
+  },
+  {
+    id: "kubernetes",
+    label: "Kubernetes · kind",
+    steps: [
+      { cmd: "mage build:oap" },
+      { cmd: "kind create cluster --name oap-dev" },
+      { cmd: "./bin/oap init --local --pinning-mode=warn --wizard" },
+    ],
+    comment: [
+      "# builds and loads images, installs OAP, waits for it to",
+      "# come up healthy, and walks you through security",
+      "# settings and model configuration.",
+    ],
+  },
+];
+
+const QUESTIONS = [
+  "What can it reach?",
+  "Who granted that access?",
+  "What happens when a tool result tells it to do something else?",
+  "What is exposed if one component is compromised?",
+];
+
+const COMPARE: [string, string, string][] = [
+  [
+    "What an agent can reach",
+    "Whatever its credentials allow",
+    "Exactly what you granted",
+  ],
+  [
+    "Who decides an action is allowed",
+    "The model, in the moment",
+    "The platform, before the call",
+  ],
+  [
+    "An injected instruction mid-session",
+    "Can redirect the agent",
+    "Cannot exceed the approved plan",
+  ],
+  [
+    "Tool credentials",
+    "Shared across tools in one sandbox",
+    "Held only by the tool that uses them",
+  ],
+  [
+    "Restricting an MCP server",
+    "Needs a narrow upstream token",
+    "Declared by you, enforced per call",
+  ],
+  [
+    "Revoking access",
+    "Rotate credentials, redeploy",
+    "One permission graph call",
+  ],
+  [
+    "The audit log",
+    "Append-only, enforced by the store",
+    "Signed, chained, verifiable offline",
+  ],
+];
 
 const PRIMITIVES = [
   {
     verb: "Define",
     title: "Agent definition",
-    body: "An AgentClass is a reviewable template you keep in git. An AgentSession is a disposable instance: one runner pod, one budget, one memory scope, one signing key, torn down when the work is done.",
+    body: "An AgentClass is a reviewable template you keep in git. An AgentSession is a disposable instance with its own runner pod, budget, memory scope and signing key, torn down when the work is done.",
     chips: ["AgentClass", "AgentSession", "one pod per session"],
     href: "/docs/agent-definition",
   },
@@ -39,98 +126,242 @@ const PRIMITIVES = [
   },
   {
     verb: "Broker",
-    title: "Identity and credentials",
-    body: 'Credentials live in named catalogs and resolve to bytes at the moment of execution. The agent is handed a valet key, not the keyring, and "acting as Alice" is a governed mode rather than a shared secret.',
-    chips: ["4 credential kinds", "7 setup flows", "JIT resolution"],
+    title: "Identity & credentials",
+    body: 'Credentials live in named catalogs and resolve at the moment of execution. The agent is handed a valet key, not the keyring, and "acting as Alice" is a governed mode rather than a shared secret.',
+    chips: [
+      "named catalogs",
+      "just-in-time resolution",
+      "per-user credentials",
+    ],
     href: "/docs/identity",
   },
   {
     verb: "Decide",
     title: "Authorization",
-    body: "One SpiceDB graph answers every state-touching action: may this subject do this, to this resource, right now. The schema is 663 lines and 18 definitions, with 15 permissions on the session alone.",
+    body: "One relationship graph answers every state-touching action: may this subject do this, to this resource, right now. The graph mirrors ownership in your organization, and every path fails closed.",
     chips: ["SpiceDB", "per subject, per action", "fails closed"],
     href: "/docs/authorization",
   },
   {
     verb: "Carry",
-    title: "Channels and continuity",
-    body: "A Channel binds a transport to an AgentClass. Threads survive across days, approvals render in the channel where the work is happening, and the button re-checks standing at click time rather than at render time.",
-    chips: ["7 transports", "threads persist", "47 interaction kinds"],
+    title: "Channels & continuity",
+    body: "A Channel binds a transport to an AgentClass. Threads survive across days, and approvals render in the channel where the work is happening, so nobody has to leave the conversation to grant or deny an action.",
+    chips: [
+      "Slack · browser · CLI · GitHub",
+      "threads persist",
+      "signed webhooks",
+    ],
     href: "/docs/channels",
   },
   {
     verb: "Remember",
-    title: "Memory and knowledge",
-    body: "Forty-four typed memory kinds, twenty-seven of them append-only and Ed25519 signed. Recall is an authorization decision rather than a database query, and the transcript is a ledger rather than a mutable table.",
-    chips: ["44 kinds", "27 append-only", "RRF search"],
+    title: "Memory & knowledge",
+    body: "Typed memory with structured recall, ranked search and a knowledge graph. Recall is an authorization decision rather than a database query, and the transcript is a signed ledger rather than a mutable table.",
+    chips: ["typed kinds", "ranked search", "append-only audit"],
     href: "/docs/memory",
   },
 ];
 
-const CANNOT = [
+interface Area {
+  title: string;
+  points: [string, ReactNode][];
+  links: [string, string][];
+}
+
+const AREAS: Area[] = [
   {
-    title: "The model never votes on its own permissions",
-    body: "The permission and resource type come from the tool’s declaration. The resource ID is computed from the call’s own validated arguments by a CEL program, not asserted by the model. The subject is the human who spoke, canonicalized at the channel boundary.",
+    title: "Every action is authorized",
+    points: [
+      [
+        "What is checked.",
+        "Tool calls, interactions, memory access, lookups and preferences all go through a relationship graph that mirrors ownership in your organization.",
+      ],
+      [
+        "Operation-level rules.",
+        "One agent can be read-only for one team and read-write for another, instead of a separate agent per audience.",
+      ],
+      [
+        "Directory sync.",
+        "Group memberships from Slack, GitHub and 1Password sync into the graph, so permissions follow your organization.",
+      ],
+      [
+        "Multiplayer sessions.",
+        "Joining a session, directing it and running sensitive tools can each require approval, and a requester cannot approve their own request.",
+      ],
+    ],
+    links: [
+      ["Authorization", "/docs/authorization"],
+      ["Identity modes", "/docs/identity-modes"],
+      ["Multiplayer", "/docs/multiplayer-sessions"],
+    ],
   },
   {
-    title: "A denied call never reaches anything",
-    body: "The check runs at the dispatch site, at a fixed position in a hook pipeline whose order is owned by code rather than configuration. A refusal means no sandbox exec and no MCP request, so there is nothing to undo.",
+    title: "Injected instructions cannot widen what an agent may do",
+    points: [
+      [
+        "Plan gating.",
+        "The agent states what it intends, a person approves that scope, and every later action is checked against it. Injected text can change what the model wants to do, not what it is allowed to do.",
+      ],
+      [
+        "Slots.",
+        "A session commits to the resource it is working on, once. It cannot drift to another resource even when its credentials would reach one.",
+      ],
+      [
+        "Approvals the model cannot reword.",
+        "The platform describes the action from the call itself, and the approval is bound to those exact arguments.",
+      ],
+      [
+        "Tool specs.",
+        "Declare which operations and resources an MCP server or CLI exposes. A read-write integration becomes read-only without a read-only token.",
+      ],
+    ],
+    links: [
+      ["Plan gating", "/docs/plan-gating"],
+      ["Tool specs", "/docs/toolspec-validation"],
+    ],
   },
   {
-    title: "An approval cannot be moved to a different target",
-    body: "Approval is bound to the exact arguments by an HMAC-SHA256 under a per-session key the model never sees. Approve acme/widget and you approved acme/widget. A call against acme/other needs its own approval.",
+    title: "Data reaches only its authorized audience",
+    points: [
+      [
+        "Leakage tracking.",
+        "Tool responses are tagged with their origin, and the platform checks those tags against who will receive the data before anything leaves.",
+      ],
+      [
+        "Slot-scoped memory.",
+        "Sessions share memory only when bound to the same resource, so one customer's context does not reach another's. Nothing is shared by default.",
+      ],
+      [
+        "Secret scrubbing.",
+        "Mark a tool output as a secret and the model receives an opaque handle. The real value is substituted outside the model.",
+      ],
+    ],
+    links: [
+      ["Information leakage", "/docs/information-leakage"],
+      ["Memory authorization", "/docs/memory-authorization"],
+    ],
   },
   {
-    title: "A requester cannot approve their own request",
-    body: "Who may approve is derived from who owns the resource, not from who can see the button. Session standing is neither required nor sufficient, so an agent’s owner cannot self-approve their way into someone else’s data.",
+    title: "Least privilege by default",
+    points: [
+      [
+        "Opt-in capabilities.",
+        "Every toolkit, tool spec and capability was added deliberately, so a review covers what was added rather than what was left on.",
+      ],
+      [
+        "A sandbox per tool.",
+        "Each tool holds only its own credentials. A compromised tool cannot borrow another's access, and the orchestrating agent never holds them at all.",
+      ],
+      [
+        "Sub-agents request their own permissions.",
+        "Delegation narrows access instead of copying it.",
+      ],
+    ],
+    links: [
+      ["Sandboxed execution", "/docs/sandboxed-execution"],
+      ["Sub-agents", "/docs/subagents-delegation"],
+    ],
   },
   {
-    title: "A revoked credential does not survive the next call",
-    body: "Using a credential is itself a graph permission, re-checked fully consistent immediately before every upstream request. Revocation lands on the next action rather than the next pod restart.",
+    title: "Control and oversight",
+    points: [
+      [
+        "Inherited requirements.",
+        "Administrators set defaults at the cluster, namespace or agent-class level, and agents cannot opt out.",
+      ],
+      [
+        "Revocation.",
+        "Remove a relationship and it takes effect everywhere at once, with no credential rotation or redeploy.",
+      ],
+      [
+        "A verifiable audit log.",
+        <>
+          Every entry is signed and hash-chained, so modification, reordering
+          and truncation are detectable. <code>oap audit verify</code> checks a
+          session offline.
+        </>,
+      ],
+      [
+        "Pinning, budgets and hooks.",
+        "Skills, containers and MCP servers pin to approved versions; budgets cap turns, spend and run time; your own hooks can trip a circuit breaker.",
+      ],
+    ],
+    links: [
+      ["Audit log", "/docs/audit-log"],
+      ["Revocation", "/docs/revocation"],
+      ["Pinning", "/docs/supply-chain-pinning"],
+    ],
   },
   {
-    title: "An audit entry cannot be quietly edited",
-    body: "Twenty-seven memory kinds refuse a write that changes existing content. Each entry carries a signature, a sequence number and the previous entry’s hash, so modification, fabrication, gaps and reordering are all detectable.",
+    title: "Isolation in the platform itself",
+    points: [
+      [
+        "A sanitizer per content type.",
+        "Each is written for that type's risks, and rendered output is contained under a Content Security Policy without cookie access.",
+      ],
+      [
+        "Separate pods.",
+        "The session runner, the operator and each sanitizer run apart, with micro-VM backing where the cluster provides it.",
+      ],
+      [
+        "Scoped bus credentials.",
+        "Each component dials the control-plane bus with its own credential, granting only its own session's subjects.",
+      ],
+      [
+        "One package per agent.",
+        "Each agent ships as one OCI-compliant package, so installation can be gated and reviewed like any other artifact.",
+      ],
+    ],
+    links: [
+      ["Artifact safety", "/docs/artifact-safety"],
+      ["Packaging", "/docs/packaging-oap"],
+    ],
   },
 ];
 
-const SEAMS = [
+const BUILDER = [
   {
-    n: "7",
-    name: "Channel transports",
-    list: "slack · github · browser · local · agent · bento · fake",
-  },
-  { n: "3", name: "LLM providers", list: "anthropic · openai · openrouter" },
-  { n: "44", name: "Memory kinds", list: "27 of them append-only and signed" },
-  {
-    n: "6",
-    name: "Artifact renderers",
-    list: "html · css · svg · image · mcpui · oap",
+    step: "Describe",
+    title: "Say what the agent is for",
+    body: "Agent Builder identifies the tools it needs, connects accounts through the platform, and defines what the new agent may do and what it must ask permission for.",
   },
   {
-    n: "7",
-    name: "Identity setup flows",
-    list: "oauth · pat · kubeconfig · scim · authkey · …",
-  },
-  { n: "5", name: "Pinning kinds", list: "mcp · image · cli · skill · oap" },
-  {
-    n: "6",
-    name: "Cluster kinds",
-    list: "gke · eks · aks · default · local · desktop",
+    step: "Test",
+    title: "Try it in a workshop",
+    body: "Each build runs in an isolated workshop. The draft cannot touch your live agents, and the builder cannot install it into the real environment.",
   },
   {
-    n: "4",
-    name: "Search providers",
-    list: "postgres · sqlite · graphiti · inmem",
+    step: "Deliver",
+    title: "Hand over a bundle",
+    body: "When you are satisfied you get a portable .oap bundle, and can submit an installation request for an administrator to review.",
   },
-  { n: "3", name: "Memory backends", list: "postgres · sqlite · inmem" },
+];
+
+const EVERYTHING = [
   {
-    n: "3",
-    name: "Revocation kinds",
-    list: "credential · tool-origin · session-hold",
+    title: "You choose the model",
+    body: "Anthropic, OpenAI or OpenRouter, swappable per deployment. Nothing in an agent's definition hardcodes a provider.",
   },
-  { n: "2", name: "Sandbox backends", list: "pod · agent-sandbox" },
-  { n: "2", name: "Content guards", list: "prompt-injection · url-allowlist" },
+  {
+    title: "You choose the infrastructure",
+    body: "A laptop, a local cluster, or your own Kubernetes: GKE, EKS, AKS or self-managed.",
+  },
+  {
+    title: "Channels",
+    body: "Slack, the browser, the CLI, GitHub, or a signed webhook trigger from another system.",
+  },
+  {
+    title: "Memory and knowledge graph",
+    body: "Structured recall, ranked search and graph-native queries over what an agent has learned.",
+  },
+  {
+    title: "Built in and swappable",
+    body: "The runner, authorization, approvals, sandboxing, credentials, memory and audit all ship built in, and each can be replaced by something your organization already runs.",
+  },
+  {
+    title: "Nothing phones home",
+    body: "The runtime's outbound calls are the ones you configure: your model provider, the MCP servers you declared, the hosts your tools reach.",
+  },
 ];
 
 const COV_LABEL: Record<string, string> = {
@@ -139,46 +370,7 @@ const COV_LABEL: Record<string, string> = {
   na: "Architectural N/A",
 };
 
-const PAPERS = [
-  {
-    slug: "agent-definition",
-    title: "Agent definition",
-    blurb:
-      "Why an agent should be a reviewable object in a cluster rather than a process someone started, and what a session boundary buys you.",
-  },
-  {
-    slug: "safe-tools",
-    title: "Safe tools",
-    blurb:
-      "Tools as declarative contracts: dual validation, argv over shell, and what it takes to make an undeclared capability structurally uncallable.",
-  },
-  {
-    slug: "identity",
-    title: "Identity and credentials",
-    blurb:
-      "Named catalogs, just-in-time resolution, and the difference between an agent acting for a person and an agent holding their keys.",
-  },
-  {
-    slug: "authorization",
-    title: "Authorization",
-    blurb:
-      "The relationship graph, where the check sits in the turn loop, how approvals bind to arguments, and every path that fails closed.",
-  },
-  {
-    slug: "channels",
-    title: "Channels and continuity",
-    blurb:
-      "Threads that outlive a process, approvals rendered where the work is, and what continuity means when the participants change.",
-  },
-  {
-    slug: "memory",
-    title: "Memory and knowledge",
-    blurb:
-      "Typed, authorized recall; ranked retrieval across providers; and an append-only ledger whose trust root the cluster witnesses.",
-  },
-];
-
-/* ------------------------------------------------------------- component --- */
+/* ------------------------------------------------------------ components --- */
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -195,6 +387,98 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/* A two-tab terminal: Desktop is the README's fastest path, kind the one for
+ * development. Arrow keys move between tabs, per the ARIA tabs pattern. */
+function InstallTerminal() {
+  const [active, setActive] = useState(0);
+  const tabs = useRef<(HTMLButtonElement | null)[]>([]);
+  const current = INSTALL[active];
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    const next =
+      (active + (e.key === "ArrowRight" ? 1 : -1) + INSTALL.length) %
+      INSTALL.length;
+    setActive(next);
+    tabs.current[next]?.focus();
+  };
+
+  return (
+    <div className="lp-term">
+      <div className="lp-term-bar">
+        <div
+          className="lp-term-tabs"
+          role="tablist"
+          aria-label="Install path"
+          onKeyDown={onKeyDown}
+        >
+          {INSTALL.map((t, i) => (
+            <button
+              key={t.id}
+              ref={(el) => {
+                tabs.current[i] = el;
+              }}
+              type="button"
+              role="tab"
+              id={`lp-tab-${t.id}`}
+              aria-selected={i === active}
+              aria-controls={`lp-panel-${t.id}`}
+              tabIndex={i === active ? 0 : -1}
+              className="lp-term-tab"
+              onClick={() => setActive(i)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <CopyButton text={current.steps.map((s) => s.cmd).join("\n")} />
+      </div>
+      <pre
+        role="tabpanel"
+        id={`lp-panel-${current.id}`}
+        aria-labelledby={`lp-tab-${current.id}`}
+      >
+        {current.steps.map((s) => (
+          <span key={s.cmd}>
+            <span className="p">$ </span>
+            {s.cmd}
+            {"\n"}
+          </span>
+        ))}
+        {current.comment.map((line) => (
+          <span key={line}>
+            <span className="c">{line}</span>
+            {"\n"}
+          </span>
+        ))}
+      </pre>
+    </div>
+  );
+}
+
+function SectionHead({
+  n,
+  kicker,
+  children,
+}: {
+  n: string;
+  kicker: string;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <div className="lp-ghost" aria-hidden="true">
+        {n}
+      </div>
+      <p className="lp-kicker">{kicker}</p>
+      <h2 className="lp-h2">{children}</h2>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ page --- */
+
 export function Landing() {
   return (
     <div className="lp">
@@ -205,8 +489,8 @@ export function Landing() {
         </a>
         <div className="lp-nav-links">
           <a href="/docs/what-is-oap">Docs</a>
-          <a href="#papers">Whitepapers</a>
-          <a href="#owasp">Security</a>
+          <a href="#secure">Security</a>
+          <a href="#agent-builder">Agent Builder</a>
           <a href={TODO.repo}>GitHub</a>
           <ThemeToggle />
           <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
@@ -220,95 +504,101 @@ export function Landing() {
         <div>
           <OapMark className="lp-hero-mark" />
           <h1>
-            The agent proposes.
-            <br />
-            <em>SpiceDB</em> decides.
+            A secure way to run <em>enterprise AI agents</em>.
           </h1>
           <p className="lp-hero-sub">
-            Open Agent Primitives is a Kubernetes-native runtime for LLM agents.
-            Every state-touching tool call resolves to a subject, a permission
-            and a resource, and is checked against a SpiceDB relationship graph
-            at the dispatch site.{" "}
-            <strong>The model is never asked whether it may act.</strong>
+            Open Agent Primitives is a set of building blocks for constructing
+            and running enterprise agents, in your own Kubernetes cluster, on
+            the models and infrastructure you choose.{" "}
+            <strong>
+              Every control sits outside the model, so the platform decides
+              before the call.
+            </strong>
           </p>
+          <p className="lp-hero-qs-head">
+            Trusting an agent with production work means answering four
+            questions:
+          </p>
+          <ol className="lp-hero-qs">
+            {QUESTIONS.map((q) => (
+              <li key={q}>{q}</li>
+            ))}
+          </ol>
           <div className="lp-hero-cta">
             <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
-              Build your first agent
+              Get started
             </a>
-            <a className="lp-btn lp-btn--ghost" href="#authorization">
-              See how a decision is made
+            <a className="lp-btn lp-btn--ghost" href="#secure">
+              How it stays secure
             </a>
           </div>
         </div>
         <div className="lp-hero-aside">
-          <div className="lp-term">
-            <div className="lp-term-bar">
-              <span className="lp-term-label">install</span>
-              <CopyButton text={INSTALL} />
-            </div>
-            <pre>
-              <span className="p">$ </span>git clone {TODO.clone}
-              {"\n"}
-              <span className="p">$ </span>cd agentprimitives && mage build
-              {"\n"}
-              <span className="p">$ </span>./bin/oap install
-              {"\n"}
-              <span className="c">
-                # installs the CRDs, operator, channel daemon, NATS and
-              </span>
-              {"\n"}
-              <span className="c">
-                # SpiceDB into a cluster you already have. It does not
-              </span>
-              {"\n"}
-              <span className="c"># create one.</span>
-            </pre>
-          </div>
+          <InstallTerminal />
           <ul className="lp-chips lp-hero-chips">
-            <li>33 CRDs</li>
-            <li>34 pluggable seams</li>
-            <li>1 SpiceDB schema</li>
-            <li>no telemetry code</li>
+            <li>6 primitives</li>
+            <li>27 security controls</li>
+            <li>your cluster, your models</li>
+            <li>Apache 2.0</li>
           </ul>
           <p className="lp-note">
-            OAP builds from source today. There is no published binary or
-            container image yet, and the repository URL above is a placeholder
-            until the project is public.
+            OAP builds from source today, from a clone of the repository. There
+            is no published binary or container image yet.
           </p>
         </div>
       </header>
 
-      {/* --------------------------------------------------- 01 the layer --- */}
-      <section className="lp-section" id="authorization">
-        <div className="lp-ghost" aria-hidden="true">
-          01
-        </div>
-        <p className="lp-kicker">The decision</p>
-        <h2 className="lp-h2">
-          A guardrail in a system prompt is a <em>request</em>.
-        </h2>
+      {/* ---------------------------------------------------- 01 problem --- */}
+      <section className="lp-section" id="problem">
+        <SectionHead n="01" kicker="The problem">
+          A credential is almost always <em>broader</em> than the task.
+        </SectionHead>
         <p className="lp-lede">
-          Ask a model not to do something and you have a preference. It holds
-          until the context gets long, the tool output gets adversarial, or
-          someone phrases the ask differently. Most agent platforms answer this
-          with a better prompt, a classifier, or a human staring at a stream of
-          approvals until they stop reading them.
+          A token that reaches one git repository normally reaches every
+          repository, and an integration built to expose a service exposes all
+          of it. An agent inherits that whole surface, and the gap between what
+          a task needs and what its credentials permit grows as agents take on
+          more work.
         </p>
         <p className="lp-lede">
-          OAP moves the decision out of the prompt and into a relationship graph
-          the model cannot reach, reason about, or talk its way around.{" "}
+          A model cannot reliably separate instructions from data, so its
+          judgment is not a dependable place to enforce a boundary, and a
+          hardened prompt is still an instruction rather than an enforcement
+          point. A permission check at the edge decides who may start an agent,
+          not what it reaches once it is running.{" "}
           <strong>
-            Authorization is computed from the tool&rsquo;s declaration and the
-            call&rsquo;s own validated arguments, then checked in SpiceDB before
-            dispatch.
-          </strong>{" "}
-          If the answer is no, the call does not happen.
+            Every control in OAP therefore sits outside the model, and no
+            decision depends on the agent&rsquo;s cooperation.
+          </strong>
         </p>
+
+        <div className="lp-compare-wrap">
+          <table className="lp-compare">
+            <thead>
+              <tr>
+                <th scope="col">
+                  <span className="lp-sr">Question</span>
+                </th>
+                <th scope="col">Typical agent platform</th>
+                <th scope="col">OAP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {COMPARE.map(([q, typical, oap]) => (
+                <tr key={q}>
+                  <th scope="row">{q}</th>
+                  <td className="lp-compare-typical">{typical}</td>
+                  <td className="lp-compare-oap">{oap}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         <div className="lp-decide">
           <div>
             <div className="lp-panel-head">
-              <span>Anatomy of one check</span>
+              <span>Before the call: anatomy of one check</span>
             </div>
             <div className="lp-panel-body">
               <table className="lp-fields">
@@ -347,9 +637,8 @@ export function Landing() {
                     <td>
                       <span className="lp-deny">DENIED</span>
                       <small>
-                        SpiceDB, at a fixed position in the pre-tool-call
-                        pipeline. The call never reaches the sandbox or the MCP
-                        server.
+                        at a fixed position in the pre-tool-call pipeline. The
+                        call never reaches the sandbox or the MCP server.
                       </small>
                     </td>
                   </tr>
@@ -392,23 +681,21 @@ export function Landing() {
 
         <p className="lp-note">
           Precisely: every <em>state-touching</em> tool call. Tools a toolkit
-          author declares stateless or passthrough resolve immediately without a
-          graph check, and that declaration is reviewable in the same YAML as
-          the tool.
+          author declares stateless or passthrough resolve without a graph
+          check, and that declaration is reviewable in the same YAML as the
+          tool.
         </p>
       </section>
 
       {/* ------------------------------------------------- 02 primitives --- */}
       <section className="lp-section" id="primitives">
-        <div className="lp-ghost" aria-hidden="true">
-          02
-        </div>
-        <p className="lp-kicker">The primitives</p>
-        <h2 className="lp-h2">Six pieces, and nothing you have to invent.</h2>
+        <SectionHead n="02" kicker="The primitives">
+          Six concerns every agent has to solve.
+        </SectionHead>
         <p className="lp-lede">
-          Running an agent safely keeps decomposing into the same six problems.
-          OAP names each one, gives it a resource type, and makes the answer
-          reviewable in git rather than resident in someone&rsquo;s head.
+          A primitive is a concern every agent has to solve, whatever it does.
+          OAP names six, ships a working implementation of each, and composes
+          every agent from them.
         </p>
         <div className="lp-prims">
           {PRIMITIVES.map((p, i) => (
@@ -428,230 +715,106 @@ export function Landing() {
             </article>
           ))}
         </div>
-        <p className="lp-note">
-          Thirty-three custom resources in total. Kubernetes already knows how
-          to review, diff, admit and roll them back, which is the point: your
-          platform team does not learn a second control plane to operate agents.
-        </p>
       </section>
 
-      {/* --------------------------------------------------- 03 cannot do --- */}
-      <section className="lp-section" id="guarantees">
-        <div className="lp-ghost" aria-hidden="true">
-          03
-        </div>
-        <p className="lp-kicker">Guarantees</p>
-        <h2 className="lp-h2">
-          What the runtime <em>cannot</em> be talked into.
-        </h2>
+      {/* ---------------------------------------------------- 03 secure --- */}
+      <section className="lp-section" id="secure">
+        <SectionHead n="03" kicker="What makes it secure">
+          Twenty-seven controls, in six areas.
+        </SectionHead>
         <p className="lp-lede">
-          Capability claims are hard to check. Constraints are easy. Each of
-          these is a property of the runtime rather than an instruction to the
-          model, which means no phrasing, context length or tool output changes
-          the answer.
+          Each control is a property of the platform rather than an instruction
+          to the model, so no phrasing, context length or tool output changes
+          the answer. The security model documents every one and names the
+          package that implements it.
         </p>
-        <ol className="lp-slab lp-slab--2 lp-cannot">
-          {CANNOT.map((c) => (
-            <li key={c.title}>
-              <div>
-                <h3>{c.title}</h3>
-                <p>{c.body}</p>
-              </div>
+        <ol className="lp-slab lp-slab--2 lp-areas">
+          {AREAS.map((a) => (
+            <li key={a.title}>
+              <h3>{a.title}</h3>
+              <ul className="lp-points">
+                {a.points.map(([lead, body]) => (
+                  <li key={lead}>
+                    <strong>{lead}</strong> {body}
+                  </li>
+                ))}
+              </ul>
+              <p className="lp-area-links">
+                {a.links.map(([label, href]) => (
+                  <a key={href} href={href}>
+                    {label}
+                  </a>
+                ))}
+              </p>
             </li>
           ))}
         </ol>
         <p className="lp-note">
-          Honest scoping: plan gating and the information-leakage gate are
-          opt-in per AgentClass, and hostname-level egress is recorded on
+          Some controls are opt-in per agent class, including plan gating and
+          the information-leakage gate. Hostname-level egress is recorded on
           session status but enforced only by a DNS-aware CNI. Network policy at
-          layer 3 and 4 is on by default, and the sandbox fails closed to
+          layers 3 and 4 is on by default, and the sandbox fails closed to
           deny-all when a class says nothing.
         </p>
       </section>
 
-      {/* ------------------------------------------------- 04 multiplayer --- */}
-      <section className="lp-section" id="multiplayer">
-        <div className="lp-ghost" aria-hidden="true">
-          04
-        </div>
-        <p className="lp-kicker">Single player, then a second person</p>
-        <h2 className="lp-h2">
-          The hard part starts when someone else replies.
-        </h2>
+      {/* --------------------------------------------- 04 agent builder --- */}
+      <section className="lp-section" id="agent-builder">
+        <SectionHead n="04" kicker="Agent Builder">
+          Build an agent by talking to an agent.
+        </SectionHead>
         <p className="lp-lede">
-          On your own, an agent needs a sandbox, a budget and a credential. Add
-          one more human to the thread and four questions appear at once, and
-          none of them is answered by a better model.
-        </p>
-        <div className="lp-cols">
-          <div className="lp-col">
-            <p className="lp-col-head">The four questions</p>
-            <dl className="lp-qa">
-              <dt>Whose permissions apply?</dt>
-              <dd>
-                If the agent holds the token, the answer is the union of
-                everyone&rsquo;s access, handed to whoever typed last.
-              </dd>
-              <dt>Who can steer?</dt>
-              <dd>
-                A thread one person opened gets silently redirected the moment
-                anyone else replies to it.
-              </dd>
-              <dt>Who can approve?</dt>
-              <dd>
-                Where an approval exists at all, the click is usually authorized
-                by visibility: whoever received the message can resolve it.
-              </dd>
-              <dt>Whose data is it?</dt>
-              <dd>
-                Some data belongs to a resource with its own owner, and neither
-                the requester nor the session owner can speak for it.
-              </dd>
-            </dl>
-          </div>
-          <div className="lp-col">
-            <p className="lp-col-head">What OAP answers</p>
-            <dl className="lp-qa">
-              <dt>The subject is the human, not the agent.</dt>
-              <dd>
-                Agents are not subjects in the graph; only people are. A class
-                picks whether to check the current requester, the person who
-                started the session, or both.
-              </dd>
-              <dt>Joining is an owner decision.</dt>
-              <dd>
-                A message from a non-participant raises a permission request
-                instead of being acted on. Approve and the held message replays,
-                so nobody retypes it.
-              </dd>
-              <dt>Approval standing comes from the resource.</dt>
-              <dd>
-                Eligibility at raise time and authorization at click time apply
-                one rule. Any single owner is enough, and a bystander is
-                rejected.
-              </dd>
-              <dt>The ask is routed to the data&rsquo;s owner.</dt>
-              <dd>
-                Reads are tagged with the resource they came from, and every
-                outbound has its audience computed live and intersected against
-                who may see the tag.
-              </dd>
-            </dl>
-          </div>
-        </div>
-        <p className="lp-note">
-          Multiplayer is the Slack story today. The browser chat is single-owner
-          by design: reach for it to drive an agent yourself, and for Slack when
-          a team shares the thread.
-        </p>
-      </section>
-
-      {/* ------------------------------------------------------ 05 control --- */}
-      <section className="lp-section" id="control">
-        <div className="lp-ghost" aria-hidden="true">
-          05
-        </div>
-        <p className="lp-kicker">Your cluster, your models, your bill</p>
-        <h2 className="lp-h2">Nothing here phones home.</h2>
-        <p className="lp-lede">
-          You bring the cluster and OAP installs into it. The outbound calls are
-          the ones you configure: the model provider you chose, the MCP servers
-          you declared, the hosts your tools reach. There is no telemetry or
-          analytics code in the repository.
+          You don&rsquo;t have to start with manifest files. Agent Builder is an
+          OAP agent whose job is to create other agents. Describe what you need
+          in plain language, then test the result live.
         </p>
         <div className="lp-slab lp-slab--3">
-          <div>
-            <p className="lp-prim-eyebrow">Models</p>
-            <h3>Picked by policy, not by prompt</h3>
-            <p>
-              Three providers ship: Anthropic, OpenAI and OpenRouter. An admin
-              curates the catalog, a cluster-wide denylist unions across tiers,
-              and a class supplying its own key is opt-in and granted top down.
-              A class may narrow a tier. It can never widen one. Keys live in
-              Kubernetes Secrets, so an AgentClass stays in git.
-            </p>
-          </div>
-          <div>
-            <p className="lp-prim-eyebrow">Cost</p>
-            <h3>Budgets that end a session</h3>
-            <p>
-              Turns, tokens, cumulative active run-time, a wall-clock expiry
-              that applies while the session sleeps, and a cap on the whole
-              delegation tree. Checked once per turn; the first tripped
-              condition fails the session. Time parked waiting on a human is not
-              billed against the agent.
-            </p>
-          </div>
-          <div>
-            <p className="lp-prim-eyebrow">Runaway use</p>
-            <h3>Breakers on by default</h3>
-            <p>
-              Five consecutive failures open a per-tool breaker; ten across one
-              origin trip every sibling tool at once. Two consecutive credential
-              refusals end the session rather than retrying a dead token. All of
-              it with no YAML. Rate limits and byte budgets are there when you
-              want them.
-            </p>
-          </div>
-        </div>
-        <p className="lp-note">
-          There is no dollar budget. Cost is reported after a session in
-          micro-USD and labelled a list-price estimate rather than a metered
-          bill, because the provider, not OAP, issues the invoice. Budgets that
-          actually stop work are counted in turns, tokens and time.
-        </p>
-      </section>
-
-      {/* ---------------------------------------------------- 06 registry --- */}
-      <section className="lp-section" id="pluggable">
-        <div className="lp-ghost" aria-hidden="true">
-          06
-        </div>
-        <p className="lp-kicker">Extension</p>
-        <h2 className="lp-h2">Registered, not branched on.</h2>
-        <p className="lp-lede">
-          Thirty-four aspects of the runtime are interface-and-registry seams
-          with at least one shipping backend. Adding a variant is one package,
-          one <code>Register</code> call in an <code>init()</code>, and one
-          blank import. If a diff for a new backend touches anything outside its
-          own directory, the seam is in the wrong place and the interface gets
-          fixed rather than the consumer.
-        </p>
-        <div className="lp-seams">
-          {SEAMS.map((s) => (
-            <div className="lp-seam" key={s.name}>
-              <span className="lp-seam-n">{s.n}</span>
-              <span className="lp-seam-name">{s.name}</span>
-              <span className="lp-seam-list">{s.list}</span>
+          {BUILDER.map((b) => (
+            <div key={b.step}>
+              <p className="lp-prim-eyebrow">{b.step}</p>
+              <h3>{b.title}</h3>
+              <p>{b.body}</p>
             </div>
           ))}
-          <a className="lp-seam lp-seam--open" href="/docs/crd-reference">
-            <span className="lp-seam-n">+</span>
-            <span className="lp-seam-name">Yours</span>
-            <span className="lp-seam-list">
-              one package, one Register, one blank import
-            </span>
+        </div>
+        <div className="lp-hero-cta lp-section-cta">
+          <a className="lp-btn lp-btn--ghost" href="/docs/agent-builder">
+            Read the Agent Builder guide
           </a>
         </div>
         <p className="lp-note">
-          Three things are deliberately not pluggable, and the reason is the
-          same for each: they are substrate, like the API server. SpiceDB, the
-          NATS bus, and Kubernetes Secrets. Upstream secret managers integrate a
-          layer below through External Secrets or the CSI driver, without OAP
-          changing a line.
+          <code>oap init</code> leaves Agent Builder off, because there is no
+          safe default for who may start it; you enable it by naming the people
+          or groups allowed to. It is subject to every control above: broad
+          freedom inside its workshop, and no authority outside it.
         </p>
       </section>
 
-      {/* ------------------------------------------------------- 07 owasp --- */}
-      <section className="lp-section" id="owasp">
-        <div className="lp-ghost" aria-hidden="true">
-          07
+      {/* -------------------------------------------- 05 everything else --- */}
+      <section className="lp-section" id="everything-else">
+        <SectionHead n="05" kicker="Everything else">
+          The rest of the platform, included.
+        </SectionHead>
+        <p className="lp-lede">
+          These capabilities are common to agent platforms. OAP includes them,
+          and they are listed here so the set is complete.
+        </p>
+        <div className="lp-slab lp-slab--3">
+          {EVERYTHING.map((e) => (
+            <div key={e.title}>
+              <h3>{e.title}</h3>
+              <p>{e.body}</p>
+            </div>
+          ))}
         </div>
-        <p className="lp-kicker">Security posture</p>
-        <h2 className="lp-h2">
+      </section>
+
+      {/* ------------------------------------------------------- 06 owasp --- */}
+      <section className="lp-section" id="owasp">
+        <SectionHead n="06" kicker="Security posture">
           The OWASP Agentic Top 10, including where we <em>fall short</em>.
           <span className="lp-draft">Draft</span>
-        </h2>
+        </SectionHead>
         <p className="lp-lede">
           We keep a coverage map of OAP against the OWASP Top 10 for Agentic
           Applications, and we publish the gaps column alongside the ratings. It
@@ -688,13 +851,24 @@ export function Landing() {
             </tbody>
           </table>
         </div>
-        <div className="lp-hero-cta" style={{ marginTop: 28, marginBottom: 0 }}>
+        <div className="lp-hero-cta lp-section-cta">
           <a className="lp-btn lp-btn--ghost" href="/docs/owasp-top10">
             Read the coverage map
           </a>
           <a className="lp-btn lp-btn--ghost" href={TODO.owaspFull}>
             Full assessment
           </a>
+        </div>
+        <div className="lp-evidence">
+          <p className="lp-col-head">How we know the gates still hold</p>
+          <p>
+            Three test suites gate every merge. Scripted whole-session scenarios
+            assert on the tool result rather than the reply, golden
+            authorization traces turn any change in what was checked into a diff
+            someone has to read, and replays of captured real sessions show a
+            real model produced the interaction at least once. None of them pins
+            what a model will do next.
+          </p>
         </div>
         <p className="lp-note">
           OWASP materials are referenced under CC BY-SA 4.0. This assessment is
@@ -703,100 +877,20 @@ export function Landing() {
         </p>
       </section>
 
-      {/* ------------------------------------------------------ 08 papers --- */}
-      <section className="lp-section" id="papers">
-        <div className="lp-ghost" aria-hidden="true">
-          08
-        </div>
-        <p className="lp-kicker">The whitepapers</p>
-        <h2 className="lp-h2">
-          One paper per primitive.
-          <span className="lp-draft">Draft</span>
-        </h2>
-        <p className="lp-lede">
-          Six papers, one for each primitive, written for the person who has to
-          defend the design in a review rather than the person evaluating a
-          product. Each one states the problem, the mechanism, the failure it
-          prevents, and what it still does not cover.
-        </p>
-        <div className="lp-papers">
-          {PAPERS.map((p, i) => (
-            <a className="lp-paper" key={p.slug} href={TODO.paper(p.slug)}>
-              <span className="lp-paper-n">
-                Paper {String(i + 1).padStart(2, "0")}
-              </span>
-              <h3>{p.title}</h3>
-              <p>{p.blurb}</p>
-            </a>
-          ))}
-        </div>
-        <p className="lp-note">
-          Links are placeholders while the final drafts are in review.
-        </p>
-      </section>
-
-      {/* ----------------------------------------------------- 09 evidence --- */}
-      <section className="lp-section" id="evidence">
-        <div className="lp-ghost" aria-hidden="true">
-          09
-        </div>
-        <p className="lp-kicker">Evidence</p>
-        <h2 className="lp-h2">How we know the gates still hold.</h2>
-        <p className="lp-lede">
-          A permission boundary is only as good as the thing that notices when
-          it stops being enforced. Three suites gate every merge, and the last
-          one replays whole sessions through the real pipeline rather than
-          testing the check in isolation.
-        </p>
-        <div className="lp-slab lp-slab--3">
-          <div>
-            <p className="lp-prim-eyebrow">Scripted</p>
-            <h3>78 whole-session scenarios</h3>
-            <p>
-              Each one drives a real session, with its assertions on the tool
-              result rather than the reply, because a scripted transcript says
-              the same words whether a call returned rows or a permission error.
-            </p>
-          </div>
-          <div>
-            <p className="lp-prim-eyebrow">Frozen</p>
-            <h3>30 golden authorization traces</h3>
-            <p>
-              Property assertions cover what the author thought to claim. A
-              golden trace records everything that happened, so a change nobody
-              named still arrives as a diff someone has to read.
-            </p>
-          </div>
-          <div>
-            <p className="lp-prim-eyebrow">Captured</p>
-            <h3>Replays of a real session</h3>
-            <p>
-              A capture refuses to emit rather than write a bundle that would
-              replay differently than it recorded. Eighteen self-check codes
-              gate the write, and the tool says what it synthesized when it had
-              to.
-            </p>
-          </div>
-        </div>
-        <p className="lp-note">
-          The distinction is evidentiary and it is the reason the suites are
-          separate: a green scripted scenario proves the system handles an
-          interaction. A green captured one also shows a real model produced it,
-          at least once. Neither pins what a model will do next.
-        </p>
-      </section>
-
       {/* ----------------------------------------------------------- close --- */}
       <section className="lp-close">
-        <p className="lp-kicker">Start here</p>
-        <h2 className="lp-h2">Give an agent a job, not the keyring.</h2>
+        <p className="lp-kicker">Defense in depth</p>
+        <h2 className="lp-h2">Every layer assumes the others may fail.</h2>
         <p className="lp-lede">
-          Install into a cluster you already run, declare one agent, and watch
-          the first denial land before the tool ever executes.
+          To misuse an OAP agent, an attacker has to get past a plan a human
+          approved, a slot that cannot be reopened, a tool lens that cannot be
+          widened, an authorization check on every call, and a sandbox that
+          never held the credential in the first place. None of them is
+          sufficient alone.
         </p>
         <div className="lp-hero-cta">
           <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
-            Build your first agent
+            Get started
           </a>
           <a className="lp-btn lp-btn--ghost" href="/docs/what-is-oap">
             Read the docs
@@ -812,9 +906,12 @@ export function Landing() {
         <a href="/docs/what-is-oap">Docs</a>
         <a href="/docs/crd-reference">CRD reference</a>
         <a href="/docs/cli-reference">CLI reference</a>
-        <a href="#owasp">Security</a>
+        <a href="#owasp">OWASP coverage</a>
         <a href={TODO.discuss}>Community</a>
-        <span>Built on SpiceDB.</span>
+        <span>
+          Built by <a href="https://authzed.com">AuthZed</a>, using{" "}
+          <a href="https://github.com/authzed/spicedb">SpiceDB</a>.
+        </span>
       </footer>
     </div>
   );

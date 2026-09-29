@@ -4,12 +4,12 @@ import "./landing.css";
 
 export const metadata: Metadata = {
   title: {
-    absolute: "Open Agent Primitives — the agent proposes, SpiceDB decides",
+    absolute: "Open Agent Primitives: a secure way to run enterprise AI agents",
   },
   openGraph: {
     title: "Open Agent Primitives",
     description:
-      "A Kubernetes-native runtime for LLM agents, with authorization decided outside the model.",
+      "Building blocks for constructing and running enterprise AI agents in your own cluster, with every control outside the model.",
     type: "website",
   },
 };

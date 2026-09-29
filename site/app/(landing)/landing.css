@@ -129,10 +129,7 @@ body:has(.lp) {
 .lp-hero > *,
 .lp-decide > *,
 .lp-slab > *,
-.lp-cols > *,
-.lp-prims > *,
-.lp-seams > *,
-.lp-papers > * {
+.lp-prims > * {
   min-width: 0;
 }
 
@@ -379,8 +376,47 @@ body:has(.lp) {
 
 /* Small, checkable, boring facts. They do more for an infra reader than an
    adjective would, and each one is verifiable from the repository. */
-.lp-hero-chips {
+.lp-chips.lp-hero-chips {
   margin-top: 16px;
+}
+
+/* The README's four trust questions, set as a quiet numbered list under the
+   subhead. They frame the page; the sections below answer them. */
+.lp-hero-qs-head {
+  font-size: 14px;
+  color: var(--lp-fg);
+  margin: 0 0 10px;
+}
+
+.lp-hero-qs {
+  counter-reset: lp-q;
+  list-style: none;
+  margin: 0 0 30px;
+  padding: 0;
+  max-width: 60ch;
+}
+
+.lp-hero-qs li {
+  counter-increment: lp-q;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--lp-muted);
+  padding: 7px 0;
+  border-top: 1px solid var(--lp-line-soft);
+}
+
+.lp-hero-qs li:last-child {
+  border-bottom: 1px solid var(--lp-line-soft);
+}
+
+.lp-hero-qs li::before {
+  content: '0' counter(lp-q);
+  font-family: var(--lp-mono);
+  font-size: 11px;
+  color: var(--lp-state);
+  padding-top: 3px;
 }
 
 /* ------------------------------------------------------------- terminal --- */
@@ -400,13 +436,40 @@ body:has(.lp) {
   border-bottom: 1px solid var(--lp-term-line);
 }
 
-.lp-term-label {
+.lp-term-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-right: auto;
+}
+
+/* The selected tab is a state, so it earns the accent underline; the text
+   itself stays neutral. */
+.lp-term-tab {
   font-family: var(--lp-mono);
   font-size: 10.5px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--lp-term-muted);
-  margin-right: auto;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+.lp-term-tab:hover {
+  color: var(--lp-term-fg);
+}
+
+.lp-term-tab[aria-selected='true'] {
+  color: var(--lp-term-fg);
+  border-bottom-color: var(--lp-term-accent);
+}
+
+.lp-term-tab:focus-visible {
+  outline: 1px solid var(--lp-term-muted);
+  outline-offset: 1px;
 }
 
 .lp-copy-btn {
@@ -490,6 +553,133 @@ body:has(.lp) {
   margin: 0;
 }
 
+/* ---------------------------------------------------------------- areas --- */
+
+.lp-areas {
+  list-style: none;
+  padding: 0;
+}
+
+.lp-areas > li {
+  display: flex;
+  flex-direction: column;
+}
+
+.lp-points {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.lp-points li {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--lp-muted);
+  margin: 0 0 9px;
+}
+
+.lp-points strong {
+  color: var(--lp-fg);
+  font-weight: 500;
+}
+
+.lp-points code,
+.lp-note code {
+  font-family: var(--lp-mono);
+  font-size: 0.9em;
+  color: var(--lp-fg);
+}
+
+.lp-slab p.lp-area-links {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-family: var(--lp-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.lp-area-links a {
+  color: var(--lp-link);
+  text-decoration: none;
+  border-bottom: 1px solid var(--lp-line);
+}
+
+.lp-area-links a:hover {
+  color: var(--lp-heading);
+  border-bottom-color: var(--lp-surface-3);
+}
+
+.lp-section-cta {
+  margin-top: 28px;
+}
+
+/* ---------------------------------------------------------- comparison --- */
+
+.lp-compare-wrap {
+  margin-top: 34px;
+  overflow-x: auto;
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-radius);
+}
+
+.lp-compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  background: var(--lp-card);
+}
+
+.lp-compare th,
+.lp-compare td {
+  text-align: left;
+  vertical-align: top;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--lp-line-soft);
+}
+
+.lp-compare tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.lp-compare thead th {
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lp-muted);
+  border-bottom-color: var(--lp-line);
+}
+
+.lp-compare thead th:last-child {
+  color: var(--lp-state);
+}
+
+.lp-compare tbody th {
+  font-weight: 500;
+  color: var(--lp-heading);
+  width: 34%;
+}
+
+.lp-compare-typical {
+  color: var(--lp-muted);
+}
+
+.lp-compare-oap {
+  color: var(--lp-fg);
+}
+
+.lp-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /* --------------------------------------------------------------- primitives */
 
 .lp-prims {
@@ -563,46 +753,6 @@ body:has(.lp) {
   border: 1px solid var(--lp-line);
   border-radius: 999px;
   padding: 2px 9px;
-}
-
-/* ------------------------------------------------------- cannot-do list --- */
-
-.lp-cannot {
-  counter-reset: lp-cannot;
-  margin: 34px 0 0;
-  padding: 0;
-}
-
-.lp-cannot > li {
-  list-style: none;
-  display: grid;
-  grid-template-columns: 44px 1fr;
-  gap: 0 4px;
-}
-
-.lp-cannot > li::before {
-  counter-increment: lp-cannot;
-  content: '0' counter(lp-cannot);
-  font-family: var(--lp-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--lp-state);
-  padding-top: 3px;
-}
-
-.lp-cannot h3 {
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 1.3;
-  color: var(--lp-heading);
-  margin: 0 0 7px;
-}
-
-.lp-cannot p {
-  font-size: 13.5px;
-  line-height: 1.62;
-  color: var(--lp-muted);
-  margin: 0;
 }
 
 /* ---------------------------------------------------------- decision box --- */
@@ -709,23 +859,7 @@ body:has(.lp) {
   margin: 14px 0 0;
 }
 
-/* ----------------------------------------------------------- two columns --- */
-
-.lp-cols {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  background: var(--lp-line);
-  border: 1px solid var(--lp-line);
-  border-radius: var(--lp-radius);
-  overflow: hidden;
-  margin-top: 34px;
-}
-
-.lp-col {
-  background: var(--lp-card);
-  padding: 24px;
-}
+/* ------------------------------------------------------------ evidence --- */
 
 .lp-col-head {
   font-family: var(--lp-mono);
@@ -733,90 +867,23 @@ body:has(.lp) {
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--lp-state);
-  margin: 0 0 16px;
+  margin: 0 0 12px;
 }
 
-.lp-qa {
-  margin: 0;
-}
-
-.lp-qa dt {
-  font-size: 14.5px;
-  font-weight: 500;
-  color: var(--lp-heading);
-  margin: 0 0 5px;
-}
-
-.lp-qa dd {
-  margin: 0 0 18px;
-  font-size: 13.5px;
-  line-height: 1.6;
-  color: var(--lp-muted);
-}
-
-.lp-qa dd:last-child {
-  margin-bottom: 0;
-}
-
-/* --------------------------------------------------------------- seams --- */
-
-/* Unlike the other grids, the seam count does not divide evenly into the column
-   count at every breakpoint, so a container painted line-colored would show its
-   own background as a slab in the trailing gap. Each cell draws its own hairline
-   with an outward box-shadow instead: adjacent shadows meet exactly inside the
-   1px gap and read as one rule, and an unfilled cell is simply absent. */
-.lp-seams {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 1px;
-  margin: 35px 1px 0;
-}
-
-.lp-seam {
+.lp-evidence {
+  margin-top: 34px;
+  padding: 22px 24px;
   background: var(--lp-card);
-  box-shadow: 0 0 0 1px var(--lp-line);
-  padding: 16px 18px;
-  min-height: 92px;
-  display: block;
-  color: inherit;
-  text-decoration: none;
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-radius);
 }
 
-.lp-seam-n {
-  font-family: var(--lp-mono);
-  font-size: 22px;
-  line-height: 1;
-  color: var(--lp-state);
-  display: block;
-  margin-bottom: 8px;
-}
-
-.lp-seam-name {
-  font-size: 13.5px;
-  font-weight: 500;
-  color: var(--lp-heading);
-  display: block;
-  margin-bottom: 4px;
-}
-
-.lp-seam-list {
-  font-family: var(--lp-mono);
-  font-size: 10.5px;
-  line-height: 1.55;
+.lp-evidence p:last-child {
+  font-size: 14px;
+  line-height: 1.65;
   color: var(--lp-muted);
-  word-break: break-word;
-}
-
-.lp-seam--open {
-  background: transparent;
-}
-
-.lp-seam--open .lp-seam-n {
-  color: var(--lp-muted);
-}
-
-.lp-seam--open:hover {
-  background: var(--lp-surface-2);
+  max-width: 88ch;
+  margin: 0;
 }
 
 /* ---------------------------------------------------------------- owasp --- */
@@ -946,55 +1013,6 @@ body:has(.lp) {
   vertical-align: 3px;
 }
 
-/* --------------------------------------------------------------- papers --- */
-
-.lp-papers {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
-  background: var(--lp-line);
-  border: 1px solid var(--lp-line);
-  border-radius: var(--lp-radius);
-  overflow: hidden;
-  margin-top: 34px;
-}
-
-.lp-paper {
-  background: var(--lp-card);
-  padding: 22px 22px 24px;
-  text-decoration: none;
-  display: block;
-  color: inherit;
-}
-
-.lp-paper:hover {
-  background: var(--lp-surface-2);
-}
-
-.lp-paper-n {
-  font-family: var(--lp-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  color: var(--lp-state);
-  display: block;
-  margin-bottom: 10px;
-}
-
-.lp-paper h3 {
-  font-size: 17px;
-  font-weight: 500;
-  line-height: 1.25;
-  color: var(--lp-heading);
-  margin: 0 0 8px;
-}
-
-.lp-paper p {
-  font-size: 13.5px;
-  line-height: 1.6;
-  color: var(--lp-muted);
-  margin: 0;
-}
-
 /* --------------------------------------------------------------- closing --- */
 
 .lp-close {
@@ -1034,6 +1052,10 @@ body:has(.lp) {
   text-decoration: none;
 }
 
+.lp-footer span a {
+  color: var(--lp-fg);
+}
+
 .lp-footer a:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -1050,12 +1072,8 @@ body:has(.lp) {
 
 @media (max-width: 1000px) {
   .lp-prims,
-  .lp-papers,
   .lp-slab--3 {
     grid-template-columns: repeat(2, 1fr);
-  }
-  .lp-seams {
-    grid-template-columns: repeat(3, 1fr);
   }
   .lp-decide {
     grid-template-columns: 1fr;
@@ -1076,14 +1094,9 @@ body:has(.lp) {
     padding-bottom: 52px;
   }
   .lp-prims,
-  .lp-papers,
-  .lp-cols,
   .lp-slab--2,
   .lp-slab--3 {
     grid-template-columns: 1fr;
-  }
-  .lp-seams {
-    grid-template-columns: repeat(2, 1fr);
   }
   .lp-nav-links a:not(.lp-btn) {
     display: none;
@@ -1098,6 +1111,11 @@ body:has(.lp) {
   }
   .lp-owasp td.lp-gap {
     display: none;
+  }
+  .lp-compare th,
+  .lp-compare td {
+    padding: 10px 12px;
+    font-size: 13px;
   }
 }
 
