@@ -320,8 +320,10 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 
 	var subject string
 	userVals := map[string]apiextv1.JSON{}
+	outcome := preferenceaccess.OutcomeUnresolved
 	if res.Subject != "" {
 		subject = res.Subject
+		outcome = preferenceaccess.OutcomeOK
 		userScope, uerr := memory.UserScope(subject)
 		if uerr != nil {
 			log.FromContext(r.Context()).Info("memory: preferences user scope derivation failed",
@@ -335,6 +337,22 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 			auditFault(preferenceaccess.OutcomeQueryError, subject, qerr)
 			failRequest(w, r, scope, "preferences.user", qerr)
 			return
+		}
+		if !res.SubjectProven && len(qres.Entries) == 0 {
+			// The reference resolved in FORM only (an email canonicalizes to
+			// a subject unconditionally — see Resolution.SubjectProven) and
+			// the platform has no saved-preference record of that subject,
+			// for ANY class. Canonicalizing is not resolving: with no linkage
+			// authority behind the reference and no record behind the
+			// subject, this is the unresolved case wearing a well-formed
+			// address, and it is refused the same way below. The bar is
+			// "some user_preference entry exists" — any class, a cleared
+			// tombstone included — because a saved (or deliberately cleared)
+			// value is the one record only a real, human-confirmed user can
+			// leave, and it needs no new infrastructure to check: the query
+			// above already fetched it.
+			outcome = preferenceaccess.OutcomeUnknownSubject
+			res.Reason = "no platform user is known by this reference"
 		}
 		for _, e := range qres.Entries {
 			var p userpreference.Preference
@@ -356,10 +374,6 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 		}
 	}
 
-	outcome := preferenceaccess.OutcomeOK
-	if subject == "" {
-		outcome = preferenceaccess.OutcomeUnresolved
-	}
 	if aerr := audit(outcome, res.Reason, subject, keys); aerr != nil {
 		log.FromContext(r.Context()).Info("memory: preferences user-ref audit write failed",
 			"session", scope.ID, "err", aerr.Error())
@@ -367,16 +381,21 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Never answer an unresolved user-ref with class DEFAULTS. A default
-	// snapshot is byte-for-byte identical to "this user saved nothing", so a 200
-	// here would let the caller silently act on the wrong policy for a user it
-	// could not identify — the webhook-triggered reviewbot bug: pinging on the
-	// on_problems default when the author had set `always`. The attempt was
-	// audited above (OutcomeUnresolved); the client gets a hard error carrying
-	// the resolution reason and decides for itself (reviewbot: fall back to a
-	// plain login, never a guessed mention). A RESOLVED user with no stored
-	// value for a key still gets that key's default, in the snapshot below.
-	if subject == "" {
+	// Never answer an unresolved OR unknown user-ref with class DEFAULTS. A
+	// default snapshot is byte-for-byte identical to "this user saved
+	// nothing", so a 200 here would let the caller silently act on the wrong
+	// policy for a user it could not identify — the webhook-triggered
+	// reviewbot bug, in both of its shapes: a reference that resolved to
+	// nobody (pinging on the on_problems default when the author had set
+	// `always`), and an email reference that canonicalized to a subject the
+	// platform has no record of (pinging on the same default when the person
+	// behind a different address had set `never`). The attempt was audited
+	// above (OutcomeUnresolved / OutcomeUnknownSubject); the client gets a
+	// hard error carrying the resolution reason and decides for itself
+	// (reviewbot: fall back to a plain login, never a guessed mention). A
+	// RESOLVED, KNOWN user with no stored value for a key still gets that
+	// key's default, in the snapshot below.
+	if outcome != preferenceaccess.OutcomeOK {
 		reason := res.Reason
 		if reason == "" {
 			reason = "no linked platform user"

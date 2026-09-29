@@ -73,7 +73,11 @@ func resolveTypeID(ctx context.Context, ref string, env Env) (Resolution, bool, 
 	}
 	switch len(sole) {
 	case 1:
-		return Resolution{Subject: sole[0]}, true, nil
+		// SubjectProven: the sole_user edge IS the platform's own linkage
+		// authority — this resolution vouches that the platform links this
+		// subject to the reference, unlike the email resolver's form-only
+		// canonicalization.
+		return Resolution{Subject: sole[0], SubjectProven: true}, true, nil
 	case 0:
 		return Resolution{Reason: fmt.Sprintf("%s:%s has no linked platform user", typ, id)}, true, nil
 	default:

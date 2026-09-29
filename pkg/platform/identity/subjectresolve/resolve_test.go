@@ -105,6 +105,51 @@ func TestResolve_TriggerAuthor(t *testing.T) {
 	})
 }
 
+// TestResolve_SubjectProven pins which resolvers VOUCH for their subject.
+// A relation-backed resolution (a resource's sole_user, trigger-author's
+// recursion into one) proves the platform links this subject to the
+// reference; the email resolver canonicalizes in form only — any well-formed
+// address yields a subject whether or not a platform user exists behind it —
+// so its resolutions stay unproven and a consumer must apply its own
+// existence bar before treating the subject as a real user. The zero value
+// is unproven on purpose: a future resolver that forgets to claim proof gets
+// the stricter treatment, not the looser one.
+func TestResolve_SubjectProven(t *testing.T) {
+	t.Run("email: resolved in form only, unproven", func(t *testing.T) {
+		res, err := Resolve(t.Context(), "email:alice@example.com", Env{})
+		require.NoError(t, err)
+		require.NotEmpty(t, res.Subject)
+		assert.False(t, res.SubjectProven,
+			"an email canonicalizes unconditionally; it must never claim the platform knows this user")
+	})
+
+	t.Run("resource via sole_user: proven", func(t *testing.T) {
+		rel := &fakeRelations{subjects: map[string][]string{
+			"github_user:4172237:sole_user": {"deadbeef"},
+		}}
+		res, err := Resolve(t.Context(), "github_user:4172237", Env{Relations: rel})
+		require.NoError(t, err)
+		require.Equal(t, "deadbeef", res.Subject)
+		assert.True(t, res.SubjectProven, "a sole_user edge IS the platform's own linkage authority")
+	})
+
+	t.Run("trigger-author via sole_user: proven", func(t *testing.T) {
+		rel := &fakeRelations{subjects: map[string][]string{
+			"github_user:4172237:sole_user": {"deadbeef"},
+		}}
+		env := Env{
+			Relations: rel,
+			SessionAnnotations: fakeAnnotations(map[string]string{
+				spiceboxv1alpha1.AnnotationTriggerOwnerSubject: "github_user:4172237#user",
+			}),
+		}
+		res, err := Resolve(t.Context(), "trigger-author", env)
+		require.NoError(t, err)
+		require.Equal(t, "deadbeef", res.Subject)
+		assert.True(t, res.SubjectProven, "trigger-author recurses into the same sole_user authority")
+	})
+}
+
 func TestResolve_GenericResource(t *testing.T) {
 	t.Run("sole_user exactly one: resolved", func(t *testing.T) {
 		rel := &fakeRelations{subjects: map[string][]string{

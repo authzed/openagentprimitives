@@ -40,8 +40,10 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/all" // register user_preference Kind
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/preferenceaccess"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/preferencewrite"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/userpreference"
 	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/preferences"
 )
 
@@ -158,6 +160,28 @@ func TestPreferencesUserRefRouteIsServedWhenWiredTheWayTheOperatorWiresIt(t *tes
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	opSigned := provenance.NewSigningMemory(ml, provenance.NewSigner(priv, "system:operator"))
+
+	// A saved value makes the referenced subject a KNOWN platform user: an
+	// email-form reference for a subject with no user_preference record at
+	// all is refused (422 unknown-subject — httpsrv's own tests pin that),
+	// and this test's claim is about run()'s wiring, not about resolution
+	// semantics, so it reads a user the resolution has no reason to refuse.
+	canon, err := identity.EmailReference(identity.Email("alice@example.com")).Canonical()
+	require.NoError(t, err)
+	aliceScope, err := memory.UserScope(canon.String())
+	require.NoError(t, err)
+	prefContent, err := json.Marshal(userpreference.Preference{
+		ClassNamespace: prefsWiringNS, ClassName: prefsWiringClass,
+		Key: "language", Value: json.RawMessage(`"de"`),
+	})
+	require.NoError(t, err)
+	_, err = ml.Put(memory.SystemContext(context.Background(), "test"), memory.Entry{
+		Scope:   aliceScope,
+		Kind:    userpreference.KindName,
+		ID:      userpreference.EntryID(prefsWiringNS, prefsWiringClass, "language"),
+		Content: prefContent,
+	})
+	require.NoError(t, err)
 
 	opts := newMemHandlerOpts(memHandlerDeps{K8sClient: fakeClient, MemLocal: ml, OpSigned: opSigned})
 	h := httpsrv.NewHandler(ml, reg, opts...)
