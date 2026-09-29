@@ -1,8 +1,8 @@
-// Static docs validator. Runs outside the Vite build (via `pnpm docs:check`).
+// Static docs validator. Runs before `next build` (via `pnpm check`).
 // It does NOT judge whether a claim is true — that is the authoring agent's job.
 // It enforces structure:
 //   1. Every media reference in an MDX guide resolves in _manifest.json with the
-//      right asset kind, and the referenced file exists under docs/public.
+//      right asset kind, and the referenced file exists under public/.
 //   2. Every manifest entry's file exists on disk.
 //   3. Every .refs.yaml is well-formed: each ref has id + claim + exactly one
 //      anchor (symbol | file+lines | production), and the code anchor exists in
@@ -12,12 +12,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
-const docsDir = path.dirname(fileURLToPath(import.meta.url));
-const showcaseDir = path.dirname(docsDir);
-const repoRoot = path.dirname(showcaseDir);
-const guidesDir = path.join(docsDir, "guides");
-const publicDir = path.join(docsDir, "public");
-const manifestPath = path.join(docsDir, "_manifest.json");
+const siteDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const repoRoot = path.dirname(siteDir);
+const guidesDir = path.join(siteDir, "content/docs");
+const publicDir = path.join(siteDir, "public");
+const manifestPath = path.join(siteDir, "content/_manifest.json");
 
 const errors: string[] = [];
 const err = (m: string) => errors.push(m);
@@ -123,10 +122,10 @@ for (const file of refFiles) {
 }
 
 if (errors.length) {
-  console.error(`docs:check FAILED with ${errors.length} problem(s):`);
+  console.error(`check FAILED with ${errors.length} problem(s):`);
   for (const e of errors) console.error(`  ✗ ${e}`);
   process.exit(1);
 }
 console.log(
-  `docs:check OK — ${mdxFiles.length} guide(s), ${refFiles.length} refs sidecar(s), ${Object.keys(manifest).length} media entr(ies).`,
+  `check OK — ${mdxFiles.length} guide(s), ${refFiles.length} refs sidecar(s), ${Object.keys(manifest).length} media entr(ies).`,
 );

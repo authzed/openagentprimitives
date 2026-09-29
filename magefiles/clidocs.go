@@ -13,9 +13,9 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/gen/crddocs"
 )
 
-// docsGuidesDir is where the generated reference MDX lands, alongside the rest of
-// the showcase docs guides.
-const cliDocsDir = "showcase/docs/guides"
+// cliDocsDir is where the generated reference MDX lands, alongside the
+// hand-written guides the site renders.
+const cliDocsDir = "site/content/docs"
 
 // crdSchemaDir holds the controller-gen CRD YAMLs the CRD reference is built from.
 const crdSchemaDir = "config/crds"
