@@ -1,4 +1,4 @@
 allowBuilds:
   sharp: true
   esbuild: true
-  core-js: true
+  core-js: false

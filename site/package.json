@@ -2,6 +2,7 @@
   "name": "@oap/site",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.3.4",
   "scripts": {
     "dev": "next dev --port 5179",
     "check": "tsx scripts/check.ts",
