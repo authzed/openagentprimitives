@@ -217,9 +217,10 @@ enforces them. No separate CI job.
 
 ## Sequencing
 
-The landing-page work on the `landing-page` branch is uncommitted. Commit it
-as-is first, so the migration diff reads as a move rather than mixing with
-unfinished work.
+The landing-page work on the `landing-page` branch is uncommitted and is not
+committed on its own. It is the source the new `site/` ports from. Once
+`site/` renders the landing page and the docs, the Vite app (committed and
+uncommitted parts alike) is deleted.
 
 ## Outside the repo (owner action)
 
