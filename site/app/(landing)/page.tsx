@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { OG_IMAGE, SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
 import { Landing } from "./Landing";
 import "./landing.css";
 
@@ -6,12 +7,17 @@ export const metadata: Metadata = {
   title: {
     absolute: "Open Agent Primitives: a secure way to run enterprise AI agents",
   },
+  description: SITE_DESCRIPTION,
+  alternates: { canonical: "/" },
   openGraph: {
-    title: "Open Agent Primitives",
-    description:
-      "Building blocks for running enterprise AI agents in your own cluster. The AI never decides what it's allowed to do: OAP checks every action before it runs.",
+    title: SITE_NAME,
+    description: SITE_DESCRIPTION,
+    url: "/",
+    siteName: SITE_NAME,
     type: "website",
+    images: [OG_IMAGE],
   },
+  twitter: { card: "summary_large_image", images: [OG_IMAGE.url] },
 };
 
 export default function Page() {
