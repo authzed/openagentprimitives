@@ -431,19 +431,14 @@ function InstallTerminal() {
 }
 
 function SectionHead({
-  n,
   kicker,
   children,
 }: {
-  n: string;
   kicker: string;
   children: ReactNode;
 }) {
   return (
     <>
-      <div className="lp-ghost" aria-hidden="true">
-        {n}
-      </div>
       <p className="lp-kicker">{kicker}</p>
       <h2 className="lp-h2">{children}</h2>
     </>
@@ -511,7 +506,7 @@ export function Landing() {
 
       {/* ---------------------------------------------------- 01 problem --- */}
       <section className="lp-section" id="problem">
-        <SectionHead n="01" kicker="The problem">
+        <SectionHead kicker="The problem">
           A credential is almost always <em>broader</em> than the task.
         </SectionHead>
         <p className="lp-lede">
@@ -625,7 +620,7 @@ export function Landing() {
 
       {/* ------------------------------------------------- 02 primitives --- */}
       <section className="lp-section" id="primitives">
-        <SectionHead n="02" kicker="The primitives">
+        <SectionHead kicker="The primitives">
           Six concerns every agent has to solve.
         </SectionHead>
         <p className="lp-lede">
@@ -649,7 +644,7 @@ export function Landing() {
 
       {/* ---------------------------------------------------- 03 secure --- */}
       <section className="lp-section" id="secure">
-        <SectionHead n="03" kicker="What makes it secure">
+        <SectionHead kicker="What makes it secure">
           Twenty-seven controls, in six areas.
         </SectionHead>
         <p className="lp-lede">
@@ -685,7 +680,7 @@ export function Landing() {
 
       {/* --------------------------------------------- 04 agent builder --- */}
       <section className="lp-section" id="agent-builder">
-        <SectionHead n="04" kicker="Agent Builder">
+        <SectionHead kicker="Agent Builder">
           Build an agent by talking to an agent.
         </SectionHead>
         <p className="lp-lede">
@@ -714,7 +709,7 @@ export function Landing() {
 
       {/* -------------------------------------------- 05 everything else --- */}
       <section className="lp-section" id="everything-else">
-        <SectionHead n="05" kicker="Everything else">
+        <SectionHead kicker="Everything else">
           The rest of the platform, included.
         </SectionHead>
         <p className="lp-lede">
@@ -732,7 +727,7 @@ export function Landing() {
 
       {/* ------------------------------------------------------- 06 owasp --- */}
       <section className="lp-section" id="owasp">
-        <SectionHead n="06" kicker="Security posture">
+        <SectionHead kicker="Security posture">
           Coverage of the OWASP Agentic Top 10.
           <span className="lp-draft">Draft</span>
         </SectionHead>

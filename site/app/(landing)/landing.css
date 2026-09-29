@@ -54,10 +54,6 @@
   --lp-term-accent: #72b1ad;
   --lp-term-line: #2a2231;
 
-  /* The chapter numeral needs more ink on paper than on a dark ground to sit at
-     the same perceived weight. */
-  --lp-ghost-opacity: 0.045;
-
   --lp-radius: 0.5rem;
   --lp-rail: 1180px;
   --lp-sans:
@@ -100,8 +96,6 @@
   --lp-state-dim: #72b1ad; /* teal-400 reads as a border on paper */
   --lp-deny: #9e2e3f; /* red-600 hue, darkened */
   --lp-warn: #8b5a41; /* sand-600 hue, darkened */
-
-  --lp-ghost-opacity: 0.08;
 
   color-scheme: light;
 }
@@ -156,23 +150,6 @@ body:has(.lp) {
 .lp-section {
   border-top: 1px solid var(--lp-line);
   padding: 76px 40px;
-  position: relative;
-  overflow: hidden;
-}
-
-/* The chapter numeral, set huge and nearly invisible in the section's corner.
-   Decorative only, so it is hidden from assistive tech. */
-.lp-ghost {
-  position: absolute;
-  top: -0.22em;
-  right: 16px;
-  font-family: var(--lp-mono);
-  font-size: clamp(150px, 20vw, 300px);
-  line-height: 1;
-  color: var(--lp-state);
-  opacity: var(--lp-ghost-opacity);
-  pointer-events: none;
-  user-select: none;
 }
 
 .lp-kicker {
@@ -1098,9 +1075,6 @@ body:has(.lp) {
     grid-template-columns: 1fr;
   }
   .lp-nav-links a:not(.lp-btn) {
-    display: none;
-  }
-  .lp-ghost {
     display: none;
   }
   .lp-owasp td.lp-gap {
