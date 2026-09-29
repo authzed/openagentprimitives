@@ -10,11 +10,12 @@ import { Wordmark } from "@/components/Wordmark";
 import { SiteFooter } from "@/components/SiteFooter";
 import { OWASP } from "./owasp";
 
+const REPO = "https://github.com/authzed/openagentprimitives";
+
 /* Every outbound URL the page needs that does not yet exist. Kept in one object
  * so filling them in is a single edit. Anything pointing at `/docs/<slug>` is
  * a real guide on this site and is written inline. */
 const TODO = {
-  repo: "https://example.invalid/PLACEHOLDER-repo",
   owaspFull: "https://example.invalid/PLACEHOLDER-owasp-coverage",
 };
 
@@ -461,7 +462,7 @@ export function Landing() {
           <a href="/docs/what-is-oap">Docs</a>
           <a href="#secure">Security</a>
           <a href="#agent-builder">Agent Builder</a>
-          <a href={TODO.repo}>GitHub</a>
+          <a href={REPO}>GitHub</a>
           <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
             Get started
           </a>
@@ -741,7 +742,7 @@ export function Landing() {
           <a className="lp-btn lp-btn--ghost" href="/docs/what-is-oap">
             Read the docs
           </a>
-          <a className="lp-btn lp-btn--ghost" href={TODO.repo}>
+          <a className="lp-btn lp-btn--ghost" href={REPO}>
             Source
           </a>
         </div>
