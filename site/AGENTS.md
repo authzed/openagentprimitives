@@ -39,9 +39,15 @@ and `go test ./pkg/gen/<pkg>/` from the repo root.
 2. Cross-link with `[text](/docs/other-slug)`, or
    `[text](/docs/other-slug#anchor)` for a specific section — `pnpm check`
    enforces that every link resolves.
-3. Match the house voice — a `doc-lede` paragraph, then `##` sections, a
-   security `<Callout>` where relevant. Ground claims in code; don't invent
-   behavior.
+3. Match the house voice — a lede written as `<div className="doc-lede">`,
+   **never** `<p className="doc-lede">`, then `##` sections, a security
+   `<Callout>` where relevant. Ground claims in code; don't invent behavior. The
+   `<div>` isn't a style choice: MDX wraps multi-line block content (including a
+   top-level lede) in its own `<p>`, so a `<p>` you write for the lede nests
+   inside that `<p>`. A `<p>` inside a `<p>` is invalid HTML — the browser
+   re-parents it at parse time, the server-rendered markup and the client's DOM
+   disagree, and React throws hydration error #418, but only in production.
+   `pnpm check` fails the build if a guide does this.
 
 ### Regenerate the CLI / CRD reference
 
@@ -74,5 +80,9 @@ reference it from a page with `<Clip name="…" />` or `<Screenshot name="…" /
   which MDX takes literally — never escape those.
 - **`pnpm check` covers dead links too.** It validates `/docs/<slug>` and
   `#anchor` links along with media/refs — no separate scan needed.
-- **Search needs a build.** Pagefind indexes `.next/server/app`, so `pnpm dev`
-  never has search; run `pnpm build` (or `pnpm start` against one) to test it.
+- **Search needs a build.** Pagefind indexes `.next/server/app`. On a clean
+  checkout `pnpm dev` has no search index at all; after any `pnpm build`,
+  `public/_pagefind` exists on disk and `pnpm dev` serves that index too — it's
+  just possibly stale, reflecting content as of that build rather than your
+  latest edits. Run `pnpm build` (or `pnpm start` against one) to get a fresh
+  index.

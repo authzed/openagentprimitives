@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { anchorIds, checkLinks } from "../lib/links";
+import { checkLedeTags } from "../lib/lede";
 
 const siteDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.dirname(siteDir);
@@ -151,6 +152,17 @@ const linkFiles = [
 ];
 for (const p of checkLinks(linkFiles, guideAnchors))
   err(`${p.file}: ${p.href}: ${p.reason}`);
+
+// 5: no guide writes its lede as <p className="doc-lede">. MDX wraps a
+// top-level lede in its own <p>, and <p> inside <p> is invalid HTML — use
+// <div> instead (see lib/lede.ts for why).
+for (const p of checkLedeTags(
+  [...guideSources].map(([slug, src]) => ({
+    file: `content/docs/${slug}.mdx`,
+    src,
+  })),
+))
+  err(`${p.file}: uses <p className="doc-lede">; use <div> instead`);
 
 if (errors.length) {
   console.error(`check FAILED with ${errors.length} problem(s):`);
