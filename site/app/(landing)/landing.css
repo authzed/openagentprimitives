@@ -124,7 +124,6 @@ body:has(.lp) {
    track is forced open and the whole page scrolls sideways on a phone. Every
    such block already has its own `overflow-x: auto`. */
 .lp-hero > *,
-.lp-decide > *,
 .lp-slab > *,
 .lp-prims > * {
   min-width: 0;
@@ -739,110 +738,6 @@ body:has(.lp) {
   margin: 0 0 14px;
 }
 
-/* ---------------------------------------------------------- decision box --- */
-
-.lp-decide {
-  display: grid;
-  grid-template-columns: 1.15fr 1fr;
-  gap: 1px;
-  background: var(--lp-line);
-  border: 1px solid var(--lp-line);
-  border-radius: var(--lp-radius);
-  overflow: hidden;
-  margin-top: 34px;
-}
-
-.lp-decide > * {
-  background: var(--lp-card);
-  padding: 0;
-}
-
-.lp-panel-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--lp-line-soft);
-}
-
-.lp-panel-head span {
-  font-family: var(--lp-mono);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--lp-muted);
-}
-
-.lp-panel-body {
-  padding: 18px 20px 20px;
-}
-
-/* A field table: label, value, and the provenance of the value. */
-.lp-fields {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--lp-mono);
-  font-size: 12.5px;
-  line-height: 1.55;
-}
-
-.lp-fields th {
-  text-align: left;
-  font-weight: 400;
-  color: var(--lp-muted);
-  padding: 4px 14px 4px 0;
-  white-space: nowrap;
-  vertical-align: top;
-  width: 1%;
-}
-
-.lp-fields td {
-  padding: 4px 0;
-  color: var(--lp-fg);
-  vertical-align: top;
-  word-break: break-all;
-}
-
-.lp-fields td small {
-  display: block;
-  font-size: 12px;
-  color: var(--lp-muted);
-  word-break: normal;
-}
-
-.lp-fields tr.lp-verdict th,
-.lp-fields tr.lp-verdict td {
-  border-top: 1px solid var(--lp-line-soft);
-  padding-top: 12px;
-}
-
-.lp-deny {
-  color: var(--lp-deny);
-  letter-spacing: 0.08em;
-}
-
-.lp-trace {
-  margin: 0;
-  font-family: var(--lp-mono);
-  font-size: 12px;
-  line-height: 1.95;
-  color: var(--lp-fg);
-  overflow-x: auto;
-  white-space: pre;
-}
-
-.lp-trace .d {
-  color: var(--lp-deny);
-}
-
-.lp-caption {
-  font-family: var(--lp-mono);
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--lp-muted);
-  margin: 14px 0 0;
-}
-
 /* ------------------------------------------------------------ evidence --- */
 
 .lp-col-head {
@@ -933,8 +828,7 @@ body:has(.lp) {
 }
 
 /* Inline code in marketing prose: a quiet label, not a code block. */
-.lp-lede code,
-.lp-caption code {
+.lp-lede code {
   font-family: var(--lp-mono);
   font-size: 0.88em;
   color: var(--lp-fg);
@@ -1026,9 +920,6 @@ body:has(.lp) {
   .lp-prims,
   .lp-slab--3 {
     grid-template-columns: repeat(2, 1fr);
-  }
-  .lp-decide {
-    grid-template-columns: 1fr;
   }
 }
 
