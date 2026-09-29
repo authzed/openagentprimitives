@@ -584,8 +584,8 @@ export function Landing() {
           areas.
         </SectionHead>
         <p className="lp-lede">
-          Each control is enforced by the platform, not requested of the model.
-          No prompt or tool output can change the answer.
+          The platform enforces every control. No prompt or tool output can
+          affect enforcement.
         </p>
         <ol className="lp-slab lp-slab--2 lp-areas">
           {AREAS.map((a) => (
