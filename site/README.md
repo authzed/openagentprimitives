@@ -17,9 +17,12 @@ pnpm check    # validates docs structure: media/refs resolve, refs sidecars are 
 pnpm test     # vitest
 ```
 
-Pagefind builds its search index from the built `.next/server/app` output, so
-search only works after `pnpm build` (or `pnpm start` against a build) — not
-under `pnpm dev`.
+Pagefind builds its search index from the built `.next/server/app` output. On a
+clean checkout, `pnpm dev` has no index at all — the search box reports
+"unavailable" until something has built one. Once any `pnpm build` has run,
+`public/_pagefind` exists on disk, and `pnpm dev` serves that index too, like
+any other static file; it just won't reflect content changes since that build,
+so treat it as possibly stale until you rebuild.
 
 ## Layout
 

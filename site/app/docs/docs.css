@@ -114,8 +114,8 @@ body:has(.doc-app) {
 }
 /* "light" and "dark" name the INK, so the light-ink mark is the one for the
    dark theme. Only one of the pair is ever shown, and which one is decided by
-   the attribute the pre-paint script stamps — no React state, so the mark is
-   right on the first frame. */
+   the data-theme attribute next-themes sets before paint — no React state, so
+   the mark is right on the first frame. */
 .wordmark--on-light {
   display: none;
 }

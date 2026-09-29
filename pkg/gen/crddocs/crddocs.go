@@ -1,4 +1,4 @@
-// Package crddocs generates the showcase docs' CRD reference: one MDX page per
+// Package crddocs generates the site's CRD reference: one MDX page per
 // OAP CustomResourceDefinition, from the generated CRD YAML schemas (which carry
 // field descriptions from the Go doc comments, plus types/enums/defaults). A
 // change to a *_types.go field surfaces — after `mage gen:api` — as a docs diff,

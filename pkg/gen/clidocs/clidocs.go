@@ -1,4 +1,4 @@
-// Package clidocs generates the showcase docs' CLI reference: one MDX page per
+// Package clidocs generates the site's CLI reference: one MDX page per
 // top-level `oap` command family, walked deterministically from the live cobra
 // command tree. It takes a *cobra.Command so the heavy rendering is unit-testable
 // against a synthetic tree; the real oap tree is passed in by a gated test in

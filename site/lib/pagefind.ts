@@ -1,6 +1,8 @@
 // Pagefind's bundle is written to public/_pagefind by `pnpm build`, after
 // Next has compiled everything, so the bundler must not try to resolve it.
-// Under `next dev` there is no bundle and the import rejects.
+// On a clean checkout `next dev` has no bundle and the import rejects; once
+// any `pnpm build` has run, `public/_pagefind` exists on disk and `next dev`
+// serves that (possibly stale) index like any other static file.
 export interface PagefindResult {
   url: string;
   meta: { title?: string };

@@ -1356,7 +1356,7 @@ func shortDockerID(id string) string {
 	return id
 }
 
-// Docs regenerates the showcase docs site's generated reference pages from the
+// Docs regenerates the site's generated reference pages from the
 // live source of truth (the cobra tree, the CRD schemas) — see Cli and Crd in
 // clidocs.go. Both are deterministic; neither invokes an LLM.
 type Docs mg.Namespace

@@ -1,8 +1,8 @@
 import manifest from "@/content/_manifest.json";
 
 // Media are referenced from MDX by name (e.g. <Clip name="multiplayer-approval" />)
-// and resolved here through docs/_manifest.json, which the media pipeline writes.
-// A miss renders a placeholder rather than breaking the page.
+// and resolved here through site/content/_manifest.json, whose entries are
+// added by hand. A miss renders a placeholder rather than breaking the page.
 export interface MediaAsset {
   kind: "clip" | "screenshot" | "video";
   webm?: string;

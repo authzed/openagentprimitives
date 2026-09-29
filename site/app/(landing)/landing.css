@@ -2,7 +2,7 @@
  *
  * Palette, type semantics and radius come from the product's own design tokens
  * (web/packages/design/src/tokens.css), copied rather than imported because
- * showcase/ is deliberately outside the web/ pnpm workspace. The rules those
+ * site/ is its own package outside the web/ pnpm workspace. The rules those
  * tokens carry are honored here, not just their values:
  *
  *   - --lp-state (teal-400) is the ONE hue on the page and means STATE, never
