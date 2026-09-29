@@ -376,6 +376,61 @@ func (r *Reconciler) schedulingStallForPod(ctx context.Context, namespace, podNa
 	}, true
 }
 
+// containerTermination is a container death kubelet has already recorded on a
+// bundle pod — the observed cause the terminal Failed message names instead of
+// guessing ("likely a slow image pull / OOM kill / …").
+type containerTermination struct {
+	podName   string
+	container string
+	reason    string // kubelet's Terminated.Reason, e.g. "OOMKilled"; may be ""
+	exitCode  int32
+}
+
+func (t containerTermination) message() string {
+	reason := t.reason
+	if reason == "" {
+		reason = "Error"
+	}
+	return fmt.Sprintf("container %q in pod %q terminated: %s (exit code %d)", t.container, t.podName, reason, t.exitCode)
+}
+
+// firstContainerTermination returns the first failed container termination
+// recorded across the named pods: a currently-terminated container, or a
+// restarting container's LastTerminationState — which is how an OOM-killed
+// container appears while its restart backs off. Exit-code-0 terminations are
+// skipped (a Completed init/sidecar container is not the failure). FAIL-SAFE:
+// pod misses are skipped; ok=false keeps the caller's generic message.
+func (r *Reconciler) firstContainerTermination(ctx context.Context, namespace string, podNames []string) (containerTermination, bool) {
+	for _, name := range podNames {
+		if name == "" {
+			continue
+		}
+		var pod corev1.Pod
+		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &pod); err != nil {
+			continue
+		}
+		statuses := make([]corev1.ContainerStatus, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))
+		statuses = append(statuses, pod.Status.InitContainerStatuses...)
+		statuses = append(statuses, pod.Status.ContainerStatuses...)
+		for _, cs := range statuses {
+			term := cs.State.Terminated
+			if term == nil {
+				term = cs.LastTerminationState.Terminated
+			}
+			if term == nil || term.ExitCode == 0 {
+				continue
+			}
+			return containerTermination{
+				podName:   pod.Name,
+				container: cs.Name,
+				reason:    term.Reason,
+				exitCode:  term.ExitCode,
+			}, true
+		}
+	}
+	return containerTermination{}, false
+}
+
 // firstSchedulingStall returns the first pod in podNames stuck Pending on a
 // scheduling failure. FAIL-SAFE (each pod miss is skipped); ok=false means none
 // are stalled, so the caller keeps the generic waiting message.
@@ -1685,9 +1740,32 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 					// likely an image pull" for a taint-blocked pod (as this once did)
 					// sends the user chasing a cause that isn't the problem.
 					var msg string
+					bundlesWereReady := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionBundlesReady)
 					if stall, ok := r.firstSchedulingStall(ctx, sess.Namespace, notReadyPods); ok {
 						msg = fmt.Sprintf("sandbox bundle(s) %v did not become Ready within %s of provisioning start: %s is unschedulable: %s",
 							notReadyBundles, bundleDeadline, stall.podName, strings.TrimSuffix(stall.reason, "."))
+					} else if bundlesWereReady != nil && bundlesWereReady.Status == metav1.ConditionTrue {
+						// The bundles all became Ready earlier in this session's life —
+						// the durable BundlesReady condition is the record — so this is
+						// not a provisioning problem at all: a bundle that was serving
+						// turned unhealthy mid-session (an OOM-killed or crashed
+						// container, an evicted pod). The deadline math cannot tell the
+						// two apart — mid-session, "now − bundle creation" is always
+						// past the deadline — and blaming a slow image pull here once
+						// sent an operator chasing image pulls for a cgroup OOM kill.
+						readySince := bundlesWereReady.LastTransitionTime.UTC().Format(time.RFC3339)
+						if term, ok := r.firstContainerTermination(ctx, sess.Namespace, notReadyPods); ok {
+							// kubelet already recorded the death — name it (an OOM
+							// kill shows as OOMKilled/137) instead of guessing.
+							msg = fmt.Sprintf("sandbox bundle(s) %v became unhealthy after running (Ready since %s): %s",
+								notReadyBundles, readySince, term.message())
+						} else {
+							msg = fmt.Sprintf("sandbox bundle(s) %v became unhealthy after running (Ready since %s): a pod stopped being Ready mid-session — likely a crashed or OOM-killed container, or an evicted pod",
+								notReadyBundles, readySince)
+						}
+					} else if term, ok := r.firstContainerTermination(ctx, sess.Namespace, notReadyPods); ok {
+						msg = fmt.Sprintf("sandbox bundle(s) %v did not become Ready within %s of provisioning start: %s",
+							notReadyBundles, bundleDeadline, term.message())
 					} else {
 						msg = fmt.Sprintf("sandbox bundle(s) %v did not become Ready within %s of provisioning start; the pod(s) scheduled but never became Ready, so the likely cause is a slow/cold image pull or a crashing container",
 							notReadyBundles, bundleDeadline)
