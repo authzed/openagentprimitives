@@ -2,8 +2,8 @@ import { OapMark } from "./OapMark";
 import { ThemeToggle } from "./ThemeToggle";
 import "./site-footer.css";
 
-// Placeholder until the project's community space exists.
-const COMMUNITY = "https://example.invalid/PLACEHOLDER-community";
+// The AuthZed Discord, the destination authzed.com/discord redirects to.
+const COMMUNITY = "https://discord.gg/TUd4k5McMX";
 
 /* The footer shared by the landing page and the docs. Plain <a> throughout:
  * the two sections load different stylesheets, so crossing between them is a

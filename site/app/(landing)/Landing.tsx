@@ -12,13 +12,6 @@ import { OWASP } from "./owasp";
 
 const REPO = "https://github.com/authzed/openagentprimitives";
 
-/* Every outbound URL the page needs that does not yet exist. Kept in one object
- * so filling them in is a single edit. Anything pointing at `/docs/<slug>` is
- * a real guide on this site and is written inline. */
-const TODO = {
-  owaspFull: "https://example.invalid/PLACEHOLDER-owasp-coverage",
-};
-
 /* The page's copy follows the repository README: its order, its emphasis and
  * its claims. When the README's story changes, change this page to match. */
 
@@ -707,9 +700,6 @@ export function Landing() {
         <div className="lp-hero-cta lp-section-cta">
           <a className="lp-btn lp-btn--ghost" href="/docs/owasp-top10">
             Read the coverage map
-          </a>
-          <a className="lp-btn lp-btn--ghost" href={TODO.owaspFull}>
-            Full assessment
           </a>
         </div>
         <div className="lp-evidence">
