@@ -1,0 +1,1109 @@
+/* OAP landing page.
+ *
+ * Palette, type semantics and radius come from the product's own design tokens
+ * (web/packages/design/src/tokens.css), copied rather than imported because
+ * showcase/ is deliberately outside the web/ pnpm workspace. The rules those
+ * tokens carry are honored here, not just their values:
+ *
+ *   - --lp-state (teal-400) is the ONE hue on the page and means STATE, never
+ *     action. Buttons are ink. Links are stone. If you find yourself reaching
+ *     for teal to make something clickable, use a border instead.
+ *   - Surfaces are pinned on contrast against the surface beneath, not on an
+ *     alpha modifier: on a dark ground alpha moves a color toward the
+ *     background, so `bg/50` lands ~1.06:1 away from it, which is nothing.
+ *   - Monospace is quarantined to <=12px labels and to code. It never sets body
+ *     copy, so it reads unambiguously as "system label".
+ *
+ * Structure is a ruled frame, not floating cards: the page body sits inside a
+ * drawn rectangle and every section adds a top rule. Grid rules are produced by
+ * `gap: 1px` over a border-colored background rather than by per-cell borders,
+ * so adjacent cells share one hairline.
+ */
+
+:root {
+  --lp-bg: #0c050f; /* stone-975  — background */
+  --lp-card: #1e1424; /* stone-900  — card */
+  --lp-surface-2: #2f2136; /* 1.18:1 on --lp-card */
+  --lp-surface-3: #372b3e; /* 1.34:1 on --lp-card */
+  --lp-line: #3f3644; /* stone-800  — border */
+  --lp-line-soft: #2a2231; /* the rule inside a slab, one rung quieter */
+  /* Every value below clears WCAG AA (4.5:1) against all three of --lp-bg,
+     --lp-card and --lp-surface-2, so no token needs a per-surface override.
+     Worst case is --lp-muted on --lp-surface-2 at 5.11:1; lighten it before
+     darkening any surface. Ratios: muted 6.82/6.03/5.11, fg 16.35/14.46/12.27,
+     heading 18.82/16.64/14.12, link 11.66/10.31/8.75, state 8.24/7.29/6.19,
+     deny 8.12/7.18/6.10, warn 11.43/10.11/8.58. Ink text on the primary button
+     is 14.86:1. */
+  --lp-fg: #e9e7e9; /* stone-050  — foreground */
+  --lp-heading: #f8f7f8; /* stone-025 */
+  --lp-muted: #9a94a0; /* stone ramp */
+  --lp-ink: #dedddf; /* stone-100  — primary, i.e. buttons */
+  --lp-ink-fg: #0c050f;
+  --lp-link: #c7c4ca; /* stone-200  — links are NEUTRAL */
+  --lp-state: #72b1ad; /* teal-400   — the one hue; state, never action */
+  --lp-state-dim: #4a7d7b; /* teal-600 */
+  --lp-deny: #f9808a; /* red-400    — destructive */
+  --lp-warn: #ffb370; /* sand-300   — warning */
+
+  /* The terminal is deliberately NOT themed. It reads as a thing from your
+     machine rather than a panel on a web page, and a light-on-light install
+     block loses that. These five are the only colors that do not flip. */
+  --lp-term-bg: #090410;
+  --lp-term-fg: #e9e7e9;
+  --lp-term-muted: #9a94a0;
+  --lp-term-accent: #72b1ad;
+  --lp-term-line: #2a2231;
+
+  /* The chapter numeral needs more ink on paper than on a dark ground to sit at
+     the same perceived weight. */
+  --lp-ghost-opacity: 0.045;
+
+  --lp-radius: 0.5rem;
+  --lp-rail: 1180px;
+  --lp-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --lp-mono: 'SFMono-Regular', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+
+  color-scheme: dark;
+}
+
+/* Light theme. Same token SET, opposite direction: the surface ladder DESCENDS
+ * from the ground, so a raised panel is darker rather than lighter, and ink
+ * flips to stone-950. Values track the product's own light block
+ * (web/packages/design/src/tokens.css, `:root[data-theme="light"]`).
+ *
+ * Three hues are one rung darker than that file's: teal-600, red-600 and
+ * sand-600 clear 4.5:1 on the page ground but land at 3.78-3.81 on
+ * --lp-surface-2, which this page uses as a hover fill under accent-colored
+ * text. Hue and saturation are unchanged; only lightness moved, the same
+ * correction the product file already documents for --muted-foreground.
+ * Measured on --lp-bg / --lp-card / --lp-surface-2:
+ *   heading 18.43/17.69/15.37, fg 17.34/16.64/14.46, muted 6.16/5.91/5.14,
+ *   link 8.49/8.15/7.08, state 5.42/5.21/4.52, deny 7.02/6.74/5.85,
+ *   warn 5.63/5.40/4.69. Ink text on the primary button is 17.69:1. */
+:root[data-theme='light'] {
+  --lp-bg: #fcfcfc; /* site light ground */
+  --lp-card: #f8f7f8; /* stone-025 */
+  --lp-surface-2: #e9e7e9; /* stone-050 */
+  --lp-surface-3: #dedddf; /* stone-100 */
+  --lp-line: #d2cfd3; /* stone-150 */
+  --lp-line-soft: #e6e3e8; /* the rule inside a slab, one rung quieter */
+  --lp-fg: #1e1424; /* stone-900 */
+  --lp-heading: #170d1c; /* stone-950 */
+  --lp-muted: #655d69; /* stone-600 — stone-500 is under AA on card */
+  --lp-ink: #170d1c; /* ink button inverts with the ground */
+  --lp-ink-fg: #f8f7f8;
+  --lp-link: #514856; /* stone-700 */
+  --lp-state: #42706e; /* teal-600 hue, darkened for AA on --lp-surface-2 */
+  --lp-state-dim: #72b1ad; /* teal-400 reads as a border on paper */
+  --lp-deny: #9e2e3f; /* red-600 hue, darkened */
+  --lp-warn: #8b5a41; /* sand-600 hue, darkened */
+
+  --lp-ghost-opacity: 0.08;
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body:has(.lp) {
+  background: var(--lp-bg);
+  color: var(--lp-fg);
+  font-family: var(--lp-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A grid item defaults to `min-width: auto`, which means it refuses to shrink
+   below its content's min-content width. Several cells here hold `white-space:
+   pre` blocks whose min-content width is the longest line, so without this the
+   track is forced open and the whole page scrolls sideways on a phone. Every
+   such block already has its own `overflow-x: auto`. */
+.lp-hero > *,
+.lp-decide > *,
+.lp-slab > *,
+.lp-cols > *,
+.lp-prims > *,
+.lp-seams > *,
+.lp-papers > * {
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- frame --- */
+
+.lp {
+  width: min(var(--lp-rail), 100%);
+  margin: 0 auto;
+  border-left: 1px solid var(--lp-line);
+  border-right: 1px solid var(--lp-line);
+
+  /* Theme toggle (components/theme-toggle.css styles itself from these). */
+  --tt-line: var(--lp-line);
+  --tt-fg: var(--lp-muted);
+  --tt-fg-hover: var(--lp-fg);
+  --tt-fg-active: var(--lp-heading);
+  --tt-bg-active: var(--lp-surface-2);
+  --tt-ring: var(--lp-link);
+}
+
+.lp-section {
+  border-top: 1px solid var(--lp-line);
+  padding: 76px 40px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* The chapter numeral, set huge and nearly invisible in the section's corner.
+   Decorative only, so it is hidden from assistive tech. */
+.lp-ghost {
+  position: absolute;
+  top: -0.22em;
+  right: 16px;
+  font-family: var(--lp-mono);
+  font-size: clamp(150px, 20vw, 300px);
+  line-height: 1;
+  color: var(--lp-state);
+  opacity: var(--lp-ghost-opacity);
+  pointer-events: none;
+  user-select: none;
+}
+
+.lp-kicker {
+  font-family: var(--lp-mono);
+  font-size: 10px;
+  line-height: 16px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--lp-state);
+  margin: 0 0 14px;
+}
+
+/* Display type: large, LIGHT, tightly tracked, near-solid leading. The pairing
+   of a 300-weight display face with 15px body is the page's whole density
+   signature — do not bold these. */
+.lp-h2 {
+  font-size: clamp(30px, 3.4vw, 42px);
+  font-weight: 300;
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+  color: var(--lp-heading);
+  margin: 0 0 18px;
+  max-width: 22ch;
+}
+
+.lp-h2 em {
+  font-style: normal;
+  color: var(--lp-state);
+}
+
+.lp-lede {
+  font-size: 16px;
+  line-height: 1.68;
+  color: var(--lp-muted);
+  max-width: 62ch;
+  margin: 0 0 8px;
+}
+
+.lp-lede strong {
+  color: var(--lp-fg);
+  font-weight: 500;
+}
+
+.lp-note {
+  font-family: var(--lp-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--lp-muted);
+  max-width: 78ch;
+  margin: 20px 0 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--lp-line);
+}
+
+/* ------------------------------------------------------------------ nav --- */
+
+.lp-nav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 18px 40px;
+}
+
+.lp-nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--lp-heading);
+  text-decoration: none;
+  margin-right: auto;
+}
+
+.lp-nav-brand svg {
+  height: 17px;
+  width: auto;
+}
+
+.lp-nav-brand span {
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+.lp-nav-links {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+/* `:not(.lp-btn)` matters: a bare `.lp-nav-links a` rule outranks `.lp-btn--primary`
+   on specificity and would repaint the pill's ink-on-light text as a link color. */
+.lp-nav-links a:not(.lp-btn) {
+  color: var(--lp-link);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.lp-nav-links a:not(.lp-btn):hover {
+  color: var(--lp-heading);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* --------------------------------------------------------------- buttons --- */
+
+.lp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition:
+    opacity 0.12s ease-out,
+    background 0.12s ease-out;
+  white-space: nowrap;
+}
+
+.lp-btn--primary {
+  background: var(--lp-ink);
+  color: var(--lp-ink-fg);
+}
+
+.lp-btn--primary:hover {
+  opacity: 0.86;
+}
+
+.lp-btn--ghost {
+  border-color: var(--lp-line);
+  color: var(--lp-fg);
+}
+
+.lp-btn--ghost:hover {
+  background: var(--lp-surface-2);
+}
+
+/* ----------------------------------------------------------------- hero --- */
+
+/* Two columns above 900px: the claim on the left, something you can run on the
+   right. The install block is the hero's real proof, so it sits beside the
+   headline rather than below the fold. */
+.lp-hero {
+  padding: 84px 40px 76px;
+  display: grid;
+  grid-template-columns: 1.08fr 0.92fr;
+  gap: 52px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .lp-hero {
+    grid-template-columns: 1fr;
+    gap: 38px;
+  }
+}
+
+.lp-hero-mark {
+  height: 30px;
+  width: auto;
+  color: var(--lp-heading);
+  display: block;
+  margin-bottom: 30px;
+}
+
+.lp-hero h1 {
+  font-size: clamp(40px, 5.4vw, 66px);
+  font-weight: 300;
+  line-height: 1.01;
+  letter-spacing: -0.038em;
+  color: var(--lp-heading);
+  margin: 0 0 24px;
+}
+
+.lp-hero h1 em {
+  font-style: normal;
+  color: var(--lp-state);
+}
+
+.lp-hero-sub {
+  font-size: 17px;
+  line-height: 1.62;
+  color: var(--lp-muted);
+  max-width: 60ch;
+  margin: 0 0 30px;
+}
+
+.lp-hero-sub strong {
+  color: var(--lp-fg);
+  font-weight: 500;
+}
+
+.lp-hero-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.lp-hero-aside {
+  padding-top: 6px;
+}
+
+/* Small, checkable, boring facts. They do more for an infra reader than an
+   adjective would, and each one is verifiable from the repository. */
+.lp-hero-chips {
+  margin-top: 16px;
+}
+
+/* ------------------------------------------------------------- terminal --- */
+
+.lp-term {
+  border: 1px solid var(--lp-term-line);
+  border-radius: var(--lp-radius);
+  background: var(--lp-term-bg);
+  overflow: hidden;
+}
+
+.lp-term-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--lp-term-line);
+}
+
+.lp-term-label {
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lp-term-muted);
+  margin-right: auto;
+}
+
+.lp-copy-btn {
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--lp-term-muted);
+  background: transparent;
+  border: 1px solid var(--lp-term-line);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.lp-copy-btn:hover {
+  color: var(--lp-term-fg);
+  border-color: var(--lp-term-muted);
+}
+
+.lp-term pre {
+  margin: 0;
+  padding: 14px 16px;
+  font-family: var(--lp-mono);
+  font-size: 12.5px;
+  line-height: 1.85;
+  color: var(--lp-term-fg);
+  overflow-x: auto;
+}
+
+/* The prompt glyph must never land in a drag-select of the command. */
+.lp-term .p {
+  color: var(--lp-term-accent);
+  user-select: none;
+}
+
+.lp-term .c {
+  color: var(--lp-term-muted);
+}
+
+/* ---------------------------------------------------------------- slabs --- */
+
+/* Cells fused into one slab by a 1px gap over a line-colored ground, so
+   adjacent cells share a single hairline rather than doubling borders. */
+.lp-slab {
+  display: grid;
+  gap: 1px;
+  background: var(--lp-line);
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-radius);
+  overflow: hidden;
+  margin-top: 34px;
+}
+
+.lp-slab > * {
+  background: var(--lp-card);
+  padding: 22px 24px;
+}
+
+.lp-slab--2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.lp-slab--3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.lp-slab h3 {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: -0.012em;
+  color: var(--lp-heading);
+  margin: 0 0 10px;
+}
+
+.lp-slab p {
+  font-size: 13.5px;
+  line-height: 1.62;
+  color: var(--lp-muted);
+  margin: 0;
+}
+
+/* --------------------------------------------------------------- primitives */
+
+.lp-prims {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--lp-line);
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-radius);
+  overflow: hidden;
+  margin-top: 34px;
+}
+
+.lp-prim {
+  background: var(--lp-card);
+  padding: 26px 24px 28px;
+}
+
+.lp-prim-eyebrow {
+  font-family: var(--lp-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lp-state);
+  margin: 0 0 12px;
+}
+
+.lp-prim h3 {
+  font-size: 19px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  color: var(--lp-heading);
+  margin: 0 0 10px;
+}
+
+/* Links are neutral and carry a rule on hover, never the accent: teal means
+   state on this page, and spending it on an affordance collapses that meaning. */
+.lp-prim h3 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.lp-prim h3 a:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-color: var(--lp-line);
+}
+
+.lp-prim p {
+  font-size: 14px;
+  line-height: 1.62;
+  color: var(--lp-muted);
+  margin: 0 0 14px;
+}
+
+.lp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lp-chips li {
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--lp-muted);
+  border: 1px solid var(--lp-line);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+/* ------------------------------------------------------- cannot-do list --- */
+
+.lp-cannot {
+  counter-reset: lp-cannot;
+  margin: 34px 0 0;
+  padding: 0;
+}
+
+.lp-cannot > li {
+  list-style: none;
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 0 4px;
+}
+
+.lp-cannot > li::before {
+  counter-increment: lp-cannot;
+  content: '0' counter(lp-cannot);
+  font-family: var(--lp-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--lp-state);
+  padding-top: 3px;
+}
+
+.lp-cannot h3 {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--lp-heading);
+  margin: 0 0 7px;
+}
+
+.lp-cannot p {
+  font-size: 13.5px;
+  line-height: 1.62;
+  color: var(--lp-muted);
+  margin: 0;
+}
+
+/* ---------------------------------------------------------- decision box --- */
+
+.lp-decide {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 1px;
+  background: var(--lp-line);
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-radius);
+  overflow: hidden;
+  margin-top: 34px;
+}
+
+.lp-decide > * {
+  background: var(--lp-card);
+  padding: 0;
+}
+
+.lp-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--lp-line-soft);
+}
+
+.lp-panel-head span {
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lp-muted);
+}
+
+.lp-panel-body {
+  padding: 18px 20px 20px;
+}
+
+/* A field table: label, value, and the provenance of the value. */
+.lp-fields {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--lp-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.lp-fields th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--lp-muted);
+  padding: 4px 14px 4px 0;
+  white-space: nowrap;
+  vertical-align: top;
+  width: 1%;
+}
+
+.lp-fields td {
+  padding: 4px 0;
+  color: var(--lp-fg);
+  vertical-align: top;
+  word-break: break-all;
+}
+
+.lp-fields td small {
+  display: block;
+  font-size: 11px;
+  color: var(--lp-muted);
+  word-break: normal;
+}
+
+.lp-fields tr.lp-verdict th,
+.lp-fields tr.lp-verdict td {
+  border-top: 1px solid var(--lp-line-soft);
+  padding-top: 12px;
+}
+
+.lp-deny {
+  color: var(--lp-deny);
+  letter-spacing: 0.08em;
+}
+
+.lp-trace {
+  margin: 0;
+  font-family: var(--lp-mono);
+  font-size: 11.5px;
+  line-height: 1.95;
+  color: var(--lp-fg);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.lp-trace .d {
+  color: var(--lp-deny);
+}
+
+.lp-caption {
+  font-family: var(--lp-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--lp-muted);
+  margin: 14px 0 0;
+}
+
+/* ----------------------------------------------------------- two columns --- */
+
+.lp-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--lp-line);
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-radius);
+  overflow: hidden;
+  margin-top: 34px;
+}
+
+.lp-col {
+  background: var(--lp-card);
+  padding: 24px;
+}
+
+.lp-col-head {
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--lp-state);
+  margin: 0 0 16px;
+}
+
+.lp-qa {
+  margin: 0;
+}
+
+.lp-qa dt {
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--lp-heading);
+  margin: 0 0 5px;
+}
+
+.lp-qa dd {
+  margin: 0 0 18px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--lp-muted);
+}
+
+.lp-qa dd:last-child {
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------- seams --- */
+
+/* Unlike the other grids, the seam count does not divide evenly into the column
+   count at every breakpoint, so a container painted line-colored would show its
+   own background as a slab in the trailing gap. Each cell draws its own hairline
+   with an outward box-shadow instead: adjacent shadows meet exactly inside the
+   1px gap and read as one rule, and an unfilled cell is simply absent. */
+.lp-seams {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  margin: 35px 1px 0;
+}
+
+.lp-seam {
+  background: var(--lp-card);
+  box-shadow: 0 0 0 1px var(--lp-line);
+  padding: 16px 18px;
+  min-height: 92px;
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.lp-seam-n {
+  font-family: var(--lp-mono);
+  font-size: 22px;
+  line-height: 1;
+  color: var(--lp-state);
+  display: block;
+  margin-bottom: 8px;
+}
+
+.lp-seam-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--lp-heading);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.lp-seam-list {
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--lp-muted);
+  word-break: break-word;
+}
+
+.lp-seam--open {
+  background: transparent;
+}
+
+.lp-seam--open .lp-seam-n {
+  color: var(--lp-muted);
+}
+
+.lp-seam--open:hover {
+  background: var(--lp-surface-2);
+}
+
+/* ---------------------------------------------------------------- owasp --- */
+
+.lp-owasp-wrap {
+  margin-top: 34px;
+  overflow-x: auto;
+}
+
+.lp-owasp {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.lp-owasp caption {
+  caption-side: top;
+  text-align: left;
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lp-muted);
+  padding-bottom: 12px;
+}
+
+.lp-owasp th,
+.lp-owasp td {
+  text-align: left;
+  padding: 11px 14px 11px 0;
+  border-bottom: 1px solid var(--lp-line-soft);
+  vertical-align: top;
+}
+
+.lp-owasp thead th {
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lp-muted);
+  border-bottom-color: var(--lp-line);
+}
+
+.lp-owasp td.lp-id {
+  font-family: var(--lp-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  width: 1%;
+}
+
+/* The ids deep-link into the guide's own per-item anchors, which the docs hash
+   router resolves as `#/<slug>#<anchor>`. */
+.lp-owasp td.lp-id a {
+  color: var(--lp-muted);
+  text-decoration: none;
+  border-bottom: 1px solid var(--lp-line);
+}
+
+.lp-owasp td.lp-id a:hover {
+  color: var(--lp-heading);
+  border-bottom-color: var(--lp-surface-3);
+}
+
+/* Inline code in marketing prose: a quiet label, not a code block. */
+.lp-lede code,
+.lp-caption code {
+  font-family: var(--lp-mono);
+  font-size: 0.88em;
+  color: var(--lp-fg);
+  background: var(--lp-surface-2);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.lp-owasp td.lp-title {
+  color: var(--lp-heading);
+}
+
+.lp-owasp td.lp-gap {
+  color: var(--lp-muted);
+  font-size: 13px;
+}
+
+.lp-cov {
+  display: inline-block;
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.lp-cov--substantial {
+  color: var(--lp-state);
+  border-color: var(--lp-state-dim);
+}
+
+.lp-cov--partial {
+  color: var(--lp-warn);
+  border-color: color-mix(in srgb, var(--lp-warn) 45%, transparent);
+}
+
+.lp-cov--na {
+  color: var(--lp-muted);
+  border-color: var(--lp-line);
+}
+
+/* ----------------------------------------------------------------- draft --- */
+
+/* Marks a section whose content is still being written, so a reader is never
+   misled about which parts are settled. */
+.lp-draft {
+  display: inline-block;
+  font-family: var(--lp-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lp-warn);
+  border: 1px dashed color-mix(in srgb, var(--lp-warn) 45%, transparent);
+  border-radius: 4px;
+  padding: 1px 8px;
+  margin-left: 10px;
+  vertical-align: 3px;
+}
+
+/* --------------------------------------------------------------- papers --- */
+
+.lp-papers {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--lp-line);
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-radius);
+  overflow: hidden;
+  margin-top: 34px;
+}
+
+.lp-paper {
+  background: var(--lp-card);
+  padding: 22px 22px 24px;
+  text-decoration: none;
+  display: block;
+  color: inherit;
+}
+
+.lp-paper:hover {
+  background: var(--lp-surface-2);
+}
+
+.lp-paper-n {
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--lp-state);
+  display: block;
+  margin-bottom: 10px;
+}
+
+.lp-paper h3 {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--lp-heading);
+  margin: 0 0 8px;
+}
+
+.lp-paper p {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--lp-muted);
+  margin: 0;
+}
+
+/* --------------------------------------------------------------- closing --- */
+
+.lp-close {
+  text-align: center;
+  padding: 92px 40px 96px;
+}
+
+.lp-close .lp-h2 {
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 26ch;
+}
+
+.lp-close .lp-lede {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.lp-close .lp-hero-cta {
+  justify-content: center;
+  margin: 28px 0 0;
+}
+
+.lp-footer {
+  border-top: 1px solid var(--lp-line);
+  padding: 26px 40px 34px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  font-size: 12.5px;
+  color: var(--lp-muted);
+}
+
+.lp-footer a {
+  color: var(--lp-link);
+  text-decoration: none;
+}
+
+.lp-footer a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.lp-footer-mark {
+  height: 13px;
+  width: auto;
+  color: var(--lp-muted);
+  margin-right: auto;
+}
+
+/* ------------------------------------------------------------ responsive --- */
+
+@media (max-width: 1000px) {
+  .lp-prims,
+  .lp-papers,
+  .lp-slab--3 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .lp-seams {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .lp-decide {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .lp-section,
+  .lp-hero,
+  .lp-close,
+  .lp-nav,
+  .lp-footer {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .lp-section {
+    padding-top: 52px;
+    padding-bottom: 52px;
+  }
+  .lp-prims,
+  .lp-papers,
+  .lp-cols,
+  .lp-slab--2,
+  .lp-slab--3 {
+    grid-template-columns: 1fr;
+  }
+  .lp-seams {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .lp-nav-links a:not(.lp-btn) {
+    display: none;
+  }
+  /* The toggle costs the nav 84px, which is what pushed the wordmark onto a
+     second line. The logomark alone still reads as the brand. */
+  .lp-nav-brand span {
+    display: none;
+  }
+  .lp-ghost {
+    display: none;
+  }
+  .lp-owasp td.lp-gap {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
