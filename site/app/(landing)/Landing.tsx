@@ -36,7 +36,7 @@ const INSTALL: {
 }[] = [
   {
     id: "desktop",
-    label: "Desktop · macOS",
+    label: "macOS desktop",
     steps: [
       { cmd: "mage desktop:all" },
       { cmd: "open build/desktop/out/oap.app" },
@@ -45,7 +45,7 @@ const INSTALL: {
   },
   {
     id: "kubernetes",
-    label: "Kubernetes · kind",
+    label: "Local Kubernetes",
     steps: [
       { cmd: "mage build:oap" },
       { cmd: "kind create cluster --name oap-dev" },

@@ -426,8 +426,7 @@ body:has(.lp) {
 .lp-term-tab {
   font-family: var(--lp-mono);
   font-size: 11.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   color: var(--lp-term-muted);
   background: transparent;
   border: 0;
