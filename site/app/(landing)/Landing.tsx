@@ -26,7 +26,6 @@ const TODO = {
 
 interface Step {
   cmd: string;
-  note?: string;
 }
 
 const INSTALL: {
@@ -42,11 +41,7 @@ const INSTALL: {
       { cmd: "mage desktop:all" },
       { cmd: "open build/desktop/out/oap.app" },
     ],
-    comment: [
-      "# runs OAP in a lightweight Linux VM reachable only from",
-      "# your Mac, with a menubar app for chats, sessions, the",
-      "# admin dashboard and agent installation.",
-    ],
+    comment: ["# a local VM with a menubar app. No Kubernetes needed."],
   },
   {
     id: "kubernetes",
@@ -56,11 +51,7 @@ const INSTALL: {
       { cmd: "kind create cluster --name oap-dev" },
       { cmd: "./bin/oap init --local --pinning-mode=warn --wizard" },
     ],
-    comment: [
-      "# builds and loads images, installs OAP, waits for it to",
-      "# come up healthy, and walks you through security",
-      "# settings and model configuration.",
-    ],
+    comment: ["# builds, installs, and walks you through setup."],
   },
 ];
 
@@ -113,51 +104,37 @@ const PRIMITIVES = [
   {
     verb: "Define",
     title: "Agent definition",
-    body: "An AgentClass is a reviewable template you keep in git. An AgentSession is a disposable instance with its own runner pod, budget, memory scope and signing key, torn down when the work is done.",
-    chips: ["AgentClass", "AgentSession", "one pod per session"],
+    body: "An AgentClass is a reviewable template kept in git. Each AgentSession gets its own pod, budget and memory, and is torn down when the work is done.",
     href: "/docs/agent-definition",
   },
   {
     verb: "Constrain",
     title: "Safe tools",
-    body: 'A tool is a declarative contract, validated when it is authored and again when it runs. Calls execute as argv arrays in a hardened sandbox pod, never through a shell, so "what can this agent do" has an enumerable answer.',
-    chips: ["argv, never a shell", "deny by default", "CEL constraints"],
+    body: "A tool is a declarative contract, checked when it is written and again when it runs. Calls execute in a hardened sandbox, never through a shell.",
     href: "/docs/safe-tools",
   },
   {
     verb: "Broker",
     title: "Identity & credentials",
-    body: 'Credentials live in named catalogs and resolve at the moment of execution. The agent is handed a valet key, not the keyring, and "acting as Alice" is a governed mode rather than a shared secret.',
-    chips: [
-      "named catalogs",
-      "just-in-time resolution",
-      "per-user credentials",
-    ],
+    body: "Credentials resolve at the moment of use. The agent gets a valet key, not the keyring.",
     href: "/docs/identity",
   },
   {
     verb: "Decide",
     title: "Authorization",
-    body: "One relationship graph answers every state-touching action: may this subject do this, to this resource, right now. The graph mirrors ownership in your organization, and every path fails closed.",
-    chips: ["SpiceDB", "per subject, per action", "fails closed"],
+    body: "One relationship graph answers every action: may this person do this, to this resource, right now. Every path fails closed.",
     href: "/docs/authorization",
   },
   {
     verb: "Carry",
     title: "Channels & continuity",
-    body: "A Channel binds a transport to an AgentClass. Threads survive across days, and approvals render in the channel where the work is happening, so nobody has to leave the conversation to grant or deny an action.",
-    chips: [
-      "Slack · browser · CLI · GitHub",
-      "threads persist",
-      "signed webhooks",
-    ],
+    body: "Agents work in Slack, the browser, the CLI and GitHub. Threads last for days, and approvals appear where the conversation already is.",
     href: "/docs/channels",
   },
   {
     verb: "Remember",
     title: "Memory & knowledge",
-    body: "Typed memory with structured recall, ranked search and a knowledge graph. Recall is an authorization decision rather than a database query, and the transcript is a signed ledger rather than a mutable table.",
-    chips: ["typed kinds", "ranked search", "append-only audit"],
+    body: "Recall, search and a knowledge graph. Reading memory is an authorization decision, and the transcript is a signed ledger.",
     href: "/docs/memory",
   },
 ];
@@ -173,20 +150,20 @@ const AREAS: Area[] = [
     title: "Every action is authorized",
     points: [
       [
-        "What is checked.",
-        "Tool calls, interactions, memory access, lookups and preferences all go through a relationship graph that mirrors ownership in your organization.",
+        "Checked per action.",
+        "Tool calls, memory, lookups and interactions all go through one permission graph.",
       ],
       [
         "Operation-level rules.",
-        "One agent can be read-only for one team and read-write for another, instead of a separate agent per audience.",
+        "One agent can be read-only for one team and read-write for another.",
       ],
       [
         "Directory sync.",
-        "Group memberships from Slack, GitHub and 1Password sync into the graph, so permissions follow your organization.",
+        "Groups from Slack, GitHub and 1Password keep permissions in step with your organization.",
       ],
       [
         "Multiplayer sessions.",
-        "Joining a session, directing it and running sensitive tools can each require approval, and a requester cannot approve their own request.",
+        "Joining, directing and sensitive tools can each require approval.",
       ],
     ],
     links: [
@@ -196,23 +173,23 @@ const AREAS: Area[] = [
     ],
   },
   {
-    title: "Injected instructions cannot widen what an agent may do",
+    title: "Injected instructions can't widen access",
     points: [
       [
         "Plan gating.",
-        "The agent states what it intends, a person approves that scope, and every later action is checked against it. Injected text can change what the model wants to do, not what it is allowed to do.",
+        "A person approves the agent's plan, and every later action is checked against it.",
       ],
       [
         "Slots.",
-        "A session commits to the resource it is working on, once. It cannot drift to another resource even when its credentials would reach one.",
+        "A session commits to one resource and cannot drift to another.",
       ],
       [
-        "Approvals the model cannot reword.",
-        "The platform describes the action from the call itself, and the approval is bound to those exact arguments.",
+        "Approvals the model can't reword.",
+        "The platform describes the action from the call itself.",
       ],
       [
         "Tool specs.",
-        "Declare which operations and resources an MCP server or CLI exposes. A read-write integration becomes read-only without a read-only token.",
+        "Make a read-write integration read-only without a read-only token.",
       ],
     ],
     links: [
@@ -221,19 +198,19 @@ const AREAS: Area[] = [
     ],
   },
   {
-    title: "Data reaches only its authorized audience",
+    title: "Data reaches only its audience",
     points: [
       [
         "Leakage tracking.",
-        "Tool responses are tagged with their origin, and the platform checks those tags against who will receive the data before anything leaves.",
+        "Data is tagged with its origin and checked against who will receive it.",
       ],
       [
         "Slot-scoped memory.",
-        "Sessions share memory only when bound to the same resource, so one customer's context does not reach another's. Nothing is shared by default.",
+        "One customer's context never reaches another customer's session.",
       ],
       [
         "Secret scrubbing.",
-        "Mark a tool output as a secret and the model receives an opaque handle. The real value is substituted outside the model.",
+        "The model sees an opaque handle, never the secret itself.",
       ],
     ],
     links: [
@@ -244,17 +221,14 @@ const AREAS: Area[] = [
   {
     title: "Least privilege by default",
     points: [
-      [
-        "Opt-in capabilities.",
-        "Every toolkit, tool spec and capability was added deliberately, so a review covers what was added rather than what was left on.",
-      ],
+      ["Opt-in capabilities.", "Nothing is enabled until someone adds it."],
       [
         "A sandbox per tool.",
-        "Each tool holds only its own credentials. A compromised tool cannot borrow another's access, and the orchestrating agent never holds them at all.",
+        "Each tool holds only its own credentials, and the agent holds none.",
       ],
       [
-        "Sub-agents request their own permissions.",
-        "Delegation narrows access instead of copying it.",
+        "Narrowing delegation.",
+        "Sub-agents request their own permissions instead of inheriting yours.",
       ],
     ],
     links: [
@@ -266,24 +240,23 @@ const AREAS: Area[] = [
     title: "Control and oversight",
     points: [
       [
-        "Inherited requirements.",
-        "Administrators set defaults at the cluster, namespace or agent-class level, and agents cannot opt out.",
+        "Inherited policy.",
+        "Cluster, namespace and class defaults that agents can't opt out of.",
       ],
       [
-        "Revocation.",
-        "Remove a relationship and it takes effect everywhere at once, with no credential rotation or redeploy.",
+        "Instant revocation.",
+        "Remove one relationship; no credential rotation or redeploy.",
       ],
       [
-        "A verifiable audit log.",
+        "Verifiable audit.",
         <>
-          Every entry is signed and hash-chained, so modification, reordering
-          and truncation are detectable. <code>oap audit verify</code> checks a
-          session offline.
+          Signed, hash-chained entries, checked offline with{" "}
+          <code>oap audit verify</code>.
         </>,
       ],
       [
-        "Pinning, budgets and hooks.",
-        "Skills, containers and MCP servers pin to approved versions; budgets cap turns, spend and run time; your own hooks can trip a circuit breaker.",
+        "Pinning and budgets.",
+        "Approved versions, capped spend and circuit breakers.",
       ],
     ],
     links: [
@@ -293,23 +266,23 @@ const AREAS: Area[] = [
     ],
   },
   {
-    title: "Isolation in the platform itself",
+    title: "Isolation in the platform",
     points: [
       [
-        "A sanitizer per content type.",
-        "Each is written for that type's risks, and rendered output is contained under a Content Security Policy without cookie access.",
+        "Sanitized output.",
+        "Each content type has its own sanitizer, and rendered output runs under a strict CSP.",
       ],
       [
         "Separate pods.",
-        "The session runner, the operator and each sanitizer run apart, with micro-VM backing where the cluster provides it.",
+        "Runner, operator and sanitizers run apart, on micro-VMs where available.",
       ],
       [
-        "Scoped bus credentials.",
-        "Each component dials the control-plane bus with its own credential, granting only its own session's subjects.",
+        "Scoped credentials.",
+        "Each component reaches only its own session on the control-plane bus.",
       ],
       [
-        "One package per agent.",
-        "Each agent ships as one OCI-compliant package, so installation can be gated and reviewed like any other artifact.",
+        "Reviewable packages.",
+        "Each agent ships as one OCI package you can gate like any artifact.",
       ],
     ],
     links: [
@@ -322,45 +295,45 @@ const AREAS: Area[] = [
 const BUILDER = [
   {
     step: "Describe",
-    title: "Say what the agent is for",
-    body: "Agent Builder identifies the tools it needs, connects accounts through the platform, and defines what the new agent may do and what it must ask permission for.",
+    title: "Say what it's for",
+    body: "Agent Builder picks the tools, connects accounts, and sets what the new agent may do.",
   },
   {
     step: "Test",
     title: "Try it in a workshop",
-    body: "Each build runs in an isolated workshop. The draft cannot touch your live agents, and the builder cannot install it into the real environment.",
+    body: "Drafts run in isolation and can't touch your live agents.",
   },
   {
     step: "Deliver",
     title: "Hand over a bundle",
-    body: "When you are satisfied you get a portable .oap bundle, and can submit an installation request for an administrator to review.",
+    body: "You get a portable .oap bundle for an administrator to review and install.",
   },
 ];
 
 const EVERYTHING = [
   {
-    title: "You choose the model",
-    body: "Anthropic, OpenAI or OpenRouter, swappable per deployment. Nothing in an agent's definition hardcodes a provider.",
+    title: "Your choice of model",
+    body: "Anthropic, OpenAI or OpenRouter, swappable per deployment.",
   },
   {
-    title: "You choose the infrastructure",
-    body: "A laptop, a local cluster, or your own Kubernetes: GKE, EKS, AKS or self-managed.",
+    title: "Your infrastructure",
+    body: "A laptop, a local cluster, GKE, EKS, AKS or self-managed Kubernetes.",
   },
   {
     title: "Channels",
-    body: "Slack, the browser, the CLI, GitHub, or a signed webhook trigger from another system.",
+    body: "Slack, browser, CLI, GitHub and signed webhooks.",
   },
   {
     title: "Memory and knowledge graph",
-    body: "Structured recall, ranked search and graph-native queries over what an agent has learned.",
+    body: "Structured recall, ranked search and graph queries.",
   },
   {
     title: "Built in and swappable",
-    body: "The runner, authorization, approvals, sandboxing, credentials, memory and audit all ship built in, and each can be replaced by something your organization already runs.",
+    body: "Every core component ships built in and can be replaced with one you already run.",
   },
   {
     title: "Nothing phones home",
-    body: "The runtime's outbound calls are the ones you configure: your model provider, the MCP servers you declared, the hosts your tools reach.",
+    body: "The runtime only calls the providers, servers and hosts you configure.",
   },
 ];
 
@@ -492,7 +465,6 @@ export function Landing() {
           <a href="#secure">Security</a>
           <a href="#agent-builder">Agent Builder</a>
           <a href={TODO.repo}>GitHub</a>
-          <ThemeToggle />
           <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
             Get started
           </a>
@@ -507,17 +479,12 @@ export function Landing() {
             A secure way to run <em>enterprise AI agents</em>.
           </h1>
           <p className="lp-hero-sub">
-            Open Agent Primitives is a set of building blocks for constructing
-            and running enterprise agents, in your own Kubernetes cluster, on
-            the models and infrastructure you choose.{" "}
-            <strong>
-              Every control sits outside the model, so the platform decides
-              before the call.
-            </strong>
+            Building blocks for running enterprise agents in your own cluster,
+            on the models you choose.{" "}
+            <strong>Every control sits outside the model.</strong>
           </p>
           <p className="lp-hero-qs-head">
-            Trusting an agent with production work means answering four
-            questions:
+            Trusting an agent means answering four questions:
           </p>
           <ol className="lp-hero-qs">
             {QUESTIONS.map((q) => (
@@ -535,15 +502,9 @@ export function Landing() {
         </div>
         <div className="lp-hero-aside">
           <InstallTerminal />
-          <ul className="lp-chips lp-hero-chips">
-            <li>6 primitives</li>
-            <li>27 security controls</li>
-            <li>your cluster, your models</li>
-            <li>Apache 2.0</li>
-          </ul>
           <p className="lp-note">
-            OAP builds from source today, from a clone of the repository. There
-            is no published binary or container image yet.
+            OAP builds from source today. There is no published binary or image
+            yet.
           </p>
         </div>
       </header>
@@ -554,21 +515,18 @@ export function Landing() {
           A credential is almost always <em>broader</em> than the task.
         </SectionHead>
         <p className="lp-lede">
-          A token that reaches one git repository normally reaches every
-          repository, and an integration built to expose a service exposes all
-          of it. An agent inherits that whole surface, and the gap between what
-          a task needs and what its credentials permit grows as agents take on
-          more work.
+          A token for one repository usually reaches every repository. An agent
+          inherits all of that access, not just what its task needs.
         </p>
         <p className="lp-lede">
-          A model cannot reliably separate instructions from data, so its
-          judgment is not a dependable place to enforce a boundary, and a
-          hardened prompt is still an instruction rather than an enforcement
-          point. A permission check at the edge decides who may start an agent,
-          not what it reaches once it is running.{" "}
+          A model can&rsquo;t reliably tell instructions from data, so its
+          judgment can&rsquo;t be the boundary. A better prompt is still just an
+          instruction.
+        </p>
+        <p className="lp-lede">
           <strong>
-            Every control in OAP therefore sits outside the model, and no
-            decision depends on the agent&rsquo;s cooperation.
+            So every control in OAP sits outside the model, and none depends on
+            the agent&rsquo;s cooperation.
           </strong>
         </p>
 
@@ -607,48 +565,35 @@ export function Landing() {
                     <th scope="row">subject</th>
                     <td>
                       user:alice@acme.example
-                      <small>
-                        the human who spoke, canonicalized at the channel
-                        boundary
-                      </small>
+                      <small>the person who asked</small>
                     </td>
                   </tr>
                   <tr>
                     <th scope="row">permission</th>
                     <td>
                       push
-                      <small>
-                        declared by the toolkit, not chosen at call time
-                      </small>
+                      <small>declared by the tool, not the model</small>
                     </td>
                   </tr>
                   <tr>
                     <th scope="row">resource</th>
                     <td>
                       git_repo:acme/widget
-                      <small>
-                        derived from the call&rsquo;s own arguments by a CEL
-                        expression
-                      </small>
+                      <small>derived from the call&rsquo;s arguments</small>
                     </td>
                   </tr>
                   <tr className="lp-verdict">
                     <th scope="row">decision</th>
                     <td>
                       <span className="lp-deny">DENIED</span>
-                      <small>
-                        at a fixed position in the pre-tool-call pipeline. The
-                        call never reaches the sandbox or the MCP server.
-                      </small>
+                      <small>the call never reaches the tool</small>
                     </td>
                   </tr>
                 </tbody>
               </table>
               <p className="lp-caption">
-                An unresolvable argument denies rather than guesses. In the git
-                toolkit, a shorthand remote like <code>origin</code> yields an
-                empty resource ID on purpose, so a push fails closed instead of
-                authorizing against an unnamed repository.
+                An argument that can&rsquo;t be resolved is denied, never
+                guessed.
               </p>
             </div>
           </div>
@@ -670,21 +615,12 @@ export function Landing() {
                 <span className="d">denied</span>
               </pre>
               <p className="lp-caption">
-                Three lines of a golden authorization trace from the end-to-end
-                suite. The trace is frozen per scenario, so a gate that stops
-                refusing shows up as a diff in review rather than as an
-                incident.
+                From a golden trace in the test suite. If a check ever stops
+                refusing, the change shows up in code review.
               </p>
             </div>
           </div>
         </div>
-
-        <p className="lp-note">
-          Precisely: every <em>state-touching</em> tool call. Tools a toolkit
-          author declares stateless or passthrough resolve without a graph
-          check, and that declaration is reviewable in the same YAML as the
-          tool.
-        </p>
       </section>
 
       {/* ------------------------------------------------- 02 primitives --- */}
@@ -693,9 +629,8 @@ export function Landing() {
           Six concerns every agent has to solve.
         </SectionHead>
         <p className="lp-lede">
-          A primitive is a concern every agent has to solve, whatever it does.
-          OAP names six, ships a working implementation of each, and composes
-          every agent from them.
+          OAP ships a working implementation of each, and every agent is built
+          from them.
         </p>
         <div className="lp-prims">
           {PRIMITIVES.map((p, i) => (
@@ -707,11 +642,6 @@ export function Landing() {
                 <a href={p.href}>{p.title}</a>
               </h3>
               <p>{p.body}</p>
-              <ul className="lp-chips">
-                {p.chips.map((c) => (
-                  <li key={c}>{c}</li>
-                ))}
-              </ul>
             </article>
           ))}
         </div>
@@ -723,10 +653,8 @@ export function Landing() {
           Twenty-seven controls, in six areas.
         </SectionHead>
         <p className="lp-lede">
-          Each control is a property of the platform rather than an instruction
-          to the model, so no phrasing, context length or tool output changes
-          the answer. The security model documents every one and names the
-          package that implements it.
+          Each control is enforced by the platform, not requested of the model.
+          No prompt or tool output can change the answer.
         </p>
         <ol className="lp-slab lp-slab--2 lp-areas">
           {AREAS.map((a) => (
@@ -750,11 +678,8 @@ export function Landing() {
           ))}
         </ol>
         <p className="lp-note">
-          Some controls are opt-in per agent class, including plan gating and
-          the information-leakage gate. Hostname-level egress is recorded on
-          session status but enforced only by a DNS-aware CNI. Network policy at
-          layers 3 and 4 is on by default, and the sandbox fails closed to
-          deny-all when a class says nothing.
+          Plan gating and leakage tracking are opt-in per agent class. Network
+          policy is on by default.
         </p>
       </section>
 
@@ -764,9 +689,8 @@ export function Landing() {
           Build an agent by talking to an agent.
         </SectionHead>
         <p className="lp-lede">
-          You don&rsquo;t have to start with manifest files. Agent Builder is an
-          OAP agent whose job is to create other agents. Describe what you need
-          in plain language, then test the result live.
+          Agent Builder is an OAP agent that creates other agents. Describe what
+          you need in plain language, then test it live.
         </p>
         <div className="lp-slab lp-slab--3">
           {BUILDER.map((b) => (
@@ -783,10 +707,8 @@ export function Landing() {
           </a>
         </div>
         <p className="lp-note">
-          <code>oap init</code> leaves Agent Builder off, because there is no
-          safe default for who may start it; you enable it by naming the people
-          or groups allowed to. It is subject to every control above: broad
-          freedom inside its workshop, and no authority outside it.
+          Off by default. You turn it on by naming who may use it, and it
+          follows every control above.
         </p>
       </section>
 
@@ -796,8 +718,7 @@ export function Landing() {
           The rest of the platform, included.
         </SectionHead>
         <p className="lp-lede">
-          These capabilities are common to agent platforms. OAP includes them,
-          and they are listed here so the set is complete.
+          The capabilities you&rsquo;d expect from any agent platform.
         </p>
         <div className="lp-slab lp-slab--3">
           {EVERYTHING.map((e) => (
@@ -812,15 +733,13 @@ export function Landing() {
       {/* ------------------------------------------------------- 06 owasp --- */}
       <section className="lp-section" id="owasp">
         <SectionHead n="06" kicker="Security posture">
-          The OWASP Agentic Top 10, including where we <em>fall short</em>.
+          Coverage of the OWASP Agentic Top 10.
           <span className="lp-draft">Draft</span>
         </SectionHead>
         <p className="lp-lede">
-          We keep a coverage map of OAP against the OWASP Top 10 for Agentic
-          Applications, and we publish the gaps column alongside the ratings. It
-          is an advisory self-assessment for orientation, not a certification,
-          an audit or a penetration test. It says a control exists and is wired
-          into the relevant path. It does not say the control is free of bugs.
+          How OAP maps to each risk in the OWASP Top 10 for Agentic
+          Applications, with the remaining gaps listed alongside. This is a
+          self-assessment, not a certification.
         </p>
         <div className="lp-owasp-wrap">
           <table className="lp-owasp">
@@ -862,18 +781,14 @@ export function Landing() {
         <div className="lp-evidence">
           <p className="lp-col-head">How we know the gates still hold</p>
           <p>
-            Three test suites gate every merge. Scripted whole-session scenarios
-            assert on the tool result rather than the reply, golden
-            authorization traces turn any change in what was checked into a diff
-            someone has to read, and replays of captured real sessions show a
-            real model produced the interaction at least once. None of them pins
-            what a model will do next.
+            Every merge runs whole-session scenarios, golden authorization
+            traces and replays of real sessions. A permission check that stops
+            working fails the build.
           </p>
         </div>
         <p className="lp-note">
-          OWASP materials are referenced under CC BY-SA 4.0. This assessment is
-          not affiliated with or endorsed by OWASP. Coverage levels are a
-          qualitative judgement of breadth, not a score.
+          OWASP materials are used under CC BY-SA 4.0. Not affiliated with or
+          endorsed by OWASP.
         </p>
       </section>
 
@@ -882,11 +797,9 @@ export function Landing() {
         <p className="lp-kicker">Defense in depth</p>
         <h2 className="lp-h2">Every layer assumes the others may fail.</h2>
         <p className="lp-lede">
-          To misuse an OAP agent, an attacker has to get past a plan a human
-          approved, a slot that cannot be reopened, a tool lens that cannot be
-          widened, an authorization check on every call, and a sandbox that
-          never held the credential in the first place. None of them is
-          sufficient alone.
+          To misuse an agent, an attacker has to get past an approved plan, a
+          locked slot, a tool spec, a check on every call, and a sandbox that
+          never held the credential.
         </p>
         <div className="lp-hero-cta">
           <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
@@ -912,6 +825,7 @@ export function Landing() {
           Built by <a href="https://authzed.com">AuthZed</a>, using{" "}
           <a href="https://github.com/authzed/spicedb">SpiceDB</a>.
         </span>
+        <ThemeToggle />
       </footer>
     </div>
   );

@@ -60,8 +60,11 @@
 
   --lp-radius: 0.5rem;
   --lp-rail: 1180px;
-  --lp-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --lp-mono: 'SFMono-Regular', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+  --lp-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  --lp-mono:
+    "SFMono-Regular", "Menlo", "Consolas", "Liberation Mono", monospace;
 
   color-scheme: dark;
 }
@@ -80,7 +83,7 @@
  *   heading 18.43/17.69/15.37, fg 17.34/16.64/14.46, muted 6.16/5.91/5.14,
  *   link 8.49/8.15/7.08, state 5.42/5.21/4.52, deny 7.02/6.74/5.85,
  *   warn 5.63/5.40/4.69. Ink text on the primary button is 17.69:1. */
-:root[data-theme='light'] {
+:root[data-theme="light"] {
   --lp-bg: #fcfcfc; /* site light ground */
   --lp-card: #f8f7f8; /* stone-025 */
   --lp-surface-2: #e9e7e9; /* stone-050 */
@@ -201,11 +204,11 @@ body:has(.lp) {
 }
 
 .lp-lede {
-  font-size: 16px;
-  line-height: 1.68;
+  font-size: 17px;
+  line-height: 1.65;
   color: var(--lp-muted);
-  max-width: 62ch;
-  margin: 0 0 8px;
+  max-width: 58ch;
+  margin: 0 0 14px;
 }
 
 .lp-lede strong {
@@ -215,7 +218,7 @@ body:has(.lp) {
 
 .lp-note {
   font-family: var(--lp-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--lp-muted);
   max-width: 78ch;
@@ -374,12 +377,6 @@ body:has(.lp) {
   padding-top: 6px;
 }
 
-/* Small, checkable, boring facts. They do more for an infra reader than an
-   adjective would, and each one is verifiable from the repository. */
-.lp-chips.lp-hero-chips {
-  margin-top: 16px;
-}
-
 /* The README's four trust questions, set as a quiet numbered list under the
    subhead. They frame the page; the sections below answer them. */
 .lp-hero-qs-head {
@@ -412,7 +409,7 @@ body:has(.lp) {
 }
 
 .lp-hero-qs li::before {
-  content: '0' counter(lp-q);
+  content: "0" counter(lp-q);
   font-family: var(--lp-mono);
   font-size: 11px;
   color: var(--lp-state);
@@ -462,7 +459,7 @@ body:has(.lp) {
   color: var(--lp-term-fg);
 }
 
-.lp-term-tab[aria-selected='true'] {
+.lp-term-tab[aria-selected="true"] {
   color: var(--lp-term-fg);
   border-bottom-color: var(--lp-term-accent);
 }
@@ -547,8 +544,8 @@ body:has(.lp) {
 }
 
 .lp-slab p {
-  font-size: 13.5px;
-  line-height: 1.62;
+  font-size: 14.5px;
+  line-height: 1.6;
   color: var(--lp-muted);
   margin: 0;
 }
@@ -572,10 +569,10 @@ body:has(.lp) {
 }
 
 .lp-points li {
-  font-size: 13.5px;
-  line-height: 1.6;
+  font-size: 14.5px;
+  line-height: 1.55;
   color: var(--lp-muted);
-  margin: 0 0 9px;
+  margin: 0 0 12px;
 }
 
 .lp-points strong {
@@ -730,29 +727,10 @@ body:has(.lp) {
 }
 
 .lp-prim p {
-  font-size: 14px;
-  line-height: 1.62;
+  font-size: 15px;
+  line-height: 1.6;
   color: var(--lp-muted);
   margin: 0 0 14px;
-}
-
-.lp-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.lp-chips li {
-  font-family: var(--lp-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.02em;
-  color: var(--lp-muted);
-  border: 1px solid var(--lp-line);
-  border-radius: 999px;
-  padding: 2px 9px;
 }
 
 /* ---------------------------------------------------------- decision box --- */
@@ -853,7 +831,7 @@ body:has(.lp) {
 
 .lp-caption {
   font-family: var(--lp-mono);
-  font-size: 11px;
+  font-size: 11.5px;
   line-height: 1.6;
   color: var(--lp-muted);
   margin: 14px 0 0;
@@ -1099,11 +1077,6 @@ body:has(.lp) {
     grid-template-columns: 1fr;
   }
   .lp-nav-links a:not(.lp-btn) {
-    display: none;
-  }
-  /* The toggle costs the nav 84px, which is what pushed the wordmark onto a
-     second line. The logomark alone still reads as the brand. */
-  .lp-nav-brand span {
     display: none;
   }
   .lp-ghost {
