@@ -14,7 +14,7 @@ export const OWASP: readonly (readonly [
     "ASI01",
     "Agent Goal Hijack",
     "partial",
-    "No goal-lock or plan-divergence detection; meta tools bypass the gate.",
+    "No goal-lock or plan-divergence detection.",
   ],
   [
     "ASI02",

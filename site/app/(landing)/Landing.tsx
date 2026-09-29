@@ -314,7 +314,7 @@ const EVERYTHING = [
   },
   {
     title: "Channels",
-    body: "Slack, the browser, the CLI and GitHub, plus signed webhooks, scheduled runs and sub-agent conversations. Transports are pluggable, so you can add your own.",
+    body: "Slack, the browser, the CLI and GitHub, plus signed webhooks and scheduled runs. Transports are pluggable, so you can add your own.",
   },
   {
     title: "Memory and knowledge graph",
@@ -325,8 +325,8 @@ const EVERYTHING = [
     body: "Every core component ships built in and can be replaced with one you already run.",
   },
   {
-    title: "Nothing phones home",
-    body: "The runtime only calls the providers, servers and hosts you configure.",
+    title: "Under your control",
+    body: "OAP runs inside a cluster you operate. Your team owns its network, access and upgrades.",
   },
 ];
 
@@ -711,8 +711,15 @@ export function Landing() {
           </p>
         </div>
         <p className="lp-note">
-          OWASP materials are used under CC BY-SA 4.0. Not affiliated with or
-          endorsed by OWASP.
+          Based on the{" "}
+          <a href="https://genai.owasp.org">
+            OWASP Top 10 for Agentic Applications (2026)
+          </a>{" "}
+          by the OWASP GenAI Security Project, licensed under{" "}
+          <a href="https://creativecommons.org/licenses/by-sa/4.0/">
+            CC BY-SA 4.0
+          </a>
+          . This assessment is not affiliated with or endorsed by OWASP.
         </p>
       </section>
 

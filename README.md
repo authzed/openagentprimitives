@@ -192,9 +192,8 @@ On first launch, pick a model provider, enter its API key, and set a local admin
 password. OAP provisions the VM, configures the platform, and installs a demo
 agent.
 
-Desktop is single-player: good for trying OAP, developing and demoing agents, or
-running production agents one person owns and operates. Use Kubernetes when
-agents need a shared environment.
+Desktop is single-player: good for trying OAP and for developing and demoing
+agents. Use Kubernetes for anything durable or shared.
 
 **Local Kubernetes** installs onto a `kind` cluster for development:
 
@@ -339,6 +338,9 @@ OAP agent. It has broad freedom inside its temporary workshop and no authority
 outside it.
 
 ## Read the docs
+
+The docs are at [openap.org/docs](https://openap.org/docs). To run them locally
+instead:
 
 ```bash
 cd site
