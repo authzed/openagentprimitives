@@ -1384,8 +1384,8 @@ func (Audit) All() error {
 	return auditGenerator().All(context.Background())
 }
 
-// Recent audits only the code changed vs AUDIT_DIFF_BASE (default master):
-// `git diff master...HEAD`. A no-op when that diff is empty. Writes
+// Recent audits only the code changed vs AUDIT_DIFF_BASE (default main):
+// `git diff main...HEAD`. A no-op when that diff is empty. Writes
 // docs/audits/<date>-recent-audit.md. Good for a pre-merge pass on a branch.
 func (Audit) Recent() error {
 	return auditGenerator().Recent(context.Background())

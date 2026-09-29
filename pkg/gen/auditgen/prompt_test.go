@@ -44,8 +44,8 @@ func TestAuditPrompt_ScopeDescription(t *testing.T) {
 		},
 		{
 			name:       "recent scope embeds the diff",
-			target:     Target{Scope: ScopeRecent, Slug: "recent", Date: "2026-07-15", Diff: "DIFF-SENTINEL-42", DiffBase: "master"},
-			contains:   []string{"```diff", "DIFF-SENTINEL-42", "master...HEAD"},
+			target:     Target{Scope: ScopeRecent, Slug: "recent", Date: "2026-07-15", Diff: "DIFF-SENTINEL-42", DiffBase: "main"},
+			contains:   []string{"```diff", "DIFF-SENTINEL-42", "main...HEAD"},
 			notContain: []string{"WHOLE repository"},
 		},
 		{

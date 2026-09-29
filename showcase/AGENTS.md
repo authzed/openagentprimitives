@@ -102,9 +102,9 @@ control makes, never to a fabricated state.
 ## Commit & merge discipline
 
 - Commit in focused chunks; keep the gate green per commit.
-- The showcase branch merges to **local master** as clean `--no-ff` merges run
-  in the main checkout (master diverges, so it's a merge, not a fast-forward).
-  Local only — do **not** push to origin unless asked.
+- The showcase branch merges to **local main** as clean `--no-ff` merges run in
+  the main checkout (main diverges, so it's a merge, not a fast-forward). Local
+  only — do **not** push to origin unless asked.
 - Never `git stash` (repo-wide rule); never touch the main checkout's
   uncommitted work — the merges are on disjoint paths and must leave it
   untouched.

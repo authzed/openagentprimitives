@@ -513,7 +513,7 @@ func TestBackend_QueryLimit(t *testing.T) {
 }
 
 // TestBackend_QueryAllScopes covers Part 2 (not in the original task brief,
-// added because master grew memory.Backend.QueryAllScopes after this task
+// added because main grew memory.Backend.QueryAllScopes after this task
 // was planned): seeds entries across TWO scope_ids under the same
 // ScopeKind and confirms the cross-scope query spans both, honoring
 // OrderDesc + Limit/Offset. Mirrors postgres's

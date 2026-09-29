@@ -626,7 +626,7 @@ invisible in the mode everyone tests.** See
 
 ## Ship gate: all three test suites must pass before anything merges
 
-**Nothing ships — no merge to `master`, no push, no "done" — until all three
+**Nothing ships — no merge to `main`, no push, no "done" — until all three
 suites are green:**
 
 ```bash
@@ -810,7 +810,7 @@ false confidence. The integration and e2e tests are gated behind
 A change can leave the entire e2e suite red — or not even compiling — and the
 default `go test` run stays green.
 
-This is not hypothetical: the owner-derived approver refactor merged to `master`
+This is not hypothetical: the owner-derived approver refactor merged to `main`
 with the whole e2e suite broken (stale `started_by` model, a `pipeline.Authz`
 stub missing new methods, approval scenarios that no longer had a valid
 approver) because only the unit suite was run. Fixing it after the fact cost far
@@ -1030,7 +1030,7 @@ log): here "audit" means _review the code_, not _the append-only ledger_.
 ### What a pass does
 
 1. **Scope the target.** Default is the **whole repo** (`pkg/` + `cmd/`). Narrow
-   it when asked: "recent changes" → `git diff master...HEAD`; one or more named
+   it when asked: "recent changes" → `git diff main...HEAD`; one or more named
    packages → just those. The whole-repo pass is expensive by design — it
    partitions the 330+ leaf packages into subsystem groups and fans out — so use
    the narrowed forms for routine work and reserve the full sweep for a periodic
@@ -1090,13 +1090,13 @@ it):
 
 ```bash
 mage audit:all              # whole repo (pkg/ + internal/ + cmd/)
-mage audit:recent           # git diff master...HEAD (no-op if empty)
+mage audit:recent           # git diff main...HEAD (no-op if empty)
 mage audit:pkg pkg/memory   # a named package/dir
 ```
 
 Env overrides: `AUDIT_DRY_RUN=1` prints the prompt/command without invoking
 Claude; `AUDIT_CLAUDE_MODEL` (default `opus`) and `AUDIT_DIFF_BASE` (default
-`master`) override the model and the "recent" diff base. Or trigger a pass in
+`main`) override the model and the "recent" diff base. Or trigger a pass in
 plain language — "run an audit on `pkg/memory`" — following the steps above.
 
 ### Rules of thumb
