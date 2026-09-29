@@ -8,7 +8,6 @@ import {
 } from "react";
 import { OapMark } from "@/components/OapMark";
 import { SiteFooter } from "@/components/SiteFooter";
-import { Wordmark } from "@/components/Wordmark";
 import { OWASP } from "./owasp";
 
 /* Every outbound URL the page needs that does not yet exist. Kept in one object
@@ -468,7 +467,6 @@ export function Landing() {
       {/* ------------------------------------------------------------ hero --- */}
       <header className="lp-hero">
         <div>
-          <Wordmark className="lp-hero-mark" />
           <h1>
             A secure way to run <em>enterprise AI agents</em>.
           </h1>
@@ -489,14 +487,10 @@ export function Landing() {
             ))}
           </ol>
           <p className="lp-hero-qs-foot">
-            OAP answers each one in the platform, before the agent acts.{" "}
-            <a href="#compare">See how &rarr;</a>
+            OAP answers each one in the platform, before the agent acts.
           </p>
           <div className="lp-hero-cta">
-            <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
-              Get started
-            </a>
-            <a className="lp-btn lp-btn--ghost" href="#secure">
+            <a className="lp-btn lp-btn--primary" href="#secure">
               How it stays secure
             </a>
           </div>
@@ -531,7 +525,7 @@ export function Landing() {
           </strong>
         </p>
 
-        <div className="lp-compare-wrap" id="compare">
+        <div className="lp-compare-wrap">
           <table className="lp-compare">
             <thead>
               <tr>

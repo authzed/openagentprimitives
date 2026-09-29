@@ -231,7 +231,7 @@ body:has(.lp) {
 }
 
 .lp-nav-brand svg {
-  height: 20px;
+  height: 28px;
   width: auto;
 }
 
@@ -312,15 +312,6 @@ body:has(.lp) {
   }
 }
 
-/* The full wordmark names the project once, in the hero; the nav carries only
-   the logomark. Display is left to components/wordmark.css, which shows one
-   ink per theme. */
-.lp-hero-mark {
-  width: min(400px, 100%);
-  height: auto;
-  margin-bottom: 36px;
-}
-
 .lp-hero h1 {
   font-size: clamp(40px, 5.4vw, 66px);
   font-weight: 300;
@@ -374,31 +365,14 @@ body:has(.lp) {
   max-width: 60ch;
 }
 
-/* Resolves the four questions: the answer is the comparison table in the next
-   section, which takes them row by row. */
+/* Closes the four questions; the comparison table in the next section answers
+   them row by row. */
 .lp-hero-qs-foot {
   font-size: 15px;
   line-height: 1.55;
   color: var(--lp-fg);
   max-width: 60ch;
   margin: 0 0 30px;
-}
-
-.lp-hero-qs-foot a {
-  color: var(--lp-heading);
-  font-weight: 500;
-  text-decoration: none;
-  border-bottom: 1px solid var(--lp-line);
-  white-space: nowrap;
-}
-
-.lp-hero-qs-foot a:hover {
-  border-bottom-color: var(--lp-link);
-}
-
-/* A jump to the table lands with breathing room above it. */
-#compare {
-  scroll-margin-top: 24px;
 }
 
 .lp-hero-qs li {
