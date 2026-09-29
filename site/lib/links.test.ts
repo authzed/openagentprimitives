@@ -20,14 +20,23 @@ describe("linkKind", () => {
 
 describe("extractDocLinks", () => {
   it("finds markdown and JSX doc links, with and without anchors", () => {
-    const src = 'See [a](/docs/a) and [b](/docs/b#x). <a href="/docs/c">c</a> [old](#/d)';
-    expect(extractDocLinks(src)).toEqual(["/docs/a", "/docs/b#x", "/docs/c", "#/d"]);
+    const src =
+      'See [a](/docs/a) and [b](/docs/b#x). <a href="/docs/c">c</a> [old](#/d)';
+    expect(extractDocLinks(src)).toEqual([
+      "/docs/a",
+      "/docs/b#x",
+      "/docs/c",
+      "#/d",
+    ]);
   });
   it("skips external links, same-page anchors, and mailto", () => {
-    expect(extractDocLinks("[e](https://x.io/docs/a) [h](#top) [m](mailto:a@b.c)")).toEqual([]);
+    expect(
+      extractDocLinks("[e](https://x.io/docs/a) [h](#top) [m](mailto:a@b.c)"),
+    ).toEqual([]);
   });
   it("ignores links inside fenced code blocks and inline code", () => {
-    const src = "```\n[a](/docs/nope)\n```\nand `[b](#/nope)` but [c](/docs/yes)";
+    const src =
+      "```\n[a](/docs/nope)\n```\nand `[b](#/nope)` but [c](/docs/yes)";
     expect(extractDocLinks(src)).toEqual(["/docs/yes"]);
   });
   it("finds object-literal href fields", () => {
@@ -38,7 +47,9 @@ describe("extractDocLinks", () => {
 
 describe("anchorIds", () => {
   it("collects id attributes", () => {
-    expect(anchorIds('<h3 id="asi01">x</h3> <span id="b" />')).toEqual(new Set(["asi01", "b"]));
+    expect(anchorIds('<h3 id="asi01">x</h3> <span id="b" />')).toEqual(
+      new Set(["asi01", "b"]),
+    );
   });
 });
 

@@ -341,9 +341,9 @@ outside it.
 ## Read the docs
 
 ```bash
-cd showcase
+cd site
 pnpm install
-pnpm docs:dev
+pnpm dev
 ```
 
 Then open [http://localhost:5179](http://localhost:5179) for installation

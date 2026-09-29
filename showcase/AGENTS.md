@@ -9,39 +9,22 @@ Directions for an agent extending the OAP docs + demo system. Read
   outside Go's `./...` walk. Run `pnpm` commands from **`showcase/`**.
 - The generators it depends on are Go, under `pkg/gen/` in the repo, driven by
   `mage` from the **repo root**.
-- Every doc page is one `*.mdx` in `docs/guides/`. Its `export const meta` block
-  (`section`, `group`, `order`) drives the two-level sidebar; the body is MDX
-  with `<Clip>`, `<Screenshot>`, `<Callout>`, `<Coverage>` components.
+- The docs + landing site that renders this media lives at
+  [`site/`](../site/AGENTS.md) — a separate pnpm project. Doc-page authoring,
+  the CLI/CRD reference recipe, and the docs validation gate live in
+  `site/AGENTS.md`, not here.
 
 ## The gate — run before you call anything done
 
 ```bash
 pnpm typecheck
-pnpm exec vite build --config vite.docs.config.ts     # every MDX must parse
-pnpm docs:check                                        # media/refs resolve + exist
 pnpm test                                              # vitest
-# dead cross-links (check.ts does NOT catch #/… links):
-cd docs/guides && for t in $(grep -rhoE '#/[a-z0-9-]+' *.mdx | sed 's#/##;s/^#//' | sort -u); do \
-  ls "$t.mdx" >/dev/null 2>&1 || echo "DEAD #/$t"; done
 ```
 
 If you touched Go (a generator), also `go build ./...`, `go vet ./pkg/gen/...`,
 and `go test ./pkg/gen/<pkg>/` from the repo root.
 
 ## Recipes
-
-### Add or edit a doc page
-
-1. Create `docs/guides/<slug>.mdx` with a `meta` block. Pick `section` + `group`
-   - `order` so it lands where you want — the nav orders sections and groups by
-     their lowest child `order`. Existing bands: Guides `10–290` (Get started,
-     Concepts, Admin console, Operations, Security), Reference `2010–3320` (the
-     7 primitives, then CLI, then CRD reference).
-2. Cross-link with `[text](#/other-slug)` (hash routes; no dead-link check in
-   CI, so run the scan above).
-3. Match the house voice — a `doc-lede` paragraph, then `##` sections, a
-   security `<Callout>` where relevant. Ground claims in code; don't invent
-   behavior.
 
 ### Add a Slack demo
 
@@ -55,19 +38,14 @@ and `go test ./pkg/gen/<pkg>/` from the repo root.
 4. Render:
    `SIM_PORT=5178 node engine/capture/clip.mjs <name> out/clips/<name> dark 1600x900`
    (and/or `still.mjs <name> <beat> …` for a caption-free still).
-5. Copy to `docs/public/media/`, add a `_manifest.json` entry, reference it.
+5. Copy to `site/public/media/`, add a `site/content/_manifest.json` entry,
+   reference it from a guide (see [`site/AGENTS.md`](../site/AGENTS.md)).
 
 ### Add a console demo
 
 Same shape in `demos/consolesim/src/scenarios/`, but a beat's `run` is **async**
 and drives a `TermControl` (`type`, `line`, `prompt`, …) — animated typing +
 ANSI color via `term/ansi.ts`. Serve on `:5180`, capture with `SIM_PORT=5180`.
-
-### Regenerate the CLI / CRD reference
-
-Never hand-edit `docs/guides/oap-*.mdx` or `crd-*.mdx`. From the repo root:
-`mage docs:cli` / `mage docs:crd`. If the CRD schemas are stale, `mage gen:api`
-first. Read the diff before committing.
 
 ### Regenerate Block Kit fixtures
 
@@ -115,19 +93,11 @@ control makes, never to a fabricated state.
 
 - **`SIM_PORT`** selects the sim server (default 5178 slacksim; 5180
   consolesim). `clip.mjs`/`still.mjs` build the URL from it.
-- **`go test` runs with cwd = the package dir**, so `docs:cli`'s driver needs an
-  **absolute** output path (the mage target handles it) — a relative path writes
-  under `cmd/oap/`.
-- **MDX escaping in generators.** Prose containing `<` or `{` must be entity-
-  escaped (`mdxutil.EscapeMDX`); usages/flags/paths go in code spans/fences,
-  which MDX takes literally — never escape those.
 - **consolesim beats are async** — `window.__showcaseStory.run(i)` returns a
   promise so `page.evaluate` awaits the whole typing animation. Keep them async.
 - **Empty-state captures.** A minimal cluster yields empty admin sections;
   that's honest but thin. Re-capture on a populated cluster when one's available
   — the scripts are deterministic, so stills swap in with no doc changes.
-- **`docs:check` ≠ dead-link check.** It validates media/refs, not `#/…` links.
-  Run the scan in the gate.
 
 ## Commit & merge discipline
 

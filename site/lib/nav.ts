@@ -19,7 +19,10 @@ export interface Guide {
   description?: string;
 }
 
-export function normalizeGuide(slug: string, meta: GuideMeta | undefined): Guide {
+export function normalizeGuide(
+  slug: string,
+  meta: GuideMeta | undefined,
+): Guide {
   return {
     slug,
     title: meta?.title ?? slug,
@@ -31,7 +34,9 @@ export function normalizeGuide(slug: string, meta: GuideMeta | undefined): Guide
 }
 
 export function sortGuides(guides: Guide[]): Guide[] {
-  return [...guides].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
+  return [...guides].sort(
+    (a, b) => a.order - b.order || a.title.localeCompare(b.title),
+  );
 }
 
 // A nav block is one rendered unit: a single ungrouped guide, or a titled group.
@@ -49,7 +54,10 @@ export interface NavSection {
 }
 
 export function buildNav(sorted: Guide[]): NavSection[] {
-  const sections = new Map<string, { blocks: NavBlock[]; byGroup: Map<string, NavBlock> }>();
+  const sections = new Map<
+    string,
+    { blocks: NavBlock[]; byGroup: Map<string, NavBlock> }
+  >();
   for (const guide of sorted) {
     let s = sections.get(guide.section);
     if (!s) {

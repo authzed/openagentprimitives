@@ -12,7 +12,9 @@ describe("toPath", () => {
 
 describe("loadPagefind", () => {
   it("returns null when the bundle is missing (next dev)", async () => {
-    expect(await loadPagefind(() => Promise.reject(new Error("404")))).toBeNull();
+    expect(
+      await loadPagefind(() => Promise.reject(new Error("404"))),
+    ).toBeNull();
   });
   it("returns the module when the import succeeds", async () => {
     const pf = { search: async () => ({ results: [] }) };

@@ -15,16 +15,22 @@ interface GuideModule {
 }
 
 export const guideSlugs = cache(async (): Promise<string[]> =>
-  (await readdir(GUIDES_DIR)).filter((f) => f.endsWith(".mdx")).map((f) => f.slice(0, -".mdx".length)),
+  (await readdir(GUIDES_DIR))
+    .filter((f) => f.endsWith(".mdx"))
+    .map((f) => f.slice(0, -".mdx".length)),
 );
 
-export async function loadGuide(slug: string): Promise<{ Component: ComponentType; guide: Guide }> {
+export async function loadGuide(
+  slug: string,
+): Promise<{ Component: ComponentType; guide: Guide }> {
   const mod = (await import(`@/content/docs/${slug}.mdx`)) as GuideModule;
   return { Component: mod.default, guide: normalizeGuide(slug, mod.meta) };
 }
 
 export const allGuides = cache(async (): Promise<Guide[]> => {
   const slugs = await guideSlugs();
-  const guides = await Promise.all(slugs.map(async (slug) => (await loadGuide(slug)).guide));
+  const guides = await Promise.all(
+    slugs.map(async (slug) => (await loadGuide(slug)).guide),
+  );
   return sortGuides(guides);
 });

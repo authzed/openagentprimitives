@@ -868,8 +868,8 @@ body:has(.lp) {
   width: 1%;
 }
 
-/* The ids deep-link into the guide's own per-item anchors, which the docs hash
-   router resolves as `#/<slug>#<anchor>`. */
+/* The ids deep-link into the guide's own per-item anchors, resolved at
+   `/docs/<slug>#<anchor>`. */
 .lp-owasp td.lp-id a {
   color: var(--lp-muted);
   text-decoration: none;

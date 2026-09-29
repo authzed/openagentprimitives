@@ -1,9 +1,17 @@
 "use client";
 import Link from "next/link";
 import { useRef, useState } from "react";
-import { loadPagefind, toPath, type Pagefind, type PagefindResult } from "@/lib/pagefind";
+import {
+  loadPagefind,
+  toPath,
+  type Pagefind,
+  type PagefindResult,
+} from "@/lib/pagefind";
 
-type State = { kind: "idle" } | { kind: "unavailable" } | { kind: "results"; items: PagefindResult[] };
+type State =
+  | { kind: "idle" }
+  | { kind: "unavailable" }
+  | { kind: "results"; items: PagefindResult[] };
 
 export function Search() {
   const pf = useRef<Pagefind | null | undefined>(undefined);
@@ -48,7 +56,9 @@ export function Search() {
       )}
       {state.kind === "results" && (
         <ul className="doc-search-results">
-          {state.items.length === 0 && <li className="doc-search-note">No matches.</li>}
+          {state.items.length === 0 && (
+            <li className="doc-search-note">No matches.</li>
+          )}
           {state.items.map((r) => (
             <li key={r.url}>
               <Link href={toPath(r.url)}>{r.meta.title ?? toPath(r.url)}</Link>

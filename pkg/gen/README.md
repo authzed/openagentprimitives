@@ -12,8 +12,8 @@ involved — that walk the live cobra tree and the CRD schemas.
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | [`auditgen`](auditgen/)     | The audit pass behind `mage audit:*`: the canonical lens list, the prompt, and the run orchestration.                                |
 | [`claudeexec`](claudeexec/) | The shared headless-`claude` invocation contract — argv, exec, and the `RunFunc`/`DiffFunc` seams a claude-driven generator injects. |
-| [`clidocs`](clidocs/)       | `mage docs:cli`: regenerates the showcase docs' CLI reference from the live cobra tree.                                              |
-| [`crddocs`](crddocs/)       | `mage docs:crd`: regenerates the showcase docs' CRD reference from `config/crds`.                                                    |
+| [`clidocs`](clidocs/)       | `mage docs:cli`: regenerates the docs site's CLI reference from the live cobra tree, into `site/content/docs`.                       |
+| [`crddocs`](crddocs/)       | `mage docs:crd`: regenerates the docs site's CRD reference from `config/crds`, into `site/content/docs`.                             |
 
 ## Boundary
 

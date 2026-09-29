@@ -348,9 +348,10 @@ mage manifests  # always after gen:api, OR after any config/ edit
 
 ## Documentation regeneration
 
-`mage docs:cli` and `mage docs:crd` regenerate the showcase docs site's
-reference pages — one from the live cobra tree, one from the CRD schemas under
-`config/crds`. Both are plain deterministic generators; neither invokes an LLM.
+`mage docs:cli` and `mage docs:crd` regenerate the docs site's reference pages —
+one from the live cobra tree, one from the CRD schemas under `config/crds` —
+writing into `site/content/docs`. Both are plain deterministic generators;
+neither invokes an LLM.
 
 `PRIMITIVES.md` (repo root) and `docs/owasp-agentic-top10-coverage.html` are
 both hand-maintained: update them by hand when a primitive's code moves or the

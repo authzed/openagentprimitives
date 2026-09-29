@@ -125,15 +125,32 @@ for (const file of refFiles) {
 // 4: every /docs link names a guide, and every #anchor names an id in it. The
 // landing page is plain TSX, so it is scanned the same way; a templated href
 // (the OWASP table) cannot be, and is covered by app/(landing)/owasp.test.ts.
-const guideSources = new Map(mdxFiles.map((f) => [f.slice(0, -4), readFileSync(path.join(guidesDir, f), "utf8")]));
-const guideAnchors = new Map([...guideSources].map(([slug, src]) => [slug, anchorIds(src)]));
+const guideSources = new Map(
+  mdxFiles.map((f) => [
+    f.slice(0, -4),
+    readFileSync(path.join(guidesDir, f), "utf8"),
+  ]),
+);
+const guideAnchors = new Map(
+  [...guideSources].map(([slug, src]) => [slug, anchorIds(src)]),
+);
 const linkFiles = [
-  ...[...guideSources].map(([slug, src]) => ({ file: `content/docs/${slug}.mdx`, src })),
-  ...readdirSync(path.join(siteDir, "app"), { recursive: true, encoding: "utf8" })
+  ...[...guideSources].map(([slug, src]) => ({
+    file: `content/docs/${slug}.mdx`,
+    src,
+  })),
+  ...readdirSync(path.join(siteDir, "app"), {
+    recursive: true,
+    encoding: "utf8",
+  })
     .filter((f) => f.endsWith(".tsx"))
-    .map((f) => ({ file: `app/${f}`, src: readFileSync(path.join(siteDir, "app", f), "utf8") })),
+    .map((f) => ({
+      file: `app/${f}`,
+      src: readFileSync(path.join(siteDir, "app", f), "utf8"),
+    })),
 ];
-for (const p of checkLinks(linkFiles, guideAnchors)) err(`${p.file}: ${p.href}: ${p.reason}`);
+for (const p of checkLinks(linkFiles, guideAnchors))
+  err(`${p.file}: ${p.href}: ${p.reason}`);
 
 if (errors.length) {
   console.error(`check FAILED with ${errors.length} problem(s):`);

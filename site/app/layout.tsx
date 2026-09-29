@@ -13,8 +13,16 @@ export const metadata: Metadata = {
   // follows the OS scheme rather than the site's toggle.
   icons: {
     icon: [
-      { url: iconDarkInk.src, type: "image/svg+xml", media: "(prefers-color-scheme: light)" },
-      { url: iconLightInk.src, type: "image/svg+xml", media: "(prefers-color-scheme: dark)" },
+      {
+        url: iconDarkInk.src,
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: iconLightInk.src,
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: dark)",
+      },
     ],
   },
 };
@@ -33,7 +41,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     // element whose attributes are allowed to differ from the server render.
     <html lang="en" suppressHydrationWarning>
       <body>
-        <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem disableTransitionOnChange>
+        <ThemeProvider
+          attribute="data-theme"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
           {children}
           <Analytics />
         </ThemeProvider>

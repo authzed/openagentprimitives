@@ -8,8 +8,16 @@ import darkInk from "../../docs/assets/brand/oap-wordmark-dark.svg";
 export function Wordmark({ className = "" }: { className?: string }) {
   return (
     <>
-      <img className={`${className} wordmark--on-dark`} src={lightInk.src} alt="" />
-      <img className={`${className} wordmark--on-light`} src={darkInk.src} alt="" />
+      <img
+        className={`${className} wordmark--on-dark`}
+        src={lightInk.src}
+        alt=""
+      />
+      <img
+        className={`${className} wordmark--on-light`}
+        src={darkInk.src}
+        alt=""
+      />
     </>
   );
 }

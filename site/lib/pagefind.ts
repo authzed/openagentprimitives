@@ -8,14 +8,21 @@ export interface PagefindResult {
 }
 
 export interface Pagefind {
-  search(q: string): Promise<{ results: { data(): Promise<PagefindResult> }[] }>;
+  search(
+    q: string,
+  ): Promise<{ results: { data(): Promise<PagefindResult> }[] }>;
 }
 
 const BUNDLE = "/_pagefind/pagefind.js";
 
-const importBundle = () => import(/* webpackIgnore: true */ /* turbopackIgnore: true */ BUNDLE) as Promise<Pagefind>;
+const importBundle = () =>
+  import(
+    /* webpackIgnore: true */ /* turbopackIgnore: true */ BUNDLE
+  ) as Promise<Pagefind>;
 
-export async function loadPagefind(importer: () => Promise<Pagefind> = importBundle): Promise<Pagefind | null> {
+export async function loadPagefind(
+  importer: () => Promise<Pagefind> = importBundle,
+): Promise<Pagefind | null> {
   try {
     return await importer();
   } catch {

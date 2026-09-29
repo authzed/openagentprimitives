@@ -35,5 +35,6 @@ the inlined copies too:
 | `cmd/oap/internal/desktop/setupui/static/index.html`     | The logomark in the desktop setup header, plus the icon                                                                                            |
 | `cmd/oap/internal/desktop/menubaricons/render/tunnel.go` | Not a copy: the menu-bar icons are drawn in code. `menuMarkCutout` carries the menu icon's cut-out; regenerate the PNGs with `mage desktop:icons`. |
 
-The repo README and the showcase docs site (`showcase/docs/app`) reference the
-files here directly.
+The repo README and the docs + landing site (`site/`: the `Wordmark` component,
+the root layout icons, and `app/(landing)/OapMark.tsx`) reference the files here
+directly.

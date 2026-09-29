@@ -22,5 +22,5 @@
       "@slacksim/*": ["demos/slacksim/src/*"]
     }
   },
-  "include": ["demos", "engine", "docs", "vite.slacksim.config.ts", "vite.docs.config.ts", "vitest.setup.ts"]
+  "include": ["demos", "engine", "vite.slacksim.config.ts", "vitest.setup.ts"]
 }

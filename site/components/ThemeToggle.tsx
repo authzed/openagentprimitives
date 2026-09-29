@@ -9,7 +9,7 @@ type Mode = "light" | "dark" | "system";
 // arrow-key navigation, roving focus and the correct grouping semantics for
 // free, and the three options are genuinely mutually exclusive.
 const MODES: { id: Mode; label: string; icon: JSX.Element }[] = [
-    {
+  {
     id: "light",
     label: "Light",
     icon: (

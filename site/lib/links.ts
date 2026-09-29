@@ -4,7 +4,12 @@
 export type LinkKind = "docs" | "external" | "plain";
 
 export function linkKind(href: string): LinkKind {
-  if (href === "/docs" || href.startsWith("/docs/") || href.startsWith("/docs#")) return "docs";
+  if (
+    href === "/docs" ||
+    href.startsWith("/docs/") ||
+    href.startsWith("/docs#")
+  )
+    return "docs";
   if (/^https?:\/\//.test(href)) return "external";
   return "plain";
 }
@@ -26,7 +31,8 @@ export function extractDocLinks(src: string): string[] {
   const out: string[] = [];
   for (const m of stripCode(src).matchAll(LINK_RE)) {
     const href = m[1] ?? m[2] ?? m[3];
-    if (href === "/docs" || href.startsWith("/docs/") || href.startsWith("#/")) out.push(href);
+    if (href === "/docs" || href.startsWith("/docs/") || href.startsWith("#/"))
+      out.push(href);
   }
   return out;
 }
@@ -41,19 +47,27 @@ export interface LinkProblem {
   reason: string;
 }
 
-export function checkLinks(files: { file: string; src: string }[], guides: Map<string, Set<string>>): LinkProblem[] {
+export function checkLinks(
+  files: { file: string; src: string }[],
+  guides: Map<string, Set<string>>,
+): LinkProblem[] {
   const problems: LinkProblem[] = [];
   for (const { file, src } of files) {
     for (const href of extractDocLinks(src)) {
       if (href.startsWith("#/")) {
-        problems.push({ file, href, reason: `hash route; use /docs/${href.slice(2)}` });
+        problems.push({
+          file,
+          href,
+          reason: `hash route; use /docs/${href.slice(2)}`,
+        });
         continue;
       }
       if (href === "/docs" || href === "/docs/") continue;
       const [slug, anchor] = href.slice("/docs/".length).split("#");
       const ids = guides.get(slug);
       if (!ids) problems.push({ file, href, reason: `no guide '${slug}'` });
-      else if (anchor && !ids.has(anchor)) problems.push({ file, href, reason: `no id '${anchor}' in '${slug}'` });
+      else if (anchor && !ids.has(anchor))
+        problems.push({ file, href, reason: `no id '${anchor}' in '${slug}'` });
     }
   }
   return problems;

@@ -20,7 +20,7 @@ const cliDocsDir = "site/content/docs"
 // crdSchemaDir holds the controller-gen CRD YAMLs the CRD reference is built from.
 const crdSchemaDir = "config/crds"
 
-// Crd regenerates the showcase docs' CRD reference (one MDX page per CustomResource
+// Crd regenerates the site's CRD reference (one MDX page per CustomResource
 // kind) from the CRD schemas under config/crds. Unlike Cli it runs in-process — it
 // reads YAML, so it needs no seam into package main. Run `mage gen:api` first if
 // the CRD schemas are stale relative to the *_types.go.
@@ -32,7 +32,7 @@ func (Docs) Crd() error {
 	return nil
 }
 
-// Cli regenerates the showcase docs' CLI reference (one MDX page per `oap`
+// Cli regenerates the site's CLI reference (one MDX page per `oap`
 // command family) from the live cobra tree. The walk lives in pkg/gen/clidocs;
 // it is driven here by the gated TestGenerateCLIReference in cmd/oap, because
 // NewRootCmd is package main and can only be reached from within that package.
