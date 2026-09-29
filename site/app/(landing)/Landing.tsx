@@ -559,8 +559,8 @@ export function Landing() {
           Six concerns every agent has to solve.
         </SectionHead>
         <p className="lp-lede">
-          OAP ships a working implementation of each, and every agent is built
-          from them.
+          OAP ships a working implementation of each. Any agent can be built
+          from them, using only the ones it needs.
         </p>
         <div className="lp-prims">
           {PRIMITIVES.map((p, i) => (
