@@ -19,6 +19,8 @@ TODO
 .claude/
 .worktrees/
 .superpowers/
+# Superpowers design specs and plans: working notes, kept out of the repo.
+docs/superpowers/
 
 # mage desktop:* build outputs (rootfs.img, images-minimal.tar.zst, ap.app)
 # and downloaded upstream artifacts (Ubuntu cloud image, k3s release) — see
