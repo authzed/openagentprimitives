@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { ThemeProvider } from "next-themes";
+import { Analytics } from "@/components/Analytics";
 import iconDarkInk from "../../docs/assets/brand/oap-icon-dark.svg";
 import iconLightInk from "../../docs/assets/brand/oap-icon-light.svg";
 
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem disableTransitionOnChange>
           {children}
+          <Analytics />
         </ThemeProvider>
       </body>
     </html>
