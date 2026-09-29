@@ -119,7 +119,7 @@ body:has(.lp) {
   background: var(--lp-bg);
   color: var(--lp-fg);
   font-family: var(--lp-sans);
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
@@ -204,7 +204,7 @@ body:has(.lp) {
 }
 
 .lp-lede {
-  font-size: 17px;
+  font-size: 18px;
   line-height: 1.65;
   color: var(--lp-muted);
   max-width: 58ch;
@@ -251,7 +251,7 @@ body:has(.lp) {
 }
 
 .lp-nav-brand span {
-  font-size: 13px;
+  font-size: 14px;
   letter-spacing: 0.01em;
 }
 
@@ -266,7 +266,7 @@ body:has(.lp) {
 .lp-nav-links a:not(.lp-btn) {
   color: var(--lp-link);
   text-decoration: none;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .lp-nav-links a:not(.lp-btn):hover {
@@ -284,7 +284,7 @@ body:has(.lp) {
   height: 36px;
   padding: 0 16px;
   border-radius: 999px;
-  font-size: 13.5px;
+  font-size: 14.5px;
   font-weight: 500;
   text-decoration: none;
   border: 1px solid transparent;
@@ -355,7 +355,7 @@ body:has(.lp) {
 }
 
 .lp-hero-sub {
-  font-size: 17px;
+  font-size: 18px;
   line-height: 1.62;
   color: var(--lp-muted);
   max-width: 60ch;
@@ -380,7 +380,7 @@ body:has(.lp) {
 /* The README's four trust questions, set as a quiet numbered list under the
    subhead. They frame the page; the sections below answer them. */
 .lp-hero-qs-head {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--lp-fg);
   margin: 0 0 10px;
 }
@@ -397,7 +397,7 @@ body:has(.lp) {
   counter-increment: lp-q;
   display: grid;
   grid-template-columns: 28px 1fr;
-  font-size: 14.5px;
+  font-size: 15.5px;
   line-height: 1.55;
   color: var(--lp-muted);
   padding: 7px 0;
@@ -535,7 +535,7 @@ body:has(.lp) {
 }
 
 .lp-slab h3 {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 500;
   line-height: 1.25;
   letter-spacing: -0.012em;
@@ -544,7 +544,7 @@ body:has(.lp) {
 }
 
 .lp-slab p {
-  font-size: 14.5px;
+  font-size: 15.5px;
   line-height: 1.6;
   color: var(--lp-muted);
   margin: 0;
@@ -569,7 +569,7 @@ body:has(.lp) {
 }
 
 .lp-points li {
-  font-size: 14.5px;
+  font-size: 15.5px;
   line-height: 1.55;
   color: var(--lp-muted);
   margin: 0 0 12px;
@@ -624,7 +624,7 @@ body:has(.lp) {
 .lp-compare {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 15px;
   background: var(--lp-card);
 }
 
@@ -705,7 +705,7 @@ body:has(.lp) {
 }
 
 .lp-prim h3 {
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 500;
   line-height: 1.2;
   letter-spacing: -0.015em;
@@ -727,7 +727,7 @@ body:has(.lp) {
 }
 
 .lp-prim p {
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.6;
   color: var(--lp-muted);
   margin: 0 0 14px;
@@ -857,7 +857,7 @@ body:has(.lp) {
 }
 
 .lp-evidence p:last-child {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.65;
   color: var(--lp-muted);
   max-width: 88ch;
@@ -874,7 +874,7 @@ body:has(.lp) {
 .lp-owasp {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13.5px;
+  font-size: 14.5px;
 }
 
 .lp-owasp caption {
@@ -943,7 +943,7 @@ body:has(.lp) {
 
 .lp-owasp td.lp-gap {
   color: var(--lp-muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .lp-cov {
@@ -1016,13 +1016,34 @@ body:has(.lp) {
 
 .lp-footer {
   border-top: 1px solid var(--lp-line);
-  padding: 26px 40px 34px;
+  padding: 26px 40px 28px;
+  font-size: 13.5px;
+  color: var(--lp-muted);
+}
+
+.lp-footer-top {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 18px;
-  font-size: 12.5px;
-  color: var(--lp-muted);
+}
+
+/* Credit on the left, the theme toggle on the right: the conventional home
+   for a site-wide preference most visitors never change, since the default
+   follows the system. */
+.lp-footer-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 18px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--lp-line-soft);
+}
+
+.lp-footer-credit {
+  margin: 0;
 }
 
 .lp-footer a {
@@ -1030,7 +1051,7 @@ body:has(.lp) {
   text-decoration: none;
 }
 
-.lp-footer span a {
+.lp-footer-credit a {
   color: var(--lp-fg);
 }
 
@@ -1088,7 +1109,7 @@ body:has(.lp) {
   .lp-compare th,
   .lp-compare td {
     padding: 10px 12px;
-    font-size: 13px;
+    font-size: 14px;
   }
 }
 

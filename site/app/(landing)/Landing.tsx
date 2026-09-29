@@ -815,17 +815,21 @@ export function Landing() {
       </section>
 
       <footer className="lp-footer">
-        <OapMark className="lp-footer-mark" />
-        <a href="/docs/what-is-oap">Docs</a>
-        <a href="/docs/crd-reference">CRD reference</a>
-        <a href="/docs/cli-reference">CLI reference</a>
-        <a href="#owasp">OWASP coverage</a>
-        <a href={TODO.discuss}>Community</a>
-        <span>
-          Built by <a href="https://authzed.com">AuthZed</a>, using{" "}
-          <a href="https://github.com/authzed/spicedb">SpiceDB</a>.
-        </span>
-        <ThemeToggle />
+        <div className="lp-footer-top">
+          <OapMark className="lp-footer-mark" />
+          <a href="/docs/what-is-oap">Docs</a>
+          <a href="/docs/crd-reference">CRD reference</a>
+          <a href="/docs/cli-reference">CLI reference</a>
+          <a href="#owasp">OWASP coverage</a>
+          <a href={TODO.discuss}>Community</a>
+        </div>
+        <div className="lp-footer-bottom">
+          <p className="lp-footer-credit">
+            Built by <a href="https://authzed.com">AuthZed</a>, using{" "}
+            <a href="https://github.com/authzed/spicedb">SpiceDB</a>.
+          </p>
+          <ThemeToggle />
+        </div>
       </footer>
     </div>
   );
