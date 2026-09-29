@@ -2,7 +2,7 @@ export const meta = {
   title: 'oap tools',
   section: 'Reference',
   group: 'CLI',
-  order: 2970,
+  order: 2990,
   description: 'Manage tools used by agents (kind-agnostic)',
 }
 
@@ -24,40 +24,14 @@ Flags:
 
 Open the named tool resource in $EDITOR via kubectl edit
 
-## `oap tools gen [goal]`
+## `oap tools gen`
 
-Generate tool specs from a natural-language goal.
-
-The default path runs an LLM-driven agent (pkg/tools/discover) that picks
-between authoring an MCPServer (for SaaS / remote APIs, with live OAuth +
-JSON-RPC probe) or a sandbox toolspec (for local CLI tools, via the
-catalog-driven authoring loop). The agent confirms each spec with the user
-before writing.
-
-Pass --no-agent to fall back to the legacy deterministic flow:
-gen.Decide picks sandbox vs MCP, then either runs the deterministic
-authoring loop (sandbox) or prints a manual-registration advisory (MCP).
+Opens a session with the agent builder in your browser. The agent builder walks you from an idea to a working, tested agent — it has replaced the old local tool generator.
 
 Flags:
 
 ```text
---allow-nonconvergent  [deterministic path] exit 0 even if tests didn't converge
---apply                [agent path] kubectl apply -f each written spec
---force                [agent path] overwrite existing spec files
---format string        [deterministic path] render format: text|markdown|json (default "text")
---llm-model string     [both paths] override LLM model id
---llm-thinking string  [both paths] thinking level: minimal|low|medium|high
---max-iter int         [agent path] max agent-loop turns (default "30")
---max-iterations int   [deterministic path] max test-convergence-loop iterations (default "3")
---no-agent             use the deterministic legacy wizard / one-shot path instead of the agent
---no-tests             [deterministic path] skip test-case generation + convergence loop
---no-wizard            [deterministic path] force one-shot mode
---output-dir string    [agent path] directory to write specs into (default ".")
---quiet                [deterministic path] suppress progress output
---toolkits string      [both paths] toolkit catalog dir (env TOOLSPEC_TOOLKITS)
---web-search string    [agent path] web search provider: anthropic|fake (default "anthropic")
--i, --interactive      [deterministic path] force interactive wizard
--o, --output string    [deterministic path] Write output to this file instead of stdout
+--no-browser  Print the workshop URL instead of opening a browser
 ```
 
 ## `oap tools get <name>`
