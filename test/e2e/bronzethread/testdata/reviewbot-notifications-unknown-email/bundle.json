@@ -1,0 +1,109 @@
+{
+  "name": "reviewbot-notifications-unknown-email",
+  "description": "A pull request author whose commit email the platform has NEVER seen — no saved preference, no linked account, no record of any kind. The agent follows the commit-email join-key protocol and calls get_preferences with `user: \"email:unlinked-committer@example.com\"`. The email resolver canonicalizes ANY well-formed address into a subject — form, not proof — so before this behavior existed the read answered a 200 defaults snapshot that is byte-for-byte identical to \"this author saved nothing\", and the agent acted on nobody's policy while believing it read the author's (mention on problems, because the default is on_problems). What this bundle pins: the TOOL RESULT is an ERROR — the server refuses (422, unknown subject) rather than defaulting — and the agent treats the error exactly as the class contract says (\"the user could not be identified at all — treat exactly like never\"): the delivered review opens with the author's plain login, never a mention token. Asserted on the tool result, not the reply text, because a scripted transcript says the same words whether the read errored or silently defaulted — lastToolResultIsError is the only assertion that distinguishes the fixed server from the buggy one.\n\nNo seeds, deliberately: seedUserPreferences would make the subject known (defeating the scenario), and the sole_user edge is absent because an author with NO platform linkage at all is exactly the author whose commit email nobody can vouch for.",
+
+  "agentDir": "testdata/agent-reviewbot",
+  "agentClass": "demo-reviewbot",
+
+  "trigger": {
+    "channel": "demo-reviewbot-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#4",
+    "headSHA": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+    "statusName": "demo-reviewbot"
+  },
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Pull request demo-org/demo-repo#4 was opened",
+        "toolOffered": "claim_trigger_status"
+      },
+      "reply": [{ "toolUse": { "name": "claim_trigger_status", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "claim_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"already_concluded\":false",
+        "toolOffered": "get_preferences"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "get_preferences",
+            "args": { "user": "email:unlinked-committer@example.com" }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "get_preferences",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "could not resolve user-ref \"email:unlinked-committer@example.com\" to a platform user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Reviewed PR #4 \"Update README.md\" (demo-org/demo-repo) for demo-contributor.\n\nDocumentation-only change (+3/-1 lines in README.md); no code, config, or tests touched. No security, correctness, or logic issues. Safe to merge as-is.\n\n(demo-contributor could not be identified as a platform user from their commit email, so this note names them by login rather than pinging them.)"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user", "lastToolResultIsError": false },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "conclude_trigger_status",
+            "args": {
+              "outcome": "clean",
+              "summary": "Docs-only change to README.md (+3/-1), no code/config/tests touched. No security or correctness issues. Safe to merge."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "conclude_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "recorded on the GitHub check run on demo-org/demo-repo#4: clean"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Reviewed demo-org/demo-repo#4 (docs-only README.md change). No issues found. The author's commit email is unknown to the platform, so the preference read errored and was treated as never: delivered without a mention. Concluded the check run as clean."
+            }
+          }
+        }
+      ]
+    }
+  ],
+
+  "assert": {
+    "toolsCalled": ["get_preferences"],
+    "approvalPrompts": 0,
+    "triggerStatus": {
+      "status": "completed",
+      "conclusion": "success",
+      "externalID": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+      "creates": 1,
+      "updates": 1
+    },
+    "channel": {
+      "postCount": 2,
+      "postsContain": [
+        "Picked up pull request demo-org/demo-repo#4",
+        "demo-contributor"
+      ]
+    }
+  }
+}

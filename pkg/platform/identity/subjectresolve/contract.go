@@ -40,6 +40,16 @@ type RelationReader interface {
 type Resolution struct {
 	// Subject is the bare canonical user id; empty when unresolved.
 	Subject string
+	// SubjectProven reports whether the resolver VOUCHES that the platform
+	// links Subject to the reference — true only for a resolution backed by a
+	// linkage authority (a resource's sole_user relation, trigger-author's
+	// recursion into one). The email resolver leaves it false: it
+	// canonicalizes any well-formed address into a subject in FORM only, with
+	// nothing behind it, so a consumer must apply its own existence bar
+	// before treating an unproven subject as a real platform user. The zero
+	// value is unproven on purpose — a future resolver that forgets to claim
+	// proof gets the stricter treatment, not the looser one.
+	SubjectProven bool
 	// Reason says why resolution failed, in words an agent may relay.
 	Reason string
 }

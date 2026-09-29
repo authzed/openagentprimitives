@@ -31,9 +31,16 @@ const (
 	OutcomeOK = "ok"
 	// OutcomeUnresolved: the reference did not resolve (unknown form, no
 	// linked platform user, resolution unavailable on this cluster); the
-	// class-visible DEFAULTS were returned with no user layer. Reason says
-	// why, in the resolver's own bounded words.
+	// request answered 422 and disclosed nothing beyond the schema. Reason
+	// says why, in the resolver's own bounded words.
 	OutcomeUnresolved = "unresolved"
+	// OutcomeUnknownSubject: the reference resolved in FORM only (an email
+	// canonicalizes to a subject unconditionally) and the platform has no
+	// record of that subject, so the request answered 422 exactly like an
+	// unresolved reference. ResolvedSubject IS populated — whom the attempt
+	// was about is known and belongs in the record — which is what
+	// distinguishes this token from OutcomeUnresolved in a forensic query.
+	OutcomeUnknownSubject = "unknown-subject"
 	// OutcomeResolverError: subjectresolve.Resolve itself faulted (a SpiceDB
 	// read error, a session-annotation read error); the request answered
 	// 502 and disclosed nothing. Reason carries the bounded fault text.
@@ -60,8 +67,9 @@ type Content struct {
 	// ResolvedSubject is the canonical user id the reference resolved to;
 	// empty when resolution did not (or could not yet) produce one. It IS
 	// populated on the post-resolution fault outcomes (user-scope-error,
-	// query-error): the subject was known by then, and "whom the attempt
-	// was about" is the fact the trail exists to carry.
+	// query-error) AND on unknown-subject: the subject was known by then,
+	// and "whom the attempt was about" is the fact the trail exists to
+	// carry.
 	ResolvedSubject string `json:"resolvedSubject,omitempty"`
 	// Outcome is one of the canonical Outcome* tokens above.
 	Outcome string `json:"outcome"`

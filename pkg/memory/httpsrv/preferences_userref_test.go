@@ -246,16 +246,95 @@ func TestPreferencesGetUserRef_NilRelations_ResourceRef_UnresolvedNotAPanic(t *t
 // TestPreferencesGetUserRef_EmailStillWorksWithNilRelations proves the
 // email-form resolver needs no RelationReader at all, so the SAME handler
 // that cannot resolve a resource reference (previous test) still resolves
-// an email one.
+// an email one — for a subject the platform has a record of (here, a saved
+// value). An email with NO platform record errs instead; that half is
+// TestPreferencesGetUserRef_EmailUnknownUser_Error's.
 func TestPreferencesGetUserRef_EmailStillWorksWithNilRelations(t *testing.T) {
 	class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
 	sess := buildSession(prefsNS, prefsSession, prefsClass)
-	srv, _ := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess)
+	srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess)
+	subject := mustCanonicalEmail(t, "alice@example.com")
+	putUserPreference(t, mem, subject, prefsNS, prefsClass, "language", json.RawMessage(`"de"`))
 
 	resp, snap := getPreferencesForUserRef(t, srv, prefsNS, prefsSession, "email:alice@example.com", prefsToken)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, mustCanonicalEmail(t, "alice@example.com"), snap.Subject)
+	assert.Equal(t, subject, snap.Subject)
+}
+
+// TestPreferencesGetUserRef_EmailUnknownUser_Error proves an email-form
+// reference is held to the same "resolved means a platform user" bar as every
+// other form. The email resolver canonicalizes ANY well-formed address into a
+// subject — form, not proof — so a subject the platform has no record of must
+// be an ERROR, exactly like an unresolvable resource ref, never a 200
+// carrying class defaults: a defaults snapshot for an unknown address is
+// byte-for-byte identical to "this user saved nothing", which is how an agent
+// joining on a commit email the platform never saw silently acts on nobody's
+// policy while believing it read the author's.
+func TestPreferencesGetUserRef_EmailUnknownUser_Error(t *testing.T) {
+	class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
+	sess := buildSession(prefsNS, prefsSession, prefsClass)
+	srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess)
+
+	resp, _ := getPreferencesForUserRef(t, srv, prefsNS, prefsSession, "email:nobody@example.com", prefsToken)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode,
+		"an email the platform has no record of must be an error, not a 200 carrying class defaults")
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, strings.ToLower(string(body)), "resolve",
+		"the error body must explain the ref could not be resolved to a platform user")
+
+	entries := listAudit(t, mem)
+	require.Len(t, entries, 1, "the refused attempt must still be audited")
+	assert.Equal(t, "email:nobody@example.com", entries[0].Ref)
+	assert.Equal(t, preferenceaccess.OutcomeUnknownSubject, entries[0].Outcome)
+	assert.Equal(t, mustCanonicalEmail(t, "nobody@example.com"), entries[0].ResolvedSubject,
+		"a canonical id WAS derived before the refusal; whom the attempt was about belongs in the record")
+	assert.NotEmpty(t, entries[0].Reason)
+	assert.Equal(t, []string{"language"}, entries[0].Keys,
+		"the record still names the class-visible keys the attempt considered")
+}
+
+// TestPreferencesGetUserRef_EmailKnownThroughAnotherClass_StillResolves pins
+// the existence bar at "the platform has SOME saved-preference record for
+// this subject", not "a record for THIS class": a user who saved a value for
+// a different class is a real platform user, and a real user with nothing
+// stored for this class's keys still gets the class defaults — the same
+// contract a relation-proven subject already has.
+func TestPreferencesGetUserRef_EmailKnownThroughAnotherClass_StillResolves(t *testing.T) {
+	class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
+	sess := buildSession(prefsNS, prefsSession, prefsClass)
+	srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess)
+	subject := mustCanonicalEmail(t, "alice@example.com")
+	putUserPreference(t, mem, subject, prefsNS, "another-class", "language", json.RawMessage(`"de"`))
+
+	resp, snap := getPreferencesForUserRef(t, srv, prefsNS, prefsSession, "email:alice@example.com", prefsToken)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, subject, snap.Subject)
+	require.Len(t, snap.Snapshot.Keys, 1)
+	assert.Equal(t, preferences.SourceDefault, snap.Snapshot.Keys[0].Source,
+		"another class's value proves the user exists but contributes nothing to THIS class's snapshot")
+}
+
+// TestPreferencesGetUserRef_EmailKnownViaClearedTombstone_StillResolves — a
+// cleared (null) value is a deliberate act by a real user: it proves the
+// subject exists even though it contributes no value to the snapshot, so the
+// read answers the class default rather than refusing.
+func TestPreferencesGetUserRef_EmailKnownViaClearedTombstone_StillResolves(t *testing.T) {
+	class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
+	sess := buildSession(prefsNS, prefsSession, prefsClass)
+	srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess)
+	subject := mustCanonicalEmail(t, "alice@example.com")
+	putUserPreference(t, mem, subject, prefsNS, prefsClass, "language", json.RawMessage(`null`))
+
+	resp, snap := getPreferencesForUserRef(t, srv, prefsNS, prefsSession, "email:alice@example.com", prefsToken)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, subject, snap.Subject)
+	require.Len(t, snap.Snapshot.Keys, 1)
+	assert.Equal(t, preferences.SourceDefault, snap.Snapshot.Keys[0].Source,
+		"the tombstone is skipped as a value (cleared, not saved) but still proves the user exists")
 }
 
 // TestPreferencesGet_TurnAndUserRef_MutuallyExclusive_400 proves the two
@@ -310,6 +389,8 @@ func TestPreferencesGetUserRef_AuditTrail(t *testing.T) {
 	})
 	sess := buildSession(prefsNS, prefsSession, prefsClass)
 	srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess)
+	putUserPreference(t, mem, mustCanonicalEmail(t, "alice@example.com"),
+		prefsNS, prefsClass, "language", json.RawMessage(`"de"`))
 
 	resp1, _ := getPreferencesForUserRef(t, srv, prefsNS, prefsSession, "email:alice@example.com", prefsToken)
 	resp1.Body.Close()

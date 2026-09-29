@@ -19,7 +19,10 @@ const emailPrefix = "email:"
 // encoding. This is a REFERENCE, not a proven login, matching
 // identity.EmailReference's own contract; the resulting canonical id is
 // identical to what a verified email would produce (CanonicalUserID does not
-// carry the verified bit).
+// carry the verified bit). Its resolutions accordingly stay SubjectProven ==
+// false: any well-formed address yields a subject whether or not a platform
+// user exists behind it, so a consumer must apply its own existence bar
+// before treating the subject as a real user (see Resolution.SubjectProven).
 type emailResolver struct{}
 
 func (emailResolver) Usage() (string, string) {
