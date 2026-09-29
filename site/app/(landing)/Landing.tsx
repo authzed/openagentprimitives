@@ -6,8 +6,9 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { OapMark } from "./OapMark";
-import { ThemeToggle } from "@/components/ThemeToggle";
+import { OapMark } from "@/components/OapMark";
+import { SiteFooter } from "@/components/SiteFooter";
+import { Wordmark } from "@/components/Wordmark";
 import { OWASP } from "./owasp";
 
 /* Every outbound URL the page needs that does not yet exist. Kept in one object
@@ -15,7 +16,6 @@ import { OWASP } from "./owasp";
  * a real guide on this site and is written inline. */
 const TODO = {
   repo: "https://example.invalid/PLACEHOLDER-repo",
-  discuss: "https://example.invalid/PLACEHOLDER-community",
   owaspFull: "https://example.invalid/PLACEHOLDER-owasp-coverage",
 };
 
@@ -453,7 +453,6 @@ export function Landing() {
       <nav className="lp-nav">
         <a className="lp-nav-brand" href="/">
           <OapMark />
-          <span>Open Agent Primitives</span>
         </a>
         <div className="lp-nav-links">
           <a href="/docs/what-is-oap">Docs</a>
@@ -469,14 +468,17 @@ export function Landing() {
       {/* ------------------------------------------------------------ hero --- */}
       <header className="lp-hero">
         <div>
-          <OapMark className="lp-hero-mark" />
+          <Wordmark className="lp-hero-mark" />
           <h1>
             A secure way to run <em>enterprise AI agents</em>.
           </h1>
           <p className="lp-hero-sub">
             Building blocks for running enterprise agents in your own cluster,
             on the models you choose.{" "}
-            <strong>Every control sits outside the model.</strong>
+            <strong>
+              The AI never decides what it&rsquo;s allowed to do. OAP checks
+              every action before it runs.
+            </strong>
           </p>
           <p className="lp-hero-qs-head">
             Trusting an agent means answering four questions:
@@ -498,8 +500,8 @@ export function Landing() {
         <div className="lp-hero-aside">
           <InstallTerminal />
           <p className="lp-note">
-            OAP builds from source today. There is no published binary or image
-            yet.
+            You build OAP from source, so every image in your cluster comes from
+            code you can read and review.
           </p>
         </div>
       </header>
@@ -520,8 +522,8 @@ export function Landing() {
         </p>
         <p className="lp-lede">
           <strong>
-            So every control in OAP sits outside the model, and none depends on
-            the agent&rsquo;s cooperation.
+            So OAP enforces every rule itself, before each action runs, where no
+            prompt can change it.
           </strong>
         </p>
 
@@ -809,23 +811,7 @@ export function Landing() {
         </div>
       </section>
 
-      <footer className="lp-footer">
-        <div className="lp-footer-top">
-          <OapMark className="lp-footer-mark" />
-          <a href="/docs/what-is-oap">Docs</a>
-          <a href="/docs/crd-reference">CRD reference</a>
-          <a href="/docs/cli-reference">CLI reference</a>
-          <a href="#owasp">OWASP coverage</a>
-          <a href={TODO.discuss}>Community</a>
-        </div>
-        <div className="lp-footer-bottom">
-          <p className="lp-footer-credit">
-            Built by <a href="https://authzed.com">AuthZed</a>, using{" "}
-            <a href="https://github.com/authzed/spicedb">SpiceDB</a>.
-          </p>
-          <ThemeToggle />
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

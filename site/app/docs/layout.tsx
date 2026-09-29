@@ -3,7 +3,7 @@ import { allGuides } from "@/lib/guides";
 import { buildNav } from "@/lib/nav";
 import { NavLink } from "@/components/NavLink";
 import { Search } from "@/components/Search";
-import { ThemeToggle } from "@/components/ThemeToggle";
+import { SiteFooter } from "@/components/SiteFooter";
 import { Wordmark } from "@/components/Wordmark";
 import "./docs.css";
 
@@ -27,7 +27,6 @@ export default async function DocsLayout({
           </a>
           <div className="doc-brand-meta">
             <span className="doc-brand-sub">docs</span>
-            <ThemeToggle />
           </div>
         </div>
         <Search />
@@ -58,6 +57,9 @@ export default async function DocsLayout({
         <article className="doc-article" data-pagefind-body>
           {children}
         </article>
+        <div className="doc-footer">
+          <SiteFooter />
+        </div>
       </main>
     </div>
   );

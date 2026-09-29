@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Open Agent Primitives",
     description:
-      "Building blocks for constructing and running enterprise AI agents in your own cluster, with every control outside the model.",
+      "Building blocks for running enterprise AI agents in your own cluster. The AI never decides what it's allowed to do: OAP checks every action before it runs.",
     type: "website",
   },
 };

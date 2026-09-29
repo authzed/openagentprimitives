@@ -11,8 +11,8 @@
  *   - Surfaces are pinned on contrast against the surface beneath, not on an
  *     alpha modifier: on a dark ground alpha moves a color toward the
  *     background, so `bg/50` lands ~1.06:1 away from it, which is nothing.
- *   - Monospace is quarantined to <=12px labels and to code. It never sets body
- *     copy, so it reads unambiguously as "system label".
+ *   - Monospace is quarantined to small (<=13px) labels, notes and code. It
+ *     never sets body copy, so it reads unambiguously as "system label".
  *
  * Structure is a ruled frame, not floating cards: the page body sits inside a
  * drawn rectangle and every section adds a top rule. Grid rules are produced by
@@ -145,6 +145,14 @@ body:has(.lp) {
   --tt-fg-active: var(--lp-heading);
   --tt-bg-active: var(--lp-surface-2);
   --tt-ring: var(--lp-link);
+
+  /* Shared footer (components/site-footer.css). */
+  --sf-line: var(--lp-line);
+  --sf-line-soft: var(--lp-line-soft);
+  --sf-muted: var(--lp-muted);
+  --sf-link: var(--lp-link);
+  --sf-strong: var(--lp-fg);
+  --sf-pad-x: 40px;
 }
 
 .lp-section {
@@ -154,7 +162,7 @@ body:has(.lp) {
 
 .lp-kicker {
   font-family: var(--lp-mono);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 16px;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -195,7 +203,7 @@ body:has(.lp) {
 
 .lp-note {
   font-family: var(--lp-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.6;
   color: var(--lp-muted);
   max-width: 78ch;
@@ -223,13 +231,8 @@ body:has(.lp) {
 }
 
 .lp-nav-brand svg {
-  height: 17px;
+  height: 20px;
   width: auto;
-}
-
-.lp-nav-brand span {
-  font-size: 14px;
-  letter-spacing: 0.01em;
 }
 
 .lp-nav-links {
@@ -309,12 +312,13 @@ body:has(.lp) {
   }
 }
 
+/* The full wordmark names the project once, in the hero; the nav carries only
+   the logomark. Display is left to components/wordmark.css, which shows one
+   ink per theme. */
 .lp-hero-mark {
-  height: 30px;
-  width: auto;
-  color: var(--lp-heading);
-  display: block;
-  margin-bottom: 30px;
+  width: min(400px, 100%);
+  height: auto;
+  margin-bottom: 36px;
 }
 
 .lp-hero h1 {
@@ -388,7 +392,7 @@ body:has(.lp) {
 .lp-hero-qs li::before {
   content: "0" counter(lp-q);
   font-family: var(--lp-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--lp-state);
   padding-top: 3px;
 }
@@ -421,7 +425,7 @@ body:has(.lp) {
    itself stays neutral. */
 .lp-term-tab {
   font-family: var(--lp-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--lp-term-muted);
@@ -448,7 +452,7 @@ body:has(.lp) {
 
 .lp-copy-btn {
   font-family: var(--lp-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--lp-term-muted);
@@ -468,7 +472,7 @@ body:has(.lp) {
   margin: 0;
   padding: 14px 16px;
   font-family: var(--lp-mono);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.85;
   color: var(--lp-term-fg);
   overflow-x: auto;
@@ -520,7 +524,7 @@ body:has(.lp) {
   margin: 0 0 10px;
 }
 
-.lp-slab p {
+.lp-slab p:not(.lp-prim-eyebrow) {
   font-size: 15.5px;
   line-height: 1.6;
   color: var(--lp-muted);
@@ -570,7 +574,7 @@ body:has(.lp) {
   flex-wrap: wrap;
   gap: 6px 16px;
   font-family: var(--lp-mono);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.02em;
 }
 
@@ -619,7 +623,7 @@ body:has(.lp) {
 
 .lp-compare thead th {
   font-family: var(--lp-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 400;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -674,7 +678,7 @@ body:has(.lp) {
 
 .lp-prim-eyebrow {
   font-family: var(--lp-mono);
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--lp-state);
@@ -703,7 +707,7 @@ body:has(.lp) {
   text-decoration-color: var(--lp-line);
 }
 
-.lp-prim p {
+.lp-prim p:not(.lp-prim-eyebrow) {
   font-size: 16px;
   line-height: 1.6;
   color: var(--lp-muted);
@@ -738,7 +742,7 @@ body:has(.lp) {
 
 .lp-panel-head span {
   font-family: var(--lp-mono);
-  font-size: 10.5px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--lp-muted);
@@ -753,7 +757,7 @@ body:has(.lp) {
   width: 100%;
   border-collapse: collapse;
   font-family: var(--lp-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.55;
 }
 
@@ -776,7 +780,7 @@ body:has(.lp) {
 
 .lp-fields td small {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--lp-muted);
   word-break: normal;
 }
@@ -795,7 +799,7 @@ body:has(.lp) {
 .lp-trace {
   margin: 0;
   font-family: var(--lp-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.95;
   color: var(--lp-fg);
   overflow-x: auto;
@@ -808,7 +812,7 @@ body:has(.lp) {
 
 .lp-caption {
   font-family: var(--lp-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--lp-muted);
   margin: 14px 0 0;
@@ -818,7 +822,7 @@ body:has(.lp) {
 
 .lp-col-head {
   font-family: var(--lp-mono);
-  font-size: 10.5px;
+  font-size: 12px;
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--lp-state);
@@ -858,7 +862,7 @@ body:has(.lp) {
   caption-side: top;
   text-align: left;
   font-family: var(--lp-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--lp-muted);
@@ -875,7 +879,7 @@ body:has(.lp) {
 
 .lp-owasp thead th {
   font-family: var(--lp-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 400;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -885,7 +889,7 @@ body:has(.lp) {
 
 .lp-owasp td.lp-id {
   font-family: var(--lp-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   white-space: nowrap;
   width: 1%;
 }
@@ -926,7 +930,7 @@ body:has(.lp) {
 .lp-cov {
   display: inline-block;
   font-family: var(--lp-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   padding: 2px 9px;
@@ -957,7 +961,7 @@ body:has(.lp) {
 .lp-draft {
   display: inline-block;
   font-family: var(--lp-mono);
-  font-size: 10px;
+  font-size: 11.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--lp-warn);
@@ -991,59 +995,6 @@ body:has(.lp) {
   margin: 28px 0 0;
 }
 
-.lp-footer {
-  border-top: 1px solid var(--lp-line);
-  padding: 26px 40px 28px;
-  font-size: 13.5px;
-  color: var(--lp-muted);
-}
-
-.lp-footer-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 18px;
-}
-
-/* Credit on the left, the theme toggle on the right: the conventional home
-   for a site-wide preference most visitors never change, since the default
-   follows the system. */
-.lp-footer-bottom {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px 18px;
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid var(--lp-line-soft);
-}
-
-.lp-footer-credit {
-  margin: 0;
-}
-
-.lp-footer a {
-  color: var(--lp-link);
-  text-decoration: none;
-}
-
-.lp-footer-credit a {
-  color: var(--lp-fg);
-}
-
-.lp-footer a:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.lp-footer-mark {
-  height: 13px;
-  width: auto;
-  color: var(--lp-muted);
-  margin-right: auto;
-}
-
 /* ------------------------------------------------------------ responsive --- */
 
 @media (max-width: 1000px) {
@@ -1060,8 +1011,10 @@ body:has(.lp) {
   .lp-section,
   .lp-hero,
   .lp-close,
-  .lp-nav,
-  .lp-footer {
+  .lp {
+    --sf-pad-x: 16px;
+  }
+  .lp-nav {
     padding-left: 16px;
     padding-right: 16px;
   }
@@ -1077,8 +1030,13 @@ body:has(.lp) {
   .lp-nav-links a:not(.lp-btn) {
     display: none;
   }
-  .lp-owasp td.lp-gap {
+  .lp-owasp td.lp-gap,
+  .lp-owasp thead th:last-child {
     display: none;
+  }
+  .lp-owasp caption {
+    white-space: normal;
+    line-height: 1.6;
   }
   .lp-compare th,
   .lp-compare td {

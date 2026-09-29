@@ -4,6 +4,7 @@
 // frame without waiting for React.
 import lightInk from "../../docs/assets/brand/oap-wordmark-light.svg";
 import darkInk from "../../docs/assets/brand/oap-wordmark-dark.svg";
+import "./wordmark.css";
 
 export function Wordmark({ className = "" }: { className?: string }) {
   return (

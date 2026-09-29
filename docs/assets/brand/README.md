@@ -34,7 +34,7 @@ the inlined copies too:
 | `pkg/platform/identityd/handlers_password.go`            | The icon on the sign-in page                                                                                                                       |
 | `cmd/oap/internal/desktop/setupui/static/index.html`     | The logomark in the desktop setup header, plus the icon                                                                                            |
 | `cmd/oap/internal/desktop/menubaricons/render/tunnel.go` | Not a copy: the menu-bar icons are drawn in code. `menuMarkCutout` carries the menu icon's cut-out; regenerate the PNGs with `mage desktop:icons`. |
-| `site/app/(landing)/OapMark.tsx`                         | `OapMark`, the logomark inlined for the landing page so it inherits `currentColor` and needs no light/dark asset pair.                             |
+| `site/components/OapMark.tsx`                            | `OapMark`, the logomark inlined for the landing page and site footer so it inherits `currentColor` and needs no light/dark asset pair.             |
 
 The repo README and the docs + landing site (`site/`: the `Wordmark` component
 and the root layout icons) reference the files here directly.
