@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { allGuides } from "@/lib/guides";
 import { buildNav } from "@/lib/nav";
 import { NavLink } from "@/components/NavLink";
+import { Search } from "@/components/Search";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Wordmark } from "@/components/Wordmark";
 import "./docs.css";
@@ -21,6 +22,7 @@ export default async function DocsLayout({ children }: { children: ReactNode }) 
             <ThemeToggle />
           </div>
         </div>
+        <Search />
         {nav.map(({ section, blocks }) => (
           <div className="doc-nav-section" key={section}>
             <div className="doc-nav-section-title">{section}</div>
