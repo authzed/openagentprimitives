@@ -541,6 +541,19 @@ body:has(.lp) {
 .lp-areas > li {
   display: flex;
   flex-direction: column;
+  padding: 26px 28px 24px;
+}
+
+/* The area title has to read as the card's heading, a clear step above the
+   bold lead-in on each bullet: larger, tighter, and ruled off from the list. */
+.lp-slab .lp-areas-title {
+  font-size: 22px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--lp-heading);
+  margin: 0 0 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--lp-line);
 }
 
 .lp-points {
@@ -1013,6 +1026,9 @@ body:has(.lp) {
   .lp-close,
   .lp {
     --sf-pad-x: 16px;
+  }
+  .lp-areas > li {
+    padding: 22px 20px 20px;
   }
   .lp-nav {
     padding-left: 16px;

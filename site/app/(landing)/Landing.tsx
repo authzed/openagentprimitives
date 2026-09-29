@@ -656,7 +656,7 @@ export function Landing() {
         <ol className="lp-slab lp-slab--2 lp-areas">
           {AREAS.map((a) => (
             <li key={a.title}>
-              <h3>{a.title}</h3>
+              <h3 className="lp-areas-title">{a.title}</h3>
               <ul className="lp-points">
                 {a.points.map(([lead, body]) => (
                   <li key={lead}>
