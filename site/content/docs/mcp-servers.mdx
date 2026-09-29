@@ -20,7 +20,7 @@ export const meta = {
 An **MCPServer** is a per-agent resource — an AgentClass opts into it by name, it isn't a global registration.
 It declares the server's address and, critically, an **allowlist of tools**: a tool the MCPServer doesn't list
 is never callable. Each listed tool carries its own **authorization policy** (including its
-[`stateImpact`](#/toolspec-validation)) and an argument allowlist refined with CEL — so an MCP tool is gated
+[`stateImpact`](/docs/toolspec-validation)) and an argument allowlist refined with CEL — so an MCP tool is gated
 exactly like a sandboxed CLI, not waved through because it came from "a real MCP server."
 
 ## SidecarToolbox: your own MCP server, alongside the agent
@@ -35,7 +35,7 @@ being injected into the agent's.
 
 Under the hood, a sidecar toolbox is synthesized into the *same* representation as a remote MCP server — the
 runner genuinely can't tell them apart at dispatch. That's the point: whether a tool is a sandboxed CLI, a
-remote MCP server, or a local sidecar, it arrives at the [pipeline](#/agent-loop) as a tool with a permission
+remote MCP server, or a local sidecar, it arrives at the [pipeline](/docs/agent-loop) as a tool with a permission
 and an impact, and every gate — authorization, approval, content inspection, breakers — applies identically.
 
 <Callout kind="tip" title="Author and probe before you trust">

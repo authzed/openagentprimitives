@@ -17,7 +17,7 @@ export const meta = {
 ## Logs
 
 **Logs** is the cross-session audit: approvals, authorization decisions, tool calls, and scope changes, filtered
-by kind, outcome, agent, or tool. It's the read side of the [tamper-evident log](#/audit-log) — the same signed,
+by kind, outcome, agent, or tool. It's the read side of the [tamper-evident log](/docs/audit-log) — the same signed,
 hash-chained records `oap audit verify` checks offline — surfaced for browsing rather than verification.
 
 <Screenshot name="admin-logs" />
@@ -26,6 +26,6 @@ hash-chained records `oap audit verify` checks offline — surfaced for browsing
 
 **Budget** breaks down estimated spend by model, agent, session, and user — a running total (list-price
 estimate) that resets daily. It's the console view of the same accounting the per-session
-[budgets](#/session-lifecycle) enforce.
+[budgets](/docs/session-lifecycle) enforce.
 
 <Screenshot name="admin-budget" />

@@ -44,7 +44,7 @@ the session **pauses and asks you to connect it** — it never silently falls ba
   Passthrough is not "share the agent's key and pretend to be the user." Each user's credentials are their own,
   narrowed per session to exactly what the agent needs, and OAP's authorization model treats the *user* as the
   subject — so an agent acting as you can never quietly become an agent acting as someone else. See
-  <a href="#/owasp-top10#asi03">ASI03 — Identity & Privilege Abuse</a>.
+  <a href="/docs/owasp-top10#asi03">ASI03 — Identity & Privilege Abuse</a>.
 </Callout>
 
 Which one an agent uses is fixed on the class (`agent` / `userPassthrough`) — or chosen per session, which is

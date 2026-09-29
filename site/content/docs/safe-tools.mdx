@@ -32,22 +32,22 @@ circuit breakers, and per-call data-volume budgets keep a misbehaving tool from 
 
 ## Go deeper
 
-- **[Toolspec & validation](#/toolspec-validation)** — deny-by-default allowlists, CEL, and dual validation.
-- **[Sandboxed execution](#/sandboxed-execution)** — the hardened pod model and argv-not-shell execution.
-- **[MCP servers & sidecar toolboxes](#/mcp-servers)** — bringing external tools under the same rules.
-- **[Content guards & egress](#/content-guards-egress)** — inspecting tool I/O and bounding what leaves the session.
-- **[Budgets, rate limits & circuit breakers](#/budgets-breakers)** — bounding runaway use.
-- **[Supply-chain pinning](#/supply-chain-pinning)** — content-hashing the tools an agent is allowed to run.
+- **[Toolspec & validation](/docs/toolspec-validation)** — deny-by-default allowlists, CEL, and dual validation.
+- **[Sandboxed execution](/docs/sandboxed-execution)** — the hardened pod model and argv-not-shell execution.
+- **[MCP servers & sidecar toolboxes](/docs/mcp-servers)** — bringing external tools under the same rules.
+- **[Content guards & egress](/docs/content-guards-egress)** — inspecting tool I/O and bounding what leaves the session.
+- **[Budgets, rate limits & circuit breakers](/docs/budgets-breakers)** — bounding runaway use.
+- **[Supply-chain pinning](/docs/supply-chain-pinning)** — content-hashing the tools an agent is allowed to run.
 
 <Callout kind="security" title="How this addresses the OWASP Agentic Top 10">
   Tool safety is OAP's home turf:
   <ul>
-    <li><a href="#/owasp-top10#asi02">ASI02 — Tool Misuse & Exploitation</a> (substantial): dual validation,
+    <li><a href="/docs/owasp-top10#asi02">ASI02 — Tool Misuse & Exploitation</a> (substantial): dual validation,
       deny-by-default, argv-no-shell, per-action authorization.</li>
-    <li><a href="#/owasp-top10#asi05">ASI05 — Unexpected Code Execution</a> (substantial): hardened pods, no
+    <li><a href="/docs/owasp-top10#asi05">ASI05 — Unexpected Code Execution</a> (substantial): hardened pods, no
       shell, closed-world tools.</li>
-    <li><a href="#/owasp-top10#asi04">ASI04 — Agentic Supply Chain</a> (partial): content-hash pinning of the
+    <li><a href="/docs/owasp-top10#asi04">ASI04 — Agentic Supply Chain</a> (partial): content-hash pinning of the
       tool manifest.</li>
-    <li><a href="#/owasp-top10#asi01">ASI01 — Agent Goal Hijack</a>: the content-guard seam over tool I/O.</li>
+    <li><a href="/docs/owasp-top10#asi01">ASI01 — Agent Goal Hijack</a>: the content-guard seam over tool I/O.</li>
   </ul>
 </Callout>

@@ -23,7 +23,7 @@ oap install --builder-starters user:$(oap identity canonical-id you@example.com)
 
 `oap identity canonical-id` turns an email into the identifier the platform uses for that person. You can list
 several identities, separated by commas, and a group as `group:<group-id>` — the same subjects the rest of the
-[authorization model](#/authorization) uses.
+[authorization model](/docs/authorization) uses.
 
 That is the whole install. It puts one `AgentClass`, `agent-builder`, in the platform's own namespace,
 `agentprimitives-system`, with its workshop sidecar and its skills, and records the class as sanctioned for
@@ -37,7 +37,7 @@ oap install --without-builder
 
 ## On the Desktop app, or after `oap init`
 
-Neither the [Desktop app](#/install-desktop) nor [`oap init`](#/install-init) installs the builder: neither has
+Neither the [Desktop app](/docs/install-desktop) nor [`oap init`](/docs/install-init) installs the builder: neither has
 an identity to hand it, and an empty starter list would lock everyone out of a class nobody could then fix from
 the UI. Add it afterwards with a second `oap install` — installing is idempotent, so re-running it against a
 cluster that is already up only adds what is missing.
@@ -80,4 +80,4 @@ picker; anyone else does not. Pick it and the workshop page opens:
 | A sanction in `ClusterAgentSettings` | cluster-wide | `limits.builderClasses` names the class and its sidecar. Only a sanctioned class gets a workshop. The same settings hold `limits.maxWorkshopsPerStarter`, the per-person limit (default 3). |
 
 Each build then creates a `Workshop` for that session — its own namespace, its own permissions, its own
-sidecar identity — and deletes it when the build is over. See [Workshops and limits](#/agent-builder-workshops).
+sidecar identity — and deletes it when the build is over. See [Workshops and limits](/docs/agent-builder-workshops).

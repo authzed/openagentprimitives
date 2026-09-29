@@ -135,7 +135,7 @@ func overviewPage(crds []crdInfo) string {
 	b.WriteString("full spec.\n\n")
 	b.WriteString("| Kind | Scope | Summary |\n| --- | --- | --- |\n")
 	for _, c := range crds {
-		fmt.Fprintf(&b, "| [%s](#/crd-%s) | %s | %s |\n", c.kind, c.singular, c.scope, mdxutil.TableText(c.desc))
+		fmt.Fprintf(&b, "| [%s](/docs/crd-%s) | %s | %s |\n", c.kind, c.singular, c.scope, mdxutil.TableText(c.desc))
 	}
 	return b.String()
 }

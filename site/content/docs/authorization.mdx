@@ -34,22 +34,22 @@ approval can never be transplanted onto something it wasn't for.
 
 ## Go deeper
 
-- **[Multiplayer sessions](#/multiplayer-sessions)** — more than one human in a shared session, gated at the
+- **[Multiplayer sessions](/docs/multiplayer-sessions)** — more than one human in a shared session, gated at the
   door and at the dangerous step.
-- **[Plan gating & approvals](#/plan-gating)** — approving a whole multi-step plan at once, scoped to exactly
+- **[Plan gating & approvals](/docs/plan-gating)** — approving a whole multi-step plan at once, scoped to exactly
   the plan — and the exact resources — it named.
-- **[Shared permissions](#/shared-permissions)** — data owned by a resource, released only with its owner's
+- **[Shared permissions](/docs/shared-permissions)** — data owned by a resource, released only with its owner's
   approval, routed to the owner rather than the requester.
-- **[Information leakage & egress](#/information-leakage)** — the right data reaching the wrong audience is a
+- **[Information leakage & egress](/docs/information-leakage)** — the right data reaching the wrong audience is a
   permission question too, gated per-datum and routed to the data owner.
 
 <Callout kind="security" title="How this addresses the OWASP Agentic Top 10">
   <ul>
-    <li><a href="#/owasp-top10#asi02">ASI02 — Tool Misuse</a> & <a href="#/owasp-top10#asi03">ASI03 — Privilege
+    <li><a href="/docs/owasp-top10#asi02">ASI02 — Tool Misuse</a> & <a href="/docs/owasp-top10#asi03">ASI03 — Privilege
       Abuse</a>: per-action checks and owner-derived approval.</li>
-    <li><a href="#/owasp-top10#asi06">ASI06 — Memory & Context Poisoning</a>: per-subject authorization on the
+    <li><a href="/docs/owasp-top10#asi06">ASI06 — Memory & Context Poisoning</a>: per-subject authorization on the
       memory store.</li>
-    <li><a href="#/owasp-top10#asi10">ASI10 — Rogue Agents</a>: every check writes a tamper-evident decision
+    <li><a href="/docs/owasp-top10#asi10">ASI10 — Rogue Agents</a>: every check writes a tamper-evident decision
       record that outlives the session.</li>
   </ul>
 </Callout>

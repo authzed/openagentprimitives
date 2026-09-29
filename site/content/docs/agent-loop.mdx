@@ -37,10 +37,10 @@ the checks.
 
 The hooks run **before** dispatch, in the pre-tool-call stage:
 
-- **Authorization** — can this subject take this action, on this resource, right now? ([Authorization](#/authorization))
-- **Plan gate** — is this call inside an approved plan, or does it need one? ([Plan gating](#/plan-gating))
-- **Content guards** — does the call's input or the tool's output need inspecting or bounding? ([Content guards](#/content-guards-egress))
-- **Rate limits & circuit breakers** — has this tool run away? ([Budgets & breakers](#/budgets-breakers))
+- **Authorization** — can this subject take this action, on this resource, right now? ([Authorization](/docs/authorization))
+- **Plan gate** — is this call inside an approved plan, or does it need one? ([Plan gating](/docs/plan-gating))
+- **Content guards** — does the call's input or the tool's output need inspecting or bounding? ([Content guards](/docs/content-guards-egress))
+- **Rate limits & circuit breakers** — has this tool run away? ([Budgets & breakers](/docs/budgets-breakers))
 
 A call that any gate denies **never reaches the tool** — no sandbox exec, no MCP request. The denial comes
 back to the model as an error result, which it reads like any other content. And nothing is allowed to hang

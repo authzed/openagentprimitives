@@ -11,6 +11,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { anchorIds, checkLinks } from "../lib/links";
 
 const siteDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.dirname(siteDir);
@@ -120,6 +121,19 @@ for (const file of refFiles) {
       err(`${file}: ref ${id} production not in manifest: ${ref.production}`);
   }
 }
+
+// 4: every /docs link names a guide, and every #anchor names an id in it. The
+// landing page is plain TSX, so it is scanned the same way; a templated href
+// (the OWASP table) cannot be, and is covered by app/(landing)/owasp.test.ts.
+const guideSources = new Map(mdxFiles.map((f) => [f.slice(0, -4), readFileSync(path.join(guidesDir, f), "utf8")]));
+const guideAnchors = new Map([...guideSources].map(([slug, src]) => [slug, anchorIds(src)]));
+const linkFiles = [
+  ...[...guideSources].map(([slug, src]) => ({ file: `content/docs/${slug}.mdx`, src })),
+  ...readdirSync(path.join(siteDir, "app"), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".tsx"))
+    .map((f) => ({ file: `app/${f}`, src: readFileSync(path.join(siteDir, "app", f), "utf8") })),
+];
+for (const p of checkLinks(linkFiles, guideAnchors)) err(`${p.file}: ${p.href}: ${p.reason}`);
 
 if (errors.length) {
   console.error(`check FAILED with ${errors.length} problem(s):`);

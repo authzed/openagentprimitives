@@ -20,10 +20,10 @@ export const meta = {
 An AgentClass is a Kubernetes resource, so you diff it, review it, and pin it like any other. In one place it
 declares the whole agent:
 
-- **Model** — which LLM (or nothing, to use the [cluster default](#/install-overview)).
+- **Model** — which LLM (or nothing, to use the [cluster default](/docs/install-overview)).
 - **Prompt** — the system prompt that defines the agent's job.
 - **Tools** — the toolspecs, MCP servers, and skills it may use, and nothing else.
-- **Identity** — whose credentials it acts as ([agent, passthrough, ask, or dynamic](#/identity-modes)).
+- **Identity** — whose credentials it acts as ([agent, passthrough, ask, or dynamic](/docs/identity-modes)).
 - **Authorization** — the permissions and resource *slots* it can be granted, checked per action.
 - **Channels** — where it can be reached (bound separately, per install).
 - **Budgets** — ceilings on tokens, turns, and wall-clock time.

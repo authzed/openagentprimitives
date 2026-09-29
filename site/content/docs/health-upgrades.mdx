@@ -19,7 +19,7 @@ export const meta = {
 
 `oap check` verifies each component and reports `✓ / ⚠ / ✗` per one, so "is the platform healthy?" has a
 concrete answer rather than a guess. `oap check --watch` keeps re-checking every couple of seconds — useful
-while an install or upgrade is converging. It's the same readiness the [install](#/install-overview) itself
+while an install or upgrade is converging. It's the same readiness the [install](/docs/install-overview) itself
 waits on, available on demand.
 
 <Clip name="console-check" />
@@ -28,7 +28,7 @@ waits on, available on demand.
 
 An upgrade is a **re-install**: `oap install` applies the current platform manifests over the running one. The
 apply is idempotent — an unchanged component is left alone, and only what actually differs is updated — so
-re-running it is safe. The resolved [cluster kind](#/install-cluster) is stamped onto the components at install,
+re-running it is safe. The resolved [cluster kind](/docs/install-cluster) is stamped onto the components at install,
 which is why upgrading a pre-cluster-kind install means re-running `oap install` so the kind is set explicitly.
 
 <Callout kind="tip" title="Fail loud, not silent">

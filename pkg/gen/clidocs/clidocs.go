@@ -81,7 +81,7 @@ func overviewPage(root *cobra.Command, fams []*cobra.Command) string {
 	b.WriteString("## Families\n\n")
 	b.WriteString("| Family | What it does |\n| --- | --- |\n")
 	for _, f := range fams {
-		fmt.Fprintf(&b, "| [`oap %s`](#/oap-%s) | %s |\n", f.Name(), f.Name(), mdxutil.TableText(f.Short))
+		fmt.Fprintf(&b, "| [`oap %s`](/docs/oap-%s) | %s |\n", f.Name(), f.Name(), mdxutil.TableText(f.Short))
 	}
 	b.WriteString("\n## Global flags\n\n")
 	b.WriteString("These persistent flags apply to every command:\n\n")

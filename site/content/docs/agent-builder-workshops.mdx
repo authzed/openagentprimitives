@@ -30,7 +30,7 @@ workshop and nothing else; a grant for one workshop means nothing in another.
 ## How many you may have open
 
 Each person may keep a small number of workshops open at once — **three by default**, set cluster-wide by
-`limits.maxWorkshopsPerStarter` in [settings](#/settings-config). "Open" means live: a build still going, or one
+`limits.maxWorkshopsPerStarter` in [settings](/docs/settings-config). "Open" means live: a build still going, or one
 that finished but whose workshop has not been released yet.
 
 Starting a builder session past the limit is refused before anything is created. The refusal names the open
@@ -62,7 +62,7 @@ request to wait for, so a session that ends after *Hand the draft to someone* re
 workshops stop counting toward the limit.
 
 <Callout kind="note" title="For admins">
-  The [admin console](#/admin-dashboard) lists every open workshop with its starter, its install request if it
+  The [admin console](/docs/admin-dashboard) lists every open workshop with its starter, its install request if it
   made one, and the option to delete it outright. The per-person limit is `spec.limits.maxWorkshopsPerStarter`
   on the cluster's settings; the list of classes allowed to open a workshop at all is
   `spec.limits.builderClasses`, seeded by <code>oap install</code> for the builder and never widened by a

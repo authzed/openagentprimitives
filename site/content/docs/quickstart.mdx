@@ -42,7 +42,7 @@ a form instead of prompts.
 - **Wrote the secrets from _your_ answers.** A bundle *declares* the secrets it needs; it never carries their
   values. The GitHub PAT you typed became the `gh-pat` Secret in your cluster — the bundle only knew it needed
   one.
-- **Used the cluster's model.** Your [platform install](#/install-overview) registered a default model and a
+- **Used the cluster's model.** Your [platform install](/docs/install-overview) registered a default model and a
   central key for it, so an agent doesn't ship or ask for a model key — it uses the cluster default unless it
   declares its own.
 
@@ -54,7 +54,7 @@ Once it's installed, start a conversation:
   inline tool sessions, and approval prompts. Zero external setup. (For a scripted one-shot instead, use
   `oap agent run product-manager --prompt "…"`.)
 - **In your browser** — the web server serves a chat at `/sessions` (this is what the
-  [Desktop](#/install-desktop) menubar "New chat…" opens). Pick the agent and go.
+  [Desktop](/docs/install-desktop) menubar "New chat…" opens). Pick the agent and go.
 - **In Slack** — the richest surface, and the one most of these docs are shown through. `oap channel create
   --kind slack` runs a wizard that creates the Slack app and wires the agent to a channel. (Slack needs a
   workspace and the authorization graph set up, so it's a step beyond the first two.)
@@ -62,9 +62,9 @@ Once it's installed, start a conversation:
 <Screenshot name="web-chat" />
 
 <Callout kind="tip" title="Where to go from here">
-  Build one of your own without writing a bundle by hand: [Your first custom agent](#/agent-builder-first-agent)
+  Build one of your own without writing a bundle by hand: [Your first custom agent](/docs/agent-builder-first-agent)
   walks the agent builder from a one-line description to a tested, installable draft. Or look at how an agent is
-  defined ([Agent definition](#/agent-definition)), what tools it may use ([Safe tools](#/safe-tools)), whose
-  identity it acts as ([Identity](#/identity)), and how its risky actions get approved
-  ([Authorization](#/authorization)). Each primitive's overview links to the deeper guides.
+  defined ([Agent definition](/docs/agent-definition)), what tools it may use ([Safe tools](/docs/safe-tools)), whose
+  identity it acts as ([Identity](/docs/identity)), and how its risky actions get approved
+  ([Authorization](/docs/authorization)). Each primitive's overview links to the deeper guides.
 </Callout>

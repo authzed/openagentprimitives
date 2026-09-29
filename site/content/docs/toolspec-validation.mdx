@@ -37,8 +37,8 @@ Each tool carries a **`stateImpact`**:
 - **`readwrite`** — it changes state, but the change stays inside the session and is reversible.
 - **`external`** — the effect leaves the session and can't be undone.
 
-That one field drives two things: the [authorization](#/authorization) check that decides whether the call is
-allowed, and whether a human is [asked](#/plan-gating) before it runs. An `external` tool is the one you're most
+That one field drives two things: the [authorization](/docs/authorization) check that decides whether the call is
+allowed, and whether a human is [asked](/docs/plan-gating) before it runs. An `external` tool is the one you're most
 likely to be asked to approve.
 
 <Screenshot name="safe-tools-approval" />

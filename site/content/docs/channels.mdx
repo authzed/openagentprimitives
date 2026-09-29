@@ -29,18 +29,18 @@ approve is an authorization question, not "whoever can type."
 
 ## Go deeper
 
-- **[Slack](#/slack)** — the richest surface: the app-provisioning wizard, threads, in-channel interactions, and
-  the App Home hub. (Most of the [Authorization](#/authorization) guides are shown through Slack.)
-- **[Browser web chat](#/browser-chat)** — the built-in `/sessions` chat served by the web daemon.
-- **[Local terminal](#/terminal-chat)** — a full-screen TUI (`oap agent chat`) with zero external setup.
-- **[Continuity & interactions](#/continuity-interactions)** — how threads persist and how approvals, notices, and status render across kinds.
+- **[Slack](/docs/slack)** — the richest surface: the app-provisioning wizard, threads, in-channel interactions, and
+  the App Home hub. (Most of the [Authorization](/docs/authorization) guides are shown through Slack.)
+- **[Browser web chat](/docs/browser-chat)** — the built-in `/sessions` chat served by the web daemon.
+- **[Local terminal](/docs/terminal-chat)** — a full-screen TUI (`oap agent chat`) with zero external setup.
+- **[Continuity & interactions](/docs/continuity-interactions)** — how threads persist and how approvals, notices, and status render across kinds.
 
 <Callout kind="security" title="How this addresses the OWASP Agentic Top 10">
   <ul>
-    <li><a href="#/owasp-top10#asi09">ASI09 — Human-Agent Trust Exploitation</a> (substantial): the in-channel
+    <li><a href="/docs/owasp-top10#asi09">ASI09 — Human-Agent Trust Exploitation</a> (substantial): the in-channel
       approval design — explicit confirmation on risky actions, an injection-isolated summarizer, and the
       approver derived from the session, not the sender.</li>
-    <li><a href="#/owasp-top10#asi07">ASI07 — Insecure Inter-Agent Communication</a> (N/A): OAP's channels are
+    <li><a href="/docs/owasp-top10#asi07">ASI07 — Insecure Inter-Agent Communication</a> (N/A): OAP's channels are
       human↔agent, not agent↔agent, so there is no inter-agent bus to secure.</li>
   </ul>
 </Callout>

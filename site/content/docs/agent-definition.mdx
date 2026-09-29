@@ -32,19 +32,19 @@ thing that acts.
 
 ## Go deeper
 
-- **[AgentClass & AgentSession](#/agentclass-agentsession)** — the template/instance split, field by field.
-- **[The agent loop](#/agent-loop)** — how a turn runs, and where the safety hooks sit.
-- **[Skills](#/skills)** — reusable capabilities an agent can be granted.
-- **[Packaging](#/packaging-oap)** — the `.oap` bundle: shipping an agent and its dependency graph as one signed artifact.
+- **[AgentClass & AgentSession](/docs/agentclass-agentsession)** — the template/instance split, field by field.
+- **[The agent loop](/docs/agent-loop)** — how a turn runs, and where the safety hooks sit.
+- **[Skills](/docs/skills)** — reusable capabilities an agent can be granted.
+- **[Packaging](/docs/packaging-oap)** — the `.oap` bundle: shipping an agent and its dependency graph as one signed artifact.
 
 <Callout kind="security" title="How this addresses the OWASP Agentic Top 10">
   The class as a reviewable, budgeted, isolated unit is OAP's answer to several agentic threats:
   <ul>
-    <li><a href="#/owasp-top10#asi01">ASI01 — Agent Goal Hijack</a>: tool output is treated as data, never
+    <li><a href="/docs/owasp-top10#asi01">ASI01 — Agent Goal Hijack</a>: tool output is treated as data, never
       instructions, and high-impact actions are gated.</li>
-    <li><a href="#/owasp-top10#asi08">ASI08 — Cascading Failures</a>: per-session isolation, budgets, and
+    <li><a href="/docs/owasp-top10#asi08">ASI08 — Cascading Failures</a>: per-session isolation, budgets, and
       default-on circuit breakers contain blast radius.</li>
-    <li><a href="#/owasp-top10#asi09">ASI09 — Human-Agent Trust Exploitation</a>: the approval design that
+    <li><a href="/docs/owasp-top10#asi09">ASI09 — Human-Agent Trust Exploitation</a>: the approval design that
       surrounds every risky action.</li>
   </ul>
 </Callout>

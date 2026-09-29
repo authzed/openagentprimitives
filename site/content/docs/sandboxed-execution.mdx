@@ -29,7 +29,7 @@ host kernel.
 The tool's command is an **argv array** — an explicit list of arguments — POSTed to the pod's exec endpoint,
 never a string handed to `sh -c`. A filename argument like `; rm -rf /` is an inert positional argument, not a
 new command, because there's no shell to interpret it. This is the execution-time half of the
-[toolspec](#/toolspec-validation)'s promise: what was declared is exactly what runs.
+[toolspec](/docs/toolspec-validation)'s promise: what was declared is exactly what runs.
 
 ## Pluggable backends
 

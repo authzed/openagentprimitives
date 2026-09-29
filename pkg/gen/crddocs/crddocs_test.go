@@ -67,7 +67,7 @@ func TestGenerate(t *testing.T) {
 	require.NoError(t, err)
 	over := string(overB)
 	assert.Contains(t, over, "group: 'CRD reference'")
-	assert.Contains(t, over, "[Widget](#/crd-widget)", "kind listed in the overview")
+	assert.Contains(t, over, "[Widget](/docs/crd-widget)", "kind listed in the overview")
 
 	pageB, err := os.ReadFile(filepath.Join(out, "crd-widget.mdx"))
 	require.NoError(t, err)

@@ -17,7 +17,7 @@ export const meta = {
 
 - **`oap init`** is the one-shot onboarding command: it builds the images, installs the platform, and runs a
   health check, then optionally walks you through a security-settings wizard and a default model. Use this to go
-  from nothing to a working install — see the [step-by-step](#/install-init).
+  from nothing to a working install — see the [step-by-step](/docs/install-init).
 - **`oap install`** does just the platform bring-up — the operator, CRDs, and services — against a cluster
   you've already got, without building images.
 
@@ -36,7 +36,7 @@ oap check --watch     # keep checking every couple of seconds
   pulls prebaked images doesn't need Docker on your machine.
 
 If you're on a Mac and don't want to manage a cluster at all, skip straight to
-**[Desktop](#/install-desktop)** — it runs the whole thing in a local VM.
+**[Desktop](/docs/install-desktop)** — it runs the whole thing in a local VM.
 
 ## What gets stood up
 
@@ -52,5 +52,5 @@ wait — and when a component is slow, it asks whether to keep waiting rather th
 an AI CLI) can even launch it to diagnose a stalled component. An interrupt offers to tear down what was applied
 so a failed install doesn't leave debris.
 
-Next: **[Desktop](#/install-desktop)** for the zero-Kubernetes Mac flow, or **[On a cluster](#/install-cluster)**
+Next: **[Desktop](/docs/install-desktop)** for the zero-Kubernetes Mac flow, or **[On a cluster](/docs/install-cluster)**
 for the platform matrix.

@@ -48,6 +48,6 @@ The ordering of observations doesn't change the outcome.
 
 A tool declares an **`observes`** rule — a small expression over the call's arguments and result — saying which
 resources it's about and which facts to record; after a successful call, the matching facts are written. On the
-consuming side, an [authorization slot](#/plan-gating) can *require* a fact before it grants authority: "this
+consuming side, an [authorization slot](/docs/plan-gating) can *require* a fact before it grants authority: "this
 repository may be operated on only once we've observed that it belongs to the approver." The agent's power is
 bound to what's actually known, not to what it claims.

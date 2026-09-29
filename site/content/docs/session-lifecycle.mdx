@@ -10,7 +10,7 @@ export const meta = {
 # The life of a session
 
 <p className="doc-lede">
-  An <a href="#/agentclass-agentsession">AgentSession</a> isn't a process that runs until it stops — it moves
+  An <a href="/docs/agentclass-agentsession">AgentSession</a> isn't a process that runs until it stops — it moves
   through a small set of <strong>governed, observable states</strong>. It's born scoped, runs in turns, waits
   when it needs a human, sleeps when idle, and ends accountably. Knowing those states is knowing what an agent
   is actually doing.
@@ -19,22 +19,22 @@ export const meta = {
 ## It starts scoped
 
 A session begins from a channel message, the CLI, or a `kubectl apply`. It inherits everything its
-[class](#/agent-definition) allows — tools, identity, authorization — and narrows from there, with its own
+[class](/docs/agent-definition) allows — tools, identity, authorization — and narrows from there, with its own
 budget and its own audit trail. Before it acts it may pause at the door: a guest may need
-[start approval](#/multiplayer-sessions), a passthrough agent needs your [credentials](#/passthrough-vs-agent),
-and an `ask`/`dynamic` agent needs an [identity choice](#/choosing-identity). These are *waits*, not failures —
+[start approval](/docs/multiplayer-sessions), a passthrough agent needs your [credentials](/docs/passthrough-vs-agent),
+and an `ask`/`dynamic` agent needs an [identity choice](/docs/choosing-identity). These are *waits*, not failures —
 the session parks until the answer arrives.
 
 ## It runs in turns
 
-Once cleared, it runs [turns](#/agent-loop): the model proposes tool calls, the gated pipeline runs them, the
+Once cleared, it runs [turns](/docs/agent-loop): the model proposes tool calls, the gated pipeline runs them, the
 results feed back. Its status is visible the whole time — thinking, a tool running, a plan's progress — and a
 silence watchdog catches a turn that goes quiet rather than letting it hang.
 
 ## It waits when it must
 
 Some states are deliberate pauses. When the agent hits an action that needs sign-off it parks
-**awaiting a decision** and surfaces an [approval](#/authorization); it can park awaiting credentials or an
+**awaiting a decision** and surfaces an [approval](/docs/authorization); it can park awaiting credentials or an
 identity choice. Parking is not spinning — a parked session isn't burning its budget on nothing, and the person
 it's waiting on is told what it needs.
 
@@ -47,7 +47,7 @@ conversation can span days without an idle agent costing anything.
 
 ## It's bounded
 
-Every session carries a [budget](#/agentclass-agentsession): ceilings on tokens, on turns, and on cumulative
+Every session carries a [budget](/docs/agentclass-agentsession): ceilings on tokens, on turns, and on cumulative
 **active** run-time (time parked on a human doesn't count). A separate hard **expiration** caps its wall-clock
 lifetime even while it sleeps. Hit a ceiling and the session ends cleanly rather than running away — the
 budgets are a backstop the class sets once and every session inherits.
@@ -55,8 +55,8 @@ budgets are a backstop the class sets once and every session inherits.
 ## It ends accountably
 
 A session finishes **Succeeded** or **Failed**. If its class declares
-[delivery requirements](#/artifact-delivery), it can't complete until it has actually handed over the work it
-produced. At completion the [audit chain](#/audit-log) heads are anchored — the tamper-evident record of what
+[delivery requirements](/docs/artifact-delivery), it can't complete until it has actually handed over the work it
+produced. At completion the [audit chain](/docs/audit-log) heads are anchored — the tamper-evident record of what
 happened is sealed — and only then is the session reaped. A session can also be placed on a **hold**: frozen in
 place for inspection instead of torn down, when something needs a closer look.
 

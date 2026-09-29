@@ -11,7 +11,7 @@ export const meta = {
 
 <p className="doc-lede">
   <code>oap init</code> takes you from an empty cluster to a working, configured OAP in one command. It's the
-  CLI counterpart to the <a href="#/install-desktop">Desktop</a> flow — it builds the images, installs the
+  CLI counterpart to the <a href="/docs/install-desktop">Desktop</a> flow — it builds the images, installs the
   platform, seeds authorization, checks health, and then walks you through the first security and model setup.
 </p>
 
@@ -38,7 +38,7 @@ That's the whole command. On a terminal it runs interactively; add `-y` (and `--
 ## What it does, step by step
 
 1. **Resolves the cluster kind.** From `--local` / `--cluster-kind`, or by detecting it from the cluster —
-   which decides the [install profile](#/install-cluster) (memory backend, SpiceDB datastore, artifact store).
+   which decides the [install profile](/docs/install-cluster) (memory backend, SpiceDB datastore, artifact store).
 2. **Builds the images** — `oap build all` compiles the first-party components. Skip with `--skip-build`, or
    push to a registry with `--image-registry <ref>`.
 3. **Installs the platform** — `oap install` applies the operator, CRDs, services, an operator-managed SpiceDB,
@@ -47,16 +47,16 @@ That's the whole command. On a terminal it runs interactively; add `-y` (and `--
 4. **Seeds authorization** — applies the SpiceDB schema the whole platform authorizes against.
 5. **Checks health** — `oap check --watch` polls until every component reports `✓`.
 6. **Walks you through first-run setup** (interactive on a terminal):
-   - a **security-defaults wizard** — the [tiered ceilings and defaults](#/settings-config) (or apply the
+   - a **security-defaults wizard** — the [tiered ceilings and defaults](/docs/settings-config) (or apply the
      recommended baseline non-interactively with `--defaults`);
-   - connecting an **[identity provider](#/idp-signin)** for sign-in (skip with `--no-idp`);
+   - connecting an **[identity provider](/docs/idp-signin)** for sign-in (skip with `--no-idp`);
    - registering a **default model** and its key, so agents don't each need their own;
    - a **monitoring** channel (skip with `--no-monitoring`).
 
 ## When it finishes
 
 `oap check` confirms each component is healthy. From here, install an agent and talk to it —
-**[Your first agent](#/quickstart)**.
+**[Your first agent](/docs/quickstart)**.
 
 <Callout kind="tip" title="Fail-loud, and cleans up after itself">
   Install isn't a fire-and-forget script: a component that can't come up healthy stops the run with a real

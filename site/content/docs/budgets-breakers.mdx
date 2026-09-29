@@ -43,7 +43,7 @@ Also optional: a byte budget on what moves through a tool.
   error**, so an oversized payload never reaches the model.
 
 Every one of these is configured on the AgentClass — and a cluster-level ceiling can clamp what an individual
-class is allowed to loosen — with every trip written to the [audit log](#/audit-log).
+class is allowed to loosen — with every trip written to the [audit log](/docs/audit-log).
 
 <Callout kind="security" title="Defaults that contain, not just observe">
   The breakers are on out of the box, and their action is to *deny*, not merely warn. Containing a cascading

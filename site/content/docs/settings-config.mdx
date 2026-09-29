@@ -31,8 +31,8 @@ inside that envelope.
 
 ## What's tiered
 
-The tiered surface is the operational policy that shouldn't live per-agent: [budgets](#/session-lifecycle),
-[tool-guard breakers, rate limits, and data budgets](#/budgets-breakers), [content inspectors](#/content-guards-egress),
+The tiered surface is the operational policy that shouldn't live per-agent: [budgets](/docs/session-lifecycle),
+[tool-guard breakers, rate limits, and data budgets](/docs/budgets-breakers), [content inspectors](/docs/content-guards-egress),
 the default model, and requirements like "subagent digest pins are mandatory." An agent reads its **effective**
 settings — the resolved result of all tiers — so what actually applies is a single computed answer, not
 something you reconstruct by hand.
@@ -41,7 +41,7 @@ something you reconstruct by hand.
 
 `oap settings wizard` walks you through the security-relevant defaults and ceilings interactively; `oap settings
 apply` applies a settings file. The result is recorded so you can see the effective policy an agent is running
-under — including in the [admin console](#/admin-dashboard), which shows the resolved value per setting:
+under — including in the [admin console](/docs/admin-dashboard), which shows the resolved value per setting:
 
 <Screenshot name="admin-settings" />
 

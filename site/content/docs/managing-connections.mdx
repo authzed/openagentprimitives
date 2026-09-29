@@ -32,7 +32,7 @@ every account you've linked and every one an agent has asked for. From there you
 <Callout kind="security" title="Revocation reaches running sessions">
   Revoking a connection isn't just a database delete: the change propagates to in-flight sessions within tens of
   milliseconds, so an agent mid-task loses access the moment you pull it — it can't keep using a credential you
-  just revoked. See <a href="#/owasp-top10#asi03">ASI03 — Identity & Privilege Abuse</a>.
+  just revoked. See <a href="/docs/owasp-top10#asi03">ASI03 — Identity & Privilege Abuse</a>.
 </Callout>
 
 ## Before it's stored, it's verified

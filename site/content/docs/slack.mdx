@@ -28,7 +28,7 @@ consoles. It connects over **Socket Mode**, so no public inbound URL is required
 
 A session is a **thread**. Mention the agent and it opens one; reply in that thread and the conversation
 continues in the same session. Who is allowed to drive or approve isn't "whoever can type" — it's an
-[authorization](#/authorization) question, so a bystander posting in the thread is gated, and the person who
+[authorization](/docs/authorization) question, so a bystander posting in the thread is gated, and the person who
 approves a risky step is derived from the session, not from whoever sent the last message.
 
 ## Summoning the bot into an existing thread
@@ -60,13 +60,13 @@ replies are context it reads, not commands.
 
 ## Approvals live in the channel
 
-The interesting Slack behavior is the [approvals](#/authorization). Block Kit cards render the exact thing
+The interesting Slack behavior is the [approvals](/docs/authorization). Block Kit cards render the exact thing
 being approved — a plan, a tool call, a piece of shared data — with Approve/Deny buttons, right where the work
 is happening. Several of these guides are Slack walkthroughs:
 
-- [Multiplayer sessions](#/multiplayer-sessions) — a new participant is gated until an owner approves.
-- [Plan gating](#/plan-gating) — one approval covers a whole plan, scoped to the resource it named.
-- [Shared permissions](#/shared-permissions) — an approval routed to a *resource's* owner, not the requester.
+- [Multiplayer sessions](/docs/multiplayer-sessions) — a new participant is gated until an owner approves.
+- [Plan gating](/docs/plan-gating) — one approval covers a whole plan, scoped to the resource it named.
+- [Shared permissions](/docs/shared-permissions) — an approval routed to a *resource's* owner, not the requester.
 
 ## The App Home hub
 

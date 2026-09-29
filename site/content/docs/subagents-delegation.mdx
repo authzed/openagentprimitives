@@ -20,27 +20,27 @@ export const meta = {
 An AgentClass declares the exact agents it may delegate to — a **subagent roster**. It can't summon an
 arbitrary agent by name; it can hand work only to a member of that reviewed list. The roster is validated as a
 DAG (no delegation cycles), and each entry can be **pinned to an exact bundle digest** (`name@sha256:…`) so the
-subagent you approved is the subagent that runs — see [supply-chain pinning](#/supply-chain-pinning). A cluster
+subagent you approved is the subagent that runs — see [supply-chain pinning](/docs/supply-chain-pinning). A cluster
 can *require* those digest pins as a ratchet, so no one loosens it below.
 
 ## Bounded by construction
 
 Each roster member has a **mode ceiling** — `single_turn`, `task`, or `chat` — capping how much autonomy a
 delegated agent gets, and the whole delegation *tree* is bounded by a budget (`maxDelegatedAgents`), so a chain
-of agents can't fan out without limit. A subagent is still just an [AgentSession](#/session-lifecycle): scoped,
+of agents can't fan out without limit. A subagent is still just an [AgentSession](/docs/session-lifecycle): scoped,
 budgeted, audited, and torn down when done — the parent doesn't get to escape those rules by going through a
 child.
 
 ## Delegation can't launder a data boundary
 
 The subtle risk in delegation is *disclosure*: handing a child a piece of data the requester was allowed to see
-but the child's audience is not. OAP treats that as an [authorization](#/information-leakage) question. When a
+but the child's audience is not. OAP treats that as an [authorization](/docs/information-leakage) question. When a
 delegated call would pass data past the set of people who can see it, the parent **parks and asks the data's
 owner** — the same owner-gated check as a direct share — rather than letting the boundary dissolve one hop
 away.
 
 <Callout kind="security" title="A delegated agent is still gated at every tool call">
   Delegation doesn't hand a child the parent's authority. The child has its own class, its own identity, and
-  its own authorization, and every tool it calls runs through the same [pipeline](#/agent-loop). "The parent was
+  its own authorization, and every tool it calls runs through the same [pipeline](/docs/agent-loop). "The parent was
   allowed to" is never a reason a child's action skips a check.
 </Callout>
