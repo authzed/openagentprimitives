@@ -11,7 +11,20 @@ export interface ShortcutEvent {
   shiftKey: boolean;
 }
 
-/** `platform` is navigator.userAgentData?.platform or navigator.platform. */
+/**
+ * Picks the platform string to test: the User-Agent Client Hints value when it
+ * is non-empty, else the legacy `navigator.platform`. Chromium reports the hint
+ * as "" in some configurations (and after device emulation), so an empty hint
+ * must fall through rather than win.
+ */
+export function platformName(
+  hint: string | undefined,
+  legacy: string | undefined,
+): string {
+  return hint || legacy || "";
+}
+
+/** `platform` is the result of platformName. */
 export function isApplePlatform(platform: string): boolean {
   return /mac|iphone|ipad|ipod/i.test(platform);
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isApplePlatform,
   isSearchShortcut,
+  platformName,
   searchShortcutLabel,
 } from "./shortcut";
 
@@ -17,6 +18,17 @@ const key = (
   altKey: false,
   shiftKey: false,
   ...mods,
+});
+
+describe("platformName", () => {
+  it.each([
+    ["client hint wins when present", "macOS", "MacIntel", "macOS"],
+    ["empty hint falls back to navigator.platform", "", "MacIntel", "MacIntel"],
+    ["missing hint falls back", undefined, "Win32", "Win32"],
+    ["nothing known yields empty", undefined, undefined, ""],
+  ])("%s", (_name, hint, legacy, want) =>
+    expect(platformName(hint, legacy)).toBe(want),
+  );
 });
 
 describe("isApplePlatform", () => {

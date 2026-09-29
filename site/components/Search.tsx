@@ -10,6 +10,7 @@ import {
 import {
   isApplePlatform,
   isSearchShortcut,
+  platformName,
   searchShortcutLabel,
 } from "@/lib/shortcut";
 import {
@@ -42,7 +43,7 @@ export function Search() {
       userAgentData?: { platform?: string };
     };
     const isApple = isApplePlatform(
-      nav.userAgentData?.platform ?? nav.platform ?? "",
+      platformName(nav.userAgentData?.platform, nav.platform),
     );
     setApple(isApple);
     const onKey = (e: KeyboardEvent) => {
