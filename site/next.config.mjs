@@ -12,8 +12,48 @@ const withMDX = createMDX({
   options: { remarkPlugins: ["remark-gfm"] },
 });
 
+// Response headers for every route. The site is fully static, so the CSP
+// cannot carry per-request nonces: Next's hydration payload and next-themes'
+// pre-paint script are inline, hence 'unsafe-inline' for scripts. Pagefind
+// compiles WebAssembly ('wasm-unsafe-eval'), and analytics posts to
+// i.authzed.com. The CSP is production-only because `next dev` relies on eval.
+const csp = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "media-src 'self'",
+  "font-src 'self'",
+  "connect-src 'self' https://i.authzed.com",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "upgrade-insecure-requests",
+].join("; ");
+
+const securityHeaders = [
+  {
+    key: "Strict-Transport-Security",
+    value: "max-age=63072000; includeSubDomains",
+  },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  {
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(), geolocation=()",
+  },
+  ...(process.env.NODE_ENV === "production"
+    ? [{ key: "Content-Security-Policy", value: csp }]
+    : []),
+];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  async headers() {
+    return [{ source: "/:path*", headers: securityHeaders }];
+  },
   pageExtensions: ["ts", "tsx", "mdx"],
   turbopack: { root: repoRoot },
   outputFileTracingRoot: repoRoot,
