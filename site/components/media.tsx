@@ -1,9 +1,27 @@
 "use client";
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { getAsset } from "@/lib/manifest";
 
 function Missing({ name }: { name: string }) {
   return <div className="doc-media-missing">missing media: {name}</div>;
+}
+
+// Screenshot and ScreenshotSeries images are role="button" (a real <button>
+// can't hold an <img> the way these layouts need), so they need their own
+// keyboard activation: Enter or Space, matching what a native button does.
+// preventDefault on Space stops the page from scrolling.
+function activateOnKey(
+  e: ReactKeyboardEvent<HTMLImageElement>,
+  activate: () => void,
+) {
+  if (e.key === "Enter" || e.key === " ") {
+    if (e.key === " ") e.preventDefault();
+    activate();
+  }
 }
 
 // A full-screen overlay showing an image at its natural size. Click the backdrop
@@ -101,6 +119,7 @@ export function Screenshot({
           role="button"
           tabIndex={0}
           onClick={() => setOpen(true)}
+          onKeyDown={(e) => activateOnKey(e, () => setOpen(true))}
         />
         {cap && <figcaption>{cap}</figcaption>}
       </figure>
@@ -146,6 +165,11 @@ export function ScreenshotSeries({
               role="button"
               tabIndex={0}
               onClick={() => setOpen({ src: s.src, caption: s.caption })}
+              onKeyDown={(e) =>
+                activateOnKey(e, () =>
+                  setOpen({ src: s.src, caption: s.caption }),
+                )
+              }
             />
             {s.caption && <figcaption>{s.caption}</figcaption>}
           </figure>

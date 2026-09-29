@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import {
   loadPagefind,
   toPath,
@@ -15,10 +16,23 @@ type State =
 
 export function Search() {
   const pf = useRef<Pagefind | null | undefined>(undefined);
+  const inputRef = useRef<HTMLInputElement>(null);
   // Bumped at the start of each onInput call; a stale (slower) call's result
   // is dropped instead of overwriting a newer call's state.
   const gen = useRef(0);
   const [state, setState] = useState<State>({ kind: "idle" });
+  const pathname = usePathname();
+
+  // Search lives in the docs layout, which persists across navigations.
+  // Picking a result routes to a new page without remounting this
+  // component, so without this the query and result list would still be
+  // showing over the page you just navigated to. Bump the generation first
+  // so a search already in flight can't repopulate state after we clear it.
+  useEffect(() => {
+    gen.current++;
+    setState({ kind: "idle" });
+    if (inputRef.current) inputRef.current.value = "";
+  }, [pathname]);
 
   async function ensure() {
     if (pf.current === undefined) pf.current = await loadPagefind();
@@ -42,6 +56,7 @@ export function Search() {
   return (
     <div className="doc-search" role="search">
       <input
+        ref={inputRef}
         className="doc-search-input"
         type="search"
         placeholder="Search docs"
