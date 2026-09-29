@@ -488,6 +488,10 @@ export function Landing() {
               <li key={q}>{q}</li>
             ))}
           </ol>
+          <p className="lp-hero-qs-foot">
+            OAP answers each one in the platform, before the agent acts.{" "}
+            <a href="#compare">See how &rarr;</a>
+          </p>
           <div className="lp-hero-cta">
             <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
               Get started
@@ -509,7 +513,7 @@ export function Landing() {
       {/* ---------------------------------------------------- 01 problem --- */}
       <section className="lp-section" id="problem">
         <SectionHead kicker="The problem">
-          Credentials reach <em>further</em> than the task needs.
+          Your agent can reach <em>everything</em> its credentials can.
         </SectionHead>
         <p className="lp-lede">
           A token for one repository usually reaches every repository. An agent
@@ -527,7 +531,7 @@ export function Landing() {
           </strong>
         </p>
 
-        <div className="lp-compare-wrap">
+        <div className="lp-compare-wrap" id="compare">
           <table className="lp-compare">
             <thead>
               <tr>
