@@ -116,7 +116,7 @@ const PRIMITIVES = [
   {
     verb: "Broker",
     title: "Identity & credentials",
-    body: "Credentials resolve at the moment of use. The agent gets a valet key, not the keyring.",
+    body: "Credentials resolve at the moment of use, and the agent never holds them.",
     href: "/docs/identity",
   },
   {
@@ -210,7 +210,7 @@ const AREAS: Area[] = [
       ],
       [
         "Secret scrubbing.",
-        "The model sees an opaque handle, never the secret itself.",
+        "The model sees an opaque handle in place of the value.",
       ],
     ],
     links: [
@@ -509,11 +509,11 @@ export function Landing() {
       {/* ---------------------------------------------------- 01 problem --- */}
       <section className="lp-section" id="problem">
         <SectionHead kicker="The problem">
-          A credential is almost always <em>broader</em> than the task.
+          Credentials reach <em>further</em> than the task needs.
         </SectionHead>
         <p className="lp-lede">
           A token for one repository usually reaches every repository. An agent
-          inherits all of that access, not just what its task needs.
+          inherits all of it.
         </p>
         <p className="lp-lede">
           A model can&rsquo;t reliably tell instructions from data, so its
@@ -589,8 +589,7 @@ export function Landing() {
                 </tbody>
               </table>
               <p className="lp-caption">
-                An argument that can&rsquo;t be resolved is denied, never
-                guessed.
+                An argument that can&rsquo;t be resolved is denied.
               </p>
             </div>
           </div>
