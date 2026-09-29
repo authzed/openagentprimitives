@@ -873,24 +873,6 @@ body:has(.lp) {
   border-color: var(--lp-line);
 }
 
-/* ----------------------------------------------------------------- draft --- */
-
-/* Marks a section whose content is still being written, so a reader is never
-   misled about which parts are settled. */
-.lp-draft {
-  display: inline-block;
-  font-family: var(--lp-mono);
-  font-size: 11.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--lp-warn);
-  border: 1px dashed color-mix(in srgb, var(--lp-warn) 45%, transparent);
-  border-radius: 4px;
-  padding: 1px 8px;
-  margin-left: 10px;
-  vertical-align: 3px;
-}
-
 /* --------------------------------------------------------------- closing --- */
 
 .lp-close {

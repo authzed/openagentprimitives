@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Wordmark } from "@/components/Wordmark";
 import { SiteFooter } from "@/components/SiteFooter";
-import { OWASP } from "./owasp";
+import { OWASP, coverageSummary } from "./owasp";
 
 const REPO = "https://github.com/authzed/openagentprimitives";
 
@@ -69,7 +69,7 @@ const COMPARE: [string, string, string][] = [
   [
     "An injected instruction mid-session",
     "Can redirect the agent",
-    "Cannot exceed the approved plan",
+    "Cannot widen what it's authorized to do",
   ],
   [
     "Tool credentials",
@@ -214,7 +214,10 @@ const AREAS: Area[] = [
   {
     title: "Least privilege by default",
     points: [
-      ["Opt-in capabilities.", "Nothing is enabled until someone adds it."],
+      [
+        "Opt-in capabilities.",
+        "No tool or capability is granted until someone adds it.",
+      ],
       [
         "A sandbox per tool.",
         "Each tool holds only its own credentials, and the agent holds none.",
@@ -237,8 +240,8 @@ const AREAS: Area[] = [
         "Cluster, namespace and class defaults that agents can't opt out of.",
       ],
       [
-        "Instant revocation.",
-        "Remove one relationship; no credential rotation or redeploy.",
+        "Revocation.",
+        "Remove one relationship and the next action is refused, with no credential rotation or redeploy.",
       ],
       [
         "Verifiable audit.",
@@ -322,7 +325,7 @@ const EVERYTHING = [
   },
   {
     title: "Built in and swappable",
-    body: "Every core component ships built in and can be replaced with one you already run.",
+    body: "The runner, authorization, approvals, sandboxing, credentials, memory and audit ship built in, and each can be swapped for one you already run.",
   },
   {
     title: "Under your control",
@@ -495,10 +498,6 @@ export function Landing() {
         </div>
         <div className="lp-hero-aside">
           <InstallTerminal />
-          <p className="lp-note">
-            You build OAP from source, so every image in your cluster comes from
-            code you can read and review.
-          </p>
         </div>
       </header>
 
@@ -574,8 +573,7 @@ export function Landing() {
       {/* ---------------------------------------------------- 03 secure --- */}
       <section className="lp-section" id="secure">
         <SectionHead kicker="What makes it secure">
-          <span className="lp-nowrap">Twenty-seven controls,</span> in six
-          areas.
+          Controls in six areas.
         </SectionHead>
         <p className="lp-lede">
           The platform enforces every control. No prompt or tool output can
@@ -659,9 +657,7 @@ export function Landing() {
       <section className="lp-section" id="owasp">
         <SectionHead kicker="Security posture">
           Coverage of the OWASP{" "}
-          <span className="lp-nowrap">
-            Agentic Top 10.<span className="lp-draft">Draft</span>
-          </span>
+          <span className="lp-nowrap">Agentic Top 10.</span>
         </SectionHead>
         <p className="lp-lede">
           How OAP maps to each risk in the OWASP Top 10 for Agentic
@@ -670,7 +666,7 @@ export function Landing() {
         </p>
         <div className="lp-owasp-wrap">
           <table className="lp-owasp">
-            <caption>4 substantial · 5 partial · 1 architectural N/A</caption>
+            <caption>{coverageSummary(OWASP)}</caption>
             <thead>
               <tr>
                 <th scope="col">Item</th>

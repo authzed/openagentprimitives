@@ -52,15 +52,15 @@ with many different owners.
 Every control in OAP therefore sits outside the model. The platform decides
 before the call, and the decision does not depend on the agent's cooperation.
 
-|                                     | Typical agent platform             | OAP                                  |
-| ----------------------------------- | ---------------------------------- | ------------------------------------ |
-| What an agent can reach             | Whatever its credentials allow     | Exactly what you granted             |
-| Who decides an action is allowed    | The model, in the moment           | The platform, before the call        |
-| An injected instruction mid-session | Can redirect the agent             | Cannot exceed the approved plan      |
-| Tool credentials                    | Shared across tools in one sandbox | Held only by the tool that uses them |
-| Restricting an MCP server           | Needs a narrow upstream token      | Declared by you, enforced per call   |
-| Revoking access                     | Rotate credentials, redeploy       | One permission graph call            |
-| The audit log                       | Append-only, enforced by the store | Signed, chained, verifiable offline  |
+|                                     | Typical agent platform             | OAP                                     |
+| ----------------------------------- | ---------------------------------- | --------------------------------------- |
+| What an agent can reach             | Whatever its credentials allow     | Exactly what you granted                |
+| Who decides an action is allowed    | The model, in the moment           | The platform, before the call           |
+| An injected instruction mid-session | Can redirect the agent             | Cannot widen what it's authorized to do |
+| Tool credentials                    | Shared across tools in one sandbox | Held only by the tool that uses them    |
+| Restricting an MCP server           | Needs a narrow upstream token      | Declared by you, enforced per call      |
+| Revoking access                     | Rotate credentials, redeploy       | One permission graph call               |
+| The audit log                       | Append-only, enforced by the store | Signed, chained, verifiable offline     |
 
 ## What makes it secure
 

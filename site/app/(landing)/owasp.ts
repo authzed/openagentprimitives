@@ -38,7 +38,7 @@ export const OWASP: readonly (readonly [
     "ASI05",
     "Unexpected Code Execution",
     "substantial",
-    "Per-call isolation deferred: calls in one session share UID, /proc, /tmp, /work.",
+    "Isolation is per session: tool calls within one session share a UID, /proc, /tmp and /work.",
   ],
   [
     "ASI06",
@@ -49,8 +49,8 @@ export const OWASP: readonly (readonly [
   [
     "ASI07",
     "Insecure Inter-Agent Communication",
-    "na",
-    "One agent per session; channels are human to agent, not agent to agent.",
+    "partial",
+    "Delegation stays within one cluster; there is no protocol for agents outside it.",
   ],
   [
     "ASI08",
@@ -71,3 +71,21 @@ export const OWASP: readonly (readonly [
     "The tool manifest is enforced but unsigned; tamper-evidence is not tamper-proofing.",
   ],
 ];
+
+const SUMMARY_LABEL: Record<CoverageLevel, string> = {
+  substantial: "substantial",
+  partial: "partial",
+  na: "architectural N/A",
+};
+
+/** The table caption, counted from the rows so it cannot drift from them. */
+export function coverageSummary(
+  rows: readonly (readonly [string, string, CoverageLevel, string])[],
+): string {
+  const order: CoverageLevel[] = ["substantial", "partial", "na"];
+  return order
+    .map((level) => [level, rows.filter((r) => r[2] === level).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([level, n]) => `${n} ${SUMMARY_LABEL[level]}`)
+    .join(" · ");
+}
