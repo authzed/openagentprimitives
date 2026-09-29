@@ -25,6 +25,8 @@ describe("posthogOptions", () => {
       disable_session_recording: true,
       capture_heatmaps: false,
       disable_surveys: true,
+      disable_conversations: true,
+      disable_product_tours: true,
       advanced_disable_flags: true,
       disable_external_dependency_loading: true,
       respect_dnt: true,
