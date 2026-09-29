@@ -137,6 +137,15 @@ body:has(.doc-app) {
   color: var(--doc-accent);
 }
 .doc-search { margin-bottom: 20px; }
+/* Visually hidden, still read aloud: the search's status line. */
+.doc-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 .doc-search-input {
   width: 100%;
   padding: 7px 10px;
@@ -267,10 +276,14 @@ body:has(.doc-app) {
 }
 .doc-article a {
   color: var(--doc-accent);
-  text-decoration: none;
+  /* Underlined, not colour alone: the accent is only ~2.4:1 against body
+     text, under the 3:1 a colour-only link needs (WCAG 1.4.1). */
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 3px;
 }
 .doc-article a:hover {
-  text-decoration: underline;
+  text-decoration-color: currentColor;
 }
 .doc-article ul,
 .doc-article ol {

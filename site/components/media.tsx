@@ -1,6 +1,7 @@
 "use client";
 import {
   useEffect,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -26,6 +27,9 @@ function activateOnKey(
 
 // A full-screen overlay showing an image at its natural size. Click the backdrop
 // or press Escape to dismiss; the image itself swallows the click so it stays open.
+// It is a modal dialog, so it behaves like one for the keyboard: focus moves to
+// its close button on open, Tab cannot leave it (the button is its only control),
+// and focus returns to whatever opened it on close.
 function Lightbox({
   src,
   caption,
@@ -35,9 +39,21 @@ function Lightbox({
   caption?: string;
   onClose: () => void;
 }) {
+  const close = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    close.current?.focus();
+    return () => opener?.focus();
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+      if (e.key === "Tab") {
+        e.preventDefault();
+        close.current?.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -52,9 +68,12 @@ function Lightbox({
       className="doc-lightbox"
       role="dialog"
       aria-modal="true"
+      aria-label={caption ?? "Image"}
       onClick={onClose}
     >
       <button
+        ref={close}
+        type="button"
         className="doc-lightbox-close"
         aria-label="Close"
         onClick={onClose}

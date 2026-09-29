@@ -207,6 +207,18 @@ body:has(.lp) {
   font-weight: 500;
 }
 
+/* A link inside a note's running text is underlined, not colour-only. */
+.lp-note a {
+  color: var(--lp-fg);
+  text-decoration: underline;
+  text-decoration-color: var(--lp-line);
+  text-underline-offset: 3px;
+}
+
+.lp-note a:hover {
+  text-decoration-color: currentColor;
+}
+
 .lp-note {
   font-family: var(--lp-mono);
   font-size: 12.5px;
@@ -928,8 +940,19 @@ body:has(.lp) {
   .lp-slab--3 {
     grid-template-columns: 1fr;
   }
-  .lp-nav-links a:not(.lp-btn) {
+  /* Phones keep only Docs beside the button; the rest are on the page. */
+  .lp-nav-links a:not(.lp-btn):not(.lp-nav-keep) {
     display: none;
+  }
+  .lp-nav-links {
+    gap: 12px;
+  }
+  .lp-nav-wordmark {
+    height: 29px;
+  }
+  .lp-nav .lp-btn {
+    padding-left: 14px;
+    padding-right: 14px;
   }
   .lp-owasp td.lp-gap,
   .lp-owasp thead th:last-child {

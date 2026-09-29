@@ -455,7 +455,9 @@ export function Landing() {
           <Wordmark className="lp-nav-wordmark" />
         </a>
         <div className="lp-nav-links">
-          <a href="/docs/what-is-oap">Docs</a>
+          <a className="lp-nav-keep" href="/docs/what-is-oap">
+            Docs
+          </a>
           <a href="#secure">Security</a>
           <a href="#agent-builder">Agent Builder</a>
           <a href={REPO}>GitHub</a>
@@ -466,280 +468,282 @@ export function Landing() {
       </nav>
 
       {/* ------------------------------------------------------------ hero --- */}
-      <header className="lp-hero">
-        <div>
-          <h1>
-            A secure way to run <em>enterprise AI agents</em>.
-          </h1>
-          <p className="lp-hero-sub">
-            Building blocks for running enterprise agents in your own cluster,
-            on the models you choose.{" "}
+      <main>
+        <header className="lp-hero">
+          <div>
+            <h1>
+              A secure way to run <em>enterprise AI agents</em>.
+            </h1>
+            <p className="lp-hero-sub">
+              Building blocks for running enterprise agents in your own cluster,
+              on the models you choose.{" "}
+              <strong>
+                The AI never decides what it&rsquo;s allowed to do. OAP checks
+                every action before it runs.
+              </strong>
+            </p>
+            <p className="lp-hero-qs-head">
+              Trusting an agent means answering four questions:
+            </p>
+            <ol className="lp-hero-qs">
+              {QUESTIONS.map((q) => (
+                <li key={q}>{q}</li>
+              ))}
+            </ol>
+            <p className="lp-hero-qs-foot">
+              OAP answers each one in the platform, before the agent acts.
+            </p>
+            <div className="lp-hero-cta">
+              <a className="lp-btn lp-btn--primary" href="#secure">
+                How it stays secure
+              </a>
+            </div>
+          </div>
+          <div className="lp-hero-aside">
+            <InstallTerminal />
+          </div>
+        </header>
+
+        {/* ---------------------------------------------------- 01 problem --- */}
+        <section className="lp-section" id="problem">
+          <SectionHead kicker="The problem">
+            Your agent can reach <em>everything</em> its credentials can.
+          </SectionHead>
+          <p className="lp-lede">
+            A token for one repository usually reaches every repository. An
+            agent inherits all of it.
+          </p>
+          <p className="lp-lede">
+            A model can&rsquo;t reliably tell instructions from data, so its
+            judgment can&rsquo;t be the boundary. A better prompt is still just
+            an instruction.
+          </p>
+          <p className="lp-lede">
             <strong>
-              The AI never decides what it&rsquo;s allowed to do. OAP checks
-              every action before it runs.
+              So OAP enforces every rule itself, before each action runs, where
+              no prompt can change it.
             </strong>
           </p>
-          <p className="lp-hero-qs-head">
-            Trusting an agent means answering four questions:
+
+          <div className="lp-compare-wrap">
+            <table className="lp-compare">
+              <thead>
+                <tr>
+                  <th scope="col">
+                    <span className="lp-sr">Question</span>
+                  </th>
+                  <th scope="col">Typical agent platform</th>
+                  <th scope="col">OAP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {COMPARE.map(([q, typical, oap]) => (
+                  <tr key={q}>
+                    <th scope="row">{q}</th>
+                    <td className="lp-compare-typical">{typical}</td>
+                    <td className="lp-compare-oap">{oap}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* ------------------------------------------------- 02 primitives --- */}
+        <section className="lp-section" id="primitives">
+          <SectionHead kicker="The primitives">
+            Six concerns every agent has to solve.
+          </SectionHead>
+          <p className="lp-lede">
+            A primitive is a basic building block that agents rely on, whatever
+            they do. OAP ships a working implementation of every one.
           </p>
-          <ol className="lp-hero-qs">
-            {QUESTIONS.map((q) => (
-              <li key={q}>{q}</li>
+          <div className="lp-prims">
+            {PRIMITIVES.map((p, i) => (
+              <article className="lp-prim" key={p.title}>
+                <p className="lp-prim-eyebrow">
+                  #{i + 1} {p.verb}
+                </p>
+                <h3>
+                  <a href={p.href}>{p.title}</a>
+                </h3>
+                <p>{p.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        {/* ---------------------------------------------------- 03 secure --- */}
+        <section className="lp-section" id="secure">
+          <SectionHead kicker="What makes it secure">
+            Controls in six areas.
+          </SectionHead>
+          <p className="lp-lede">
+            The platform enforces every control. No prompt or tool output can
+            affect enforcement.
+          </p>
+          <ol className="lp-slab lp-slab--2 lp-areas">
+            {AREAS.map((a) => (
+              <li key={a.title}>
+                <h3 className="lp-areas-title">{a.title}</h3>
+                <ul className="lp-points">
+                  {a.points.map(([lead, body]) => (
+                    <li key={lead}>
+                      <strong>{lead}</strong> {body}
+                    </li>
+                  ))}
+                </ul>
+                <p className="lp-area-links">
+                  {a.links.map(([label, href]) => (
+                    <a key={href} href={href}>
+                      {label}
+                    </a>
+                  ))}
+                </p>
+              </li>
             ))}
           </ol>
-          <p className="lp-hero-qs-foot">
-            OAP answers each one in the platform, before the agent acts.
+          <p className="lp-note">
+            Plan gating and leakage tracking are opt-in per agent class. Network
+            policy is on by default.
           </p>
-          <div className="lp-hero-cta">
-            <a className="lp-btn lp-btn--primary" href="#secure">
-              How it stays secure
+        </section>
+
+        {/* --------------------------------------------- 04 agent builder --- */}
+        <section className="lp-section" id="agent-builder">
+          <SectionHead kicker="Agent Builder">
+            Build an agent by talking to an agent.
+          </SectionHead>
+          <p className="lp-lede">
+            Agent Builder is an OAP agent that creates other agents. Describe
+            what you need in plain language, then test it live.
+          </p>
+          <div className="lp-slab lp-slab--3">
+            {BUILDER.map((b) => (
+              <div key={b.step}>
+                <p className="lp-prim-eyebrow">{b.step}</p>
+                <h3>{b.title}</h3>
+                <p>{b.body}</p>
+              </div>
+            ))}
+          </div>
+          <div className="lp-hero-cta lp-section-cta">
+            <a className="lp-btn lp-btn--ghost" href="/docs/agent-builder">
+              Read the Agent Builder guide
             </a>
           </div>
-        </div>
-        <div className="lp-hero-aside">
-          <InstallTerminal />
-        </div>
-      </header>
-
-      {/* ---------------------------------------------------- 01 problem --- */}
-      <section className="lp-section" id="problem">
-        <SectionHead kicker="The problem">
-          Your agent can reach <em>everything</em> its credentials can.
-        </SectionHead>
-        <p className="lp-lede">
-          A token for one repository usually reaches every repository. An agent
-          inherits all of it.
-        </p>
-        <p className="lp-lede">
-          A model can&rsquo;t reliably tell instructions from data, so its
-          judgment can&rsquo;t be the boundary. A better prompt is still just an
-          instruction.
-        </p>
-        <p className="lp-lede">
-          <strong>
-            So OAP enforces every rule itself, before each action runs, where no
-            prompt can change it.
-          </strong>
-        </p>
-
-        <div className="lp-compare-wrap">
-          <table className="lp-compare">
-            <thead>
-              <tr>
-                <th scope="col">
-                  <span className="lp-sr">Question</span>
-                </th>
-                <th scope="col">Typical agent platform</th>
-                <th scope="col">OAP</th>
-              </tr>
-            </thead>
-            <tbody>
-              {COMPARE.map(([q, typical, oap]) => (
-                <tr key={q}>
-                  <th scope="row">{q}</th>
-                  <td className="lp-compare-typical">{typical}</td>
-                  <td className="lp-compare-oap">{oap}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* ------------------------------------------------- 02 primitives --- */}
-      <section className="lp-section" id="primitives">
-        <SectionHead kicker="The primitives">
-          Six concerns every agent has to solve.
-        </SectionHead>
-        <p className="lp-lede">
-          A primitive is a basic building block that agents rely on, whatever
-          they do. OAP ships a working implementation of every one.
-        </p>
-        <div className="lp-prims">
-          {PRIMITIVES.map((p, i) => (
-            <article className="lp-prim" key={p.title}>
-              <p className="lp-prim-eyebrow">
-                #{i + 1} {p.verb}
-              </p>
-              <h3>
-                <a href={p.href}>{p.title}</a>
-              </h3>
-              <p>{p.body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      {/* ---------------------------------------------------- 03 secure --- */}
-      <section className="lp-section" id="secure">
-        <SectionHead kicker="What makes it secure">
-          Controls in six areas.
-        </SectionHead>
-        <p className="lp-lede">
-          The platform enforces every control. No prompt or tool output can
-          affect enforcement.
-        </p>
-        <ol className="lp-slab lp-slab--2 lp-areas">
-          {AREAS.map((a) => (
-            <li key={a.title}>
-              <h3 className="lp-areas-title">{a.title}</h3>
-              <ul className="lp-points">
-                {a.points.map(([lead, body]) => (
-                  <li key={lead}>
-                    <strong>{lead}</strong> {body}
-                  </li>
-                ))}
-              </ul>
-              <p className="lp-area-links">
-                {a.links.map(([label, href]) => (
-                  <a key={href} href={href}>
-                    {label}
-                  </a>
-                ))}
-              </p>
-            </li>
-          ))}
-        </ol>
-        <p className="lp-note">
-          Plan gating and leakage tracking are opt-in per agent class. Network
-          policy is on by default.
-        </p>
-      </section>
-
-      {/* --------------------------------------------- 04 agent builder --- */}
-      <section className="lp-section" id="agent-builder">
-        <SectionHead kicker="Agent Builder">
-          Build an agent by talking to an agent.
-        </SectionHead>
-        <p className="lp-lede">
-          Agent Builder is an OAP agent that creates other agents. Describe what
-          you need in plain language, then test it live.
-        </p>
-        <div className="lp-slab lp-slab--3">
-          {BUILDER.map((b) => (
-            <div key={b.step}>
-              <p className="lp-prim-eyebrow">{b.step}</p>
-              <h3>{b.title}</h3>
-              <p>{b.body}</p>
-            </div>
-          ))}
-        </div>
-        <div className="lp-hero-cta lp-section-cta">
-          <a className="lp-btn lp-btn--ghost" href="/docs/agent-builder">
-            Read the Agent Builder guide
-          </a>
-        </div>
-        <p className="lp-note">
-          Off by default. You turn it on by naming who may use it, and it
-          follows every control above.
-        </p>
-      </section>
-
-      {/* -------------------------------------------- 05 everything else --- */}
-      <section className="lp-section" id="everything-else">
-        <SectionHead kicker="Everything else">
-          The rest of the platform, included.
-        </SectionHead>
-        <p className="lp-lede">
-          The capabilities you&rsquo;d expect from any agent platform.
-        </p>
-        <div className="lp-slab lp-slab--3">
-          {EVERYTHING.map((e) => (
-            <div key={e.title}>
-              <h3>{e.title}</h3>
-              <p>{e.body}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ------------------------------------------------------- 06 owasp --- */}
-      <section className="lp-section" id="owasp">
-        <SectionHead kicker="Security posture">
-          Coverage of the OWASP{" "}
-          <span className="lp-nowrap">Agentic Top 10.</span>
-        </SectionHead>
-        <p className="lp-lede">
-          How OAP maps to each risk in the OWASP Top 10 for Agentic
-          Applications, with the remaining gaps listed alongside. This is a
-          self-assessment, not a certification.
-        </p>
-        <div className="lp-owasp-wrap">
-          <table className="lp-owasp">
-            <caption>{coverageSummary(OWASP)}</caption>
-            <thead>
-              <tr>
-                <th scope="col">Item</th>
-                <th scope="col">Risk</th>
-                <th scope="col">Coverage</th>
-                <th scope="col">Known gap</th>
-              </tr>
-            </thead>
-            <tbody>
-              {OWASP.map(([id, title, level, gap]) => (
-                <tr key={id}>
-                  <td className="lp-id">
-                    <a href={`/docs/owasp-top10#${id.toLowerCase()}`}>{id}</a>
-                  </td>
-                  <td className="lp-title">{title}</td>
-                  <td>
-                    <span className={`lp-cov lp-cov--${level}`}>
-                      {COV_LABEL[level]}
-                    </span>
-                  </td>
-                  <td className="lp-gap">{gap}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="lp-hero-cta lp-section-cta">
-          <a className="lp-btn lp-btn--ghost" href="/docs/owasp-top10">
-            Read the coverage map
-          </a>
-        </div>
-        <div className="lp-evidence">
-          <p className="lp-col-head">How we know the gates still hold</p>
-          <p>
-            Every merge runs whole-session scenarios, golden authorization
-            traces and replays of real sessions. A permission check that stops
-            working fails the build.
+          <p className="lp-note">
+            Off by default. You turn it on by naming who may use it, and it
+            follows every control above.
           </p>
-        </div>
-        <p className="lp-note">
-          Based on the{" "}
-          <a href="https://genai.owasp.org">
-            OWASP Top 10 for Agentic Applications (2026)
-          </a>{" "}
-          by the OWASP GenAI Security Project, licensed under{" "}
-          <a href="https://creativecommons.org/licenses/by-sa/4.0/">
-            CC BY-SA 4.0
-          </a>
-          . This assessment is not affiliated with or endorsed by OWASP.
-        </p>
-      </section>
+        </section>
 
-      {/* ----------------------------------------------------------- close --- */}
-      <section className="lp-close">
-        <p className="lp-kicker">Defense in depth</p>
-        <h2 className="lp-h2">Every layer assumes the others may fail.</h2>
-        <p className="lp-lede">
-          To misuse an agent, an attacker has to get past an approved plan, a
-          locked slot, a tool spec, a check on every call, and a sandbox that
-          never held the credential.
-        </p>
-        <div className="lp-hero-cta">
-          <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
-            Get started
-          </a>
-          <a className="lp-btn lp-btn--ghost" href="/docs/what-is-oap">
-            Read the docs
-          </a>
-          <a className="lp-btn lp-btn--ghost" href={REPO}>
-            Source
-          </a>
-        </div>
-      </section>
+        {/* -------------------------------------------- 05 everything else --- */}
+        <section className="lp-section" id="everything-else">
+          <SectionHead kicker="Everything else">
+            The rest of the platform, included.
+          </SectionHead>
+          <p className="lp-lede">
+            The capabilities you&rsquo;d expect from any agent platform.
+          </p>
+          <div className="lp-slab lp-slab--3">
+            {EVERYTHING.map((e) => (
+              <div key={e.title}>
+                <h3>{e.title}</h3>
+                <p>{e.body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ------------------------------------------------------- 06 owasp --- */}
+        <section className="lp-section" id="owasp">
+          <SectionHead kicker="Security posture">
+            Coverage of the OWASP{" "}
+            <span className="lp-nowrap">Agentic Top 10.</span>
+          </SectionHead>
+          <p className="lp-lede">
+            How OAP maps to each risk in the OWASP Top 10 for Agentic
+            Applications, with the remaining gaps listed alongside. This is a
+            self-assessment, not a certification.
+          </p>
+          <div className="lp-owasp-wrap">
+            <table className="lp-owasp">
+              <caption>{coverageSummary(OWASP)}</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Item</th>
+                  <th scope="col">Risk</th>
+                  <th scope="col">Coverage</th>
+                  <th scope="col">Known gap</th>
+                </tr>
+              </thead>
+              <tbody>
+                {OWASP.map(([id, title, level, gap]) => (
+                  <tr key={id}>
+                    <td className="lp-id">
+                      <a href={`/docs/owasp-top10#${id.toLowerCase()}`}>{id}</a>
+                    </td>
+                    <td className="lp-title">{title}</td>
+                    <td>
+                      <span className={`lp-cov lp-cov--${level}`}>
+                        {COV_LABEL[level]}
+                      </span>
+                    </td>
+                    <td className="lp-gap">{gap}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="lp-hero-cta lp-section-cta">
+            <a className="lp-btn lp-btn--ghost" href="/docs/owasp-top10">
+              Read the coverage map
+            </a>
+          </div>
+          <div className="lp-evidence">
+            <p className="lp-col-head">How we know the gates still hold</p>
+            <p>
+              Every merge runs whole-session scenarios, golden authorization
+              traces and replays of real sessions. A permission check that stops
+              working fails the build.
+            </p>
+          </div>
+          <p className="lp-note">
+            Based on the{" "}
+            <a href="https://genai.owasp.org">
+              OWASP Top 10 for Agentic Applications (2026)
+            </a>{" "}
+            by the OWASP GenAI Security Project, licensed under{" "}
+            <a href="https://creativecommons.org/licenses/by-sa/4.0/">
+              CC BY-SA 4.0
+            </a>
+            . This assessment is not affiliated with or endorsed by OWASP.
+          </p>
+        </section>
+
+        {/* ----------------------------------------------------------- close --- */}
+        <section className="lp-close">
+          <p className="lp-kicker">Defense in depth</p>
+          <h2 className="lp-h2">Every layer assumes the others may fail.</h2>
+          <p className="lp-lede">
+            To misuse an agent, an attacker has to get past an approved plan, a
+            locked slot, a tool spec, a check on every call, and a sandbox that
+            never held the credential.
+          </p>
+          <div className="lp-hero-cta">
+            <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
+              Get started
+            </a>
+            <a className="lp-btn lp-btn--ghost" href="/docs/what-is-oap">
+              Read the docs
+            </a>
+            <a className="lp-btn lp-btn--ghost" href={REPO}>
+              Source
+            </a>
+          </div>
+        </section>
+      </main>
 
       <SiteFooter />
     </div>

@@ -47,6 +47,11 @@
 
 .site-footer-credit a {
   color: var(--sf-strong, #e9e7e9);
+  /* These sit inside a sentence, so they carry an underline rather than
+     relying on colour against the muted text around them (WCAG 1.4.1). */
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 3px;
 }
 
 .site-footer a:hover {
