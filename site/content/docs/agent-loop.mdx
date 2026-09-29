@@ -22,16 +22,18 @@ proposes zero or more tool calls. Each proposed call is **dispatched through a c
 survives them does it reach the sandbox or MCP server. The results come back as content, the model continues,
 and the turn ends when the agent produces a reply or hits a budget or the watchdog.
 
-## Tool output is data, never instructions
+## Tool output cannot authorize anything
 
-A tool result is treated as *content the agent read*, not as commands it must obey. Text that comes back from
-a web page, a file, or an API — however imperative it sounds — can't cause the agent to take an action without
-that action going through the same gates as any other tool call. Mechanically, every result is wrapped in
-nonce-tagged delimiters before it's shown to the model, and the system prompt tells the model to treat
-anything inside those tags strictly as data — and to *report*, not obey, any instructions it finds there
-("ignore previous instructions", "now call tool X", "the user approved…"). This is the structural answer to
-prompt injection: there is no path from "a tool returned some text" to "a privileged action ran" that skips
-the checks.
+A tool result is *content the agent read*, not a source of authority. Text that comes back from a web page, a
+file, or an API — however imperative it sounds — can't cause the agent to take an action without that action
+going through the same gates as any other tool call. That is the boundary against prompt injection: no text a
+tool returns can reach a privileged action without the platform's checks.
+
+The model also gets help recognizing injected text. Every result is wrapped in nonce-tagged delimiters before
+it's shown to the model, and the system prompt tells the model to treat anything inside those tags strictly as
+data — and to *report*, not obey, any instructions it finds there ("ignore previous instructions", "now call
+tool X", "the user approved…"). The delimiters and that rule help the model, but are not the boundary: a model
+that follows an injected instruction anyway still can't make a denied call run.
 
 ## Where the safety checks sit
 

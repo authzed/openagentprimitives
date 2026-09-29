@@ -21,8 +21,8 @@ export const meta = {
 
 ## What it is, and what it is not
 
-The builder is itself an ordinary agent — an `AgentClass` named `agent-builder`, installed once per cluster by
-`oap install`. It runs under the same guardrails as everything else here: a plan it must declare, stages you
+The builder is itself an ordinary agent — an `AgentClass` named `agent-builder`, installed by `oap install` when you
+name who may start it. It runs under the same guardrails as everything else here: a plan it must declare, stages you
 approve, tools it calls through the platform, an audit trail. What makes it different is where it works and what
 it produces.
 

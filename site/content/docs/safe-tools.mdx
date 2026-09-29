@@ -27,8 +27,8 @@ never through a shell, never `eval`** — so there's no string to inject into.
 
 Every tool declares its `stateImpact` — `readonly`, `readwrite`, or `external` — and that drives both the
 authorization check and whether a human is asked before it runs. The sandbox pods themselves are hardened
-(non-root, read-only root filesystem, no ambient service-account token), and default-on rate limits,
-circuit breakers, and per-call data-volume budgets keep a misbehaving tool from running away.
+(non-root, read-only root filesystem, no ambient service-account token), and default-on circuit breakers,
+plus optional rate limits and per-call data-volume budgets, keep a misbehaving tool from running away.
 
 ## Go deeper
 

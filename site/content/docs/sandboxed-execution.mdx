@@ -21,8 +21,8 @@ Sandbox (and runner) pods are locked down by default: they run **non-root**, wit
 filesystem**, **all Linux capabilities dropped**, privilege escalation disabled, and the default seccomp
 profile applied. Crucially, the sandbox has **no ambient Kubernetes token** — the service-account token isn't
 mounted — so a tool can't turn around and call the cluster API with the pod's identity. Working directories are
-small in-memory scratch space, and by default the sandbox runs under VM-grade isolation rather than sharing the
-host kernel.
+small in-memory scratch space. Sandboxes run as hardened pods; setting a runtime class such as `kata-fc` on the
+sandbox class gives micro-VM isolation where the cluster provides it.
 
 ## Argv, never a shell
 

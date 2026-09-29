@@ -40,8 +40,9 @@ thing that acts.
 <Callout kind="security" title="How this addresses the OWASP Agentic Top 10">
   The class as a reviewable, budgeted, isolated unit is OAP's answer to several agentic threats:
   <ul>
-    <li><a href="/docs/owasp-top10#asi01">ASI01 — Agent Goal Hijack</a>: tool output is treated as data, never
-      instructions, and high-impact actions are gated.</li>
+    <li><a href="/docs/owasp-top10#asi01">ASI01 — Agent Goal Hijack</a>: tool output cannot widen what the agent
+      may do — every resulting action is checked outside the model, and high-impact actions can be gated.
+      Delimiting tool output as data is a secondary aid.</li>
     <li><a href="/docs/owasp-top10#asi08">ASI08 — Cascading Failures</a>: per-session isolation, budgets, and
       default-on circuit breakers contain blast radius.</li>
     <li><a href="/docs/owasp-top10#asi09">ASI09 — Human-Agent Trust Exploitation</a>: the approval design that

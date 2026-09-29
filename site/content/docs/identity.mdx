@@ -48,7 +48,8 @@ what everything at runtime reads.
   <ul>
     <li><a href="/docs/owasp-top10#asi03">ASI03 — Identity & Privilege Abuse</a> (substantial): per-agent identity
       with no shared credential catalog, on-behalf-of with credential narrowing, a just-in-time token broker,
-      and the structural rule that <em>agents are not authorization subjects — only users are</em>, which blocks
-      the confused-deputy problem.</li>
+      and the structural rule that <em>an agent never acts on authority of its own</em>: checks run against the
+      user it acts for, or, for a session with no user, a principal of its own (the session itself, or a service it declares) with no standing grants. That
+      blocks the confused-deputy problem.</li>
   </ul>
 </Callout>

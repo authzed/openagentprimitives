@@ -4,13 +4,15 @@ export const meta = {
   group: 'Get started',
   order: 10,
   description:
-    'Open Agent Primitives — a Kubernetes-native runtime for LLM agents, built so operating an agent safely is the default.',
+    'Open Agent Primitives — a secure way to run enterprise AI agents, composed from basic building blocks and run in your own Kubernetes cluster on the models you choose.',
 }
 
 # What is OAP?
 
 <div className="doc-lede">
-  <strong>Open Agent Primitives (OAP)</strong> is a Kubernetes-native runtime for LLM agents. Defining an agent
+  <strong>Open Agent Primitives (OAP)</strong> is a secure way to run enterprise AI agents. A primitive is a basic
+  building block that agents rely on, whatever they do; OAP ships a working implementation of each, and agents
+  are composed from them. It runs in your own Kubernetes cluster on the models you choose. Defining an agent
   is easy — a prompt, some tools, a loop. <em>Operating</em> one safely is the hard part, and that's what OAP is
   for: an agent's identity, authorization, tools, memory, and channels are first-class, governed things rather
   than an afterthought.

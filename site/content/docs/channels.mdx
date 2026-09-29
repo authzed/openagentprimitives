@@ -40,7 +40,8 @@ approve is an authorization question, not "whoever can type."
     <li><a href="/docs/owasp-top10#asi09">ASI09 — Human-Agent Trust Exploitation</a> (substantial): the in-channel
       approval design — explicit confirmation on risky actions, an injection-isolated summarizer, and the
       approver derived from the session, not the sender.</li>
-    <li><a href="/docs/owasp-top10#asi07">ASI07 — Insecure Inter-Agent Communication</a> (N/A): OAP's channels are
-      human↔agent, not agent↔agent, so there is no inter-agent bus to secure.</li>
+    <li><a href="/docs/owasp-top10#asi07">ASI07 — Insecure Inter-Agent Communication</a> (partial): agent-to-agent
+      messages travel only between delegating sessions, as typed, authorized directions over a Channel joining
+      the two, with the sender authenticated by its own session subject.</li>
   </ul>
 </Callout>

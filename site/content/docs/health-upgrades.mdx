@@ -31,6 +31,14 @@ apply is idempotent — an unchanged component is left alone, and only what actu
 re-running it is safe. The resolved [cluster kind](/docs/install-cluster) is stamped onto the components at install,
 which is why upgrading a pre-cluster-kind install means re-running `oap install` so the kind is set explicitly.
 
+```bash
+oap install --builder-starters user:$(oap identity canonical-id you@example.com)
+```
+
+`oap install` needs either `--builder-starters` (who may start Agent Builder) or `--without-builder`; see
+[Agent Builder](/docs/agent-builder-install). The starter list replaces what was there, so pass the full list on every
+upgrade.
+
 <Callout kind="tip" title="Fail loud, not silent">
   The platform is deliberately fail-closed about its own configuration — a missing artifact store, an
   unrecognized cluster kind, or an unset required backend crash-loops the component rather than starting in a

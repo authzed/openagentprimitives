@@ -23,10 +23,13 @@ export const meta = {
 
 ```bash
 oap init              # build + install + check (first run)
-oap install           # platform only, into the configured cluster
+oap install --builder-starters user:$(oap identity canonical-id you@example.com)   # platform only
 oap check             # verify every component is healthy
 oap check --watch     # keep checking every couple of seconds
 ```
+
+`oap install` needs either `--builder-starters` (who may start Agent Builder) or `--without-builder`; see
+[Agent Builder](/docs/agent-builder-install).
 
 ## Prerequisites
 

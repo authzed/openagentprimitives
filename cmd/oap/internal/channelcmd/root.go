@@ -12,7 +12,7 @@ func NewCmd(g *apcmd.Globals) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "channel",
 		Aliases: []string{"channels", "ch"},
-		Short:   "Manage Channel CRs (Slack, future webhook/cron, ...).",
+		Short:   "Manage Channel CRs (Slack, browser, GitHub webhooks, schedules, ...).",
 	}
 	cmd.AddCommand(
 		newChannelListCmd(g),
