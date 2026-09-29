@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadPagefind, toPath } from "./pagefind";
 
 describe("toPath", () => {
@@ -11,13 +11,16 @@ describe("toPath", () => {
 });
 
 describe("loadPagefind", () => {
-  it("returns null when the bundle is missing (next dev)", async () => {
-    expect(
-      await loadPagefind(() => Promise.reject(new Error("404"))),
-    ).toBeNull();
+  it("returns null and logs the cause when the bundle is missing", async () => {
+    const log = vi.fn();
+    const err = new Error("404");
+    expect(await loadPagefind(() => Promise.reject(err), log)).toBeNull();
+    expect(log).toHaveBeenCalledWith(expect.any(String), err);
   });
   it("returns the module when the import succeeds", async () => {
     const pf = { search: async () => ({ results: [] }) };
-    expect(await loadPagefind(async () => pf)).toBe(pf);
+    const log = vi.fn();
+    expect(await loadPagefind(async () => pf, log)).toBe(pf);
+    expect(log).not.toHaveBeenCalled();
   });
 });

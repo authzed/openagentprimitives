@@ -22,12 +22,17 @@ const importBundle = () =>
     /* webpackIgnore: true */ /* turbopackIgnore: true */ BUNDLE
   ) as Promise<Pagefind>;
 
+// A missing bundle is expected under `next dev` and returns null so the UI can
+// say so. It is still logged: on a deployed site the same failure means the
+// index 404ed or was blocked, and the console is the only place that shows why.
 export async function loadPagefind(
   importer: () => Promise<Pagefind> = importBundle,
+  log: (message: string, err: unknown) => void = console.error,
 ): Promise<Pagefind | null> {
   try {
     return await importer();
-  } catch {
+  } catch (err) {
+    log("docs search: could not load the search index", err);
     return null;
   }
 }

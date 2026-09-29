@@ -23,7 +23,35 @@ import {
 type State =
   | { kind: "idle" }
   | { kind: "unavailable" }
+  | { kind: "error" }
   | { kind: "results"; items: PagefindResult[] };
+
+// The index only exists after `pnpm build`, so on a dev server "unavailable"
+// has a known fix; on a deployed site it means something failed to load.
+const UNAVAILABLE =
+  process.env.NODE_ENV === "production" ? (
+    "Search is unavailable right now."
+  ) : (
+    <>
+      Search is available after <code>pnpm build</code>.
+    </>
+  );
+
+/** What the hidden status line announces for each state. */
+function announce(state: State): string {
+  switch (state.kind) {
+    case "idle":
+      return "";
+    case "unavailable":
+      return "Search is unavailable.";
+    case "error":
+      return "Search failed. Try again.";
+    case "results":
+      return state.items.length === 0
+        ? "No matches."
+        : `${state.items.length} result${state.items.length === 1 ? "" : "s"}.`;
+  }
+}
 
 export function Search() {
   const pf = useRef<Pagefind | null | undefined>(undefined);
@@ -90,9 +118,14 @@ export function Search() {
       if (my === gen.current) setState({ kind: "idle" });
       return;
     }
-    const { results } = await engine.search(q);
-    const items = await Promise.all(results.slice(0, 8).map((r) => r.data()));
-    if (my === gen.current) setState({ kind: "results", items });
+    try {
+      const { results } = await engine.search(q);
+      const items = await Promise.all(results.slice(0, 8).map((r) => r.data()));
+      if (my === gen.current) setState({ kind: "results", items });
+    } catch (err) {
+      console.error("docs search: query failed", { query: q, err });
+      if (my === gen.current) setState({ kind: "error" });
+    }
   }
 
   return (
@@ -117,10 +150,14 @@ export function Search() {
           </kbd>
         )}
       </div>
+      <p className="doc-sr" role="status">
+        {announce(state)}
+      </p>
       {state.kind === "unavailable" && (
-        <p className="doc-search-note">
-          Search is available after <code>pnpm build</code>.
-        </p>
+        <p className="doc-search-note">{UNAVAILABLE}</p>
+      )}
+      {state.kind === "error" && (
+        <p className="doc-search-note">Search failed. Try again.</p>
       )}
       {state.kind === "results" && (
         <ul className="doc-search-results">
