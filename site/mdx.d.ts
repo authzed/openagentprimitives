@@ -1,8 +1,7 @@
 declare module "*.mdx" {
   import type { ComponentType } from "react";
-  export const meta:
-    | { title: string; section?: string; group?: string; order?: number; description?: string }
-    | undefined;
+  import type { GuideMeta } from "@/lib/nav";
+  export const meta: GuideMeta | undefined;
   const MDXComponent: ComponentType;
   export default MDXComponent;
 }
