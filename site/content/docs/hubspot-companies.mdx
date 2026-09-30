@@ -32,7 +32,17 @@ The demo is a scripted Slack simulation; its people, companies, and results are 
 - [Shared permissions](/docs/shared-permissions) — the approval routes to the data's owner, and
   the data is shared only after that owner says yes.
 
+## Install it
+
 The bundle is in the repository at
 [`examples/hubspot-companies`](https://github.com/authzed/openagentprimitives/tree/main/examples/hubspot-companies),
-packaged as a `.oap` agent container you can lint and install with
-[`oap agent`](/docs/packaging-oap).
+packaged as a [`.oap` agent container](/docs/packaging-oap):
+
+```bash
+oap agent lint    examples/hubspot-companies
+oap agent install examples/hubspot-companies --namespace default
+```
+
+The install applies the bundled manifests, then drives each required channel's
+wizard. The HubSpot OAuth credential is minted separately by the identity setup
+flow described in the bundle's README.

@@ -32,7 +32,17 @@ fictional.
 - [Safe tools](/docs/safe-tools) — read-only is a property of the tool contracts the session is
   offered, checked on every call.
 
+## Install it
+
 The bundle is in the repository at
 [`examples/pm-agent`](https://github.com/authzed/openagentprimitives/tree/main/examples/pm-agent),
-packaged as a `.oap` agent container you can lint and install with
-[`oap agent`](/docs/packaging-oap).
+packaged as a [`.oap` agent container](/docs/packaging-oap):
+
+```bash
+oap agent lint    examples/pm-agent
+oap agent install examples/pm-agent --namespace default
+```
+
+The install asks its two questions — which repositories the agent may read, and
+the read-only GitHub PAT it authenticates with. It applies no privileged
+resources, so it is safe to install into a shared namespace.

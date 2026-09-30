@@ -35,7 +35,17 @@ fictional.
 - [Passthrough identity](/docs/passthrough-vs-agent) — the work runs as Jordan, under Jordan's own
   GitHub and Anthropic credentials, which the platform never stores server-side.
 
+## Install it
+
 The bundle is in the repository at
 [`examples/codebot`](https://github.com/authzed/openagentprimitives/tree/main/examples/codebot),
-packaged as a `.oap` agent container you can lint and install with
-[`oap agent`](/docs/packaging-oap).
+packaged as a [`.oap` agent container](/docs/packaging-oap):
+
+```bash
+oap agent lint    examples/codebot
+oap agent install examples/codebot --namespace default
+```
+
+The install prompts one question — which language toolchains the coding sandbox
+should get. After install, each user links their own GitHub and Anthropic
+credentials once via the identity portal.

@@ -34,7 +34,17 @@ The demo is a scripted Slack simulation; its people, repositories, and results a
 - [Safe tools](/docs/safe-tools) — the read-only boundary is declared in the tool contracts and
   enforced per call, not entrusted to the model or to a narrow upstream token.
 
+## Install it
+
 The bundle is in the repository at
 [`examples/reviewbot`](https://github.com/authzed/openagentprimitives/tree/main/examples/reviewbot),
-packaged as a `.oap` agent container you can lint and install with
-[`oap agent`](/docs/packaging-oap).
+packaged as a [`.oap` agent container](/docs/packaging-oap):
+
+```bash
+oap agent lint    examples/reviewbot
+oap agent install examples/reviewbot --namespace default
+```
+
+The install prompts for reviewbot's own Anthropic API key when its Secret is
+absent, and runs the GitHub channel wizard. See the bundle's README for the
+prerequisites, including the Claude toolchain image its sandbox runs.
