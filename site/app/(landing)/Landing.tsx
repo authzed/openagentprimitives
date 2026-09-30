@@ -10,6 +10,7 @@ import { Wordmark } from "@/components/Wordmark";
 import { SiteFooter } from "@/components/SiteFooter";
 import { DiscordIcon, GitHubIcon } from "@/components/BrandIcons";
 import { DISCORD_URL } from "@/lib/site";
+import { getAsset } from "@/lib/manifest";
 import { OWASP, coverageSummary } from "./owasp";
 
 const REPO = "https://github.com/authzed/openagentprimitives";
@@ -428,6 +429,23 @@ function InstallTerminal() {
   );
 }
 
+/* A narrated demo clip, resolved from the docs media manifest. The narration
+ * is the point, so there is no autoplay: it starts on a click, unmuted, from
+ * its poster frame. */
+function DemoClip({ name, caption }: { name: string; caption: ReactNode }) {
+  const asset = getAsset(name);
+  if (!asset || (!asset.webm && !asset.mp4)) return null;
+  return (
+    <figure className="lp-clip">
+      <video controls playsInline preload="metadata" poster={asset.poster}>
+        {asset.webm && <source src={asset.webm} type="video/webm" />}
+        {asset.mp4 && <source src={asset.mp4} type="video/mp4" />}
+      </video>
+      <figcaption>{caption}</figcaption>
+    </figure>
+  );
+}
+
 function SectionHead({
   kicker,
   children,
@@ -508,6 +526,15 @@ export function Landing() {
           </div>
           <div className="lp-hero-aside">
             <InstallTerminal />
+            <DemoClip
+              name="reviewbot-demo"
+              caption={
+                <>
+                  Watch one: <a href="/docs/reviewbot">reviewbot</a> reviews a
+                  pull request read-only and records a Check Run.
+                </>
+              }
+            />
           </div>
         </header>
 
@@ -634,6 +661,10 @@ export function Landing() {
               </div>
             ))}
           </div>
+          <DemoClip
+            name="builder-first-agent"
+            caption="One build end to end in the real web UI: describe the agent, answer its questions, approve the stage once, test it live, and keep the draft."
+          />
           <div className="lp-hero-cta lp-section-cta">
             <a className="lp-btn lp-btn--ghost" href="/docs/agent-builder">
               Read the Agent Builder guide
