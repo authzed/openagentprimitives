@@ -670,7 +670,7 @@ func (a *Admind) enrichSessionRows(r *http.Request, rows []audit.EntityRow) {
 			rows[i].OutputTokens = st.OutputTokens
 			// st.Model is the uniform "<provider>/<model>" display id; strip the
 			// provider prefix before the bare-keyed price lookup.
-			rows[i].EstimatedCostUSD = prices.Estimate(bareModel(st.Model), st.InputTokens, st.OutputTokens)
+			rows[i].EstimatedCostUSD = prices.Estimate(bareModel(st.Model), st.InputTokens, st.OutputTokens) + toolCostUSD(st.ByTool)
 		}
 		if m, ok := meta[key]; ok {
 			rows[i].StartedBy = m.StartedBy

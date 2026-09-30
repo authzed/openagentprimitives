@@ -215,7 +215,7 @@ func (a *Admind) handleBudget(w http.ResponseWriter, r *http.Request) {
 		// so it must be stripped of its provider prefix before pricing.
 		bs := budgetSession{
 			State:    s,
-			Est:      prices.Estimate(bareModel(s.Model), s.InputTokens, s.OutputTokens),
+			Est:      prices.Estimate(bareModel(s.Model), s.InputTokens, s.OutputTokens) + toolCostUSD(s.ByTool),
 			Starters: starters,
 		}
 		for _, d := range budgetDimensions {
@@ -257,6 +257,16 @@ func bucketCostUSD(b spiceboxv1alpha1.ModelCostBucket) cost.USD {
 		return cost.USD(math.NaN())
 	}
 	return cost.USD(float64(b.AmountMicroUSD) / 1e6)
+}
+
+// toolCostUSD sums a session's provider-reported interactive-toolkit spend.
+// Nil/empty -> 0. Tool cost is always priced, so this never yields NaN.
+func toolCostUSD(buckets []spiceboxv1alpha1.ToolCostBucket) cost.USD {
+	var micro int64
+	for _, b := range buckets {
+		micro += b.AmountMicroUSD
+	}
+	return cost.USD(float64(micro) / 1e6)
 }
 
 // sortedBudgetRows flattens the accumulator into a non-nil slice ordered by
