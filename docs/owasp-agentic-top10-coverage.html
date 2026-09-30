@@ -91,7 +91,7 @@
   }
   .distro > div { display: flex; align-items: center; justify-content: center; color: #0c050f; }
   .distro .s-full { background: var(--cov-full); flex: 4; }
-  .distro .s-partial { background: var(--cov-partial); flex: 5; }
+  .distro .s-partial { background: var(--cov-partial); flex: 6; }
   .distro .s-minimal { background: var(--cov-minimal); flex: 1; }
   .distro .s-na { background: var(--cov-na); flex: 1; }
   .distro-note { color: var(--fg-faint); font-size: 12px; }
@@ -213,7 +213,7 @@
 <p class="meta">
   Source: <em>OWASP Top 10 For Agentic Applications 2026</em> (OWASP GenAI Security Project &mdash; Agentic
   Security Initiative, Dec&nbsp;2025, CC&nbsp;BY-SA&nbsp;4.0) &nbsp;·&nbsp;
-  Assessment scope: <code>agentprimitives</code> @ branch <code>master</code>,
+  Assessment scope: <code>agentprimitives</code> @ branch <code>main</code>,
   point-in-time read of the codebase. &nbsp;·&nbsp; Not an official OWASP or AuthZed artifact.
 </p>
 
@@ -229,17 +229,16 @@
 
 <div class="distro" aria-hidden="true">
   <div class="s-full">4 · substantial</div>
-  <div class="s-partial">5 · partial</div>
-  <div class="s-na">1 · N/A</div>
+  <div class="s-partial">6 · partial</div>
 </div>
 <p class="distro-note">
   <code>ap</code>'s defenses concentrate at the <strong>action boundary</strong> (tools, identity, authorization,
   human approval) and the <strong>execution boundary</strong> (sandboxed, non-root, no-shell, default-on per-tool
-  circuit breakers / rate limits, and default-on runner + sandbox egress NetworkPolicies). They thin out at
+  circuit breakers plus opt-in rate limits, and default-on runner + sandbox egress NetworkPolicies). They thin out at
   the <strong>input / content-integrity boundary</strong> (memory poisoning, indirect injection of retrieved
   content); <strong>supply-chain provenance</strong> now has content-hash pinning across dependency kinds but
-  still lacks signing / attestation. Multi-agent risks (ASI07/ASI08
-  fan-out) are mostly off the table because <code>ap</code> runs one agent per session.
+  still lacks signing / attestation. Multi-agent risk (ASI07) is bounded by a closed, reviewed subagent
+  roster and typed, separately authorized parent↔child messages, but stays within one cluster.
 </p>
 
 <div class="scorecards">
@@ -299,12 +298,12 @@
   </div>
 
   <!-- ASI07 -->
-  <div class="card na">
-    <div class="top"><span class="asi">ASI07</span><span class="badge na">Architectural N/A</span></div>
+  <div class="card partial">
+    <div class="top"><span class="asi">ASI07</span><span class="badge partial">Partial</span></div>
     <h3><a href="#asi07">Insecure Inter-Agent Comms</a></h3>
     <p class="desc">Tampered / spoofed / replayed messages between cooperating agents (A2A, MCP, message bus).</p>
-    <div class="meter na"><span style="width:100%"></span></div>
-    <div class="prim-tags"><span class="prim">single-agent</span></div>
+    <div class="meter partial"><span style="width:60%"></span></div>
+    <div class="prim-tags"><span class="prim">channels</span><span class="prim">agent-def</span></div>
   </div>
 
   <!-- ASI08 -->
@@ -351,7 +350,7 @@
   <a href="#asi04"><span class="b" style="background:var(--cov-partial)"></span>ASI04 — Agentic Supply Chain</a>
   <a href="#asi05"><span class="b" style="background:var(--cov-full)"></span>ASI05 — Unexpected Code Execution</a>
   <a href="#asi06"><span class="b" style="background:var(--cov-partial)"></span>ASI06 — Memory &amp; Context Poisoning</a>
-  <a href="#asi07"><span class="b" style="background:var(--cov-na)"></span>ASI07 — Insecure Inter-Agent Comms</a>
+  <a href="#asi07"><span class="b" style="background:var(--cov-partial)"></span>ASI07 — Insecure Inter-Agent Comms</a>
   <a href="#asi08"><span class="b" style="background:var(--cov-partial)"></span>ASI08 — Cascading Failures</a>
   <a href="#asi09"><span class="b" style="background:var(--cov-full)"></span>ASI09 — Human-Agent Trust Exploitation</a>
   <a href="#asi10"><span class="b" style="background:var(--cov-partial)"></span>ASI10 — Rogue Agents</a>
@@ -374,10 +373,11 @@
       <ul>
         <li class="check"> Every tool result is wrapped in an <strong>unpredictable per-result nonce</strong> (<code>&lt;untrusted-tool-output nonce="…"&gt;</code>) the output can't forge — and tool results are the <em>only</em> non-user ingress path: retrieval, web search, and even memory/KG recall arrive as wrapped tool output, and wrappers persist in the transcript across turns.<span class="ref">pkg/agent/runner/loop.go:59–98, 1561</span></li>
         <li class="check"> System prompt rule: treat everything inside a matched pair strictly as <strong>data to observe, never instructions</strong> — even "ignore previous instructions" style text. This is delimiter-based spotlighting with unforgeable markers, and prompt-level <em>by design</em>: a general-purpose agent must reason over the content itself, so quarantining it behind a sub-LLM or paraphrasing it would strip or alter exactly the meaning the task needs. The rule's first line is model compliance; the enforcement backstop is structural at the <em>action</em> boundary — dual validation, approval gates, the isolated summarizer — not input isolation.<span class="ref">pkg/agent/runner/prompt.go:206</span></li>
+        <li class="check"> <strong>Tool output cannot widen what the agent may do</strong>: every action a tool result might prompt is checked outside the model, at the same pre-dispatch choke point as any other call. The delimiter and system-prompt items above help the model, but are not the boundary.<span class="ref">pkg/agent/runner/loop_dispatch.go</span></li>
         <li class="check"> High-impact / <code>external</code> actions are <strong>gated by human approval</strong>, so a hijacked goal can't silently execute irreversible side effects.<span class="ref">pkg/authz/hooks/toolcallauthz.go</span></li>
         <li class="check"> The approver's "What" is generated by an <strong>isolated summarizer LLM</strong> that never sees the (possibly-poisoned) primary chat — a hijacked agent can't talk its way past the gate (see ASI09).</li>
         <li class="check"> Closed-world tools + least privilege bound the blast radius of any redirected goal.</li>
-        <li class="check"> <strong>A pluggable content-inspection seam now guards the tool-I/O ingress path</strong> — the only non-user ingress (see the nonce-wrap item above). Registry-keyed <code>contentguard</code> <em>Inspector</em> plugins examine the serialized tool args (<code>PreToolCall</code>) and the tool result (<code>PostToolCall</code>) and return pass / block / approve, mapped onto the existing pipeline (Block withholds the whole result from the model; Approve raises a human gate). Default-off, referenced from tiered settings by ID as a ceiling (lower tiers add, never weaken), and fail-closed: an inspector that errors blocks, an unregistered ID / unparseable config makes the settings object Invalid. The shipped example, <code>url-allowlist</code>, enforces an ordered domain-glob / regex / CEL URL policy (per-rule allow/deny/approve) over URLs found in tool I/O — blocking exfiltration / injection-carrier URLs in tool output before they reach the model.<span class="ref">pkg/authz/contentguard/; pkg/authz/contentguard/kinds/urlallowlist/; pkg/authz/contentguard/hook.go; pkg/apis/v1alpha1/settings_common_types.go (ContentInspectors)</span></li>
+        <li class="check"> <strong>A pluggable content-inspection seam now guards the tool-I/O ingress path</strong> — the only non-user ingress (see the nonce-wrap item above). Registry-keyed <code>contentguard</code> <em>Inspector</em> plugins examine the serialized tool args (<code>PreToolCall</code>) and the tool result (<code>PostToolCall</code>) and return pass / block / approve, mapped onto the existing pipeline (Block withholds the whole result from the model; Approve raises a human gate). Default-off, referenced from tiered settings by ID as a ceiling (lower tiers add, never weaken), and fail-closed: an inspector that errors blocks, an unregistered ID / unparseable config makes the settings object Invalid. Two inspectors ship. <code>prompt-injection</code> runs a classifier over inspected text in a per-session pod with egress denied unconditionally, and blocks content above a threshold. <code>url-allowlist</code> enforces an ordered domain-glob / regex / CEL URL policy (per-rule allow/deny/approve) over URLs found in tool I/O — blocking exfiltration / injection-carrier URLs in tool output before they reach the model.<span class="ref">pkg/authz/contentguard/; pkg/authz/contentguard/kinds/promptinjection/; pkg/authz/contentguard/kinds/urlallowlist/; pkg/authz/contentguard/hook.go; pkg/apis/v1alpha1/settings_common_types.go (ContentInspectors)</span></li>
       </ul>
     </div>
     <div class="col gap">
@@ -385,7 +385,7 @@
       <ul>
         <li class="cross"> <strong>No goal-lock / "intent capsule."</strong> The declared goal isn't bound into a signed envelope per cycle, so subtle goal drift isn't detected.</li>
         <li class="cross"> <strong>No plan-divergence detection.</strong> The <code>plans</code> state tracks step status but never alerts when the agent deviates from its declared plan.<span class="ref">pkg/agent/session/state/plans/</span></li>
-        <li class="cross"> <strong>The content-inspection seam exists, but no prompt-injection / prompt-carrier <em>detector</em> ships in it yet.</strong> The <code>contentguard</code> framework + the <code>url-allowlist</code> example (see left) cover URL-policy exfil/injection-carrier guarding, but there is no built-in CDR (content disarm &amp; reconstruction) or injection-payload classifier inspector — that detector is the next inspector kind, not a new framework. Coverage is also tool-I/O-scoped: meta tools (<code>respond_to_user</code> et al.) bypass the gate pipeline, and memory/KG writes aren't inspected (ASI06).</li>
+        <li class="cross"> <strong>Inspection covers tool I/O, not the agent's own replies.</strong> The <code>prompt-injection</code> and <code>url-allowlist</code> inspectors (see left) examine tool args and results; there is no built-in CDR (content disarm &amp; reconstruction) inspector, and memory/KG writes aren't inspected (ASI06).</li>
       </ul>
     </div>
   </div>
@@ -410,7 +410,7 @@
         <li class="check"> <strong>Secret scrubbing + out-of-band <code>secretout</code></strong>: declared secrets in tool output are diverted to a session store and replaced with an opaque handle the LLM never reads.<span class="ref">pkg/tools/redact/, pkg/agent/secretout/</span></li>
         <li class="check"> SSRF-guarded HTTP for MCP; turn / token / duration <strong>budgets</strong> bound runaway loops.<span class="ref">pkg/x/safehttp/, pkg/agent/runner/budget.go</span></li>
         <li class="check"> <strong>Capability drift is enforced per the effective pinning mode</strong>: a <code>block</code> rule withholds drifted tools at session start, <code>approve</code> escalates their calls to human approval (an empty rule mode defaults to approve), and drift is recorded in <code>observedPins</code> + audit pin facts.<span class="ref">cmd/runner/pindrift.go:10–24; pkg/platform/settings/pinning.go:11–15</span></li>
-        <li class="check"> <strong>Per-tool rate limits are enforced at dispatch and default-on</strong>: a <code>toolguard</code> Guard hook runs at <code>PreToolCall</code> (before the SpiceDB check) and <em>denies</em> calls that exceed <code>maxCallsPerTurn</code> or <code>maxCalls</code>&nbsp;+&nbsp;<code>window</code>; even with no policy declared, a builtin rule applies. This directly bounds the OWASP "ping in a loop to exfiltrate via DNS" pattern (ASI02 scenario 7).<span class="ref">pkg/apis/v1alpha1/toolguard_types.go:87–101; pkg/authz/toolguard/state.go:217–239; pkg/authz/toolguard/hook_guard.go:45–102; pkg/agent/runner/pipeline_wiring.go:794–814</span></li>
+        <li class="check"> <strong>Per-tool rate limits are enforced at dispatch, opt-in</strong>: a <code>toolguard</code> Guard hook runs at <code>PreToolCall</code> (before the SpiceDB check) and <em>denies</em> calls that exceed <code>maxCallsPerTurn</code> or <code>maxCalls</code>&nbsp;+&nbsp;<code>window</code>. The builtin rule that applies with no policy declared turns the circuit breaker on and leaves rate limits off, so a limit binds once a <code>ToolGuardPolicy</code> tier sets one. This directly bounds the OWASP "ping in a loop to exfiltrate via DNS" pattern (ASI02 scenario 7).<span class="ref">pkg/apis/v1alpha1/toolguard_types.go:87–101; pkg/authz/toolguard/policy.go:11; pkg/authz/toolguard/state.go:217–239; pkg/authz/toolguard/hook_guard.go:45–102; pkg/agent/runner/pipeline_wiring.go:794–814</span></li>
         <li class="check"> <strong>Per-call data-volume budgets are enforced in both directions.</strong> A <code>toolguard</code> <code>DataLimit</code> caps the serialized tool-args size at <code>PreToolCall</code> (<em>egress</em> — over-limit denies before the tool runs) and the tool-result size at <code>PostToolCall</code> (<em>ingress</em> — over-limit withholds the result, swapping in an <code>IsError</code> the model never reads), so a single call can't move an unbounded payload past its cap. The ingress cap applies to <em>error</em> results too — a tool can't mark an oversized exfil payload <code>IsError</code> to slip it through — and the limit is available per-tool and as a tiered, strictest-wins ceiling.<span class="ref">pkg/apis/v1alpha1/toolguard_types.go:105–132,164–172; pkg/authz/toolguard/hook_guard.go:58–62; pkg/authz/toolguard/hook_record.go; pkg/authz/toolguard/events.go</span></li>
       </ul>
     </div>
@@ -418,7 +418,7 @@
       <h4>What's missing</h4>
       <ul>
         <li class="cross"> <strong>Egress enforcement is partial.</strong> Runner and sandbox pods now get default-on NetworkPolicies (ingress-deny + egress allowlist; sandbox network mode <code>none</code> or a missing class is a fail-closed full egress deny), but enforcement is L3/L4 only — label selectors, CIDRs, and ports. Allowlist-mode sandboxes get coarse TCP 443/80 to <em>any</em> address; the recorded <code>effectiveAllowedHosts</code> hostnames are not enforced without a DNS-aware CNI.<span class="ref">pkg/controllers/agentsession/netpol.go:167–180,323</span></li>
-        <li class="cross"> <strong>The data-volume budget is per-<em>call</em>, not cumulative</strong>, and opt-in (default-off, unlike the default-on rate/breaker rules). A per-call byte cap (see left) bounds any single payload, but a tool making many calls each under its egress cap can still move large total volume across a turn — there is no aggregate per-turn / per-session egress budget — and no byte limit binds at all unless a rule or ceiling configures one.<span class="ref">pkg/apis/v1alpha1/toolguard_types.go:105–112</span></li>
+        <li class="cross"> <strong>The data-volume budget is per-<em>call</em>, not cumulative</strong>, and opt-in (default-off, like rate limits and unlike the default-on breaker). A per-call byte cap (see left) bounds any single payload, but a tool making many calls each under its egress cap can still move large total volume across a turn — there is no aggregate per-turn / per-session egress budget — and no byte limit binds at all unless a rule or ceiling configures one.<span class="ref">pkg/apis/v1alpha1/toolguard_types.go:105–112</span></li>
         <li class="cross"> Typosquat protection only via toolkit-revision + manifest-hash pinning, not signed endpoints; drift enforcement is observe-only for kinds no pinning rule covers.</li>
       </ul>
     </div>
@@ -557,28 +557,28 @@
 </div>
 
 <!-- ASI07 -->
-<div class="detail na" id="asi07">
-  <h3><span class="asi">ASI07</span> Insecure Inter-Agent Communication <span class="badge na">Architectural N/A</span></h3>
+<div class="detail partial" id="asi07">
+  <h3><span class="asi">ASI07</span> Insecure Inter-Agent Communication <span class="badge partial">Partial</span></h3>
   <p class="risk">
     Multi-agent systems are exposed to intercepted, spoofed, or replayed messages between cooperating agents
-    (A2A, MCP, message bus). <code>ap</code> runs <strong>one agent per session</strong>; channels are
-    human↔agent, not agent↔agent — so this class is largely out of scope today.
+    (A2A, MCP, message bus). In <code>ap</code>, agents talk to each other only through delegation: a parent
+    session hands work to a subagent session, and the two exchange a small set of typed messages.
   </p>
   <div class="cols">
     <div class="col has">
-      <h4>Why it's out of scope (and where the seam is)</h4>
+      <h4>What ap does</h4>
       <ul>
-        <li class="check"> Each <code>AgentSession</code> is a single runner pod with one LLM loop; there is no agent-to-agent delegation or A2A registry.</li>
-        <li class="check"> NATS carries human↔agent envelopes and operator↔runner control only — not cross-runner agent messaging.<span class="ref">README.md (architecture)</span></li>
-        <li class="check"> Per-session pods, per-session Secrets, and scoped RBAC keep one session's traffic off another's.</li>
+        <li class="check"> Delegation reaches only a <strong>closed, reviewed subagent roster</strong>, validated as a DAG (no cycles); entries can be pinned to an exact bundle digest.</li>
+        <li class="check"> The delegation tree is <strong>bounded</strong>: <code>maxDelegatedAgents</code> caps its size, and each roster member has a mode ceiling. Each subagent is its own scoped, budgeted, audited <code>AgentSession</code>.</li>
+        <li class="check"> Parent and child exchange only <strong>three typed, separately authorized directions</strong> (<code>ask_parent</code>, <code>return_result</code>, <code>reply_to_subagent</code>), delivered as inspected tool results. Free-form agent-to-agent messages were deliberately removed.<span class="ref">pkg/apis/v1alpha1/subagentrequest_types.go</span></li>
+        <li class="check"> The <strong>sender is authenticated by its own per-session bus subject</strong>, and the destination must match a real Channel joining the two sessions.<span class="ref">pkg/channels/channelkinds/agent/sender.go</span></li>
+        <li class="check"> Passing data past its audience <strong>parks for the data owner's approval</strong>, so delegation can't launder a disclosure boundary.</li>
       </ul>
     </div>
     <div class="col gap">
-      <h4>What to watch if multi-agent lands</h4>
+      <h4>What's missing</h4>
       <ul>
-        <li class="cross"> The transport that <em>does</em> exist isn't fully locked down: the channelsd <strong>NATS JWT subject scope is broad</strong> (<code>ap.&gt;</code> + <code>_INBOX.&gt;</code>), though runner per-session JWTs are already narrowly scoped.</li>
-        <li class="cross"> No mutual-auth / signed-message / anti-replay machinery exists to build on — it would be green-field if A2A is added.</li>
-        <li class="cross"> No attested agent registry or agent-card verification.</li>
+        <li class="cross"> <strong>Delegation stays within one cluster</strong>; there is no protocol for agents outside it.</li>
       </ul>
     </div>
   </div>
@@ -701,7 +701,7 @@
     </tr>
     <tr>
       <td><strong>Input / content integrity</strong></td>
-      <td>A pluggable content-inspection seam (<code>contentguard</code>) now guards the tool-I/O ingress path with a <code>url-allowlist</code> example — but no prompt-injection/CDR detector inspector ships yet, meta tools bypass it, and memory/KG writes are still uninspected (no content validation on memory writes; bootstrap-poisoning via self-ingestion; no provenance scores).</td>
+      <td>A pluggable content-inspection seam (<code>contentguard</code>) now guards the tool-I/O ingress path with a <code>prompt-injection</code> classifier and a <code>url-allowlist</code> inspector — but inspection covers tool I/O, not the agent's own replies, no CDR inspector ships, and memory/KG writes are still uninspected (no content validation on memory writes; assistant turns ingested into the knowledge graph without separate validation; no provenance scores).</td>
       <td class="mono">ASI01 · ASI06</td>
       <td class="mono">pkg/authz/contentguard/; facade.go:108–127, kgingestion/hooks.go</td>
     </tr>
@@ -719,7 +719,7 @@
     </tr>
     <tr>
       <td><strong>Intra-session isolation</strong></td>
-      <td>Tier-1 sandbox isolation deferred — ToolCalls in a session share UID / <code>/proc</code> / <code>/work</code>. (Per-tool rate limits / circuit breakers are now enforced and default-on via <code>pkg/toolguard</code> in the dispatch pipeline.)</td>
+      <td>Tier-1 sandbox isolation deferred — ToolCalls in a session share UID / <code>/proc</code> / <code>/work</code>. (Per-tool circuit breakers are now enforced and default-on via <code>pkg/authz/toolguard</code> in the dispatch pipeline; rate limits are enforced there too, but opt-in.)</td>
       <td class="mono">ASI05 · ASI08</td>
       <td class="mono">Open</td>
     </tr>
@@ -731,11 +731,10 @@
   classic agent-authorization risks — tool misuse, privilege abuse, unsafe execution, and human-approval
   manipulation (ASI02/03/05/09). The work ahead is mostly at two frontiers the design hasn't reached yet:
   <strong>content integrity</strong> (treating untrusted data and memory as adversarial, not just access-controlled) —
-  where a pluggable <code>contentguard</code> inspection seam over tool I/O is now the first foothold, awaiting a
-  prompt-injection/CDR detector and memory-write validation — and <strong>supply-chain provenance</strong>
-  (verifying where tools and descriptors come from). Multi-agent risks
-  (ASI07/08) stay parked until/unless <code>ap</code> grows agent-to-agent topology — at which point inter-agent
-  auth becomes green-field work, not a retrofit.
+  where a pluggable <code>contentguard</code> inspection seam over tool I/O, with a prompt-injection classifier and a
+  URL allowlist, is now the first foothold, awaiting CDR and memory-write validation — and <strong>supply-chain provenance</strong>
+  (verifying where tools and descriptors come from). Inter-agent communication (ASI07) is bounded to delegation
+  inside one cluster; there is no protocol for agents outside it.
 </div>
 
 <!-- ============ MAPPING TO PRIMITIVES ============ -->
@@ -747,8 +746,8 @@
     <tr><td><strong>Safe tools</strong></td><td class="mono">ASI02, ASI04, ASI05, ASI01</td><td>Strong on misuse/RCE; weak on supply-chain provenance.</td></tr>
     <tr><td><strong>Identity &amp; credentials</strong></td><td class="mono">ASI03</td><td>Strong; TOCTOU + sidecar-freeze are the edges.</td></tr>
     <tr><td><strong>Authorization</strong></td><td class="mono">ASI02, ASI03, ASI06, ASI10</td><td>Strong per-action checks; no behavioral attestation.</td></tr>
-    <tr><td><strong>Agent definition</strong></td><td class="mono">ASI01, ASI08, ASI09</td><td>Approval + budgets + isolation strong; no plan-divergence.</td></tr>
-    <tr><td><strong>Channels &amp; continuity</strong></td><td class="mono">ASI09, (ASI07)</td><td>Human approval strong; agent↔agent absent by design.</td></tr>
+    <tr><td><strong>Agent definition</strong></td><td class="mono">ASI01, ASI07, ASI08, ASI09</td><td>Approval + budgets + isolation strong; no plan-divergence.</td></tr>
+    <tr><td><strong>Channels &amp; continuity</strong></td><td class="mono">ASI09, ASI07</td><td>Human approval strong; agent↔agent limited to typed, authorized delegation messages.</td></tr>
     <tr><td><strong>Memory &amp; knowledge</strong></td><td class="mono">ASI06, ASI10</td><td>Access-control strong; content-integrity thin.</td></tr>
   </tbody>
 </table>
@@ -756,7 +755,7 @@
 <div class="footer">
   <p><strong>Methodology.</strong> Risk definitions are taken from the OWASP Top 10 for Agentic Applications 2026.
   Coverage verdicts come from a point-in-time read of the <code>agentprimitives</code> codebase (branch
-  <code>master</code>): file references point at the mechanism that mitigates each risk,
+  <code>main</code>): file references point at the mechanism that mitigates each risk,
   Meter fills are a qualitative judgment of coverage breadth, not a quantitative score.</p>
   <p><strong>Caveats.</strong> This is an internal mapping for orientation, not a formal security audit or a
   penetration test. It does not certify that the cited controls are free of implementation bugs — only that the

@@ -1,0 +1,55 @@
+export const meta = {
+  title: 'Identity & credentials',
+  section: 'Guides',
+  group: 'Concepts',
+  order: 130,
+  description:
+    "An agent acts as itself or on a user's behalf, with named credentials resolved by need — a valet key, not the keyring.",
+}
+
+# Identity & credentials
+
+<div className="doc-lede">
+  A real agent has to authenticate to real systems. The naive way — a pile of environment-variable secrets the
+  process inherits — hands the agent the whole keyring, turns "acting as the user" into impersonation by shared
+  secret, and never asks whose identity to use in the first place. OAP resolves <strong>named credentials by
+  need</strong>, and makes "whose identity" an explicit, governed choice.
+</div>
+
+## Whose credentials? — the four modes
+
+An agent's tools authenticate as *someone*. An AgentClass's `identityMode` decides who:
+
+- **`agent`** — the agent uses its own credentials (an operator account it owns). *"Uses an operator account —
+  has its own credentials."*
+- **`userPassthrough`** — the agent uses the credentials of the person who started the session. *"Uses YOUR
+  account — calls services as you."*
+- **`ask`** — at session start, the person is asked to choose: run as the agent, or run as me.
+- **`dynamic`** — an isolated recommender LLM *suggests* one of the two, but the person still confirms. The
+  recommendation is advisory only.
+
+There is no autonomous "selected" mode: `ask` and `dynamic` both end in the same human choice — `ask` presents
+it blank, `dynamic` pre-highlights a suggestion. The resolved answer (always `agent` or `userPassthrough`) is
+what everything at runtime reads.
+
+## Go deeper
+
+- **[Identity modes](/docs/identity-modes)** — the four modes, and static vs. resolved (`effectiveIdentityMode`).
+- **[User-passthrough vs. agent-identity](/docs/passthrough-vs-agent)** — the two ways an agent authenticates, and
+  the credential flow behind each.
+- **[Choosing identity per session](/docs/choosing-identity)** — how `ask` and `dynamic` present the choice, and why
+  a passthrough session *pauses* rather than failing.
+- **[Giving an agent credentials](/docs/giving-credentials)** — the `AgentIdentity` resource, credential types
+  (static, OAuth, federated, GitHub App), and the guided setup flows.
+- **[Enterprise managed auth](/docs/enterprise-auth)** — deriving an upstream token from a user's enterprise IdP (ID-JAG federation).
+- **[Managing your connections](/docs/managing-connections)** — the self-service portal to link, review, and revoke credentials.
+
+<Callout kind="security" title="How this addresses the OWASP Agentic Top 10">
+  <ul>
+    <li><a href="/docs/owasp-top10#asi03">ASI03 — Identity & Privilege Abuse</a> (substantial): per-agent identity
+      with no shared credential catalog, on-behalf-of with credential narrowing, a just-in-time token broker,
+      and the structural rule that <em>an agent never acts on authority of its own</em>: checks run against the
+      user it acts for, or, for a session with no user, a principal of its own (the session itself, or a service it declares) with no standing grants. That
+      blocks the confused-deputy problem.</li>
+  </ul>
+</Callout>

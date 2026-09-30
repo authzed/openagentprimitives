@@ -1,0 +1,154 @@
+export const meta = {
+  title: 'OWASP Agentic Top 10',
+  section: 'Guides',
+  group: 'Security',
+  order: 210,
+  description:
+    "How Open Agent Primitives maps against the OWASP Top 10 for Agentic Applications (2026) — what each primitive addresses, and where the gaps are.",
+}
+
+# OWASP Agentic Top 10 — coverage
+
+<div className="doc-lede">
+  A map of how OAP addresses the <strong>OWASP Top 10 for Agentic Applications (2026)</strong>. Each concept
+  in these docs is designed around specific threats below; each threat here names the OAP mechanism that
+  answers it and the gaps that remain. This is an <em>advisory</em> assessment, not a certification — coverage
+  is a qualitative judgement, and honest about what's missing.
+</div>
+
+Across the ten: **4 substantially addressed · 6 partial.**
+
+<Callout kind="note" title="How to read this">
+  Each item links back to the concept that addresses it, and each concept's overview links here. "Substantial"
+  means the threat is a design center of OAP; "Partial" means real defenses with named gaps.
+</Callout>
+
+<h3 id="asi01">ASI01 — Agent Goal Hijack <Coverage level="partial" /></h3>
+
+**What OAP does.** Tool output cannot widen what the agent may do: every resulting action is checked outside
+the model, and high-impact and *external* actions can be human-approval-gated. Tool results are the *only*
+non-user ingress path; as a secondary aid, each is wrapped in an unpredictable per-result nonce and the system
+prompt's spotlighting rule tells the model to treat delimited content as data, never instructions. A pluggable
+content-guard seam inspects tool I/O, and two inspectors ship: a prompt-injection classifier (run in a
+zero-egress pod) and a URL allowlist. — see [Safe tools](/docs/safe-tools),
+[Content guards & egress](/docs/content-guards-egress), and [Agent definition](/docs/agent-definition).
+
+**Gaps.** No goal-lock or plan-divergence detection; inspection covers tool I/O, not the agent's own replies.
+
+<h3 id="asi02">ASI02 — Tool Misuse & Exploitation <Coverage level="substantial" /></h3>
+
+**What OAP does.** This is OAP's home turf. Tools are dual-validated — at authoring time and again at
+execution time — behind deny-by-default subcommand/field allowlists and CEL, and they run as **argv arrays,
+never through a shell**. Each tool's `stateImpact` (readonly / readwrite / external) drives the authorization
+check and whether a human is asked; every action is checked per-action against SpiceDB. Secrets are scrubbed
+from output; default-on circuit breakers, plus opt-in per-tool rate limits and per-call data-volume budgets,
+bound runaway use. — see
+[Safe tools](/docs/safe-tools).
+
+**Gaps.** Egress control is L3/L4 only; the volume budget is per-call, not cumulative.
+
+<h3 id="asi03">ASI03 — Identity & Privilege Abuse <Coverage level="substantial" /></h3>
+
+**What OAP does.** Each agent has its own `AgentIdentity` — there is no shared credential catalog. Acting on a
+user's behalf goes through `UserIdentity → SessionUserIdentity` with the credential set narrowed to what the
+session's agent asked for, and a token broker resolves credentials just-in-time (a valet key, fail-closed).
+Critically, **an agent never acts on authority of its own**: checks run against the user it acts for, or, for a
+session with no user, a principal of its own (the session itself, or a service it declares) with no standing grants — which structurally blocks the
+confused-deputy problem; grants are bound to an arguments-hash HMAC caveat, and credential revocation reaches in-flight
+sessions. — see [Identity](/docs/identity).
+
+**Gaps.** Sidecar credentials are frozen at pod-create (no mid-execution re-auth); revocation delivery is
+at-most-once.
+
+<h3 id="asi04">ASI04 — Agentic Supply Chain <Coverage level="partial" /></h3>
+
+**What OAP does.** The MCP tool manifest is content-hash-pinned, with pluggable pinning kinds (mcp / image /
+cli / skill) under a tiered policy, and drift is *enforced*, not merely recorded. A tiered `allowedMCPServers`
+allowlist bounds what an agent may install. — see [Safe tools](/docs/safe-tools).
+
+**Gaps.** No descriptor signing or attestation, and no SBOM/AIBOM — a hash pins *content*, not *origin*.
+
+<h3 id="asi05">ASI05 — Unexpected Code Execution (RCE) <Coverage level="substantial" /></h3>
+
+**What OAP does.** Tool pods are hardened: non-root, read-only root filesystem, all capabilities dropped,
+seccomp `RuntimeDefault`, no service-account token. Tools execute as **argv arrays over pod exec — never a
+shell, never `eval`** — against a closed set of tools, in per-session sandbox pods. — see
+[Safe tools](/docs/safe-tools).
+
+**Gaps.** Egress is L3/L4 only. Isolation is per session: tool calls within one session share a UID, /proc,
+/tmp and /work.
+
+<h3 id="asi06">ASI06 — Memory & Context Poisoning <Coverage level="partial" /></h3>
+
+**What OAP does.** Memory is authorized per-subject through SpiceDB — read is session membership, write and
+delete are the creator's — with tenant/scope isolation and search post-filtered through SpiceDB. External
+entries are tagged untrusted, and the transcript, authz decisions, and audit kinds are an **append-only,
+Ed25519-signed, tamper-evident log** verifiable offline with `oap audit verify`. — see [Memory](/docs/memory) and
+[Authorization](/docs/authorization).
+
+**Gaps.** No content validation on memory writes. Assistant turns are ingested into the knowledge graph without
+separate validation, so a poisoned turn can influence later recall.
+
+<h3 id="asi07">ASI07 — Insecure Inter-Agent Communication <Coverage level="partial" /></h3>
+
+**What OAP does.** Delegation reaches only a **closed, reviewed subagent roster**, validated as a DAG, with
+entries that can be pinned to a bundle digest. The delegation tree is bounded (`maxDelegatedAgents`, and a
+per-member mode ceiling), and each subagent is its own scoped, budgeted, audited AgentSession. Parent and child
+exchange only three typed, separately authorized directions — `ask_parent`, `return_result`, and
+`reply_to_subagent` — delivered as inspected tool results; free-form agent-to-agent messages were deliberately
+removed. The sender is authenticated by its own per-session bus subject, and the destination must match a real
+Channel joining the two sessions. Passing data past its audience parks for the data owner's approval. — see
+[Subagents & delegation](/docs/subagents-delegation) and [Channels](/docs/channels).
+
+**Gaps.** Delegation stays within one cluster; there is no protocol for agents outside it.
+
+<h3 id="asi08">ASI08 — Cascading Failures <Coverage level="partial" /></h3>
+
+**What OAP does.** Per-session isolation contains blast radius; a silence watchdog, per-phase budgets, and
+default-on circuit breakers (a per-tool/per-origin three-state machine) stop runaway loops; default-on egress
+NetworkPolicies bound each session and sandbox; the operator's Secret/ConfigMap reads are code-confined to
+adopted objects with a fail-loud tripwire. — see [Agent definition](/docs/agent-definition).
+
+**Gaps.** The breaker is per-tool/origin, not cross-cutting; the operator's `secrets` RBAC is cluster-wide by
+default.
+
+<h3 id="asi09">ASI09 — Human-Agent Trust Exploitation <Coverage level="substantial" /></h3>
+
+**What OAP does.** OAP's whole approval design targets this. External/high-impact actions require explicit
+confirmation, and the card a human reads is built by an **injection-isolated summarizer** — a second LLM that
+sees only the operator-signed schema and arguments, never the primary chat. The mechanically-derived "What" is
+shown separately from the agent's "Why", a permanent Show-Details escape hatch exposes the raw arguments, and
+previews are separated from effects (an SVG artifact renders as an inert `data:` URI, no script). The approver
+is session-derived and owner-gated at click time. — see [Channels](/docs/channels) and the
+[Authorization](/docs/authorization) guides.
+
+**Gaps.** No plan-divergence cross-check; no confidence-weighted UI cues.
+
+<h3 id="asi10">ASI10 — Rogue Agents <Coverage level="partial" /></h3>
+
+**What OAP does.** Sessions are disposable and scoped, checked per-action against SpiceDB; the declared tool
+set is an **enforced behavioral manifest** — an undeclared tool is structurally uncallable. The audit system
+*is* the audit trail: every authorization check writes a tamper-evident, signed decision record that outlives
+the session. Runtime scope can be narrowed, and both credentials and tools can be revoked into in-flight
+sessions. — see [Authorization](/docs/authorization) and [Memory](/docs/memory).
+
+**Gaps.** The tool manifest isn't signed/attested and drift within the allowed surface is undetected;
+tamper-*evidence* is not tamper-*proofing*; there is no self-replication guard.
+
+## Mapped to the primitives
+
+Each concept is designed around specific threats:
+
+- **[Safe tools](/docs/safe-tools)** → [ASI02](/docs/owasp-top10#asi02), [ASI04](/docs/owasp-top10#asi04), [ASI05](/docs/owasp-top10#asi05), [ASI01](/docs/owasp-top10#asi01)
+- **[Identity & credentials](/docs/identity)** → [ASI03](/docs/owasp-top10#asi03)
+- **[Authorization](/docs/authorization)** → [ASI02](/docs/owasp-top10#asi02), [ASI03](/docs/owasp-top10#asi03), [ASI06](/docs/owasp-top10#asi06), [ASI10](/docs/owasp-top10#asi10)
+- **[Agent definition](/docs/agent-definition)** → [ASI01](/docs/owasp-top10#asi01), [ASI07](/docs/owasp-top10#asi07), [ASI08](/docs/owasp-top10#asi08), [ASI09](/docs/owasp-top10#asi09)
+- **[Channels & continuity](/docs/channels)** → [ASI07](/docs/owasp-top10#asi07), [ASI09](/docs/owasp-top10#asi09)
+- **[Memory & knowledge](/docs/memory)** → [ASI06](/docs/owasp-top10#asi06), [ASI10](/docs/owasp-top10#asi10)
+
+---
+
+This page is based on the [OWASP Top 10 for Agentic Applications (2026)](https://genai.owasp.org)
+by the OWASP GenAI Security Project, licensed under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The assessment is AuthZed's own and is not
+affiliated with or endorsed by OWASP.

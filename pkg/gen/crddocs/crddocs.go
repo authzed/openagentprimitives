@@ -1,4 +1,4 @@
-// Package crddocs generates the showcase docs' CRD reference: one MDX page per
+// Package crddocs generates the site's CRD reference: one MDX page per
 // OAP CustomResourceDefinition, from the generated CRD YAML schemas (which carry
 // field descriptions from the Go doc comments, plus types/enums/defaults). A
 // change to a *_types.go field surfaces — after `mage gen:api` — as a docs diff,
@@ -135,7 +135,7 @@ func overviewPage(crds []crdInfo) string {
 	b.WriteString("full spec.\n\n")
 	b.WriteString("| Kind | Scope | Summary |\n| --- | --- | --- |\n")
 	for _, c := range crds {
-		fmt.Fprintf(&b, "| [%s](#/crd-%s) | %s | %s |\n", c.kind, c.singular, c.scope, mdxutil.TableText(c.desc))
+		fmt.Fprintf(&b, "| [%s](/docs/crd-%s) | %s | %s |\n", c.kind, c.singular, c.scope, mdxutil.TableText(c.desc))
 	}
 	return b.String()
 }

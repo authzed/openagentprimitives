@@ -1,4 +1,4 @@
-// Package clidocs generates the showcase docs' CLI reference: one MDX page per
+// Package clidocs generates the site's CLI reference: one MDX page per
 // top-level `oap` command family, walked deterministically from the live cobra
 // command tree. It takes a *cobra.Command so the heavy rendering is unit-testable
 // against a synthetic tree; the real oap tree is passed in by a gated test in
@@ -81,7 +81,7 @@ func overviewPage(root *cobra.Command, fams []*cobra.Command) string {
 	b.WriteString("## Families\n\n")
 	b.WriteString("| Family | What it does |\n| --- | --- |\n")
 	for _, f := range fams {
-		fmt.Fprintf(&b, "| [`oap %s`](#/oap-%s) | %s |\n", f.Name(), f.Name(), mdxutil.TableText(f.Short))
+		fmt.Fprintf(&b, "| [`oap %s`](/docs/oap-%s) | %s |\n", f.Name(), f.Name(), mdxutil.TableText(f.Short))
 	}
 	b.WriteString("\n## Global flags\n\n")
 	b.WriteString("These persistent flags apply to every command:\n\n")

@@ -1,0 +1,47 @@
+export const meta = {
+  title: 'oap settings',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2960,
+  description: 'Manage cluster-wide agent settings (security defaults wizard + apply).',
+}
+
+# oap settings
+
+Manage cluster-wide agent settings (security defaults wizard + apply).
+
+## `oap settings apply -f <file>`
+
+Apply a ClusterAgentSettings YAML manifest.
+
+Flags:
+
+```text
+--dry-run          Print what would be applied without applying
+-f, --file string  Path to ClusterAgentSettings YAML
+```
+
+## `oap settings wizard`
+
+wizard walks you through enabling security controls (circuit breakers,
+rate limits, data-volume budgets, dependency pinning, prompt-injection detection,
+and URL allow-listing) and applies the resulting ClusterAgentSettings to your cluster.
+
+Use --defaults for a non-interactive secure baseline, or --dry-run to preview
+without applying.
+
+Flags:
+
+```text
+--default-model string                   Register a cluster default model (catalog entry marked default) — e.g. claude-sonnet-5
+--default-model-provider string          Provider for the default model (default "anthropic")
+--default-model-secret-key string        Key within the central token Secret (default "token")
+--default-model-secret-name string       Central token Secret name (default "model-default-token")
+--default-model-secret-namespace string  Central token Secret namespace (default "agentprimitives-system")
+--default-model-token-env string         Env var holding the model API token (required with a non-anthropic --default-model-provider, unless --default-model-token-file is given) (default "ANTHROPIC_API_KEY")
+--default-model-token-file string        File holding the model API token (wins over env)
+--defaults                               Apply the recommended secure baseline without prompting (non-interactive)
+--dry-run                                Preview the resulting ClusterAgentSettings without applying it
+--wizard                                 Force interactive wizard (default when neither --defaults nor --wizard is specified)
+```
+

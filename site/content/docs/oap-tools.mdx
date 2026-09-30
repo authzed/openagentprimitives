@@ -1,0 +1,205 @@
+export const meta = {
+  title: 'oap tools',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2990,
+  description: 'Manage tools used by agents (kind-agnostic)',
+}
+
+# oap tools
+
+Manage tools used by agents (kind-agnostic)
+
+## `oap tools apply`
+
+Server-side apply a multi-doc YAML stream of tool resources (any kind)
+
+Flags:
+
+```text
+-f, --file string  Path to YAML file (or '-' for stdin)
+```
+
+## `oap tools edit <name>`
+
+Open the named tool resource in $EDITOR via kubectl edit
+
+## `oap tools gen`
+
+Opens a session with the agent builder in your browser. The agent builder walks you from an idea to a working, tested agent — it has replaced the old local tool generator.
+
+Flags:
+
+```text
+--no-browser  Print the workshop URL instead of opening a browser
+```
+
+## `oap tools get <name>`
+
+Aliases: `show`.
+
+Show the detail view of a tool resource (any kind)
+
+## `oap tools lint -f <file>`
+
+Run offline lint on a tool spec file
+
+Flags:
+
+```text
+-f, --file string  Path to spec file
+```
+
+## `oap tools list`
+
+List all tool resources across registered kinds
+
+Flags:
+
+```text
+-A, --all-namespaces  List across all namespaces
+```
+
+## `oap tools mcp`
+
+MCPServer-spec authoring helpers (check, explain, test, probe)
+
+### `oap tools mcp check <spec.yaml>`
+
+Schema + CEL compile check an MCPServer spec
+
+### `oap tools mcp explain --spec=<spec.yaml> --tool=<name> --args='<json>'`
+
+Run mcp validator against a synthetic call and print a trace
+
+Flags:
+
+```text
+--args string  JSON-encoded args payload (default "{}")
+--spec string  path to MCPServer spec YAML
+--tool string  tool name to simulate
+```
+
+### `oap tools mcp probe <server>`
+
+Probe a deployed MCPServer with credentials resolved from an AgentIdentity.
+
+Unlike `oap tools probe -f &lt;file&gt;` (anonymous, file-based, used during spec authoring),
+this command resolves the live OAuth/PAT credential from an AgentIdentity whose
+credentials include a credential named after the server, and shows what the
+server actually exposes to authenticated callers.
+
+If exactly one AgentIdentity in the namespace has a credential for the server,
+it is selected automatically. Otherwise pass --via to choose one.
+
+Flags:
+
+```text
+--json        Emit the raw tools/list response as indented JSON
+--schemas     Inline each tool's input and output JSON schema (piped/non-TTY output only; the interactive view always offers them)
+--via string  AgentIdentity to authenticate with (required if more than one identity binds to the server)
+```
+
+### `oap tools mcp test <spec.yaml>`
+
+Replay persisted MCP test cases against a spec
+
+## `oap tools probe -f <file>`
+
+Probe a live tool backend using the spec file (e.g. MCP tools/list)
+
+Flags:
+
+```text
+-f, --file string  Path to spec file
+```
+
+## `oap tools toolcall`
+
+Inspect ToolCall resources (per-invocation sandbox tool exec records)
+
+### `oap tools toolcall list`
+
+List ToolCall CRs in the namespace
+
+Flags:
+
+```text
+--session string  Only show ToolCalls targeting this SpiceboxSession name
+```
+
+### `oap tools toolcall show <name>`
+
+Show a ToolCall's spec, status, conditions, and artifact refs
+
+## `oap tools toolkit`
+
+Inspect SpiceboxToolkit resources (registered tool descriptions)
+
+### `oap tools toolkit list`
+
+List SpiceboxToolkit CRs
+
+### `oap tools toolkit show <name>`
+
+Show a SpiceboxToolkit's binary target, subcommands, and validation status
+
+## `oap tools toolspec`
+
+Sandbox-toolspec authoring helpers (gen moved to oap tools gen; cluster verbs moved to oap tools &lt;verb&gt;)
+
+### `oap tools toolspec check <spec.yaml>`
+
+Schema + CEL compile check a spec (against its toolkit)
+
+Flags:
+
+```text
+--toolkit string  optional toolkit for cross-check
+```
+
+### `oap tools toolspec describe <spec.yaml>`
+
+Render a plain-language description of a spec
+
+Flags:
+
+```text
+--format string    render format: text|markdown|json (default "text")
+--toolkits string  toolkit catalog dir (env TOOLSPEC_TOOLKITS)
+```
+
+### `oap tools toolspec explain -- <argv...>`
+
+Run validate and print a human-readable trace
+
+Flags:
+
+```text
+--binary-version string  binary semver version
+--cwd string             working directory
+--env stringSlice        env var KEY=VALUE; repeatable
+--spec string            path to spec YAML
+--toolkit string         path to toolkit YAML
+```
+
+### `oap tools toolspec test <spec.yaml>`
+
+Replay persisted test cases against a spec
+
+Flags:
+
+```text
+--toolkits string  toolkit catalog dir (env TOOLSPEC_TOOLKITS)
+```
+
+## `oap tools validate -f <file>`
+
+Validate a tool spec file (kind detected from apiVersion+kind or flat structure)
+
+Flags:
+
+```text
+-f, --file string  Path to spec file
+```
+

@@ -1,0 +1,54 @@
+export const meta = {
+  title: 'Continuity & interactions',
+  section: 'Reference',
+  group: 'Channels',
+  order: 2440,
+  description:
+    'How threads persist across turns, how approvals/notices/status render on every channel kind, and how non-human triggers start sessions.',
+}
+
+# Continuity & interactions
+
+<div className="doc-lede">
+  A channel isn't just a way to send a message — it's a durable thread and a shared surface for everything the
+  agent needs to say back: approvals, notices, and live status. OAP renders those the same way on every channel
+  kind, so the behavior you learn in one place holds in all of them.
+</div>
+
+## Threads that persist
+
+A session is a durable thread, not a transient chat. It continues across turns, and everyone in it sees the
+same conversation, the same plan, and the same approvals. When a session goes idle its pods are reaped to free
+resources — but it stays **wakeable**: the next message rehydrates it and picks up where it left off. Continuity
+is a property of the session, not of a process staying alive.
+
+## Interactions: things that need an answer vs. things that just inform
+
+Everything the agent surfaces to a human is an **interaction**, and there are two kinds. *Interactive* ones need
+a response — an approval, an identity choice, a request to link a credential — and the session waits on them.
+*Notices* are informational — a status change, a delivery receipt, a warning — and don't block. Each interaction
+category knows how to render itself on each channel kind, so adding a transport doesn't mean re-implementing
+approvals: they come along for free.
+
+## The same interaction, every surface
+
+An approval isn't Slack-specific. The same underlying interaction renders as a Block Kit card in
+[Slack](/docs/slack), an inline prompt in the [terminal](/docs/terminal-chat), and a card in the
+[browser](/docs/browser-chat) — asking the identical question and recording the identical decision. Live status and
+progress — "thinking", a tool running, a turn's cost — surface the same way, and a silence watchdog catches a
+session that goes quiet rather than letting it hang.
+
+## Triggers: not everything starts with a human
+
+A session doesn't have to begin with someone typing. A **signed webhook** — a pull request opened, a scheduled
+job firing — can start a *triggered* session with no human on it at all. The inbound payload is the input; the
+agent runs under the same tools, identity, and authorization as any other session, and reports back into the
+channel it came from.
+
+## Interrupting and mid-turn replies
+
+While the agent is mid-turn, you're not locked out. A message you send is acknowledged and queued for the next
+turn — or, if it's urgent, it interrupts the in-flight work and is delivered right away. Either way you stay in
+the loop instead of waiting for the turn to finish.
+
+<Screenshot name="mid-turn-queue" />

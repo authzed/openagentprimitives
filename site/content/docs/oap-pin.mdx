@@ -1,0 +1,73 @@
+export const meta = {
+  title: 'oap pin',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2900,
+  description: 'Inspect and update dependency pin baselines',
+}
+
+# oap pin
+
+Manage dependency pinning for MCPServers, SidecarToolboxes, Skills, and SpiceboxToolkits.
+
+Pinning records the immutable identity (manifest hash, image digest, git SHA) of each
+dependency an agent uses, detects drift, and gates tool calls based on the effective
+pinning policy.
+
+Subcommands:
+  status   — list all pinned dependencies with strength, digest, drift, and age
+  diff     — compare the recorded baseline against the live identity
+  update   — set the pin-refreeze annotation to accept a new baseline
+
+## `oap pin diff <kind> <name>`
+
+Compare the recorded pin baseline against the live dependency identity.
+
+Supported kinds:
+  mcp    — probe tools/list unauthenticated and compare hashes + tool names
+  image  — print the PinDrift condition (live signal from the toolbox reconciler)
+  skill  — print declared identity; diff is N/A (identity declared in spec)
+  cli    — print declared identity; diff is N/A (identity declared in spec)
+
+## `oap pin status`
+
+List all pinned dependencies with strength, digest, drift, and age
+
+Flags:
+
+```text
+--kind string  Filter rows to one kind (skill, mcp, image, cli); skill covers both Skill and ClusterSkill rows
+```
+
+## `oap pin update <kind> <name>`
+
+Set the agentprimitives.authzed.com/pin-refreeze annotation on a dependency,
+requesting that the reconciler accept the given identity as the new pin baseline.
+
+The reconciler accepts the refreeze only when the live identity equals the annotated
+value (race-free accept: you re-freeze exactly what you reviewed). Once honored, the
+annotation is cleared and PinDrift is set to PinMatch.
+
+Supported kinds:
+  mcp    — probe tools/list unauthenticated to derive the live hash, or pass --to
+  image  — --to &lt;sha256:digest&gt; required (CLI cannot pull images), or --current
+
+Rejected kinds (identity is declared in spec, not set via annotation):
+  skill  — edit spec.source.resolvedSHA or the SkillSource instead
+  cli    — edit spec.pinnedBinaryHash or versionRange instead
+
+Flags:
+  --to &lt;sha256:…&gt;   explicit target identity (required for image without --current)
+  --current         accept the observed drift digest recorded by the reconciler
+  --all             accept all drifted resources in the namespace (no positional args)
+  --kind mcp|image  with --all, restrict to one resource kind
+
+Flags:
+
+```text
+--all          Accept all drifted resources in the namespace
+--current      Accept the reconciler-recorded observed drift digest (status.pin.details.observedDriftDigest)
+--kind string  With --all: restrict to one kind (mcp or image)
+--to string    Target identity (sha256:… hash or image digest); required for image without --current, optional for mcp
+```
+

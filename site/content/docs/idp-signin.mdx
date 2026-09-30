@@ -1,0 +1,40 @@
+export const meta = {
+  title: 'Identity providers & sign-in',
+  section: 'Reference',
+  group: 'Identity',
+  order: 2270,
+  description:
+    'How a human signs in to the platform — a local admin password on Desktop, or a connected OIDC provider on a cluster — and becomes the subject every request is authorized against.',
+}
+
+# Identity providers & sign-in
+
+<div className="doc-lede">
+  This is about <em>your</em> identity, not the agent's. Before you can open the dashboard or a chat, the
+  platform has to know who you are — and that signed-in identity becomes the <strong>subject</strong> every
+  request is authorized against in the same graph the agents use.
+</div>
+
+## Two ways in
+
+- **A local admin password.** On [Desktop](/docs/install-desktop) — and any single-operator install — you set an
+  admin password at setup and sign in with it. Simple, local, no external dependency.
+- **A connected identity provider.** On a shared cluster you connect an **OIDC** provider (your company SSO) via
+  a **`ClusterIdentityProvider`**, and people sign in through it. The install offers to set this up, or you
+  configure it later with `oap idp`.
+
+Either way, an unauthenticated request to a gated surface is redirected to sign in; only after that does the
+request carry a real identity.
+
+## From sign-in to a subject
+
+A successful sign-in mints a session for the browser, and the **verified identity** — an email from the trusted
+provider — is what becomes the SpiceDB subject on every subsequent request. So "can this person see this
+session / install this agent / approve this step" is answered by the *same* per-subject check as everything
+else. There's no second, weaker access model for the human side.
+
+<Callout kind="security" title="The identity is verified, then checked — not asserted">
+  The platform trusts an identity because a provider it configured vouched for it, and then still authorizes
+  each request against the graph. A signed-in user isn't implicitly an admin; being able to do a thing is a
+  permission someone granted, checked live — the same fail-closed discipline as agent authorization.
+</Callout>

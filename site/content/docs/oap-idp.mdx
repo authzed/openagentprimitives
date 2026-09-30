@@ -1,0 +1,37 @@
+export const meta = {
+  title: 'oap idp',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2820,
+  description: 'Manage the cluster identity provider',
+}
+
+# oap idp
+
+Manage the cluster identity provider
+
+## `oap idp remove`
+
+Remove the cluster identity provider and its client secret
+
+Flags:
+
+```text
+--yes  Skip confirmation prompt
+```
+
+## `oap idp setup <kind>`
+
+Walk through an interactive wizard to configure the cluster identity provider.
+
+&lt;kind&gt; is one of the registered provider kinds (e.g. google, oidc).
+Run without arguments to see available kinds.
+
+This command has no scripted form: the sign-in policy must be chosen
+explicitly, and every other answer is a credential, which does not belong in
+shell history or the process table.
+
+## `oap idp status`
+
+Show the cluster identity provider status
+

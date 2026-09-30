@@ -52,15 +52,15 @@ with many different owners.
 Every control in OAP therefore sits outside the model. The platform decides
 before the call, and the decision does not depend on the agent's cooperation.
 
-|                                     | Typical agent platform             | OAP                                  |
-| ----------------------------------- | ---------------------------------- | ------------------------------------ |
-| What an agent can reach             | Whatever its credentials allow     | Exactly what you granted             |
-| Who decides an action is allowed    | The model, in the moment           | The platform, before the call        |
-| An injected instruction mid-session | Can redirect the agent             | Cannot exceed the approved plan      |
-| Tool credentials                    | Shared across tools in one sandbox | Held only by the tool that uses them |
-| Restricting an MCP server           | Needs a narrow upstream token      | Declared by you, enforced per call   |
-| Revoking access                     | Rotate credentials, redeploy       | One permission graph call            |
-| The audit log                       | Append-only, enforced by the store | Signed, chained, verifiable offline  |
+|                                     | Typical agent platform             | OAP                                     |
+| ----------------------------------- | ---------------------------------- | --------------------------------------- |
+| What an agent can reach             | Whatever its credentials allow     | Exactly what you granted                |
+| Who decides an action is allowed    | The model, in the moment           | The platform, before the call           |
+| An injected instruction mid-session | Can redirect the agent             | Cannot widen what it's authorized to do |
+| Tool credentials                    | Shared across tools in one sandbox | Held only by the tool that uses them    |
+| Restricting an MCP server           | Needs a narrow upstream token      | Declared by you, enforced per call      |
+| Revoking access                     | Rotate credentials, redeploy       | One permission graph call               |
+| The audit log                       | Append-only, enforced by the store | Signed, chained, verifiable offline     |
 
 ## What makes it secure
 
@@ -192,9 +192,8 @@ On first launch, pick a model provider, enter its API key, and set a local admin
 password. OAP provisions the VM, configures the platform, and installs a demo
 agent.
 
-Desktop is single-player: good for trying OAP, developing and demoing agents, or
-running production agents one person owns and operates. Use Kubernetes when
-agents need a shared environment.
+Desktop is single-player: good for trying OAP and for developing and demoing
+agents. Use Kubernetes for anything durable or shared.
 
 **Local Kubernetes** installs onto a `kind` cluster for development:
 
@@ -340,10 +339,13 @@ outside it.
 
 ## Read the docs
 
+The docs are at [openap.org/docs](https://openap.org/docs). To run them locally
+instead:
+
 ```bash
-cd showcase
+cd site
 pnpm install
-pnpm docs:dev
+pnpm dev
 ```
 
 Then open [http://localhost:5179](http://localhost:5179) for installation

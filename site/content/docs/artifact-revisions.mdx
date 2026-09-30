@@ -1,0 +1,47 @@
+export const meta = {
+  title: 'Revisions & versioning',
+  section: 'Reference',
+  group: 'Artifacts',
+  order: 2610,
+  description:
+    'Every change is a new immutable revision; the artifact tracks its history and a moving `latest`, so you can revise in place and still address an exact version.',
+}
+
+# Revisions & versioning
+
+<div className="doc-lede">
+  An artifact isn't overwritten when it changes — it gains a <strong>revision</strong>. The artifact itself is a
+  stable handle with a version history; each revision is immutable. That split is what lets "the report" be one
+  durable thing whose contents can still evolve.
+</div>
+
+## Immutable revisions, a mutable head
+
+There are two halves. A **revision** is written once and never changes after creation — it records its sequence
+number, a change description, and the durable reference to its rendered bytes. The **artifact head** is the
+stable identity: it tracks how many revisions exist and which one is current. Revise an artifact and you add a
+new immutable revision and advance the head — you never mutate the bytes anyone already saw.
+
+## Revising in place
+
+Because the head is stable, a link to an artifact keeps working as it's revised: it resolves to the newest
+revision. So an agent can publish a report, then improve it, and everyone following it sees the update in place —
+while an exact earlier revision remains addressable if you need the version someone actually approved.
+
+## The durable handle
+
+Each revision carries the reference to its bytes in the [artifact store](/docs/artifacts). That reference is the
+one durable handle to the output once the transient render is cleaned up — it's what makes an artifact outlive
+the session that made it.
+
+```bash
+oap artifact versions            # list an artifact's revision history
+oap artifact revisions <id>      # the revisions of one artifact
+oap artifact get <id>            # fetch a specific version
+```
+
+<Callout kind="tip" title="Point at the thing, or the exact version">
+  Two addressing modes fall out of the head/revision split: reference the artifact to always get the latest, or
+  reference a specific revision to pin the exact bytes. You rarely have to choose up front — the same artifact
+  supports both.
+</Callout>

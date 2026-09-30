@@ -15,7 +15,7 @@ import (
 const DefaultModel = "opus"
 
 // DefaultDiffBase is the git ref the "recent" scope diffs against by default.
-const DefaultDiffBase = "master"
+const DefaultDiffBase = "main"
 
 // Scope identifies what an audit pass covers.
 type Scope string

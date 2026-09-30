@@ -7,7 +7,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/gen/clidocs"
 )
 
-// TestGenerateCLIReference regenerates the showcase docs' CLI reference from the
+// TestGenerateCLIReference regenerates the site's CLI reference from the
 // live oap command tree. It is the gated driver for pkg/gen/clidocs (NewRootCmd
 // is in package main and can't be imported there). Runs only when
 // OAP_GEN_CLI_DOCS names an output dir — `mage docs:cli` sets it; a normal

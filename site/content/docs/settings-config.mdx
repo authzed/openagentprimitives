@@ -1,0 +1,58 @@
+export const meta = {
+  title: 'Settings & tiered configuration',
+  section: 'Guides',
+  group: 'Concepts',
+  order: 185,
+  description:
+    'Operational limits and defaults resolve through tiers — cluster, namespace, agent — where a cluster ceiling can clamp what a class is allowed to loosen.',
+}
+
+# Settings & tiered configuration
+
+<div className="doc-lede">
+  Not every knob belongs on every AgentClass. Budgets, tool-guard limits, content inspectors, and the like are
+  <strong> settings</strong> that resolve through tiers — a cluster operator sets defaults and hard ceilings,
+  and an individual agent narrows within them. It's how one team can hand out agents without handing out the
+  ability to remove their own guardrails.
+</div>
+
+## Defaults flow down; ceilings clamp up
+
+Settings resolve from the **cluster**, through the **namespace**, down to the **AgentClass** — the most specific
+tier that sets a value wins. But there are two kinds of setting, and they compose differently:
+
+- A **default** is a starting value a lower tier may override. Set a default token budget cluster-wide, and an
+  agent can raise or lower it.
+- A **ceiling** is a hard limit a lower tier may *not* exceed. Set a ceiling, and an agent can go stricter but
+  never looser — it clamps whatever the class tries to loosen.
+
+So a platform team pins the outer bounds once (the ceilings), ships sensible defaults, and lets each agent tune
+inside that envelope.
+
+## What's tiered
+
+The tiered surface is the operational policy that shouldn't live per-agent: [budgets](/docs/session-lifecycle),
+[tool-guard breakers, rate limits, and data budgets](/docs/budgets-breakers), [content inspectors](/docs/content-guards-egress),
+the default model, and requirements like "subagent digest pins are mandatory." An agent reads its **effective**
+settings — the resolved result of all tiers — so what actually applies is a single computed answer, not
+something you reconstruct by hand.
+
+## Setting them
+
+`oap settings wizard` walks you through the security-relevant defaults and ceilings interactively; `oap settings
+apply` applies a settings file. The result is recorded so you can see the effective policy an agent is running
+under — including in the [admin console](/docs/admin-dashboard), which shows the resolved value per setting:
+
+<Screenshot name="admin-settings" />
+
+On the desktop app the same cluster settings are editable directly from the menubar's **Settings…** window. Its
+**Cluster** tab groups the model catalog, limits, and defaults into sub-tabs, validates a change against the live
+cluster before you save, and keeps the save controls pinned in reach as the forms grow:
+
+<Screenshot name="desktop-settings" />
+
+<Callout kind="security" title="An agent can't widen its own guardrails">
+  The ceiling/default split is the point: safety limits set above an agent are ones it can only tighten. A
+  compromised or over-eager class can't raise its token budget past the cluster cap or turn off a required
+  content inspector — the resolver clamps it, and the clamp is enforced, not advisory.
+</Callout>

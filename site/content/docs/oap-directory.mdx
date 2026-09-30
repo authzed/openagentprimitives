@@ -1,0 +1,32 @@
+export const meta = {
+  title: 'oap directory',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2800,
+  description: 'Configure directory-sync sources (RelationshipSource): Slack, GitHub, 1Password, ...',
+}
+
+# oap directory
+
+Configure directory-sync sources (RelationshipSource): Slack, GitHub, 1Password, ...
+
+## `oap directory configure`
+
+configure walks you through picking a directory-sync kind, a credential to
+sync with, its endpoint, and that kind's own questions, then server-side-applies
+the resulting RelationshipSource under a fixed field manager.
+
+Re-running against an already-configured kind edits the same source in
+place — entering through a screen keeps its prior answer.
+
+Flags:
+
+```text
+--answer stringArray  Pre-seed one answer as key=value (e.g. --answer kind=github). Repeatable.
+--non-interactive     Fail rather than prompt for any answer not already supplied via --answer.
+```
+
+## `oap directory list`
+
+List directory-sync sources configured in this namespace, and every kind you could configure.
+

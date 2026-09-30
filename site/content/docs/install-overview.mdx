@@ -1,0 +1,75 @@
+export const meta = {
+  title: 'Install — overview',
+  section: 'Guides',
+  group: 'Get started',
+  order: 20,
+  description: 'The two install commands, the prerequisites, and what gets stood up.',
+}
+
+# Installing OAP
+
+<div className="doc-lede">
+  OAP runs on Kubernetes. There are two ways in: a one-command bring-up for a laptop or a Mac, and a
+  platform-only install for an existing cluster.
+</div>
+
+## `oap init` vs. `oap install`
+
+- **`oap init`** is the one-shot onboarding command: it builds the images, installs the platform, and runs a
+  health check, then optionally walks you through a security-settings wizard and a default model. Use this to go
+  from nothing to a working install — see the [step-by-step](/docs/install-init).
+- **`oap install`** does just the platform bring-up — the operator, CRDs, and services — against a cluster
+  you've already got, without building images.
+
+```bash
+oap init              # build + install + check (first run)
+oap install --builder-starters user:$(oap identity canonical-id you@example.com)   # platform only
+oap check             # verify every component is healthy
+oap check --watch     # keep checking every couple of seconds
+```
+
+`oap install` needs either `--builder-starters` (who may start Agent Builder) or `--without-builder`; see
+[Agent Builder](/docs/agent-builder-install).
+
+<h2 id="prerequisites">Prerequisites</h2>
+
+OAP builds from source. Each tool's own page covers installing it.
+
+- **[Git](https://git-scm.com/downloads)**, to clone the repository.
+- **[Go](https://go.dev/doc/install)** 1.26 or later.
+- **[Mage](https://magefile.org/)**, which runs the build targets (`mage build:oap`, `mage desktop:all`).
+- **[Docker](https://docs.docker.com/get-started/get-docker/)** with
+  **[buildx](https://docs.docker.com/build/concepts/overview/)**, to build the images (the `oap init` /
+  `oap build` path). A cluster that pulls prebaked images doesn't need Docker on your machine.
+- A reachable **Kubernetes cluster** — a local one for development (for example
+  **[kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation)**), or a managed cluster for
+  production. Everything runs off your kubeconfig.
+
+Then clone the repository and build the CLI:
+
+```bash
+git clone https://github.com/authzed/openagentprimitives
+cd openagentprimitives
+mage build:oap        # writes ./bin/oap
+```
+
+If you're on a Mac and don't want to manage a cluster at all, skip straight to
+**[Desktop](/docs/install-desktop)** — it runs the whole thing in a local VM, and
+[lists the few extra tools it needs](/docs/install-desktop#before-you-start).
+
+## What gets stood up
+
+An install brings up the platform components: the **operator** (and the CRDs), the **authorization** service,
+the **channels** daemon, an operator-managed **SpiceDB**, the **web** server (sessions + admin), plus the
+messaging bus and the memory/knowledge-graph stores appropriate to your profile. `oap check` verifies each one
+and reports `✓ / ⚠ / ✗` per component.
+
+## The install experience
+
+Install isn't a fire-and-forget script. It renders as a live checklist of named phases, each with a readiness
+wait — and when a component is slow, it asks whether to keep waiting rather than aborting, and (if you've wired
+an AI CLI) can even launch it to diagnose a stalled component. An interrupt offers to tear down what was applied
+so a failed install doesn't leave debris.
+
+Next: **[Desktop](/docs/install-desktop)** for the zero-Kubernetes Mac flow, or **[On a cluster](/docs/install-cluster)**
+for the platform matrix.

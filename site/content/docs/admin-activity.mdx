@@ -1,0 +1,49 @@
+export const meta = {
+  title: 'Live activity',
+  section: 'Guides',
+  group: 'Admin console',
+  order: 188,
+  description:
+    "The dashboard's live views — every session in flight, tool calls as they happen, and the approvals waiting on a human.",
+}
+
+# Live activity
+
+<div className="doc-lede">
+  The console's <strong>Live</strong> views are the real-time window on the fleet: which
+  <a href="/docs/session-lifecycle">sessions</a> are running, what tools they're calling right now, and what's
+  parked waiting for someone to decide.
+</div>
+
+## Sessions
+
+**Sessions** lists every agent session, current and historical — its status, which class it's a run of, who
+started it, and its estimated tokens. It's the same set you can reach from the CLI with `oap session`; the panel
+is the at-a-glance version.
+
+<Screenshot name="admin-sessions" />
+
+## Live tool calls
+
+**Live tool calls** streams tool invocations as they happen, across every session — the moment-to-moment view of
+what the agents are actually doing. Each call is one pass through the [gated pipeline](/docs/agent-loop).
+
+<Screenshot name="admin-toolcalls" />
+
+## Approvals
+
+**Approvals** is the queue of things waiting on a person: tool calls and [information-leakage](/docs/information-leakage)
+gates that need a decision. It's the operator's side of the [in-channel approvals](/docs/authorization) — the same
+decisions, gathered in one place.
+
+<Screenshot name="admin-approvals" />
+
+## Workshops
+
+**Workshops** lists every open [agent-builder](/docs/agent-builder) workshop — who started it, what phase it is
+in, and the install request waiting on it, if the person asked for one. **Install** applies the drafted agent
+into a namespace you choose, answering any install-time questions the draft declares; **Decline** ends the
+request; **Kill** tears the workshop down outright. Installing is the one action a builder cannot take for
+itself, which is why it lives here.
+
+<Screenshot name="admin-workshops" />

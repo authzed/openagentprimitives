@@ -1,0 +1,47 @@
+export const meta = {
+  title: 'Delivery & completion',
+  section: 'Reference',
+  group: 'Artifacts',
+  order: 2640,
+  description:
+    'Producing an artifact is not the same as delivering it — and a session can be required to actually hand its work over before it completes.',
+}
+
+# Delivery & completion
+
+<div className="doc-lede">
+  An agent can render a perfect report and still leave you empty-handed if it never hands it over. So OAP draws
+  a line between <strong>producing</strong> an artifact and <strong>delivering</strong> it — and can hold a
+  session accountable for the difference.
+</div>
+
+## Produce, then deliver
+
+Producing an artifact creates the durable, versioned output. **Delivering** it is a separate act: the agent
+**attaches** the artifact to its reply, which is what actually puts it in front of you. A render that's ready
+but never attached is work the agent did that you never received — which is exactly the gap this distinction
+exists to close.
+
+<Screenshot name="memory-artifact" />
+
+## The delivery completion requirement
+
+An AgentClass can declare that delivery is **required**. With it, a session **cannot complete while it owns a
+rendered artifact that was never attached to a reply** — the agent can't quietly wrap up having produced
+something it didn't deliver. Like every gate in OAP it **fails closed**: if the runner can't confirm delivery,
+it treats the requirement as unmet rather than assuming the best. (A session with no reply channel at all is
+the one exemption — there's nowhere to deliver to.)
+
+## Offering a live view
+
+Alongside attaching the rendered bytes, an agent can **offer a live view** — a button that opens the artifact in
+the browser. The button carries no frozen link: a fresh, short-lived signed URL is minted **on each click**, so
+it keeps working for the life of the session instead of expiring thirty minutes after it was posted. An
+offer, though, isn't a delivery — it points at the artifact rather than handing over the bytes, so it doesn't
+satisfy the requirement above.
+
+<Callout kind="security" title="Delivery is a fact, not a hope">
+  Because the requirement is checked against what was actually attached — not what the agent *said* it did — "I
+  produced the report" and "you have the report" can't be confused. The session is accountable for the second,
+  not just the first.
+</Callout>

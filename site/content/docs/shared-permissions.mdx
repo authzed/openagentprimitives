@@ -1,0 +1,57 @@
+export const meta = {
+  title: 'Shared permissions',
+  section: 'Reference',
+  group: 'Authorization',
+  order: 2330,
+  description:
+    "How data that belongs to a resource with an owner can only be shared with the owner's approval — and how the request is routed to that owner, not to whoever asked.",
+}
+
+# Shared permissions
+
+<div className="doc-lede">
+  Not every permission belongs to the person talking to the agent. Some data belongs to a
+  <strong> resource</strong> that has its own <strong>owner</strong> — a company, an account, a record — and
+  another person can't read or share it just because they asked. The owner has to approve. OAP routes that
+  approval to the owner, wherever they are, and only releases the data once they say yes.
+</div>
+
+<Clip name="shared-permissions" />
+
+## Some data has an owner
+
+In the clip, Sam asks the CRM agent for **Circldot**'s contacts to build a QBR deck. But Circldot's contacts
+aren't Sam's to hand out — Circldot is a resource with an owner, **Jordan**, the account owner. So the agent
+doesn't just run the query and return the data. It recognizes the contacts are owned, and pauses to get the
+owner's approval first.
+
+## The request goes to the owner, not whoever asked
+
+This is the part that makes it a *shared* permission: the approval is routed to the **owner of the resource** —
+Jordan — and DMed to them directly. Not to Sam, who asked. Not to whoever happens to own the session. To the
+person the data actually belongs to.
+
+<Screenshot name="sp-dm" />
+
+The card tells Jordan exactly what is being asked (share Circldot's contacts), why (Sam's request), and which
+permission on which resource it grants — enough to decide without leaving Slack.
+
+<Callout kind="security" title="The owner decides — and no one can decide for them">
+  Only an owner of Circldot can approve releasing Circldot's data. The person who asked can't approve their own
+  request, and the owner of the conversation can't approve access to a resource that isn't theirs — a session
+  owner can never self-approve their way into someone else's data. Any owner of the resource is enough (one is
+  a quorum), but it has to be an owner.
+</Callout>
+
+## Only after approval is the data shared
+
+When Jordan approves, the card resolves and the agent finally returns the contacts — to Sam, back in the
+channel where the request started. The approval didn't just unblock one reply; it granted the session access to
+**Circldot's** contacts specifically. A request for a *different* company's data would be a different owner's
+call, and would ask again.
+
+<Screenshot name="sp-return" />
+
+That's a shared permission end to end: data owned by a resource, released only with its owner's approval,
+routed to the owner rather than the requester — so "who is allowed to see this" is answered by the person who
+actually owns it.

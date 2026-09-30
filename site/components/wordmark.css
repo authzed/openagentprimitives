@@ -1,0 +1,16 @@
+/* "light" and "dark" name the INK, so the light-ink mark is the one for the
+   dark theme. Only one of the pair is ever shown, and which one is decided by
+   the data-theme attribute next-themes sets before paint — no React state, so
+   the mark is right on the first frame.
+   The `img` in each selector outranks a page's own single-class sizing rule
+   (`.doc-brand-wordmark`, `.lp-hero-mark`), which may set `display` and loads
+   in no guaranteed order relative to this sheet. */
+img.wordmark--on-light {
+  display: none;
+}
+:root[data-theme='light'] img.wordmark--on-dark {
+  display: none;
+}
+:root[data-theme='light'] img.wordmark--on-light {
+  display: block;
+}

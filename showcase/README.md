@@ -1,10 +1,11 @@
-# showcase — OAP docs + narrated-demo system
+# showcase — OAP demo media
 
-A self-contained Node/TS project that produces the OAP documentation site and
-its demo media. Two scripted **simulators** (a fake Slack and a fake terminal)
-and two kinds of **real capture** (the web chat, the admin console) feed a
-Playwright engine that renders stills and narrated webm/mp4 clips; those, plus
-generated CLI and CRD reference, assemble into an MDX docs site.
+A self-contained Node/TS project that produces OAP's demo media: two scripted
+**simulators** (a fake Slack and a fake terminal) and two kinds of **real
+capture** (the web chat, the admin console) feed a Playwright engine that
+renders stills and narrated webm/mp4 clips. That media, plus the generated CLI
+and CRD reference, feed the docs + landing site under
+[`site/`](../site/README.md).
 
 It is deliberately **outside** the `web/` pnpm workspace and outside Go's
 `./...` walk — the heavy capture toolchain (Playwright, ffmpeg, xterm.js) lives
@@ -21,14 +22,6 @@ showcase/
 ├── demos/
 │   ├── slacksim/     fake Slack (React): chrome + Block Kit renderer + scenario store   :5178
 │   └── consolesim/   fake terminal (xterm.js): themed window + scripted typing/ANSI      :5180
-├── docs/
-│   ├── guides/       every doc page (*.mdx) — frontmatter meta drives the two-level nav
-│   ├── _manifest.json   media map: name → clip {webm,mp4,poster} | screenshot {src}
-│   ├── app/          the MDX docs app (nav, components, Clip/Screenshot/Callout, lightbox)
-│   ├── public/media/ committed stills + clips (NOT gitignored)
-│   ├── check.ts      validator: every referenced media/ref resolves + exists
-│   ├── DOCS-PLAN.md  the information architecture
-│   └── DOCS-GAPS.md  the codebase→docs gap analysis (what's covered / missing)
 ├── engine/
 │   ├── capture/      Playwright drivers: shot.mjs (still), still.mjs (beat still),
 │   │                 clip.mjs (narrated webm+mp4+poster), webshot.mjs (real product login)
@@ -38,14 +31,12 @@ showcase/
 ```
 
 Real Block Kit fixtures live at `demos/slacksim/src/fixtures/blockkit/*.json`
-and are generated (not hand-authored) — see below. The CLI/CRD reference pages
-under `docs/guides/` (`oap-*.mdx`, `crd-*.mdx`) are generated too.
+and are generated (not hand-authored) — see below.
 
 ## Quick start
 
 ```bash
 pnpm install
-pnpm docs:dev            # docs site  → http://localhost:5179
 pnpm slacksim:dev        # fake Slack → http://localhost:5178/?scenario=<name>&theme=dark
 pnpm consolesim:dev      # fake term  → http://localhost:5180/?scenario=<name>&theme=dark
 ```
@@ -53,9 +44,7 @@ pnpm consolesim:dev      # fake term  → http://localhost:5180/?scenario=<name>
 Validate (the gate every change must pass):
 
 ```bash
-pnpm typecheck                              # tsc over docs app + both sims
-pnpm exec vite build --config vite.docs.config.ts   # all MDX must parse
-pnpm docs:check                             # media/refs resolve + exist
+pnpm typecheck                              # tsc over both sims
 pnpm test                                   # vitest (parsers, renderers, generators-as-libs)
 ```
 
@@ -90,24 +79,24 @@ SIM_PORT=5180 node engine/capture/clip.mjs <scenario> out/clips/<name> dark 1120
 node engine/capture/shot.mjs "http://localhost:5178/?scenario=…" out/x.png 1600x900
 ```
 
-Then copy the output into `docs/public/media/`, add an entry to
-`_manifest.json`, and reference it from a page with `<Clip name="…" />` or
-`<Screenshot name="…" />`.
+Then copy the output into `site/public/media/`, add an entry to
+`site/content/_manifest.json`, and reference it from a page with
+`<Clip name="…" />` or `<Screenshot name="…" />` — see
+[`site/AGENTS.md`](../site/AGENTS.md).
 
 ## Generated content (run from the repo root)
 
-These are the no-drift generators — **never hand-edit their output**; re-run the
-generator instead.
+This is the no-drift generator for Slack fixtures — **never hand-edit its
+output**; re-run the generator instead.
 
 ```bash
 mage blocks:capture   # real Slack Block Kit JSON → demos/slacksim/src/fixtures/blockkit/
-mage docs:cli         # oap CLI reference (one page per family) from the live cobra tree
-mage docs:crd         # CRD reference (one page per kind) from config/crds schemas
 ```
 
-Sources: `pkg/gen/blockcapture`, `pkg/gen/clidocs`, `pkg/gen/crddocs` (shared
-MDX helpers in `pkg/gen/mdxutil`). `docs:cli` runs a gated test in `cmd/oap`
-(`NewRootCmd` is package `main`); `docs:crd` reads YAML directly.
+Source: `pkg/gen/blockcapture`. The CLI and CRD reference generators
+(`mage docs:cli`, `mage docs:crd`) write straight into
+[`site/content/docs`](../site/content/docs) — see
+[`site/AGENTS.md`](../site/AGENTS.md).
 
 ## Real product captures
 

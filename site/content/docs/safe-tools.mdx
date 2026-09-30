@@ -1,0 +1,53 @@
+export const meta = {
+  title: 'Safe tools',
+  section: 'Guides',
+  group: 'Concepts',
+  order: 120,
+  description:
+    'An agent can only do what was written down: sandboxed CLI tools and MCP servers, validated against a toolspec and run without a shell.',
+}
+
+# Safe tools
+
+<div className="doc-lede">
+  An LLM agent is only as safe as the tools you hand it. When the thing that runs a tool call is a Python
+  function with full process authority, the tool surface is whatever code happens to expose, arguments go
+  unvalidated, and every tool runs with ambient authority. OAP restricts an agent to <strong>sandboxed CLI
+  tools and MCP servers, validated against a toolspec</strong> — it can only do what was written down.
+</div>
+
+<Clip name="safe-tools-demo" />
+
+## How it works
+
+A tool in OAP is a *specification*, not a function. Each is declared with a **deny-by-default** allowlist of
+subcommands and fields (refined with CEL), and it is validated twice — once at authoring time, and again at
+execution time, so a spec that drifts can't quietly widen. Tools run as **argv arrays over a sandboxed pod —
+never through a shell, never `eval`** — so there's no string to inject into.
+
+Every tool declares its `stateImpact` — `readonly`, `readwrite`, or `external` — and that drives both the
+authorization check and whether a human is asked before it runs. The sandbox pods themselves are hardened
+(non-root, read-only root filesystem, no ambient service-account token), and default-on circuit breakers,
+plus optional rate limits and per-call data-volume budgets, keep a misbehaving tool from running away.
+
+## Go deeper
+
+- **[Toolspec & validation](/docs/toolspec-validation)** — deny-by-default allowlists, CEL, and dual validation.
+- **[Sandboxed execution](/docs/sandboxed-execution)** — the hardened pod model and argv-not-shell execution.
+- **[MCP servers & sidecar toolboxes](/docs/mcp-servers)** — bringing external tools under the same rules.
+- **[Content guards & egress](/docs/content-guards-egress)** — inspecting tool I/O and bounding what leaves the session.
+- **[Budgets, rate limits & circuit breakers](/docs/budgets-breakers)** — bounding runaway use.
+- **[Supply-chain pinning](/docs/supply-chain-pinning)** — content-hashing the tools an agent is allowed to run.
+
+<Callout kind="security" title="How this addresses the OWASP Agentic Top 10">
+  Tool safety is OAP's home turf:
+  <ul>
+    <li><a href="/docs/owasp-top10#asi02">ASI02 — Tool Misuse & Exploitation</a> (substantial): dual validation,
+      deny-by-default, argv-no-shell, per-action authorization.</li>
+    <li><a href="/docs/owasp-top10#asi05">ASI05 — Unexpected Code Execution</a> (substantial): hardened pods, no
+      shell, closed-world tools.</li>
+    <li><a href="/docs/owasp-top10#asi04">ASI04 — Agentic Supply Chain</a> (partial): content-hash pinning of the
+      tool manifest.</li>
+    <li><a href="/docs/owasp-top10#asi01">ASI01 — Agent Goal Hijack</a>: the content-guard seam over tool I/O.</li>
+  </ul>
+</Callout>

@@ -1,0 +1,31 @@
+export const meta = {
+  title: 'oap image',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2830,
+  description: 'Work with local Docker images and the current cluster',
+}
+
+# oap image
+
+Work with local Docker images and the current cluster
+
+## `oap image load <image[:tag]>`
+
+Load a locally-built Docker image into the node(s) of the cluster the
+current kube-context points at, without pushing to a registry:
+
+  - oap-desktop:           docker save -&gt; SSH -&gt; k3s ctr images import (into the VM)
+  - kind / k3d / minikube: the runtime's own image-import command
+  - docker-desktop:        no-op (the node shares this machine's Docker daemon)
+  - anything else:         an error — those nodes can only pull from a registry,
+                           so there is nothing this command can do
+
+The image must already exist in the local Docker daemon — build it first.
+
+Flags:
+
+```text
+--vm-ssh-key string  Path to the oap-desktop VM SSH private key (default: auto-discover; overrides OAP_DESKTOP_SSH_KEY)
+```
+

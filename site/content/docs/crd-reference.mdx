@@ -1,0 +1,49 @@
+export const meta = {
+  title: 'CRD reference',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3000,
+  description: 'Every OAP custom resource, generated from the installed CRD schemas.',
+}
+
+# CRD reference
+
+OAP's resources are Kubernetes CRDs. Each page below is generated from the CRD schema — so
+field names, types, and descriptions match what the cluster enforces. Pick a kind for its
+full spec.
+
+| Kind | Scope | Summary |
+| --- | --- | --- |
+| [AgentClass](/docs/crd-agentclass) | Namespaced | AgentClass is the reviewable template an agent is defined by: model, system |
+| [AgentIdentity](/docs/crd-agentidentity) | Namespaced | AgentIdentity is the named credential set an agent acts as: reusable static |
+| [AgentSession](/docs/crd-agentsession) | Namespaced | AgentSession is one running instance of an AgentClass: a conversation with |
+| [AgentSessionGrants](/docs/crd-agentsessiongrants) | Namespaced | AgentSessionGrants is the per-AgentClass declaration of the (resourceType, |
+| [AgentSettings](/docs/crd-agentsettings) | Namespaced | AgentSettings is the namespace tier of agent governance settings: limits |
+| [AgentUI](/docs/crd-agentui) | Namespaced | AgentUI is a bundle-authored DECLARATION of an agent-defined view: a page |
+| [ArtifactRender](/docs/crd-artifactrender) | Namespaced | ArtifactRender is one request to turn agent-supplied bytes into a |
+| [Channel](/docs/crd-channel) | Namespaced | Channel binds one transport conversation -- a Slack channel, a scheduled |
+| [ClusterAgentSettings](/docs/crd-clusteragentsettings) | Cluster | ClusterAgentSettings is the cluster-wide top tier of agent governance |
+| [ClusterIdentityProvider](/docs/crd-clusteridentityprovider) | Cluster | ClusterIdentityProvider configures cluster-wide human login: which |
+| [ClusterSkill](/docs/crd-clusterskill) | Cluster | ClusterSkill is a cluster-scoped Skill, visible to every namespace. A |
+| [ClusterSkillSource](/docs/crd-clusterskillsource) | Cluster | ClusterSkillSource is a git repo that materializes cluster-scoped |
+| [CredentialUpdateRequest](/docs/crd-credentialupdaterequest) | Namespaced | CredentialUpdateRequest is an agent's REQUEST that a human replace a |
+| [MCPServer](/docs/crd-mcpserver) | Namespaced | MCPServer declares one MCP endpoint an agent may call: where it lives |
+| [PublicEndpoint](/docs/crd-publicendpoint) | Cluster | PublicEndpoint is how this cluster is reached from the public Internet. |
+| [RelationshipSource](/docs/crd-relationshipsource) | Namespaced | RelationshipSource declares one upstream directory (Slack first) to poll |
+| [SessionHold](/docs/crd-sessionhold) | Namespaced | SessionHold parks an AgentSession for forensic review and gates its return to |
+| [SessionUserIdentity](/docs/crd-sessionuseridentity) | Namespaced | SessionUserIdentity is one session's narrowing of a user's UserIdentity |
+| [SidecarToolbox](/docs/crd-sidecartoolbox) | Namespaced | SidecarToolbox declares a user-supplied MCP server that runs as a sidecar |
+| [Skill](/docs/crd-skill) | Namespaced | Skill is one agentskills.io skill: a SKILL.md (frontmatter + body) plus |
+| [SkillSource](/docs/crd-skillsource) | Namespaced | SkillSource is a git repo that yields one or more Skills. |
+| [SpiceDBBootstrap](/docs/crd-spicedbbootstrap) | Namespaced | SpiceDBBootstrap declaratively seeds SpiceDB state: an optional schema |
+| [SpiceboxClass](/docs/crd-spiceboxclass) | Cluster | SpiceboxClass is the template a tool sandbox is cut from: image, resources, |
+| [SpiceboxSession](/docs/crd-spiceboxsession) | Namespaced | SpiceboxSession is one live sandbox instantiated from a SpiceboxClass: the |
+| [SpiceboxToolchain](/docs/crd-spiceboxtoolchain) | Cluster | SpiceboxToolchain is a language or tooling overlay a sandbox can mount -- a |
+| [SpiceboxToolkit](/docs/crd-spiceboxtoolkit) | Cluster | SpiceboxToolkit is the machine-readable description of one CLI a sandbox |
+| [SpiceboxToolspec](/docs/crd-spiceboxtoolspec) | Cluster | SpiceboxToolspec is one sandbox tool as the agent sees it: a SpiceboxToolkit |
+| [SubagentRequest](/docs/crd-subagentrequest) | Namespaced | SubagentRequest is a runner's request to delegate a task to a child session. |
+| [ToolCall](/docs/crd-toolcall) | Namespaced | ToolCall is one execution of one sandbox tool inside a SpiceboxSession: the |
+| [UserIdentity](/docs/crd-useridentity) | Cluster | UserIdentity is a human's credential catalog: the credentials one person has |
+| [Workshop](/docs/crd-workshop) | Namespaced | Workshop is one builder session's isolated build space: the durable record |
+| [WorkshopProbe](/docs/crd-workshopprobe) | Namespaced | WorkshopProbe is the tool-discovery probe object for an agent-builder |
+| [WorkspaceSource](/docs/crd-workspacesource) | Namespaced | WorkspaceSource declares a named, pluggable origin that per-session |

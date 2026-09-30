@@ -417,9 +417,8 @@ func (Test) Unit() error {
 }
 
 // defaultWebCheckDiffBase is the git ref checkWebBundleFreshness diffs
-// against by default, mirroring auditgen's DiffBase convention
-// (AUDIT_DIFF_BASE, defaulting to "master").
-const defaultWebCheckDiffBase = "master"
+// against by default: this repo's base branch.
+const defaultWebCheckDiffBase = "main"
 
 // checkWebBundleFreshness runs `mage web:check` when this branch's diff
 // touches pkg/**/ui/** — the TypeScript source web/vite.config.ts's
@@ -443,7 +442,7 @@ const defaultWebCheckDiffBase = "master"
 // already needs node to have made that edit, so paying it here costs them
 // nothing new.
 //
-// WEB_CHECK_DIFF_BASE overrides the default "master" base. A diff-computation
+// WEB_CHECK_DIFF_BASE overrides the default "main" base. A diff-computation
 // failure (no such ref, a shallow clone missing history) is logged and SKIPS
 // the check rather than failing test:unit outright — test:unit is the fast
 // gate every developer runs constantly (see (Test).Postgres's own doc), and a
@@ -1356,7 +1355,7 @@ func shortDockerID(id string) string {
 	return id
 }
 
-// Docs regenerates the showcase docs site's generated reference pages from the
+// Docs regenerates the site's generated reference pages from the
 // live source of truth (the cobra tree, the CRD schemas) — see Cli and Crd in
 // clidocs.go. Both are deterministic; neither invokes an LLM.
 type Docs mg.Namespace
@@ -1385,8 +1384,8 @@ func (Audit) All() error {
 	return auditGenerator().All(context.Background())
 }
 
-// Recent audits only the code changed vs AUDIT_DIFF_BASE (default master):
-// `git diff master...HEAD`. A no-op when that diff is empty. Writes
+// Recent audits only the code changed vs AUDIT_DIFF_BASE (default main):
+// `git diff main...HEAD`. A no-op when that diff is empty. Writes
 // docs/audits/<date>-recent-audit.md. Good for a pre-merge pass on a branch.
 func (Audit) Recent() error {
 	return auditGenerator().Recent(context.Background())

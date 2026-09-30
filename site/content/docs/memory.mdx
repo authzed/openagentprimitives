@@ -1,0 +1,49 @@
+export const meta = {
+  title: 'Memory & knowledge',
+  section: 'Guides',
+  group: 'Concepts',
+  order: 160,
+  description:
+    'An agent remembers within reason: an authorized, searchable store with a knowledge-graph layer.',
+}
+
+# Memory & knowledge
+
+<div className="doc-lede">
+  An agent with no memory is a goldfish with API keys. But the naive fixes each fail: stuffing the context
+  window doesn't scale, dumping turns to a blob isn't recallable, and bolting on a vector database ignores that
+  memory has <em>owners</em>. OAP gives an agent an <strong>authorized, searchable store</strong> with a
+  knowledge-graph layer — it remembers within reason.
+</div>
+
+<Clip name="memory-demo" />
+
+## How it works
+
+Memory is three layers: durable **storage**, ranked **search** (structured filters, full-text, and vector
+similarity, fused and re-ranked), and a **knowledge-graph** layer that extracts entities and facts. Two kinds
+of recall coexist: `query` is boolean filtering ("everything tagged X"), `search` is scoring ("what's most
+relevant to this").
+
+Every read and write is **authorized per subject** through the same SpiceDB graph as everything else — reading
+is session membership, writing and deleting are the creator's — so memory isn't a shared bucket. And the
+transcript, authorization decisions, and audit records are an **append-only, cryptographically signed,
+tamper-evident log** you can verify offline. Durable *outputs* — rendered reports, pages, charts — are a
+first-class thing of their own, with their own section: see [Artifacts](/docs/artifacts).
+
+## Go deeper
+
+- **[Storage, search & the knowledge graph](/docs/memory-storage-search)** — the three-layer stack and how recall works.
+- **[Facts & observations](/docs/facts-observations)** — durable knowledge attached to resources, not just to a transcript.
+- **[Per-subject authorization](/docs/memory-authorization)** — how the memory store is gated by the same graph as tools.
+- **[The tamper-evident audit log](/docs/audit-log)** — append-only, signed records and `oap audit verify`.
+
+<Callout kind="security" title="How this addresses the OWASP Agentic Top 10">
+  <ul>
+    <li><a href="/docs/owasp-top10#asi06">ASI06 — Memory & Context Poisoning</a> (partial): per-subject
+      authorization, tenant/scope isolation, and a signed, tamper-evident audit log.</li>
+    <li><a href="/docs/owasp-top10#asi10">ASI10 — Rogue Agents</a> (partial): every authorization check writes a
+      tamper-evident decision record that outlives the session — the audit system <em>is</em> the audit
+      trail.</li>
+  </ul>
+</Callout>

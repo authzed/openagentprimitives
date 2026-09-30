@@ -2,7 +2,8 @@
 node_modules/
 
 # All capture/render scratch (raw recordings, screenshots, transcodes).
-# Published media lives under docs/public/media/ and IS committed.
+# Published media lives under site/public/media/ (copied there by hand) and
+# IS committed.
 out/
 **/_raw/
 

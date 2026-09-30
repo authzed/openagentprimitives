@@ -1,0 +1,39 @@
+export const meta = {
+  title: 'Workspaces',
+  section: 'Reference',
+  group: 'Agent definition',
+  order: 2050,
+  description:
+    'A per-session working directory seeded from a declared source — a copy-on-write overlay, so a session gets its own files and can’t disturb the source or another run.',
+}
+
+# Workspaces
+
+<div className="doc-lede">
+  An agent that edits code or files needs somewhere to work. OAP gives a session a <strong>workspace</strong> at
+  <code>/workspace</code>, seeded from a declared source and isolated per run — a copy-on-write overlay, so one
+  session's changes never touch the source or another session's files.
+</div>
+
+## A declared source, seeded per session
+
+An AgentClass points at a **`WorkspaceSource`** (today, a git repository). When a session starts, its workspace
+is materialized from that source — the agent finds the repository already checked out at `/workspace`, rather
+than cloning it itself with whatever credentials happened to be around. Where the workspace lives is a pluggable
+seam (backed by cluster storage), so the same agent definition works across cluster kinds.
+
+## Copy-on-write isolation
+
+The seeded workspace is a **per-session overlay**: the session reads through to the source but writes into its
+own layer. Two consequences fall out of that:
+
+- **The source is never mutated by a run.** An agent can edit, build, and break things in its workspace without
+  changing the upstream the next session will seed from.
+- **Sessions don't collide.** Two runs of the same agent get two independent workspaces, so one can't read or
+  clobber the other's work-in-progress.
+
+<Callout kind="tip" title="The workspace is scoped like the session">
+  A workspace is bounded to its [session](/docs/session-lifecycle): created when the session starts, isolated while
+  it runs, and reclaimed when it's reaped. It's a scratch space the agent is trusted to make a mess in — not a
+  shared mount whose state leaks between runs.
+</Callout>

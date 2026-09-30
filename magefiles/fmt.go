@@ -30,6 +30,8 @@ var fmtTargets = []string{
 	"web/**/*.tsx",
 	"showcase/**/*.ts",
 	"showcase/**/*.tsx",
+	"site/**/*.ts",
+	"site/**/*.tsx",
 }
 
 // All rewrites Markdown and TypeScript in place.

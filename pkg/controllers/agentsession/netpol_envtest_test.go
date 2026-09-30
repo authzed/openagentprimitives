@@ -230,7 +230,7 @@ func TestReconcileStampsSidecarNetworkPolicy(t *testing.T) {
 // assertion the "isolated" row makes. Without it these assertions could pass
 // for a reason unrelated to the field -- e.g. RunModeFor always choosing
 // separate-pod, or an empty container list for an unrelated reason. Row
-// "isolated" fails against master's sidecars.go if the isolation branch of
+// "isolated" fails against main's sidecars.go if the isolation branch of
 // RunModeFor is reverted (confirmed by temporarily removing that branch and
 // re-running -- see the task report).
 func TestReconcileFieldIsolatedSidecar_SeparatePodOwnNetpolNoRunnerContainer(t *testing.T) {

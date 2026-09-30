@@ -1,0 +1,75 @@
+/* The footer shared by the landing page and the docs. Like theme-toggle.css it
+ * styles itself from its own variables, which .lp and .doc-app each map onto
+ * their palette. Fallbacks are the dark landing values. */
+
+.site-footer {
+  border-top: 1px solid var(--sf-line, #3f3644);
+  padding: 26px var(--sf-pad-x, 40px) 28px;
+  font-size: 13.5px;
+  color: var(--sf-muted, #9a94a0);
+}
+
+.site-footer-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+}
+
+/* Credit on the left, the theme toggle on the right: the conventional home
+   for a site-wide preference most visitors never change, since the default
+   follows the system. */
+.site-footer-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 18px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--sf-line-soft, #2a2231);
+}
+
+.site-footer-credit {
+  margin: 0;
+}
+
+/* Keeps the toggle in the right-hand corner even when a narrow column wraps it
+   onto its own line. */
+.site-footer-bottom .theme-toggle {
+  margin-left: auto;
+}
+
+.site-footer a {
+  color: var(--sf-link, #c7c4ca);
+  text-decoration: none;
+}
+
+.site-footer-credit a {
+  color: var(--sf-strong, #e9e7e9);
+  /* These sit inside a sentence, so they carry an underline rather than
+     relying on colour against the muted text around them (WCAG 1.4.1). */
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 3px;
+}
+
+.site-footer a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.site-footer-home {
+  margin-right: auto;
+  display: inline-flex;
+}
+
+.site-footer a.site-footer-home:hover {
+  text-decoration: none;
+}
+
+.site-footer-mark {
+  height: 13px;
+  width: auto;
+  color: var(--sf-muted, #9a94a0);
+}

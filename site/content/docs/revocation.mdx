@@ -1,0 +1,39 @@
+export const meta = {
+  title: 'Revocation',
+  section: 'Guides',
+  group: 'Operations',
+  order: 200,
+  description:
+    "Pull an agent's authority mid-flight — a credential, a grant, a running session — and have it take effect on the very next action, not the next restart.",
+}
+
+# Revocation
+
+<div className="doc-lede">
+  Sometimes the answer is "stop — now." A credential leaked, a grant was a mistake, a session is doing something
+  it shouldn't. OAP's authority is designed to be <strong>pulled in flight</strong>: revoke it and the change
+  lands on the agent's next action, not whenever it happens to restart.
+</div>
+
+## Revocation is checked at the choke point, live
+
+Because every consequential thing an agent does is a tool call through a [gated pipeline](/docs/agent-loop), there's
+a single place to enforce a withdrawal. Revocation re-checks **immediately before the call runs** — so a
+credential or grant you pull mid-turn stops the *very next* tool call, rather than being caught only when a
+token is next minted or a pod next starts. There's no window where authority you've already removed keeps
+working.
+
+## What you can pull
+
+- **A credential** — a leaked or rotated secret. Once revoked, tools that authenticate with it fail closed, and
+  repeated auth failures [end the session](/docs/budgets-breakers) rather than retrying a dead credential.
+- **A grant** — an approval or a slot you granted, including a [participant's standing](/docs/multiplayer-sessions)
+  in a session. Revoke it and that subject can no longer drive or approve.
+- **A session** — halt a run outright, or place it on a **hold** so it's frozen for inspection rather than
+  torn down.
+
+<Callout kind="security" title="Removed means removed">
+  The value of an authorization model is only as good as how fast you can take authority back. OAP's answer is
+  "at the next check," and the next check is never far away — it's the same per-action gate that authorized the
+  agent in the first place. Nothing keeps running on authority you've already revoked.
+</Callout>

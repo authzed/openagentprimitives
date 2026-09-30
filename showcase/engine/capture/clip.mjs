@@ -22,7 +22,8 @@ const url = `http://localhost:${PORT}/?scenario=${scenario}&theme=${theme}`
 const outDir = path.dirname(outBase)
 mkdirSync(outDir, { recursive: true })
 // Raw Playwright recordings go to the always-gitignored out/ scratch, never
-// next to published media (which may live under docs/public).
+// next to published media (which may live under site/public, copied there by
+// hand).
 const rawDir = path.join('out', '_raw')
 mkdirSync(rawDir, { recursive: true })
 

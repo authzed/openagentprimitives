@@ -1,0 +1,36 @@
+export const meta = {
+  title: 'Memory, knowledge & artifacts',
+  section: 'Guides',
+  group: 'Admin console',
+  order: 196,
+  description:
+    "The dashboard's read views into what agents have stored and produced — the memory store, the knowledge graph, and rendered artifacts.",
+}
+
+# Memory, knowledge & artifacts
+
+<div className="doc-lede">
+  The stores an agent writes to are readable from the console too — what it <a href="/docs/memory">remembers</a>,
+  the graph it's built, and the <a href="/docs/artifacts">artifacts</a> it's produced.
+</div>
+
+## Memory
+
+**Memory** is the read view into the searchable, authorized [memory store](/docs/memory-storage-search) — the kinds
+of entry, how many of each, and their scopes. It's the console counterpart of `oap memory`, and it's gated by
+the [same per-subject authorization](/docs/memory-authorization) as the store itself.
+
+<Screenshot name="admin-memory" />
+
+## Knowledge
+
+**Knowledge** surfaces the [knowledge graph](/docs/memory-storage-search) — entities, facts, and communities
+(`oap kg`). It's available when the graph provider is configured; without it, the view simply reports that
+knowledge isn't wired up on this install.
+
+## Artifacts
+
+**Artifacts** lists the durable, versioned [outputs](/docs/artifacts) agents have rendered — each with its
+revisions. It's the read side of `oap artifact`.
+
+<Screenshot name="admin-artifacts" />

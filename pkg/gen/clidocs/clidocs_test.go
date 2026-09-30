@@ -35,7 +35,7 @@ func TestGenerate(t *testing.T) {
 	over := string(overB)
 	assert.Contains(t, over, "section: 'Reference'")
 	assert.Contains(t, over, "group: 'CLI'")
-	assert.Contains(t, over, "[`oap agent`](#/oap-agent)", "family listed in overview")
+	assert.Contains(t, over, "[`oap agent`](/docs/oap-agent)", "family listed in overview")
 	assert.Contains(t, over, "--namespace", "global persistent flags rendered on the overview")
 
 	famB, err := os.ReadFile(filepath.Join(dir, "oap-agent.mdx"))

@@ -1,0 +1,122 @@
+export const meta = {
+  title: 'oap skill',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2970,
+  description: 'List, view, create, and delete agent Skills and SkillSources',
+}
+
+# oap skill
+
+Manage agent skills.
+
+A SkillSource pulls SKILL.md files from a git repo and materializes Skills.
+Skills can also be hand-authored from a local SKILL.md directory (instruction-only).
+Use --cluster on any subcommand to target the cluster-scoped ClusterSkill/ClusterSkillSource.
+
+## `oap skill create --from-dir <dir>`
+
+Reads &lt;dir&gt;/SKILL.md, validates its frontmatter, and creates an
+instruction-only Skill with a reserved local:// canonical name
+(local/&lt;namespace&gt;//&lt;name&gt;, or local//&lt;name&gt; with --cluster).
+
+For executable skills (scripts/assets) or git-sourced skills, use a
+SkillSource instead (`oap skill source create`); scripts/ and assets/ in
+the directory are NOT bundled here.
+
+Flags:
+
+```text
+--cluster          Create a cluster-scoped ClusterSkill
+--from-dir string  Directory containing the SKILL.md to author from
+```
+
+## `oap skill delete <name>`
+
+&lt;name&gt; is the Kubernetes object name (as shown in `oap skill list`).
+
+Note: a Skill materialized by a SkillSource is recreated on the next sync; delete the SkillSource (`oap skill source delete`) to stop materializing it.
+
+Flags:
+
+```text
+--cluster  Delete a cluster-scoped ClusterSkill
+```
+
+## `oap skill list`
+
+List Skills (or ClusterSkills with --cluster)
+
+Flags:
+
+```text
+--cluster  List cluster-scoped ClusterSkills instead of namespaced Skills
+```
+
+## `oap skill show <name>`
+
+&lt;name&gt; is the Kubernetes object name (as shown in `oap skill list`), not the canonical name.
+
+Flags:
+
+```text
+--cluster  Target a cluster-scoped ClusterSkill
+```
+
+## `oap skill source`
+
+Aliases: `sources`, `src`.
+
+List, view, create, and delete SkillSources (git repos that yield Skills)
+
+### `oap skill source create <name> --repo <url>`
+
+Creates a SkillSource that clones &lt;url&gt; and materializes Skills from SKILL.md
+files under --subpath. For a private repo, supply auth:
+  namespaced: --identity &lt;AgentIdentity&gt; --credential &lt;name&gt;
+  cluster:    --secret-namespace &lt;ns&gt; --secret-name &lt;name&gt; --secret-key &lt;key&gt;
+
+Flags:
+
+```text
+--cluster                  Create a cluster-scoped ClusterSkillSource
+--credential string        AgentCredential name on the AgentIdentity (namespaced)
+--identity string          AgentIdentity holding the clone credential (namespaced)
+--ref string               Branch, tag, or commit SHA to fetch (default: the repo's default branch)
+--repo string              Git repo URL to clone (required)
+--secret-key string        Key in the clone-token Secret (--cluster) (default "token")
+--secret-name string       Name of the clone-token Secret (--cluster)
+--secret-namespace string  Namespace of the clone-token Secret (--cluster)
+--subpath string           Restrict SKILL.md discovery to this subtree (e.g. .claude/skills)
+```
+
+### `oap skill source delete <name>`
+
+Deleting a source garbage-collects the Skills it materialized (owner references).
+
+Flags:
+
+```text
+--cluster  Delete a cluster-scoped ClusterSkillSource
+```
+
+### `oap skill source list`
+
+List SkillSources (or ClusterSkillSources with --cluster)
+
+Flags:
+
+```text
+--cluster  List cluster-scoped ClusterSkillSources
+```
+
+### `oap skill source show <name>`
+
+Show a SkillSource's spec, resolved SHA, discovery problems, and status
+
+Flags:
+
+```text
+--cluster  Target a cluster-scoped ClusterSkillSource
+```
+

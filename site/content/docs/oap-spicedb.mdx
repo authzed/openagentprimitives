@@ -1,0 +1,77 @@
+export const meta = {
+  title: 'oap spicedb',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2980,
+  description: 'Apply schema and check permissions against the system SpiceDB.',
+}
+
+# oap spicedb
+
+Apply schema and check permissions against the system SpiceDB.
+
+## `oap spicedb apply-schema`
+
+Apply the canonical agentprimitives schema (pkg/authz/spicedb/schema) to the SpiceDB endpoint via WriteSchema (idempotent).
+
+Flags:
+
+```text
+--endpoint string    SpiceDB gRPC endpoint (default: $SPICEDB_ENDPOINT)
+--insecure           Use insecure gRPC (no TLS) (default "true")
+--token-file string  Path to a file holding the SpiceDB bearer token (default: $SPICEDB_TOKEN_FILE)
+```
+
+## `oap spicedb check <object_type>:<object_id>#<permission>@<subject_type>:<subject_id>[#<rel>]`
+
+One-shot CheckPermission query for debugging.
+
+Flags:
+
+```text
+--endpoint string    SpiceDB gRPC endpoint (default: $SPICEDB_ENDPOINT)
+--insecure           Use insecure gRPC (default "true")
+--token-file string  Path to bearer token file (default: $SPICEDB_TOKEN_FILE)
+```
+
+## `oap spicedb expose`
+
+Wraps kubectl port-forward against the spicebox-spicedb Service. It lives in
+the platform's system namespace, which is where this looks unless -n says
+otherwise. Useful for pointing an external SpiceDB client at the operator's
+SpiceDB.
+
+Foreground process; Ctrl-C kills the forward.
+
+Example: in another terminal, run
+  SPICEDB_ENDPOINT=localhost:50051 ./run.sh
+in a client checkout to write permissions into the same SpiceDB this
+operator manages.
+
+Flags:
+
+```text
+--local-port int   Local port to forward from (default "50051")
+--remote-port int  Remote port on the SpiceDB Service (50051 = gRPC, 8443 = HTTP) (default "50051")
+```
+
+## `oap spicedb proxy`
+
+Opens a long-running port-forward from 127.0.0.1:&lt;port&gt; to the
+spicebox-spicedb Service, writes a zed context (default name "agentprimitives")
+pointing at it, and switches to that context. Blocks until Ctrl-C / SIGTERM,
+then removes the zed context entry and tears down the forward.
+
+After it's running, in another terminal:
+
+    zed schema read
+    zed relationship read agentsession:abc
+    zed permission check agentsession:abc interact user:alice
+
+Flags:
+
+```text
+--port uint16         Local TCP port to bind (default "60061")
+--zed-context string  zed context name to create / use (default "agentprimitives")
+```
+
