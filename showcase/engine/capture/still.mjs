@@ -15,7 +15,7 @@ const PORT = process.env.SIM_PORT || process.env.SLACKSIM_PORT || '5178'
 
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 2 })
-await page.goto(`http://localhost:${PORT}/?scenario=${scenario}&theme=${theme}`, { waitUntil: 'networkidle' })
+await page.goto(`http://127.0.0.1:${PORT}/?scenario=${scenario}&theme=${theme}`, { waitUntil: 'networkidle' })
 await page.waitForFunction(() => !!window.__showcaseStory && !!window.__showcase)
 const count = await page.evaluate(() => window.__showcaseStory.count)
 for (let i = 0; i <= Math.min(beatIndex, count - 1); i++) {

@@ -37,7 +37,9 @@ and `go test ./pkg/gen/<pkg>/` from the repo root.
 3. `pnpm slacksim:build && pnpm exec vite preview --config vite.slacksim.config.ts --port 5178 --strictPort &`
 4. Render:
    `SIM_PORT=5178 node engine/capture/clip.mjs <name> out/clips/<name> dark 1600x900`
-   (and/or `still.mjs <name> <beat> …` for a caption-free still).
+   (and/or `still.mjs <name> <beat> …` for a caption-free still). For spoken
+   narration, put `ELEVENLABS_API_KEY=...` in ignored `.env.local` and run
+   `node --env-file=.env.local engine/capture/clip.mjs ...`.
 5. Copy to `site/public/media/`, add a `site/content/_manifest.json` entry,
    reference it from a guide (see [`site/AGENTS.md`](../site/AGENTS.md)).
 

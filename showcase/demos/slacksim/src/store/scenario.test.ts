@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { newScenario } from "./scenario";
 import { SimStore } from "./simstore";
+import { loadStory } from "../scenarios";
 
 describe("scenario builder determinism", () => {
   it("produces byte-identical scenarios across two builds", () => {
@@ -33,6 +34,62 @@ describe("scenario builder determinism", () => {
     expect(s.messages[0].ts).toMatch(/^\d+\.000000$/);
     expect(tss[1] - tss[0]).toBe(37);
     expect(tss[2] - tss[1]).toBe(37);
+  });
+});
+
+describe("example-agent demo stories", () => {
+  it("shows the weekly HubSpot digest before Sam asks for contacts", () => {
+    const story = loadStory("hubspot-companies");
+    const store = new SimStore(story.scenario);
+    story.beats?.[0].run(store as never);
+    expect(
+      store
+        .getSnapshot()
+        .messages.some((message) =>
+          message.text?.includes("New companies this week"),
+        ),
+    ).toBe(true);
+    expect(
+      store
+        .getSnapshot()
+        .messages.some((message) =>
+          message.text?.includes("can you pull Circldot"),
+        ),
+    ).toBe(false);
+    story.beats?.[1].run(store as never);
+    expect(
+      store
+        .getSnapshot()
+        .messages.some((message) =>
+          message.text?.includes("can you pull Circldot"),
+        ),
+    ).toBe(true);
+  });
+
+  it("shows a reviewbot report reference alongside the summary", () => {
+    const story = loadStory("reviewbot-demo");
+    const store = new SimStore(story.scenario);
+    for (const beat of story.beats ?? []) beat.run(store as never);
+    const summary = store
+      .getSnapshot()
+      .messages.find((message) => message.text?.includes("do not merge yet"));
+    expect(summary).toBeDefined();
+    expect(JSON.stringify(summary?.attachments)).toContain("pr42-review.html");
+  });
+
+  it.each([
+    ["hubspot-companies", "Circldot", "approved by"],
+    ["reviewbot-demo", "PR #42", "Check Run"],
+    ["pm-agent-demo", "product goals", "No changes were made"],
+  ])("shows the request and outcome for %s", (name, request, outcome) => {
+    const story = loadStory(name);
+    const store = new SimStore(story.scenario);
+    const initial = JSON.stringify(store.getSnapshot().messages);
+    for (const beat of story.beats ?? []) beat.run(store as never);
+    const finished = JSON.stringify(store.getSnapshot().messages);
+    expect(finished).toContain(request);
+    expect(finished).toContain(outcome);
+    expect(finished).not.toBe(initial);
   });
 });
 

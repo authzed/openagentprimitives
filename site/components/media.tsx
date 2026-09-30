@@ -91,8 +91,7 @@ function Lightbox({
   );
 }
 
-// An autoplay-muted-loop clip with a poster and click-to-expand. This is how a
-// guide embeds a scenario clip captured by the engine.
+// A playable clip with a poster and controls. Narrated clips must start unmuted.
 export function Clip({ name, caption }: { name: string; caption?: string }) {
   const asset = getAsset(name);
   if (!asset || (!asset.webm && !asset.mp4)) return <Missing name={name} />;
@@ -101,8 +100,6 @@ export function Clip({ name, caption }: { name: string; caption?: string }) {
       <video
         className="doc-clip-video"
         controls
-        muted
-        loop
         playsInline
         preload="metadata"
         poster={asset.poster}

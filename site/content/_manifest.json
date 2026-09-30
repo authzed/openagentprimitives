@@ -1,4 +1,32 @@
 {
+  "codebot-demo": {
+    "kind": "clip",
+    "webm": "/media/codebot-demo.webm",
+    "mp4": "/media/codebot-demo.mp4",
+    "poster": "/media/codebot-demo.png",
+    "caption": "Simulated codebot: scoped plan approval, a pull request, and a fresh approval for a new repository."
+  },
+  "hubspot-companies-demo": {
+    "kind": "clip",
+    "webm": "/media/hubspot-companies-demo.webm",
+    "mp4": "/media/hubspot-companies-demo.mp4",
+    "poster": "/media/hubspot-companies-demo.png",
+    "caption": "Simulated HubSpot agent: a scheduled company digest and owner-approved contact sharing."
+  },
+  "reviewbot-demo": {
+    "kind": "clip",
+    "webm": "/media/reviewbot-demo.webm",
+    "mp4": "/media/reviewbot-demo.mp4",
+    "poster": "/media/reviewbot-demo.png",
+    "caption": "Simulated reviewbot: a pull-request-triggered, read-only review summarized in Slack and recorded as a Check Run."
+  },
+  "pm-agent-demo": {
+    "kind": "clip",
+    "webm": "/media/pm-agent-demo.webm",
+    "mp4": "/media/pm-agent-demo.mp4",
+    "poster": "/media/pm-agent-demo.png",
+    "caption": "Simulated pm-bot: read-only GitHub and Linear work summarized against product goals."
+  },
   "multiplayer-approval": {
     "kind": "clip",
     "webm": "/media/multiplayer-approval.webm",

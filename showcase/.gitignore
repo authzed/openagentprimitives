@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.env.local
 
 # All capture/render scratch (raw recordings, screenshots, transcodes).
 # Published media lives under site/public/media/ (copied there by hand) and

@@ -67,9 +67,11 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
+      # web/ pins its own pnpm via packageManager; the repo-root package.json
+      # pins a different pnpm for Vercel, so point the action at web/ explicitly.
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.34.5
+          package_json_file: web/package.json
           run_install: false
       - run: pnpm install --frozen-lockfile
         working-directory: web
@@ -88,9 +90,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+      # fmt runs `pnpm dlx` at the repo root; take the version from the root
+      # package.json's packageManager pin instead of double-specifying it.
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.34.5
           run_install: false
       - uses: actions/setup-go@v7
         with:
