@@ -45,12 +45,16 @@ func TestTheResolverIsAskedAboutTheBindingsOWNER(t *testing.T) {
 	publishOut(t, nc, "default", leaf.Name, "interaction_request",
 		interactionRequestEnvelope(t, leaf.Name))
 
+	// Wait on the Send, not on SubChannelSenderFor: the relay calls Send only
+	// after the resolver returns, so waiting on the resolver alone races the
+	// delivery asserted below.
 	require.True(t, waitUntil(t, 2*time.Second, func() bool {
-		_, ok := res.lastSubChannelRef()
+		_, ok := sndr.first()
 		return ok
-	}), "SubChannelSenderFor was never called")
+	}), "the card never reached the sub-channel sender")
 
-	ref, _ := res.lastSubChannelRef()
+	ref, ok := res.lastSubChannelRef()
+	require.True(t, ok, "SubChannelSenderFor was never called")
 	assert.Equal(t, root.Name, ref.Name,
 		"the resolver must be asked about the session that OWNS the binding; asked about the child, "+
 			"a client-hosted host refuses a card it is the right reader for")
@@ -64,8 +68,7 @@ func TestTheResolverIsAskedAboutTheBindingsOWNER(t *testing.T) {
 		"binding and identity must come from one session, not two")
 
 	// And the card is still about the leaf where the human reads it.
-	got, ok := sndr.first()
-	require.True(t, ok)
+	got, _ := sndr.first()
 	assert.Equal(t, leaf.Name, got.Name,
 		"only delivery moved; the approver must still see WHICH session is asking")
 }
