@@ -50,12 +50,12 @@
 # comment for why: avoids paying qemu emulation for the compile itself).
 #
 # Pinned digest, same pin as images/toolchain-go/Dockerfile's builder stage —
-# this repo's go.mod declares `go 1.26.1`, and reusing an already-verified
+# this repo's go.mod declares `go 1.26.6`, and reusing an already-verified
 # digest here avoids fetching a second, unverified one for a pin whose only
 # real requirement is "new enough to compile the module". Refresh with:
-#   docker pull golang:1.26.1-bookworm
-#   docker image inspect golang:1.26.1-bookworm --format '{{index .RepoDigests 0}}'
-FROM --platform=$BUILDPLATFORM golang@sha256:ab3d6955bbc813a0f3fdf220c1d817dd89c0b3f283777db8ece4a32fe7858edd AS shim
+#   docker pull golang:1.26.6-bookworm
+#   docker image inspect golang:1.26.6-bookworm --format '{{index .RepoDigests 0}}'
+FROM --platform=$BUILDPLATFORM golang@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS shim
 ARG TARGETARCH
 WORKDIR /src
 ENV GOFLAGS=-trimpath

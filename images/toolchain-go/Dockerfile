@@ -11,17 +11,17 @@
 # `GLIBC_2.xx not found` at exec time, far from its cause.
 #
 # The Go version must be >= the highest `go` directive of any repo an agent is
-# expected to build. Both this repo and the first consumer declare `go 1.26.1`,
+# expected to build. Both this repo and the first consumer declare `go 1.26.6`,
 # and GOTOOLCHAIN=local (below, and on the SpiceboxToolchain CR) forbids the
 # `go` command from downloading a newer toolchain — so an overlay older than the
 # module's `go` directive fails the build outright:
-#   go: go.mod requires go >= 1.26.1 (running go 1.24.5; GOTOOLCHAIN=local)
+#   go: go.mod requires go >= 1.26.6 (running go 1.26.1; GOTOOLCHAIN=local)
 # That is the intended, legible failure. Keep this ahead of the repos, not behind.
 #
 # Pinned digest. Refresh with:
-#   docker pull golang:1.26.1-bookworm
-#   docker image inspect golang:1.26.1-bookworm --format '{{index .RepoDigests 0}}'
-FROM golang@sha256:ab3d6955bbc813a0f3fdf220c1d817dd89c0b3f283777db8ece4a32fe7858edd AS build
+#   docker pull golang:1.26.6-bookworm
+#   docker image inspect golang:1.26.6-bookworm --format '{{index .RepoDigests 0}}'
+FROM golang@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS build
 
 ENV TC=/opt/ap-toolchains/go
 ENV GOTOOLCHAIN=local
@@ -43,7 +43,7 @@ RUN GOROOT="${TC}" "${TC}/bin/go" version && "${TC}/tools/bin/gopls" version
 # thing cannot. Under GOTOOLCHAIN=local an older Go fails here at BUILD time
 # instead of failing an agent's `go build` at session time.
 RUN mkdir -p /tmp/goprobe && cd /tmp/goprobe \
- && printf 'module goprobe\n\ngo 1.26.1\n' > go.mod \
+ && printf 'module goprobe\n\ngo 1.26.6\n' > go.mod \
  && printf 'package main\n\nfunc main() {}\n' > main.go \
  && GOROOT="${TC}" GOTOOLCHAIN=local "${TC}/bin/go" build ./... \
  && cd / && rm -rf /tmp/goprobe

@@ -22,6 +22,7 @@ import (
 
 	"github.com/authzed/openagentprimitives/pkg/gen/auditgen"
 	"github.com/authzed/openagentprimitives/pkg/gen/claudeexec"
+	"github.com/authzed/openagentprimitives/pkg/platform/apimage"
 	"github.com/authzed/openagentprimitives/test/envtestreap"
 	"github.com/authzed/openagentprimitives/test/suitelock"
 	"github.com/authzed/openagentprimitives/test/testparallel"
@@ -105,6 +106,40 @@ func (Build) Workshop() error {
 // Oap builds the agent-primitives CLI binary.
 func (Build) Oap() error {
 	return sh.RunV("go", "build", "-o", "bin/oap", "./cmd/oap")
+}
+
+// Toolchains builds every toolchain overlay image (apimage.Toolchains) for the
+// docker daemon's NATIVE platform, exporting nothing (--output=type=cacheonly,
+// same shape as desktop:images' GoBuilder prebuild). It exists as a build
+// CHECK cheap enough for CI, not a bake: toolchain-go and toolchain-claude pin
+// a golang digest that must stay >= this repo's go.mod `go` directive, and
+// under GOTOOLCHAIN=local a stale pin fails these builds outright (toolchain-
+// go's goprobe stage; toolchain-claude's shim stage compiling this module) —
+// a drift `mage test:*` can never see, since it only surfaces inside a docker
+// build. Shipped `mage desktop:devapp` broken once; this target is the gate.
+//
+// Native platform, not desktopPlatform: the pinned digest is one multi-arch
+// manifest list carrying a single Go version, so the invariant is arch-
+// independent, and building natively (amd64 in CI, arm64 on Apple Silicon)
+// avoids paying qemu emulation for payload stages only the real desktop bake
+// needs as arm64.
+func (Build) Toolchains() error {
+	if err := desktopRequireTools("docker"); err != nil {
+		return err
+	}
+	for _, im := range apimage.Toolchains {
+		fmt.Printf("==> build:toolchains: docker buildx build %s (native platform, dockerfile=%q, context=%q)\n",
+			im.Name, im.Dockerfile, im.Context)
+		args := []string{"buildx", "build", "--output=type=cacheonly"}
+		if im.Dockerfile != "" {
+			args = append(args, "-f", im.Dockerfile)
+		}
+		args = append(args, im.Context)
+		if err := sh.RunV("docker", args...); err != nil {
+			return fmt.Errorf("build:toolchains: build %s: %w", im.Name, err)
+		}
+	}
+	return nil
 }
 
 // Web builds / serves / drift-checks the browser UI bundles under web/.
