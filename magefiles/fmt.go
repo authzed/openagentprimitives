@@ -46,8 +46,9 @@ func (Fmt) Check() error {
 }
 
 // oxfmtArgs builds the `pnpm dlx` invocation. oxfmt ships as an npm package, and
-// this repo has no root Node project — `pnpm dlx` pins the version without
-// adding one, and without pulling the formatter's dependency tree into go.mod.
+// the root package.json exists only to pin pnpm for Vercel, with no
+// dependencies — `pnpm dlx` pins the formatter's version without adding it
+// there, and without pulling its dependency tree into go.mod.
 func oxfmtArgs(mode string) []string {
 	args := []string{"dlx", "oxfmt@" + oxfmtVersion, mode}
 	return append(args, fmtTargets...)

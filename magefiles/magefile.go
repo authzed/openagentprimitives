@@ -115,8 +115,9 @@ type Web mg.Namespace
 //
 // The difference matters because corepack resolves which pnpm to run by reading
 // the `packageManager` field of the package.json in its CURRENT DIRECTORY — it
-// does not honour `-C`. Invoked from the repo root (which has no package.json)
-// corepack falls back to the newest pnpm it knows about, ignoring the version
+// does not honour `-C`. Invoked from the repo root, corepack reads the root
+// package.json (which pins the site's pnpm, for Vercel) or, without one, falls
+// back to the newest pnpm it knows about; either way it ignores the version
 // web/package.json pins. That is not hypothetical: the fallback (pnpm 11.17.0)
 // crashes on Node 22.x with ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING, so every
 // web target failed while the pin sat there looking correct.
