@@ -11,9 +11,9 @@ func TestLoopAddToolCost_AccumulatesPerTool(t *testing.T) {
 	var l Loop
 	// codebot's shape: one tool ("claude-oauth") invoked many times -> ONE
 	// summed bucket; a second tool -> a distinct bucket, first-seen order.
-	l.addToolCost("claude-oauth", 5.43, true)
-	l.addToolCost("claude-oauth", 1.31, true)
-	l.addToolCost("aider", 2.10, true)
+	l.AddToolCost("claude-oauth", 5.43, true)
+	l.AddToolCost("claude-oauth", 1.31, true)
+	l.AddToolCost("aider", 2.10, true)
 
 	got := l.usageByToolSnapshot()
 	require.Len(t, got, 2, "two distinct tools -> two buckets in first-encountered order")
@@ -28,7 +28,7 @@ func TestLoopAddToolCost_AccumulatesPerTool(t *testing.T) {
 
 func TestLoopAddToolCost_NegativeCostIgnored(t *testing.T) {
 	var l Loop
-	l.addToolCost("claude-oauth", -1.0, true)
+	l.AddToolCost("claude-oauth", -1.0, true)
 
 	got := l.usageByToolSnapshot()
 	require.Len(t, got, 1, "the tool is still recorded")
@@ -40,7 +40,7 @@ func TestLoopAddToolCost_ZeroCostUnbilled(t *testing.T) {
 	// An unbilled / credential-halt run reports cost 0; it adds 0 and does not
 	// mark the bucket as having a reported (billed) cost.
 	var l Loop
-	l.addToolCost("claude-oauth", 0, false)
+	l.AddToolCost("claude-oauth", 0, false)
 
 	got := l.usageByToolSnapshot()
 	require.Len(t, got, 1)

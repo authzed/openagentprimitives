@@ -128,12 +128,16 @@ type toolUsageBucket struct {
 	costReported bool
 }
 
-// addToolCost folds one interactive toolkit result event's provider-reported
+// AddToolCost folds one interactive toolkit result event's provider-reported
 // cost into the bucket for outerTool. Shares usageMu with addUsage/addModelUsage
 // (see usageMu's doc). ok is the toolkit's success flag; v1 accumulates cost
 // regardless — a run the provider billed cost money whether or not it succeeded,
 // and an unbilled run reports 0 anyway.
-func (l *Loop) addToolCost(outerTool string, costUSD float64, ok bool) {
+//
+// Exported (unlike addModelUsage) because it is wired from internal/cmd/runner's
+// interactive-tool result callback, which lives in a different package; the
+// runner's turn loop feeds addModelUsage internally, so that one stays private.
+func (l *Loop) AddToolCost(outerTool string, costUSD float64, ok bool) {
 	l.usageMu.Lock()
 	defer l.usageMu.Unlock()
 	if l.usageByToolIdx == nil {
