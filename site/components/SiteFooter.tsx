@@ -1,9 +1,8 @@
 import { OapMark } from "./OapMark";
 import { ThemeToggle } from "./ThemeToggle";
+import { DISCORD_URL } from "@/lib/site";
 import "./site-footer.css";
 
-// The AuthZed Discord, the destination authzed.com/discord redirects to.
-const COMMUNITY = "https://discord.gg/TUd4k5McMX";
 const LICENSE =
   "https://github.com/authzed/openagentprimitives/blob/main/LICENSE";
 
@@ -25,7 +24,7 @@ export function SiteFooter() {
         <a href="/docs/crd-reference">CRD reference</a>
         <a href="/docs/cli-reference">CLI reference</a>
         <a href="/#owasp">OWASP coverage</a>
-        <a href={COMMUNITY}>Community</a>
+        <a href={DISCORD_URL}>Community</a>
       </div>
       <div className="site-footer-bottom">
         <p className="site-footer-credit">

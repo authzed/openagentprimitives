@@ -8,6 +8,8 @@ import {
 } from "react";
 import { Wordmark } from "@/components/Wordmark";
 import { SiteFooter } from "@/components/SiteFooter";
+import { DiscordIcon, GitHubIcon } from "@/components/BrandIcons";
+import { DISCORD_URL } from "@/lib/site";
 import { OWASP, coverageSummary } from "./owasp";
 
 const REPO = "https://github.com/authzed/openagentprimitives";
@@ -460,7 +462,12 @@ export function Landing() {
           </a>
           <a href="#secure">Security</a>
           <a href="#agent-builder">Agent Builder</a>
-          <a href={REPO}>GitHub</a>
+          <a className="lp-nav-icon" href={REPO} aria-label="GitHub">
+            <GitHubIcon />
+          </a>
+          <a className="lp-nav-icon" href={DISCORD_URL} aria-label="Discord">
+            <DiscordIcon />
+          </a>
           <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
             Get started
           </a>

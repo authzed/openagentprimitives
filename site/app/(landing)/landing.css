@@ -275,6 +275,35 @@ body:has(.lp) {
   text-underline-offset: 3px;
 }
 
+/* GitHub and Discord as icons, with a 32px hit
+   area around the 20px mark. */
+.lp-nav-links a.lp-nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 0 -6px;
+}
+
+.lp-nav-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.lp-nav-links a.lp-nav-icon:hover {
+  text-decoration: none;
+}
+
+/* The narrowest phones can't fit the icons beside Docs and the button. Both
+   stay reachable further down: the footer's Community link and the closing
+   section's GitHub button. */
+@media (max-width: 440px) {
+  .lp-nav-links a.lp-nav-icon {
+    display: none;
+  }
+}
+
 /* --------------------------------------------------------------- buttons --- */
 
 .lp-btn {
@@ -940,8 +969,8 @@ body:has(.lp) {
   .lp-slab--3 {
     grid-template-columns: 1fr;
   }
-  /* Phones keep only Docs beside the button; the rest are on the page. */
-  .lp-nav-links a:not(.lp-btn):not(.lp-nav-keep) {
+  /* Phones keep Docs and the icons beside the button; the rest are on the page. */
+  .lp-nav-links a:not(.lp-btn):not(.lp-nav-keep):not(.lp-nav-icon) {
     display: none;
   }
   .lp-nav-links {

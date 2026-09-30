@@ -17,3 +17,6 @@ export const OG_IMAGE = {
   height: 630,
   alt: "Open Agent Primitives: a secure way to run enterprise AI agents",
 };
+
+// The AuthZed Discord, the destination authzed.com/discord redirects to.
+export const DISCORD_URL = "https://discord.gg/TUd4k5McMX";
