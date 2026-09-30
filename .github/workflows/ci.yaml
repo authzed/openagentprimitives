@@ -85,6 +85,34 @@ jobs:
       - run: go install github.com/magefile/mage@v1.17.2 && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: mage web:check
 
+  # site/ is its own pnpm project (the docs + landing site Vercel deploys).
+  # Formatting of its TypeScript is covered by the `format` job's fmt:check.
+  # `pnpm build` runs `pnpm check` (links, media, refs) before `next build`, and
+  # check resolves code anchors against the whole repo, so the full checkout is
+  # needed.
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: site/package.json
+          run_install: false
+      - run: pnpm install --frozen-lockfile
+        working-directory: site
+      - run: pnpm typecheck
+        working-directory: site
+      - run: pnpm lint
+        working-directory: site
+      - run: pnpm test
+        working-directory: site
+      - run: pnpm build
+        working-directory: site
+
   format:
     runs-on: ubuntu-latest
     timeout-minutes: 10
