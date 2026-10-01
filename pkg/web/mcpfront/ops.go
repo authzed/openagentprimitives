@@ -210,6 +210,35 @@ func failedLegOf(dec spicedb.AccessTokenDecision) string {
 	}
 }
 
+// sessionResourcePermission maps a token mirror permission to the permission
+// leg 3 checks on the agentsession itself (AccessTokenCheck.ResourcePermission).
+//
+// WHY the "read"/"view" mirrors map to read_transcript: agentsession defines
+// no "read" or "view" permission, and the session-level truth each mirror
+// stands on IS read_transcript —
+//   - memory_entry#read is literally defined as session->read_transcript in
+//     the schema, so for a whole-session memory read, read_transcript on the
+//     session is the same question asked one hop earlier;
+//   - artifact#view adds org-view (parent->artifact_org_view) and platform
+//     admin (platform->view_audit) arms on top of parent->interact. Gating a
+//     token's artifact reads on session-level read_transcript is deliberately
+//     NARROWER: token holders do not get those side doors in v1 — an
+//     org-wide artifact audience or an admin's audit standing must not leak
+//     through a delegated bearer token.
+//
+// Every other mirror ("read_transcript", "interact", "approve", ...) is
+// literally the session permission of the same name; empty means "same as
+// the mirror" (CheckAccessTokenOp's default), keeping this map a closed
+// exception list rather than a parallel naming scheme.
+func sessionResourcePermission(mirrorPerm string) string {
+	switch mirrorPerm {
+	case permRead, permView:
+		return permReadTranscript
+	default:
+		return ""
+	}
+}
+
 // authorizeSessionOp loads the AgentSession CR and runs the three-legged
 // CheckAccessTokenOp for perm against it. Denial and not-found BOTH return
 // errSessionNotAccessible — verbatim, never wrapped — so a caller cannot tell
@@ -235,12 +264,13 @@ func authorizeSessionOp(ctx context.Context, d Deps, act acting, perm, ns, name 
 
 	classID := sess.Namespace + "/" + sess.Spec.Class
 	dec, err := d.AccessTokenAuthz().CheckAccessTokenOp(ctx, spicedb.AccessTokenCheck{
-		TokenID:      act.TokenID,
-		Owner:        act.Owner,
-		Permission:   perm,
-		ResourceType: "agentsession",
-		ResourceID:   ns + "/" + name,
-		ClassID:      classID,
+		TokenID:            act.TokenID,
+		Owner:              act.Owner,
+		Permission:         perm,
+		ResourceType:       "agentsession",
+		ResourceID:         ns + "/" + name,
+		ClassID:            classID,
+		ResourcePermission: sessionResourcePermission(perm),
 	}, true)
 	if err != nil {
 		d.Logger().Info("mcpfront: authorizeSessionOp check errored; denying",

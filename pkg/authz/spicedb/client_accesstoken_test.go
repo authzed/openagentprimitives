@@ -308,6 +308,98 @@ func TestAccessTokenCheckOp_ResponseMatching(t *testing.T) {
 	}
 }
 
+// TestAccessTokenCheckOp_ResourcePermissionDecouplesLeg3 pins the
+// ResourcePermission contract: leg 1 (the token mirror) keeps chk.Permission,
+// leg 3 (the resource check) uses ResourcePermission when set, and each
+// granted pair is still attributed to its own leg — the "view" mirror whose
+// agentsession-level truth is read_transcript (mcpfront's authorizeSessionOp
+// mapping) is the motivating caller.
+func TestAccessTokenCheckOp_ResourcePermissionDecouplesLeg3(t *testing.T) {
+	legPermissions := func(req *v1.CheckBulkPermissionsRequest) (mirror, resource string) {
+		for _, item := range req.GetItems() {
+			switch {
+			case item.GetResource().GetObjectType() == accesstoken.ObjectType &&
+				item.GetPermission() != accesstoken.PermissionCovers:
+				mirror = item.GetPermission()
+			case item.GetResource().GetObjectType() != accesstoken.ObjectType:
+				resource = item.GetPermission()
+			}
+		}
+		return mirror, resource
+	}
+
+	t.Run("view mirror + read_transcript resource perm: legs carry different names, each attributed correctly", func(t *testing.T) {
+		c, fake := newAccessTokenFakeClient(t)
+		var captured *v1.CheckBulkPermissionsRequest
+		fake.respond = func(req *v1.CheckBulkPermissionsRequest) *v1.CheckBulkPermissionsResponse {
+			captured = req
+			resp := &v1.CheckBulkPermissionsResponse{}
+			for _, item := range req.GetItems() {
+				resp.Pairs = append(resp.Pairs, grantedPair(item))
+			}
+			return resp
+		}
+
+		chk := checkFixture()
+		chk.Permission = "view"
+		chk.ResourcePermission = "read_transcript"
+		dec, err := c.CheckAccessTokenOp(context.Background(), chk, true)
+		require.NoError(t, err)
+		assert.Equal(t, AccessTokenDecision{TokenGrants: true, ScopeCovers: true, OwnerHas: true}, dec)
+
+		require.NotNil(t, captured)
+		require.Len(t, captured.GetItems(), 3)
+		mirror, resource := legPermissions(captured)
+		assert.Equal(t, "view", mirror, "leg 1 must keep the token mirror name")
+		assert.Equal(t, "read_transcript", resource, "leg 3 must check the resource's own permission")
+	})
+
+	t.Run("only the resource leg granted: OwnerHas alone flips, no cross-leg bleed", func(t *testing.T) {
+		c, fake := newAccessTokenFakeClient(t)
+		fake.respond = func(req *v1.CheckBulkPermissionsRequest) *v1.CheckBulkPermissionsResponse {
+			resp := &v1.CheckBulkPermissionsResponse{}
+			for _, item := range req.GetItems() {
+				if item.GetResource().GetObjectType() == "agentsession" {
+					resp.Pairs = append(resp.Pairs, grantedPair(item))
+					continue
+				}
+				resp.Pairs = append(resp.Pairs, deniedPair(item))
+			}
+			return resp
+		}
+
+		chk := checkFixture()
+		chk.Permission = "view"
+		chk.ResourcePermission = "read_transcript"
+		dec, err := c.CheckAccessTokenOp(context.Background(), chk, true)
+		require.NoError(t, err)
+		assert.Equal(t, AccessTokenDecision{OwnerHas: true}, dec)
+		assert.False(t, dec.Allowed())
+	})
+
+	t.Run("empty ResourcePermission: leg 3 defaults to Permission, exactly the pre-field behavior", func(t *testing.T) {
+		c, fake := newAccessTokenFakeClient(t)
+		var captured *v1.CheckBulkPermissionsRequest
+		fake.respond = func(req *v1.CheckBulkPermissionsRequest) *v1.CheckBulkPermissionsResponse {
+			captured = req
+			resp := &v1.CheckBulkPermissionsResponse{}
+			for _, item := range req.GetItems() {
+				resp.Pairs = append(resp.Pairs, grantedPair(item))
+			}
+			return resp
+		}
+
+		dec, err := c.CheckAccessTokenOp(context.Background(), checkFixture(), true)
+		require.NoError(t, err)
+		assert.True(t, dec.Allowed())
+
+		require.NotNil(t, captured)
+		mirror, resource := legPermissions(captured)
+		assert.Equal(t, "read_transcript", mirror)
+		assert.Equal(t, "read_transcript", resource, "an unset ResourcePermission must leave leg 3 on Permission")
+	})
+}
+
 func TestAccessTokenCheckOp_RefusesIncompleteAndInternalPermissions(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -332,6 +424,16 @@ func TestAccessTokenCheckOp_RefusesIncompleteAndInternalPermissions(t *testing.T
 		{
 			name:    "permission \"owner\" is internal: refused",
 			mutate:  func(chk *AccessTokenCheck) { chk.Permission = accesstoken.PermissionOwner },
+			wantErr: "internal to the token definition",
+		},
+		{
+			name:    "resource permission \"covers\" is internal: refused, the guard covers both fields",
+			mutate:  func(chk *AccessTokenCheck) { chk.ResourcePermission = accesstoken.PermissionCovers },
+			wantErr: "internal to the token definition",
+		},
+		{
+			name:    "resource permission \"owner\" is internal: refused",
+			mutate:  func(chk *AccessTokenCheck) { chk.ResourcePermission = accesstoken.PermissionOwner },
 			wantErr: "internal to the token definition",
 		},
 	}

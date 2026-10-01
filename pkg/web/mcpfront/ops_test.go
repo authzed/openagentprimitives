@@ -401,6 +401,11 @@ func TestSearchMemoryScopesToAuthorizedSessionsOnly(t *testing.T) {
 	})
 }
 
+// TestRoleMatrixOnTools pins BOTH permission names each tool uses: the token
+// mirror name leg 1 checks ($sameperm contract) and the resource permission
+// leg 3 checks on the agentsession (the view/read → read_transcript mapping;
+// "" means leg 3 defaults to the mirror name). A drift on either side of
+// sessionResourcePermission's map is a regression this table catches by name.
 func TestRoleMatrixOnTools(t *testing.T) {
 	ctx := context.Background()
 	act := opsTestActing()
@@ -412,28 +417,103 @@ func TestRoleMatrixOnTools(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d := newOpsFakeDeps(t, newOpsTestClient(t, sess))
-	d.operatorURL = srv.URL
-	d.memoryToken = "webd-token"
-	// A read-role token's mirror grants every read-surface permission but
-	// denies "interact" (a send-class permission never checked by this
-	// read-only tool set) — the scripted decision table the brief asks for.
-	d.authz.mirrorDecision = func(permission string) (bool, error) { return permission != "interact", nil }
+	type permPair struct{ mirror, resource string }
 
-	_, err := opGetTranscript(ctx, d, act, GetTranscriptIn{Namespace: "demo-ns", Name: "demo-session"})
-	require.NoError(t, err)
-
-	_, err = opListArtifacts(ctx, d, act, ListArtifactsIn{Namespace: "demo-ns", Name: "demo-session"})
-	require.NoError(t, err)
-
-	var gotPerms []string
-	for _, c := range d.authz.opCalls {
-		gotPerms = append(gotPerms, c.Permission)
+	cases := []struct {
+		tool       string
+		run        func(t *testing.T, d *fakeOpsDeps) error
+		wantOp     *permPair // the CheckAccessTokenOp (mirror, ResourcePermission) pair; nil = no three-leg check
+		wantMirror string    // the CheckAccessTokenMirror permission; "" = no mirror-only check
+	}{
+		{
+			tool: "get_session",
+			run: func(t *testing.T, d *fakeOpsDeps) error {
+				_, err := opGetSession(ctx, d, act, GetSessionIn{Namespace: "demo-ns", Name: "demo-session"})
+				return err
+			},
+			wantOp: &permPair{mirror: permReadTranscript, resource: ""},
+		},
+		{
+			tool: "get_transcript",
+			run: func(t *testing.T, d *fakeOpsDeps) error {
+				_, err := opGetTranscript(ctx, d, act, GetTranscriptIn{Namespace: "demo-ns", Name: "demo-session"})
+				return err
+			},
+			wantOp: &permPair{mirror: permReadTranscript, resource: ""},
+		},
+		{
+			tool: "search_memory (explicit session)",
+			run: func(t *testing.T, d *fakeOpsDeps) error {
+				_, err := opSearchMemory(ctx, d, act, SearchMemoryIn{Query: "x", Namespace: "demo-ns", Name: "demo-session"})
+				return err
+			},
+			wantOp: &permPair{mirror: permRead, resource: permReadTranscript},
+		},
+		{
+			tool: "search_memory (derived)",
+			run: func(t *testing.T, d *fakeOpsDeps) error {
+				_, err := opSearchMemory(ctx, d, act, SearchMemoryIn{Query: "x"})
+				return err
+			},
+			wantMirror: permRead,
+		},
+		{
+			tool: "list_artifacts",
+			run: func(t *testing.T, d *fakeOpsDeps) error {
+				_, err := opListArtifacts(ctx, d, act, ListArtifactsIn{Namespace: "demo-ns", Name: "demo-session"})
+				return err
+			},
+			wantOp: &permPair{mirror: permView, resource: permReadTranscript},
+		},
+		{
+			tool: "get_artifact",
+			run: func(t *testing.T, d *fakeOpsDeps) error {
+				_, err := opGetArtifact(ctx, d, act, GetArtifactIn{Namespace: "demo-ns", Name: "demo-session", ArtifactID: "artifact-1"})
+				return err
+			},
+			wantOp: &permPair{mirror: permView, resource: permReadTranscript},
+		},
+		{
+			tool: "list_sessions",
+			run: func(t *testing.T, d *fakeOpsDeps) error {
+				_, err := opListSessions(ctx, d, act, ListSessionsIn{})
+				return err
+			},
+			wantMirror: permReadTranscript,
+		},
 	}
-	assert.Contains(t, gotPerms, permReadTranscript, "get_transcript must check read_transcript")
-	assert.Contains(t, gotPerms, permView, "list_artifacts must check view")
-	for _, p := range gotPerms {
-		assert.NotEqual(t, "interact", p, "interact is a send-class permission; no read-role tool may check it")
+
+	for _, tc := range cases {
+		t.Run(tc.tool+": pins mirror + resource permission names", func(t *testing.T) {
+			d := newOpsFakeDeps(t, newOpsTestClient(t, sess))
+			d.operatorURL = srv.URL
+			d.memoryToken = "webd-token"
+			seedArtifact(t, d.artifactMem, "demo-ns", "demo-session", "artifact-1")
+			// A read-role token's mirror grants every read-surface permission
+			// but denies "interact" (a send-class permission never checked by
+			// this read-only tool set) — the scripted decision table the brief
+			// asks for.
+			d.authz.mirrorDecision = func(permission string) (bool, error) { return permission != "interact", nil }
+
+			require.NoError(t, tc.run(t, d))
+
+			if tc.wantOp != nil {
+				require.Len(t, d.authz.opCalls, 1, "exactly one three-leg check per authorized op")
+				assert.Equal(t, tc.wantOp.mirror, d.authz.opCalls[0].Permission, "leg-1 mirror name")
+				assert.Equal(t, tc.wantOp.resource, d.authz.opCalls[0].ResourcePermission, "leg-3 resource permission")
+			}
+			if tc.wantMirror != "" {
+				require.Len(t, d.authz.mirrorCalls, 1, "exactly one mirror-only check per enumeration op")
+				assert.Equal(t, tc.wantMirror, d.authz.mirrorCalls[0])
+			}
+			for _, c := range d.authz.opCalls {
+				assert.NotEqual(t, "interact", c.Permission, "interact is a send-class permission; no read-role tool may check it")
+				assert.NotEqual(t, "interact", c.ResourcePermission)
+			}
+			for _, p := range d.authz.mirrorCalls {
+				assert.NotEqual(t, "interact", p)
+			}
+		})
 	}
 }
 
