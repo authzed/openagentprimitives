@@ -84,6 +84,18 @@ func (ui) Routes(deps webui.Deps) []webui.Route {
 			"(authorization client wired=%t, operator client wired=%t)\n",
 			sd.AgentIdentityAuthz != nil, sd.AgentCredentialWriter != nil)
 	}
+	// Optional, same shape as WebAuthzDeps above: only a SpiceDB-configured
+	// webd implements ConsentDeps directly (its ConsentClasses method, built
+	// over LookupStartableClasses + LookupInteractableSessions). Absent, the
+	// field stays a genuine nil interface and server.go's routes() does not
+	// register ANY of the OAuth authorization-server surface.
+	if cd, ok := deps.(ConsentDeps); ok {
+		sd.Consent = cd
+	}
+	if sd.Consent == nil {
+		fmt.Fprintf(os.Stderr, "identityd: OAuth authorization-server routes "+
+			"(metadata/register/authorize/consent) are NOT mounted (no consent-class deps wired)\n")
+	}
 	return NewServer(sd).routes()
 }
 

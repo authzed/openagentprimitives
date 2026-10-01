@@ -12,7 +12,7 @@ import (
 )
 
 func TestOAuthASMetadata(t *testing.T) {
-	s := newTestServer(t) // the package's existing fixture; ExternalBaseURL returns the test URL
+	s := newTestServerWithConsent(t) // metadata/register are gated on Consent != nil (Task 7)
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
@@ -40,7 +40,7 @@ func TestOAuthASMetadata(t *testing.T) {
 }
 
 func TestDynamicClientRegistration(t *testing.T) {
-	s := newTestServer(t)
+	s := newTestServerWithConsent(t)
 	body := `{"client_name":"demo local tool","redirect_uris":["http://127.0.0.1:7777/callback"],"token_endpoint_auth_method":"none"}`
 	req := httptest.NewRequest(http.MethodPost, "/oauth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -69,7 +69,7 @@ func TestDynamicClientRegistrationRejections(t *testing.T) {
 		{name: "non-loopback http redirect: 400", body: `{"client_name":"x","redirect_uris":["http://evil.test/cb"]}`},
 		{name: "malformed JSON: 400", body: `{"client_name":`},
 	}
-	s := newTestServer(t)
+	s := newTestServerWithConsent(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/oauth/register", strings.NewReader(tc.body))

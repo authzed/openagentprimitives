@@ -75,6 +75,17 @@ type Deps struct {
 	// message rather than anything reading as a permission problem, because the
 	// fix is wiring, not a grant.
 	AgentCredentialWriter AgentCredentialWriter
+
+	// Consent answers the OAuth authorization-server consent screen's one
+	// question: which agent classes may a given subject grant a tool access
+	// to? See ConsentDeps's doc (handlers_oauthas_authorize.go) for why it is
+	// optional and what registering nothing means.
+	//
+	// Nil means the ENTIRE authorization-server surface — metadata, DCR
+	// register, authorize, consent, and Task 8's token endpoint — is not
+	// registered in routes(): a cluster without SpiceDB has no consent-class
+	// lookup and therefore no token feature to offer.
+	Consent ConsentDeps
 }
 
 // Server is the identityd HTTP server. One per process.
@@ -87,6 +98,12 @@ type Server struct {
 	oauthState     *oauthStateStore
 	idp            *idpLoader
 	cliCodes       *cliCodeStore
+	// authCodes and pendingAuth back identityd's OWN authorization-server role
+	// (Tasks 7-8) — see oauthas_code_store.go's package doc. Always
+	// constructed (unlike the Consent dep they depend on): the routes using
+	// them are what's conditionally registered, not the stores themselves.
+	authCodes   *authCodeStore
+	pendingAuth *pendingAuthStore
 }
 
 // NewServer builds a Server with the given deps + registers routes.
@@ -118,6 +135,11 @@ func NewServer(d Deps) *Server {
 			now:         time.Now,
 		},
 		cliCodes: newCLICodeStore(),
+		// 5-min TTL on the code, matching RFC 6749 §4.1.2's "short lived"
+		// recommendation; 10-min on pending, generous enough for a human to
+		// read the consent screen and decide without feeling rushed.
+		authCodes:   newAuthCodeStore(5 * time.Minute),
+		pendingAuth: newPendingAuthStore(10 * time.Minute),
 	}
 	s.registerRoutes()
 	return s
@@ -137,6 +159,14 @@ func (s *Server) Handler() http.Handler { return s.mux }
 // enforces only the method set, because every handler self-verifies the
 // idd_session cookie via checkOIDCCookie. /healthz is deliberately absent —
 // webd's health WebUI owns it, and registerRoutes adds it standalone-only.
+//
+// The OAuth authorize/consent pair is the one exception to "self-verifies via
+// checkOIDCCookie": they read the subject through webui.SubjectFromContext
+// instead, which only the webui framework's auth middleware populates. On the
+// standalone mux that context value is never set by anything in this package,
+// so those two routes have no real auth there — acceptable because the
+// surface they belong to (gated on Consent below) exists for webd-mounted
+// deployments with SpiceDB, not the standalone mux's test/e2e callers.
 func (s *Server) routes() []webui.Route {
 	r := func(pattern string, methods []string, auth webui.AuthLevel, h http.HandlerFunc) webui.Route {
 		return webui.Route{Origin: webui.OriginTrusted, Pattern: pattern, Methods: methods, Auth: auth, Handler: h}
@@ -147,16 +177,6 @@ func (s *Server) routes() []webui.Route {
 		// AuthNone (GET, no cookie): the link form, the generic OIDC begin,
 		// the OIDC + OAuth callbacks, the portal landing, and the CLI login
 		// begin. Each handler self-gates (signed link / state token / cookie).
-		// /.well-known/oauth-authorization-server (RFC 8414) and /oauth/register
-		// (RFC 7591 DCR) are identityd's own OAuth-AUTHORIZATION-SERVER surface
-		// (Tasks 7-8 add /oauth/authorize + /oauth/token) — the opposite role
-		// from /link/oauth/ and /oauth/callback/ below, where identityd is the
-		// OAuth CLIENT of an upstream MCP server. Registration is
-		// AuthHandlerManaged for the same reason /cli/exchange is: a
-		// not-yet-registered client has no credential to present, so the
-		// framework has nothing to authenticate — see handlers_oauthas.go.
-		r("/.well-known/oauth-authorization-server", get, webui.AuthNone, s.handleOAuthASMetadata),
-		r("/oauth/register", post, webui.AuthHandlerManaged, s.handleOAuthRegister),
 		r("/link", get, webui.AuthNone, s.handleLinkGet),
 		// /link/agent-oauth/ is AuthNone (not AuthAuthenticated, unlike
 		// /link/oauth/ below) because — like /link itself — its own no-cookie
@@ -190,6 +210,25 @@ func (s *Server) routes() []webui.Route {
 		r("/my/accounts/", []string{http.MethodGet, http.MethodPost}, webui.AuthAuthenticated, s.handlePortalSubrouter),
 		r("/heartbeat", post, webui.AuthAuthenticated, s.handleHeartbeat),
 		r("/link/oauth/", get, webui.AuthAuthenticated, s.handleLinkOAuthGet),
+	}
+	// identityd's OWN OAuth AUTHORIZATION-SERVER surface — RFC 8414 metadata,
+	// RFC 7591 DCR, and the authorize/consent pair (Task 8 adds /oauth/token
+	// to this same block) — the opposite role from /link/oauth/ and
+	// /oauth/callback/ above, where identityd is the OAuth CLIENT of an
+	// upstream MCP server. Registered ONLY when Consent is wired: a cluster
+	// without SpiceDB has no consent-class lookup and therefore no token
+	// feature to offer, so these paths must 404 rather than serve a flow
+	// nothing can complete. Metadata/register are AuthHandlerManaged for the
+	// same reason /cli/exchange is: a not-yet-registered client has no
+	// credential to present, so the framework has nothing to authenticate —
+	// see handlers_oauthas.go.
+	if s.deps.Consent != nil {
+		routes = append(routes,
+			r("/.well-known/oauth-authorization-server", get, webui.AuthNone, s.handleOAuthASMetadata),
+			r("/oauth/register", post, webui.AuthHandlerManaged, s.handleOAuthRegister),
+			r("/oauth/authorize", get, webui.AuthLoginIfNecessary, s.handleOAuthAuthorize),
+			r("/oauth/consent", post, webui.AuthAuthenticated, s.handleOAuthConsent),
+		)
 	}
 	// /icon/<credName> — public favicons; only when an IconHandler is wired.
 	if s.deps.IconHandler != nil {
