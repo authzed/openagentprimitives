@@ -82,6 +82,12 @@ var crGroupVersionResources = []schema.GroupVersionResource{
 	// against Kubernetes' own owner-reference garbage collection.
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "subagentrequests"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "relationshipsources"},
+	// AccessToken carries FinalizerAccessToken, cleared only by the
+	// operator's accesstoken controller (pkg/controllers/accesstoken)
+	// removing the token's SpiceDB tuples. The PublicEndpoint concern above
+	// applies: omitting it here would wedge teardown on a finalizer nothing
+	// is left running to clear.
+	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "accesstokens"},
 }
 
 // cleanDefaultTimeout is `oap clean`'s own budget for a full teardown. Named
