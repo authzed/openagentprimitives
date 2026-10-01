@@ -96,6 +96,19 @@ func (ui) Routes(deps webui.Deps) []webui.Route {
 		fmt.Fprintf(os.Stderr, "identityd: OAuth authorization-server routes "+
 			"(metadata/register/authorize/consent) are NOT mounted (no consent-class deps wired)\n")
 	}
+	// Optional, same shape as ConsentDeps above: Task 9 wires webd's concrete
+	// *mcpfront.Minter to satisfy AccessTokenMinter structurally (identityd
+	// cannot import pkg/web/mcpfront — see handlers_oauthas_token.go's package
+	// doc). No deps value implements this yet, so sd.Minter stays a genuine
+	// nil interface in production: /oauth/token still mounts (it is gated on
+	// Consent, not on Minter) but 503s "token minting unavailable" until Task
+	// 9 lands.
+	if m, ok := deps.(AccessTokenMinter); ok {
+		sd.Minter = m
+	}
+	if sd.Minter == nil {
+		fmt.Fprintf(os.Stderr, "identityd: /oauth/token will respond 503 (no access-token minter wired)\n")
+	}
 	return NewServer(sd).routes()
 }
 
