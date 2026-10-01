@@ -39,6 +39,12 @@ type AccessTokenGrant struct {
 // wildcard scope tuple or one scope tuple per class — all carrying the
 // expiration trait, so an expired token fails every check with no cleanup
 // job required. TOUCH keeps re-mints idempotent.
+//
+// TOUCH cuts the other way for a ROLE CHANGE: re-minting the SAME TokenID
+// with a DIFFERENT role TOUCHes a second role relation alongside the first,
+// and the ladder then grants the UNION of both roles. Callers must always
+// use a fresh TokenID (the mint path does) or call DeleteAccessTokenTuples
+// first — never re-grant an existing id with a new role.
 func (c *Client) WriteAccessTokenGrant(ctx context.Context, g AccessTokenGrant) error {
 	if g.TokenID == "" || g.Owner.IsZero() {
 		return fmt.Errorf("access token grant for %q: requires token id and owner", g.TokenID)
@@ -141,6 +147,14 @@ func (c *Client) CheckAccessTokenOp(ctx context.Context, chk AccessTokenCheck, f
 	if chk.TokenID == "" || chk.Owner.IsZero() || chk.Permission == "" ||
 		chk.ResourceType == "" || chk.ResourceID == "" || chk.ClassID == "" {
 		return dec, fmt.Errorf("access token check for %q: requires token, owner, permission, resource, and class", chk.TokenID)
+	}
+	// Leg 1 and leg 2 are told apart below by permission name alone (both
+	// address the token resource), so a check FOR "covers" itself would be
+	// attributed to the wrong leg. "owner" is likewise an internal permission,
+	// never a $sameperm mirror. Refuse both by intent rather than letting the
+	// switch mis-attribute them by coincidence.
+	if chk.Permission == accesstoken.PermissionCovers || chk.Permission == accesstoken.PermissionOwner {
+		return dec, fmt.Errorf("access token check for %q: permission %q is internal to the token definition, not a checkable mirror", chk.TokenID, chk.Permission)
 	}
 
 	ownerSubj := &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: "user", ObjectId: chk.Owner.String()}}
