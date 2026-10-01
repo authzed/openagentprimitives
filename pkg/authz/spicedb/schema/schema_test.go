@@ -159,10 +159,10 @@ func TestAgentClassInteractorRelationAndPersonalizePermission(t *testing.T) {
 // unbroken prefix, so a substring check would keep passing while the token's
 // role relations silently admitted new subject kinds.
 func TestAccessTokenDefinition(t *testing.T) {
-	requireExactRelationLine(t, authzschema.Schema, "relation role_read: user")
-	requireExactRelationLine(t, authzschema.Schema, "relation role_interact: user")
-	requireExactRelationLine(t, authzschema.Schema, "relation role_full: user")
-	requireExactRelationLine(t, authzschema.Schema, "relation scope_class: agentclass | agentclass:*")
+	requireExactRelationLine(t, authzschema.Schema, "relation role_read: user with expiration")
+	requireExactRelationLine(t, authzschema.Schema, "relation role_interact: user with expiration")
+	requireExactRelationLine(t, authzschema.Schema, "relation role_full: user with expiration")
+	requireExactRelationLine(t, authzschema.Schema, "relation scope_class: agentclass with expiration | agentclass:* with expiration")
 	for _, want := range []string{
 		"definition accesstoken {",
 		"permission covers = scope_class",
