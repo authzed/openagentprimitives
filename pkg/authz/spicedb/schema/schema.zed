@@ -185,6 +185,45 @@ definition github_user {
 // token on the next fully-consistent use_token check.
 definition externaltoken {}
 
+// accesstoken is an INBOUND delegated credential minted by identityd at OAuth
+// consent. It acts AS its owner, narrowed to a role and an optional resource
+// filter. Contrast externaltoken above: an OUTBOUND credential a session is
+// authorized to use. Authorization truth for a token lives ENTIRELY here —
+// the AccessToken CRD is only the authentication record (hash → token id).
+//
+// Exactly one role relation is written at mint; its subject is the owner, so
+// a single tuple binds owner + role + (via the expiration trait) expiry.
+// scope_class holds the agentclasses the token may touch — one wildcard
+// tuple for an unfiltered token.
+//
+// The ladder permissions (can_*) are internal and never checked directly —
+// the platform#can_admin pattern. Consumers check the $sameperm mirrors
+// below, each named EXACTLY like the resource permission it delegates, so
+// the checker fans "need P on R" into token#P + token#covers + R#P with no
+// role→permission table anywhere in Go. Each mirror is spelled from the
+// ladder rather than aliasing a sibling (the hold-vs-approve discipline) so
+// any one can diverge without touching call sites.
+definition accesstoken {
+    relation role_read: user
+    relation role_interact: user
+    relation role_full: user
+    relation scope_class: agentclass | agentclass:*
+
+    permission owner = role_read + role_interact + role_full
+    permission covers = scope_class
+
+    permission can_full = role_full
+    permission can_interact = role_interact + can_full
+    permission can_read = role_read + can_interact
+
+    permission read_transcript = can_read
+    permission read = can_read
+    permission view = can_read
+    permission interact = can_interact
+    permission approve = can_full
+    permission start_session = can_full
+}
+
 definition agentsession {
     // started_by records who initiated the session. It confers interact and
     // NOTHING else — see the interact/approve split below.
@@ -509,6 +548,11 @@ definition platform {
     permission view_config = can_admin
     permission kill_session = can_admin
     permission install_agent = can_admin
+    // view_tokens / revoke_token gate the admin console's access-token page.
+    // Per-area permissions (not can_admin at the consumer) per this
+    // definition's contract above.
+    permission view_tokens = can_admin
+    permission revoke_token = can_admin
     // start_session is the platform-wide arm of the session-start gate: "may
     // start ANY agent", as opposed to agentclass#starter's "may start THIS
     // agent".
