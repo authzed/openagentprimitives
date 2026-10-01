@@ -35,6 +35,11 @@ type Deps interface {
 	// a root session — rather than a dedicated read-only lookup; see the
 	// webd implementation's own doc comment.
 	LookupReadableSessions(ctx context.Context, owner identity.CanonicalUserID) (spicedb.InteractableSessions, error)
+	// FetchArtifact fetches an artifact's rendered content bytes: resolve
+	// artifactID to its head revision's render, then fetch that render's
+	// bytes, the same two-step webd's own ContentRender/FetchRender pair does
+	// for the browser live-view. Returns the bytes and the render's MIME type.
+	FetchArtifact(ctx context.Context, ns, name, artifactID string) ([]byte, string, error)
 	// ExternalBaseURL is the trusted-origin base URL this process is reached
 	// at. Used both to build the protected-resource metadata's "resource"/
 	// "authorization_servers" fields and the WWW-Authenticate challenge's
