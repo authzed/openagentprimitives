@@ -1,0 +1,50 @@
+export const meta = {
+  title: 'reviewbot',
+  section: 'Guides',
+  group: 'Example agents',
+  order: 74,
+  description: 'An automated pull-request reviewer: triggered by a webhook, read-only by construction, concluded as a GitHub Check Run.',
+}
+
+# reviewbot
+
+<div className="doc-lede">
+  reviewbot is an automated GitHub pull-request reviewer. A push to a pull request arrives as a
+  signed webhook — no human starts the session — so the agent clones the diff read-only, drives an
+  inner Claude Code through its bundled review skills, delivers the summary to Slack, and records
+  the outcome as a GitHub Check Run on the pull request's head commit. It never writes to a
+  repository and never comments on a pull request.
+</div>
+
+<Clip name="reviewbot-demo" />
+
+## What the demo shows
+
+A pull-request update starts a read-only review. reviewbot posts its findings and a report
+reference in Slack, then concludes a Check Run on the reviewed commit. Nothing in the run can
+modify the repository or post PR comments — the write simply isn't among the tools the session is
+offered.
+
+The demo is a scripted Slack simulation; its people, repositories, and results are fictional.
+
+## The controls at work
+
+- [Triggers](/docs/triggers) — the session starts from a signed webhook, with HMAC verification
+  and event filtering enforced by the platform.
+- [Safe tools](/docs/safe-tools) — the read-only boundary is declared in the tool contracts and
+  enforced per call, not entrusted to the model or to a narrow upstream token.
+
+## Install it
+
+The bundle is in the repository at
+[`examples/reviewbot`](https://github.com/authzed/openagentprimitives/tree/main/examples/reviewbot),
+packaged as a [`.oap` agent container](/docs/packaging-oap):
+
+```bash
+oap agent lint    examples/reviewbot
+oap agent install examples/reviewbot --namespace default
+```
+
+The install prompts for reviewbot's own Anthropic API key when its Secret is
+absent, and runs the GitHub channel wizard. See the bundle's README for the
+prerequisites, including the Claude toolchain image its sandbox runs.

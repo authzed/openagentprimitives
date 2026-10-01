@@ -1,0 +1,48 @@
+export const meta = {
+  title: 'pm-bot',
+  section: 'Guides',
+  group: 'Example agents',
+  order: 76,
+  description: 'A read-only product-manager agent that reports how GitHub and Linear work in flight aligns with product goals.',
+}
+
+# pm-bot
+
+<div className="doc-lede">
+  pm-bot is a read-only product-manager agent. It reads the GitHub repositories it was granted and
+  the Linear issues in the linked workspace, then reports how the work in flight aligns with stated
+  product goals. It never writes to either system.
+</div>
+
+<Clip name="pm-agent-demo" />
+
+## What the demo shows
+
+pm-bot reads its granted repositories and linked issues, groups the work in flight by product
+goal, and posts a summary that recommends a next step — without changing anything in GitHub or
+Linear.
+
+The demo is a scripted Slack simulation; its people, repositories, issues, and results are
+fictional.
+
+## The controls at work
+
+- Which repositories the agent may read is an install question, answered by the administrator who
+  installs it — not something the agent discovers at runtime.
+- [Safe tools](/docs/safe-tools) — read-only is a property of the tool contracts the session is
+  offered, checked on every call.
+
+## Install it
+
+The bundle is in the repository at
+[`examples/pm-agent`](https://github.com/authzed/openagentprimitives/tree/main/examples/pm-agent),
+packaged as a [`.oap` agent container](/docs/packaging-oap):
+
+```bash
+oap agent lint    examples/pm-agent
+oap agent install examples/pm-agent --namespace default
+```
+
+The install asks its two questions — which repositories the agent may read, and
+the read-only GitHub PAT it authenticates with. It applies no privileged
+resources, so it is safe to install into a shared namespace.

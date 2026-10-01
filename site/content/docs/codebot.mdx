@@ -1,0 +1,51 @@
+export const meta = {
+  title: 'codebot',
+  section: 'Guides',
+  group: 'Example agents',
+  order: 70,
+  description: 'A passthrough coding agent that plans, gets one scoped approval, and opens a pull request as the person who asked.',
+}
+
+# codebot
+
+<div className="doc-lede">
+  codebot is a coding agent that clones a repository, makes the change with the requester's own
+  Claude Code subscription, commits as the requester, and opens a pull request. It runs in
+  passthrough identity mode, so the platform never holds the person's credentials — they are
+  injected into the sandbox at session start and discarded with it.
+</div>
+
+<Clip name="codebot-demo" />
+
+## What the demo shows
+
+Jordan asks codebot to fix a flaky test in `acme/widget`. The agent proposes a plan, and a single
+approval covers both the plan and the repository it names — the approval is slotted to
+`acme/widget`, so the steps inside the plan run without prompting again, ending in an opened pull
+request. When Jordan then asks for work in a different repository, the slotted approval does not
+stretch to cover it: a fresh approval is required.
+
+The demo is a scripted Slack simulation; its people, companies, repositories, and results are
+fictional.
+
+## The controls at work
+
+- [Plan gating](/docs/plan-gating) — a person approves the plan once, and every later action is
+  checked against it.
+- [Passthrough identity](/docs/passthrough-vs-agent) — the work runs as Jordan, under Jordan's own
+  GitHub and Anthropic credentials, which the platform never stores server-side.
+
+## Install it
+
+The bundle is in the repository at
+[`examples/codebot`](https://github.com/authzed/openagentprimitives/tree/main/examples/codebot),
+packaged as a [`.oap` agent container](/docs/packaging-oap):
+
+```bash
+oap agent lint    examples/codebot
+oap agent install examples/codebot --namespace default
+```
+
+The install prompts one question — which language toolchains the coding sandbox
+should get. After install, each user links their own GitHub and Anthropic
+credentials once via the identity portal.

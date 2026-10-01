@@ -538,6 +538,42 @@ body:has(.lp) {
   color: var(--lp-term-muted);
 }
 
+/* ---------------------------------------------------------------- clips --- */
+
+/* Narrated demo clips, framed like the terminal. Posters carry the frame;
+   the narration means no autoplay, so the video waits for a click. */
+.lp-clip {
+  margin: 0;
+}
+
+.lp-hero-aside .lp-clip {
+  margin-top: 16px;
+}
+
+.lp-section .lp-clip {
+  margin-top: 40px;
+  max-width: 860px;
+}
+
+.lp-clip video {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--lp-line);
+  border-radius: var(--lp-radius);
+  background: var(--lp-term-bg);
+}
+
+.lp-clip figcaption {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--lp-muted);
+}
+
+.lp-clip figcaption a {
+  color: var(--lp-link);
+}
+
 /* ---------------------------------------------------------------- slabs --- */
 
 /* Cells fused into one slab by a 1px gap over a line-colored ground, so

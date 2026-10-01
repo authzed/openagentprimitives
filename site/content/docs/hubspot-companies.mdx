@@ -1,0 +1,48 @@
+export const meta = {
+  title: 'hubspot-companies',
+  section: 'Guides',
+  group: 'Example agents',
+  order: 72,
+  description: 'A read-only HubSpot CRM reporter: a scheduled company digest, with private contacts gated behind the owner of the data.',
+}
+
+# hubspot-companies
+
+<div className="doc-lede">
+  hubspot-companies is a read-only HubSpot CRM reporting agent. On a schedule it reports the
+  companies created inside a window that cleared a minimum fit score, mentioning each company's
+  assigned owner in the channel. Contacts on a named company are gated behind an owner-approval
+  flow — the person who owns the record decides, not whoever asked.
+</div>
+
+<Clip name="hubspot-companies-demo" />
+
+## What the demo shows
+
+A scheduled digest highlights the companies that passed the fit threshold. When Sam asks for
+Circldot's contacts, the agent does not answer Sam directly: the approval routes to Circldot's
+owner, Jordan, who sees what would be shared, with whom, and why. Only after Jordan approves does
+the agent return the contacts to Sam.
+
+The demo is a scripted Slack simulation; its people, companies, and results are fictional.
+
+## The controls at work
+
+- [Triggers](/docs/triggers) — the digest is a scheduled run, not a person typing.
+- [Shared permissions](/docs/shared-permissions) — the approval routes to the data's owner, and
+  the data is shared only after that owner says yes.
+
+## Install it
+
+The bundle is in the repository at
+[`examples/hubspot-companies`](https://github.com/authzed/openagentprimitives/tree/main/examples/hubspot-companies),
+packaged as a [`.oap` agent container](/docs/packaging-oap):
+
+```bash
+oap agent lint    examples/hubspot-companies
+oap agent install examples/hubspot-companies --namespace default
+```
+
+The install applies the bundled manifests, then drives each required channel's
+wizard. The HubSpot OAuth credential is minted separately by the identity setup
+flow described in the bundle's README.
