@@ -92,7 +92,7 @@ func TestRunnerAuthz_ReadonlyAllow(t *testing.T) {
 	defer cancel()
 
 	// Grant alice reader on repo:foo.
-	_, err := perm.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{
+	wresp, err := perm.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{
 		Updates: []*v1.RelationshipUpdate{{
 			Operation: v1.RelationshipUpdate_OPERATION_TOUCH,
 			Relationship: &v1.Relationship{
@@ -104,7 +104,16 @@ func TestRunnerAuthz_ReadonlyAllow(t *testing.T) {
 	})
 	require.NoError(t, err, "WriteRelationships")
 
-	res := toolcheck.Checker{Cli: cli}.CheckToolCall(ctx,
+	// Floor the check at the write above. A cacheless Checker checks at
+	// MinimizeLatency, which is free to serve a quantized snapshot that
+	// predates the write (see the consistency notes in CheckToolCall) —
+	// correct in production, but here it intermittently turns this allow
+	// into a deny. What this test claims is the readonly allow path, not
+	// floorless freshness, so pin the revision like production callers do.
+	cache := toolcheck.NewZedTokenCache()
+	cache.Set("github_repo", "foo", wresp.WrittenAt.Token)
+
+	res := toolcheck.Checker{Cli: cli, Cache: cache}.CheckToolCall(ctx,
 		authz.Permission{
 			StateImpact: authz.Readonly,
 			Check: &authz.PermissionCheck{
