@@ -9,6 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -569,11 +570,38 @@ func secretUnstructured(s SecretSpec, ns string) (*unstructured.Unstructured, er
 func ssaApply(ctx context.Context, c client.Client, obj *unstructured.Unstructured, identity objectIdentity) error {
 	// UID prevents a same-name replacement from being seized. ResourceVersion
 	// makes the apply conditional on the exact state Prepare approved (or Create
-	// returned), so disappearance, replacement, or an intervening update fails
-	// closed instead of turning SSA into an untracked create/overwrite.
-	obj.SetUID(identity.uid)
-	obj.SetResourceVersion(identity.resourceVersion)
-	if err := c.Patch(ctx, obj, client.Apply, client.FieldOwner(FieldManager), client.ForceOwnership); err != nil {
+	// returned), so disappearance or replacement fails closed instead of
+	// turning SSA into an untracked create/overwrite.
+	//
+	// A bare resourceVersion conflict, though, is not by itself foul play: the
+	// object's own controller watches these kinds and routinely writes to a
+	// fresh object (a status condition, a finalizer) between that observation
+	// and this apply. Losing that race used to abort the whole install — a
+	// recurring e2e flake. So a conflict re-reads the object: the same UID
+	// proves it is still the one this run approved, and the apply retries on
+	// the current resourceVersion; a different UID (or a failed re-read) is a
+	// mid-install replacement or disappearance and still fails closed.
+	rv := identity.resourceVersion
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		applied := obj.DeepCopy()
+		applied.SetUID(identity.uid)
+		applied.SetResourceVersion(rv)
+		patchErr := c.Patch(ctx, applied, client.Apply, client.FieldOwner(FieldManager), client.ForceOwnership)
+		if patchErr == nil || !apierrors.IsConflict(patchErr) {
+			return patchErr
+		}
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(obj.GroupVersionKind())
+		if getErr := c.Get(ctx, client.ObjectKeyFromObject(obj), current); getErr != nil {
+			return fmt.Errorf("re-read after apply conflict: %w", getErr)
+		}
+		if current.GetUID() != identity.uid {
+			return fmt.Errorf("object was replaced during install (uid %s, expected %s)", current.GetUID(), identity.uid)
+		}
+		rv = current.GetResourceVersion()
+		return patchErr
+	})
+	if err != nil {
 		return fmt.Errorf("ssa-apply %s/%s: %w", obj.GetKind(), obj.GetName(), err)
 	}
 	return nil
