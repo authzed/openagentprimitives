@@ -147,6 +147,16 @@ func (s *Server) routes() []webui.Route {
 		// AuthNone (GET, no cookie): the link form, the generic OIDC begin,
 		// the OIDC + OAuth callbacks, the portal landing, and the CLI login
 		// begin. Each handler self-gates (signed link / state token / cookie).
+		// /.well-known/oauth-authorization-server (RFC 8414) and /oauth/register
+		// (RFC 7591 DCR) are identityd's own OAuth-AUTHORIZATION-SERVER surface
+		// (Tasks 7-8 add /oauth/authorize + /oauth/token) — the opposite role
+		// from /link/oauth/ and /oauth/callback/ below, where identityd is the
+		// OAuth CLIENT of an upstream MCP server. Registration is
+		// AuthHandlerManaged for the same reason /cli/exchange is: a
+		// not-yet-registered client has no credential to present, so the
+		// framework has nothing to authenticate — see handlers_oauthas.go.
+		r("/.well-known/oauth-authorization-server", get, webui.AuthNone, s.handleOAuthASMetadata),
+		r("/oauth/register", post, webui.AuthHandlerManaged, s.handleOAuthRegister),
 		r("/link", get, webui.AuthNone, s.handleLinkGet),
 		// /link/agent-oauth/ is AuthNone (not AuthAuthenticated, unlike
 		// /link/oauth/ below) because — like /link itself — its own no-cookie
