@@ -147,3 +147,10 @@ rules:
   - apiGroups: ["agentprimitives.authzed.com"]
     resources: ["agentidentities"]
     verbs: ["get"]
+  # Task 8's /oauth/token mints an AccessToken CR as the authentication
+  # record for a newly-issued bearer token (pkg/web/mcpfront.Minter). create
+  # for the mint itself; get/list/watch for the admin tokens page and the
+  # eventual AccessToken controller/finalizer reading its own objects back.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["accesstokens"]
+    verbs: ["create", "get", "list", "watch"]

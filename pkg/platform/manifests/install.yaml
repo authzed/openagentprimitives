@@ -26064,6 +26064,15 @@ rules:
   - agentidentities
   verbs:
   - get
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - accesstokens
+  verbs:
+  - create
+  - get
+  - list
+  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

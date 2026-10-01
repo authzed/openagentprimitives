@@ -86,6 +86,17 @@ type Deps struct {
 	// registered in routes(): a cluster without SpiceDB has no consent-class
 	// lookup and therefore no token feature to offer.
 	Consent ConsentDeps
+
+	// Minter mints the access token /oauth/token exchanges an approved
+	// authorization code for. See handlers_oauthas_token.go's package doc for
+	// why this is a mirror interface rather than an import of
+	// pkg/web/mcpfront.Minter.
+	//
+	// Nil is FAIL-CLOSED: the route still mounts (it is gated on Consent, not
+	// on Minter), but every exchange 503s "token minting unavailable" rather
+	// than panicking. Task 9 wires the concrete adapter in webd; until then
+	// this stays nil in production.
+	Minter AccessTokenMinter
 }
 
 // Server is the identityd HTTP server. One per process.
@@ -228,6 +239,12 @@ func (s *Server) routes() []webui.Route {
 			r("/oauth/register", post, webui.AuthHandlerManaged, s.handleOAuthRegister),
 			r("/oauth/authorize", get, webui.AuthLoginIfNecessary, s.handleOAuthAuthorize),
 			r("/oauth/consent", post, webui.AuthAuthenticated, s.handleOAuthConsent),
+			// /oauth/token is AuthHandlerManaged for the same reason
+			// metadata/register are: the credential being authenticated (the
+			// authorization code + PKCE verifier) is carried in the POST body
+			// itself, so the framework has nothing to check ahead of the
+			// handler — see handlers_oauthas_token.go.
+			r("/oauth/token", post, webui.AuthHandlerManaged, s.handleOAuthToken),
 		)
 	}
 	// /icon/<credName> — public favicons; only when an IconHandler is wired.
