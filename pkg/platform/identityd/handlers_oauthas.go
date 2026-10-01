@@ -79,6 +79,11 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 		ClientName   string   `json:"client_name"`
 		RedirectURIs []string `json:"redirect_uris"`
 	}
+	// Deliberately NOT DisallowUnknownFields (contrast handleCLIExchange):
+	// RFC 7591 §2 says a registration server SHOULD ignore unrecognized
+	// client metadata, and real MCP clients send fields we don't model
+	// (token_endpoint_auth_method, grant_types, ...). The fields we DO
+	// read are each validated below.
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRegisterBodyLen))
 	if err := dec.Decode(&req); err != nil {
 		oauthError(w, http.StatusBadRequest, "invalid_client_metadata", "malformed registration body")
