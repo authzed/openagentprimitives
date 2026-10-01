@@ -1,6 +1,7 @@
 package identityd
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/passthroughlink"
 	"github.com/authzed/openagentprimitives/pkg/web/webui"
 	webuiregistry "github.com/authzed/openagentprimitives/pkg/web/webui/registry"
@@ -40,6 +42,14 @@ func (d fakeWebDeps) Authenticators() map[string]channelkinds.WebAuthenticator {
 	return map[string]channelkinds.WebAuthenticator{}
 }
 func (d fakeWebDeps) InsecureTrustLinks() bool { return false }
+
+// ConsentClasses makes fakeWebDeps satisfy identityd.ConsentDeps (the Task 7
+// optional interface), so the OAuth authorization-server routes (metadata,
+// register, authorize, consent) are part of the base route set these tests
+// assert against.
+func (d fakeWebDeps) ConsentClasses(_ context.Context, _ identity.CanonicalUserID) ([]ConsentClass, error) {
+	return []ConsentClass{{ID: "default/demo-agent", DisplayName: "Demo"}}, nil
+}
 
 // routeKey is patterns paired with the auth level we expect.
 func routeIndex(routes []webui.Route) map[string]webui.Route {
@@ -78,6 +88,8 @@ func TestIdentityUI_Routes_PatternsAndAuthLevels(t *testing.T) {
 	expected := map[string]want{
 		"/.well-known/oauth-authorization-server": {webui.AuthNone, []string{http.MethodGet}},
 		"/oauth/register":                         {webui.AuthHandlerManaged, []string{http.MethodPost}},
+		"/oauth/authorize":                        {webui.AuthLoginIfNecessary, []string{http.MethodGet}},
+		"/oauth/consent":                          {webui.AuthAuthenticated, []string{http.MethodPost}},
 		"/link":                                   {webui.AuthNone, []string{http.MethodGet}},
 		"/link/agent-oauth/":                      {webui.AuthNone, []string{http.MethodGet}},
 		"/oidc/login":                             {webui.AuthNone, []string{http.MethodGet}},
@@ -111,6 +123,8 @@ func TestIdentityUI_Routes_IconConditional(t *testing.T) {
 	expected := map[string]struct{}{
 		"/.well-known/oauth-authorization-server": {},
 		"/oauth/register":                         {},
+		"/oauth/authorize":                        {},
+		"/oauth/consent":                          {},
 		"/link":                                   {},
 		"/link/agent-oauth/":                      {},
 		"/oidc/login":                             {},
