@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	"golang.org/x/time/rate"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -20,15 +21,32 @@ import (
 const (
 	// tokenCacheTTL bounds how long the bearer middleware trusts its
 	// in-process hash->identity map before re-listing AccessTokens. A hash
-	// MISS always triggers an immediate re-list regardless of this TTL (see
-	// tokenCache.resolve) — this TTL only bounds how stale a HIT may be, i.e.
-	// how long a REVOKED token (its CR deleted) keeps authenticating purely
-	// from cache. Revocation itself is still enforced immediately by the
-	// SpiceDB leg checks a tool call makes afterward (the finalizer deletes
-	// the token's tuples on CR delete) — this cache only gates
-	// AUTHENTICATION (does a hash resolve to a live, unexpired token at
-	// all), never authorization.
+	// MISS triggers a re-list sooner than this — as soon as the cache is
+	// older than missRelistFloor (see tokenCache.resolve) — so this TTL only
+	// bounds how stale a HIT may be, i.e. how long a REVOKED token (its CR
+	// deleted) keeps authenticating purely from cache. Revocation itself is
+	// still enforced immediately by the SpiceDB leg checks a tool call makes
+	// afterward (the finalizer deletes the token's tuples on CR delete) —
+	// this cache only gates AUTHENTICATION (does a hash resolve to a live,
+	// unexpired token at all), never authorization.
 	tokenCacheTTL = 30 * time.Second
+
+	// missRelistFloor bounds how often an UNKNOWN hash may trigger a re-list:
+	// a miss re-lists only when the cache is older than this floor; a miss
+	// against a younger cache trusts the recent authoritative set and 401s
+	// with NO K8s round trip. This is the amplification bound for
+	// unauthenticated garbage bearers — without it, every junk request is a
+	// namespace-wide List an attacker controls, entirely upstream of any rate
+	// limit (the limiter is per TOKEN, and a garbage bearer never resolves to
+	// one). A single rule, no per-hash bookkeeping: distinct garbage hashes
+	// within one floor window share the same "the list is seconds old; you
+	// are not in it" answer.
+	//
+	// The accepted cost: a token minted mid-window authenticates up to this
+	// long after mint, not instantly. In practice the mint flow's first /mcp
+	// call (the OAuth client finishing its token exchange, then connecting)
+	// lands later than this anyway.
+	missRelistFloor = 2 * time.Second
 
 	// lastUsedResolution is the minimum gap between two status.lastUsedAt
 	// patches for the same token — an observation, not an enforcement signal,
@@ -87,14 +105,23 @@ type cachedToken struct {
 }
 
 // tokenCache is the /mcp bearer middleware's in-process view of every live
-// AccessToken in d.AccessTokenNamespace(), plus the per-token rate limiters
-// that share its lifecycle. See tokenCacheTTL's doc for exactly what staleness
-// here does and does not mean for revocation.
+// AccessToken in d.AccessTokenNamespace(), plus the per-token rate limiters.
+// The two share one mutex but deliberately NOT one lifecycle — see
+// rebuildLocked for why the limiters are pruned rather than wiped. See
+// tokenCacheTTL's doc for exactly what staleness here does and does not mean
+// for revocation.
 type tokenCache struct {
-	mu       sync.Mutex
-	byHash   map[string]cachedToken
-	expires  time.Time
+	mu     sync.Mutex
+	byHash map[string]cachedToken
+	// listedAt is when byHash was last rebuilt from a List. Both freshness
+	// rules derive from it: a HIT is served until listedAt+tokenCacheTTL, and
+	// a MISS re-lists only once the cache is older than missRelistFloor.
+	listedAt time.Time
 	limiters map[string]*rate.Limiter
+	// relistGroup collapses concurrent re-lists into ONE List call: N
+	// concurrent requests bearing unknown tokens (or arriving just as the TTL
+	// lapses) share a single K8s round trip rather than issuing N.
+	relistGroup singleflight.Group
 }
 
 func newTokenCache() *tokenCache {
@@ -103,33 +130,67 @@ func newTokenCache() *tokenCache {
 
 // resolve answers whether hash names a live, unexpired AccessToken. A cache
 // HIT inside the TTL is served with no K8s round trip — this runs on every
-// request. A MISS, whether the hash is simply unknown or the TTL has lapsed,
-// re-lists every AccessToken in d.AccessTokenNamespace(), rebuilds the cache,
-// and retries once: a token minted a moment ago (by identityd's /oauth/token,
+// request. A stale cache (TTL lapsed) re-lists before answering either way.
+// A MISS against a cache younger than missRelistFloor is answered 401 from
+// the cache alone — the authoritative set is seconds old, and a hash absent
+// from it is a miss WITHOUT another List (the unauthenticated-amplification
+// bound; see missRelistFloor's doc). A miss against an older cache re-lists
+// (through singleflight, so concurrent misses share one List) and retries
+// once: a token minted after the floor elapsed (by identityd's /oauth/token,
 // running in a different request) is visible on its very first use, not only
 // after the TTL next lapses.
 func (c *tokenCache) resolve(ctx context.Context, d Deps, hash string, now time.Time) (cachedToken, bool, error) {
 	c.mu.Lock()
 	tok, hit := c.byHash[hash]
-	fresh := hit && now.Before(c.expires)
+	age := now.Sub(c.listedAt)
 	c.mu.Unlock()
-	if fresh {
+
+	if hit && age < tokenCacheTTL {
 		return checkExpiry(tok, now)
 	}
+	if !hit && age < missRelistFloor {
+		return cachedToken{}, false, nil
+	}
 
-	var list spiceboxv1alpha1.AccessTokenList
-	if err := d.K8s().List(ctx, &list, client.InNamespace(d.AccessTokenNamespace())); err != nil {
-		return cachedToken{}, false, fmt.Errorf("mcpfront: list access tokens: %w", err)
+	if err := c.relist(ctx, d, now); err != nil {
+		return cachedToken{}, false, err
 	}
 
 	c.mu.Lock()
-	c.rebuildLocked(list, now)
 	tok, hit = c.byHash[hash]
 	c.mu.Unlock()
 	if !hit {
 		return cachedToken{}, false, nil
 	}
 	return checkExpiry(tok, now)
+}
+
+// relist re-lists every AccessToken in d.AccessTokenNamespace() and rebuilds
+// the cache, through singleflight so concurrent callers share one List. The
+// double-check inside the flight handles the caller that lost the race: a
+// flight that completed between its outer age check and its Do call has
+// already rebuilt, so re-listing again would defeat the floor — it skips
+// instead and lets the caller re-read the fresh cache. A canceled or failed
+// leader fails every sharer closed (their requests 401, logged); the next
+// request simply starts a new flight.
+func (c *tokenCache) relist(ctx context.Context, d Deps, now time.Time) error {
+	_, err, _ := c.relistGroup.Do("relist", func() (any, error) {
+		c.mu.Lock()
+		rebuiltMoments := now.Sub(c.listedAt) < missRelistFloor
+		c.mu.Unlock()
+		if rebuiltMoments {
+			return nil, nil
+		}
+		var list spiceboxv1alpha1.AccessTokenList
+		if err := d.K8s().List(ctx, &list, client.InNamespace(d.AccessTokenNamespace())); err != nil {
+			return nil, fmt.Errorf("mcpfront: list access tokens: %w", err)
+		}
+		c.mu.Lock()
+		c.rebuildLocked(list, now)
+		c.mu.Unlock()
+		return nil, nil
+	})
+	return err
 }
 
 // checkExpiry denies a cache hit whose AccessToken has passed its own
@@ -144,13 +205,17 @@ func checkExpiry(tok cachedToken, now time.Time) (cachedToken, bool, error) {
 }
 
 // rebuildLocked replaces the cache's hash map wholesale from a freshly-listed
-// set and resets the TTL. The limiter map is dropped too: a revoked or
-// rotated token's rate-limit state must not linger once it's no longer live,
-// and a re-minted token (a fresh TokenID — see mint.go's TOUCH-vs-role-change
-// doc) starts its own budget rather than inheriting a stranger's. Caller
-// holds c.mu.
+// set and resets listedAt. The limiter map is PRUNED, never wiped: only
+// entries whose token id is absent from the fresh list are dropped — a
+// revoked or rotated token's rate-limit state must not linger once it's no
+// longer live, but a LIVE token's spent budget must survive every rebuild.
+// Wiping the whole map here was a real bug: a rebuild is triggerable by any
+// stale-cache miss, so an attacker who exhausted their token's budget could
+// send one garbage bearer and collect a fresh burst — the rate limit reset on
+// demand, by the very party it limits. Caller holds c.mu.
 func (c *tokenCache) rebuildLocked(list spiceboxv1alpha1.AccessTokenList, now time.Time) {
 	fresh := make(map[string]cachedToken, len(list.Items))
+	live := make(map[string]bool, len(list.Items))
 	for i := range list.Items {
 		item := &list.Items[i]
 		var lastUsed time.Time
@@ -164,14 +229,21 @@ func (c *tokenCache) rebuildLocked(list spiceboxv1alpha1.AccessTokenList, now ti
 			ExpiresAt:  item.Spec.ExpiresAt.Time,
 			LastUsedAt: lastUsed,
 		}
+		live[item.Name] = true
 	}
 	c.byHash = fresh
-	c.expires = now.Add(tokenCacheTTL)
-	c.limiters = map[string]*rate.Limiter{}
+	c.listedAt = now
+	for id := range c.limiters {
+		if !live[id] {
+			delete(c.limiters, id)
+		}
+	}
 }
 
 // limiterFor returns tokenID's rate limiter, creating a fresh one (full
-// burst) on first use within this cache generation.
+// burst) on the token's first use. The limiter then lives for as long as the
+// token stays in the listed set — rebuilds prune dead entries but never
+// reset a live token's budget (see rebuildLocked).
 func (c *tokenCache) limiterFor(tokenID string) *rate.Limiter {
 	c.mu.Lock()
 	defer c.mu.Unlock()

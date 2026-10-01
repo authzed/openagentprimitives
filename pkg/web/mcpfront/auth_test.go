@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,16 +198,22 @@ func TestBearerMiddleware401IsUniform(t *testing.T) {
 }
 
 // TestTokenCacheRefreshesOnMiss: a request with token B misses the cache
-// warmed with only A, triggers a re-list, and succeeds — a token minted
-// after warm-up (by identityd's /oauth/token, running in a different
-// request against the same K8s namespace) works on its very first use.
+// warmed with only A and, once the cache is older than missRelistFloor,
+// triggers a re-list and succeeds — a token minted after warm-up (by
+// identityd's /oauth/token, running in a different request against the same
+// K8s namespace) works on its first use after the floor, long before the
+// 30s TTL would next lapse. The pre-floor request pins the documented
+// trade-off: a miss against a cache younger than the floor is answered 401
+// from the cache alone (the unauthenticated-List amplification bound), so a
+// just-minted token has a ≤missRelistFloor first-use delay.
 func TestTokenCacheRefreshesOnMiss(t *testing.T) {
-	now := time.Now()
+	cur := time.Now()
+	clock := func() time.Time { return cur }
 	valA := mustNewTokenValue(t)
-	crA := accessTokenCR("at-aaaaaaaaaaaa", valA, "owner-a", now.Add(time.Hour))
+	crA := accessTokenCR("at-aaaaaaaaaaaa", valA, "owner-a", cur.Add(time.Hour))
 	c := newAuthTestClient(t, crA)
 	d := newFakeDeps(c)
-	mw := newBearerMiddleware(d, func() time.Time { return now })
+	mw := newBearerMiddleware(d, clock)
 
 	// Warm the cache with A.
 	rhA := &recordingHandler{}
@@ -216,13 +224,194 @@ func TestTokenCacheRefreshesOnMiss(t *testing.T) {
 	// minted elsewhere after the cache warmed, never going through the
 	// middleware itself.
 	valB := mustNewTokenValue(t)
-	crB := accessTokenCR("at-bbbbbbbbbbbb", valB, "owner-b", now.Add(time.Hour))
+	crB := accessTokenCR("at-bbbbbbbbbbbb", valB, "owner-b", cur.Add(time.Hour))
 	require.NoError(t, c.Create(context.Background(), crB))
 
+	// Within the floor: the cache is seconds old, so the miss is answered
+	// from it without a re-list — B is not yet usable (the documented,
+	// accepted first-use delay).
+	recEarly := doBearerRequest(mw, (&recordingHandler{}).handler(), "Bearer "+valB)
+	assert.Equal(t, http.StatusUnauthorized, recEarly.Code,
+		"a miss against a fresher-than-floor cache must be refused without a re-list")
+
+	// Past the floor: the miss re-lists and B authenticates.
+	cur = cur.Add(missRelistFloor + time.Millisecond)
 	rhB := &recordingHandler{}
 	recB := doBearerRequest(mw, rhB.handler(), "Bearer "+valB)
-	assert.Equal(t, http.StatusOK, recB.Code, "a token minted after cache warm-up must authenticate via the on-miss re-list")
+	assert.Equal(t, http.StatusOK, recB.Code, "a token minted after cache warm-up must authenticate via the on-miss re-list once the floor has elapsed")
 	assert.True(t, rhB.ran)
+}
+
+// TestRateLimiterSurvivesCacheRebuild is the regression test for the
+// limiter-reset-on-demand bug: rebuildLocked used to WIPE the limiter map,
+// and any stale-cache miss triggers a rebuild — so an attacker who exhausted
+// their token's budget could send one garbage bearer and collect a fresh
+// burst of 20. The limiter map must survive a rebuild for every token still
+// in the listed set.
+func TestRateLimiterSurvivesCacheRebuild(t *testing.T) {
+	cur := time.Now()
+	clock := func() time.Time { return cur }
+
+	valA := mustNewTokenValue(t)
+	crA := accessTokenCR("at-aaaaaaaaaaaa", valA, "owner-a", cur.Add(time.Hour))
+
+	var listCount atomic.Int32
+	c := fake.NewClientBuilder().
+		WithScheme(newMintScheme(t)).
+		WithStatusSubresource(&spiceboxv1alpha1.AccessToken{}).
+		WithObjects(crA).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				listCount.Add(1)
+				return cl.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	d := newFakeDeps(c)
+	mw := newBearerMiddleware(d, clock)
+
+	doReq := func(value string) *httptest.ResponseRecorder {
+		return doBearerRequest(mw, (&recordingHandler{}).handler(), "Bearer "+value)
+	}
+
+	// Warm the cache, then advance PAST the floor before exhausting, so the
+	// garbage bearer below is able to trigger a rebuild with no further
+	// clock movement (no movement ⇒ no limiter refill between exhaustion and
+	// the post-rebuild probe — the refill and the reset must not be
+	// conflated).
+	require.Equal(t, http.StatusOK, doReq(valA).Code)
+	cur = cur.Add(missRelistFloor + time.Second)
+
+	for i := 0; i < tokenRateLimitBurst; i++ {
+		require.Equal(t, http.StatusOK, doReq(valA).Code, "request %d within burst should succeed", i)
+	}
+	require.Equal(t, http.StatusTooManyRequests, doReq(valA).Code, "the budget must be spent before the rebuild is forced")
+
+	// Force a rebuild: an unknown bearer against a stale-enough cache
+	// re-lists. Prove the rebuild actually happened via the List count.
+	before := listCount.Load()
+	require.Equal(t, http.StatusUnauthorized, doReq(mustNewTokenValue(t)).Code)
+	require.Equal(t, before+1, listCount.Load(), "the garbage bearer must have triggered a re-list for this test to prove anything")
+
+	// The hot token's spent budget must have survived the rebuild.
+	assert.Equal(t, http.StatusTooManyRequests, doReq(valA).Code,
+		"an exhausted token must STILL be refused after a rebuild — a wiped limiter map hands the attacker a fresh burst on demand")
+}
+
+// TestMissRelistFloorBoundsUnauthenticatedLists pins both halves of the
+// List-amplification bound: a miss against a fresher-than-floor cache
+// answers 401 with NO List at all (so repeated garbage bearers — same or
+// distinct — within one window cost zero K8s round trips), and a miss
+// against an older cache re-lists exactly once.
+func TestMissRelistFloorBoundsUnauthenticatedLists(t *testing.T) {
+	cur := time.Now()
+	clock := func() time.Time { return cur }
+
+	valA := mustNewTokenValue(t)
+	crA := accessTokenCR("at-aaaaaaaaaaaa", valA, "owner-a", cur.Add(time.Hour))
+
+	var listCount atomic.Int32
+	c := fake.NewClientBuilder().
+		WithScheme(newMintScheme(t)).
+		WithStatusSubresource(&spiceboxv1alpha1.AccessToken{}).
+		WithObjects(crA).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				listCount.Add(1)
+				return cl.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	d := newFakeDeps(c)
+	mw := newBearerMiddleware(d, clock)
+
+	// Warm-up costs the one bootstrap List.
+	require.Equal(t, http.StatusOK, doBearerRequest(mw, (&recordingHandler{}).handler(), "Bearer "+valA).Code)
+	require.Equal(t, int32(1), listCount.Load())
+
+	// A burst of DISTINCT garbage bearers within the floor window: every one
+	// is refused from the cache alone — zero further Lists.
+	for i := 0; i < 5; i++ {
+		rec := doBearerRequest(mw, (&recordingHandler{}).handler(), "Bearer "+mustNewTokenValue(t))
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	}
+	assert.Equal(t, int32(1), listCount.Load(), "misses within the floor window must not List at all")
+
+	// Past the floor, one more garbage bearer re-lists — exactly once.
+	cur = cur.Add(missRelistFloor + time.Millisecond)
+	require.Equal(t, http.StatusUnauthorized, doBearerRequest(mw, (&recordingHandler{}).handler(), "Bearer "+mustNewTokenValue(t)).Code)
+	assert.Equal(t, int32(2), listCount.Load(), "a stale-cache miss must re-list")
+
+	// And the window resets: further garbage at the same instant is again
+	// answered without a List.
+	require.Equal(t, http.StatusUnauthorized, doBearerRequest(mw, (&recordingHandler{}).handler(), "Bearer "+mustNewTokenValue(t)).Code)
+	assert.Equal(t, int32(2), listCount.Load(), "the re-list must start a fresh floor window")
+}
+
+// TestConcurrentUnknownBearersShareOneList: N concurrent requests bearing the
+// same unknown token against a never-listed cache produce exactly ONE List —
+// singleflight collapses the in-flight callers, and the double-check inside
+// the flight stops a caller that lost the race from re-listing a cache
+// another flight just rebuilt.
+func TestConcurrentUnknownBearersShareOneList(t *testing.T) {
+	now := time.Now()
+
+	var listCount atomic.Int32
+	c := fake.NewClientBuilder().
+		WithScheme(newMintScheme(t)).
+		WithStatusSubresource(&spiceboxv1alpha1.AccessToken{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				listCount.Add(1)
+				return cl.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	d := newFakeDeps(c)
+	mw := newBearerMiddleware(d, func() time.Time { return now })
+
+	unknown := "Bearer " + mustNewTokenValue(t)
+	const n = 8
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			codes[i] = doBearerRequest(mw, (&recordingHandler{}).handler(), unknown).Code
+		}(i)
+	}
+	wg.Wait()
+
+	for i, code := range codes {
+		assert.Equal(t, http.StatusUnauthorized, code, "request %d", i)
+	}
+	assert.Equal(t, int32(1), listCount.Load(), "concurrent unknown bearers must share exactly one List")
+}
+
+// TestRebuildPrunesOnlyDeadLimiters pins rebuildLocked's limiter contract
+// directly: a limiter whose token survives the rebuild is the SAME limiter
+// (its spent budget intact), and one whose token is gone from the listed set
+// is dropped.
+func TestRebuildPrunesOnlyDeadLimiters(t *testing.T) {
+	now := time.Now()
+	cache := newTokenCache()
+
+	liveLimiter := cache.limiterFor("at-live")
+	_ = cache.limiterFor("at-dead")
+
+	list := spiceboxv1alpha1.AccessTokenList{Items: []spiceboxv1alpha1.AccessToken{
+		*accessTokenCR("at-live", mustNewTokenValue(t), "owner-a", now.Add(time.Hour)),
+	}}
+	cache.mu.Lock()
+	cache.rebuildLocked(list, now)
+	cache.mu.Unlock()
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	assert.Same(t, liveLimiter, cache.limiters["at-live"], "a live token's limiter must survive the rebuild untouched")
+	_, deadKept := cache.limiters["at-dead"]
+	assert.False(t, deadKept, "a token absent from the listed set must have its limiter pruned")
 }
 
 // TestPerTokenRateLimit: hammering one token past its burst (20) within one
