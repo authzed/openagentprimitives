@@ -26073,6 +26073,13 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - accesstokens/status
+  verbs:
+  - update
+  - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

@@ -154,3 +154,11 @@ rules:
   - apiGroups: ["agentprimitives.authzed.com"]
     resources: ["accesstokens"]
     verbs: ["create", "get", "list", "watch"]
+  # Task 9's /mcp bearer middleware records status.lastUsedAt as a
+  # best-effort OBSERVATION (see pkg/web/mcpfront/auth.go's touchLastUsed) via
+  # a MergeFrom status patch. The base object (spec+status together) is read
+  # through the main-resource "get" above — mirrors sessionuseridentities/status
+  # above, which likewise carries only the write verbs.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["accesstokens/status"]
+    verbs: ["update", "patch"]
