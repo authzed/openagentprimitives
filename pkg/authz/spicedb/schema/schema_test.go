@@ -146,6 +146,36 @@ func TestAgentClassInteractorRelationAndPersonalizePermission(t *testing.T) {
 	assert.Contains(t, authzschema.Schema, "permission can_personalize = interactor")
 }
 
+// TestAccessTokenDefinition pins the accesstoken definition and platform
+// token permissions required by the OAuth access-token flow. The accesstoken
+// definition mints delegated credentials narrowed to a role and optional
+// resource filter; the platform permissions gate the admin console's
+// access-token management page.
+func TestAccessTokenDefinition(t *testing.T) {
+	for _, want := range []string{
+		"definition accesstoken {",
+		"relation role_read: user",
+		"relation role_interact: user",
+		"relation role_full: user",
+		"relation scope_class: agentclass | agentclass:*",
+		"permission covers = scope_class",
+		"permission owner = role_read + role_interact + role_full",
+		"permission can_full = role_full",
+		"permission can_interact = role_interact + can_full",
+		"permission can_read = role_read + can_interact",
+		"permission read_transcript = can_read",
+		"permission read = can_read",
+		"permission view = can_read",
+		"permission interact = can_interact",
+		"permission approve = can_full",
+		"permission start_session = can_full",
+		"permission view_tokens = can_admin",
+		"permission revoke_token = can_admin",
+	} {
+		assert.Contains(t, authzschema.Schema, want)
+	}
+}
+
 // requireExactRelationLine requires that schema contains a line — after
 // trimming leading/trailing whitespace — that equals want exactly. Unlike
 // require.Contains, this fails on an append (e.g. "user" widened to
