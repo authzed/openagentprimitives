@@ -204,10 +204,16 @@ definition externaltoken {}
 // ladder rather than aliasing a sibling (the hold-vs-approve discipline) so
 // any one can diverge without touching call sites.
 definition accesstoken {
-    relation role_read: user
-    relation role_interact: user
-    relation role_full: user
-    relation scope_class: agentclass | agentclass:*
+    // Every relation here carries `with expiration`: ExpiresAt on the CRD is
+    // meaningless unless the tuple itself expires, and without the trait
+    // SpiceDB refuses a write that sets OptionalExpiresAt outright (it does
+    // not silently drop it) — caught by TestAccessTokenGrantRoundTrip
+    // ("subjects of type `user with expiration` are not allowed") the first
+    // time the client package tried to write a real grant.
+    relation role_read: user with expiration
+    relation role_interact: user with expiration
+    relation role_full: user with expiration
+    relation scope_class: agentclass with expiration | agentclass:* with expiration
 
     permission owner = role_read + role_interact + role_full
     permission covers = scope_class
