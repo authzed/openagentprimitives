@@ -55,10 +55,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, r.finalize(ctx, &tok)
 	}
 
+	// One clock read for the whole pass: the expiry gate and the RequeueAfter
+	// below must agree on "now". With two reads straddling the API writes, a
+	// clock crossing spec.expiresAt in between yields RequeueAfter <= 0 —
+	// which controller-runtime never schedules — so the token would sit
+	// unreconciled until the cache resync. (Same idiom as workshop's
+	// testwatch: capture once, reuse.)
+	now := r.now()
+
 	// Expired: delete the CR; the finalizer path removes the tuples. The
 	// tuples self-expire via the expiration trait anyway — this is hygiene,
 	// not the enforcement.
-	if exp := tok.Spec.ExpiresAt.Time; !exp.IsZero() && r.now().After(exp) {
+	if exp := tok.Spec.ExpiresAt.Time; !exp.IsZero() && now.After(exp) {
 		log.Info("deleting expired access token", "token", tok.Name)
 		if err := r.Client.Delete(ctx, &tok); client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, fmt.Errorf("delete expired AccessToken %s: %w", tok.Name, err)
@@ -82,7 +90,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if exp := tok.Spec.ExpiresAt.Time; !exp.IsZero() {
-		return ctrl.Result{RequeueAfter: exp.Sub(r.now())}, nil
+		return ctrl.Result{RequeueAfter: exp.Sub(now)}, nil
 	}
 	return ctrl.Result{}, nil
 }
