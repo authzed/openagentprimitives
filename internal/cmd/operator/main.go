@@ -98,6 +98,7 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/onepassword" // register onepassword relsync.Kind for the relationshipsource controller (relsync.Get); also reachable transitively via the relsource/imports blank import above, but this is the explicit wiring site for THIS aspect, not an accident of that one
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/slack"       // register slack kind for channel-controller validation
 	"github.com/authzed/openagentprimitives/pkg/cli/clikit"
+	accesstokenctrl "github.com/authzed/openagentprimitives/pkg/controllers/accesstoken"
 	agentclassctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentclass"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentidentity"
 	agentsessionctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
@@ -1641,6 +1642,21 @@ func run(cfg *config) {
 		os.Exit(1)
 	}
 	log.Info("registered controller", "name", "UserIdentity")
+
+	// Registered here for the same reason the AgentIdentity and UserIdentity
+	// reconcilers above are: it needs the SpiceDB client to remove a revoked
+	// (or expired) token's tuples on finalization. spiceDBClient is a real,
+	// non-nil *spicedb.Client by this point (construction failure exits
+	// above), so assigning it into the TupleDeleter interface field cannot
+	// produce a typed-nil interface.
+	if err := (&accesstokenctrl.Reconciler{
+		Client:  mgr.GetClient(),
+		SpiceDB: spiceDBClient,
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to create controller", "controller", "AccessToken")
+		os.Exit(1)
+	}
+	log.Info("registered controller", "name", "AccessToken")
 
 	// RelationshipSource — polls an upstream directory (Slack first) through
 	// the registered relsync.Kind and syncs the membership relationships it
