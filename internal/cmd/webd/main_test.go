@@ -576,7 +576,9 @@ func TestBuildArtifactViewDepsFailsClosed(t *testing.T) {
 		func() string { return "https://sandbox.example.com" },
 		logr.Logger{}, // zero-value: nil-sink no-op; tests need not configure a real logger
 		"", "",        // admindURL, admindToken: unconfigured; adminui plugin fails closed
-		[]string{"default"}, // startNamespaces: the flag's own default
+		[]string{"default"},      // startNamespaces: the flag's own default
+		"agentprimitives-system", // accessTokenNamespace: unused on this fail-closed path
+		2160*time.Hour,           // accessTokenLifetime: unused on this fail-closed path
 	)
 	assert.Nil(t, av, "viewer must fail closed when SpiceDB is unconfigured")
 }
