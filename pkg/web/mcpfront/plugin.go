@@ -27,15 +27,6 @@ func init() { webuiregistry.Register(ui{}) }
 
 func (ui) Name() string { return "mcpfront" }
 
-// registerTools registers the /mcp server's tool set against d. STUB: Task
-// 10 fills this in (list_sessions, read_transcript, … — each gated through
-// d.AccessTokenAuthz()). Left as an empty function, rather than omitted,
-// so this file's shape doesn't change when Task 10 lands — only this
-// function's body does.
-func registerTools(srv *mcp.Server, d Deps) {
-	// Task 10.
-}
-
 // Routes mounts the /mcp plugin. It is INERT — returns no routes at all —
 // when deps doesn't implement Deps, or AccessTokenAuthz() is nil: an
 // unconfigured SpiceDB means no MCP surface exists, fail closed by absence

@@ -1145,6 +1145,21 @@ func (d *artifactViewDeps) LookupReadableSessions(ctx context.Context, owner ide
 	return d.spdb.LookupInteractableSessions(ctx, owner, mcpReadableSessionsLimit, true)
 }
 
+// FetchArtifact implements mcpfront.Deps: the same two-step resolve-then-fetch
+// ContentRender/FetchRender do for the browser live-view (ResolveToRender maps
+// the artifactID handle to the ArtifactRender CR holding its current bytes,
+// then FetchRender pulls those bytes through the operator), reused here rather
+// than re-derived so the /mcp get_artifact tool can never read different bytes
+// than the live-view frames for the same handle.
+func (d *artifactViewDeps) FetchArtifact(ctx context.Context, ns, name, artifactID string) ([]byte, string, error) {
+	scope := memory.Scope{Kind: "session", ID: ns + "/" + name}
+	renderName, err := d.artSvc.ResolveToRender(ctx, scope, artifactID)
+	if err != nil {
+		return nil, "", err
+	}
+	return d.FetchRender(ctx, ns, name, renderName)
+}
+
 // LookupStartableClasses implements sessions.Deps: the bootstrap arm of the
 // start gate. Fails closed with an error rather than an empty set when SpiceDB
 // is absent — an empty answer here is indistinguishable from "you may start

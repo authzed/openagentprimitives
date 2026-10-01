@@ -46,6 +46,9 @@ func (f *fakeDeps) Artifacts() *artifacts.Service      { return nil }
 func (f *fakeDeps) LookupReadableSessions(_ context.Context, _ identity.CanonicalUserID) (spicedb.InteractableSessions, error) {
 	return spicedb.InteractableSessions{}, nil
 }
+func (f *fakeDeps) FetchArtifact(_ context.Context, _, _, _ string) ([]byte, string, error) {
+	return nil, "", nil
+}
 func (f *fakeDeps) ExternalBaseURL() string { return f.externalBaseURL }
 func (f *fakeDeps) Logger() logr.Logger     { return logr.Discard() }
 
