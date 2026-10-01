@@ -76,6 +76,32 @@ func TestLiveTokenGetsFinalizerReadyAndExpiryRequeue(t *testing.T) {
 	assert.InDelta(t, time.Hour, res.RequeueAfter, float64(time.Minute), "requeue lands at expiry")
 }
 
+func TestClockCrossesExpiryMidReconcile_RequeueAfterStaysPositive(t *testing.T) {
+	// Reconcile must read the clock ONCE and reuse it for both the expiry
+	// gate and the RequeueAfter computation. With a second read after the
+	// API writes, a clock that crosses spec.expiresAt in between yields
+	// RequeueAfter <= 0 — and controller-runtime only schedules when
+	// RequeueAfter > 0, so the token would sit unreconciled until the ~10h
+	// cache resync. The first clock read says "1s before expiry"; every
+	// later read is past it.
+	expiry := time.Now().Add(time.Hour)
+	tok := newToken(expiry)
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(tok).WithStatusSubresource(tok).Build()
+	calls := 0
+	r := &Reconciler{Client: c, SpiceDB: &fakeDeleter{}, Clock: func() time.Time {
+		calls++
+		if calls == 1 {
+			return expiry.Add(-time.Second) // not yet expired at the gate...
+		}
+		return expiry.Add(time.Minute) // ...but past expiry on any later read
+	}}
+
+	res := reconcileOnce(t, r, tok.Name)
+
+	assert.Greater(t, res.RequeueAfter, time.Duration(0),
+		"clock crossed expiry between reads: the single captured now must still yield a positive requeue")
+}
+
 func TestExpiredTokenIsDeleted(t *testing.T) {
 	now := time.Now()
 	tok := newToken(now.Add(-time.Minute))
