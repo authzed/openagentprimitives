@@ -151,13 +151,20 @@ func TestAgentClassInteractorRelationAndPersonalizePermission(t *testing.T) {
 // definition mints delegated credentials narrowed to a role and optional
 // resource filter; the platform permissions gate the admin console's
 // access-token management page.
+//
+// The four relation lines are pinned with requireExactRelationLine, not
+// Contains, for the same subject-closure reason as
+// TestAgentSessionInteractSubjectsAreClosed: widening a type union by
+// appending (e.g. "user" → "user | service") leaves the original text as an
+// unbroken prefix, so a substring check would keep passing while the token's
+// role relations silently admitted new subject kinds.
 func TestAccessTokenDefinition(t *testing.T) {
+	requireExactRelationLine(t, authzschema.Schema, "relation role_read: user")
+	requireExactRelationLine(t, authzschema.Schema, "relation role_interact: user")
+	requireExactRelationLine(t, authzschema.Schema, "relation role_full: user")
+	requireExactRelationLine(t, authzschema.Schema, "relation scope_class: agentclass | agentclass:*")
 	for _, want := range []string{
 		"definition accesstoken {",
-		"relation role_read: user",
-		"relation role_interact: user",
-		"relation role_full: user",
-		"relation scope_class: agentclass | agentclass:*",
 		"permission covers = scope_class",
 		"permission owner = role_read + role_interact + role_full",
 		"permission can_full = role_full",
