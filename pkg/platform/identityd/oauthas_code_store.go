@@ -14,6 +14,21 @@
 // Both are process-local: a restart mid-flow invalidates every outstanding
 // pending-authorize or code, which fails the flow closed and costs only a
 // re-attempt.
+//
+// The same process-locality means pendingAuthStore and authCodeStore ALSO
+// cannot be read across replicas: the authorize -> consent -> token sequence
+// for one flow must land on the SAME webd replica that minted the pending id
+// (and later the code), or the later step's lookup simply misses. Current
+// install manifests pin webd to replicas:1, so this is latent today. Running
+// webd at >1 replica would require either session affinity on the OAuth AS
+// paths (/oauth/authorize, /oauth/consent, /oauth/token) so one flow always
+// hits the replica that holds its state, or a future signed-code design that
+// makes the pending id / authorization code self-describing and verifiable
+// by any replica — mirroring how the OAuth client_id itself is already
+// stateless. This does NOT affect /mcp's bearer auth: that check is a
+// stateless hash lookup against the AccessToken CR (via the K8s API / its
+// informer cache), not against either store here, so /mcp itself is
+// replica-safe regardless of webd's replica count.
 package identityd
 
 import (

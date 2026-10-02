@@ -295,6 +295,13 @@ func writeConsentForm(w http.ResponseWriter, clientName, ownerDisplay, pendingID
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// Never cached: a per-visit page carrying a single-use pending id.
 	w.Header().Set("Cache-Control", "no-store")
+	// Anti-clickjacking: this page approves a delegated grant with one click
+	// (the approve button), so it must never be framable — an attacker page
+	// could otherwise overlay invisible UI and trick the signed-in subject
+	// into approving a grant they never saw. Both headers say the same thing
+	// to old and new clients respectively; belt-and-suspenders, not redundant.
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 	w.WriteHeader(http.StatusOK)
 
 	var rows strings.Builder
