@@ -149,11 +149,17 @@ rules:
     verbs: ["get"]
   # Task 8's /oauth/token mints an AccessToken CR as the authentication
   # record for a newly-issued bearer token (pkg/web/mcpfront.Minter). create
-  # for the mint itself; get/list/watch for the admin tokens page and the
-  # eventual AccessToken controller/finalizer reading its own objects back.
+  # for the mint itself; list for the /mcp bearer middleware's hash-lookup
+  # relist (pkg/web/mcpfront/auth.go's tokenCache); get for touchLastUsed's
+  # read-before-status-patch. No watch: webd's client is direct (client.New,
+  # uncached — no informer ever lists/watches this kind), and the admin
+  # tokens page reads through admind, hosted in the OPERATOR binary, not
+  # here. No delete either: revocation is admind's authorized route plus the
+  # operator's finalizer — a browser-facing pod must not be able to destroy
+  # token records (the RBAC sufficiency harness pins that verb denied).
   - apiGroups: ["agentprimitives.authzed.com"]
     resources: ["accesstokens"]
-    verbs: ["create", "get", "list", "watch"]
+    verbs: ["create", "get", "list"]
   # Task 9's /mcp bearer middleware records status.lastUsedAt as a
   # best-effort OBSERVATION (see pkg/web/mcpfront/auth.go's touchLastUsed) via
   # a MergeFrom status patch. The base object (spec+status together) is read
