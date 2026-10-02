@@ -111,6 +111,7 @@ func (l *Loop) fireSessionEnd(ctx context.Context, reason string) {
 			CacheCreationTokens: snap.CacheCreationTokens,
 			CacheReadTokens:     snap.CacheReadTokens,
 			ByModel:             l.usageByModelSnapshot(),
+			ByTool:              l.usageByToolSnapshot(),
 		},
 	}, host); err != nil {
 		slog.Default().Info("fireSessionEnd: SessionEnd executor errored (best-effort)",

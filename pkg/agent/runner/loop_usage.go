@@ -120,6 +120,65 @@ func (l *Loop) usageByModelSnapshot() []pipeline.ModelUsage {
 	return out
 }
 
+// toolUsageBucket is one interactive toolkit's running cost accumulation across
+// its invocations this session, keyed by outer tool name.
+type toolUsageBucket struct {
+	tool         string
+	costMicroUSD int64
+	costReported bool
+}
+
+// AddToolCost folds one interactive toolkit result event's provider-reported
+// cost into the bucket for outerTool. Shares usageMu with addUsage/addModelUsage
+// (see usageMu's doc). ok is the toolkit's success flag; v1 accumulates cost
+// regardless — a run the provider billed cost money whether or not it succeeded,
+// and an unbilled run reports 0 anyway.
+//
+// Exported (unlike addModelUsage) because it is wired from internal/cmd/runner's
+// interactive-tool result callback, which lives in a different package; the
+// runner's turn loop feeds addModelUsage internally, so that one stays private.
+func (l *Loop) AddToolCost(outerTool string, costUSD float64, ok bool) {
+	l.usageMu.Lock()
+	defer l.usageMu.Unlock()
+	if l.usageByToolIdx == nil {
+		l.usageByToolIdx = make(map[string]int)
+	}
+	i, seen := l.usageByToolIdx[outerTool]
+	if !seen {
+		i = len(l.usageByTool)
+		l.usageByToolIdx[outerTool] = i
+		l.usageByTool = append(l.usageByTool, toolUsageBucket{tool: outerTool})
+	}
+	b := &l.usageByTool[i]
+	if costUSD < 0 {
+		// A negative provider-reported tool cost would reduce the session total.
+		// Treat it as unreported rather than netting it against real charges —
+		// same guard as addModelUsage.
+		slog.Default().Info("negative reported tool cost; ignoring",
+			"tool", outerTool, "costUSD", costUSD)
+		return
+	}
+	// Round once at the USD->micro-USD boundary so accumulation is pure int64.
+	b.costMicroUSD += int64(math.Round(costUSD * 1e6))
+	b.costReported = true
+	_ = ok
+}
+
+// usageByToolSnapshot returns the Loop's per-tool cost as pipeline.ToolUsage in
+// first-encountered order (nil when unused). Safe for concurrent use.
+func (l *Loop) usageByToolSnapshot() []pipeline.ToolUsage {
+	l.usageMu.Lock()
+	defer l.usageMu.Unlock()
+	if len(l.usageByTool) == 0 {
+		return nil
+	}
+	out := make([]pipeline.ToolUsage, len(l.usageByTool))
+	for i, b := range l.usageByTool {
+		out[i] = pipeline.ToolUsage{Tool: b.tool, CostMicroUSD: b.costMicroUSD, CostReported: b.costReported}
+	}
+	return out
+}
+
 // StampEstimatedCost persists the cost estimate via the StatusPatcher. nil-safe:
 // a Loop without a Status (tests/kubectl-driven) silently no-ops.
 func (l *Loop) StampEstimatedCost(ctx context.Context, c spiceboxv1alpha1.EstimatedSessionCost) error {

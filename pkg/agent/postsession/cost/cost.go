@@ -75,13 +75,21 @@ func (r *Reporter) Eval(ctx context.Context, in pipeline.Input) pipeline.Decisio
 		micro = microUSD(e, price)
 	}
 
+	// Interactive toolkit cost (e.g. an inner `claude` sub-run's own billed
+	// spend) is provider-reported, so it is always "known" and is ADDED to the
+	// model total. When a served model is unpriced (known=false, micro=0), the
+	// grand total is still the priced tool component — a lower bound, per the
+	// EstimatedSessionCost.AmountMicroUSD contract.
+	toolBuckets, toolTotal := buildToolBuckets(e.ByTool)
+
 	cost := v1.EstimatedSessionCost{
-		AmountMicroUSD: micro,
+		AmountMicroUSD: micro + toolTotal,
 		Currency:       currency,
 		Model:          e.Model,
 		PricingKnown:   known,
 		AsOf:           r.d.Now(),
 		ByModel:        buckets,
+		ByTool:         toolBuckets,
 	}
 	if known && cost.Currency == "" {
 		cost.Currency = "USD"
@@ -165,6 +173,22 @@ func (r *Reporter) buildCostBuckets(usages []pipeline.ModelUsage) (buckets []v1.
 	return buckets, total, allKnown, currency
 }
 
+// buildToolBuckets maps each interactive-toolkit usage bucket to a priced
+// ToolCostBucket. Tool cost is always provider-reported (already micro-USD and
+// "known"), so there is no table lookup here — this is a pure projection plus a
+// sum. Returns the buckets in caller order and their total.
+func buildToolBuckets(usages []pipeline.ToolUsage) (buckets []v1.ToolCostBucket, total int64) {
+	if len(usages) == 0 {
+		return nil, 0
+	}
+	buckets = make([]v1.ToolCostBucket, len(usages))
+	for i, u := range usages {
+		buckets[i] = v1.ToolCostBucket{Tool: u.Tool, AmountMicroUSD: u.CostMicroUSD, PricingKnown: u.CostReported}
+		total += u.CostMicroUSD
+	}
+	return buckets, total
+}
+
 func costNotice(e *pipeline.SessionEndInfo, c v1.EstimatedSessionCost, known bool) *notice.Notice {
 	if !known {
 		return notice.New(categories.SessionCost, notice.Args{
@@ -177,15 +201,27 @@ func costNotice(e *pipeline.SessionEndInfo, c v1.EstimatedSessionCost, known boo
 			Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceParticipants},
 		})
 	}
+	fields := []channelevents.InteractionField{
+		{Label: "Tokens", Value: fmt.Sprintf("%s in / %s out",
+			formatTokens(e.InputTokens), formatTokens(e.OutputTokens))},
+		{Label: "Cache", Value: fmt.Sprintf("%s read / %s write",
+			formatTokens(e.CacheReadTokens), formatTokens(e.CacheCreationTokens))},
+		{Label: "Model", Value: e.Model},
+	}
+	// Break out inner interactive-toolkit spend (e.g. a passthrough `claude`
+	// sub-run) so the total's provenance is visible, not folded silently.
+	var toolTotal int64
+	for _, b := range c.ByTool {
+		toolTotal += b.AmountMicroUSD
+	}
+	if toolTotal > 0 {
+		fields = append(fields, channelevents.InteractionField{
+			Label: "Sub-agent tools", Value: formatUSD(toolTotal),
+		})
+	}
 	return notice.New(categories.SessionCost, notice.Args{
-		Lead: fmt.Sprintf("This session cost ~%s", formatUSD(c.AmountMicroUSD)),
-		Fields: []channelevents.InteractionField{
-			{Label: "Tokens", Value: fmt.Sprintf("%s in / %s out",
-				formatTokens(e.InputTokens), formatTokens(e.OutputTokens))},
-			{Label: "Cache", Value: fmt.Sprintf("%s read / %s write",
-				formatTokens(e.CacheReadTokens), formatTokens(e.CacheCreationTokens))},
-			{Label: "Model", Value: e.Model},
-		},
+		Lead:     fmt.Sprintf("This session cost ~%s", formatUSD(c.AmountMicroUSD)),
+		Fields:   fields,
 		Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceParticipants},
 	})
 }

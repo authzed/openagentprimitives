@@ -226,6 +226,38 @@ func TestAdmindAuditEndpoints(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestAdmindOverview_IncludesToolCost(t *testing.T) {
+	s := &spiceboxv1alpha1.AgentSession{}
+	s.Namespace, s.Name = "default", "s-codebot"
+	s.Spec.Class = "codebot"
+	s.Status.Phase = "Completed"
+	s.Status.EffectiveSettings = &spiceboxv1alpha1.EffectiveSettings{
+		Model: spiceboxv1alpha1.ModelConfig{Provider: "anthropic", Name: "claude-opus-4-8"},
+	}
+	// Zero tokens -> $0 model estimate, isolating the tool-cost contribution.
+	s.Status.Progress = &spiceboxv1alpha1.AgentSessionProgress{InputTokens: 0, OutputTokens: 0}
+	s.Status.EstimatedCost = &spiceboxv1alpha1.EstimatedSessionCost{
+		ByTool: []spiceboxv1alpha1.ToolCostBucket{
+			{Tool: "claude-oauth", AmountMicroUSD: 19_020_000, PricingKnown: true},
+		},
+	}
+
+	k8s := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(s).Build()
+	a := newTestAdmind(t, k8s)
+	a.Aggregator().UpsertSession(s)
+
+	w := do(t, a.Handler(), http.MethodGet, "/admin/v1/overview", "test-token", "user:YWRtaW4", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	var ov struct {
+		Budget struct {
+			EstimatedCostUSD float64 `json:"estimatedCostUSD"`
+		} `json:"budget"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ov))
+	assert.InDelta(t, 19.02, ov.Budget.EstimatedCostUSD, 1e-9,
+		"Overview headline spend must include inner tool cost ($0 model + $19.02 tool)")
+}
+
 func TestAdmindOverviewAndHealth(t *testing.T) {
 	sess := sessionCR("default", "s1", "support-bot", "Running")
 	k8s := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(sess).Build()
