@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -10,7 +11,10 @@ import (
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
+	"github.com/authzed/openagentprimitives/pkg/channels/notice"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
@@ -184,6 +188,10 @@ func threadSeedRequestsFor(class *spiceboxv1alpha1.AgentClass) []authz.ThreadSee
 			Permission:      s.Permission,
 			ValueTransforms: transforms[s.ResourceType],
 			AutoGrantFrom:   s.AutoGrantFrom,
+			// Occupancy/Rebind are plain spec fields on the slot, so they ride
+			// straight off it onto every binding this seed emits.
+			Occupancy: s.Occupancy,
+			Rebind:    s.Rebind,
 		})
 	}
 	return out
@@ -252,10 +260,86 @@ func (p *Pipeline) seedThreadSlots(
 		// Not fatal: without the grants the agent simply has to ask.
 		logger.Info("thread slot seeding: grant write failed; those values will need approval",
 			"session", sess.Namespace+"/"+sess.Name, "bindings", len(bindings), "err", err.Error())
+		// A single-occupancy pin refusal is an answer, not a transient failure:
+		// the thread named a target this session cannot switch to. Tell the
+		// people in it, beyond the operator log above. Pass the bindings so the
+		// notice routes its NextStep by the refused slot's rebind policy.
+		p.publishSlotBindRefusedNotice(ctx, sess, bindings, err)
 		return
 	}
 	logger.Info("thread slot seeding: bound values a trusted author put in the thread",
 		"session", sess.Namespace+"/"+sess.Name, "bindings", len(bindings))
+}
+
+// publishSlotBindRefusedNotice surfaces a mint-time slot-bind refusal to the
+// session as a SlotBindRefused notice, so the people in the conversation learn
+// a target they named was NOT bound because the session is committed to a
+// different one — a fact that otherwise lived only in the operator log beside
+// each call site.
+//
+// Scoped to the pin ruling: errors.Is(err, authz.ErrSlotPinned) also covers the
+// multi-arrival "cannot hold N distinct instances at once" refusal, which wraps
+// the same sentinel. A transient SpiceDB failure is NOT a user-actionable
+// commitment and stays operator-only — the agent retries or asks, and announcing
+// an outage as a pin would be a lie.
+//
+// Best-effort: the grants this explains were advisory (a refused thread-seed or
+// trigger bind costs an approval, not the session), so a publish failure is
+// logged (no-silent-errors) and never propagated. Shared by both mint-time
+// paths — thread seed (above) and trigger bind (triggerslots.go).
+func (p *Pipeline) publishSlotBindRefusedNotice(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, bindings []authz.SlotBinding, err error) {
+	if err == nil || !errors.Is(err, authz.ErrSlotPinned) {
+		return
+	}
+	if p.NATS == nil {
+		return
+	}
+	ref := channelevents.SessionRef{Namespace: sess.Namespace, Name: sess.Name}
+	if perr := slotBindRefusedNotice(err.Error(), allRebindNever(bindings)).Publish(p.NATS.Publish, ref, mintRequestID()); perr != nil {
+		log.FromContext(ctx).Info("slot bind refused: publishing the user-facing notice failed; the refusal remains in the operator log only",
+			"session", sess.Namespace+"/"+sess.Name, "err", perr.Error())
+	}
+}
+
+// allRebindNever reports whether EVERY binding in the refused set declares
+// rebind:never — the one case whose only route out is a new session. An empty
+// Rebind reads as the default ("approval"), which DOES have a re-plan route, so
+// any approval/unset binding flips this false. Empty bindings → false: default
+// to naming the re-plan route, which also names the new-session fallback, rather
+// than foreclosing it.
+func allRebindNever(bindings []authz.SlotBinding) bool {
+	if len(bindings) == 0 {
+		return false
+	}
+	for _, b := range bindings {
+		if b.Rebind != authz.SlotRebindNever {
+			return false
+		}
+	}
+	return true
+}
+
+// slotBindRefusedNotice builds the user-facing SlotBindRefused notice. The
+// NextStep routes by the slot's rebind policy: a `never` slot can only be worked
+// in a new session, while the default `approval` slot additionally has the
+// re-plan route (an approved amendment moves the commitment). The exact
+// per-type route the refusal names also rides the inert Excerpt (externally-
+// derived content per the notice.Args contract), so the Excerpt and NextStep
+// agree rather than the NextStep contradicting the route the Excerpt shows.
+func slotBindRefusedNotice(refusal string, neverOnly bool) *notice.Notice {
+	nextStep := "To work on a different target, the agent can propose an updated plan naming it — " +
+		"approving that plan moves the commitment — or start a new conversation for it. The details below say more."
+	if neverOnly {
+		nextStep = "To work on a different target, start a new conversation for it — this session's commitment " +
+			"cannot be moved. The details below say more."
+	}
+	return notice.New(categories.SlotBindRefused, notice.Args{
+		Lead:     "A different target wasn't added to this session",
+		Body:     "This session is committed to a single target for one of its slots, so another target named here was not added. The work continues on the target already committed.",
+		NextStep: nextStep,
+		Excerpt:  &channelevents.InteractionExcerpt{Label: "Why", Content: refusal},
+		Audience: participantsAudience(),
+	})
 }
 
 func (p *Pipeline) applyAdoptionGrants(

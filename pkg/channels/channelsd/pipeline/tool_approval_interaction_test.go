@@ -95,10 +95,15 @@ type slotGrantRecorder struct {
 	fakeAuthz
 	fail      bool
 	relations []authz.Relation
+	pins      map[string]string // keyed by "<ns>/<name>\x00<type>"
 }
 
 // Relations returns the recorder itself as the authz.RelWriter BindApproved
-// writes through.
+// writes through. The recorder also implements authz.SlotPinner: the approval
+// binds a single-occupancy slot (empty occupancy defaults to single), which the
+// GrantSlots gate refuses to write through a plain RelWriter. The pinned write
+// records into the same `relations` slice as the plain path, so an assertion on
+// the written tuple reads the same whichever path a binding took.
 func (s *slotGrantRecorder) Relations() authz.RelWriter { return s }
 
 func (s *slotGrantRecorder) WriteRelationships(_ context.Context, rels []authz.Relation) error {
@@ -111,6 +116,46 @@ func (s *slotGrantRecorder) WriteRelationships(_ context.Context, rels []authz.R
 
 func (s *slotGrantRecorder) DeleteRelationships(_ context.Context, _ []authz.Relation) error {
 	return nil
+}
+
+func slotGrantRecorderPinKey(scope authz.SessionRef, resourceType string) string {
+	return scope.String() + "\x00" + resourceType
+}
+
+func (s *slotGrantRecorder) EnsurePin(_ context.Context, resourceType, resourceID string, scope authz.SessionRef) (bool, string, error) {
+	if s.pins == nil {
+		s.pins = map[string]string{}
+	}
+	key := slotGrantRecorderPinKey(scope, resourceType)
+	if cur, ok := s.pins[key]; ok {
+		return true, cur, nil
+	}
+	s.pins[key] = resourceID
+	return false, resourceID, nil
+}
+
+func (s *slotGrantRecorder) WriteGrantsPinned(_ context.Context, rels []authz.Relation, _, _ string, _ authz.SessionRef) error {
+	if s.fail {
+		return errors.New("spicedb unavailable")
+	}
+	s.relations = append(s.relations, rels...)
+	return nil
+}
+
+func (s *slotGrantRecorder) MovePin(_ context.Context, resourceType, _, toID string, _ []authz.Relation, scope authz.SessionRef) error {
+	if s.pins == nil {
+		s.pins = map[string]string{}
+	}
+	s.pins[slotGrantRecorderPinKey(scope, resourceType)] = toID
+	return nil
+}
+
+func (s *slotGrantRecorder) ReadPin(_ context.Context, resourceType string, scope authz.SessionRef) (string, error) {
+	return s.pins[slotGrantRecorderPinKey(scope, resourceType)], nil
+}
+
+func (s *slotGrantRecorder) ListGrantsFor(_ context.Context, _, _ string, _ authz.SessionRef) ([]authz.Relation, error) {
+	return nil, nil
 }
 
 // approvalPipeline builds the pipeline fixture the tool-approval tests share.
@@ -218,6 +263,72 @@ func TestToolApprovalDecision_narrowsScopeToTheApprovedInstance(t *testing.T) {
 	}
 	assert.Equal(t, []string{"4210"}, ids,
 		"approving this company must exclude the others, not merely permit this one")
+}
+
+// TestToolApprovalDecision_CarriesOccupancyFromDetailsToTheGate proves the
+// occupancy resolved at request-record time (ToolApprovalDetails.Occupancy)
+// reaches the SlotBinding the handler binds, and so the GrantSlots gate: a
+// "multi" record takes the plain unpinned write, while a single (empty) record
+// pins the slot. If det.Occupancy stopped propagating onto the binding, the
+// multi approval would pin — caught by the pin's presence, not by the grant
+// merely landing.
+func TestToolApprovalDecision_CarriesOccupancyFromDetailsToTheGate(t *testing.T) {
+	decisionWith := func(occupancy string) channelinteractions.Decision {
+		det, _ := json.Marshal(channelevents.ToolApprovalDetails{
+			Permission: "apply", ResourceType: "label", ResourceID: "bug", ArgsHash: "h1",
+			StateImpact: "readonly", Occupancy: occupancy,
+		})
+		return channelinteractions.Decision{
+			Session: channelevents.SessionRef{Namespace: "default", Name: "demo-session"},
+			Payload: channelevents.InteractionDecisionPayload{Category: "tool_approval", RequestRef: "req-occ", ActionID: "approve"},
+			Request: &channelevents.InteractionRequestPayload{Category: "tool_approval", RequestRef: "req-occ", Details: det},
+		}
+	}
+
+	t.Run("multi: binds without pinning", func(t *testing.T) {
+		rec := &slotGrantRecorder{}
+		_, err := toolApprovalHandler(approvalPipeline(t, rec))(context.Background(), decisionWith("multi"))
+		require.NoError(t, err)
+		require.Len(t, rec.relations, 1)
+		assert.Empty(t, rec.pins, "a multi-occupancy approval must not pin the slot")
+	})
+	t.Run("single (empty): pins the slot", func(t *testing.T) {
+		rec := &slotGrantRecorder{}
+		_, err := toolApprovalHandler(approvalPipeline(t, rec))(context.Background(), decisionWith(""))
+		require.NoError(t, err)
+		require.Len(t, rec.relations, 1)
+		assert.NotEmpty(t, rec.pins, "a single-occupancy approval (empty occupancy) must pin the slot")
+	})
+}
+
+// TestToolApprovalDecision_pinRefusedRoutesToNewSession: when an approved JIT
+// bind hits a single-occupancy slot already committed to a DIFFERENT instance,
+// the tool_approval card has NO plan route to move the pin (it is the escalation
+// path for classes with no plan gate). The handler must refuse with a message
+// that names the target and routes to a NEW SESSION — and keep wrapping
+// ErrSlotPinned so the decision pipe classifies it as a pin refusal, not a
+// generic handler error — rather than GrantSlots' "propose an updated plan"
+// advice, which this class cannot follow.
+func TestToolApprovalDecision_pinRefusedRoutesToNewSession(t *testing.T) {
+	rec := &slotGrantRecorder{}
+	p := approvalPipeline(t, rec)
+	// The slot's type is already pinned to a DIFFERENT instance for this session,
+	// so the approved different-instance bind is refused by the pin.
+	rec.pins = map[string]string{
+		slotGrantRecorderPinKey(authz.SessionRef{Namespace: "default", Name: "demo-session"}, "repo"): "other-repo",
+	}
+
+	_, err := toolApprovalHandler(p)(context.Background(), toolDecision("approve", "readwrite"))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, authz.ErrSlotPinned,
+		"the refusal must stay errors.Is-able so the decision pipe routes it as a pin refusal, not a render error")
+	assert.Contains(t, err.Error(), "start a new session",
+		"a class with no plan gate can only move to a new target via a new session")
+	assert.Contains(t, err.Error(), "repo:r1",
+		"the refusal names the target this approval was for")
+	assert.NotContains(t, err.Error(), "propose an updated plan",
+		"a class with no plan gate must not be told to re-plan")
+	assert.Empty(t, rec.relations, "a refused bind grants nothing")
 }
 
 // TestToolApprovalHandler_ResourcelessCall pins the case observed live on

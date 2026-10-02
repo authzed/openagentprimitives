@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -154,7 +155,29 @@ func toolApprovalHandler(p *Pipeline) channelinteractions.DecisionHandler {
 					// precondition_waiver card, never this tool_call one (see
 					// toolcallauthz.explainPrecondition), so a tool_approval bind
 					// can only ever cover a call whose gate was Satisfied or absent.
+					//
+					// Occupancy/Rebind were resolved from the class slot at
+					// request-record time (the runner held the class; this handler
+					// does not) and carried in the details, so GrantSlots pins this
+					// approval's grant exactly as a non-approval bind of the same
+					// slot would — a single-occupancy type binds through the pin,
+					// not the unpinned plain write.
+					Occupancy: det.Occupancy,
+					Rebind:    det.Rebind,
 				}}, authz.EnforcePreconditions, expiry, logr.FromContextOrDiscard(ctx), p.Now); err != nil {
+				if errors.Is(err, authz.ErrSlotPinned) {
+					// The tool_approval card is the escalation path for classes with
+					// NO plan gate, so there is no re-plan route to move a filled
+					// single-occupancy slot. The generic bind-error chain would hand
+					// the clicker GrantSlots' "propose an updated plan" advice — a
+					// dead end this class cannot follow. Return a clean refusal
+					// (still wrapping ErrSlotPinned so the decision pipe routes it as
+					// a pin refusal, not a render error) that names the target this
+					// approval was for and the only real route: a new session.
+					return channelinteractions.Outcome{}, fmt.Errorf(
+						"%w: this session is already committed to a different %s, and this agent cannot move that commitment (it uses no plan) — start a new session to work on %s",
+						authz.ErrSlotPinned, det.ResourceType, det.ResourceType+":"+det.ResourceID)
+				}
 				return channelinteractions.Outcome{}, fmt.Errorf(
 					"tool approval decision: bind %s on %s/%s (requestRef %q): %w",
 					det.ResourceType+":"+det.ResourceID, d.Session.Namespace, d.Session.Name,
