@@ -566,6 +566,7 @@ const slotSchemaFragment = `
 definition demo_target {
     relation slot_grant_reachable: agentsession with expiration
     relation slot_grant_mutate: agentsession with expiration
+    relation slot_pin: agentsession
     relation owner: user
     permission reachable = slot_grant_reachable->interact + owner
     permission mutate = slot_grant_mutate->interact + owner
@@ -573,6 +574,7 @@ definition demo_target {
 
 definition demo_widget {
     relation slot_grant_usable: agentsession with expiration
+    relation slot_pin: agentsession
     relation owner: user
     permission usable = slot_grant_usable->interact + owner
 }
@@ -780,9 +782,12 @@ func TestIntegration_RevokeSlot_IsSurgicalAndImmediate(t *testing.T) {
 
 	require.NoError(t, c.TouchInteractParticipantUser(ctx, ns, sessName, member), "TouchInteractParticipantUser")
 	sess := authz.SessionRef{Namespace: ns, Name: sessName}
+	// Occupancy multi: surgical revocation is only interesting when the session
+	// holds MORE THAN ONE instance of a type, which single-occupancy pinning
+	// forbids by construction. This is the explicit multi-set case.
 	require.NoError(t, authz.GrantSlots(ctx, c.Relations(), sess, []authz.SlotBinding{
-		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(keepID), Permission: "reachable"},
-		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(dropID), Permission: "reachable"},
+		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(keepID), Permission: "reachable", Occupancy: "multi"},
+		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(dropID), Permission: "reachable", Occupancy: "multi"},
 	}, time.Now().Add(time.Hour)), "GrantSlots")
 
 	reach := func(id string) bool {

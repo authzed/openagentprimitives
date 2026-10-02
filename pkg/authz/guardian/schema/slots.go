@@ -223,8 +223,15 @@ func composeOneSlot(src string, s SlotPair) (string, bool, bool, error) {
 
 	wantRel := "    relation " + slotGrantRelationDecl(s.Permission)
 
+	// The pin relation is per resource TYPE, not per permission: every
+	// permission of a single-occupancy slot shares one pin. Emitted for every
+	// slot resource (multi included) because its presence enforces nothing —
+	// enforcement is entirely write-time — and composing it unconditionally
+	// keeps occupancy out of the cross-class slot-pair union.
+	wantPin := "    relation " + authz.SlotPinRelationName + ": agentsession"
+
 	var kept []string
-	hasRel, hasPerm := false, false
+	hasRel, hasPerm, hasPin := false, false, false
 	permLine := regexp.MustCompile(`^\s*permission\s+` + regexp.QuoteMeta(s.Permission) + `\s*=`)
 
 	// The composer is about to unconditionally overwrite the line permLine
@@ -260,6 +267,9 @@ func composeOneSlot(src string, s SlotPair) (string, bool, bool, error) {
 		case trimmed == strings.TrimSpace(wantRel):
 			hasRel = true
 			kept = append(kept, wantRel)
+		case trimmed == strings.TrimSpace(wantPin):
+			hasPin = true
+			kept = append(kept, wantPin)
 		case permLine.MatchString(line):
 			// The composer owns this line: whatever the author wrote is
 			// replaced, which is what removes a wildcard leaf.
@@ -270,8 +280,15 @@ func composeOneSlot(src string, s SlotPair) (string, bool, bool, error) {
 		}
 	}
 
+	var toInsertAfterHeader []string
 	if !hasRel {
-		kept = insertAfterDefinitionHeader(kept, wantRel)
+		toInsertAfterHeader = append(toInsertAfterHeader, wantRel)
+	}
+	if !hasPin {
+		toInsertAfterHeader = append(toInsertAfterHeader, wantPin)
+	}
+	if len(toInsertAfterHeader) > 0 {
+		kept = insertAfterDefinitionHeader(kept, toInsertAfterHeader...)
 	}
 	if !hasPerm {
 		// BEFORE the closing brace. Appending to the block's lines put the
@@ -289,19 +306,22 @@ func composeOneSlot(src string, s SlotPair) (string, bool, bool, error) {
 	return src[:start] + rebuilt + src[end:], true, false, nil
 }
 
-// insertAfterDefinitionHeader places a relation immediately after the
-// `definition X {` line, so relations stay grouped above permissions the way a
-// hand-written schema reads.
-func insertAfterDefinitionHeader(lines []string, relation string) []string {
+// insertAfterDefinitionHeader places one or more relations immediately after
+// the `definition X {` line, so relations stay grouped above permissions the
+// way a hand-written schema reads. Variadic so a caller inserting more than
+// one missing relation in the same pass (the grant relation and the pin) gets
+// them placed together, in the order given, rather than one push reordering
+// the other.
+func insertAfterDefinitionHeader(lines []string, relations ...string) []string {
 	for i, l := range lines {
 		if strings.HasSuffix(strings.TrimSpace(l), "{") {
-			out := make([]string, 0, len(lines)+1)
+			out := make([]string, 0, len(lines)+len(relations))
 			out = append(out, lines[:i+1]...)
-			out = append(out, relation)
+			out = append(out, relations...)
 			return append(out, lines[i+1:]...)
 		}
 	}
-	return append(lines, relation)
+	return append(lines, relations...)
 }
 
 // definitionBlockBounds returns the [start,end) offsets of `definition <name> {
