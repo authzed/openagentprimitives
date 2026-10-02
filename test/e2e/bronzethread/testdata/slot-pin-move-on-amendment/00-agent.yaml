@@ -1,0 +1,139 @@
+# Fixture agent for the slot-pin-move-on-amendment scenario.
+#
+# code_repo is a single-occupancy (the default), SESSION-ONLY slot with one
+# permission, read, keyed per-call on a repo name. Session-only is the shape
+# that binds on a plain plan-gate approval — no owner tuple, no owner-approver —
+# so the first approval does not merely grant repo-alpha, it PINS the session to
+# it (a non-expiring slot_pin tuple). A re-plan that re-points the same phase at
+# repo-bravo is then not a second independent grant but a MOVE: the amendment
+# card names both instances and says approving moves the pin and revokes the old
+# instance's access, and approving it repoints the pin and revokes repo-alpha's
+# grant in one request.
+#
+# The centerdot repoint bundle (plangate-slot-repoint-reasks) cannot show this:
+# its crm_company is `standing: required` and its auto-approver owns nothing, so
+# nothing binds and nothing pins. This fixture uses session-only precisely so
+# the pin engages and the MOVE renders on a real published card.
+apiVersion: v1
+kind: Secret
+metadata: {name: codepin-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: codepin-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: codepin-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "unused-by-the-fake-mcp-server"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: codepin-identity, namespace: default}
+spec:
+  description: "Session-only-standing e2e fixture: static MCP bearer token."
+  credentials:
+    - name: codepin-mcp-bearer
+      type: static
+      static: {secretRef: {name: codepin-mcp-token, key: access_token}}
+---
+# Self-contained MCP fixture exposing one read-only tool gated on code_repo.
+#
+# code_repo declares `standing: session-only` and a single `read` permission.
+# Because the AgentClass below declares code_repo as an authz slot, the composer
+# rewrites read to `slot_grant_read->interact + owner` and emits
+# `relation slot_grant_read: agentsession` plus the per-type
+# `relation slot_pin: agentsession` single-occupancy carries. ONE permission on
+# ONE instance per call — deliberately not the git_repo read-on-"workspace" +
+# push-on-URL shape, which names two instances of one single-occupancy type and
+# muddies what the pin is on.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: codepin-fixture, namespace: default}
+spec:
+  name: codepin-fixture
+  version: v1
+  intent: "Self-contained single-instance git-repo-shaped fixture for the e2e harness."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: codepin-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: code_repo
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          - {name: read, expr: owner, title: "Read the repository"}
+  tools:
+    - name: fetch
+      intent: "Read a repository this session is pinned to."
+      args:
+        allowedFields: [repo]
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: code_repo
+          resourceIDExpr: '"" + args.repo'
+          permission: read
+          resourceIDHint: "name the repository"
+      effects:
+        readOnly: true
+        idempotent: true
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: codepin-fixture, namespace: default}
+spec:
+  displayName: CodePinBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: codepin-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+
+      You read repositories. Declare a plan phase naming the repository, then
+      call codepin_fetch(repo).
+  agentIdentity: codepin-identity
+  mcpServers:
+    - name: codepin
+      ref: codepin-fixture
+  authz:
+    slots:
+      - resourceType: code_repo
+        permission: read
+        description: "A code repository, reached by name"
+    planGate:
+      mode: enforcing
+      rendering:
+        # One auto-approvable handle for the session. The phase declares one
+        # handle (read) AND one slot, so breadth promotes it past tier 0 and a
+        # human must clear it — which is what makes the card (and its move copy)
+        # observable. Without this the all-readonly phase auto-approves and no
+        # card is ever published.
+        maxAutoApproveHandles: 1
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: codepin-fixture-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: codepin-fixture
+  credentialsRef: {secretName: codepin-fake-creds}
+  fake: {echo: false}
