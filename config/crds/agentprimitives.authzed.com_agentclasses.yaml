@@ -694,6 +694,23 @@ spec:
                           - dynamic
                           - frozen
                           type: string
+                        occupancy:
+                          default: single
+                          description: |-
+                            Occupancy decides how many instances may occupy this slot at once.
+
+                            single (default): at most one instance occupies the slot for the
+                            session's life, recorded as a non-expiring slot_pin relationship. A
+                            bind to a DIFFERENT instance is refused rather than silently added.
+                            A second permission on the SAME instance, and a re-grant of the same
+                            instance after its grants expired, are not drift and still bind.
+
+                            multi: the slot binds a set; each addition is gated as it is today.
+                            No pin is written.
+                          enum:
+                          - single
+                          - multi
+                          type: string
                         permission:
                           minLength: 1
                           pattern: ^[a-z][a-z0-9_]*$
@@ -720,6 +737,21 @@ spec:
                             type: string
                           type: array
                           x-kubernetes-list-type: atomic
+                        rebind:
+                          default: approval
+                          description: |-
+                            Rebind decides what a bind to a DIFFERENT instance does on a filled
+                            single-occupancy slot. Meaningful only when occupancy is single
+                            (as triggerInstance is meaningful only with fillFrom "trigger").
+
+                            approval (default): refused, and the refusal names the route — an
+                            approved plan amendment naming the new instance moves the pin and
+                            revokes the old instance's grants.
+                            never: refused unconditionally; retargeting requires a new session.
+                          enum:
+                          - approval
+                          - never
+                          type: string
                         requires:
                           description: |-
                             Requires are predicates over the facts a candidate arrived with, all of
@@ -1017,6 +1049,23 @@ spec:
                       - dynamic
                       - frozen
                       type: string
+                    occupancy:
+                      default: single
+                      description: |-
+                        Occupancy decides how many instances may occupy this slot at once.
+
+                        single (default): at most one instance occupies the slot for the
+                        session's life, recorded as a non-expiring slot_pin relationship. A
+                        bind to a DIFFERENT instance is refused rather than silently added.
+                        A second permission on the SAME instance, and a re-grant of the same
+                        instance after its grants expired, are not drift and still bind.
+
+                        multi: the slot binds a set; each addition is gated as it is today.
+                        No pin is written.
+                      enum:
+                      - single
+                      - multi
+                      type: string
                     permission:
                       minLength: 1
                       pattern: ^[a-z][a-z0-9_]*$
@@ -1043,6 +1092,21 @@ spec:
                         type: string
                       type: array
                       x-kubernetes-list-type: atomic
+                    rebind:
+                      default: approval
+                      description: |-
+                        Rebind decides what a bind to a DIFFERENT instance does on a filled
+                        single-occupancy slot. Meaningful only when occupancy is single
+                        (as triggerInstance is meaningful only with fillFrom "trigger").
+
+                        approval (default): refused, and the refusal names the route — an
+                        approved plan amendment naming the new instance moves the pin and
+                        revokes the old instance's grants.
+                        never: refused unconditionally; retargeting requires a new session.
+                      enum:
+                      - approval
+                      - never
+                      type: string
                     requires:
                       description: |-
                         Requires are predicates over the facts a candidate arrived with, all of

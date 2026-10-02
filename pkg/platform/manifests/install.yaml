@@ -732,6 +732,23 @@ spec:
                           - dynamic
                           - frozen
                           type: string
+                        occupancy:
+                          default: single
+                          description: |-
+                            Occupancy decides how many instances may occupy this slot at once.
+
+                            single (default): at most one instance occupies the slot for the
+                            session's life, recorded as a non-expiring slot_pin relationship. A
+                            bind to a DIFFERENT instance is refused rather than silently added.
+                            A second permission on the SAME instance, and a re-grant of the same
+                            instance after its grants expired, are not drift and still bind.
+
+                            multi: the slot binds a set; each addition is gated as it is today.
+                            No pin is written.
+                          enum:
+                          - single
+                          - multi
+                          type: string
                         permission:
                           minLength: 1
                           pattern: ^[a-z][a-z0-9_]*$
@@ -758,6 +775,21 @@ spec:
                             type: string
                           type: array
                           x-kubernetes-list-type: atomic
+                        rebind:
+                          default: approval
+                          description: |-
+                            Rebind decides what a bind to a DIFFERENT instance does on a filled
+                            single-occupancy slot. Meaningful only when occupancy is single
+                            (as triggerInstance is meaningful only with fillFrom "trigger").
+
+                            approval (default): refused, and the refusal names the route — an
+                            approved plan amendment naming the new instance moves the pin and
+                            revokes the old instance's grants.
+                            never: refused unconditionally; retargeting requires a new session.
+                          enum:
+                          - approval
+                          - never
+                          type: string
                         requires:
                           description: |-
                             Requires are predicates over the facts a candidate arrived with, all of
@@ -1055,6 +1087,23 @@ spec:
                       - dynamic
                       - frozen
                       type: string
+                    occupancy:
+                      default: single
+                      description: |-
+                        Occupancy decides how many instances may occupy this slot at once.
+
+                        single (default): at most one instance occupies the slot for the
+                        session's life, recorded as a non-expiring slot_pin relationship. A
+                        bind to a DIFFERENT instance is refused rather than silently added.
+                        A second permission on the SAME instance, and a re-grant of the same
+                        instance after its grants expired, are not drift and still bind.
+
+                        multi: the slot binds a set; each addition is gated as it is today.
+                        No pin is written.
+                      enum:
+                      - single
+                      - multi
+                      type: string
                     permission:
                       minLength: 1
                       pattern: ^[a-z][a-z0-9_]*$
@@ -1081,6 +1130,21 @@ spec:
                         type: string
                       type: array
                       x-kubernetes-list-type: atomic
+                    rebind:
+                      default: approval
+                      description: |-
+                        Rebind decides what a bind to a DIFFERENT instance does on a filled
+                        single-occupancy slot. Meaningful only when occupancy is single
+                        (as triggerInstance is meaningful only with fillFrom "trigger").
+
+                        approval (default): refused, and the refusal names the route — an
+                        approved plan amendment naming the new instance moves the pin and
+                        revokes the old instance's grants.
+                        never: refused unconditionally; retargeting requires a new session.
+                      enum:
+                      - approval
+                      - never
+                      type: string
                     requires:
                       description: |-
                         Requires are predicates over the facts a candidate arrived with, all of
@@ -8900,6 +8964,63 @@ spec:
                   gone. Diagnostic + drives the reap decision's "already slept" guard.
                 format: date-time
                 type: string
+              slotPins:
+                description: |-
+                  SlotPins is a DISPLAY-ONLY observation, one entry per single-occupancy
+                  resource type, mirroring the instance SpiceDB's slot_pin relation
+                  currently pins this session to. SpiceDB is the enforcement source of
+                  truth for single-occupancy pinning; nothing that authorizes a bind or a
+                  tool call reads this field. See SlotPin's doc comment for what writes
+                  it and what MovedBy/MovedAt mean.
+                items:
+                  description: |-
+                    SlotPin is a DISPLAY-ONLY mirror of one single-occupancy slot's current
+                    commitment — the instance SpiceDB's slot_pin relation pins the session to
+                    for ResourceType, written by authz.GrantSlots (via SlotPinner.EnsurePin) on
+                    a first bind and repointed by authz.BindApproved's move path
+                    (SlotPinner.MovePin) when an approved plan moves it.
+
+                    SpiceDB is the enforcement source of truth: the slot_pin tuple is what a
+                    tool-call Check and GrantSlots' own single-occupancy gate actually consult.
+                    Nothing that authorizes a bind or a call reads this field — it exists so
+                    `oap session show` and operator logs can see the commitment without a live
+                    SpiceDB read, and it can lag or be absent (e.g. no status writer wired)
+                    without changing what is actually enforced.
+                  properties:
+                    movedAt:
+                      description: |-
+                        MovedAt is when MovedBy's move landed on this pin. Empty for a pin that
+                        has only ever been first-filled.
+                      format: date-time
+                      type: string
+                    movedBy:
+                      description: |-
+                        MovedBy is the approval-record reference that authorized the most
+                        recent MOVE off a prior instance — empty for a pin that has only ever
+                        been first-filled. Populated only by the plan-gate approval path
+                        (pkg/agent/runner's narrowToApproved), from the plan-gate audit record
+                        that carried the approval: its PhaseKey, or PlanDigest+PhaseIndex when
+                        PhaseKey is unset on an older record.
+                      type: string
+                    resourceID:
+                      description: ResourceID is the instance ResourceType is currently
+                        pinned to.
+                      type: string
+                    resourceType:
+                      description: |-
+                        ResourceType is the slot's declared resource type, and the key
+                        UpsertSlotPin replaces by — a single-occupancy slot holds at most one
+                        instance per type for the session's life, so one entry per type is
+                        always the complete picture.
+                      type: string
+                  required:
+                  - resourceID
+                  - resourceType
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - resourceType
+                x-kubernetes-list-type: map
               startApprovalParkedAt:
                 description: |-
                   StartApprovalParkedAt is when the session entered AwaitingStartApproval
