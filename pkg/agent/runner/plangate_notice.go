@@ -49,7 +49,21 @@ func approverIDOf(p identity.Principal) string {
 // lookup" is not something the person clicking Approve can act on, and this
 // surface is a chat window, not an operator console; the operator detail is in
 // the log line beside this call.
-func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error) {
+//
+// pinnedRefusal branches the copy, because the reasons an approval fails to
+// apply fall into two opposite buckets and the old single wording lied about
+// both halves for one of them:
+//
+//   - a RECOVERABLE FAULT (pinnedRefusal=false): a standing lookup blipped, or
+//     an approved MOVE could not execute because the pin drifted since the card
+//     was shown. Nothing bound, and re-approving can take once the transient
+//     condition clears — "a fault on our side, try once more" is true.
+//   - a PLAIN PINNED REFUSAL (pinnedRefusal=true): a binding named a different
+//     instance of a slot already committed to another, with no move approved.
+//     This is NOT a fault, re-approving the same card will not change it, and
+//     because GrantSlots is per-type partitioned OTHER instances the plan named
+//     may well have bound — so "nothing was granted" would be a lie.
+func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error, pinnedRefusal bool) {
 	if h.l == nil || h.l.InteractionRequestPublish == nil {
 		return
 	}
@@ -58,22 +72,34 @@ func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause er
 		sessNS, sessName = h.sess.Namespace, h.sess.Name
 	}
 
+	// Recoverable-fault copy (the default): nothing bound, and re-approving may
+	// take. Bounded rather than "retry"/"don't retry" — one more attempt
+	// distinguishes a transient blip from a persistent one; a third never does.
+	lead := "Your approval could not be applied, so nothing was granted and the plan " +
+		"has not started. This is a fault on our side, not a refusal."
+	nextStep := "Try approving once more. If it fails again, report it — nothing " +
+		"has been granted either way."
+	if pinnedRefusal {
+		// A plain pinned refusal: the slot is committed elsewhere and this is an
+		// answer, not a fault. Honest that other instances may have bound and that
+		// re-approving the SAME card changes nothing.
+		lead = "This session is already committed to a different target for one of its " +
+			"slots, so the instance your approval named was not granted. Other instances " +
+			"the plan named may have been granted; this one was not."
+		nextStep = "To target the committed instance, the plan must name it so an approved " +
+			"amendment can move the commitment; otherwise start a new session for it. " +
+			"Re-approving this card will not move it."
+	}
+
 	pl := channelevents.InteractionRequestPayload{
 		AgentSessionRef: channelevents.SessionRef{Namespace: sessNS, Name: sessName},
 		Category:        categories.InternalError,
 		RequestRef:      newRequestID(),
-		Lead: "Your approval could not be applied, so nothing was granted and the plan " +
-			"has not started. This is a fault on our side, not a refusal.",
-		// Required of every degraded-tone notice, and the reason the rule
-		// exists: without it this says something went wrong and leaves the
-		// reader holding an unanswered card.
-		//
-		// Bounded rather than "retry" or "don't retry", because BOTH causes are
-		// real and they want opposite advice: an unreachable permission service
-		// clears on its own, and an identity the service cannot accept never
-		// will. One more attempt distinguishes them; a third never does.
-		NextStep: "Try approving once more. If it fails again, report it — nothing " +
-			"has been granted either way.",
+		Lead:            lead,
+		// Required of every degraded-tone notice, and the reason the rule exists:
+		// without it this says something went wrong and leaves the reader holding
+		// an unanswered card.
+		NextStep: nextStep,
 		Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceApprovers},
 	}
 	env, err := channelevents.BuildEnvelope(sessNS, sessName, channelevents.KindInteractionRequest, pl)

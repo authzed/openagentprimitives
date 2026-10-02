@@ -299,6 +299,26 @@ type Loop struct {
 	deliveredThisRound bool
 	deliveredMu        sync.Mutex
 
+	// slotPinRefusals holds, PER RESOURCE TYPE, the newest user-visible refusal
+	// produced when a mid-turn slot promotion (extracted at the autofill site,
+	// observed after dispatch) was refused by a single-occupancy pin — the text
+	// names the pinned instance and the route out. A subsequent tool call denied
+	// on the same resource type reads the matching refusal appended to its
+	// result, so the model learns WHY the instance it named is unusable instead
+	// of seeing a bare "permission denied" that reads as a system fault.
+	//
+	// Keyed by type with newest-wins overwrite, and CLEARED whenever that type
+	// binds or its pin moves (the promote nil-error paths, narrowToApproved's
+	// success path): a refusal that said "pinned to A" must not outlive an
+	// approved A→B move, or the model is handed advice about a pin that no
+	// longer exists. Written from the per-call dispatch goroutines (extracted),
+	// the loop goroutine (observed) and the approval host (clear on move), read
+	// from the per-call goroutines at denial time — hence the mutex.
+	// Process-scoped and advisory: losing it on restart costs one unexplained
+	// denial, never a wrong authorization.
+	slotPinRefusalMu sync.Mutex
+	slotPinRefusals  map[string]slotPinRefusal
+
 	// uiEscalated is set by applyUIResource the first time a tool result carries a
 	// UIResource (the MCP ui:// interception), and gates every later widget in the
 	// same run from re-publishing the session_view_offer anchor. Best-effort: it
