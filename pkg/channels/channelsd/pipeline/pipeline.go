@@ -81,6 +81,16 @@ type Authz interface {
 	// adoption to seed the values a trusted author already put in the thread,
 	// so the agent may reach them without a prompt. Present on *spicedb.Client.
 	GrantSlots(ctx context.Context, ns, name string, bindings []authz.SlotBinding, expiresAt time.Time) error
+	// DeleteSlotGrants removes every slot grant AND pin a session holds. The
+	// mint path calls it to sweep whatever a DEAD PREDECESSOR with this same
+	// ns/name left in SpiceDB, synchronously BEFORE its own first bind —
+	// because this path pre-stamps the operator's finalizer (see the Create
+	// site), which suppresses the operator's own admission sweep for a channelsd
+	// mint. A pin never expires, so a leftover would otherwise refuse the new
+	// session its own first bind and leak the predecessor's authority under the
+	// reused name. Present on *spicedb.Client (same method finalize + the
+	// operator's admission sweep use).
+	DeleteSlotGrants(ctx context.Context, ns, name string) error
 	// Relations is the authz.RelWriter view of the same client, needed so an
 	// approval can narrow scope through authz.BindApproved rather than writing
 	// a grant alone. Present on *spicedb.Client.
@@ -1504,6 +1514,21 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sessName,
 			Namespace: ev.Channel.Namespace,
+			// Pre-stamp the operator's finalizer at Create. The operator's
+			// EnsureFinalizer runs its admission slot-tuple sweep ONLY on the
+			// reconcile that transitions the finalizer absent -> present (its
+			// added=true branch). That sweep races the mint-time slot binds this
+			// path performs right after the session exists (BindTriggerSlots,
+			// seedThreadSlots): the two are unordered, so the sweep can delete the
+			// legitimate authority — including the pin — those binds just wrote,
+			// deterministically when the operator is briefly backlogged. Stamping
+			// the finalizer here makes added=false on the operator's first
+			// reconcile, so its sweep never fires for a channelsd mint; this path
+			// sweeps stale tuples itself, synchronously BEFORE binding (see the
+			// DeleteSlotGrants call below). The operator's sweep still runs for
+			// every OTHER creation path (CLI, kubectl), which do not pre-stamp, and
+			// its fork-child exemption is untouched.
+			Finalizers: []string{spiceboxv1alpha1.FinalizerAgentSession},
 			Labels: map[string]string{
 				spiceboxv1alpha1.LabelChannelName: ev.Channel.Name,
 				spiceboxv1alpha1.LabelChannelKind: ev.Channel.Spec.Kind,
@@ -1595,6 +1620,47 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 			p.K8s.Get(ctx, key, sess), "session", key.String())
 	} else {
 		created = true
+	}
+
+	// Admission sweep for a channelsd mint: wipe whatever a DEAD PREDECESSOR with
+	// this same ns/name left in SpiceDB BEFORE this session does anything with its
+	// slots. A never-expiring stale slot_pin would otherwise refuse the new
+	// session its own first bind, and a stale slot_grant_* would resolve
+	// slot_grant->interact for the NEW session (the pin/grant subject is ns/name,
+	// not UID) — a leaked authority under the reused name.
+	//
+	// This IS the operator's admission sweep, MOVED to the creator. This path
+	// pre-stamped the operator's finalizer (see the Create site), which makes the
+	// operator's EnsureFinalizer added=false and so suppresses its own sweep for a
+	// channelsd mint; doing it here runs it synchronously ahead of — rather than
+	// unordered against — the mint-time binds below (BindTriggerSlots,
+	// seedThreadSlots).
+	//
+	// Gated on `created`: only the replica that won the Create race owns the
+	// follow-up writes, so only it sweeps (the AlreadyExists-race loser must not).
+	// Runs BEFORE the startParked return below as well, so a parked session whose
+	// name was reused is swept too — the operator no longer will. p.Authz is
+	// nil-checked because a created session that binds nothing still reaches here.
+	//
+	// Fail CLOSED, like the started_by write just below: a leftover grant resolves
+	// for the new session, so proceeding past a failed sweep would run it over
+	// unverified authority. status.startFailure is the channelsd-owned signal the
+	// operator reads to drive Failed; the error still propagates.
+	if created && p.Authz != nil {
+		if err := p.Authz.DeleteSlotGrants(ctx, sess.Namespace, sess.Name); err != nil {
+			log.FromContext(ctx).Info("mint admission sweep: deleting stale slot grants/pins failed; failing the session rather than binding over unverified authority",
+				"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+			failed := sess.DeepCopy()
+			failed.Status.StartFailure = &spiceboxv1alpha1.AgentSessionStartFailure{
+				Reason:  spiceboxv1alpha1.ReasonAgentSessionAuthzWriteFail,
+				Message: err.Error(),
+			}
+			if werr := applyApprovalStatus(ctx, p.K8s, failed, sess); werr != nil {
+				log.FromContext(ctx).Info("set startFailure signal after mint admission sweep failure",
+					"session", sess.Namespace+"/"+sess.Name, "err", werr.Error())
+			}
+			return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
+		}
 	}
 
 	// started_by is user-only: the schema declares `relation started_by: user`

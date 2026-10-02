@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -225,7 +226,22 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 		// first so the click isn't silent, then return the wrapped error so the
 		// relay's log + watchdog paths fire. The pending prompt is left intact — a
 		// failed handler never resolves the card, so a retry can still act on it.
-		if pubErr := p.publishDecisionRejected(ctx, env.Session, pl, "handler_error", err.Error(), nil, ""); pubErr != nil {
+		//
+		// A pin refusal (ErrSlotPinned) is NOT a transient render error: the slot
+		// is committed elsewhere and, on the tool_approval path, the class has no
+		// plan route to move it (see toolApprovalHandler). Classify it separately
+		// so the clicker is told the real route — a new session — through the
+		// handler's own instance-naming message, rather than a generic
+		// "handler_error" the retry button cannot fix.
+		// NB: the class string deliberately avoids a "slot_pin"/"slot_grant_"
+		// prefix — the slot-write guard test (pkg/authz/slot_grant_guard_test.go)
+		// flags any such literal as a hand-built tuple, and this is a reject code,
+		// not a relation name.
+		class, reason := "handler_error", err.Error()
+		if errors.Is(err, authz.ErrSlotPinned) {
+			class = "pin_refused"
+		}
+		if pubErr := p.publishDecisionRejected(ctx, env.Session, pl, class, reason, nil, ""); pubErr != nil {
 			logger.Info("interaction decision: publish handler-error rejection failed", "err", pubErr.Error())
 		}
 		return fmt.Errorf("interaction decision: handler for %q errored (session %s): %w", pl.Category, ref, err)

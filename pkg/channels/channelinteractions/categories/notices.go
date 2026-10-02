@@ -213,6 +213,19 @@ const (
 	// here — being told what was skipped without being told one can ask for it
 	// is the shape of a notice a reader can do nothing with.
 	CompletionRequirementBypassed = "completion_requirement_bypassed"
+
+	// SlotBindRefused — a target named in the conversation (a thread value a
+	// trusted author put there, or an instance a verified webhook delivery
+	// carried) was NOT bound, because this session is committed to a single
+	// target for that slot and a different one is already pinned. The work
+	// continues on the committed target.
+	//
+	// Degraded rather than housekeeping: a reader who assumes the new target
+	// took effect will be wrong, and the reader has a real move (start a fresh
+	// conversation for the other target). A NOTICE, not a prompt — the bind was
+	// already refused at mint time and on a triggered session there is nobody to
+	// approve a change, so there is nothing here to click.
+	SlotBindRefused = "slot_bind_refused"
 )
 
 // registerNotices registers every notice category. Kept out of init so a test
@@ -301,6 +314,12 @@ func registerNotices() {
 		// rather than housekeeping precisely because a reader who assumes they
 		// got the whole result will be wrong.
 		{Name: CompletionRequirementBypassed, Tone: channelinteractions.ToneDegraded},
+
+		// A different target wasn't bound because the session is pinned to one
+		// already. Degraded for the same reason as the row above: a reader who
+		// assumes the new target took effect will be wrong, and they have a real
+		// next step.
+		{Name: SlotBindRefused, Tone: channelinteractions.ToneDegraded},
 	}
 	for _, c := range notices {
 		c.Notice = true
