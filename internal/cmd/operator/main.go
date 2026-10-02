@@ -3046,6 +3046,18 @@ func run(cfg *config) {
 			// *spicedb.Client here, so assigning it directly into the Scopes
 			// interface field cannot produce a typed-nil interface either.
 			Scopes: spiceDBClient,
+			// Same reasoning again: spiceDBClient is a real, non-nil
+			// *spicedb.Client here, so assigning it directly into the
+			// AccessTokenGrants interface field cannot produce a typed-nil
+			// interface either.
+			AccessTokenGrants: spiceDBClient,
+			// systemNS (computed above, operatorNamespace(cfg.podNamespace)) is
+			// the SAME namespace webd's own --accesstoken-namespace default
+			// ("agentprimitives-system") resolves to in a standard install — the
+			// AccessToken CRs the admin Tokens page lists are the ones webd's
+			// /mcp Minter creates there, not a second, independently-configured
+			// namespace that could silently drift from it.
+			AccessTokenNamespace: systemNS,
 		})
 		if err != nil {
 			log.Error(err, "admind: construction failed")
