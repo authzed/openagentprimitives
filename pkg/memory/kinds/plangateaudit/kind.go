@@ -109,6 +109,23 @@ type SlotRef struct {
 	// from the CRD shape (see pkg/authz/hooks/activation.go); callers compare
 	// against the same string constants.
 	Standing string `json:"standing,omitempty"`
+
+	// MovedFrom, when non-empty, is the instance this slot was CURRENTLY pinned
+	// to when the approval card was built — recorded ONLY when the card named a
+	// DIFFERENT instance of a single-occupancy slot, i.e. when approving this
+	// card MOVES a filled slot rather than filling an empty one. It is the
+	// already-canonical object id read back from the pin (SlotPinner.ReadPin),
+	// not the raw value the phase declared, so the decision path can derive the
+	// move's PriorID from it directly.
+	//
+	// It is written at CARD-BUILD time, off an advisory read, so the human
+	// approves exactly the move they were shown: a card parked for days executes
+	// the move it displayed, never one the pin silently drifted into. Empty is
+	// the overwhelmingly common first-fill case — an empty slot, a
+	// multi-occupancy slot (which holds no pin), or a card built with no pinner
+	// wired. Additive, like Standing: a record written before this field existed
+	// unmarshals with it empty, which reads as "no move" everywhere downstream.
+	MovedFrom string `json:"movedFrom,omitempty"`
 }
 
 // Content is one plan-gate record.

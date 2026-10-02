@@ -124,6 +124,38 @@ func TestContent_StandingRoundTrips(t *testing.T) {
 	assert.Equal(t, "session-only", out.SlotRefs[0].Standing)
 }
 
+// SlotRef.MovedFrom is ADDITIVE for the same append-only reason as Standing: a
+// record written before the field existed must still unmarshal, with it empty
+// (read everywhere downstream as "no move").
+func TestContent_MovedFromIsAdditive(t *testing.T) {
+	const legacy = `{"event":"phase_approved","phaseKey":"k1","slotRefs":[{"type":"git_repo","id":"acme/app"}]}`
+	var c Content
+	require.NoError(t, json.Unmarshal([]byte(legacy), &c))
+	require.Len(t, c.SlotRefs, 1)
+	assert.Equal(t, "", c.SlotRefs[0].MovedFrom, "absent, not invalid")
+}
+
+// A record written WITH MovedFrom round-trips it, and it is omitted when empty
+// so a first-fill record is byte-identical to one written before the field.
+func TestContent_MovedFromRoundTripsAndOmitsWhenEmpty(t *testing.T) {
+	in := Content{
+		Event:    EventPhaseApproved,
+		SlotRefs: []SlotRef{{Type: "git_repo", ID: "acme/new", MovedFrom: "acme/old"}},
+	}
+	b, err := json.Marshal(in)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"movedFrom":"acme/old"`)
+
+	var out Content
+	require.NoError(t, json.Unmarshal(b, &out))
+	require.Len(t, out.SlotRefs, 1)
+	assert.Equal(t, "acme/old", out.SlotRefs[0].MovedFrom)
+
+	firstFill, err := json.Marshal(Content{SlotRefs: []SlotRef{{Type: "git_repo", ID: "acme/new"}}})
+	require.NoError(t, err)
+	assert.NotContains(t, string(firstFill), "movedFrom", "a first-fill records no move")
+}
+
 // NOTE: registration is NOT asserted here. This package's init() registers the
 // kind in its own test binary whether or not kinds/all imports it, so such a
 // test would assert nothing. The real assertion lives in pkg/memory/kinds/all.

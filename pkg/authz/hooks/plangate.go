@@ -148,6 +148,16 @@ type PlanGateDeps struct {
 	Recorder PlanGateRecorder
 	Logger   PlanGateLogger
 
+	// SlotPinner reads the session's current pin so a card that names a
+	// DIFFERENT instance of a filled single-occupancy slot can record the move
+	// it is proposing (SlotRef.MovedFrom). OPTIONAL and ADVISORY: the MUST_MATCH
+	// preconditions on the eventual MovePin — not this read — are what make the
+	// move safe, so a nil pinner (the unit fixtures, any binary that wires no
+	// SlotBinder) simply never records a MovedFrom and every card reads as a
+	// first-fill. A read failure does the same. It is the runner's SlotBinder,
+	// type-asserted to authz.SlotPinner; absent when that assertion fails.
+	SlotPinner authz.SlotPinner
+
 	// Now is injectable so records are deterministic in tests. Nil ⇒
 	// time.Now. Stamped ONCE per record and reused on retry: the memory
 	// facade's append-only idempotency compares marshaled bytes, so a
@@ -872,6 +882,21 @@ func (h *PlanGate) requestPhaseApproval(
 	// and the card states the full ceiling, which is correct: all of it is new.
 	added, addedSlots := h.addedSinceApproved(plan, activePhase)
 
+	// Record, on each covered phase's slot refs, any MOVE this card proposes:
+	// where the session is already pinned to a DIFFERENT instance of a
+	// single-occupancy slot, approving this card repoints it. Advisory, at
+	// card-build time, so the approval executes exactly the move shown. Mutates
+	// the covered records in place before they ride the payload below.
+	//
+	// Stamped BEFORE the card is built so the stamped MovedFrom can be threaded
+	// onto the card's added slots — an amendment card renders the delta
+	// (AddedSlots), and a re-point arrives as exactly such a delta, so without
+	// this the card would show the new instance as a plain first-fill while the
+	// approval it records moves the pin.
+	sess := authz.SessionRef{Namespace: in.Session.Namespace, Name: in.Session.Name}
+	h.stampMovedFrom(ctx, sess, covered)
+	addedSlots = threadMovedFrom(addedSlots, covered)
+
 	cardIn := plangate.CardInput{
 		Plan: plan, PhaseIndex: activePhase, Severity: sev,
 		Surface: h.deps.Surface, Approvers: h.deps.Approvers,
@@ -1119,6 +1144,104 @@ func slotValuesOf(plan plangate.Plan, index int) map[string]string {
 	for _, s := range plan.Phases[index].Slots {
 		if s.ID != "" {
 			out[s.Type] = s.ID
+		}
+	}
+	return out
+}
+
+// stampMovedFrom records, on each slot ref a covered phase names, the instance
+// the session is CURRENTLY pinned to when that differs from the instance the
+// card shows — the one case where approving this card MOVES a filled
+// single-occupancy slot rather than filling an empty one.
+//
+// It is the record half of the approved-move: planGateBindings later turns a
+// stamped ref into a PriorID-bearing binding, and BindApproved executes the
+// move the human saw. Done here, at card-build, off ONE advisory read per type,
+// so a card parked for days still executes exactly the move it displayed.
+//
+// Advisory and best-effort by design:
+//   - a nil pinner (no SlotBinder wired) records nothing — every card is a
+//     first-fill, which is the pre-move behaviour;
+//   - a multi-occupancy slot holds no pin, so ReadPin returns "" and nothing is
+//     stamped;
+//   - a read failure, or a value that will not derive to an object id, leaves
+//     MovedFrom empty and logs — a first-fill card, never an error at card time.
+//
+// The ReadPin answer is a DERIVED object id (the pin stores derived ids), so the
+// card's raw slot value is run through the type's transform chain before the
+// two are compared; the stamped MovedFrom is the derived prior id, ready for
+// TrustedObjectID at decision time.
+func (h *PlanGate) stampMovedFrom(ctx context.Context, sess authz.SessionRef, recs []plangateaudit.Content) {
+	if h.deps.SlotPinner == nil {
+		return
+	}
+	pinCache := map[string]string{}
+	currentPin := func(slotType string) (string, bool) {
+		if v, ok := pinCache[slotType]; ok {
+			return v, true
+		}
+		v, err := h.deps.SlotPinner.ReadPin(ctx, slotType, sess)
+		if err != nil {
+			h.logf("plan_gate: reading the current pin to render a slot move failed; the card shows a first-fill",
+				"session", sess.String(), "slotType", slotType, "err", err.Error())
+			return "", false
+		}
+		pinCache[slotType] = v
+		return v, true
+	}
+	for ri := range recs {
+		for si := range recs[ri].SlotRefs {
+			ref := &recs[ri].SlotRefs[si]
+			if ref.ID == "" {
+				// A deferred target names no instance, so there is nothing to
+				// compare and no move to record.
+				continue
+			}
+			pinned, ok := currentPin(ref.Type)
+			if !ok || pinned == "" {
+				continue
+			}
+			objID, err := authz.NewObjectID(ref.ID, h.deps.SlotValueTransforms[ref.Type])
+			if err != nil {
+				h.logf("plan_gate: could not derive the card's slot instance to compare against the current pin; no move recorded",
+					"session", sess.String(), "slotType", ref.Type, "err", err.Error())
+				continue
+			}
+			if pinned != objID.String() {
+				ref.MovedFrom = pinned
+			}
+		}
+	}
+}
+
+// threadMovedFrom copies the MovedFrom that stampMovedFrom recorded on the
+// covered records onto the card's added slots, matched by (type, id), so the
+// amendment card renders a re-point as a move rather than a first-fill.
+//
+// The two carry the same instance by different routes: a covered record's
+// SlotRef names the phase's slot, and addedSlots is the delta DiffPhase found —
+// a re-point is a changed slot value, so the newly-pointed instance appears in
+// both. Returns a copy; the input delta is never mutated, and an addedSlot with
+// no matching stamped move is left a first-fill. A no-op when nothing moved.
+func threadMovedFrom(slots []plangate.Slot, covered []plangateaudit.Content) []plangate.Slot {
+	if len(slots) == 0 {
+		return slots
+	}
+	moved := map[string]string{}
+	for _, rec := range covered {
+		for _, ref := range rec.SlotRefs {
+			if ref.MovedFrom != "" && ref.ID != "" {
+				moved[ref.Type+"\x00"+ref.ID] = ref.MovedFrom
+			}
+		}
+	}
+	if len(moved) == 0 {
+		return slots
+	}
+	out := append([]plangate.Slot(nil), slots...)
+	for i := range out {
+		if mf, ok := moved[out[i].Type+"\x00"+out[i].ID]; ok {
+			out[i].MovedFrom = mf
 		}
 	}
 	return out
