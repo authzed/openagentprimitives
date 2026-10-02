@@ -1,0 +1,157 @@
+# slot_pinning scenario fixtures.
+#
+# A git-repo-like single-occupancy slot class. code_repo is declared as an
+# authz slot with one permission (read); occupancy defaults to `single`, so the
+# composed schema carries `relation slot_pin: agentsession` and the grant
+# relation `slot_grant_read: agentsession` on code_repo. The slot_pinning e2e
+# test drives the REAL SpiceDB-backed writer (authz.GrantSlots / BindApproved /
+# the SlotPinner's EnsurePin) against this composed schema directly — the
+# deterministic proof of the pin/refuse/move mechanism a scripted LLM session
+# cannot make, because it can assert the slot_pin tuple and the grant moving
+# from one instance to another at the SpiceDB layer.
+#
+# Standing is irrelevant to that direct path (the writer is called below the
+# approver-standing gate), so code_repo declares session-only: the card-level
+# standing semantics are covered in pkg/authz/plangate's card tests, not here.
+#
+# One tool (fetch) gated on code_repo#read makes the MCPServer valid (its
+# tools/list probe must match a declared tool) so the AgentClass reaches Valid
+# and the guardian composes the schema. The test never calls it — it is the
+# minimum that makes the schema real.
+---
+# Placeholder Anthropic-style API key. model.provider=test never reads it, but
+# the AgentClass controller resolves the Secret ref during validation.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: code-placeholder
+  namespace: default
+type: Opaque
+stringData:
+  api-key: "unused-by-the-test-provider"
+---
+# Placeholder Channel credentials. The fake kind ignores them but
+# Channel.spec.credentialsRef is mandatory.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: code-fake-creds
+  namespace: default
+type: Opaque
+stringData:
+  placeholder: "unused-by-the-fake-channel"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: code-mcp-token
+  namespace: default
+type: Opaque
+stringData:
+  access_token: "unused-by-the-fake-mcp-server"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: code-identity
+  namespace: default
+spec:
+  description: "slot_pinning e2e fixture: static MCP bearer token."
+  credentials:
+    - name: code-mcp-bearer
+      type: static
+      static:
+        secretRef:
+          name: code-mcp-token
+          key: access_token
+---
+# Self-contained MCP fixture exposing one read-only tool gated on code_repo.
+#
+# code_repo declares `standing: session-only` and a single `read` permission.
+# Because the AgentClass below declares code_repo as an authz slot, the schema
+# composer rewrites `read` to `slot_grant_read->interact + owner` and emits
+# `relation slot_grant_read: agentsession` plus the per-type
+# `relation slot_pin: agentsession` single-occupancy carries.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata:
+  name: code-repos
+  namespace: default
+spec:
+  name: code-repos
+  version: v1
+  intent: "Self-contained git-repo-shaped fixture for the e2e harness."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: code-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: code_repo
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          - {name: read, expr: owner, title: "Read the repository"}
+  tools:
+    - name: fetch
+      intent: "Read a repository the session is pinned to."
+      args:
+        allowedFields: [repo]
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: code_repo
+          resourceIDExpr: '"" + args.repo'
+          permission: read
+          resourceIDHint: "name the repository"
+      effects:
+        readOnly: true
+        idempotent: true
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: ac-slot-pinning
+  namespace: default
+spec:
+  displayName: CodeRepoBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey:
+      name: code-placeholder
+      key: api-key
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster.
+  agentIdentity: code-identity
+  mcpServers:
+    - name: code
+      ref: code-repos
+  authz:
+    slots:
+      - resourceType: code_repo
+        description: "A code repository, reached by name"
+        permission: read
+  budget:
+    maxTurns: 10
+    maxTokens: 50000
+    maxDuration: 5m
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata:
+  name: ac-slot-pinning-fake
+  namespace: default
+spec:
+  kind: fake
+  role: both
+  agentClass: ac-slot-pinning
+  credentialsRef:
+    secretName: code-fake-creds
+  fake:
+    echo: false
