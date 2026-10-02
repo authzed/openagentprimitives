@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -125,14 +126,78 @@ type SlotBinding struct {
 	// gate, recorded through PreconditionsWaived — and for every binding whose
 	// type declares no precondition, where there is nothing to evaluate.
 	Requires []precondition.Rule
+
+	// Occupancy and Rebind are copied from the slot declaration the binding
+	// came from. Empty Occupancy means "single" (the field's default): a
+	// binding whose producer predates these fields is gated, never un-gated,
+	// by omission.
+	Occupancy string
+	Rebind    string
+
+	// PriorID, when non-zero, means this approved binding MOVES a filled
+	// single-occupancy slot from PriorID to ResourceID — atomically, with
+	// PriorID's grants revoked in the same request. It is derived ONLY from
+	// the approval record's MovedFrom (what the card showed the approver),
+	// never from a live pin read at decision time: a card can sit parked for
+	// days, and the human must get exactly the move they were shown. If the
+	// pin is no longer PriorID at execution, the move's MUST_MATCH fails and
+	// the approval fails loudly rather than moving something unseen.
+	PriorID ObjectID
 }
 
-// GrantSlots writes a slot grant per binding.
+// SlotOccupancySingle and SlotOccupancyMulti name the two occupancy modes a
+// slot declares. They mirror the AgentClass CRD's `occupancy` enum
+// (v1alpha1.AuthzSlotOccupancyDefault); pkg/authz cannot import v1alpha1 (that
+// package imports this one), so the contract strings are restated here.
 //
-// It is deliberately all-or-nothing per call rather than best-effort per
-// binding: these are authorization grants, and a partially-applied set would
-// leave the agent believing it holds reach it does not, which surfaces later as
-// an inexplicable denial mid-task rather than as a failure at bind time.
+// Empty reads as single — see occupancyOf. A binding produced before these
+// fields existed is therefore GATED, never silently un-gated, by omission.
+const (
+	SlotOccupancySingle = "single"
+	SlotOccupancyMulti  = "multi"
+)
+
+// SlotRebindNever names the one rebind mode whose refusal message routes to a
+// new session rather than to a plan amendment. The default ("approval", and the
+// empty value) is handled by the switch default in GrantSlots, so it needs no
+// constant of its own.
+const SlotRebindNever = "never"
+
+// occupancyOf reports a binding's occupancy, defaulting empty to single. The
+// fail-closed default lives here so every reader agrees on it.
+func occupancyOf(b SlotBinding) string {
+	if b.Occupancy == "" {
+		return SlotOccupancySingle
+	}
+	return b.Occupancy
+}
+
+// GrantSlots writes a slot grant per binding, enforcing single-occupancy
+// pinning PER RESOURCE TYPE.
+//
+// Partitioned by type, not all-or-nothing across the whole call. A
+// single-occupancy type binds at most one instance for the session's life: a
+// second DISTINCT instance of that type is refused (ErrSlotPinned), and the
+// refusal names the route out. But a refusal on ONE type must not strand
+// another type's bindings in the same call — those are independent grants a
+// human may already have approved — so each type is resolved on its own:
+//
+//   - single-occupancy types go through the SlotPinner (EnsurePin +
+//     WriteGrantsPinned), which records the one pinned instance and guards the
+//     grant write against a concurrent move;
+//   - multi-occupancy types keep the plain batched TOUCH write, unpinned, each
+//     addition gated as before.
+//
+// Within a single type the write is still atomic (its grants land together or
+// not at all); across types, a refused type leaves the others untouched. Input
+// validation (malformed binding, missing expiry) still fails the WHOLE call
+// before anything is written — a caller that handed a nonsense binding has a
+// bug, not a partial set to salvage.
+//
+// A non-nil RelWriter that does not implement SlotPinner cannot bind a
+// single-occupancy type: the gate refuses that type rather than writing it
+// through unpinned as if it were unmarked. The nil-writer early return stays
+// first — nil grants nothing, so there is nothing to protect.
 func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []SlotBinding, expiresAt time.Time) error {
 	if g == nil || len(bindings) == 0 {
 		return nil
@@ -144,21 +209,120 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 		// to anchor to should pass SlotGrantExpiry(now, 0).
 		return fmt.Errorf("authz: slot grant needs an expiry (schema requires one); use SlotGrantExpiry")
 	}
-	rels := make([]Relation, 0, len(bindings))
+
+	// One group per resource type, preserving first-appearance order so writes
+	// and refusals are deterministic. All validation runs in this pass, before
+	// any write, so a malformed binding fails the whole call rather than leaving
+	// a partial set behind.
+	type typeGroup struct {
+		rels    []Relation
+		ids     map[string]struct{}
+		firstID string
+		single  bool
+		rebind  string
+	}
+	order := make([]string, 0, len(bindings))
+	groups := make(map[string]*typeGroup, len(bindings))
 	for _, b := range bindings {
 		if b.ResourceType == "" || b.ResourceID.IsZero() || b.Permission == "" {
 			// An empty id names no instance; an empty permission names no
 			// relation, so the tuple would grant nothing and be unrevocable.
 			return fmt.Errorf("authz: slot binding needs resourceType, resourceID and permission: %+v", b)
 		}
+		grp := groups[b.ResourceType]
+		if grp == nil {
+			grp = &typeGroup{ids: make(map[string]struct{})}
+			groups[b.ResourceType] = grp
+			order = append(order, b.ResourceType)
+		}
+		// A type is single unless EVERY binding of it is multi: mixed occupancy
+		// within one call is a producer bug, and the single (pinned) treatment is
+		// the fail-closed one.
+		if occupancyOf(b) != SlotOccupancyMulti {
+			grp.single = true
+		}
+		if grp.rebind == "" {
+			grp.rebind = b.Rebind
+		}
 		rel := SlotGrantRelation(b.ResourceType, b.ResourceID.String(), b.Permission, scope)
 		rel.ExpiresAt = expiresAt
-		rels = append(rels, rel)
+		grp.rels = append(grp.rels, rel)
+		id := b.ResourceID.String()
+		if _, seen := grp.ids[id]; !seen {
+			grp.ids[id] = struct{}{}
+			if grp.firstID == "" {
+				grp.firstID = id
+			}
+		}
 	}
-	if err := g.WriteRelationships(ctx, rels); err != nil {
-		return fmt.Errorf("authz: write slot grants: %w", err)
+
+	// refusals accumulates EVERY per-type refusal (and, below, a failed plain
+	// write) so the remaining types still land and NO refusal is silently
+	// dropped. Keeping only the first would hide a second single-occupancy type's
+	// refusal behind the first — the model would be told about one blocked target
+	// and left to rediscover the next by trying it. errors.Join at the end keeps
+	// every errors.Is(…, ErrSlotPinned) reachable for the dispatchers that route
+	// on the sentinel.
+	var refusals []error
+	var plainRels []Relation
+	for _, rt := range order {
+		grp := groups[rt]
+		if !grp.single {
+			plainRels = append(plainRels, grp.rels...)
+			continue
+		}
+		// Single-occupancy type. More than one distinct instance arriving in one
+		// set cannot be reconciled to a single occupant, so it is refused outright
+		// — nothing is pinned and nothing is granted for this type.
+		if len(grp.ids) > 1 {
+			refusals = append(refusals, fmt.Errorf("%w: slot type %s cannot hold %d distinct instances at once; it is single-occupancy",
+				ErrSlotPinned, rt, len(grp.ids)))
+			continue
+		}
+		pinner, ok := g.(SlotPinner)
+		if !ok {
+			// A plain RelWriter cannot express the pin's precondition, so writing
+			// the grant through it would silently drop the single-occupancy
+			// guarantee. Refuse this type rather than write it unpinned.
+			refusals = append(refusals, fmt.Errorf("authz: single-occupancy slot type %s needs a SlotPinner-capable writer, got %T", rt, g))
+			continue
+		}
+		id := grp.firstID
+		held, pinnedID, err := pinner.EnsurePin(ctx, rt, id, scope)
+		if err != nil {
+			return fmt.Errorf("authz: ensure pin for %s:%s: %w", rt, id, err)
+		}
+		if held && pinnedID != id {
+			// Already pinned to a DIFFERENT instance. The refusal text is
+			// user-visible — it becomes text the model reads — so it names the
+			// pinned instance and the route out, chosen by the slot's rebind mode.
+			switch grp.rebind {
+			case SlotRebindNever:
+				refusals = append(refusals, fmt.Errorf("%w: this session is pinned to %s:%s for its lifetime; start a new session to target %s:%s",
+					ErrSlotPinned, rt, pinnedID, rt, id))
+			default: // "approval" and unset
+				refusals = append(refusals, fmt.Errorf("%w: this session is pinned to %s:%s; to work on %s:%s, propose an updated plan naming it — an approved plan moves the pin",
+					ErrSlotPinned, rt, pinnedID, rt, id))
+			}
+			continue
+		}
+		// held && pinnedID == id: already pinned to this SAME instance (a second
+		// permission, or a re-grant after expiry) — not drift, so it still binds.
+		if err := pinner.WriteGrantsPinned(ctx, grp.rels, rt, id, scope); err != nil {
+			return fmt.Errorf("authz: write pinned slot grants for %s:%s: %w", rt, id, err)
+		}
 	}
-	return nil
+
+	if len(plainRels) > 0 {
+		if err := g.WriteRelationships(ctx, plainRels); err != nil {
+			// JOIN, not return: a plain-write failure must not discard a pin
+			// refusal already accumulated above for another type in this call —
+			// the caller needs to see both the multi-occupancy write failure AND
+			// the single-occupancy refusal that stood beside it.
+			refusals = append(refusals, fmt.Errorf("authz: write slot grants: %w", err))
+		}
+	}
+	return errors.Join(refusals...)
 }
 
 // RevokeSlots removes slot grants.
@@ -184,16 +348,39 @@ func RevokeSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []
 // bound instances onto its child. *spicedb.Client satisfies it.
 type SlotGrantCopier interface {
 	ListSlotGrants(ctx context.Context, ns, name string) ([]SlotBinding, error)
-	GrantSlots(ctx context.Context, ns, name string, bindings []SlotBinding, expiresAt time.Time) error
+	// ListSlotPins returns every pin the parent holds, verbatim — resource and
+	// subject only, no derived occupancy. See SlotPinRelation.
+	ListSlotPins(ctx context.Context, ns, name string) ([]Relation, error)
+	// CopySlotTuples writes rels in one batched TOUCH — no gate, no expiry
+	// stamping of its own. The caller (CopySlotGrants) has already re-targeted
+	// each relation's SubjectID at the child and, for a grant, stamped the
+	// child's expiry; a pin tuple carries none, matching how EnsurePin writes
+	// it.
+	CopySlotTuples(ctx context.Context, rels []Relation) error
 }
 
-// CopySlotGrants re-points the parent's slot grants at the child, returning how
-// many were carried.
+// CopySlotGrants re-points the parent's slot grants AND pins at the child,
+// VERBATIM, returning how many grants were carried.
+//
+// VERBATIM, not re-gated through GrantSlots: a lifecycle clone is not a new
+// arrival. GrantSlots enforces single-occupancy from a SlotBinding's declared
+// Occupancy field, which a tuple read back out of SpiceDB cannot reconstruct —
+// ListSlotGrants returns bindings with no Occupancy set, and occupancyOf reads
+// that as "single" for every type, fail-closed. Routing the copy back through
+// GrantSlots would therefore refuse outright any restart of a multi-occupancy
+// slot currently holding two or more instances, and any legacy two-instance
+// session recorded before single-occupancy pinning existed — copying NOTHING
+// for that type on every such restart. The pin invariant still holds: a pin is
+// listed from the parent and copied as-is onto the child, which starts with no
+// pin of its own, so there is nothing for the copied pin to conflict with.
 //
 // A grant names the SESSION as its subject, so a child session inherits nothing
 // automatically — without this, a continuation would silently lose every
 // instance a human had approved and start re-asking for values the user already
-// granted.
+// granted. A pin is the same kind of tuple, naming the session as subject: left
+// uncopied, the child starts unpinned and its first bind can land on a
+// different instance than the one the parent had already committed to, with no
+// error to say so.
 //
 // CALLERS MUST NOT CALL THIS FOR A takeover FORK. A takeover is a DIFFERENT user
 // continuing a terminal session, and they become the child's owner; copying the
@@ -217,11 +404,28 @@ func CopySlotGrants(ctx context.Context, c SlotGrantCopier, parent, child Sessio
 	if err != nil {
 		return 0, fmt.Errorf("authz: list parent slot grants %s: %w", parent, err)
 	}
-	if len(held) == 0 {
+	pins, err := c.ListSlotPins(ctx, parent.Namespace, parent.Name)
+	if err != nil {
+		return 0, fmt.Errorf("authz: list parent slot pins %s: %w", parent, err)
+	}
+	if len(held) == 0 && len(pins) == 0 {
 		return 0, nil
 	}
-	if err := c.GrantSlots(ctx, child.Namespace, child.Name, held, expiresAt); err != nil {
-		return 0, fmt.Errorf("authz: grant child slot grants %s: %w", child, err)
+
+	rels := make([]Relation, 0, len(held)+len(pins))
+	for _, b := range held {
+		rel := SlotGrantRelation(b.ResourceType, b.ResourceID.String(), b.Permission, child)
+		rel.ExpiresAt = expiresAt
+		rels = append(rels, rel)
+	}
+	for _, p := range pins {
+		// The pin is otherwise copied byte-for-byte; only the subject moves.
+		p.SubjectID = child.String()
+		rels = append(rels, p)
+	}
+
+	if err := c.CopySlotTuples(ctx, rels); err != nil {
+		return 0, fmt.Errorf("authz: copy slot tuples to child %s: %w", child, err)
 	}
 	return len(held), nil
 }
