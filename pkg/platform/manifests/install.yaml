@@ -26003,7 +26003,6 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -26414,7 +26413,6 @@ rules:
   - create
   - get
   - list
-  - watch
 - apiGroups:
   - agentprimitives.authzed.com
   resources:

@@ -5,7 +5,13 @@
 // checkable before the CR exists. This controller is the cleanup half.
 package accesstoken
 
-// +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=accesstokens,verbs=get;list;watch;update;patch;delete
+// Main-resource verbs are minimized to actual client calls: get (LoadInto),
+// list;watch (the For informer — and admind's tokens list, hosted in this same
+// operator binary), update (EnsureFinalizer/RemoveFinalizer's plain Updates),
+// delete (the expiry self-delete, and admind's revoke). No create — minting is
+// webd's (pkg/web/mcpfront.Minter) — and no main-resource patch: the only
+// patch this reconciler issues targets the status subresource below.
+// +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=accesstokens,verbs=get;list;watch;update;delete
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=accesstokens/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=accesstokens/finalizers,verbs=update
 
