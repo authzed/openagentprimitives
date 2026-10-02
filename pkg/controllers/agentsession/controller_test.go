@@ -1422,6 +1422,24 @@ type fakeSpiceDBDeleter struct {
 	dataSlotsCalls  int
 	// order records which teardown call arrived first.
 	order []string
+
+	// stalePresent simulates slot_pin/slot_grant_* tuples already sitting in
+	// SpiceDB for a given ns/name — e.g. a straggling write from a dead
+	// predecessor session that reused this name. seedStaleSlotTuples marks an
+	// entry present; DeleteSlotGrants clears it, so a test can assert the
+	// stale tuples are actually GONE rather than merely that the call fired.
+	stalePresent map[string]bool
+}
+
+func (f *fakeSpiceDBDeleter) seedStaleSlotTuples(ns, name string) {
+	if f.stalePresent == nil {
+		f.stalePresent = map[string]bool{}
+	}
+	f.stalePresent[ns+"/"+name] = true
+}
+
+func (f *fakeSpiceDBDeleter) hasStaleSlotTuples(ns, name string) bool {
+	return f.stalePresent[ns+"/"+name]
 }
 
 func (f *fakeSpiceDBDeleter) DeleteAgentSessionRelationships(_ context.Context, ns, name string) error {
@@ -1437,6 +1455,7 @@ func (f *fakeSpiceDBDeleter) DeleteSlotGrants(_ context.Context, ns, name string
 	f.slotGrantsNS = ns
 	f.slotGrantsName = name
 	f.order = append(f.order, "slots")
+	delete(f.stalePresent, ns+"/"+name)
 	return nil
 }
 
@@ -1484,7 +1503,13 @@ func TestFinalize_DeletesSpiceDBRelationships(t *testing.T) {
 	// agentsession-as-RESOURCE wipe above cannot reach them. Missing this call
 	// leaks live authority on somebody else's resource for as long as the
 	// retained AgentSession CR keeps slot_grant->interact resolving.
-	assert.Equal(t, 1, deleter.slotGrantsCalls, "finalize must also collect the session's slot grants")
+	//
+	// TWO calls, not one: the admission sweep (during bootstrap, on the
+	// reconcile that adds the finalizer) ALSO calls DeleteSlotGrants, to wipe
+	// any stale slot_pin/slot_grant_* left behind by a dead predecessor that
+	// reused this session's name — see TestReconcile_AdmissionSweepsStaleSlotTuples.
+	assert.Equal(t, 2, deleter.slotGrantsCalls,
+		"the admission sweep and finalize must each collect the session's slot grants")
 	assert.Equal(t, "default", deleter.slotGrantsNS, "DeleteSlotGrants called with namespace")
 	assert.Equal(t, "sess-spicedb", deleter.slotGrantsName, "DeleteSlotGrants called with name")
 	// Data slot grants are a THIRD sweep and neither of the others reaches
@@ -1497,8 +1522,9 @@ func TestFinalize_DeletesSpiceDBRelationships(t *testing.T) {
 	assert.Equal(t, "default", deleter.dataSlotsNS, "DeleteDataSlotGrants called with namespace")
 	assert.Equal(t, "sess-spicedb", deleter.dataSlotsName, "DeleteDataSlotGrants called with name")
 
-	assert.Equal(t, []string{"slots", "dataSlots", "session"}, deleter.order,
-		"grants that sit on OTHER objects go first — authority then data — because they are the half that outlives the session")
+	assert.Equal(t, []string{"slots", "slots", "dataSlots", "session"}, deleter.order,
+		"the admission sweep's slot-grant call lands first (during bootstrap); at finalize, grants that sit on "+
+			"OTHER objects still go first — authority then data — because they are the half that outlives the session")
 
 	// Finalizer should be removed.
 	var gone spiceboxv1alpha1.AgentSession
@@ -1508,6 +1534,135 @@ func TestFinalize_DeletesSpiceDBRelationships(t *testing.T) {
 				"AgentSession finalizer should be removed after successful finalization")
 		}
 	}
+}
+
+// TestReconcile_AdmissionSweepsStaleSlotTuples: a brand-new AgentSession whose
+// name was reused from a dead predecessor (killed without ever reaching
+// finalize, or a name recycled by a user) must not inherit that predecessor's
+// slot_pin/slot_grant_* tuples. A pin never expires, so without a sweep at
+// admission the new session would be refused its own first bind by a pin it
+// never earned. The sweep must fire exactly once — on the reconcile that adds
+// the finalizer — not on every reconcile of the session.
+func TestReconcile_AdmissionSweepsStaleSlotTuples(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+
+	deleter := &fakeSpiceDBDeleter{}
+	r := newReconciler(t, env)
+	r.SpiceDBDeleter = deleter
+
+	ac := validClass("ac-admission-sweep")
+	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass")
+	markValid(t, env, ac)
+
+	sess := validSession("sess-admission-sweep", "ac-admission-sweep")
+	require.NoError(t, env.Client.Create(ctx, sess), "create AgentSession")
+
+	// Seed the stale tuples a dead predecessor with this same name left
+	// behind, BEFORE this session is ever reconciled.
+	deleter.seedStaleSlotTuples(sess.Namespace, sess.Name)
+	require.True(t, deleter.hasStaleSlotTuples(sess.Namespace, sess.Name), "fixture sanity: the stale tuples must be seeded")
+
+	// First reconcile: adds the finalizer and must run the admission sweep
+	// before returning.
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sess)})
+	require.NoError(t, err, "Reconcile (admission)")
+
+	assert.Equal(t, 1, deleter.slotGrantsCalls, "the admission sweep must call DeleteSlotGrants exactly once")
+	assert.Equal(t, sess.Namespace, deleter.slotGrantsNS)
+	assert.Equal(t, sess.Name, deleter.slotGrantsName)
+	assert.False(t, deleter.hasStaleSlotTuples(sess.Namespace, sess.Name),
+		"the stale slot_pin/slot_grant_* tuples must be gone after admission")
+
+	// Further reconciles of the same session must NOT sweep again — the
+	// finalizer is already present, so EnsureFinalizer's added=false branch
+	// is taken every time after the first.
+	for i := 0; i < 3; i++ {
+		_, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sess)})
+	}
+	assert.Equal(t, 1, deleter.slotGrantsCalls, "the admission sweep must run exactly once per session, not on every reconcile")
+}
+
+// TestReconcile_AdmissionSweepSparesAForkChildsCopiedTuples: the parent's
+// ReconcileRestart copies slot grants + pin onto the fork child's (ns, name)
+// BEFORE the child's own first reconcile runs (BuildChildSession creates the
+// child with no finalizer). If the admission sweep ran on the child, it would
+// be the LAST writer and wipe that copied authority: every clean-path
+// non-takeover fork would come back unpinned with its inherited grants
+// deleted. A fork child's name is generated (PendingRestart.TargetSessionName),
+// so the dead-predecessor name-reuse the sweep guards against cannot happen
+// to it — the sweep must skip any session whose spec marks it forked.
+func TestReconcile_AdmissionSweepSparesAForkChildsCopiedTuples(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+
+	deleter := &fakeSpiceDBDeleter{}
+	r := newReconciler(t, env)
+	r.SpiceDBDeleter = deleter
+
+	ac := validClass("ac-fork-no-sweep")
+	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass")
+	markValid(t, env, ac)
+
+	child := validSession("sess-fork-no-sweep-child", "ac-fork-no-sweep")
+	child.Spec.ForkedFrom = "sess-fork-no-sweep-parent" // what BuildChildSession stamps on every restart child
+	require.NoError(t, env.Client.Create(ctx, child), "create fork-child AgentSession")
+
+	// These stand in for the grants + pin the parent's ReconcileRestart
+	// already copied onto the child's name — legitimate authority, not a
+	// stale leftover.
+	deleter.seedStaleSlotTuples(child.Namespace, child.Name)
+
+	// The child's first reconcile adds the finalizer; the admission sweep
+	// must NOT fire for a fork child.
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(child)})
+	require.NoError(t, err, "Reconcile (fork child admission)")
+
+	assert.Zero(t, deleter.slotGrantsCalls,
+		"the admission sweep must not run for a fork child — it would wipe the authority the parent's restart just copied")
+	assert.True(t, deleter.hasStaleSlotTuples(child.Namespace, child.Name),
+		"the copied grant+pin tuples must survive the child's first reconcile")
+}
+
+// TestReconcile_AdmissionSweepSkippedWhenFinalizerPreStamped: a channelsd mint
+// pre-stamps the operator's finalizer at Create and sweeps stale slot tuples
+// itself, synchronously, before its mint-time binds. So when the operator first
+// reconciles such a session the finalizer is ALREADY present: EnsureFinalizer
+// returns added=false, the added=true branch (and its admission sweep) never
+// runs, and the operator must NOT wipe the tuples channelsd just wrote. This is
+// the restart-variant of the sweep guard — a session that already carries the
+// finalizer at first reconcile must take the added=false path.
+func TestReconcile_AdmissionSweepSkippedWhenFinalizerPreStamped(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+
+	deleter := &fakeSpiceDBDeleter{}
+	r := newReconciler(t, env)
+	r.SpiceDBDeleter = deleter
+
+	ac := validClass("ac-prestamped-finalizer")
+	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass")
+	markValid(t, env, ac)
+
+	sess := validSession("sess-prestamped-finalizer", "ac-prestamped-finalizer")
+	// The channelsd mint path stamps this at Create (pipeline.go), which is what
+	// suppresses the operator's own sweep for a channelsd-minted session.
+	sess.Finalizers = append(sess.Finalizers, spiceboxv1alpha1.FinalizerAgentSession)
+	require.NoError(t, env.Client.Create(ctx, sess), "create AgentSession")
+
+	// Stand-in for the pin + grants channelsd legitimately wrote at mint under
+	// this name. The operator must leave them alone.
+	deleter.seedStaleSlotTuples(sess.Namespace, sess.Name)
+
+	// First reconcile: finalizer already present → added=false → no admission
+	// block, no sweep. Nothing outside the admission block or finalize calls
+	// DeleteSlotGrants, so its count must stay zero.
+	_, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sess)})
+
+	assert.Zero(t, deleter.slotGrantsCalls,
+		"a pre-stamped finalizer takes the added=false path, so the operator's admission sweep must not fire for a channelsd mint")
+	assert.True(t, deleter.hasStaleSlotTuples(sess.Namespace, sess.Name),
+		"the operator must not wipe the tuples channelsd wrote under a session whose finalizer it pre-stamped")
 }
 
 // ownerCapturingGranter implements authz.Granter and records TouchOwner calls.
