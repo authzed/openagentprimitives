@@ -107,6 +107,8 @@ func TestAuthorizeValidation(t *testing.T) {
 				assert.Contains(t, body, "demo tool")
 				assert.Contains(t, body, `value="read" checked`) // read-only preselected
 				assert.Contains(t, body, "default/demo-agent")
+				assert.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"), "consent page must refuse framing")
+				assert.Equal(t, "frame-ancestors 'none'", rec.Header().Get("Content-Security-Policy"), "consent page must refuse framing")
 			}
 		})
 	}

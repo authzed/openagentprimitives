@@ -77,6 +77,10 @@ var errSessionNotAccessible = errors.New("session not found or not accessible")
 // typed contract the six /mcp tools expose — also the contract the Phase-2
 // CLI backend imports directly (see task-10-brief.md), so field names and
 // JSON tags here are the wire format, not an implementation detail.
+// Phase-1 narrowing, recorded: the spec's time-range filtering (e.g.
+// startedAfter/startedBefore) is NOT implemented here — Agent/State/Limit
+// are the only filters. A caller wanting a time window filters client-side
+// over StartedAt on the returned SessionSummary rows.
 type ListSessionsIn struct {
 	Agent string `json:"agent,omitempty"` // agentclass name filter
 	State string `json:"state,omitempty"` // "running"|"ended"|"" for all
@@ -222,9 +226,22 @@ func failedLegOf(dec spicedb.AccessTokenDecision) string {
 //   - artifact#view adds org-view (parent->artifact_org_view) and platform
 //     admin (platform->view_audit) arms on top of parent->interact. Gating a
 //     token's artifact reads on session-level read_transcript is deliberately
-//     NARROWER: token holders do not get those side doors in v1 — an
-//     org-wide artifact audience or an admin's audit standing must not leak
-//     through a delegated bearer token.
+//     NARROWER on those two arms: token holders do not get those side doors
+//     in v1 — an org-wide artifact audience or an admin's audit standing must
+//     not leak through a delegated bearer token.
+//
+// The mapping is NOT narrower in every direction, though. read_transcript
+// also has a parent-chain arm (parent + parent->read_transcript) that
+// artifact#view's own parent->interact arm does not mirror one-for-one, so a
+// parent-session owner's token can fetch a CHILD session's artifacts here
+// where the browser's artifact#view would require interact on the child
+// directly — WIDER, on that one arm, than the permission being mirrored.
+// Accepted trade, not an oversight: a holder who can read_transcript on the
+// parent already sees everything the child did (transcript access already
+// dominates artifact content for information purposes — an artifact is a
+// rendering of something the transcript already narrates), and list_sessions
+// never lists child sessions, so this widening cannot be used to discover a
+// child session a caller does not already know the (namespace, name) of.
 //
 // Every other mirror ("read_transcript", "interact", "approve", ...) is
 // literally the session permission of the same name; empty means "same as

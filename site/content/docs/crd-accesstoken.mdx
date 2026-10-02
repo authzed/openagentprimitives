@@ -1,35 +1,31 @@
 export const meta = {
-  title: 'WorkshopProbe',
+  title: 'AccessToken',
   section: 'Reference',
   group: 'CRD reference',
-  order: 3330,
-  description: 'WorkshopProbe is the tool-discovery probe object for an agent-builder',
+  order: 3010,
+  description: 'AccessToken is the AUTHENTICATION record for one inbound delegated',
 }
 
-# WorkshopProbe
+# AccessToken
 
-**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `wprobe`
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `atok`
 
-WorkshopProbe is the tool-discovery probe object for an agent-builder
-workshop: the operator runs one pod against spec.image (or spec.script's
-baseImage, or spec.cliHelp's image) and records what it discovered — the
-probed tool set, help text, or a failure — on status. Namespaced to the
-workshop's own namespace; the sidecar SA creates it, the operator (never
-the sidecar) runs the pod and writes status.
+AccessToken is the AUTHENTICATION record for one inbound delegated
+credential minted at OAuth consent: hash → token identity, plus display
+metadata and expiry. It deliberately carries NO role and NO scope — the
+authorization truth lives entirely in SpiceDB on accesstoken:&lt;name&gt;
+(see pkg/authz/spicedb/schema/schema.zed). Deleting this object is
+revocation: the finalizer removes the SpiceDB tuples.
 
 ## Spec
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `spec.cliHelp` | `object` |  |
-| `spec.cliHelp.args` | `[]string` |  |
-| `spec.cliHelp.binary` \* | `string` |  |
-| `spec.cliHelp.image` \* | `string` |  |
-| `spec.image` | `string` |  |
-| `spec.script` | `object` |  |
-| `spec.script.baseImage` \* | `string` |  |
-| `spec.script.script` \* | `string` |  |
-| `spec.timeoutSeconds` | `integer (int32)` | _(default: 120; min 5; max 600)_ |
+| `spec.clientID` | `string` | ClientID is the OAuth client the token was issued to. |
+| `spec.clientName` | `string` | ClientName is the DCR-supplied display name, sanitized at mint. |
+| `spec.expiresAt` \* | `string (date-time)` | ExpiresAt is when the token stops authenticating. The SpiceDB tuples carry the same instant via the expiration trait; this copy gates the authentication (hash-lookup) step without a SpiceDB round trip. |
+| `spec.owner` \* | `string` | Owner is the canonical user id the token acts as. |
+| `spec.tokenHash` \* | `string` | TokenHash is hex(sha256(bearer value)). The value itself is never stored server-side. |
 
 <small>\* required</small>
 
@@ -46,15 +42,8 @@ Status is controller-owned (observed state).
 | `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
 | `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
 | `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
-| `status.helpText` | `string` |  |
+| `status.lastUsedAt` | `string (date-time)` | LastUsedAt is observation, controller-owned, updated on meaningful change only (not every request). |
 | `status.observedGeneration` | `integer (int64)` |  |
-| `status.phase` | `string` |  |
-| `status.podFailure` | `string` |  |
-| `status.resolvedDigest` | `string` |  |
-| `status.tools` | `[]object` |  |
-| `status.tools[].description` | `string` |  |
-| `status.tools[].inputSchema` | `string` | InputSchema is JSON text (not json.RawMessage: a CRD status field serializes cleanly as a plain string). |
-| `status.tools[].name` \* | `string` |  |
 
 <small>\* required</small>
 

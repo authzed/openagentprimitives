@@ -104,6 +104,11 @@ func registerTools(srv *mcp.Server, d Deps) {
 		Annotations: readOnly,
 	}, handleGetSession(d))
 
+	// Phase-1 narrowing, recorded: the spec's tail=true live-streaming mode
+	// (follow a running session's transcript via MCP progress notifications)
+	// is NOT implemented here — this tool is pagination-only (offset/limit),
+	// same as every other /mcp read tool in this file. A caller that wants
+	// "what's new" polls get_transcript again with a larger offset.
 	srv.AddTool(&mcp.Tool{
 		Name: "get_transcript",
 		Description: "Read a session's conversation transcript (messages and plan cards, in order), " +
