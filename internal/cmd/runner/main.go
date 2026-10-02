@@ -2516,6 +2516,11 @@ func run(cfg *config) error {
 	// amendment reads at-least-as-fresh as the grant instead of a pre-write
 	// snapshot — see Loop.AdvanceAuthzFloor.
 	loop.SlotBinder = spdbCli.RelationsWithFloor(loop.AdvanceAuthzFloor)
+	// Mirror onto status.slotPins any pin the cold-start BindClassDefaults
+	// above produced — display-only, read back from SpiceDB per declared
+	// single-occupancy type. Placed here rather than beside the bind because
+	// the mirror reads through the SlotBinder just wired.
+	loop.MirrorDeclaredSlotPins(rootCtx)
 
 	// Info-leakage gate wiring. Resolve the policy from AgentClass spec, set up
 	// helpers that bind the gate to the current session's scope.
