@@ -356,6 +356,36 @@ func TestBindTriggerSlots_NonTriggerSlot_BindsNothing(t *testing.T) {
 	assert.Empty(t, az.grantedSlots)
 }
 
+// TestTriggerSlots_CarriesOccupancyAndRebind is the trigger family's
+// propagation guard: the slot's occupancy/rebind must ride from the AuthzSlot
+// onto the request (TriggerSlotRequestsFor) and from the request onto every
+// bound SlotBinding (BindTriggerSlots). A drop in either hop would land a
+// verified-delivery instance at GrantSlots reading as single — fail-closed, but
+// a multi slot's second instance would be refused, with nothing red.
+func TestTriggerSlots_CarriesOccupancyAndRebind(t *testing.T) {
+	class := classWithSlots(spiceboxv1alpha1.AuthzSlot{
+		ResourceType: "github_pull_request", Permission: "write_memory",
+		FillFrom: []string{"trigger"}, TriggerInstance: `payload.custom_id`,
+		Occupancy: "multi", Rebind: "approval",
+	})
+	reqs := TriggerSlotRequestsFor(context.Background(), class)
+	require.Len(t, reqs, 1)
+	assert.Equal(t, "multi", reqs[0].Occupancy, "the slot's occupancy must reach the request")
+	assert.Equal(t, "approval", reqs[0].Rebind)
+
+	az := &fakeAuthz{}
+	p := &Pipeline{Authz: az}
+	ch := newGitHubChannel("gh-in", "service:demo")
+	ev := channelkinds.InboundEvent{
+		Channel: ch, DeliveryEvent: "pull_request",
+		RawDelivery: []byte(`{"action":"opened","number":7,"repository":{"full_name":"acme/widgets"},"custom_id":"pr-123"}`),
+	}
+	p.BindTriggerSlots(context.Background(), triggerTestSession(), ev, reqs, time.Now())
+	require.Len(t, az.grantedSlots, 1)
+	assert.Equal(t, "multi", az.grantedSlots[0].Occupancy, "the request's occupancy must reach the bound slot")
+	assert.Equal(t, "approval", az.grantedSlots[0].Rebind)
+}
+
 // TestBindTriggerSlots_ExpressionWinsOverProvider crafts the expression and
 // the provider to yield DIFFERENT ids for the same slot, and asserts the
 // expression's id is the one that binds.
