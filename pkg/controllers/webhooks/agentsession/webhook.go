@@ -594,6 +594,10 @@ var runnerWritableStatusFields = map[string]string{
 		"session's own retry of an already-idempotent write, denying its own starter no more than the runner could " +
 		"already withhold by declining to run at all — self-scoped, and any other session sharing that class/subject " +
 		"still attempts the same touch",
+		"slotPins": "a display-only mirror of slot pin state written by StatusPatcher (pkg/agent/runner/status.go). " +
+			"Every enforcement decision reads SpiceDB directly (the slot_pin tuple and the MUST_MATCH preconditions on " +
+			"grant writes), and the approval card derives move state from a live SpiceDB ReadPin rather than this field, " +
+			"so a forged value only misdescribes the forging session's own `oap session show` output and buys no authority anywhere",
 }
 
 // Webhook validates AgentSession update admission requests.
