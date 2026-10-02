@@ -504,7 +504,7 @@ func TestPlanGateBindings_EachPermissionBindsTheInstanceItResolvesTo(t *testing.
 		"git_repo\x00workspace":                             allGitRepo,
 	}
 	got := planGateBindings(surface, nil, rec, granted,
-		map[string][]string{"git_repo": {"push", "read", "write", "fetch"}}, held, nil, nil, nil)
+		map[string][]string{"git_repo": {"push", "read", "write", "fetch"}}, held, nil, nil, nil, nil)
 
 	want := map[string]string{
 		"write": "workspace",
@@ -515,6 +515,65 @@ func TestPlanGateBindings_EachPermissionBindsTheInstanceItResolvesTo(t *testing.
 		assert.Equal(t, want[b.Permission], b.ResourceID.String(),
 			"permission %q must bind the instance it resolves to", b.Permission)
 	}
+}
+
+// TestPlanGateBindings_CarriesOccupancyAndRebind is the plan-gate family's
+// propagation guard: a plan-phase approval binds through authz.BindApproved →
+// GrantSlots, so each binding must carry its type's occupancy/rebind or a multi
+// slot's approved instance arrives reading as single and GrantSlots pins it. The
+// by-type map comes from the same slotspec.FromClass source as the requires and
+// transforms maps beside it.
+func TestPlanGateBindings_CarriesOccupancyAndRebind(t *testing.T) {
+	surface := []permsurface.Descriptor{permDescConst(t, "read", "git_repo", "")}
+	h, err := permsurface.NewPermHandle("read", "git_repo")
+	require.NoError(t, err)
+	rec := plangateaudit.Content{PhaseKey: "phase-1", Ceiling: []string{h.String()}}
+	const repo = "https://github.com/acme/app"
+	granted := []plangateaudit.SlotRef{{Type: "git_repo", ID: repo}}
+	held := map[string]map[string]struct{}{"git_repo\x00" + repo: {"read": {}}}
+
+	occ := map[string]slotOccupancy{"git_repo": {Occupancy: "multi", Rebind: "approval"}}
+	got := planGateBindings(surface, nil, rec, granted,
+		map[string][]string{"git_repo": {"read"}}, held, nil, nil, nil, occ)
+	require.Len(t, got, 1)
+	assert.Equal(t, "multi", got[0].Occupancy, "the class slot's occupancy must ride onto the plan-gate binding")
+	assert.Equal(t, "approval", got[0].Rebind)
+
+	// A type absent from the map stays empty — which GrantSlots reads as single,
+	// the fail-closed default.
+	got2 := planGateBindings(surface, nil, rec, granted,
+		map[string][]string{"git_repo": {"read"}}, held, nil, nil, nil, nil)
+	require.Len(t, got2, 1)
+	assert.Empty(t, got2[0].Occupancy)
+	assert.Empty(t, got2[0].Rebind)
+}
+
+// TestLoopSlotOccupancyRebindFor is the JIT family's raise-side guard: the
+// tool_approval / precondition_waiver cards record occupancy/rebind at raise
+// time (the channelsd decision handler holds no class), and this is the lookup
+// that resolves them from the spec slot. A type the class does not declare
+// answers empty — it has no slot_grant to write, so no bind to pin.
+func TestLoopSlotOccupancyRebindFor(t *testing.T) {
+	l := &Loop{AgentClass: &spiceboxv1alpha1.AgentClass{
+		Spec: spiceboxv1alpha1.AgentClassSpec{
+			Authz: &spiceboxv1alpha1.AuthzBlock{Slots: []spiceboxv1alpha1.AuthzSlot{
+				{ResourceType: "label", Permission: "apply", Occupancy: "multi", Rebind: "approval"},
+				{ResourceType: "git_repo", Permission: "push", Occupancy: "single", Rebind: "never"},
+			}},
+		},
+	}}
+
+	occ, reb := l.slotOccupancyRebindFor("label")
+	assert.Equal(t, "multi", occ)
+	assert.Equal(t, "approval", reb)
+
+	occ, reb = l.slotOccupancyRebindFor("git_repo")
+	assert.Equal(t, "single", occ)
+	assert.Equal(t, "never", reb)
+
+	occ, reb = l.slotOccupancyRebindFor("undeclared")
+	assert.Empty(t, occ, "a type the class does not declare resolves to empty")
+	assert.Empty(t, reb)
 }
 
 // A constant instance is bound ONCE however many declared slots the phase
@@ -532,7 +591,7 @@ func TestPlanGateBindings_ConstantInstanceIsBoundOnce(t *testing.T) {
 	}
 
 	held := map[string]map[string]struct{}{"git_repo\x00workspace": {"read": {}}}
-	got := planGateBindings(surface, nil, rec, granted, map[string][]string{"git_repo": {"read"}}, held, nil, nil, nil)
+	got := planGateBindings(surface, nil, rec, granted, map[string][]string{"git_repo": {"read"}}, held, nil, nil, nil, nil)
 	assert.Len(t, got, 1, "workspace is one instance, not one per declared repo")
 	assert.Equal(t, "workspace", got[0].ResourceID.String())
 }
@@ -584,7 +643,7 @@ func TestPlanGateBindings_DropsAPermissionTheApproverDoesNotHold(t *testing.T) {
 	}
 
 	got := planGateBindings(surface, nil, rec, granted,
-		map[string][]string{"git_repo": {"read", "push"}}, held, nil, nil, nil)
+		map[string][]string{"git_repo": {"read", "push"}}, held, nil, nil, nil, nil)
 
 	perms := map[string]bool{}
 	for _, b := range got {
@@ -592,6 +651,38 @@ func TestPlanGateBindings_DropsAPermissionTheApproverDoesNotHold(t *testing.T) {
 	}
 	assert.True(t, perms["read"], "read is held and must be bound")
 	assert.False(t, perms["push"], "push is NOT held and must not be bound — this is the over-grant fix")
+}
+
+// PriorID — which turns a binding into an approved MOVE — is derived ONLY from
+// the record's MovedFrom, never from a live pin read. A record that carries it
+// yields a PriorID-bearing binding; a record without it yields a zero PriorID,
+// a first-fill, whatever the live pin happens to be (planGateBindings does no
+// read at all, which is the structural guarantee).
+func TestPlanGateBindings_PriorIDComesFromRecordMovedFromOnly(t *testing.T) {
+	surface := []permsurface.Descriptor{permDescConst(t, "push", "git_repo", "")}
+	h, err := permsurface.NewPermHandle("push", "git_repo")
+	require.NoError(t, err)
+	const repoB = "https://github.com/acme/app"
+	rec := plangateaudit.Content{PhaseKey: "p1", Ceiling: []string{h.String()}}
+	held := map[string]map[string]struct{}{"git_repo\x00" + repoB: {"push": {}}}
+	declared := map[string][]string{"git_repo": {"push"}}
+	occ := map[string]slotOccupancy{"git_repo": {Occupancy: "single"}}
+
+	t.Run("record carries MovedFrom: binding MOVES, PriorID set from it", func(t *testing.T) {
+		granted := []plangateaudit.SlotRef{{Type: "git_repo", ID: repoB, MovedFrom: "acme-prior-id"}}
+		got := planGateBindings(surface, nil, rec, granted, declared, held, nil, nil, nil, occ)
+		require.Len(t, got, 1)
+		assert.Equal(t, "acme-prior-id", got[0].PriorID.String(),
+			"PriorID is the record's MovedFrom, already-canonical, taken verbatim")
+	})
+
+	t.Run("record omits MovedFrom: zero PriorID, a first-fill", func(t *testing.T) {
+		granted := []plangateaudit.SlotRef{{Type: "git_repo", ID: repoB}}
+		got := planGateBindings(surface, nil, rec, granted, declared, held, nil, nil, nil, occ)
+		require.Len(t, got, 1)
+		assert.True(t, got[0].PriorID.IsZero(),
+			"no MovedFrom on the record means no move, whatever the live pin is")
+	})
 }
 
 // A CONSTANT instance (a check resolvable with no tool args, e.g.
@@ -622,7 +713,7 @@ func TestPlanGateBindings_ConstantInstanceBindsEvenWhenNotInTheHeldMap(t *testin
 	held := map[string]map[string]struct{}{"git_repo\x00" + repo: {"push": {}}}
 
 	got := planGateBindings(surface, nil, rec, granted,
-		map[string][]string{"git_repo": {"read", "push"}}, held, nil, nil, nil)
+		map[string][]string{"git_repo": {"read", "push"}}, held, nil, nil, nil, nil)
 
 	byInstance := map[string]string{} // resourceID -> permission
 	for _, b := range got {
@@ -653,7 +744,7 @@ func TestPlanGateBindings_StandingRequiredConstantIsStillFiltered(t *testing.T) 
 	standing := map[string]string{"shared_thing": spiceboxv1alpha1.StandingRequired}
 
 	got := planGateBindings(surface, nil, rec, granted,
-		map[string][]string{"shared_thing": {"admin"}}, held, standing, nil, nil)
+		map[string][]string{"shared_thing": {"admin"}}, held, standing, nil, nil, nil)
 
 	assert.Empty(t, got,
 		"a StandingRequired constant the approver holds nothing on must not be bound — the constant skip is for session-only types only")
@@ -662,6 +753,6 @@ func TestPlanGateBindings_StandingRequiredConstantIsStillFiltered(t *testing.T) 
 	// approver's say-so (the legitimate constant path stays intact).
 	sessionOnly := map[string]string{"shared_thing": spiceboxv1alpha1.StandingSessionOnly}
 	got2 := planGateBindings(surface, nil, rec, granted,
-		map[string][]string{"shared_thing": {"admin"}}, held, sessionOnly, nil, nil)
+		map[string][]string{"shared_thing": {"admin"}}, held, sessionOnly, nil, nil, nil)
 	assert.Len(t, got2, 1, "a session-only constant binds on the approval alone")
 }

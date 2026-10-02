@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	humanize "github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -109,6 +110,24 @@ func newSessionShowCmd(g *apcmd.Globals) *cobra.Command {
 				fmt.Fprintln(out, "RunnerNotes:")
 				for _, n := range s.Status.RunnerNotes {
 					fmt.Fprintf(out, "  [%s] %s\n", n.Time.UTC().Format("15:04:05"), n.Message)
+				}
+			}
+
+			// Slot pins: display-only mirror of SpiceDB's slot_pin relation (see
+			// spiceboxv1alpha1.SlotPin's doc comment) — one line per
+			// single-occupancy resource type the session is currently pinned to.
+			if len(s.Status.SlotPins) > 0 {
+				fmt.Fprintln(out, "Slot pins:")
+				for _, p := range s.Status.SlotPins {
+					if p.MovedBy != "" {
+						when := "-"
+						if p.MovedAt != nil && !p.MovedAt.IsZero() {
+							when = humanize.Time(p.MovedAt.Time)
+						}
+						fmt.Fprintf(out, "  %s → %s (moved %s by %s)\n", p.ResourceType, p.ResourceID, when, p.MovedBy)
+					} else {
+						fmt.Fprintf(out, "  %s → %s\n", p.ResourceType, p.ResourceID)
+					}
 				}
 			}
 
