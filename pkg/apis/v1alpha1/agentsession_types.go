@@ -220,6 +220,17 @@ type AgentSessionStatus struct {
 	// +optional
 	ObservedPins []ObservedPin `json:"observedPins,omitempty"`
 
+	// SlotPins is a DISPLAY-ONLY observation, one entry per single-occupancy
+	// resource type, mirroring the instance SpiceDB's slot_pin relation
+	// currently pins this session to. SpiceDB is the enforcement source of
+	// truth for single-occupancy pinning; nothing that authorizes a bind or a
+	// tool call reads this field. See SlotPin's doc comment for what writes
+	// it and what MovedBy/MovedAt mean.
+	// +optional
+	// +listType=map
+	// +listMapKey=resourceType
+	SlotPins []SlotPin `json:"slotPins,omitempty"`
+
 	// CredentialAuthFailures records, per tool ORIGIN, that the platform ITSELF
 	// observed an auth-shaped failure there — the independent corroboration a
 	// CredentialUpdateRequest needs when the provider cannot be re-probed to
