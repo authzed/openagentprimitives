@@ -39,6 +39,11 @@ type ThreadSeedRequest struct {
 	ValueTransforms []string
 	// AutoGrantFrom is the slot's declared policy. Empty means owner.
 	AutoGrantFrom []string
+	// Occupancy and Rebind are the slot's single-vs-multi commitment and rebind
+	// policy, carried onto every SlotBinding this seed emits so the GrantSlots
+	// pinning gate sees them. Empty Occupancy reads as single.
+	Occupancy string
+	Rebind    string
 }
 
 // SeedFromThread selects the instances a thread may bind without an approval.
@@ -89,7 +94,7 @@ func SeedFromThread(
 					// Skip: a grant on "" cannot be revoked by id later.
 					continue
 				}
-				b := SlotBinding{ResourceType: req.ResourceType, ResourceID: id, Permission: req.Permission}
+				b := SlotBinding{ResourceType: req.ResourceType, ResourceID: id, Permission: req.Permission, Occupancy: req.Occupancy, Rebind: req.Rebind}
 				dedupKey := b.ResourceType + "\x00" + b.ResourceID.String() + "\x00" + b.Permission
 				if _, dup := seen[dedupKey]; dup {
 					continue

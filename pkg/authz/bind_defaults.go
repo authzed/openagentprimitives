@@ -79,6 +79,14 @@ type BoundEntitySpec struct {
 	// constructs a BoundEntitySpec, and why a guard test refuses a second
 	// construction site.
 	Requires []precondition.Rule
+
+	// Occupancy and Rebind carry the slot's single-vs-multi commitment and its
+	// rebind policy (AgentClass slot `occupancy`/`rebind`) through to the
+	// SlotBinding each fill source emits, so the GrantSlots pinning gate sees
+	// them. Empty Occupancy reads as single — the fail-closed default every
+	// reader agrees on (see SlotBinding / occupancyOf).
+	Occupancy string
+	Rebind    string
 }
 
 // AutoFillArgSpec mirrors v1alpha1.EntityAutoFillArg for FillToolArgs.
@@ -182,6 +190,8 @@ func BindClassDefaults(
 				ResourceID:   id,
 				RawID:        def,
 				Requires:     et.Requires,
+				Occupancy:    et.Occupancy,
+				Rebind:       et.Rebind,
 			})
 		}
 	}
