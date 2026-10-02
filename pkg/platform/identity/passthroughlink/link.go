@@ -250,6 +250,16 @@ const (
 	// can tell "first-time connect" from "replacing a credential a human was
 	// asked to fix" without inspecting RequiredCredentials.
 	PurposeCredentialUpdate = "credential_update"
+	// PurposeOAuthClient marks a STATELESS OAuth 2.0 client_id: identityd's
+	// POST /oauth/register (RFC 7591 Dynamic Client Registration) mints one of
+	// these instead of writing to a store, so the registration itself —
+	// {client_name, redirect_uris}, JSON-encoded into BackLink — survives an
+	// identityd restart or a different replica verifying it, with no shared
+	// state at all. 2-year expiry (see oauthClientIDTTL in
+	// pkg/platform/identityd/handlers_oauthas.go): long enough that a
+	// registered local tool keeps working across routine signer-key
+	// rotations' overlap window, but not eternal.
+	PurposeOAuthClient = "oauth_client"
 	// PurposeWorkshopCredential marks a deep-link that connects a bot
 	// credential for an AgentIdentity living in a workshop namespace W. It
 	// reuses SessionRef for the builder session ("<B>/<X>") that requested

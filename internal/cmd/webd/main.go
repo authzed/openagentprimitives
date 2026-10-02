@@ -56,6 +56,17 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/web/admind/agentcred"
 	"github.com/authzed/openagentprimitives/pkg/web/adminui"
 	"github.com/authzed/openagentprimitives/pkg/web/browsersession"
+	// mcpfront is imported BY NAME, not blank, for the same reason agentui and
+	// sessions are (see those imports' own comments below): main.go references
+	// mcpfront.Minter/mcpfront.MintParams/mcpfront.AccessTokenAuthz directly
+	// (buildArtifactViewDeps's Minter construction, AccessTokenAuthz's nil-
+	// guarded return, and the compile-time Deps guard below), so a future
+	// mcpfront.Deps signature drift is a `go build` failure, not a runtime
+	// deps.(mcpfront.Deps) cast that silently 404s. The import ALSO runs
+	// mcpfront's init() (webui plugin registration) — Task 9's controller
+	// ruling: a blank import would register the plugin but give main.go no way
+	// to reference mcpfront.Minter at all.
+	"github.com/authzed/openagentprimitives/pkg/web/mcpfront"
 	"github.com/authzed/openagentprimitives/pkg/web/uibindings"
 	"github.com/authzed/openagentprimitives/pkg/web/webui"
 	"github.com/authzed/openagentprimitives/pkg/x/externalurl"
@@ -242,6 +253,14 @@ type config struct {
 	// one answer this binary reads. It is deliberately NOT a bool, so an
 	// unset/unrecognized value cannot silently resolve to a permissive default.
 	clusterKind string
+	// accessTokenNamespace is where the /mcp Minter creates AccessToken CRs
+	// and where the bearer middleware lists them back — the two MUST agree, or
+	// a freshly-minted token would never authenticate. Defaults to the
+	// standard install namespace.
+	accessTokenNamespace string
+	// accessTokenLifetime is how long a token minted by /oauth/token stays
+	// valid (webd's --accesstoken-lifetime). Default 2160h = 90 days.
+	accessTokenLifetime time.Duration
 }
 
 func main() {
@@ -297,6 +316,8 @@ func newCommand() *cobra.Command {
 	fs.StringVar(&cfg.admindURL, "admind-url", "", "admind API base URL; defaults to the operator URL when empty (e.g. http://spicebox-operator.agentprimitives-system.svc:8082)")
 	fs.StringVar(&cfg.admindTokenPath, "admind-token-path", "/var/run/webd/admind-token/token", "path to the admind service token file")
 	fs.StringVar(&cfg.clusterKind, "cluster-kind", "", fmt.Sprintf("REQUIRED cluster kind stamped by `oap install` (one of: %s); selects the install profile, whose AllowsSharedOrigin() decides whether the trusted and sandbox origins may share one host. Empty or unrecognized is a FATAL startup error — no silent default. A Deployment predating this flag must be re-applied via `oap install`.", strings.Join(cloud.RegisteredKeys(), ", ")))
+	fs.StringVar(&cfg.accessTokenNamespace, "accesstoken-namespace", "agentprimitives-system", "namespace the /mcp Minter creates AccessToken CRs in, and the bearer middleware lists them back from")
+	fs.DurationVar(&cfg.accessTokenLifetime, "accesstoken-lifetime", 2160*time.Hour, "how long a token minted by /oauth/token stays valid")
 	cmd.PreRunE = clikit.EnvOverridePreRunE(map[string]string{
 		"trusted-base-url":              "WEBD_TRUSTED_BASE_URL",
 		"sandbox-base-url":              "WEBD_SANDBOX_BASE_URL",
@@ -316,6 +337,8 @@ func newCommand() *cobra.Command {
 		"max-live-sessions-per-subject": "AP_WEBD_MAX_LIVE_SESSIONS_PER_SUBJECT",
 		"max-live-sessions":             "AP_WEBD_MAX_LIVE_SESSIONS",
 		"session-start-namespaces":      "AP_WEBD_SESSION_START_NAMESPACES",
+		"accesstoken-namespace":         "WEBD_ACCESSTOKEN_NAMESPACE",
+		"accesstoken-lifetime":          "WEBD_ACCESSTOKEN_LIFETIME",
 	})
 	return cmd
 }
@@ -512,7 +535,7 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	var deps webui.Deps = base
-	if av := buildArtifactViewDeps(base, nc, cfg.operatorURL, cfg.webdTokenPath, cfg.spicedbEndpoint, cfg.spicedbInsecure, cfg.spicedbTokenPath, keyBytes, cookieSigner, trustedURL.Get, sandboxURL.Get, logger, admindURL, admindToken, cfg.startNamespaces); av != nil {
+	if av := buildArtifactViewDeps(base, nc, cfg.operatorURL, cfg.webdTokenPath, cfg.spicedbEndpoint, cfg.spicedbInsecure, cfg.spicedbTokenPath, keyBytes, cookieSigner, trustedURL.Get, sandboxURL.Get, logger, admindURL, admindToken, cfg.startNamespaces, cfg.accessTokenNamespace, cfg.accessTokenLifetime); av != nil {
 		deps = av
 	}
 	// The transcript data plane needs NATS + SpiceDB + the operator URL (see
@@ -747,6 +770,17 @@ type artifactViewDeps struct {
 	// browser-facing start routes read it per request through
 	// StartableNamespaces (see config.startNamespaces for what it means).
 	startNamespaces []string
+	// accessTokenNamespace is --accesstoken-namespace: where the /mcp Minter
+	// creates AccessToken CRs and where the bearer middleware lists them back
+	// from (mcpfront.Deps.AccessTokenNamespace).
+	accessTokenNamespace string
+	// minter mints an AccessToken for an approved /oauth/token exchange. A
+	// concrete *mcpfront.Minter field (not an interface) so the nil check in
+	// MintAccessToken below is honest — see AGENTS.md's typed-nil rule: this
+	// is always either unset (nil) or assigned a real value in
+	// buildArtifactViewDeps, never a typed-nil promoted through an interface
+	// boundary.
+	minter *mcpfront.Minter
 }
 
 // var _ agentui.Deps = (*artifactViewDeps)(nil) is a COMPILE-TIME proof that
@@ -778,6 +812,16 @@ var _ agentui.Deps = (*artifactViewDeps)(nil)
 // sessions.Deps either, for the same reason it fails agentui.Deps: it lacks
 // CheckInteract (identityd never needed one) and LookupInteractableSessions.
 var _ sessions.Deps = (*artifactViewDeps)(nil)
+
+// var _ mcpfront.Deps = (*artifactViewDeps)(nil) is the same compile-time
+// proof as the two guards above, for pkg/web/mcpfront's Deps interface
+// (AccessTokenAuthz, AccessTokenNamespace, LookupReadableSessions, embedded
+// K8s/OperatorURL/MemoryToken/Artifacts/ExternalBaseURL/Logger). *webdDeps —
+// the degraded, identity-only umbrella — deliberately does NOT satisfy
+// mcpfront.Deps either: it lacks AccessTokenAuthz and AccessTokenNamespace,
+// so an unconfigured SpiceDB correctly yields NO /mcp surface rather than one
+// whose every handler call would 500.
+var _ mcpfront.Deps = (*artifactViewDeps)(nil)
 
 // VerifyLink verifies a channelsd→webd deep-link and dispatches on Purpose.
 // PurposeArtifactView requires BOTH ArtifactID and SessionRef (unchanged from
@@ -846,6 +890,147 @@ func (d *artifactViewDeps) AgentCredentialWriter() identityd.AgentCredentialWrit
 		return nil
 	}
 	return agentcred.New(d.admindURL, d.admindToken)
+}
+
+// AccessTokenAuthz implements mcpfront.Deps: the SpiceDB half of an
+// authorized /mcp tool call. Returned as the INTERFACE and nil-guarded for
+// the same reason as AgentIdentityAuthz below — a typed-nil *spicedb.Client
+// assigned into an interface field would yield a non-nil interface that
+// panics on first call, and mcpfront's own fail-closed branch
+// (ui.Routes: "AccessTokenAuthz() == nil → no routes") would never run.
+func (d *artifactViewDeps) AccessTokenAuthz() mcpfront.AccessTokenAuthz {
+	if d.spdb == nil {
+		return nil
+	}
+	return d.spdb
+}
+
+// AccessTokenNamespace implements mcpfront.Deps: the SAME namespace
+// d.minter creates AccessToken CRs in (see buildArtifactViewDeps), so the
+// bearer middleware's hash lookup finds every token this process's Minter
+// could have produced.
+func (d *artifactViewDeps) AccessTokenNamespace() string { return d.accessTokenNamespace }
+
+// MintAccessToken implements identityd.AccessTokenMinter: identityd cannot
+// import pkg/web/mcpfront (the import direction in this repo is web ->
+// platform, never the reverse — see handlers_oauthas_token.go's package
+// doc), so AccessTokenMinter/MintParams/Minted there are a field-for-field
+// MIRROR of mcpfront's real types, not an import of them. This method is the
+// one place those two shapes are adapted into each other.
+//
+// Nil-guarded: d.minter is a concrete *mcpfront.Minter (never a typed-nil
+// promoted through an interface — see artifactViewDeps.minter's own doc), set
+// only in buildArtifactViewDeps once spdb/k8s are known real. identityd's own
+// /oauth/token handler already treats a nil Minter as "unavailable" (503) at
+// the webui.go wiring layer; this guard is belt to that braces, in case this
+// method is ever reached some other way.
+func (d *artifactViewDeps) MintAccessToken(ctx context.Context, p identityd.MintParams) (identityd.Minted, error) {
+	if d.minter == nil {
+		return identityd.Minted{}, fmt.Errorf("mcpfront: access-token minter not configured")
+	}
+	minted, err := d.minter.MintAccessToken(ctx, mcpfront.MintParams{
+		Owner:        p.Owner,
+		Role:         p.Role,
+		ScopeClasses: p.ScopeClasses,
+		Unfiltered:   p.Unfiltered,
+		ClientName:   p.ClientName,
+		ClientID:     p.ClientID,
+	})
+	if err != nil {
+		return identityd.Minted{}, err
+	}
+	return identityd.Minted{Value: minted.Value, TokenID: minted.TokenID, ExpiresAt: minted.ExpiresAt}, nil
+}
+
+// consentClassLookupLimit bounds ConsentClasses' two SpiceDB lookups —
+// generous ceilings matching pkg/web/webui/sessions' own maxListedSessions /
+// maxListedClasses constants (the consent screen asks the SAME two
+// questions that dashboard does, for the same subject). A subject who can
+// start or interact with more classes than this needs a paginated consent
+// screen, a bigger design change than this constant.
+const (
+	consentClassSessionLookupLimit = 200
+	consentClassLookupLimit        = 500
+)
+
+// ConsentClasses implements identityd.ConsentDeps: the OAuth consent
+// screen's "which agent classes may this subject grant a tool access to?"
+// question. Answered as the union of LookupStartableClasses (classes the
+// subject may start fresh) and the classes backing LookupInteractableSessions
+// (classes behind sessions the subject may already interact with) — v1's
+// answer to "what could this subject plausibly want to grant" rather than a
+// dedicated SpiceDB relation of its own.
+//
+// Both lookups read a snapshot (fullyConsistent=false): this is a display
+// list for a consent CHECKBOX, not an authorization decision — the actual
+// mint narrows only what CheckAccessTokenOp's OwnerHas leg later re-confirms
+// per call, so an over- or under-inclusive consent list cannot itself grant
+// anything the owner doesn't independently hold.
+func (d *artifactViewDeps) ConsentClasses(ctx context.Context, owner identity.CanonicalUserID) ([]identityd.ConsentClass, error) {
+	if d.spdb == nil {
+		return nil, fmt.Errorf("mcpfront: SpiceDB not configured")
+	}
+
+	// classes maps a "ns/name" class id to its resolved AgentClass (nil until
+	// resolved) so the display-name pass below can reuse what AgentClassOf
+	// already fetched for an interactable session's class, rather than
+	// re-Getting it.
+	classes := map[string]*spiceboxv1alpha1.AgentClass{}
+	var order []string
+	note := func(id string) {
+		if _, ok := classes[id]; !ok {
+			classes[id] = nil
+			order = append(order, id)
+		}
+	}
+
+	startable, err := d.LookupStartableClasses(ctx, owner, consentClassLookupLimit, false)
+	if err != nil {
+		return nil, fmt.Errorf("consent classes: lookup startable classes: %w", err)
+	}
+	for _, ref := range startable.Refs {
+		note(ref.Namespace + "/" + ref.Name)
+	}
+
+	interactable, err := d.LookupInteractableSessions(ctx, owner, consentClassSessionLookupLimit, false)
+	if err != nil {
+		return nil, fmt.Errorf("consent classes: lookup interactable sessions: %w", err)
+	}
+	for _, ref := range interactable.Refs {
+		ac, acErr := d.AgentClassOf(ctx, ref.Namespace, ref.Name)
+		if acErr != nil {
+			d.logger.Info("consent classes: resolve session's agent class failed; skipping",
+				"session", ref.Namespace+"/"+ref.Name, "err", acErr.Error())
+			continue
+		}
+		note(ac.Namespace + "/" + ac.Name)
+		classes[ac.Namespace+"/"+ac.Name] = ac
+	}
+
+	sort.Strings(order)
+	out := make([]identityd.ConsentClass, 0, len(order))
+	for _, id := range order {
+		ns, name, ok := strings.Cut(id, "/")
+		if !ok {
+			continue
+		}
+		ac := classes[id]
+		if ac == nil {
+			var fetched spiceboxv1alpha1.AgentClass
+			if getErr := d.K8s().Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &fetched); getErr == nil {
+				ac = &fetched
+			} else {
+				d.logger.Info("consent classes: resolve display name failed; falling back to the class name",
+					"class", id, "err", getErr.Error())
+			}
+		}
+		display := name
+		if ac != nil && ac.Spec.DisplayName != "" {
+			display = ac.Spec.DisplayName
+		}
+		out = append(out, identityd.ConsentClass{ID: id, DisplayName: display})
+	}
+	return out, nil
 }
 
 func (d *artifactViewDeps) CheckView(ctx context.Context, artifactID, subject string) (bool, error) {
@@ -938,6 +1123,41 @@ func (d *artifactViewDeps) LookupInteractableSessions(ctx context.Context, canon
 		return spicedb.InteractableSessions{}, fmt.Errorf("sessions: SpiceDB not configured")
 	}
 	return d.spdb.LookupInteractableSessions(ctx, canonicalID, limit, fullyConsistent)
+}
+
+// mcpReadableSessionsLimit bounds LookupReadableSessions below, matching
+// pkg/web/webui/sessions' own maxListedSessions — the /mcp tool surface
+// enumerates the same interactable set the session dashboard does, for the
+// same subject.
+const mcpReadableSessionsLimit = 200
+
+// LookupReadableSessions implements mcpfront.Deps: v1's answer to "which
+// sessions may this token's owner READ" is the interactable set itself
+// (interact implies read_transcript for a root session — see
+// pkg/authz/spicedb's $sameperm mirror), not a dedicated read-only lookup.
+// fullyConsistent=true: an /mcp tool caller enumerating sessions needs a
+// just-granted (or just-revoked) interact relationship reflected immediately,
+// the same justification interactCheckArgs gives CheckInteract above.
+func (d *artifactViewDeps) LookupReadableSessions(ctx context.Context, owner identity.CanonicalUserID) (spicedb.InteractableSessions, error) {
+	if d.spdb == nil {
+		return spicedb.InteractableSessions{}, fmt.Errorf("mcpfront: SpiceDB not configured")
+	}
+	return d.spdb.LookupInteractableSessions(ctx, owner, mcpReadableSessionsLimit, true)
+}
+
+// FetchArtifact implements mcpfront.Deps: the same two-step resolve-then-fetch
+// ContentRender/FetchRender do for the browser live-view (ResolveToRender maps
+// the artifactID handle to the ArtifactRender CR holding its current bytes,
+// then FetchRender pulls those bytes through the operator), reused here rather
+// than re-derived so the /mcp get_artifact tool can never read different bytes
+// than the live-view frames for the same handle.
+func (d *artifactViewDeps) FetchArtifact(ctx context.Context, ns, name, artifactID string) ([]byte, string, error) {
+	scope := memory.Scope{Kind: "session", ID: ns + "/" + name}
+	renderName, err := d.artSvc.ResolveToRender(ctx, scope, artifactID)
+	if err != nil {
+		return nil, "", err
+	}
+	return d.FetchRender(ctx, ns, name, renderName)
 }
 
 // LookupStartableClasses implements sessions.Deps: the bootstrap arm of the
@@ -1843,7 +2063,7 @@ func (d *artifactViewDeps) CheckPlatformPermission(ctx context.Context, permissi
 // here. ctSigner reuses the same key bytes; webd both mints (trusted side,
 // after the SpiceDB view check) and verifies (cookieless sandbox side) the
 // content token, so a single shared key suffices.
-func buildArtifactViewDeps(base *webdDeps, nc *nats.Conn, operatorURL, webdTokenPath, spicedbEndpoint string, spicedbInsecure bool, spicedbTokenPath string, keyBytes []byte, cookieSigner *passthroughlink.Signer, trustedURLGet, sandboxURLGet func() string, logger logr.Logger, admindURL, admindToken string, startNamespaces []string) *artifactViewDeps {
+func buildArtifactViewDeps(base *webdDeps, nc *nats.Conn, operatorURL, webdTokenPath, spicedbEndpoint string, spicedbInsecure bool, spicedbTokenPath string, keyBytes []byte, cookieSigner *passthroughlink.Signer, trustedURLGet, sandboxURLGet func() string, logger logr.Logger, admindURL, admindToken string, startNamespaces []string, accessTokenNamespace string, accessTokenLifetime time.Duration) *artifactViewDeps {
 	// SpiceDB connection params come from cfg (endpoint/insecure/token-path,
 	// bound to the canonical SPICEDB_* env via clikit). The token VALUE is a
 	// secret: read from the token-path file when set (taking precedence, as
@@ -1889,6 +2109,12 @@ func buildArtifactViewDeps(base *webdDeps, nc *nats.Conn, operatorURL, webdToken
 	mem := httpclient.New(operatorURL, token)
 	artSvc := artifacts.NewService(mem, nil)
 	ctSigner := contenttoken.New(keyBytes)
+	// The Minter is constructed here, not independently nil-guarded: spdb and
+	// base.k8s are both already confirmed real by the fail-closed checks
+	// above (this function has already returned nil on any missing
+	// prerequisite), so every *artifactViewDeps this function actually
+	// returns carries a real Minter.
+	minter := &mcpfront.Minter{SpiceDB: spdb, K8s: base.k8s, Namespace: accessTokenNamespace, Lifetime: accessTokenLifetime}
 
 	fmt.Fprintln(os.Stderr, "webd: artifact viewer configured (SpiceDB + memory + content token)")
 	return &artifactViewDeps{
@@ -1910,7 +2136,9 @@ func buildArtifactViewDeps(base *webdDeps, nc *nats.Conn, operatorURL, webdToken
 		// Copied on the way IN as well as on the way out (see
 		// StartableNamespaces): the caller keeps its own slice, and neither
 		// side may reshape the other's.
-		startNamespaces: append([]string(nil), startNamespaces...),
+		startNamespaces:      append([]string(nil), startNamespaces...),
+		accessTokenNamespace: accessTokenNamespace,
+		minter:               minter,
 	}
 }
 

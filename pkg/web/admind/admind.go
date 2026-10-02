@@ -158,6 +158,19 @@ type Config struct {
 	// treatment Identities and KG get, rather than failing admind construction
 	// over an additive read.
 	Scopes SourceScopeReader
+	// AccessTokenGrants reads an AccessToken's SpiceDB authorization grant
+	// (role, scope classes, unfiltered) for the admin Tokens page's role
+	// column — *spicedb.Client.ReadAccessTokenGrant (Task 3) satisfies this.
+	// OPTIONAL and NOT in the required-deps check below — nil degrades every
+	// row's role to "unknown" rather than failing admind construction, same
+	// treatment as Identities/Scopes/KG (see tokens.go).
+	AccessTokenGrants AccessTokenGrantReader
+	// AccessTokenNamespace is where AccessToken CRs live — the SAME namespace
+	// webd's --accesstoken-namespace mints into (default
+	// "agentprimitives-system"), so the Tokens page lists exactly what the
+	// /mcp bearer middleware checks against. Empty fails the tokens routes
+	// closed (see tokens.go) rather than listing cluster-wide.
+	AccessTokenNamespace string
 }
 
 // Admind is the admin API: mount Handler() under /admin/ on the
@@ -521,6 +534,14 @@ var routeTable = []Route{
 		plain: func(a *Admind) http.HandlerFunc { return a.handleCluster }},
 	{Method: http.MethodGet, Pattern: "/admin/v1/access", Permission: "view_config",
 		plain: func(a *Admind) http.HandlerFunc { return a.handleAccess }},
+	// The access-token page: list is view_tokens, revoke is revoke_token — both
+	// alias can_admin today (see schema.zed), but are their OWN permissions so
+	// a future narrower grant (view without revoke) is a schema change, not a
+	// handler change.
+	{Method: http.MethodGet, Pattern: "/admin/v1/tokens", Permission: "view_tokens",
+		plain: func(a *Admind) http.HandlerFunc { return a.handleTokensList }},
+	{Method: http.MethodPost, Pattern: "/admin/v1/tokens/revoke", Permission: "revoke_token",
+		plain: func(a *Admind) http.HandlerFunc { return a.handleTokensRevoke }},
 	{Method: http.MethodPost, Pattern: "/admin/v1/agents/oap-install", Permission: "install_agent",
 		plain: func(a *Admind) http.HandlerFunc { return a.handleOapInstall }},
 	// The three channel routes sit behind the SAME permission as the install

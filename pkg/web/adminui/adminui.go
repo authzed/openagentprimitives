@@ -156,6 +156,13 @@ func (ui) Routes(deps webui.Deps) []webui.Route {
 			Auth: webui.AuthAuthorized, Authorize: authorize("view_audit"), Handler: px},
 		{Origin: webui.OriginTrusted, Pattern: "/admin/api/access", Methods: []string{http.MethodGet},
 			Auth: webui.AuthAuthorized, Authorize: authorize("view_config"), Handler: px},
+		// The access-token page: list (view_tokens) and revoke (revoke_token) —
+		// both EXACT patterns, so TestAProxiedRouteAsksForTheSamePermissionAdmindDoes
+		// checks this pairing directly against admind.Routes().
+		{Origin: webui.OriginTrusted, Pattern: "/admin/api/tokens", Methods: []string{http.MethodGet},
+			Auth: webui.AuthAuthorized, Authorize: authorize("view_tokens"), Handler: px},
+		{Origin: webui.OriginTrusted, Pattern: "/admin/api/tokens/revoke", Methods: []string{http.MethodPost},
+			Auth: webui.AuthAuthorized, Authorize: authorize("revoke_token"), Handler: px},
 		// The workshops page: GET lists (view_sessions); the subtree fronts
 		// POST .../install + .../decline (install_agent) and DELETE .../{ns}/{name}
 		// (kill_session), resolved by workshopsAuthorize above. Both are derived

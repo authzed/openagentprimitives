@@ -146,6 +146,43 @@ func TestAgentClassInteractorRelationAndPersonalizePermission(t *testing.T) {
 	assert.Contains(t, authzschema.Schema, "permission can_personalize = interactor")
 }
 
+// TestAccessTokenDefinition pins the accesstoken definition and platform
+// token permissions required by the OAuth access-token flow. The accesstoken
+// definition mints delegated credentials narrowed to a role and optional
+// resource filter; the platform permissions gate the admin console's
+// access-token management page.
+//
+// The four relation lines are pinned with requireExactRelationLine, not
+// Contains, for the same subject-closure reason as
+// TestAgentSessionInteractSubjectsAreClosed: widening a type union by
+// appending (e.g. "user" → "user | service") leaves the original text as an
+// unbroken prefix, so a substring check would keep passing while the token's
+// role relations silently admitted new subject kinds.
+func TestAccessTokenDefinition(t *testing.T) {
+	requireExactRelationLine(t, authzschema.Schema, "relation role_read: user with expiration")
+	requireExactRelationLine(t, authzschema.Schema, "relation role_interact: user with expiration")
+	requireExactRelationLine(t, authzschema.Schema, "relation role_full: user with expiration")
+	requireExactRelationLine(t, authzschema.Schema, "relation scope_class: agentclass with expiration | agentclass:* with expiration")
+	for _, want := range []string{
+		"definition accesstoken {",
+		"permission covers = scope_class",
+		"permission owner = role_read + role_interact + role_full",
+		"permission can_full = role_full",
+		"permission can_interact = role_interact + can_full",
+		"permission can_read = role_read + can_interact",
+		"permission read_transcript = can_read",
+		"permission read = can_read",
+		"permission view = can_read",
+		"permission interact = can_interact",
+		"permission approve = can_full",
+		"permission start_session = can_full",
+		"permission view_tokens = can_admin",
+		"permission revoke_token = can_admin",
+	} {
+		assert.Contains(t, authzschema.Schema, want)
+	}
+}
+
 // requireExactRelationLine requires that schema contains a line — after
 // trimming leading/trailing whitespace — that equals want exactly. Unlike
 // require.Contains, this fails on an append (e.g. "user" widened to
