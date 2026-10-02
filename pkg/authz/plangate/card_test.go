@@ -378,6 +378,105 @@ func TestBuildCard_aHandleOnlyWideningMentionsNoSlots(t *testing.T) {
 		"the slot was already granted; only the handle is new")
 }
 
+// A slot that carries MovedFrom is a MOVE: the session is already pinned to a
+// different instance of this single-occupancy slot, and approving repoints it.
+// The card must show BOTH the current occupant and the proposed one so the
+// approver sees what one click changes, and must state plainly that the current
+// instance loses this session's access — a card that named only the new target
+// would describe a grant while hiding the revocation it comes with.
+func TestBuildCard_slotMoveShowsBothInstancesAndRevocation(t *testing.T) {
+	h := handle(t, "read", "crm_contact")
+	card := BuildCard(CardInput{
+		Plan: Plan{Phases: []Phase{{
+			Permissions: []permsurface.Handle{h},
+			Slots:       []Slot{{Type: "crm_company", ID: "4210"}},
+		}}},
+		Severity:   Elevated,
+		AddedSlots: []Slot{{Type: "crm_company", ID: "4299", MovedFrom: "4210"}},
+	})
+
+	assert.Contains(t, card.What, "4210",
+		"the move must name the instance the session is currently pinned to")
+	assert.Contains(t, card.What, "4299",
+		"and the instance approving moves the pin to")
+	assert.Contains(t, card.What, "4210 → 4299",
+		"both instances render as a move, current → proposed")
+	assert.Contains(t, card.What, "revokes this session's access to 4210",
+		"the card must state the displaced instance loses access, not hide the revocation")
+}
+
+// A first-fill slot — no MovedFrom — must render exactly as it did before the
+// move feature: the proposed instance alone, no arrow, no revocation sentence.
+// This is the byte-compatibility guard: the overwhelmingly common case must not
+// grow move copy just because the field exists.
+func TestBuildCard_slotFirstFillRendersNoMoveCopy(t *testing.T) {
+	h := handle(t, "read", "crm_contact")
+	card := BuildCard(CardInput{
+		Plan: Plan{Phases: []Phase{{
+			Permissions: []permsurface.Handle{h},
+			Slots:       []Slot{{Type: "crm_company", ID: "4210"}},
+		}}},
+		Severity:   Elevated,
+		AddedSlots: []Slot{{Type: "crm_company", ID: "4299"}},
+	})
+
+	assert.Contains(t, card.What, "4299", "a first-fill names the instance it binds")
+	assert.NotContains(t, card.What, "→", "a first-fill is not a move, so no arrow")
+	assert.NotContains(t, strings.ToLower(card.What), "moves the pin",
+		"a first-fill must not claim to move a pin")
+	assert.NotContains(t, card.What, "revokes this session's access",
+		"a first-fill revokes nothing")
+}
+
+// A move whose displaced instance (MovedFrom) is a DERIVED object id must render
+// that instance in the SAME display vocabulary as the proposed one — not as the
+// raw derived id sitting against a declared value. A type declaring a Label
+// deriver resolves the displaced instance to its label (last_segment of
+// "acme/old-repo" is "old-repo"), so the move reads "old-repo → …" rather than
+// mixing an escaped derived id with a human value.
+func TestBuildCard_slotMoveRendersDisplacedInstanceThroughDisplay(t *testing.T) {
+	h := handle(t, "push", "git_repo")
+	card := BuildCard(CardInput{
+		Plan: Plan{Phases: []Phase{{
+			Permissions: []permsurface.Handle{h},
+			Slots:       []Slot{{Type: "git_repo", ID: "acme/new-repo"}},
+		}}},
+		Severity:   Elevated,
+		AddedSlots: []Slot{{Type: "git_repo", ID: "acme/new-repo", MovedFrom: "acme/old-repo"}},
+		ResourceDisplays: map[string]ResourceDisplay{
+			"git_repo": {Label: "last_segment"},
+		},
+	})
+
+	assert.Contains(t, card.What, "old-repo → ",
+		"the displaced instance renders through ResourceDisplays, consistent with the proposed one")
+	assert.Contains(t, card.What, "revokes this session's access to old-repo",
+		"the revocation sentence uses the same display form for the displaced instance")
+	assert.NotContains(t, card.What, "acme/old-repo → ",
+		"the raw derived id must not stand in the arrow when a display label is recoverable")
+}
+
+// The fallback half of the same rule: a type with no declared display (or whose
+// label cannot be derived) must still show the displaced instance's derived id,
+// never the bare type name — the approver has to see WHICH instance moves.
+func TestBuildCard_slotMoveFallsBackToDerivedIDWhenNoLabel(t *testing.T) {
+	h := handle(t, "read", "crm_contact")
+	card := BuildCard(CardInput{
+		Plan: Plan{Phases: []Phase{{
+			Permissions: []permsurface.Handle{h},
+			Slots:       []Slot{{Type: "crm_company", ID: "4299"}},
+		}}},
+		Severity:   Elevated,
+		AddedSlots: []Slot{{Type: "crm_company", ID: "4299", MovedFrom: "4210"}},
+		// No ResourceDisplays entry for crm_company → no label recoverable.
+	})
+
+	assert.Contains(t, card.What, "4210 → 4299",
+		"with no display, the displaced instance falls back to its derived id, not the type name")
+	assert.NotContains(t, card.What, "crm_company → ",
+		"the bare type name must never stand in for the displaced instance")
+}
+
 // planWithPushPhase is a one-phase plan whose ceiling is a single external
 // permission, for tests that only care about how one CardLine renders.
 func planWithPushPhase(t *testing.T) Plan {

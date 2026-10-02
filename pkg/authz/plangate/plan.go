@@ -118,6 +118,20 @@ type Slot struct {
 	// plan and silently discard an approval already given — and an agent could
 	// vary it deliberately to escape a phase it had been refused.
 	Why string
+
+	// MovedFrom, when non-empty, is the instance this session is CURRENTLY
+	// pinned to on a single-occupancy slot, set ONLY when this card names a
+	// DIFFERENT instance — i.e. approving the card MOVES the pin rather than
+	// filling an empty slot. DISPLAY ONLY: it is threaded onto the card's slots
+	// at card-build time from the approval record's MovedFrom (what the card
+	// showed the approver), and the card renders "<MovedFrom> → <ID>" plus a
+	// sentence stating the move revokes this session's access to <MovedFrom>.
+	//
+	// Excluded from identity exactly like Why — the digest and AuthorityKey
+	// read only Type and ID (see Digest / AuthorityKey), so threading it here
+	// cannot re-key a plan or discard an approval. Empty is the common
+	// first-fill case and renders byte-identically to the pre-move card.
+	MovedFrom string
 }
 
 // AuthoredSlot is a slot request as the agent wrote it, before validation.
