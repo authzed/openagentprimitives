@@ -146,6 +146,35 @@ func TestAdoption_noSlotsSeedsNothing(t *testing.T) {
 	assert.Empty(t, az.grantedSlots)
 }
 
+// TestMint_sweepsStaleSlotTuplesBeforeBinding: a channelsd mint must sweep
+// whatever a dead predecessor left under this ns/name BEFORE it writes its own
+// mint-time binds — otherwise the operator's own sweep (now suppressed for a
+// channelsd mint by the pre-stamped finalizer) raced those binds and could
+// delete the legitimate authority they just wrote. The sweep (DeleteSlotGrants)
+// must run strictly before the first GrantSlots, and the fresh bind must
+// survive it.
+func TestMint_sweepsStaleSlotTuplesBeforeBinding(t *testing.T) {
+	ch := newChannel("c1")
+	p, az, _, _, _ := newPipeline(t, ch, classWithThreadSeededSlot(nil))
+	p.ReadHistory = func(_ context.Context, _ *spiceboxv1alpha1.Channel, _ string, _ channelkinds.ReadHistoryOpts) (channelkinds.HistoryPage, error) {
+		return threadWithLinks(), nil
+	}
+	// A stale binding a dead predecessor with this name left behind. The mint
+	// sweep must wipe it before the fresh thread-seed bind lands.
+	az.grantedSlots = []authz.SlotBinding{{ResourceType: "http_target", ResourceID: authz.TrustedObjectID("stale")}}
+
+	deliverAdoptionMention(t, p, ch)
+
+	assert.Equal(t, 1, az.deleteSlotGrantsCalls, "the mint must sweep exactly once before binding")
+	require.GreaterOrEqual(t, len(az.slotCallOrder), 2, "both the sweep and the bind must have run")
+	assert.Equal(t, "sweep", az.slotCallOrder[0], "the sweep must run BEFORE the first bind")
+	assert.Equal(t, "grant", az.slotCallOrder[1], "the bind follows the sweep")
+
+	require.Len(t, az.grantedSlots, 1, "the stale binding was swept; only the fresh thread-seed bind survives")
+	assert.Equal(t, seededID(t, "https://ci.example/job/7"), az.grantedSlots[0].ResourceID,
+		"the surviving bind is the summoner's link, not the swept stale tuple")
+}
+
 // A failed grant write must not fail the inbound: without the grants the agent
 // simply has to ask, which is the same place it would have been anyway.
 func TestAdoption_seedGrantFailureStillRoutesTheMessage(t *testing.T) {

@@ -179,7 +179,7 @@ func TestInstall_StampsOapSourceAnnotationOnAgentClass(t *testing.T) {
 //
 // install.Install now completes each slot's membership with
 // v1alpha1.AuthzSlotMembershipDefault before the SSA-apply loop
-// (completeAuthzSlotMembershipDefaults, apply.go) whenever a bundle leaves it
+// (completeAuthzSlotDefaults, apply.go) whenever a bundle leaves it
 // unset, which is what the CRD would have defaulted onto the stored object
 // anyway — so the applied payload matches what the apiserver stores, the
 // merge is a true no-op, and resourceVersion no longer moves across the

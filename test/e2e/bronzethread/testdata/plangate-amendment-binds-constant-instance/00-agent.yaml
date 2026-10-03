@@ -173,6 +173,11 @@ spec:
         permissions: [read]
         description: "A remote repository, reached by its URL"
         permission: push
+        # This class binds a constant "workspace" instance (read) alongside
+        # the chosen repo URL (push) under the same resource type — two
+        # distinct instances of amrepo_repo by design, so the slot must be
+        # multi-occupancy or the second bind is refused.
+        occupancy: multi
     planGate:
       mode: enforcing
   budget:

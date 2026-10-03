@@ -710,10 +710,19 @@ func buildSlotSection(
 		// The declared value, not the object id. See the freeze site: the chain
 		// that turns one into the other is injective, so this value is the only
 		// one that can spend the approval.
-		if s.ID == "" {
+		//
+		// A MOVE (MovedFrom set on a named slot) renders both instances as
+		// "<current> → <proposed>": the session is already pinned to a different
+		// instance of this single-occupancy slot, and approving repoints it. A
+		// first-fill (MovedFrom empty) renders the proposed instance alone,
+		// byte-identically to the pre-move card.
+		switch {
+		case s.ID == "":
 			unnamed++
 			b.WriteString(unnamedTarget)
-		} else {
+		case s.MovedFrom != "":
+			b.WriteString(displacedLabel(displays, s.Type, s.MovedFrom) + " → " + s.ID)
+		default:
 			b.WriteString(s.ID)
 		}
 		perm := permission[s.Type]
@@ -721,6 +730,13 @@ func buildSlotSection(
 			perm = p
 		}
 		b.WriteString("\n    " + slotSentence(standing[s.Type], perm))
+		// The revocation is the half of a move an approver must not miss: the
+		// displaced instance loses this session's access when the pin moves. A
+		// card naming only the new target would describe the grant and hide what
+		// it costs the current one.
+		if s.ID != "" && s.MovedFrom != "" {
+			b.WriteString("\n    Approving moves the pin and revokes this session's access to " + displacedLabel(displays, s.Type, s.MovedFrom) + ".")
+		}
 	}
 
 	// The coverage state is the actual question being answered: does saying yes
@@ -734,6 +750,27 @@ func buildSlotSection(
 	}
 	b.WriteString("\n" + slotStandingSummary(ordered, standing))
 	return b.String()
+}
+
+// displacedLabel renders the instance a move DISPLACES — Slot.MovedFrom, which
+// is a DERIVED object id read off the pin, not the raw declared value the rest
+// of the slot line shows. Rendered naively, a move reads as "<escaped derived
+// id> → <declared value>": two spellings of the resource in one arrow, in front
+// of the approver who most needs to recognise what they are repointing.
+//
+// So it runs MovedFrom through the SAME display path the proposed instance uses
+// (resolveResourceLine): a type that declared a Label deriver gets a per-instance
+// label, recovering the readable form where the derivation happens to be
+// recoverable. When no label is recoverable (resolveResourceLine can only return
+// the bare type name), it falls back to the derived id itself rather than the
+// type name — the approver must still see WHICH instance is being displaced, not
+// merely its kind.
+func displacedLabel(displays map[string]ResourceDisplay, resourceType, movedFrom string) string {
+	text, _, _ := resolveResourceLine(displays, resourceType, movedFrom)
+	if text == resourceType {
+		return movedFrom
+	}
+	return text
 }
 
 // isRequiredStanding reports whether standing names the `required` mode. Any

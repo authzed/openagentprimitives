@@ -46,18 +46,53 @@ type recordingWriteServer struct {
 	// WrittenAt ZedToken — real SpiceDB always returns one, and the freshness
 	// floor advance under test depends on capturing it.
 	writtenAt string
+	// writeErr, when non-nil, is returned once from the next
+	// WriteRelationships call instead of a success response, then cleared.
+	// Scripts a precondition failure (or any other write error) for the
+	// slot-pin tests without needing a schema that can actually produce one.
+	// The request is still recorded before the error is returned — a real
+	// SpiceDB receives and evaluates the request before it refuses it.
+	writeErr error
+	// readRels, when set, is served back verbatim by every ReadRelationships
+	// call, regardless of the request's filter — the slot-pin tests script
+	// exactly the relationships they want read back rather than simulating
+	// SpiceDB's filter evaluation.
+	readRels []*v1.Relationship
+	readReqs []*v1.ReadRelationshipsRequest
 }
 
 func (s *recordingWriteServer) WriteRelationships(_ context.Context, req *v1.WriteRelationshipsRequest) (*v1.WriteRelationshipsResponse, error) {
 	s.mu.Lock()
 	s.writeReqs = append(s.writeReqs, req)
 	tok := s.writtenAt
+	err := s.writeErr
+	s.writeErr = nil
 	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	resp := &v1.WriteRelationshipsResponse{}
 	if tok != "" {
 		resp.WrittenAt = &v1.ZedToken{Token: tok}
 	}
 	return resp, nil
+}
+
+// ReadRelationships is a server-streaming RPC: it serves back s.readRels
+// unconditionally and records the request so a test can assert on its
+// Consistency (the slot-pin conflict read must be fully consistent).
+func (s *recordingWriteServer) ReadRelationships(req *v1.ReadRelationshipsRequest, stream v1.PermissionsService_ReadRelationshipsServer) error {
+	s.mu.Lock()
+	s.readReqs = append(s.readReqs, req)
+	rels := make([]*v1.Relationship, len(s.readRels))
+	copy(rels, s.readRels)
+	s.mu.Unlock()
+	for _, rel := range rels {
+		if err := stream.Send(&v1.ReadRelationshipsResponse{Relationship: rel}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *recordingWriteServer) DeleteRelationships(_ context.Context, req *v1.DeleteRelationshipsRequest) (*v1.DeleteRelationshipsResponse, error) {
@@ -80,6 +115,28 @@ func (s *recordingWriteServer) recordedWrites() []*v1.WriteRelationshipsRequest 
 	out := make([]*v1.WriteRelationshipsRequest, len(s.writeReqs))
 	copy(out, s.writeReqs)
 	return out
+}
+
+// lastWrite returns the most recently received WriteRelationshipsRequest, or
+// nil if none has arrived yet.
+func (s *recordingWriteServer) lastWrite() *v1.WriteRelationshipsRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.writeReqs) == 0 {
+		return nil
+	}
+	return s.writeReqs[len(s.writeReqs)-1]
+}
+
+// lastRead returns the most recently received ReadRelationshipsRequest, or
+// nil if none has arrived yet.
+func (s *recordingWriteServer) lastRead() *v1.ReadRelationshipsRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.readReqs) == 0 {
+		return nil
+	}
+	return s.readReqs[len(s.readReqs)-1]
 }
 
 func (s *recordingWriteServer) recordedChecks() []*v1.CheckBulkPermissionsRequest {

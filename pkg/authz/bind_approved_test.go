@@ -3,6 +3,8 @@ package authz
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -25,14 +27,80 @@ type conflictingScopeMemory struct {
 	putErr             error
 }
 
-type approvedRecordingWriter struct{ wrote []Relation }
+// approvedRecordingWriter implements RelWriter AND SlotPinner: BindApproved
+// binds single-occupancy slots, which the gate routes through the pinner, so a
+// plain RelWriter would be refused. It records grants from either write path in
+// `wrote` and keeps one pin per (scope,type).
+//
+// It also models the approved-MOVE path: `grantsFor` seeds a prior instance's
+// held grants so ListGrantsFor returns them as the revoke set, `moves` records
+// every MovePin call in order, and `ops` logs the operation sequence so a test
+// can assert the move landed BEFORE the new instance's grant write.
+type approvedRecordingWriter struct {
+	wrote     []Relation
+	pins      map[string]string
+	grantsFor map[string][]Relation // (type\x00id) -> the instance's held grants, served by ListGrantsFor
+	moves     []moveCall            // every MovePin, in order
+	ops       []string              // ordered op log: "move", "grant"
+	moveErr   error                 // injected into MovePin
+}
+
+type moveCall struct {
+	resourceType, fromID, toID string
+	revoke                     []Relation
+}
+
+func grantStoreKey(resourceType, resourceID string) string {
+	return resourceType + "\x00" + resourceID
+}
 
 func (w *approvedRecordingWriter) WriteRelationships(_ context.Context, rels []Relation) error {
+	w.ops = append(w.ops, "grant")
 	w.wrote = append(w.wrote, rels...)
 	return nil
 }
 
 func (*approvedRecordingWriter) DeleteRelationships(context.Context, []Relation) error { return nil }
+
+func (w *approvedRecordingWriter) EnsurePin(_ context.Context, resourceType, resourceID string, scope SessionRef) (bool, string, error) {
+	if w.pins == nil {
+		w.pins = map[string]string{}
+	}
+	key := scope.String() + "\x00" + resourceType
+	if cur, ok := w.pins[key]; ok {
+		return true, cur, nil
+	}
+	w.pins[key] = resourceID
+	return false, resourceID, nil
+}
+
+func (w *approvedRecordingWriter) WriteGrantsPinned(_ context.Context, rels []Relation, _, _ string, _ SessionRef) error {
+	w.ops = append(w.ops, "grant")
+	w.wrote = append(w.wrote, rels...)
+	return nil
+}
+
+func (w *approvedRecordingWriter) MovePin(_ context.Context, resourceType, fromID, toID string, revoke []Relation, scope SessionRef) error {
+	if w.moveErr != nil {
+		return w.moveErr
+	}
+	if w.pins == nil {
+		w.pins = map[string]string{}
+	}
+	w.ops = append(w.ops, "move")
+	w.moves = append(w.moves, moveCall{resourceType: resourceType, fromID: fromID, toID: toID, revoke: revoke})
+	w.pins[scope.String()+"\x00"+resourceType] = toID
+	delete(w.grantsFor, grantStoreKey(resourceType, fromID))
+	return nil
+}
+
+func (w *approvedRecordingWriter) ReadPin(_ context.Context, resourceType string, scope SessionRef) (string, error) {
+	return w.pins[scope.String()+"\x00"+resourceType], nil
+}
+
+func (w *approvedRecordingWriter) ListGrantsFor(_ context.Context, resourceType, resourceID string, _ SessionRef) ([]Relation, error) {
+	return w.grantsFor[grantStoreKey(resourceType, resourceID)], nil
+}
 
 func (m *conflictingScopeMemory) Query(ctx context.Context, q memory.Query) (memory.QueryResult, error) {
 	m.queryCalls++
@@ -172,6 +240,132 @@ func TestBindApproved_exhaustsScopeVersionConflictsWithoutGranting(t *testing.T)
 	assert.Equal(t, 6, mem.queryCalls, "the retry bound is three read/compare attempts")
 	assert.Equal(t, 97, mem.conflictsRemaining)
 	assert.Empty(t, w.wrote, "a scope write that never wins must never create a grant")
+}
+
+// The approved MOVE — the only way a filled single-occupancy slot legitimately
+// changes instance. A binding carrying PriorID repoints the pin repoA -> repoB,
+// revokes repoA's held grants in the SAME request, and only then writes repoB's
+// grant through the normal gated path. Order matters: the revoke-and-move lands
+// before the new grant, so the slot is never momentarily held by two instances.
+func TestBindApproved_approvedMoveRepointsPinRevokesPriorGrantsThenWritesNew(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	mem := memory.NewLocal(inmem.NewBackend())
+	memScope := memory.Scope{Kind: "session", ID: "ns/s"}
+	sess := SessionRef{Namespace: "ns", Name: "s"}
+	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+
+	priorGrant := SlotGrantRelation("git_repo", "repoA", "push", sess)
+	w := &approvedRecordingWriter{
+		pins:      map[string]string{sess.String() + "\x00git_repo": "repoA"},
+		grantsFor: map[string][]Relation{grantStoreKey("git_repo", "repoA"): {priorGrant}},
+	}
+
+	err := BindApproved(ctx, mem, memScope, sess, w,
+		[]SlotBinding{{
+			ResourceType: "git_repo", ResourceID: TrustedObjectID("repoB"),
+			Permission: "push", PriorID: TrustedObjectID("repoA"),
+		}},
+		EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now)
+	require.NoError(t, err)
+
+	// Exactly one move, repointing repoA -> repoB, revoking repoA's held grant.
+	require.Len(t, w.moves, 1, "one move per moving type")
+	assert.Equal(t, "git_repo", w.moves[0].resourceType)
+	assert.Equal(t, "repoA", w.moves[0].fromID)
+	assert.Equal(t, "repoB", w.moves[0].toID)
+	require.Len(t, w.moves[0].revoke, 1, "the revoke set is the prior instance's actual grants")
+	assert.Equal(t, priorGrant, w.moves[0].revoke[0])
+
+	// The move lands BEFORE the new instance's grant write.
+	require.GreaterOrEqual(t, len(w.ops), 2)
+	assert.Equal(t, "move", w.ops[0], "the move-and-revoke happens first")
+	assert.Equal(t, "grant", w.ops[len(w.ops)-1], "the new grant is written after the move")
+
+	// repoB is now pinned and holds the new grant.
+	assert.Equal(t, "repoB", w.pins[sess.String()+"\x00git_repo"])
+	newGrant := SlotGrantRelation("git_repo", "repoB", "push", sess)
+	assert.True(t, slices.ContainsFunc(w.wrote, func(r Relation) bool {
+		return r.ResourceType == newGrant.ResourceType && r.ResourceID == newGrant.ResourceID && r.Relation == newGrant.Relation
+	}), "the new instance's grant must be written after the move")
+}
+
+// A move whose MUST_MATCH no longer holds — the pin drifted since the card was
+// shown — fails. BindApproved must PROPAGATE that failure (errors.Is-able as
+// ErrSlotPinned), never swallow it: the human's approval produced nothing, and
+// nothing may be written for the new instance either.
+func TestBindApproved_moveFailurePropagatesWrappingErrSlotPinned(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	mem := memory.NewLocal(inmem.NewBackend())
+	memScope := memory.Scope{Kind: "session", ID: "ns/s"}
+	sess := SessionRef{Namespace: "ns", Name: "s"}
+	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+
+	w := &approvedRecordingWriter{
+		pins:    map[string]string{sess.String() + "\x00git_repo": "repoA"},
+		moveErr: fmt.Errorf("move pin git_repo:repoA -> git_repo:repoB: %w", ErrSlotPinned),
+	}
+
+	err := BindApproved(ctx, mem, memScope, sess, w,
+		[]SlotBinding{{
+			ResourceType: "git_repo", ResourceID: TrustedObjectID("repoB"),
+			Permission: "push", PriorID: TrustedObjectID("repoA"),
+		}},
+		EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSlotPinned, "a failed move must propagate, not be swallowed")
+	assert.Empty(t, w.wrote, "a move that failed must not go on to write the new instance's grant")
+}
+
+// Two DISTINCT move targets for ONE single-occupancy type in one approval
+// cannot both occupy the slot. moveApprovedPins must refuse the whole set
+// BEFORE any MovePin runs — executing even the first would commit the slot to
+// whichever target happened to be ordered first, an instance the approver was
+// not necessarily shown as THE move.
+func TestBindApproved_twoDistinctMoveTargetsRefusedBeforeAnyMove(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	mem := memory.NewLocal(inmem.NewBackend())
+	memScope := memory.Scope{Kind: "session", ID: "ns/s"}
+	sess := SessionRef{Namespace: "ns", Name: "s"}
+	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+	w := &approvedRecordingWriter{pins: map[string]string{sess.String() + "\x00git_repo": "repoA"}}
+
+	err := BindApproved(ctx, mem, memScope, sess, w,
+		[]SlotBinding{
+			{ResourceType: "git_repo", ResourceID: TrustedObjectID("repoB"), Permission: "push", PriorID: TrustedObjectID("repoA")},
+			{ResourceType: "git_repo", ResourceID: TrustedObjectID("repoC"), Permission: "push", PriorID: TrustedObjectID("repoA")},
+		},
+		EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSlotPinned, "two distinct move targets is a single-occupancy refusal")
+	assert.Empty(t, w.moves, "no MovePin may run when the move set is self-contradictory")
+	assert.Empty(t, w.wrote, "a refused move set grants nothing")
+}
+
+// A binding whose PriorID equals its ResourceID is not a move: the pin already
+// names that instance. moveApprovedPins must SKIP it (no MovePin, no needless
+// revoke of the instance's own grants); the subsequent same-instance GrantSlots
+// re-binds it through the normal pinned path.
+func TestBindApproved_moveToSameInstanceIsSkippedNotMoved(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	mem := memory.NewLocal(inmem.NewBackend())
+	memScope := memory.Scope{Kind: "session", ID: "ns/s"}
+	sess := SessionRef{Namespace: "ns", Name: "s"}
+	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+	w := &approvedRecordingWriter{pins: map[string]string{sess.String() + "\x00git_repo": "repoA"}}
+
+	err := BindApproved(ctx, mem, memScope, sess, w,
+		[]SlotBinding{{
+			ResourceType: "git_repo", ResourceID: TrustedObjectID("repoA"),
+			Permission: "push", PriorID: TrustedObjectID("repoA"),
+		}},
+		EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now)
+
+	require.NoError(t, err)
+	assert.Empty(t, w.moves, "a move to the SAME instance is a no-op, never a MovePin")
+	assert.Equal(t, "repoA", w.pins[sess.String()+"\x00git_repo"], "the pin stays put")
+	assert.NotEmpty(t, w.wrote, "the same-instance re-grant still binds through the normal pinned path")
 }
 
 func TestBindApproved_doesNotRetryUnrelatedScopeWriteError(t *testing.T) {

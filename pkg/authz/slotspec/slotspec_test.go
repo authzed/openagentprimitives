@@ -45,6 +45,31 @@ func TestFromSlots_CarriesRequiresThrough(t *testing.T) {
 	assert.Equal(t, "the head of this pull request lives on a fork", got[0].Requires[0].RefusalMessage)
 }
 
+// TestFromSlots_CarriesOccupancyAndRebindThrough is the same silent-drop hazard
+// as Requires: occupancy/rebind are plain spec fields on AuthzSlot, and a
+// conversion that dropped them would hand pkg/authz a binding whose empty
+// Occupancy reads as single — so a multi slot would be gated as single, its
+// second instance refused, with nothing red. The assertion is on the spec the
+// binder consumes, not merely on the call returning.
+func TestFromSlots_CarriesOccupancyAndRebindThrough(t *testing.T) {
+	slots := []spiceboxv1alpha1.AuthzSlot{
+		{ResourceType: "label", Permission: "apply", Occupancy: "multi", Rebind: "approval"},
+		{ResourceType: "git_repo", Permission: "push", Occupancy: "single", Rebind: "never"},
+		{ResourceType: "crm_company", Permission: "contact_access"}, // both unset
+	}
+
+	got, err := slotspec.FromSlots(slots, nil)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+
+	assert.Equal(t, "multi", got[0].Occupancy, "a multi slot's occupancy must reach the binder")
+	assert.Equal(t, "approval", got[0].Rebind)
+	assert.Equal(t, "single", got[1].Occupancy)
+	assert.Equal(t, "never", got[1].Rebind, "rebind must reach the gate, which quotes it in the refusal route")
+	assert.Empty(t, got[2].Occupancy, "unset stays empty — which pkg/authz reads as single downstream")
+	assert.Empty(t, got[2].Rebind)
+}
+
 // TestFromSlots_CarriesApproversThrough is the same silent-drop hazard as the
 // program and the two messages: compileRequires is the ONE seam that copies a
 // SlotPrecondition into the precondition.Rule pkg/authz gates on, and a field

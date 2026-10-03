@@ -125,3 +125,29 @@ func TestAttestedForgeIdentityRefusedAsPrincipalOnScaffoldResource(t *testing.T)
 	require.Error(t, err, "an attested forge identity must not be handed authority over a platform object")
 	assert.Contains(t, err.Error(), "a tool may not hand a principal authority over a platform object")
 }
+
+// slot_pin and slot_grant_* are platform slot mechanisms that must not be
+// writable by tools. slot_pin is the single-occupancy commitment the pinning
+// gate writes with an atomic precondition; slot_grant_* are the session's slot
+// grants. A toolspec writing either would bypass the gate that makes them mean
+// anything.
+func TestValidateResolvedTuple_RefusesPlatformSlotRelations(t *testing.T) {
+	cases := []struct {
+		name     string
+		relation string
+	}{
+		{"slot_pin is the pinning mechanism's own relation", "slot_pin"},
+		{"slot_grant_push is a grant relation", "slot_grant_push"},
+		{"slot_grant_read is a grant relation", "slot_grant_read"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := relwrites.ValidateResolvedTuple(relwrites.ResolvedTuple{
+				Resource: "git_repo:acme/widgets", Relation: tc.relation,
+				Subject: "agentsession:ns/s",
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.relation)
+		})
+	}
+}

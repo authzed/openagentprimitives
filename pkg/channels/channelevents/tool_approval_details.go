@@ -38,6 +38,18 @@ type ToolApprovalDetails struct {
 	// It is set by the runner, which reads the class's slot list at raise time;
 	// channelsd has no other route to the answer at decision time.
 	NoSlotGrant bool `json:"noSlotGrant,omitempty"`
+	// Occupancy and Rebind are the slot's single-vs-multi commitment and rebind
+	// policy, resolved from the class slot at REQUEST-RECORD time (the runner
+	// holds the class; the channelsd decision handler does not) and read back
+	// when the approval binds, so the grant GrantSlots writes is pinned exactly
+	// as a non-approval bind of the same slot would be.
+	//
+	// Empty Occupancy reads as single downstream, so a record raised before
+	// these fields existed binds gated rather than un-gated — the same
+	// fail-closed default the SlotBinding fields carry. Persisted on the durable
+	// memapproval record alongside the rest of this payload.
+	Occupancy string `json:"occupancy,omitempty"`
+	Rebind    string `json:"rebind,omitempty"`
 	// ToolName is the tool's wire name. Machine-readable identity: the visible
 	// "Tool" field carries the tool's DESCRIPTION, because a wire name has no
 	// business on a surface a person decides from — so anything matching a

@@ -100,8 +100,9 @@ places the decision outside the model.
   text can change what the model wants to do. It cannot change what the model is
   allowed to do.
 - **Slots.** A session commits to the specific resource it is working on, as a
-  relationship that can be written only once. It cannot drift to another
-  resource even when its credentials would reach one.
+  pinned relationship. A different resource is refused unless a human approves a
+  plan amendment that moves the pin and revokes the old resource's access — and
+  a slot set `rebind: never` admits no move at all.
 - **Approvals the model cannot reword.** The platform generates the description
   of the action from the call itself. The model contributes only its reasoning,
   so it cannot restate the action in different terms.
@@ -367,10 +368,11 @@ For architecture and implementation:
 ## Defense in depth, enforced by code
 
 To misuse an OAP agent, an attacker has to get past a plan a human approved, a
-slot that cannot be reopened, a tool lens that cannot be widened, an
-authorization check on every call, and a sandbox that never held the credential
-in the first place. None of them is sufficient alone, and each is built on the
-assumption that the others may fail.
+slot that cannot be silently reopened — a different instance needs a human's
+approval, and `rebind: never` needs a new session — a tool lens that cannot be
+widened, an authorization check on every call, and a sandbox that never held the
+credential in the first place. None of them is sufficient alone, and each is
+built on the assumption that the others may fail.
 
 ## Contributing
 

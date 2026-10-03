@@ -93,6 +93,10 @@ func (s *stubAuthz) GrantSlots(_ context.Context, _, _ string, _ []authz.SlotBin
 	return nil
 }
 
+// DeleteSlotGrants satisfies pipeline.Authz: the mint admission sweep. A fresh
+// e2e session has no stale predecessor tuples, so a successful no-op is faithful.
+func (s *stubAuthz) DeleteSlotGrants(_ context.Context, _, _ string) error { return nil }
+
 // Relations satisfies pipeline.Authz. Nil is the documented safe branch:
 // authz.BindApproved narrows session_scope and logs rather than granting
 // when its writer is nil, and these e2e scenarios don't assert on the

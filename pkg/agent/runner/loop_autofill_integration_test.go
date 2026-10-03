@@ -97,6 +97,14 @@ type autofillLoopSpec struct {
 	seedExtracted string
 	// slotFillFrom overrides the class slot's fillFrom.
 	slotFillFrom []string
+	// seedPin, when non-empty, pre-pins the single-occupancy github_repo slot to
+	// this instance before Run, so a promotion of a DIFFERENT instance is refused
+	// by the pin (authz.ErrSlotPinned).
+	seedPin string
+	// toolChecker overrides the engine's ToolChecker. Nil keeps the allow-all
+	// default; a custom one lets a test deny the dispatch Check while still
+	// admitting the promotion candidate.
+	toolChecker engine.ToolChecker
 }
 
 // buildAutofillLoop constructs the Loop + capturingTool + session fixtures.
@@ -155,11 +163,20 @@ func buildAutofillLoop(t *testing.T, spec autofillLoopSpec) (*runner.Loop, *inpu
 			memory.Scope{Kind: "session", ID: "default/af-sess"},
 			eex.Content{ResourceType: "github_repo", ResourceID: spec.seedExtracted, TurnIndex: 0}))
 	}
+	if spec.seedPin != "" {
+		_, _, err := slots.EnsurePin(context.Background(), "github_repo", spec.seedPin,
+			authz.SessionRef{Namespace: "default", Name: "af-sess"})
+		require.NoError(t, err, "pre-seed pin")
+	}
 
+	var chk engine.ToolChecker = &allowAllToolChecker{}
+	if spec.toolChecker != nil {
+		chk = spec.toolChecker
+	}
 	spdb := &alwaysAllowSpiceDB{}
 	zedCache := toolcheck.NewZedTokenCache()
 	eng := engine.New(engine.Deps{
-		ToolChecker: &allowAllToolChecker{},
+		ToolChecker: chk,
 		RelWriter:   slots,
 		SlotLister:  slots,
 		Memory:      memLocal,
@@ -210,6 +227,10 @@ func buildAutofillLoop(t *testing.T, spec autofillLoopSpec) (*runner.Loop, *inpu
 		AuthzCache: zedCache,
 		Engine:     eng,
 		AgentClass: cls,
+		// The same store the engine grants through, so the pin-refusal record
+		// can read the pinned instance back (and the mirror its pin state),
+		// exactly as production wires one SpiceDB client into both.
+		SlotBinder: slots,
 
 		BindingAutofillEnabled:  spec.autofillEnabled,
 		BindingAutofillDeadline: 100 * time.Millisecond,

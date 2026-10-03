@@ -48,6 +48,19 @@ type slotCandidate struct {
 	// NoGrantRelation mirrors SlotBinding.NoGrantRelation: the type has no
 	// slot_grant relation to write, so this candidate narrows scope only.
 	NoGrantRelation bool
+	// Occupancy and Rebind mirror SlotBinding's fields, copied from the
+	// candidate's BoundEntitySpec so bindSlots can stamp them onto the
+	// SlotBinding the GrantSlots pinning gate reads. Empty Occupancy is single.
+	Occupancy string
+	Rebind    string
+
+	// PriorID mirrors SlotBinding.PriorID: when non-zero, this candidate MOVES a
+	// filled single-occupancy slot from PriorID to ResourceID. Carried through
+	// checkPreconditions so the move executes only for a candidate that actually
+	// survived the gate — a held instance must not have the pin moved to it, and
+	// the prior instance's grants must not be revoked, for a bind that never
+	// happens.
+	PriorID ObjectID
 }
 
 // admissibleCandidates is the one filter chain every fill source runs its
@@ -365,7 +378,13 @@ func bindSlots(
 		if c.NoGrantRelation {
 			continue
 		}
-		bindings = append(bindings, SlotBinding{ResourceType: c.ResourceType, ResourceID: c.ResourceID, Permission: c.Permission})
+		bindings = append(bindings, SlotBinding{
+			ResourceType: c.ResourceType,
+			ResourceID:   c.ResourceID,
+			Permission:   c.Permission,
+			Occupancy:    c.Occupancy,
+			Rebind:       c.Rebind,
+		})
 	}
 
 	var scopeErr error
@@ -522,6 +541,9 @@ func BindApproved(
 			RawID:           b.RawID,
 			Requires:        b.Requires,
 			NoGrantRelation: b.NoGrantRelation,
+			Occupancy:       b.Occupancy,
+			Rebind:          b.Rebind,
+			PriorID:         b.PriorID,
 		})
 	}
 	if policy == EnforcePreconditions {
@@ -530,5 +552,110 @@ func BindApproved(
 			return nil
 		}
 	}
+	// The approved MOVE runs BEFORE bindSlots, over the candidates that survived
+	// the precondition gate: it repoints each filled single-occupancy slot off
+	// its old instance and revokes that instance's grants, so the subsequent
+	// GrantSlots finds the pin already on the new instance (a same-instance
+	// bind) rather than a different one (which it would refuse). A move failure
+	// propagates — the human's approval produced nothing, and bindSlots must not
+	// then write the new grant.
+	if err := moveApprovedPins(ctx, w, sess, bound, logger); err != nil {
+		return err
+	}
 	return bindSlots(ctx, mem, memScope, sess, w, scope.SourceApproved, logger, now, expiresAt, bound)
+}
+
+// moveApprovedPins executes the human-approved pin MOVE for every
+// single-occupancy candidate that carries a PriorID — the only way a filled
+// single-occupancy slot legitimately changes instance.
+//
+// One MovePin per moving type: it repoints the pin fromID (PriorID) -> toID
+// (ResourceID) and revokes the prior instance's grants in the SAME request, so
+// the slot is never momentarily held by two instances and the displaced
+// instance keeps no residual authority. The revoke set is the prior instance's
+// ACTUAL grants, read back via ListGrantsFor — not rebuilt from the moving
+// approval's permission list, which would leave behind any grant the new
+// approval does not re-name (the asymmetric-permission leak).
+//
+// Nil writer: today's no-op. A nil binder grants nothing and moves nothing; the
+// later bindSlots nil-writer branch logs that the approval narrowed scope with
+// no grant written. Fail closed ONLY on a non-nil writer that cannot express the
+// pin, and ONLY when a move is actually needed: a writer that is not a
+// SlotPinner cannot repoint a pin, so routing the move through it would silently
+// drop the single-occupancy guarantee — refuse instead.
+//
+// # The ListGrantsFor → MovePin window is inherent and bounded
+//
+// Each move reads the displaced instance's current grants (ListGrantsFor) and
+// then revokes exactly those in the MovePin request. A grant written to the
+// displaced instance BETWEEN that read and that write survives the move — the
+// revoke set was computed before it existed. This is inherent to a non-atomic
+// read-then-revoke and is not closed here: the only writers of a displaced
+// instance's grants are this session's own bind paths, a straggler is rare, and
+// every slot grant carries a mandatory expiry (SlotGrantExpiry), so a survivor
+// lapses rather than lingering forever. The pin itself moves atomically (the
+// MUST_MATCH guards that), so the single-occupancy identity is never in doubt;
+// only a stray expiring grant on the old instance can briefly outlive the move.
+func moveApprovedPins(ctx context.Context, w RelWriter, sess SessionRef, bound []slotCandidate, logger logr.Logger) error {
+	type pinMove struct {
+		fromID string
+		toID   ObjectID
+	}
+	moves := make(map[string]pinMove)
+	order := make([]string, 0)
+	for _, c := range bound {
+		if c.PriorID.IsZero() || occupancyOf(SlotBinding{Occupancy: c.Occupancy}) == SlotOccupancyMulti {
+			// No move: an empty PriorID is a first-fill, and a multi-occupancy
+			// slot holds no pin to move (PriorID is only ever set for single).
+			continue
+		}
+		if c.PriorID.String() == c.ResourceID.String() {
+			// fromID == toID is not a move: the pin already names this instance.
+			// Executing a MovePin would DELETE then re-TOUCH the same pin and
+			// revoke the instance's own grants for nothing — the subsequent
+			// same-instance GrantSlots re-binds it. Skip it.
+			continue
+		}
+		if existing, ok := moves[c.ResourceType]; ok {
+			if existing.toID.String() != c.ResourceID.String() {
+				// Two DISTINCT move targets for one single-occupancy type in one
+				// approval cannot both occupy the slot. Refuse the WHOLE move set
+				// BEFORE any MovePin runs — executing even the first would commit
+				// the slot to whichever target happened to be ordered first, an
+				// instance the approver was not necessarily shown as THE move.
+				// errors.Is(…, ErrSlotPinned) so the plan-gate failure path treats
+				// it as a pin refusal, not a store error.
+				return fmt.Errorf("%w: slot type %s has two distinct move targets in one approval (%s and %s); it is single-occupancy",
+					ErrSlotPinned, c.ResourceType, existing.toID.String(), c.ResourceID.String())
+			}
+			// Same target named twice (a second permission on the moving
+			// instance) — one move covers both.
+			continue
+		}
+		moves[c.ResourceType] = pinMove{fromID: c.PriorID.String(), toID: c.ResourceID}
+		order = append(order, c.ResourceType)
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+	if w == nil {
+		return nil
+	}
+	pinner, ok := w.(SlotPinner)
+	if !ok {
+		return fmt.Errorf("authz: moving a filled single-occupancy slot needs a SlotPinner-capable writer, got %T", w)
+	}
+	for _, rt := range order {
+		mv := moves[rt]
+		revoke, err := pinner.ListGrantsFor(ctx, rt, mv.fromID, sess)
+		if err != nil {
+			return fmt.Errorf("authz: list prior grants for %s:%s to revoke on move: %w", rt, mv.fromID, err)
+		}
+		logger.Info("approved slot-pin move: repointing a filled single-occupancy slot and revoking the prior instance's grants",
+			"session", sess.String(), "slotType", rt, "from", mv.fromID, "to", mv.toID.String(), "revokeGrants", len(revoke))
+		if err := pinner.MovePin(ctx, rt, mv.fromID, mv.toID.String(), revoke, sess); err != nil {
+			return fmt.Errorf("authz: execute approved slot move for %s: %w", rt, err)
+		}
+	}
+	return nil
 }

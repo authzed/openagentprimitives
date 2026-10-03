@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/contentguard"
 	"github.com/authzed/openagentprimitives/pkg/authz/hooks"
 	"github.com/authzed/openagentprimitives/pkg/authz/toolguard"
@@ -52,6 +53,16 @@ func init() {
 		if l.PlanGateMode == "" || l.PlanGateMode == "disabled" {
 			return nil
 		}
+		// The SlotBinder is a *spicedb.RelationWriter in production, which
+		// implements authz.SlotPinner; the card uses it to read the current pin
+		// and render a move. Type-asserted into an interface variable rather than
+		// assigned as a pointer, so a nil or non-pinner binder yields a true nil
+		// interface (never a typed-nil that would panic on ReadPin) — the gate
+		// then renders every card as a first-fill, which is correct.
+		var slotPinner authz.SlotPinner
+		if sp, ok := l.SlotBinder.(authz.SlotPinner); ok {
+			slotPinner = sp
+		}
 		return []pipeline.Hook{hooks.NewPlanGate(hooks.PlanGateDeps{
 			Mode:        l.PlanGateMode,
 			RequirePlan: l.PlanGateRequirePlan,
@@ -94,6 +105,10 @@ func init() {
 			Records:     l.PlanGateRecords,
 			Recorder:    planGateRecorder{l: l},
 			Logger:      slog.Default(),
+			// Advisory: used only to render a slot MOVE on the card. The MovePin
+			// MUST_MATCH at decision time, not this read, is what makes the move
+			// safe; a nil pinner just renders first-fills.
+			SlotPinner: slotPinner,
 		})}
 	}})
 

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 )
@@ -422,4 +423,53 @@ func TestValidateSlotDeclarations_checksEveryPrecondition(t *testing.T) {
 	_, reason, msg := validateSlotDeclarations(slotClass(slot))
 	assert.Equal(t, spiceboxv1alpha1.ReasonSlotDeclarationInvalid, reason)
 	assert.Contains(t, msg, "requires[1]", "the message must name WHICH precondition is wrong")
+}
+
+func TestValidateSlotDeclarations_SingleOccupancyRejectsMultipleDefaults(t *testing.T) {
+	ac := &spiceboxv1alpha1.AgentClass{}
+	ac.Spec.Authz = &spiceboxv1alpha1.AuthzBlock{Slots: []spiceboxv1alpha1.AuthzSlot{{
+		ResourceType: "git_repo", Description: "d", Permission: "push",
+		Occupancy: "single",
+		Defaults:  []string{"github.com/a/one", "github.com/a/two"},
+	}}}
+	_, reason, msg := validateSlotDeclarations(ac)
+	require.Equal(t, spiceboxv1alpha1.ReasonSlotDeclarationInvalid, reason)
+	assert.Contains(t, msg, "git_repo")
+	assert.Contains(t, msg, "occupancy: multi")
+}
+
+func TestValidateSlotDeclarations_SingleOccupancyAllowsOneDefault(t *testing.T) {
+	ac := &spiceboxv1alpha1.AgentClass{}
+	ac.Spec.Authz = &spiceboxv1alpha1.AuthzBlock{Slots: []spiceboxv1alpha1.AuthzSlot{{
+		ResourceType: "git_repo", Description: "d", Permission: "push",
+		Occupancy: "single", Defaults: []string{"github.com/a/one"},
+	}}}
+	_, reason, _ := validateSlotDeclarations(ac)
+	assert.Empty(t, reason)
+}
+
+// An omitted occupancy MEANS single (AuthzSlotOccupancyDefault) — this is the
+// binding constraint, not a convenience: a slot written before the field
+// existed must not silently become multi-occupancy.
+func TestValidateSlotDeclarations_OmittedOccupancyDefaultsToSingle(t *testing.T) {
+	ac := &spiceboxv1alpha1.AgentClass{}
+	ac.Spec.Authz = &spiceboxv1alpha1.AuthzBlock{Slots: []spiceboxv1alpha1.AuthzSlot{{
+		ResourceType: "git_repo", Description: "d", Permission: "push",
+		Defaults: []string{"github.com/a/one", "github.com/a/two"},
+	}}}
+	_, reason, msg := validateSlotDeclarations(ac)
+	require.Equal(t, spiceboxv1alpha1.ReasonSlotDeclarationInvalid, reason)
+	assert.Contains(t, msg, "git_repo")
+	assert.Contains(t, msg, "occupancy: multi")
+}
+
+func TestValidateSlotDeclarations_MultiOccupancyAllowsSeveralDefaults(t *testing.T) {
+	ac := &spiceboxv1alpha1.AgentClass{}
+	ac.Spec.Authz = &spiceboxv1alpha1.AuthzBlock{Slots: []spiceboxv1alpha1.AuthzSlot{{
+		ResourceType: "git_repo", Description: "d", Permission: "push",
+		Occupancy: "multi",
+		Defaults:  []string{"github.com/a/one", "github.com/a/two", "github.com/a/three"},
+	}}}
+	_, reason, msg := validateSlotDeclarations(ac)
+	assert.Empty(t, reason, "unexpected rejection: %s", msg)
 }

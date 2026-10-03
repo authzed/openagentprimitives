@@ -127,7 +127,16 @@ func (observedAllowAll) CheckToolCall(_ context.Context, _ authz.Permission, _ a
 	return authz.Result{Outcome: authz.OutcomeAllowed}
 }
 
-type observedRelWriter struct{ wrote []authz.Relation }
+// observedRelWriter records every grant write. It implements authz.SlotPinner
+// as well as authz.RelWriter because the slots these tests exercise are
+// single-occupancy (empty occupancy defaults to single), and the gate refuses a
+// plain RelWriter for a single type. The pinned write records into the same
+// `wrote` slice as the plain path, so an assertion on `wrote` reads the same
+// whichever path a binding took.
+type observedRelWriter struct {
+	wrote []authz.Relation
+	pins  map[string]string // keyed by "<ns>/<name>\x00<type>"
+}
 
 func (w *observedRelWriter) WriteRelationships(_ context.Context, rels []authz.Relation) error {
 	w.wrote = append(w.wrote, rels...)
@@ -135,6 +144,39 @@ func (w *observedRelWriter) WriteRelationships(_ context.Context, rels []authz.R
 }
 func (w *observedRelWriter) DeleteRelationships(_ context.Context, _ []authz.Relation) error {
 	return nil
+}
+
+func (w *observedRelWriter) EnsurePin(_ context.Context, resourceType, resourceID string, scope authz.SessionRef) (bool, string, error) {
+	if w.pins == nil {
+		w.pins = map[string]string{}
+	}
+	key := scope.String() + "\x00" + resourceType
+	if cur, ok := w.pins[key]; ok {
+		return true, cur, nil
+	}
+	w.pins[key] = resourceID
+	return false, resourceID, nil
+}
+
+func (w *observedRelWriter) WriteGrantsPinned(_ context.Context, rels []authz.Relation, _, _ string, _ authz.SessionRef) error {
+	w.wrote = append(w.wrote, rels...)
+	return nil
+}
+
+func (w *observedRelWriter) MovePin(_ context.Context, resourceType, _, toID string, _ []authz.Relation, scope authz.SessionRef) error {
+	if w.pins == nil {
+		w.pins = map[string]string{}
+	}
+	w.pins[scope.String()+"\x00"+resourceType] = toID
+	return nil
+}
+
+func (w *observedRelWriter) ReadPin(_ context.Context, resourceType string, scope authz.SessionRef) (string, error) {
+	return w.pins[scope.String()+"\x00"+resourceType], nil
+}
+
+func (w *observedRelWriter) ListGrantsFor(_ context.Context, _, _ string, _ authz.SessionRef) ([]authz.Relation, error) {
+	return nil, nil
 }
 
 // dispatchObservingTool drives ONE round of the real dispatcher against the

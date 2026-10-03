@@ -20,6 +20,11 @@ type TriggerSlotRequest struct {
 	// Expr is the slot's compiled triggerInstance, nil when the slot
 	// declared none and relies on the kind's TriggerSlotProvider.
 	Expr cel.Program
+	// Occupancy and Rebind are the slot's single-vs-multi commitment and rebind
+	// policy, carried onto every binding a verified delivery produces so the
+	// GrantSlots pinning gate sees them. Empty Occupancy reads as single.
+	Occupancy string
+	Rebind    string
 }
 
 // maxTriggerBoundBindings caps how many instances one verified delivery may
@@ -105,7 +110,7 @@ func TriggerSlotRequestsFor(ctx context.Context, class *spiceboxv1alpha1.AgentCl
 				"class", class.Namespace+"/"+class.Name, "resourceType", s.ResourceType)
 			continue
 		}
-		req := TriggerSlotRequest{ResourceType: s.ResourceType, Permission: s.Permission}
+		req := TriggerSlotRequest{ResourceType: s.ResourceType, Permission: s.Permission, Occupancy: s.Occupancy, Rebind: s.Rebind}
 		if s.TriggerInstance != "" {
 			prg, err := authz.CompileTriggerInstanceExpr(s.TriggerInstance)
 			if err != nil {
@@ -236,7 +241,7 @@ func (p *Pipeline) BindTriggerSlots(
 					"session", sess.Namespace+"/"+sess.Name, "kind", ev.Channel.Spec.Kind, "resourceType", req.ResourceType, "err", err.Error())
 				continue
 			}
-			b := authz.SlotBinding{ResourceType: req.ResourceType, ResourceID: id, Permission: req.Permission}
+			b := authz.SlotBinding{ResourceType: req.ResourceType, ResourceID: id, Permission: req.Permission, Occupancy: req.Occupancy, Rebind: req.Rebind}
 			dedupKey := b.ResourceType + "\x00" + id.String() + "\x00" + b.Permission
 			if _, dup := seen[dedupKey]; dup {
 				continue
@@ -266,6 +271,11 @@ func (p *Pipeline) BindTriggerSlots(
 	if err := p.Authz.GrantSlots(ctx, sess.Namespace, sess.Name, bindings, expiresAt); err != nil {
 		logger.Info("trigger slot binding: grant write failed; every slot-bound write in this batch (see bindings) will be refused; there is nobody to approve on a triggered session",
 			"session", sess.Namespace+"/"+sess.Name, "bindings", len(bindings), "err", err.Error())
+		// A single-occupancy pin refusal is an answer, not a transient failure:
+		// the delivery named a target this session cannot switch to. Record a
+		// session-visible notice, beyond the operator log above. Pass the bindings
+		// so the notice routes its NextStep by the refused slot's rebind policy.
+		p.publishSlotBindRefusedNotice(ctx, sess, bindings, err)
 		return
 	}
 	logger.Info("trigger slot binding: bound the instances a verified delivery named",

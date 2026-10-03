@@ -1140,8 +1140,44 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// fields this reconcile actually changes; agentstatus.WriteOwned diffs
 	// against it.
 	ctx = withReconcileOriginal(ctx, sess.DeepCopy())
-	if added, err := apreconcile.EnsureFinalizer(ctx, r.Client, &sess, spiceboxv1alpha1.FinalizerAgentSession); added || err != nil {
-		return ctrl.Result{Requeue: added}, err
+	if addedFinalizer, ferr := apreconcile.EnsureFinalizer(ctx, r.Client, &sess, spiceboxv1alpha1.FinalizerAgentSession); addedFinalizer || ferr != nil {
+		if ferr != nil {
+			return ctrl.Result{}, ferr
+		}
+		// Admission sweep: this is the ONE reconcile per creation where the
+		// finalizer transitions absent -> present (EnsureFinalizer's contract),
+		// so it is the natural once-per-(ns,name) hook for wiping whatever a
+		// DEAD PREDECESSOR with this same name left behind in SpiceDB. A
+		// slot_pin tuple never expires, so a reused name would otherwise
+		// inherit a stale predecessor's pin and be refused its own first
+		// bind — DeleteSlotGrants is the same call finalize() makes on
+		// teardown, and sweeping it again here, before this session's own
+		// first grant can be written, is what closes that window. Fail
+		// closed: an error here must requeue rather than let the new session
+		// proceed while a leftover pin from someone else's session is still
+		// live under its name.
+		//
+		// EXCEPT a fork child. The parent's ReconcileRestart copies the
+		// parent's slot grants AND pin onto the child's (ns, name) —
+		// authz.CopySlotGrants, restart.go step 6c — and BuildChildSession
+		// creates the child with no finalizer, so that copy lands BEFORE this
+		// reconcile runs. Sweeping here would be the last writer and would
+		// silently strip every non-takeover fork of its inherited authority
+		// (and could double-pin under the PVC-restore requeue, wedging
+		// EnsurePin's one-pin read). The sweep guards against a stale write
+		// from a dead predecessor REUSING this name; a fork child's name is
+		// generated (PendingRestart.TargetSessionName), so that reuse cannot
+		// happen to it, and the tuples already present under its name are
+		// legitimate by construction. ForkedFrom is the same signal
+		// BuildChildSession stamps on every restart child.
+		if r.SpiceDBDeleter != nil && sess.Spec.ForkedFrom == "" {
+			if err := r.SpiceDBDeleter.DeleteSlotGrants(ctx, sess.Namespace, sess.Name); err != nil {
+				log.FromContext(ctx).Error(err, "admission sweep: delete stale slot grants/pins failed",
+					"session", sess.Namespace+"/"+sess.Name)
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Restore this session's memory-API bearer token into the in-process registry
