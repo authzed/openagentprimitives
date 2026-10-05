@@ -60,6 +60,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/outbound"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/pipeline"
 	"github.com/authzed/openagentprimitives/pkg/cli/clikit"
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/sessionobservation" // include native event evidence when resuming the channels publisher audit chain
 	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
 	"github.com/authzed/openagentprimitives/pkg/platform/deplogs"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
@@ -67,6 +68,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/passthroughlink"
 	"github.com/authzed/openagentprimitives/pkg/platform/kube"
 	apnats "github.com/authzed/openagentprimitives/pkg/platform/nats"
+	"github.com/authzed/openagentprimitives/pkg/platform/nats/subjects"
 	"github.com/authzed/openagentprimitives/pkg/x/externalurl"
 )
 
@@ -316,6 +318,27 @@ func envelopeHandler(
 	}
 }
 
+// componentDecisionHandler receives only a platform-owned subject tree, outside
+// the publish grant of both existing and newly minted per-session credentials.
+func componentDecisionHandler(logger logr.Logger, fn func(context.Context, channelevents.Envelope) error) func(*nats.Msg) {
+	ctx := channelevents.WithComponentDecisionIngress(handlerContext(logger))
+	return func(message *nats.Msg) {
+		var env channelevents.Envelope
+		if err := json.Unmarshal(message.Data, &env); err != nil {
+			logger.Error(err, "component decision decode")
+			return
+		}
+		ns, name, ok := subjects.ParseComponentDecision(message.Subject)
+		if !ok || env.Kind != channelevents.KindInteractionDecision || env.Session.Namespace != ns || env.Session.Name != name {
+			logger.Info("component decision subject mismatch", "subject", message.Subject, "session", env.Session)
+			return
+		}
+		if err := fn(ctx, env); err != nil {
+			logger.Error(err, "component decision refused", "session", env.Session)
+		}
+	}
+}
+
 // handlerContext is the context every inbound handler runs under: a
 // NON-CANCELLING base carrying the live logger.
 //
@@ -543,6 +566,7 @@ func run(rootCtx context.Context, cfg *config) error {
 	// Inbound pipeline: authz + memory + NATS publish + session correlation.
 	// NewPipeline constructs Engine internally from the Authz arg.
 	pl := pipeline.NewPipeline(cli, az, mem, &natsPub{nc}, caps)
+	pl.RecordGoalActor = mem.RecordGoalActor
 
 	// The durable memory facade. Two consumers: the resource-owner decision
 	// gate reads the memapproval record back after a restart, and the parked
@@ -558,6 +582,7 @@ func run(rootCtx context.Context, cfg *config) error {
 	// no per-write signing needed — CommitPreference is not an append-only
 	// write). Satisfies pipeline.PreferenceCommitter's one method.
 	pl.PreferenceCommitter = mem.client
+	pl.GoalConsentCommitter = mem.client
 
 	// Wire RestartCapable kinds. No kind implements it yet, so this loop is
 	// currently a no-op.
@@ -681,6 +706,7 @@ func run(rootCtx context.Context, cfg *config) error {
 		subject string
 		handler func(*nats.Msg)
 	}{
+		{"component_decision", subjects.ComponentDecision("*", "*"), componentDecisionHandler(logger, pl.HandleInteractionDecision)},
 		// There are deliberately no per-category subscriptions here. Every
 		// approval flow — session-join, tool_approval, info_leakage — travels as
 		// a category-generic interaction_request / _decision / _applied
@@ -871,6 +897,7 @@ func run(rootCtx context.Context, cfg *config) error {
 	// Uses the same senderResolver as the outbound relay — no duplication of
 	// Channel/Secret fetch logic.
 	sw := newSessionWatcher(cli, sr, wd)
+	sw.recoverInteractions = pl.RecoverInteractionResolutions
 	sw.publish = func(subject string, data []byte) error { return nc.Publish(subject, data) }
 	go sw.Run(rootCtx)
 
@@ -1188,6 +1215,7 @@ func run(rootCtx context.Context, cfg *config) error {
 	// and nothing on deny. Depends on pl.PreferenceCommitter (wired above) and
 	// pl.Mem (wired above, the cross-restart details fallback).
 	pipeline.BindPreferenceCommitHandler(pl)
+	pipeline.BindGoalConsentHandler(pl)
 
 	// Portal-access chat trigger: intercepts "manage my accounts" /
 	// "link my accounts" / "!my/accounts" on inbound user messages,

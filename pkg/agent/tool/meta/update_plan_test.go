@@ -89,6 +89,15 @@ func TestUpdatePlanTool_Name(t *testing.T) {
 	require.Equal(t, "update_plan", tl.Name())
 }
 
+func TestUpdatePlanRemindersRequireApprovalWiring(t *testing.T) {
+	sess := newSessForUpdatePlanTest(t)
+	tl := meta.NewUpdatePlan(meta.UpdatePlanConfig{})
+	res, err := tl.Execute(context.Background(), json.RawMessage(`{"name":"main","items":[{"id":"one","label":"Schedule reminder","status":"pending"}],"phases":[{"id":"schedule","label":"Schedule","why":"The user requested a reminder","reminders":[{"id":"goal","revision":2,"requestID":"one"}]}]}`), sess)
+	require.NoError(t, err)
+	require.True(t, res.IsError)
+	require.Contains(t, res.Content, "reminders require an enforcing plan approval gate")
+}
+
 func TestUpdatePlanTool_RejectsMissingName(t *testing.T) {
 	sess := newSessForUpdatePlanTest(t)
 	tl := meta.NewUpdatePlan(meta.UpdatePlanConfig{})

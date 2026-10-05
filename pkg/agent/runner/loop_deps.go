@@ -37,6 +37,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakageaudit"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 	"github.com/authzed/openagentprimitives/pkg/platform/artifacts"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
@@ -116,6 +117,9 @@ type Loop struct {
 	// ReportSessionCost gates the post-session cost reporter hook. Resolved from
 	// status.effectiveSettings.reportSessionCost by internal/cmd/runner.
 	ReportSessionCost bool
+	// RecordSessionCost stamps accounting even when the user suppresses notices.
+	// Bounded goal executions need durable accounting before root cleanup.
+	RecordSessionCost bool
 
 	// ModelInputPerMTok/ModelOutputPerMTok are the resolved catalog price for the
 	// session's model (USD/MTok), 0 when the catalog carries no price. When >0 the
@@ -524,6 +528,12 @@ type Loop struct {
 	// accumulate into the existing bucket instead of appending a duplicate.
 	usageByModel    []modelUsageBucket
 	usageByModelIdx map[string]int
+	// usageByTool is the per-interactive-toolkit running cost accumulation, in
+	// first-encountered order, keyed by outer tool name in usageByToolIdx. Also
+	// guarded by usageMu (see above) — addToolCost fires from the same terminal
+	// bookkeeping path as addUsage/addModelUsage.
+	usageByTool    []toolUsageBucket
+	usageByToolIdx map[string]int
 
 	// Engine is the runner's single authz dependency. Production wiring comes from
 	// internal/cmd/runner/main.go; tests inject a fake or leave nil (falling back to the
@@ -809,6 +819,8 @@ type Loop struct {
 	// PlanGateRequirePlan denies permissioned calls until the agent declares a
 	// plan, closing the "never call update_plan" bypass. Resolved, like the mode.
 	PlanGateRequirePlan bool
+
+	PlanApprovalDeriver func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error)
 
 	// planGateFrozen is the frozen plan currently in force, set when the agent
 	// declares phases. Guarded because select_phase and the gate read it from
@@ -1132,15 +1144,10 @@ type Loop struct {
 	// renderer. nil ⇒ the gate fails closed (there is no channel to ask on).
 	InteractionRequestPublish func(ctx context.Context, ns, name string, env channelevents.Envelope) error
 
-	// TimeoutAppliedPublish publishes an approval "applied" envelope on BOTH the
-	// IN subject (so channelsd's Handle*Applied handler clears its pending queue +
-	// condition) and the OUT subject (so the channel sender edits the pending
-	// message to show the request expired). Called when a per-kind approval
-	// deadline elapses with no decision, for tool_call / leakage_share /
-	// content_inspection; the envelope always carries a deny/timeout outcome — a
-	// lapsed deadline never synthesizes an approval. nil disables (kubectl/test
-	// sessions have no channel surface to clear and rely on the orchestrator
-	// ctx-deadline alone).
+	// TimeoutAppliedPublish reports timeout on IN. Channelsd serializes it
+	// with human decisions and publishes the canonical retained outcome on OUT.
+	// A lapsed deadline never synthesizes approval. nil disables surface cleanup.
+
 	TimeoutAppliedPublish func(ctx context.Context, ns, name string, env channelevents.Envelope) error
 
 	// UIPublish publishes one agent-UI push envelope on the session's out subject,

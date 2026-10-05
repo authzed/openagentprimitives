@@ -1,6 +1,7 @@
 package plangate
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -13,6 +14,7 @@ import (
 // kind; the runner projects plans.Phase into this shape, the same contract
 // permsurface.Candidate uses. Everything here is untrusted input to FreezeFrom.
 type AuthoredPhase struct {
+	Consents    []json.RawMessage
 	ID          string
 	Label       string
 	Why         string
@@ -134,6 +136,14 @@ func FreezeFrom(
 	out := Plan{Phases: make([]Phase, 0, len(authored))}
 	for i, p := range authored {
 		ph := Phase{Label: p.Label, Why: p.Why, Max: MaxSpec{Count: 1}}
+		for _, raw := range p.Consents {
+			canonical, err := json.Marshal(raw)
+			if err != nil {
+				problems = append(problems, FreezeProblem{PhaseIndex: i, Detail: "invalid consent card: " + err.Error()})
+				continue
+			}
+			ph.Consents = append(ph.Consents, canonical)
+		}
 		if p.Max != nil {
 			ph.Max = MaxSpec{Count: p.Max.Count, Why: p.Max.Why}
 		}

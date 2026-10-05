@@ -1,0 +1,53 @@
+# Signed webhook input is evidence, never a verified human goal owner.
+apiVersion: v1
+kind: Secret
+metadata: {name: eventgoal-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: unused}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: eventgoal-gh-creds, namespace: default}
+type: Opaque
+stringData: {app-id: "1", installation-id: "1", private-key: patched-by-the-harness, webhook-secret: patched-by-the-harness}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: eventgoal-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: unused}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: eventgoal, namespace: default}
+spec:
+  model: {provider: test, name: scripted, apiKey: {name: eventgoal-placeholder, key: api-key}}
+  systemPrompt: {inline: "E2E fixture. Report only; never deploy this class."}
+  capabilities: {goals: {}}
+  authz:
+    informationLeakage: {mode: enforcing}
+    session: {interactPermission: "group:eventgoal-reviewers#member"}
+  budget: {maxTurns: 20, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: eventgoal-gh, namespace: default}
+spec:
+  kind: github
+  role: input
+  agentClass: eventgoal
+  sessionScope: thread
+  authzSubject: "service:eventgoal"
+  owner: {explicit: "user:dXNlckBleGFtcGxlLmNvbQ"}
+  credentialsRef: {secretName: eventgoal-gh-creds}
+  github: {appSlug: eventgoal, events: [opened]}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: eventgoal-out, namespace: default}
+spec:
+  kind: fake
+  role: output
+  agentClass: eventgoal
+  credentialsRef: {secretName: eventgoal-fake-creds}
+  fake: {echo: false}

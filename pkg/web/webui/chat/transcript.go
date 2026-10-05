@@ -7,6 +7,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/turn"
 	"github.com/authzed/openagentprimitives/pkg/web/webui/livemirror"
 )
@@ -34,10 +35,37 @@ func readTranscript(ctx context.Context, d Deps, ns, name string) ([]timelineEnt
 	if err != nil {
 		return nil, err
 	}
+	if d.K8s() == nil {
+		d.Logger().Info("chat: session metadata unavailable; replaying the durable transcript", "session", ns+"/"+name)
+		return h.Timeline, nil
+	}
+	var sess spiceboxv1alpha1.AgentSession
+	if err := d.K8s().Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sess); err != nil {
+		d.Logger().Info("chat: get AgentSession for the opening turn failed; replaying without it",
+			"session", ns+"/"+name, "err", err.Error())
+		return h.Timeline, nil
+	}
+	if sess.Spec.OpeningSummary != "" && sess.Spec.Prompt.Inline != "" {
+		// The operator's execution instructions remain in the durable audit
+		// transcript. Replace only their opening bubble in the conversation;
+		// subsequent human messages, even identical ones, remain visible.
+		items := h.Timeline
+		if h.HasOpeningTurn {
+			for i, item := range items {
+				if item.Kind == "message" && item.Role == turn.VisibleRoleUser && item.Text == strings.TrimSpace(sess.Spec.Prompt.Inline) {
+					items = append(items[:i:i], items[i+1:]...)
+					break
+				}
+			}
+		}
+		return append([]timelineEntry{{Kind: "opening", Opening: &channelevents.SessionOpening{
+			Summary: sess.Spec.OpeningSummary, Instructions: sess.Spec.Prompt.Inline,
+		}, CreatedAt: sess.CreationTimestamp.Time}}, items...), nil
+	}
 	if h.HasOpeningTurn {
 		return h.Timeline, nil
 	}
-	opening := openingTurn(ctx, d, ns, name)
+	opening := openingTurn(&sess)
 	if len(opening) == 0 {
 		// Returned as-is rather than through append, which would turn a
 		// legitimately empty timeline into a nil one — "timeline": null on the
@@ -68,13 +96,7 @@ func readTranscript(ctx context.Context, d Deps, ns, name string) ([]timelineEnt
 // Best-effort by design: a session whose object is gone still replays its
 // durable transcript (the point of authorizeRead), so a failed Get is logged
 // and yields nothing rather than failing the whole conversation.
-func openingTurn(ctx context.Context, d Deps, ns, name string) []timelineEntry {
-	var sess spiceboxv1alpha1.AgentSession
-	if err := d.K8s().Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sess); err != nil {
-		d.Logger().Info("chat: get AgentSession for the opening turn failed; replaying without it",
-			"session", ns+"/"+name, "err", err.Error())
-		return nil
-	}
+func openingTurn(sess *spiceboxv1alpha1.AgentSession) []timelineEntry {
 	text := strings.TrimSpace(sess.Spec.Prompt.Inline)
 	if text == "" {
 		return nil

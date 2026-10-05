@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"log/slog"
 	"net"
@@ -71,6 +72,9 @@ import (
 	// css/html/image/svg which are imported into all three, is defence in
 	// depth — a second reason an agent process can never reach kind="mcpui",
 	// not the reason. See pkg/channels/channelassets/mcpui's package doc.
+	goalmodel "github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
+	eventnative "github.com/authzed/openagentprimitives/pkg/agent/sessionevents/native"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	_ "github.com/authzed/openagentprimitives/pkg/authz/contentguard/kinds/promptinjection" // register for settings-webhook content-inspector validation
 	_ "github.com/authzed/openagentprimitives/pkg/authz/contentguard/kinds/urlallowlist"    // register for settings-webhook content-inspector validation
@@ -108,6 +112,7 @@ import (
 	clusterskillctrl "github.com/authzed/openagentprimitives/pkg/controllers/clusterskill"
 	clusterskillsourcectrl "github.com/authzed/openagentprimitives/pkg/controllers/clusterskillsource"
 	"github.com/authzed/openagentprimitives/pkg/controllers/credentialupdaterequest"
+	goalctrl "github.com/authzed/openagentprimitives/pkg/controllers/goals"
 	guardianctrl "github.com/authzed/openagentprimitives/pkg/controllers/guardian"
 	"github.com/authzed/openagentprimitives/pkg/controllers/inboxwake"
 	"github.com/authzed/openagentprimitives/pkg/controllers/mcpserver"
@@ -128,6 +133,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/toolcall"
 	"github.com/authzed/openagentprimitives/pkg/controllers/useridentity"
 	websession "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/agentsession"
+	webgoalexecution "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/goalexecution"
 	websettings "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/settings"
 	webskill "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/skill"
 	websubagentreq "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/subagentrequest"
@@ -139,11 +145,13 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/workspacesource"
 	"github.com/authzed/openagentprimitives/pkg/controllers/workspacevolume"
 	memorypkg "github.com/authzed/openagentprimitives/pkg/memory"
+	goalinmem "github.com/authzed/openagentprimitives/pkg/memory/goals/inmem"
+	goalpostgres "github.com/authzed/openagentprimitives/pkg/memory/goals/postgres"
+	goalsqlite "github.com/authzed/openagentprimitives/pkg/memory/goals/sqlite"
 	"github.com/authzed/openagentprimitives/pkg/memory/httpsrv"
 	memoryinmem "github.com/authzed/openagentprimitives/pkg/memory/inmem"
 	kggraphiti "github.com/authzed/openagentprimitives/pkg/memory/kg/graphiti"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/all" // register all memory Kinds + their server-side hooks
-	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagedecision"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/kgingestion"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/pttag"
@@ -158,9 +166,13 @@ import (
 	searchinmem "github.com/authzed/openagentprimitives/pkg/memory/search/inmem"
 	pgsearch "github.com/authzed/openagentprimitives/pkg/memory/search/postgres"
 	searchsqlite "github.com/authzed/openagentprimitives/pkg/memory/search/sqlite"
+	eventsql "github.com/authzed/openagentprimitives/pkg/memory/sessionevents/sqlstore"
 	memshadow "github.com/authzed/openagentprimitives/pkg/memory/shadow"
 	"github.com/authzed/openagentprimitives/pkg/memory/spicedbauthorizer"
 	memsqlite "github.com/authzed/openagentprimitives/pkg/memory/sqlite"
+	eventweb "github.com/authzed/openagentprimitives/pkg/web/sessionevents"
+	"github.com/jackc/pgx/v5/stdlib"
+
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/deplogs"
@@ -191,6 +203,7 @@ import (
 	toolspecregistry "github.com/authzed/openagentprimitives/pkg/tools/toolspec/registry"
 	"github.com/authzed/openagentprimitives/pkg/web/gateway"
 	gatewayv1 "github.com/authzed/openagentprimitives/pkg/web/gateway/v1"
+	goalweb "github.com/authzed/openagentprimitives/pkg/web/goals"
 	_ "github.com/authzed/openagentprimitives/pkg/web/localtunnel/ngrok" // register "ngrok" localtunnel provider: PublicEndpoint controller dispatches via registry.Get (stub is test-only, not registered here)
 	localtunnelregistry "github.com/authzed/openagentprimitives/pkg/web/localtunnel/registry"
 	"github.com/authzed/openagentprimitives/pkg/web/secretoutsrv"
@@ -2012,7 +2025,7 @@ func run(cfg *config) {
 	// verifier. memLocal (UNwrapped) is handed to the HTTP handler, where
 	// token-authenticated callers sign for themselves, and to read-only /
 	// DeleteScope consumers.
-	opSigned := provenance.NewSigningMemory(memLocal, opSigner)
+	opSigned := provenance.NewSigningMemory(memLocal, opSigner, provenance.WithSeedMemory(auditSeedMemory{Memory: memLocal}))
 	log.V(1).Info("startup: memory facade + provenance verifier ready")
 
 	// Sandbox runtimes: one per registered sandbox kind (pkg/tools/sandboxkinds/registry),
@@ -2170,22 +2183,7 @@ func run(cfg *config) {
 	// that DOES act on it (the trifecta gate's every-mode refusal) is already
 	// behind that gate's own mode. Gating the record too would mean a denial
 	// that happened while the gate was off is invisible once it is turned on.
-	closureDenialStamp := hold.NewClosureDenialStamper(hold.ClosureDenialStamperDeps{
-		Client: mgr.GetClient(),
-		Denied: func(ctx context.Context, scope memorypkg.Scope) (bool, error) {
-			recs, err := infoleakagedecision.List(ctx, memLocal, scope)
-			if err != nil {
-				return false, err
-			}
-			for _, r := range recs {
-				if r.Decision == infoleakagedecision.DecisionDenied {
-					return true, nil
-				}
-			}
-			return false, nil
-		},
-		Logger: slog.Default(),
-	})
+	closureDenialStamp := newClosureDenialStamper(mgr.GetClient(), memLocal)
 
 	// One signal, three consumers. Trippers keeps a failure in one from
 	// disabling the others — if the streak tripper cannot read memory that is a
@@ -2253,6 +2251,102 @@ func run(cfg *config) {
 		PoolsReader:         spiceDBClient.Pools(),
 		KGProvider:          kgProvider,
 	})
+	var eventStore *eventsql.Store
+	var goalStore goalmodel.Store
+	switch backendKind {
+	case memoryBackendSqlite:
+		eventStore = eventsql.New(sqliteClient.DB(), false)
+		gs := goalsqlite.New(sqliteClient.DB())
+		if err := gs.Migrate(context.Background()); err != nil {
+			log.Error(err, "goals SQLite migration failed")
+			os.Exit(1)
+		}
+		goalStore = gs
+	case memoryBackendPostgres:
+		eventStore = eventsql.New(stdlib.OpenDBFromPool(pgClient.Pool()), true)
+		gs := goalpostgres.New(pgClient.Pool())
+		if err := gs.Migrate(context.Background()); err != nil {
+			log.Error(err, "goals PostgreSQL migration failed")
+			os.Exit(1)
+		}
+		goalStore = gs
+	case memoryBackendInmem:
+		goalStore = goalinmem.New()
+	}
+	// Goal evidence and audit chains must follow durable storage even when the
+	// general memory facade is explicitly set to shadow's ephemeral read source.
+	// This private facade is used only by the trusted goal endpoint/publisher;
+	// it shares the existing database and signature verifier, without indexing
+	// historical snapshots into ordinary memory search.
+	goalMemory := memLocal
+	if backendKind == memoryBackendPostgres {
+		goalMemory = memorypkg.NewLocal(mempostgres.NewBackend(pgClient), memorypkg.WithProvenanceVerifier(verifier), memorypkg.WithLogger(log.WithName("goal-memory")))
+	}
+	if eventStore != nil {
+		if err := eventStore.Migrate(context.Background()); err != nil {
+			log.Error(err, "event ledger migration failed")
+			os.Exit(1)
+		}
+	}
+	goalService := &goalmodel.Service{Store: goalStore}
+	var goalAuth goalweb.Authority
+	if spiceDBClient != nil {
+		goalAuth = spiceDBClient
+	}
+	goalHandler := &goalweb.Server{Service: goalService, Reader: mgr.GetAPIReader(), Memory: goalMemory, Tokens: memTokens, Keys: keyLookup, Auth: goalAuth, ColdRegistryUntil: time.Now().Add(memoryColdRegistryGrace)}
+	goalService.Auth = goalHandler
+	var eventHandler *eventweb.Server
+	var eventRouter *sessionevents.Router
+	var eventDispatcher *sessionevents.Dispatcher
+	if eventStore != nil && goalAuth != nil {
+		nativeAccess := &eventweb.NativeSessions{Reader: mgr.GetAPIReader(), Memory: goalMemory, Auth: goalAuth}
+		sources := sessionevents.NewRegistry()
+		if runs, ok := goalStore.(goalmodel.OccurrenceStore); ok {
+			sources.Register(&goalmodel.ReportSource{Store: goalStore, Runs: runs, Auth: goalHandler, Execution: goalHandler})
+		}
+		sources.Register(&eventnative.Adapter{Memory: goalMemory, Keys: keyLookup, Authority: nativeAccess, Access: nativeAccess, Publishers: map[string]bool{"system:channelsd": true}})
+		execution := &goalmodel.EventExecution{Service: goalService, Sources: sources}
+		consumers := sessionevents.NewConsumers()
+		consumers.Legacy = "goals"
+		consumers.Register("goals", execution)
+		triggers := &sessionevents.Triggers{Store: eventStore, Observations: eventStore, Authority: consumers}
+		if discoveryStore, ok := goalStore.(goalmodel.DiscoveryStore); ok {
+			discovery := &goalweb.Discovery{Server: goalHandler, Store: discoveryStore, Triggers: triggers, Sources: sources}
+			goalHandler.Discovery = discovery
+			consumers.Register("goal-discovery", discovery)
+			if err := mgr.Add(discovery); err != nil {
+				log.Error(err, "register goal discovery")
+				os.Exit(1)
+			}
+		}
+		execution.Triggers = triggers
+		goalService.Events = execution
+		goalHandler.EventSources = sources
+		eventRouter = &sessionevents.Router{Triggers: triggers, Store: eventStore}
+		eventDispatcher = &sessionevents.Dispatcher{Triggers: triggers, Consumer: consumers}
+		eventHandler = &eventweb.Server{Ingester: &sessionevents.Ingester{Store: eventStore, Adapters: sources}, Tokens: memTokens}
+	}
+	consentPublisher := &goalweb.ConsentPublisher{Service: goalService, Memory: goalMemory, Writer: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}, Publish: monitoringPublish}
+	goalHandler.Consent = consentPublisher
+	goalPublisher := &goalweb.Publisher{Store: goalStore, Memory: goalMemory, Signer: opSigner, Notify: consentPublisher.Notify}
+	if err := mgr.Add(goalPublisher); err != nil {
+		log.Error(err, "register goal audit publisher")
+		os.Exit(1)
+	}
+	var goalValidator agentsessionctrl.GoalSessionValidator
+	if occurrenceStore, ok := goalStore.(goalmodel.OccurrenceStore); ok && goalAuth != nil && monitoringPublish != nil {
+		goalService.ExecutionAuth = goalHandler
+		dispatcher := &goalctrl.Dispatcher{EventRouter: eventRouter, EventDispatcher: eventDispatcher, Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString(), DeliveryMemory: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}}
+		if eventHandler != nil {
+			dispatcher.EventIngester = eventHandler.Ingester
+		}
+		goalValidator = dispatcher
+		goalHandler.ExecutionSessions = dispatcher
+		if err := mgr.Add(dispatcher); err != nil {
+			log.Error(err, "register goal dispatcher")
+			os.Exit(1)
+		}
+	}
 	memHandler := httpsrv.NewHandler(memLocal, memTokens, memHandlerOpts...)
 	log.V(1).Info("startup: memory HTTP handler + search providers ready")
 
@@ -2543,8 +2637,9 @@ func run(cfg *config) {
 	}
 
 	if err := (&agentsessionctrl.Reconciler{
-		Client:    mgr.GetClient(),
-		APIReader: mgr.GetAPIReader(),
+		GoalValidator: goalValidator,
+		Client:        mgr.GetClient(),
+		APIReader:     mgr.GetAPIReader(),
 		// On local/desktop clusters, images are loaded by mutable tag and are not
 		// pullable by digest, so the per-session SidecarToolbox by-digest launch
 		// rewrite must be skipped (mirrors `oap install --no-digest-pin`).
@@ -2947,6 +3042,7 @@ func run(cfg *config) {
 	ws.Register(webtoolcall.Path, &admission.Webhook{Handler: webtoolcall.New(dec)})
 	ws.Register(webskill.PathClusterSkill, &admission.Webhook{Handler: newClusterSkillWebhook(mgr.GetClient(), dec, operatorSAUsername)})
 	ws.Register(websession.Path, &admission.Webhook{Handler: websession.New(dec)})
+	ws.Register(webgoalexecution.Path, &admission.Webhook{Handler: &webgoalexecution.Handler{Decoder: dec, OperatorSubject: "system:serviceaccount:" + systemNS + ":spicebox-operator"}})
 	ws.Register(websubagentreq.Path, &admission.Webhook{Handler: websubagentreq.New(dec)})
 	ws.Register(webworkspacejob.Path, &admission.Webhook{Handler: webworkspacejob.New(mgr.GetAPIReader(), dec)})
 	// spiceDBClient is a real, non-nil *spicedb.Client here (construction
@@ -2965,6 +3061,7 @@ func run(cfg *config) {
 		"skill", webskill.PathSkill,
 		"clusterskill", webskill.PathClusterSkill,
 		"agentsessionIdentity", websession.Path,
+		"goalExecution", webgoalexecution.Path,
 		"subagentRequestParent", websubagentreq.Path,
 		"workspaceJob", webworkspacejob.Path,
 		"workshopObject", webworkshop.PathWorkshopObject,
@@ -3124,11 +3221,16 @@ func run(cfg *config) {
 			os.Exit(1)
 		}
 		debugHandler := debug.NewHandlerWithMemAuth(store, token, memHandler, memTokens)
+		debugHandler.Handle(httpsrv.AuditPath, httpsrv.NewAuditHandler(memLocal, token))
 		// Mount the operator-mediated secret-output endpoint next to /memory.
 		// The runner POSTs a captured secret value here; the operator (which
 		// holds Secret-write RBAC; the runner does not) writes it into the
 		// per-session secret-output Secret. Auth reuses the per-session token
 		// registry — session-scoped, so a token may only write its own session.
+		debugHandler.Handle("/goals/", goalHandler)
+		if eventHandler != nil {
+			debugHandler.Handle("/session-events/", eventHandler)
+		}
 		debugHandler.Handle("/secret-output/", secretoutsrv.NewHandler(mgr.GetClient(), memTokens))
 		// The tuple-authorized workshop draft-export route (agent-builder plan
 		// 3b, Task 6 — Ruling A). A workshop sidecar's operator bearer is

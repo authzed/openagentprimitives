@@ -67,6 +67,7 @@ import (
 	// Registers the "openingsummary" state kind, which the enrichment tool
 	// writes and the runner reads to keep a triggered session's pinned
 	// opening message current.
+	goalmodel "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	_ "github.com/authzed/openagentprimitives/pkg/agent/session/state/openingsummary"
 	"github.com/authzed/openagentprimitives/pkg/agent/session/state/plans"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
@@ -137,6 +138,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/label"
 	lifecyclekind "github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/systemprompt"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/toolsession"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/turn"
@@ -1584,6 +1586,9 @@ func run(cfg *config) error {
 	}
 
 	env := capability.RunnerEnv{
+		GoalsCaller: func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+			return memHTTP.Goals(ctx, ns, name, req)
+		},
 		NATSPublish:      pubFn,
 		EnvelopeSigner:   envSigner,
 		NATSRequest:      natsRequestFn,
@@ -1722,7 +1727,17 @@ func run(cfg *config) error {
 			if l == nil {
 				return nil, fmt.Errorf("plan gate is not ready for this session")
 			}
-			return l.FreezeAndRecordPhases(ctx, runner.AuthoredPhasesFrom(phases))
+			authored, err := runner.PreparePlanReminders(ctx, phases, func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+				return memHTTP.Goals(ctx, ns, name, req)
+			}, sess.Spec.GoalExecution == nil && sess.Spec.Parent == nil)
+			if err != nil {
+				return nil, err
+			}
+			notices, err := l.FreezeAndRecordPhases(ctx, authored)
+			if err != nil {
+				return notices, err
+			}
+			return notices, l.RequestPlanReminderApproval(ctx)
 		},
 		ActivePlan: func(ctx context.Context) (plangate.Plan, bool) {
 			if l := loopRef.Load(); l != nil {
@@ -1948,6 +1963,21 @@ func run(cfg *config) error {
 		Logger:       logr.FromSlogHandler(slog.Default().Handler()),
 	})
 	mergedTools := assembled.Tools
+	if sess.Spec.GoalExecution != nil {
+		authority, err := memHTTP.Goals(rootCtx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
+		if err != nil {
+			return fmt.Errorf("read goal execution terms: %w", err)
+		}
+		if authority.ExecutionTerms == nil {
+			return fmt.Errorf("goal execution terms unavailable")
+		}
+		mergedTools = meta.BoundedGoalToolsForTerms(mergedTools, sess.Spec.GoalExecution.ConsentDigest, *authority.ExecutionTerms, func(ctx context.Context) error {
+			_, err := memHTTP.Goals(ctx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
+			return err
+		}, func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+			return memHTTP.Goals(ctx, ns, name, req)
+		})
+	}
 
 	// toolLookupFn late-binds now that mergedTools is final, so a
 	// request_credential_update call mid-session resolves against the complete
@@ -2207,6 +2237,7 @@ func run(cfg *config) error {
 		Model:              sess.Status.EffectiveSettings.Model.Name,
 		Routing:            routingToLLM(sess.Status.EffectiveSettings.ModelRouting),
 		ReportSessionCost:  sess.Status.EffectiveSettings.ReportSessionCost,
+		RecordSessionCost:  sess.Spec.GoalExecution != nil,
 		ModelInputPerMTok:  sess.Status.EffectiveSettings.ModelInputPerMTok,
 		ModelOutputPerMTok: sess.Status.EffectiveSettings.ModelOutputPerMTok,
 		UserID:             string(sess.UID),
@@ -2250,8 +2281,21 @@ func run(cfg *config) error {
 		PlanGateResourceDisplays:   runner.ResourceDisplaysOf(&class),
 		ResourceStandings:          runner.ResourceStandingsOf(&class),
 		PlanGateMaxCardHandles:     runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
-		PlanGateMaxAutoApprove:     runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings),
-		PlanGateRequirePlan:        runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
+		PlanGateMaxAutoApprove: func() int {
+			if sess.Spec.GoalExecution != nil {
+				return 0
+			}
+			return runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings)
+		}(),
+		PlanGateRequirePlan: runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
+		PlanApprovalDeriver: func() func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error) {
+			if sess.Spec.GoalExecution == nil {
+				return nil
+			}
+			return runner.GoalPlanApprovalDeriver(func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+				return memHTTP.Goals(ctx, ns, name, req)
+			})
+		}(),
 
 		// Live CR pointers, so the loop can dispatch autofill and
 		// per-user-message binding. Nil disables those paths, as a defence
@@ -2747,41 +2791,9 @@ func run(cfg *config) error {
 			return natsRT.conn.Publish(subject, body)
 		}
 		loop.TimeoutAppliedPublish = func(_ context.Context, envNS, envName string, env channelevents.Envelope) error {
-			prefix := channelevents.SubjectPrefix(envNS, envName)
-			// IN: channelsd's Handle*Applied handler clears the pending queue +
-			// condition for this kind. OUT: the outbound relay hands it to the
-			// channel sender to edit the pending prompt to "expired" (a no-op
-			// when no channel is bound); the runner's own applied subscriber
-			// ignores it because the orchestrator already forgot this request.
-			//
-			// Sign is called once per subject (not once for the shared body):
-			// the signature is bound to the exact subject it travels on, so the
-			// IN and OUT copies each need their own signature over their own
-			// digest, computed and marshalled independently.
-			inSubj := channelevents.SubjectIn(prefix, env.Kind)
-			if err := envSigner.Sign(inSubj, &env); err != nil {
-				return fmt.Errorf("sign envelope: %w", err)
-			}
-			inBody, err := json.Marshal(env)
-			if err != nil {
-				return fmt.Errorf("marshal timeout applied envelope: %w", err)
-			}
-			if err := natsRT.conn.Publish(inSubj, inBody); err != nil {
-				return fmt.Errorf("publish timeout applied on IN: %w", err)
-			}
-			outSubj := channelevents.SubjectOut(prefix, env.Kind)
-			if err := envSigner.Sign(outSubj, &env); err != nil {
-				return fmt.Errorf("sign envelope: %w", err)
-			}
-			outBody, err := json.Marshal(env)
-			if err != nil {
-				return fmt.Errorf("marshal timeout applied envelope: %w", err)
-			}
-			if err := natsRT.conn.Publish(outSubj, outBody); err != nil {
-				return fmt.Errorf("publish timeout applied on OUT: %w", err)
-			}
-			return nil
+			return runner.PublishTimeoutApplied(natsRT.conn.Publish, envSigner.Sign, envNS, envName, env)
 		}
+
 		// tool_approval, info_leakage, and content_inspection all resume via the
 		// generic subscribeInteractionApplied bridge.
 		go subscribeInteractionApplied(rootCtx, natsRT, loop.Approval, ns, name)
@@ -2989,7 +3001,8 @@ func run(cfg *config) error {
 				}
 			},
 			OnEvent: buildToolSessionEventPublisher(
-				rootCtx, pub, memSigned, scope, class.Spec.ToolSessionLog, hooksNS, hooksName, envSigner),
+				rootCtx, pub, memSigned, scope, class.Spec.ToolSessionLog, hooksNS, hooksName, envSigner,
+				loop.AddToolCost),
 			Register: toolSessionReg.register,
 		}
 	}
@@ -3246,6 +3259,7 @@ func buildToolSessionEventPublisher(
 	logMode string,
 	ns, name string,
 	signer *channelevents.EnvelopeSigner,
+	onResult func(outerTool string, costUSD float64, ok bool),
 ) func(toolCallRef, reason, outerTool string, ev toolkitstream.Event) {
 	return func(toolCallRef, reason, outerTool string, ev toolkitstream.Event) {
 		// NATS -> channelsd -> Slack — unchanged, always runs.
@@ -3291,6 +3305,14 @@ func buildToolSessionEventPublisher(
 				"session", ns+"/"+name,
 				"toolCallRef", toolCallRef,
 				"eventType", string(ev.Type))
+		}
+
+		// Fold this interactive toolkit's own provider-reported cost into the
+		// session total. Fires on the terminal result event only, and regardless
+		// of the ToolSessionLog persist gate above — accumulation must not depend
+		// on logging being on.
+		if ev.Type == toolkitstream.EventResult && onResult != nil {
+			onResult(outerTool, ev.CostUSD, ev.OK)
 		}
 	}
 }

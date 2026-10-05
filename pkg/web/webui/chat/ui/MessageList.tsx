@@ -5,6 +5,7 @@ import type { ChatLine, OperationActivityNode, PlanItemRef, PlanUpdateInner } fr
 import { OperationTree } from "./OperationTree";
 import { InteractionCard } from "./InteractionCard";
 import { NoticeCard } from "./NoticeCard";
+import { OpeningCard } from "./OpeningCard";
 import { ToolSessionBlock } from "./ToolSessionBlock";
 import type { ToolSessionMap, ToolSessionState } from "./toolSession";
 
@@ -260,6 +261,9 @@ const Line = memo(function Line({
   }
   if (line.role === "notice" && line.notice) {
     return <NoticeCard notice={line.notice} />;
+  }
+  if (line.role === "opening" && line.opening) {
+    return <OpeningCard opening={line.opening} />;
   }
   if (line.role === "system" || line.role === "error") {
     return (

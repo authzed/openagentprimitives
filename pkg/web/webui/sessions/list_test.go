@@ -444,6 +444,39 @@ func names(rows []sessionRow) []string {
 	return out
 }
 
+func TestGoalSessionAlertsUseOnlyAuthorizedSessionMetadata(t *testing.T) {
+	goal := func(s *spiceboxv1alpha1.AgentSession) {
+		s.UID = "goal-uid"
+		s.Spec.GoalExecution = &spiceboxv1alpha1.GoalExecutionReference{}
+		s.Spec.OpeningSummary = "Session created for goal Stretch"
+		s.Spec.Prompt.Inline = "Private exact instructions"
+	}
+	d := newListDeps(t,
+		lookupReturns(ref("demo-ns", "goal-run"), ref("demo-ns", "goal-pretender")),
+		withSession("demo-ns", "goal-run", classNamed("demo-agent"), goal),
+		withSession("demo-ns", "goal-pretender", classNamed("demo-agent"), func(s *spiceboxv1alpha1.AgentSession) {
+			s.Spec.OpeningSummary = "Ordinary async session"
+		}),
+		withSession("demo-ns", "private-unlisted", classNamed("demo-agent"), goal),
+	)
+	rows, _, err := buildSessionList(context.Background(), d, demoSubject, nil, false)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	byName := map[string]sessionRow{}
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
+	assert.True(t, byName["goal-run"].GoalCreated)
+	assert.Equal(t, "goal-uid", byName["goal-run"].UID)
+	assert.Equal(t, "Session created for goal Stretch", byName["goal-run"].OpeningSummary)
+	assert.False(t, byName["goal-pretender"].GoalCreated)
+	assert.Empty(t, byName["goal-pretender"].OpeningSummary)
+	raw, err := json.Marshal(rows)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "private-unlisted")
+	assert.NotContains(t, string(raw), "Private exact instructions")
+}
+
 // TestListJoinsTheLookupAgainstKubernetes is J1. The fixture is built so each
 // of the four join outcomes is present exactly once, because a fixture with
 // only joinable sessions cannot distinguish a correct join from one that

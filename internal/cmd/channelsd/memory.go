@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/pipeline"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -16,9 +17,11 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/channel_msg_ref"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/envelopefact"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/factcontent"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalactor"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/triggerdelivery"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/turn"
 	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
 // memoryClient talks to the operator's unified Kind-parameterized memory
@@ -366,3 +369,9 @@ func (m *memoryClient) Preferences() channelkinds.PreferencesClient { return m.c
 
 // Compile-time check: *memoryClient implements pipeline.Memory.
 var _ pipeline.Memory = (*memoryClient)(nil)
+
+// RecordGoalActor attests only routed human input. The operator verifies this
+// component signature and ignores author fields in runner-authored turns.
+func (m *memoryClient) RecordGoalActor(ctx context.Context, sess *v1.AgentSession, class *v1.AgentClass, owner identity.CanonicalUserID) error {
+	return goalactor.Record(ctx, m.signed, memory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}, goalactor.Content{Owner: owner.String(), SessionUID: string(sess.UID), ClassUID: string(class.UID)})
+}

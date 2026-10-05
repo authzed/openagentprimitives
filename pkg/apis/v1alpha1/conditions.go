@@ -72,7 +72,7 @@ const (
 	// message. Distinct from ReasonPodCrashed (PodFailed phase), since these pods
 	// never reach PodFailed â they retry forever â so without this the bundle (and
 	// its waiting AgentSession) would hang silently.
-	ReasonPodStartFailed     = "PodStartFailed"
+	ReasonPodStartFailed = "PodStartFailed"
 	// ReasonWorkspaceProvisioningFailed marks a session whose workspace (or
 	// snapshot-store) PVC could not be provisioned by its StorageClass — an
 	// undersized request the backend rejects (Filestore's minimum share size),
@@ -84,12 +84,12 @@ const (
 	// generic "did not become Ready" text.
 	ReasonWorkspaceProvisioningFailed = "WorkspaceProvisioningFailed"
 	ReasonNodeEvicted                 = "NodeEvicted"
-	ReasonClassMissing       = "ClassMissing"
-	ReasonClassInvalid       = "ClassInvalid"
-	ReasonIdleTTL            = "IdleTTL"
-	ReasonMaxDuration        = "MaxDuration"
-	ReasonUserDelete         = "UserDelete"
-	ReasonToolspecNotInClass = "ToolspecNotInClass"
+	ReasonClassMissing                = "ClassMissing"
+	ReasonClassInvalid                = "ClassInvalid"
+	ReasonIdleTTL                     = "IdleTTL"
+	ReasonMaxDuration                 = "MaxDuration"
+	ReasonUserDelete                  = "UserDelete"
+	ReasonToolspecNotInClass          = "ToolspecNotInClass"
 )
 
 // ToolCall condition types.
@@ -1492,6 +1492,11 @@ const AnnotationSessionOpening = "agentprimitives.authzed.com/session-opening"
 // after a successful post; left unset on a send failure so the next envelope
 // retries.
 const AnnotationSessionOpeningSent = "agentprimitives.authzed.com/session-opening-sent"
+
+// The transport message reference keeps edits on the summary itself, even
+// when an async session posts into an existing conversation thread.
+const AnnotationSessionOpeningMessageChannel = "agentprimitives.authzed.com/session-opening-message-channel"
+const AnnotationSessionOpeningMessageID = "agentprimitives.authzed.com/session-opening-message-id"
 
 // AnnotationTriggerOwnerSubject carries the subject-set reference of the
 // external account a triggered session's inbound belongs to — for a GitHub

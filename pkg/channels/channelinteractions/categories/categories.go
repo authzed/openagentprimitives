@@ -97,14 +97,16 @@ const (
 	// UserPreferenceConfirm asks the turn author (the addressee) to confirm
 	// saving a user preference. The session is parked until the addressee decides.
 	UserPreferenceConfirm = "user_preference_confirm"
+	GoalExecutionConsent  = "goal_execution_consent"
 )
 
 // registerPrompts registers every prompt category. Kept out of init for the
 // same reason as registerNotices: a test that Resets the registry can put it
 // back, which an init cannot do.
 func registerPrompts() {
+	channelinteractions.Register(channelinteractions.Category{Name: GoalExecutionConsent, PlanConsent: true, Tone: channelinteractions.TonePrivacy, Deciders: channelinteractions.DecideRequester, Resurface: channelinteractions.ResurfaceCached, Surface: channelinteractions.SurfaceDMOnly})
 	channelinteractions.Register(channelinteractions.Category{
-		Name: PlanPhase,
+		Name: PlanPhase, IncludesConsents: true,
 		Park: v1alpha1.AgentSessionPhaseAwaitingDecision,
 		// Routine, like tool_approval and for the same reason: the agent is
 		// asking to do something ordinary, and a plan gate fires on the common

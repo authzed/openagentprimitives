@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -83,7 +84,10 @@ func (p *PortForwarder) Start(ctx context.Context, out io.Writer) error {
 	if len(pods.Items) == 0 {
 		return fmt.Errorf("no pods in %s matching %q (service %q)", p.namespace, p.selector, p.service)
 	}
-	pod := pods.Items[0]
+	pod := readyPod(pods.Items)
+	if pod == nil {
+		return fmt.Errorf("no ready running pods in %s matching %q (service %q)", p.namespace, p.selector, p.service)
+	}
 
 	roundTripper, upgrader, err := spdy.RoundTripperFor(p.cfg)
 	if err != nil {
@@ -136,6 +140,23 @@ func (p *PortForwarder) Start(ctx context.Context, out io.Writer) error {
 		return errors.New("no forwarded ports")
 	}
 	p.local = ports[0].Local
+	return nil
+}
+
+// Retained evicted pods and terminating rollout replicas can precede the live
+// service pod in a list. Forward only to a replica that can serve requests.
+func readyPod(pods []corev1.Pod) *corev1.Pod {
+	for i := range pods {
+		pod := &pods[i]
+		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+				return pod
+			}
+		}
+	}
 	return nil
 }
 

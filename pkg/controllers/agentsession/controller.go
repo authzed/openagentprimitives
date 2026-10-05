@@ -524,9 +524,15 @@ type ScopeDeleter interface {
 }
 
 // Reconciler reconciles AgentSession objects.
+type GoalSessionValidator interface {
+	ValidateGoalSession(context.Context, *spiceboxv1alpha1.AgentSession) error
+	ConstrainGoalSettings(context.Context, *spiceboxv1alpha1.AgentSession, *spiceboxv1alpha1.EffectiveSettings) error
+}
+
 type Reconciler struct {
-	Client    client.Client
-	APIReader client.Reader
+	GoalValidator GoalSessionValidator
+	Client        client.Client
+	APIReader     client.Reader
 
 	// UsesLocalDevImages mirrors the resolved cloud kind's
 	// InstallProfile().UsesLocalDevImages(): true on local/desktop clusters,
@@ -1136,6 +1142,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if !sess.DeletionTimestamp.IsZero() {
 		return r.finalize(ctx, &sess)
 	}
+	if sess.Spec.GoalExecution != nil {
+		if r.GoalValidator == nil {
+			return ctrl.Result{}, fmt.Errorf("goal session validator unavailable")
+		}
+		if err := r.GoalValidator.ValidateGoalSession(ctx, &sess); err != nil {
+			return ctrl.Result{}, fmt.Errorf("goal session activation refused: %w", err)
+		}
+	}
 	// Snapshot the session as read so every status write below sends only the
 	// fields this reconcile actually changes; agentstatus.WriteOwned diffs
 	// against it.
@@ -1365,6 +1379,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, fmt.Errorf("resolve settings: %w", err)
 		}
 		sess.Status.EffectiveSettings = &eff
+		if sess.Spec.GoalExecution != nil {
+			if err := r.GoalValidator.ConstrainGoalSettings(ctx, &sess, &eff); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
 		// Catalog token: when the effective model came from the model catalog
 		// rather than bring-your-own, read the central token from its
 		// system-namespace Secret and repoint Model.APIKey at the per-session

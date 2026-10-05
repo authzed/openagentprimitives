@@ -1084,3 +1084,17 @@ func childSession(t *testing.T, name, class string, status v1.AgentSessionStatus
 		Status:     status,
 	}
 }
+
+func TestGoalExecutionCannotDelegate(t *testing.T) {
+	parent := parentSession(t, "goal-parent", "demo-lead")
+	parent.Spec.GoalExecution = &v1.GoalExecutionReference{GoalID: "goal", OccurrenceID: "occurrence", GoalRevision: 3, ConsentDigest: "digest"}
+	r, c := newReconciler(t, parentClass(t, "demo-lead", "demo-coder"), childClass(t, "demo-coder"), parent, request(t, "goal-request", "goal-parent", "demo-coder"))
+	reconcileOnce(t, r, "goal-request")
+	var result v1.SubagentRequest
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "ns", Name: "goal-request"}, &result))
+	assert.Equal(t, v1.SubagentRequestPhaseDenied, result.Status.Phase)
+	assert.Contains(t, result.Status.Determination, "cannot delegate")
+	var sessions v1.AgentSessionList
+	require.NoError(t, c.List(context.Background(), &sessions))
+	assert.Len(t, sessions.Items, 1)
+}

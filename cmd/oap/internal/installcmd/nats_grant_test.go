@@ -56,6 +56,7 @@ func TestWebdNATSGrantPublishSurface(t *testing.T) {
 
 	// The inbound subjects webd genuinely publishes.
 	permitted := map[string]string{
+		"ap.component.interaction_decision.ns1.sess1":  "client-hosted verified human decisions outside runner grants",
 		"ap.session.ns1.sess1.in.view_message":         "chat SubmitUserMessage + /interact user_message|annotation_batch|mcp_ui_action → RequestViewMessage",
 		"ap.session.ns1.sess1.in.interrupt_request":    "chat SubmitInterrupt → clienthosted.SubmitInterrupt",
 		"ap.session.ns1.sess1.in.interaction_decision": "chat SubmitDecision → clienthosted.SubmitInteractionDecision (the browser approve/deny button)",

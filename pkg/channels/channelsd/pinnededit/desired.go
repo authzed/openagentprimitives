@@ -24,6 +24,13 @@ func Desired(sess *v1alpha1.AgentSession) (channelkinds.OpeningMessageContent, b
 	}
 	chID, ts := oc.External["channel_id"], oc.External["thread_ts"]
 	openingText := sess.Annotations[v1alpha1.AnnotationSessionOpening]
+	var instructions string
+	if sess.Spec.OpeningSummary != "" {
+		openingText = sess.Spec.OpeningSummary
+		chID = sess.Annotations[v1alpha1.AnnotationSessionOpeningMessageChannel]
+		ts = sess.Annotations[v1alpha1.AnnotationSessionOpeningMessageID]
+		instructions = sess.Spec.Prompt.Inline
+	}
 	if chID == "" || ts == "" || openingText == "" {
 		return channelkinds.OpeningMessageContent{}, false
 	}
@@ -62,10 +69,11 @@ func Desired(sess *v1alpha1.AgentSession) (channelkinds.OpeningMessageContent, b
 		}
 	}
 	return channelkinds.OpeningMessageContent{
-		Ref:         channelkinds.MessageRef{ChannelID: chID, TS: ts},
-		OpeningText: openingText,
-		Badge:       badge,
-		Body:        body,
-		Link:        link,
+		Ref:          channelkinds.MessageRef{ChannelID: chID, TS: ts},
+		OpeningText:  openingText,
+		Badge:        badge,
+		Body:         body,
+		Link:         link,
+		Instructions: instructions,
 	}, true
 }

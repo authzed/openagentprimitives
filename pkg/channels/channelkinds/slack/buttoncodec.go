@@ -17,7 +17,8 @@ import "encoding/json"
 const (
 	// discShowSettings discriminates the "Show settings" button on agent
 	// messages (show_settings.go); opens the effectiveSettings modal.
-	discShowSettings = "show_settings"
+	discShowSettings        = "show_settings"
+	discSessionInstructions = "session_instructions"
 	// discInteraction discriminates an Interaction-model decision action
 	// (channelevents' ActionKindDecision): identity_choice,
 	// permission_request and queued_messages today, any decision-kind
@@ -74,7 +75,7 @@ func decodeApprovalButtonValue(raw string) (approvalButtonValue, bool) {
 		return approvalButtonValue{}, false
 	}
 	switch v.V {
-	case discShowSettings, discInteraction, discInteractionDetails:
+	case discShowSettings, discInteraction, discInteractionDetails, discSessionInstructions:
 		return v, true
 	default:
 		return approvalButtonValue{}, false

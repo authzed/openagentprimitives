@@ -89,6 +89,11 @@ type PlanGateDeps struct {
 	// the single-phase shape.
 	Records func() []plangateaudit.Content
 
+	// DeriveApproval checks a separately approved, current authority ceiling.
+	// It returns nil when human approval is required. Successful derivation is
+	// recorded and folded before use; an error cannot clear the phase.
+	DeriveApproval func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error)
+
 	// ActivePhase is the fallback index used when Records is nil.
 	ActivePhase int
 
@@ -185,6 +190,25 @@ func NewPlanGate(deps PlanGateDeps) *PlanGate { return &PlanGate{deps: deps} }
 
 func (h *PlanGate) Name() string             { return "plan_gate" }
 func (h *PlanGate) Points() []pipeline.Point { return []pipeline.Point{pipeline.PreToolCall} }
+
+// ConsentApproval makes an explicit request for a phase with prepared consents,
+// including a phase with no governed calls to trigger the normal lazy gate.
+// It uses the same card and durable approval identity as a permissioned call.
+func (h *PlanGate) ConsentApproval(ctx context.Context, session pipeline.SessionRef, index int) (pipeline.Decision, error) {
+	plan := h.activePlan()
+	if !h.enforcing() || index < 0 || index >= len(plan.Phases) || len(plan.Phases[index].Consents) == 0 {
+		return pipeline.Decision{}, fmt.Errorf("explicit consent requires an enforcing declared plan phase")
+	}
+	st, folded, err := h.foldOnce()
+	if err != nil || !folded || st.Doubtful {
+		return pipeline.Decision{}, fmt.Errorf("cannot establish plan consent approval history: %v", err)
+	}
+	needs, denied := h.phaseNeedsApproval(st, folded, index)
+	if !needs {
+		return pipeline.Decision{}, nil
+	}
+	return h.requestPhaseApproval(ctx, pipeline.Input{Session: session}, plangateaudit.Content{Mode: h.deps.Mode}, index, denied), nil
+}
 
 func (h *PlanGate) now() time.Time {
 	if h.deps.Now != nil {
@@ -335,7 +359,39 @@ func (h *PlanGate) Eval(ctx context.Context, in pipeline.Input) pipeline.Decisio
 				// first and allowing on a yes would make one approved phase
 				// authorize the whole surface — the opposite of a ceiling.
 				if needs, denied := h.phaseNeedsApproval(st, folded, activePhase); needs {
-					return h.requestPhaseApproval(ctx, in, rec, activePhase, denied)
+					if !denied && folded && !st.Doubtful && h.deps.DeriveApproval != nil {
+						approvalPlan := h.activePlan()
+						approvalDigest := approvalPlan.Digest()
+						authority, err := h.deps.DeriveApproval(ctx, approvalPlan, activePhase)
+						if err != nil {
+							return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: standing authorization could not be established: " + err.Error()}
+						}
+						if authority != nil {
+							if h.activePlan().Digest() != approvalDigest {
+								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: plan changed during standing approval"}
+							}
+							if h.deps.Recorder == nil || authority.Kind == "" || authority.Reference == "" || authority.DecisionRef == "" || authority.OccurrenceID == "" || authority.SessionUID == "" {
+								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: incomplete standing approval authority"}
+							}
+							approval := plangate.PhaseAuthorityRecord(approvalPlan, activePhase, h.deps.SlotStanding)
+							approval.Event = plangateaudit.EventPhaseApproved
+							approval.PlanDigest = approvalDigest
+							approval.ApprovalAuthority = authority
+							approval.Mode, approval.Provenance, approval.At = h.deps.Mode, "standing_authorization", h.now()
+							if err := h.deps.Recorder.Record(ctx, approval); err != nil {
+								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: recording standing approval failed: " + err.Error()}
+							}
+							state, ok, err := h.foldOnce()
+							if err != nil || !ok || state.Doubtful || !state.PhaseApproved(activePhase) {
+								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: standing approval was not durably established"}
+							}
+							// Continue through the normal per-call gates and budgets.
+						} else {
+							return h.requestPhaseApproval(ctx, in, rec, activePhase, false)
+						}
+					} else {
+						return h.requestPhaseApproval(ctx, in, rec, activePhase, denied)
+					}
 				}
 			} else {
 				rec.Event = plangateaudit.EventGateWouldDeny

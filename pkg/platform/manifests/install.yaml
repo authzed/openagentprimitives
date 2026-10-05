@@ -4770,6 +4770,25 @@ spec:
                   after archive); ForkedFrom is set on explicit user-triggered
                   restart.
                 type: string
+              goalExecution:
+                description: GoalExecution binds an operator-created root session
+                  to a durable claim.
+                properties:
+                  consentDigest:
+                    type: string
+                  goalID:
+                    type: string
+                  goalRevision:
+                    format: int64
+                    type: integer
+                  occurrenceID:
+                    type: string
+                required:
+                - consentDigest
+                - goalID
+                - goalRevision
+                - occurrenceID
+                type: object
               inputChannel:
                 description: |-
                   InputChannel records the channel-driven origin — the Channel
@@ -4840,6 +4859,13 @@ spec:
                 - name
                 - natsSubjectPrefix
                 type: object
+              openingSummary:
+                description: |-
+                  OpeningSummary optionally replaces the initial instruction bubble with a
+                  readable summary and a control to inspect the exact inline instructions.
+                  Intended for asynchronously created sessions. Render as plain text.
+                maxLength: 2000
+                type: string
               outputChannel:
                 description: |-
                   OutputChannel records the Channel the session's outbound
@@ -4962,6 +4988,9 @@ spec:
             x-kubernetes-validations:
             - message: spec.parent is immutable once set
               rule: '!has(oldSelf.parent) || (has(self.parent) && self.parent == oldSelf.parent)'
+            - message: openingSummary requires inline instructions
+              rule: '!has(self.openingSummary) || size(self.openingSummary) == 0 ||
+                (has(self.prompt.inline) && size(self.prompt.inline) > 0)'
           status:
             properties:
               activeWidgets:
@@ -6636,8 +6665,11 @@ spec:
                 properties:
                   amountMicroUSD:
                     description: |-
-                      AmountMicroUSD is the session total in micro-USD (1e-6 USD); 0 and
-                      meaningless when PricingKnown is false.
+                      AmountMicroUSD is the session total in micro-USD (1e-6 USD): the sum of
+                      every priced component (ByModel + ByTool). When PricingKnown is false, at
+                      least one served MODEL had no rate, so this is a LOWER BOUND on spend (the
+                      components that could be priced), not the full session cost — it is no
+                      longer necessarily 0, because provider-reported tool cost is always priced.
                     format: int64
                     type: integer
                   asOf:
@@ -6689,6 +6721,37 @@ spec:
                       type: object
                     type: array
                     x-kubernetes-list-type: atomic
+                  byTool:
+                    description: |-
+                      ByTool breaks out the cost of inner interactive toolkits (e.g. a `claude`
+                      Claude Code sub-run's own provider-reported spend) a session drove. These
+                      are ADDED to AmountMicroUSD alongside ByModel — a session's total is model
+                      spend plus tool spend. Empty when no interactive toolkit reported a cost.
+                      Tool cost is always provider-reported, never table-priced, so a bucket's
+                      PricingKnown is always true.
+                    items:
+                      description: ToolCostBucket is one interactive toolkit's slice
+                        of a session's cost.
+                      properties:
+                        amountMicroUSD:
+                          description: |-
+                            AmountMicroUSD is this tool's provider-reported cost, summed across its
+                            invocations, in micro-USD (1e-6 USD).
+                          format: int64
+                          type: integer
+                        pricingKnown:
+                          description: |-
+                            PricingKnown is true when AmountMicroUSD is a real cost. Tool cost is
+                            always provider-reported, so this is true whenever a cost was reported.
+                          type: boolean
+                        tool:
+                          description: Tool is the outer tool name (e.g. "claude-oauth").
+                          type: string
+                      required:
+                      - tool
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
                   currency:
                     description: Currency is the ISO code the amount is denominated
                       in ("USD").
@@ -6698,8 +6761,9 @@ spec:
                     type: string
                   pricingKnown:
                     description: |-
-                      PricingKnown is false when the model had no price; the amount is then 0
-                      and must not be shown as a real cost.
+                      PricingKnown is false when a served model had no price. The amount is then
+                      a lower bound (priced components only), not the full cost. Tool buckets are
+                      always priced, so this tracks model-pricing coverage specifically.
                     type: boolean
                 type: object
               failureReason:
@@ -24022,6 +24086,11 @@ spec:
                   deterministic hash of this value (see pkg/platform/identity/useridentity).
                 minLength: 1
                 type: string
+              suspended:
+                description: |-
+                  Suspended prevents future goal execution and stops active goal sessions.
+                  This field is controlled by the cluster administrator.
+                type: boolean
             required:
             - subject
             type: object
@@ -31309,6 +31378,40 @@ spec:
       app.kubernetes.io/name: spicebox-webd
   policyTypes:
   - Ingress
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: spicebox-goal-execution
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    caBundle: ""
+    service:
+      name: spicebox-webhook
+      namespace: agentprimitives-system
+      path: /validate-goal-execution
+      port: 443
+  failurePolicy: Fail
+  matchConditions:
+  - expression: (object != null && has(object.spec.goalExecution)) || (oldObject !=
+      null && has(oldObject.spec.goalExecution))
+    name: goal-session
+  name: goalexecution.agentprimitives.authzed.com
+  rules:
+  - apiGroups:
+    - agentprimitives.authzed.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - agentsessions
+    - agentsessions/status
+    scope: Namespaced
+  sideEffects: None
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration

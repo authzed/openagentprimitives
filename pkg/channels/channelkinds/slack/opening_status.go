@@ -77,9 +77,14 @@ func (s *slackSender) EditOpeningMessage(ctx context.Context, sess channelkinds.
 	}
 	text := renderOpeningText(content)
 	block := slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", text, false, false), nil, nil)
+	blocks := []slackapi.Block{block}
+	if content.Instructions != "" {
+		// Keep the inspection control when the pinned status is rewritten.
+		blocks = openingBlocks(text, sess.Namespace+"/"+sess.Name)
+	}
 	if _, _, _, err := s.client.UpdateMessageContext(ctx, content.Ref.ChannelID, content.Ref.TS,
 		slackapi.MsgOptionText(text, false),
-		slackapi.MsgOptionBlocks(block),
+		slackapi.MsgOptionBlocks(blocks...),
 	); err != nil {
 		log.FromContext(ctx).Info("slack: EditOpeningMessage chat.update failed",
 			"session", sess.Namespace+"/"+sess.Name, "channelID", content.Ref.ChannelID, "ts", content.Ref.TS, "err", err.Error())

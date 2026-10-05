@@ -21,6 +21,7 @@ package plangate
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -160,6 +161,9 @@ type AuthoredSlot struct {
 // Phase is one step of a plan: what the agent intends to do, and the authority
 // it needs to do it.
 type Phase struct {
+	// Consents are the operator-prepared requests reviewed with this phase.
+	// Their complete wire representation is authority, including display text.
+	Consents []json.RawMessage
 	// Label is the phase's human-readable name, for the approval card and the
 	// audit trail. Agent-authored and untrusted; display only.
 	//
@@ -276,6 +280,7 @@ func (p Plan) Ceiling(index int) (map[permsurface.Handle]struct{}, error) {
 // deliberately order-free.
 func (p Phase) AuthorityKey() string {
 	sum := sha256.New()
+	writeConsents(sum, p.Consents)
 
 	perms := make([]string, 0, len(p.Permissions))
 	for _, h := range p.Permissions {
@@ -339,6 +344,7 @@ func (p Phase) AuthorityKey() string {
 func (p Plan) Digest() string {
 	sum := sha256.New()
 	for i, ph := range p.Phases {
+		writeConsents(sum, ph.Consents)
 		io.WriteString(sum, "phase\x00")
 		io.WriteString(sum, strconv.Itoa(i))
 		io.WriteString(sum, "\x00")
@@ -397,4 +403,14 @@ func (p Plan) Digest() string {
 		}
 	}
 	return hex.EncodeToString(sum.Sum(nil))
+}
+
+func writeConsents(w io.Writer, consents []json.RawMessage) {
+	for _, raw := range consents {
+		framed := append([]byte("consent\x00"), raw...)
+		framed = append(framed, 0)
+		if _, err := w.Write(framed); err != nil {
+			panic(err)
+		}
+	}
 }

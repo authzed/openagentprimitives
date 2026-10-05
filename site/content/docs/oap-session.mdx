@@ -2,7 +2,7 @@ export const meta = {
   title: 'oap session',
   section: 'Reference',
   group: 'CLI',
-  order: 2950,
+  order: 2960,
   description: 'Inspect AgentSession resources',
 }
 
@@ -14,8 +14,8 @@ Inspect AgentSession resources
 
 Publish an approval decision envelope to NATS as if the named
 approver had clicked Approve (or --deny) in the channel. Drives any
-pending approval on the session — tool-call, info-leakage, or
-content-inspection. Useful for end-to-end testing without a Slack
+registered yes/no approval on the session, including plan approvals
+and private reminder consent. Useful for end-to-end testing without a Slack
 workspace.
 
 The decision still flows through channelsd's normal pipeline:

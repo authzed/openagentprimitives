@@ -17,6 +17,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	"github.com/authzed/openagentprimitives/pkg/platform/nats/subjects"
 )
 
 // fakeLookuper satisfies subjectLookuper for the approver pre-check tests.
@@ -179,6 +180,23 @@ func TestCollectPendings(t *testing.T) {
 	assert.Equal(t, pendingEntry{RequestID: "c1", ApproverSubject: "crm_company:3#owner", Kind: approvalKindContentInspection}, got[2])
 }
 
+func TestRegisteredPlanApprovalsAreDispatchable(t *testing.T) {
+	for _, category := range []string{categories.PlanPhase, categories.PlanAmendment, categories.GoalExecutionConsent} {
+		t.Run(category, func(t *testing.T) {
+			pending := collectPendings(sessionWith(spiceboxv1alpha1.PendingInteraction{
+				RequestID: "plan-request", Category: category, ApproverSubject: "agentsession:default/session#approve",
+			}))
+			require.Len(t, pending, 1)
+			env := capturePublish(t, pending[0].Kind, pending[0].RequestID, "admin@ap.local", "approve")
+			var payload channelevents.InteractionDecisionPayload
+			require.NoError(t, json.Unmarshal(env.Payload, &payload))
+			assert.Equal(t, category, payload.Category)
+			assert.Equal(t, "plan-request", payload.RequestRef)
+			assert.Equal(t, "approve", payload.ActionID)
+		})
+	}
+}
+
 // TestResolvePending covers the unified resolution: auto-pick (one only),
 // disambiguation error (multiple), no-pending error, explicit match, and
 // explicit no-match (across all three kinds).
@@ -233,7 +251,7 @@ func TestResolvePending(t *testing.T) {
 // capturePublish records the single subject + envelope a build+publish
 // produces, so the per-kind decision-envelope tests can assert the wire
 // shape without standing up NATS. It mirrors the production publish path:
-// dispatch.buildDecisionPayload → channelevents.PublishIn.
+// dispatch.buildDecisionPayload → channelevents.PublishComponentDecision.
 func capturePublish(t *testing.T, k approvalKind, requestID, approverEmail, decision string) channelevents.Envelope {
 	t.Helper()
 	dispatch, ok := dispatchFor(k)
@@ -247,10 +265,10 @@ func capturePublish(t *testing.T, k approvalKind, requestID, approverEmail, deci
 		return nil
 	})
 	pl := dispatch.buildDecisionPayload(requestID, approverEmail, decision)
-	require.NoError(t, channelevents.PublishIn(publish, "ns", "sess", dispatch.decisionKind, pl))
+	require.NoError(t, channelevents.PublishComponentDecision(publish, "ns", "sess", pl))
 
 	// IN subject for the kind's decision envelope.
-	wantSubject := channelevents.SubjectIn(channelevents.SubjectPrefix("ns", "sess"), dispatch.decisionKind)
+	wantSubject := subjects.ComponentDecision("ns", "sess")
 	assert.Equal(t, wantSubject, gotSubject)
 	require.NoError(t, gotEnv.Validate(), "published envelope must validate")
 	return gotEnv

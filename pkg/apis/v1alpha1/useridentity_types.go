@@ -38,6 +38,11 @@ type UserIdentityList struct {
 }
 
 type UserIdentitySpec struct {
+	// Suspended prevents future goal execution and stops active goal sessions.
+	// This field is controlled by the cluster administrator.
+	// +optional
+	Suspended bool `json:"suspended,omitempty"`
+
 	// Subject is the canonical SpiceDB subject of the user this catalog
 	// belongs to, e.g. "user:YWxpY2VAZXhhbXBsZS5jb20=". metadata.name is a
 	// deterministic hash of this value (see pkg/platform/identity/useridentity).

@@ -1,50 +1,50 @@
 {
   "identity-link": {
     "scripts": [
-      "/assets/identity-link.BpTVpI-G.js"
+      "/assets/identity-link.CvNUuyfH.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "identity-link-form": {
     "scripts": [
-      "/assets/identity-link-form.vFiHWBBM.js"
+      "/assets/identity-link-form._5gzYYg2.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "identity-portal": {
     "scripts": [
-      "/assets/identity-portal.BFvlFsRb.js"
+      "/assets/identity-portal.GIKDQeI6.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "identity-verify-warn": {
     "scripts": [
-      "/assets/identity-verify-warn.CN_Li5hi.js"
+      "/assets/identity-verify-warn.DNvvOVHJ.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "admin": {
     "scripts": [
-      "/assets/admin.C9jbAoMt.js"
+      "/assets/admin.qnGp7z9a.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "settings": {
     "scripts": [
-      "/assets/settings.Bs9xT9hr.js"
+      "/assets/settings.DMk3yKD2.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "artifact-host": {
@@ -55,56 +55,56 @@
   },
   "artifact-view": {
     "scripts": [
-      "/assets/artifact-view.D4Y_FHws.js"
+      "/assets/artifact-view.lOLJuXvR.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "chat-embed": {
     "scripts": [
-      "/assets/chat-embed.B187PZKG.js"
+      "/assets/chat-embed.V3Eb21t5.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "health": {
     "scripts": [
-      "/assets/health.DtWM4D-G.js"
+      "/assets/health.1lU8Rho7.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "sessions": {
     "scripts": [
-      "/assets/sessions.DrV0Blkf.js"
+      "/assets/sessions.4mOHGzaN.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "session-view": {
     "scripts": [
-      "/assets/session-view.dtf-izky.js"
+      "/assets/session-view.CUv5o1hD.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   },
   "mcpui-host": {
     "scripts": [
-      "/assets/mcpui-host.DUWNbgMq.js"
+      "/assets/mcpui-host.Cc6PrV5F.js"
     ],
     "css": []
   },
   "system": {
     "scripts": [
-      "/assets/system.DT_ax8I5.js"
+      "/assets/system.BVddH-yO.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.DMl_YDZA.css"
     ]
   }
 }
