@@ -1695,7 +1695,8 @@ func (l *Loop) FreezeAndRecordPhases(ctx context.Context, authored []plangate.Au
 			// Guessing "already granted" would auto-approve a phase whose
 			// approval mints a grant nobody was asked about; guessing "not
 			// granted" costs one avoidable click. Take the click.
-			UngrantedSlots: len(ph.Slots),
+			UngrantedSlots:  len(ph.Slots),
+			PendingConsents: len(ph.Consents),
 		})
 
 		declared := authority

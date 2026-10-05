@@ -14,10 +14,11 @@ type Request struct {
 	ID        string                                    `json:"id,omitempty"`
 }
 type Response struct {
-	Resource           string      `json:"resource"`
-	Run                *Occurrence `json:"run,omitempty"`
-	Runs               *RunPage    `json:"runs,omitempty"`
-	Goal               *Goal       `json:"goal,omitempty"`
-	Page               *Page       `json:"page,omitempty"`
-	ExecutionAvailable bool        `json:"executionAvailable"`
+	Approval           *channelevents.InteractionRequestPayload `json:"approval,omitempty"`
+	Resource           string                                   `json:"resource"`
+	Run                *Occurrence                              `json:"run,omitempty"`
+	Runs               *RunPage                                 `json:"runs,omitempty"`
+	Goal               *Goal                                    `json:"goal,omitempty"`
+	Page               *Page                                    `json:"page,omitempty"`
+	ExecutionAvailable bool                                     `json:"executionAvailable"`
 }

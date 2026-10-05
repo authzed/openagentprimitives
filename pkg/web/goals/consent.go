@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"strings"
+	"sync"
 	"time"
 
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
@@ -19,6 +20,7 @@ import (
 )
 
 type ConsentPublisher struct {
+	mu      sync.Mutex
 	Service *domain.Service
 	Memory  memory.Memory
 	Signer  *provenance.Signer
@@ -28,6 +30,11 @@ type ConsentPublisher struct {
 // Notify is part of the durable goal outbox: publication failures leave the
 // event pending. The exact card is signed and saved before it reaches the bus.
 func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.Service == nil || p.Service.Store == nil || p.Memory == nil || p.Signer == nil {
+		return fmt.Errorf("goal consent collaborators unavailable")
+	}
 	if event.Action == "execution_decision" {
 		g, err := p.Service.Store.Get(ctx, event.Goal.Domain, event.Goal.ID)
 		if err != nil {
@@ -146,5 +153,45 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 	if request.ExpiresAt == nil || !time.Now().Before(*request.ExpiresAt) {
 		return nil
 	}
+	if c.ApprovalMode == "plan" {
+		return nil
+	}
 	return channelevents.PublishOut(p.Publish, ns, name, channelevents.KindInteractionRequest, request)
+}
+
+// Request returns only the exact platform-signed card for this live session's
+// request. The plan presenter cannot rewrite its authority or destination.
+func (p *ConsentPublisher) Request(ctx context.Context, g domain.Goal) (*channelevents.InteractionRequestPayload, error) {
+	if g.Execution == nil || g.Execution.ApprovalMode != "plan" || g.Execution.Decision != nil {
+		return nil, domain.ErrConflict
+	}
+	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
+	entry, found, err := goalconsent.Find(ctx, p.Memory, memory.Scope{Kind: "session", ID: g.Execution.Session}, "goalconsent-request-"+g.Execution.Digest)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, domain.ErrNotFound
+	}
+	var content goalconsent.Content
+	if err := json.Unmarshal(entry.Content, &content); err != nil {
+		return nil, err
+	}
+	var request channelevents.InteractionRequestPayload
+	if err := json.Unmarshal(content.Request, &request); err != nil {
+		return nil, err
+	}
+	if request.ExpiresAt == nil {
+		return nil, domain.ErrConflict
+	}
+	if !time.Now().Before(*request.ExpiresAt) {
+		current, err := p.Service.Store.Get(ctx, g.Domain, g.ID)
+		if err != nil {
+			return nil, err
+		}
+		if current.Execution == nil || current.Execution.Digest != g.Execution.Digest || current.Execution.Decision == nil || !current.Execution.Decision.Approved {
+			return nil, domain.ErrConflict
+		}
+	}
+	return &request, nil
 }

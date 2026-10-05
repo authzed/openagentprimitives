@@ -1418,7 +1418,21 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 			if loop == nil {
 				return nil, fmt.Errorf("plan gate is not ready for this session")
 			}
-			return loop.FreezeAndRecordPhases(ctx, runner.AuthoredPhasesFrom(phases))
+			var call meta.GoalsCaller
+			if c := f.preferencesClientFor(sess); c != nil && f.SpiceDB != nil {
+				call = func(ctx context.Context, r goalcore.Request) (goalcore.Response, error) {
+					return c.Goals(ctx, sess.Namespace, sess.Name, r)
+				}
+			}
+			authored, err := runner.PreparePlanReminders(ctx, phases, call, sess.Spec.GoalExecution == nil && sess.Spec.Parent == nil)
+			if err != nil {
+				return nil, err
+			}
+			notices, err := loop.FreezeAndRecordPhases(ctx, authored)
+			if err != nil {
+				return nil, err
+			}
+			return notices, loop.RequestPlanReminderApproval(ctx)
 		},
 		ActivePlan: func(ctx context.Context) (plangate.Plan, bool) {
 			if loop == nil {

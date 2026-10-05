@@ -131,6 +131,7 @@ func grantedPhase(records []plangateaudit.Content, r plangateaudit.Content, inde
 		maxCount = 1
 	}
 	ph := Phase{
+		Consents:    r.Consents,
 		Permissions: parseHandles(r.Ceiling),
 		Max:         MaxSpec{Count: maxCount},
 		Budget:      BudgetSpec{Calls: r.BudgetCalls},

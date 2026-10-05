@@ -1726,7 +1726,17 @@ func run(cfg *config) error {
 			if l == nil {
 				return nil, fmt.Errorf("plan gate is not ready for this session")
 			}
-			return l.FreezeAndRecordPhases(ctx, runner.AuthoredPhasesFrom(phases))
+			authored, err := runner.PreparePlanReminders(ctx, phases, func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+				return memHTTP.Goals(ctx, ns, name, req)
+			}, sess.Spec.GoalExecution == nil && sess.Spec.Parent == nil)
+			if err != nil {
+				return nil, err
+			}
+			notices, err := l.FreezeAndRecordPhases(ctx, authored)
+			if err != nil {
+				return notices, err
+			}
+			return notices, l.RequestPlanReminderApproval(ctx)
 		},
 		ActivePlan: func(ctx context.Context) (plangate.Plan, bool) {
 			if l := loopRef.Load(); l != nil {

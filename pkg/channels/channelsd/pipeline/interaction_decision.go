@@ -228,7 +228,7 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 	if !bound {
 		return fmt.Errorf("interaction decision: category %q has no bound decision handler (session %s)", pl.Category, ref)
 	}
-	out, err := handler(ctx, channelinteractions.Decision{Session: env.Session, Payload: pl, Request: req})
+	out, err := p.decideWithConsents(ctx, env.Session, pl, req, handler)
 	if err != nil {
 		// A bound-handler runtime failure (e.g. a downstream grant-write error) is
 		// surfaced to the clicker AND propagated: publish a per-clicker rejection

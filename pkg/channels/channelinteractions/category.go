@@ -113,6 +113,10 @@ const (
 // dependencies and attach at process start via Bind/HandlerFor in decision.go,
 // the registry-vs-DI split used across the repo.
 type Category struct {
+	// PlanConsent permits this category to be included in a plan approval.
+	PlanConsent bool
+	// IncludesConsents permits a plan card to carry exact child requests.
+	IncludesConsents bool
 	// Name is the registry key, snake_case ("tool_approval").
 	Name string
 	// Park is the AgentSession phase this category parks the session in
@@ -206,6 +210,12 @@ func (c Category) Validate() error {
 	}
 	// A notice row and a prompt row are two different contracts. Branch once
 	// here rather than threading `if c.Notice` through every check.
+	if c.PlanConsent && (c.Notice || c.Deciders != DecideRequester || c.Resume != ResumeNone || c.Resurface != ResurfaceCached) {
+		return fmt.Errorf("interaction category %q: plan consent requires a cached requester decision without runner resume", c.Name)
+	}
+	if c.IncludesConsents && (c.Notice || c.Resume != ResumeApproval || c.Deciders != DecideApprovers) {
+		return fmt.Errorf("interaction category %q: composed consent requires an approver plan gate", c.Name)
+	}
 	if c.Notice {
 		return c.validateNotice()
 	}

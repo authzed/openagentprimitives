@@ -3,18 +3,15 @@
 // approver clicked Approve / Deny in the channel. Useful for end-to-end
 // testing the approval flows without a Slack workspace.
 //
-// It drives ANY pending approval on the AgentSession — tool-call,
-// info-leakage, and content-inspection — by resolving the request id across
-// the generic PendingInteractions list (the single home for all three approval
-// families since they were flipped onto the unified Interaction model), then
-// publishing the generic interaction_decision envelope on the inbound NATS
-// subject for the session and optionally surfacing the channelsd-side
-// Applied outcome.
+// It drives registered yes/no approvals, including plans and reminder consent,
+// by resolving the request id in PendingInteractions and publishing through
+// the component-only decision ingress used by human transports. It can also
+// wait for the channelsd-side Applied outcome.
 //
 // Wire path mirrors the generic interaction click path
 // (handleInteractionDecisionClick): build an InteractionDecisionPayload tagged
 // with the family's Category and the approver's canonical identity (Kind="cli"),
-// publish it to NATS on the inbound subject for the session, then optionally
+// publish it to NATS on the component decision subject, then optionally
 // subscribe to the outbound Applied subject and surface the channelsd-side
 // outcome (approved / denied / not_authorized / etc.) to the operator.
 //
@@ -42,6 +39,7 @@ import (
 	apspicedb "github.com/authzed/openagentprimitives/cmd/oap/internal/spicedb"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	apnats "github.com/authzed/openagentprimitives/pkg/platform/nats"
@@ -54,8 +52,8 @@ const (
 	natsServicePort      = uint16(4222)
 )
 
-// approvalKind names one of the three approval families this command can
-// drive. The string values match the user-facing kind labels printed in
+// approvalKind names a registered yes/no approval category or a legacy display
+// alias. The string values match the user-facing kind labels printed in
 // the auto-pick / disambiguation output.
 type approvalKind string
 
@@ -109,11 +107,9 @@ type kindDispatch struct {
 	// appliedKind is the channelevents.Kind the channelsd outcome is
 	// published outbound on (used to build the --wait subscription).
 	appliedKind channelevents.Kind
-	// buildDecisionPayload constructs the kind's *DecisionPayload from the
-	// resolved request id, approver email, and decision string. All three
-	// payload types share the shape {RequestID, Approver, Decision}; this
-	// returns the concrete typed value for marshaling.
-	buildDecisionPayload func(requestID, approverEmail, decision string) any
+	// buildDecisionPayload constructs the generic decision from the resolved
+	// request id, approver email, and approve/deny action.
+	buildDecisionPayload func(requestID, approverEmail, decision string) channelevents.InteractionDecisionPayload
 	// decodeApplied unmarshals the kind's Applied payload from the
 	// envelope body and normalizes it to an appliedOutcome. It returns
 	// (_, false) when the requestID does not match (so the subscriber can
@@ -134,14 +130,9 @@ func cliApprover(approverEmail string) channelevents.ExternalIdentity {
 }
 
 // dispatchFor returns the kind-dispatch table for a pending entry's kind.
-// Since Slice C2 all three approval families flow through the SAME generic
-// interaction envelopes (interaction_decision / interaction_applied) — the
-// typed Kind*ToolApproval* / Kind*InfoLeakageApproval* decision pairs are no
-// longer produced (the runner parks every family as a generic interaction_request
-// — see pkg/agent/runner/host_approval.go). Each kind therefore differs ONLY in
-// the interaction Category it carries, so all three delegate to
-// genericInteractionDispatch. Unknown kinds return ok=false so the caller fails
-// loudly rather than publishing a no-op.
+// Every approval uses generic interaction envelopes. Legacy aliases map to
+// their categories; additional categories opt in through registry metadata.
+// Unknown kinds fail closed instead of publishing a no-op.
 func dispatchFor(k approvalKind) (kindDispatch, bool) {
 	switch k {
 	case approvalKindTool:
@@ -151,6 +142,10 @@ func dispatchFor(k approvalKind) (kindDispatch, bool) {
 	case approvalKindContentInspection:
 		return genericInteractionDispatch(string(categories.ContentInspection)), true
 	default:
+		category, ok := channelinteractions.Get(string(k))
+		if ok && (category.Resume == channelinteractions.ResumeApproval || category.PlanConsent) {
+			return genericInteractionDispatch(category.Name), true
+		}
 		return kindDispatch{}, false
 	}
 }
@@ -164,7 +159,7 @@ func genericInteractionDispatch(category string) kindDispatch {
 	return kindDispatch{
 		decisionKind: channelevents.KindInteractionDecision,
 		appliedKind:  channelevents.KindInteractionApplied,
-		buildDecisionPayload: func(requestID, approverEmail, decision string) any {
+		buildDecisionPayload: func(requestID, approverEmail, decision string) channelevents.InteractionDecisionPayload {
 			// InteractionDecisionPayload.Validate requires a non-empty
 			// Decider.ExternalID; the cli approver keys on Email for
 			// canonicalization, so mirror the email into ExternalID (the
@@ -208,12 +203,8 @@ func boolDecision(approved bool) string {
 
 // collectPendings flattens the AgentSession status's generic PendingInteractions
 // list into one ordered view, mapping each entry's Category onto its CLI
-// approvalKind. Since Slice C2 all three approval families — tool_approval,
-// info_leakage, and content_inspection — park on the single PendingInteractions
-// list (the typed pendingToolGrants/pendingLeakageApprovals lists were deleted),
-// so this is the single place that enumerates them. Entries whose category has
-// no CLI approvalKind (identity_choice, credential_link, …) are skipped — this
-// command only drives the three approve/deny families.
+// approvalKind. Registered yes/no approvals are included; choice prompts and
+// notices are skipped. Legacy display names remain for the original families.
 func collectPendings(sess *spiceboxv1alpha1.AgentSession) []pendingEntry {
 	out := make([]pendingEntry, 0, len(sess.Status.PendingInteractions))
 	for _, e := range sess.Status.PendingInteractions {
@@ -237,6 +228,10 @@ func approvalKindForCategory(category string) (approvalKind, bool) {
 	case string(categories.ContentInspection):
 		return approvalKindContentInspection, true
 	default:
+		c, ok := channelinteractions.Get(category)
+		if ok && (c.Resume == channelinteractions.ResumeApproval || c.PlanConsent) {
+			return approvalKind(category), true
+		}
 		return "", false
 	}
 }
@@ -290,8 +285,8 @@ func newSessionApproveCmd(g *apcmd.Globals) *cobra.Command {
 		Short: "Force-fire an approval (or --deny) on any pending approval, simulating a channel click",
 		Long: `Publish an approval decision envelope to NATS as if the named
 approver had clicked Approve (or --deny) in the channel. Drives any
-pending approval on the session — tool-call, info-leakage, or
-content-inspection. Useful for end-to-end testing without a Slack
+registered yes/no approval on the session, including plan approvals
+and private reminder consent. Useful for end-to-end testing without a Slack
 workspace.
 
 The decision still flows through channelsd's normal pipeline:
@@ -546,8 +541,9 @@ func runSessionApprove(
 	publishFn := channelevents.PublishFunc(func(subject string, body []byte) error {
 		return nc.Publish(subject, body)
 	})
-	if err := channelevents.PublishIn(publishFn, b.Namespace, sessionName,
-		dispatch.decisionKind, pl); err != nil {
+	// The CLI credentials authorize this component-only subject. Runner
+	// credentials cannot publish here, which protects included goal consents.
+	if err := channelevents.PublishComponentDecision(publishFn, b.Namespace, sessionName, pl); err != nil {
 		return fmt.Errorf("publish decision envelope: %w", err)
 	}
 	if err := nc.Flush(); err != nil {
