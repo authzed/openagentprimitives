@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 var errConsentDeliveryPending = errors.New("consent notification awaiting durable relay receipt")
@@ -287,6 +287,26 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 	if c.Terms.ActionApproval == "standing_private" {
 		request.Body = "Authorize private delivery without another approval for each run. Each fresh plan must stay within this watch or schedule, recipient, and limits. Quiet hours defer reminders; missed windows are skipped. You can pause or cancel the goal."
 		request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Action approval", Value: "Unattended private delivery only. Other actions require separate approval."})
+	}
+	if report := c.Terms.Report; report != nil {
+		request.Lead = "Allow this private observation collector?"
+		request.Body = "Runs within the schedule and limits above. Reports are private agent observations; they do not independently verify external facts. You can pause or cancel this goal."
+		if c.Terms.ActionApproval == "standing_private" {
+			request.Body += " Publish within this scope without another approval for each run."
+		} else {
+			request.Body += " Each run asks you to approve a fresh plan before publishing."
+		}
+		actions := []string{"Publish a private observation for " + report.Subject}
+		for _, op := range c.Terms.AllowedOperations {
+			if op == "respond_to_user" {
+				actions = append(actions, "Send a private report to you")
+			}
+		}
+		request.Fields[3].Value = strings.Join(actions, "; ")
+		request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Observation", Value: report.Kind + " · " + report.Subject})
+		if c.Terms.ActionApproval == "standing_private" {
+			request.Fields[len(request.Fields)-2].Value = "Unattended private reporting within these terms. Other actions require separate approval."
+		}
 	}
 	raw, e := json.Marshal(request)
 	if e != nil {

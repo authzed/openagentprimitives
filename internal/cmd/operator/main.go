@@ -2314,6 +2314,9 @@ func run(cfg *config) {
 	if eventStore != nil && goalAuth != nil {
 		nativeAccess := &eventweb.NativeSessions{Reader: mgr.GetAPIReader(), Memory: goalMemory, Auth: goalAuth}
 		sources := sessionevents.NewRegistry()
+		if runs, ok := goalStore.(goalmodel.OccurrenceStore); ok {
+			sources.Register(&goalmodel.ReportSource{Store: goalStore, Runs: runs, Auth: goalHandler, Execution: goalHandler})
+		}
 		sources.Register(&eventnative.Adapter{Memory: goalMemory, Keys: keyLookup, Authority: nativeAccess, Access: nativeAccess, Publishers: map[string]bool{"system:channelsd": true}})
 		execution := &goalmodel.EventExecution{Service: goalService, Sources: sources}
 		consumers := sessionevents.NewConsumers()
@@ -2347,6 +2350,9 @@ func run(cfg *config) {
 	if occurrenceStore, ok := goalStore.(goalmodel.OccurrenceStore); ok && goalAuth != nil && monitoringPublish != nil {
 		goalService.ExecutionAuth = goalHandler
 		dispatcher := &goalctrl.Dispatcher{EventRouter: eventRouter, EventDispatcher: eventDispatcher, Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString(), DeliveryMemory: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}}
+		if eventHandler != nil {
+			dispatcher.EventIngester = eventHandler.Ingester
+		}
 		goalValidator = dispatcher
 		goalHandler.ExecutionSessions = dispatcher
 		if err := mgr.Add(dispatcher); err != nil {

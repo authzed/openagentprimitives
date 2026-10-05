@@ -1,9 +1,10 @@
 package goals
 
 import (
+	"time"
+
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
-	"time"
 )
 
 // PlanApprovalRequest names an already frozen plan in the authenticated root's
@@ -26,7 +27,9 @@ type Request struct {
 	List         ListRequest                               `json:"list,omitempty"`
 	ID           string                                    `json:"id,omitempty"`
 }
+
 type Response struct {
+	ExecutionTerms     *ExecutionTerms                          `json:"executionTerms,omitempty"`
 	EventFeeds         []EventFeed                              `json:"eventFeeds,omitempty"`
 	DiscoveryPolicy    *DiscoveryPolicy                         `json:"discoveryPolicy,omitempty"`
 	DiscoveryProposal  *DiscoveryProposal                       `json:"discoveryProposal,omitempty"`

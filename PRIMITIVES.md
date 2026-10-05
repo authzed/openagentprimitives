@@ -216,6 +216,10 @@ knowledge-graph layer and durable artifacts.
   records intent; each session requires a fresh enforcing plan. Explicit finite
   standing consent can authorize its private-delivery phase without another
   human decision; the signed phase record names the original consent and run.
+  Scheduled collectors can publish explicitly approved private observations from
+  immutable run results. A registered source adapter retains source dependencies;
+  a durable outbox retries publication independently of runner cleanup. These
+  records authenticate the agent report, not independent external facts.
   Separately approved discovery policies can suggest monitoring goals. Each
   proposal needs exact human acceptance before a goal or watch exists; finite
   question limits, expiry, and source access constrain those suggestions.

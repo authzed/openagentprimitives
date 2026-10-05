@@ -22,7 +22,7 @@ func (s *Store) RecordCost(ctx context.Context, o goals.Occurrence, c goals.RunC
 		if err != nil {
 			return current, err
 		}
-		if current.Fence != o.Fence || current.Worker != o.Worker || !now.Before(current.LeaseUntil) || current.SessionUID != c.SessionUID || current.GoalRevision != o.GoalRevision || (current.State != goals.OccurrenceClaimed && current.State != goals.OccurrenceRunning && current.State != goals.OccurrenceUnknown) {
+		if current.Fence != o.Fence || current.Worker != o.Worker || !now.Before(current.LeaseUntil) || current.SessionUID != c.SessionUID || current.GoalRevision != o.GoalRevision || (current.State != goals.OccurrenceClaimed && current.State != goals.OccurrenceRunning && current.State != goals.OccurrenceUnknown && current.State != goals.OccurrenceRetained) {
 			return current, goals.ErrConflict
 		}
 		if current.Cost != nil {

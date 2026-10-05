@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"testing"
+
 	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestBoundedReportRechecksAuthorityBeforePublishing(t *testing.T) {
@@ -77,4 +78,11 @@ func TestBoundedResultReportingRechecksConsent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestObservationOnlyGoalHasNoDeliveryTool(t *testing.T) {
+	report := newRespondTool(RespondConfig{Capabilities: []string{"text"}, ChannelKind: "fake"})
+	bounded := BoundedGoalToolsForTerms([]tool.Tool{report}, "digest", goals.ExecutionTerms{AllowedOperations: []string{"report_goal_event"}}, func(context.Context) error { return nil }, func(context.Context, goals.Request) (goals.Response, error) { return goals.Response{}, nil })
+	require.Len(t, bounded, 1)
+	require.Equal(t, "report_goal_result", bounded[0].Name())
 }

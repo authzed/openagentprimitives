@@ -3,6 +3,8 @@ package goals
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"crypto/sha256"
-	"encoding/hex"
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -28,6 +28,7 @@ import (
 )
 
 type Dispatcher struct {
+	EventIngester   *sessionevents.Ingester
 	EventRouter     *sessionevents.Router
 	EventDispatcher *sessionevents.Dispatcher
 	Service         *domain.Service
@@ -61,7 +62,12 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		}
 	}
 }
+
 func (d *Dispatcher) Tick(ctx context.Context) error {
+	var failures []error
+	if err := d.drainReportedObservations(ctx); err != nil {
+		failures = append(failures, err)
+	}
 	if d.EventRouter != nil {
 		if err := d.EventRouter.Tick(ctx, d.now()); err != nil {
 			log.FromContext(ctx).Info("event routing failed", "error", err)
@@ -82,7 +88,6 @@ func (d *Dispatcher) Tick(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var failures []error
 	for _, candidate := range due {
 		occurrence, err := d.Store.Claim(ctx, domain.ClaimRequest{ID: candidate.ID, Worker: d.Worker, Now: d.now(), Lease: 5 * time.Second, OwnerLimit: 1, ClassLimit: 4})
 		if errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrDenied) {
@@ -103,9 +108,11 @@ func (d *Dispatcher) Tick(ctx context.Context) error {
 	}
 	return errors.Join(failures...)
 }
+
 func ref(o domain.Occurrence) *v1.GoalExecutionReference {
 	return &v1.GoalExecutionReference{GoalID: o.GoalID, OccurrenceID: o.ID, GoalRevision: o.GoalRevision, ConsentDigest: o.ConsentDigest}
 }
+
 func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 	g, err := d.Service.Store.Get(ctx, o.Domain, o.GoalID)
 	if err != nil {
@@ -129,7 +136,7 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 		// Keep the completed conversation inspectable for its original bounded
 		// window. Its observed outcome already prevents further goal actions.
 		if lookup == nil && o.Outcome.Reason == domain.RunSessionEnded && g.State == domain.Active && g.Revision == o.GoalRevision && g.Execution != nil && d.now().Before(o.ExpiresAt) && d.now().Before(sess.CreationTimestamp.Add(time.Duration(g.Execution.Terms.Bounds.DurationSeconds)*time.Second)) {
-			return costErr
+			return errors.Join(costErr, d.retainCompleted(ctx, o, &sess))
 		}
 		return errors.Join(costErr, d.stop(ctx, o, &sess, lookup == nil))
 	}
@@ -270,7 +277,7 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 	}}, Spec: v1.AgentSessionSpec{Class: g.Domain.Class, GoalExecution: ref(o), InputChannel: output.DeepCopy(), OutputChannel: &output,
 		OpeningSummary: openingSummary(g),
 		Budget:         &v1.BudgetConfig{MaxDuration: duration, SessionExpiration: duration, MaxTurns: int32(b.Turns), MaxTokens: b.Tokens},
-		Prompt:         v1.PromptSource{Inline: fmt.Sprintf("This is one bounded execution of private goal %q. This session handles only occurrence %s, due %s: deliver at most one private message. Other scheduled occurrences run in separate sessions; do not deliver them here. Required outcome: %q. Required evidence: %s. Only respond_to_user may perform actions. %s Report a concise private result with evidence. Before agent_work_complete, call report_goal_result with a stable requestID, status reported_success, blocked, failed or unknown, a summary, and evidence references. This records your account, not verified delivery. Do not claim the durable goal is completed; session success alone is insufficient.", g.Title, o.ID, o.DueAt.UTC().Format(time.RFC3339), g.Outcome, evidence, approvalInstructions) + eventContext}}}
+		Prompt:         v1.PromptSource{Inline: fmt.Sprintf("This is one bounded execution of private goal %q. This session handles only occurrence %s, due %s: deliver at most one private message. Other scheduled occurrences run in separate sessions; do not deliver them here. Required outcome: %q. Required evidence: %s. Only the following approved operations may perform actions: %s. %s Report a concise private result with evidence. Before agent_work_complete, call report_goal_result with a stable requestID, status reported_success, blocked, failed or unknown, a summary, and evidence references. This records your account, not verified delivery. Do not claim the durable goal is completed; session success alone is insufficient.", g.Title, o.ID, o.DueAt.UTC().Format(time.RFC3339), g.Outcome, evidence, strings.Join(g.Execution.Terms.AllowedOperations, ", "), approvalInstructions) + reportInstructions(g) + eventContext}}}
 	latest, err := d.Store.Occurrence(ctx, o.ID)
 	if err != nil {
 		return err
@@ -303,6 +310,7 @@ func openingSummary(g domain.Goal) string {
 	}
 	return string(text)
 }
+
 func (d *Dispatcher) stop(ctx context.Context, o domain.Occurrence, sess *v1.AgentSession, exists bool) error {
 	if exists {
 		if !reflect.DeepEqual(sess.Spec.GoalExecution, ref(o)) || (o.SessionUID != "" && o.SessionUID != string(sess.UID)) {
@@ -434,6 +442,7 @@ func (d *Dispatcher) recordOutcome(ctx context.Context, o domain.Occurrence, rea
 	}
 	return store.RecordOutcome(ctx, o, reason, d.now())
 }
+
 func (d *Dispatcher) observeAndStop(ctx context.Context, o domain.Occurrence, sess *v1.AgentSession, exists bool, reason domain.RunReason) error {
 	if exists && (!reflect.DeepEqual(sess.Spec.GoalExecution, ref(o)) || (o.SessionUID != "" && o.SessionUID != string(sess.UID))) {
 		return fmt.Errorf("refusing to observe unrelated session")
@@ -451,11 +460,30 @@ func (d *Dispatcher) observeAndStop(ctx context.Context, o domain.Occurrence, se
 		return errors.Join(costErr, err)
 	}
 	if reason == domain.RunSessionEnded && exists {
-		return costErr
+		return errors.Join(costErr, d.retainCompleted(ctx, o, sess))
 	}
 	// Accounting outages must not prevent cancellation or bounded termination.
 	return errors.Join(costErr, d.stop(ctx, o, sess, exists))
 }
+
+// retainCompleted releases capacity only after all owned runner pods have
+// succeeded. A completion claim, Idle phase, or result proposal is insufficient.
+// The retained record stays fenced for cleanup and cannot authorize actions.
+func (d *Dispatcher) retainCompleted(ctx context.Context, o domain.Occurrence, sess *v1.AgentSession) error {
+	if o.State == domain.OccurrenceRetained {
+		return nil
+	}
+	reason, err := d.runnerOutcome(ctx, sess)
+	if err != nil {
+		return err
+	}
+	if reason != domain.RunSessionEnded {
+		return nil
+	}
+	_, err = d.Store.Finish(ctx, o, domain.OccurrenceRetained, d.now())
+	return err
+}
+
 func (d *Dispatcher) runnerOutcome(ctx context.Context, sess *v1.AgentSession) (domain.RunReason, error) {
 	var pods corev1.PodList
 	if err := d.Reader.List(ctx, &pods, client.InNamespace(sess.Namespace)); err != nil {
@@ -497,9 +525,43 @@ func (d *Dispatcher) RecordGoalResult(ctx context.Context, sess *v1.AgentSession
 	if err != nil {
 		return o, err
 	}
+	if p.Observation != nil {
+		g, err := d.Service.Store.Get(ctx, o.Domain, o.GoalID)
+		if err != nil {
+			return o, err
+		}
+		policy := g.Execution.Terms.Report
+		if policy == nil || p.Observation.Kind != policy.Kind || p.Observation.Subject != policy.Subject {
+			return o, domain.ErrDenied
+		}
+	}
 	store, ok := d.Store.(domain.RunStore)
 	if !ok {
 		return o, domain.ErrDenied
 	}
 	return store.ProposeResult(ctx, o, p, d.now())
+}
+
+// GoalExecutionTerms returns only the authenticated root's current consent.
+func (d *Dispatcher) GoalExecutionTerms(ctx context.Context, sess *v1.AgentSession) (domain.ExecutionTerms, error) {
+	if err := d.ValidateGoalSession(ctx, sess); err != nil {
+		return domain.ExecutionTerms{}, err
+	}
+	o, err := d.Store.Occurrence(ctx, sess.Spec.GoalExecution.OccurrenceID)
+	if err != nil {
+		return domain.ExecutionTerms{}, err
+	}
+	g, err := d.Service.Store.Get(ctx, o.Domain, o.GoalID)
+	if err != nil {
+		return domain.ExecutionTerms{}, err
+	}
+	return g.Execution.Terms, nil
+}
+
+func reportInstructions(g domain.Goal) string {
+	if g.Execution.Terms.Report == nil {
+		return ""
+	}
+	p := g.Execution.Terms.Report
+	return fmt.Sprintf(" Include observation={kind:%q,subject:%q,data:{...}} in report_goal_result to publish the private observation authorized for this occurrence. Preserve evidence and explicitly label simulated data; this is an agent report, not independently verified provider data.", p.Kind, p.Subject)
 }
