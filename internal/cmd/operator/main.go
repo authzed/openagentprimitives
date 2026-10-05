@@ -150,7 +150,6 @@ import (
 	memoryinmem "github.com/authzed/openagentprimitives/pkg/memory/inmem"
 	kggraphiti "github.com/authzed/openagentprimitives/pkg/memory/kg/graphiti"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/all" // register all memory Kinds + their server-side hooks
-	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagedecision"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/kgingestion"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/pttag"
@@ -2179,22 +2178,7 @@ func run(cfg *config) {
 	// that DOES act on it (the trifecta gate's every-mode refusal) is already
 	// behind that gate's own mode. Gating the record too would mean a denial
 	// that happened while the gate was off is invisible once it is turned on.
-	closureDenialStamp := hold.NewClosureDenialStamper(hold.ClosureDenialStamperDeps{
-		Client: mgr.GetClient(),
-		Denied: func(ctx context.Context, scope memorypkg.Scope) (bool, error) {
-			recs, err := infoleakagedecision.List(ctx, memLocal, scope)
-			if err != nil {
-				return false, err
-			}
-			for _, r := range recs {
-				if r.Decision == infoleakagedecision.DecisionDenied {
-					return true, nil
-				}
-			}
-			return false, nil
-		},
-		Logger: slog.Default(),
-	})
+	closureDenialStamp := newClosureDenialStamper(mgr.GetClient(), memLocal)
 
 	// One signal, three consumers. Trippers keeps a failure in one from
 	// disabling the others — if the streak tripper cannot read memory that is a
@@ -3189,6 +3173,7 @@ func run(cfg *config) {
 			os.Exit(1)
 		}
 		debugHandler := debug.NewHandlerWithMemAuth(store, token, memHandler, memTokens)
+		debugHandler.Handle(httpsrv.AuditPath, httpsrv.NewAuditHandler(memLocal, token))
 		// Mount the operator-mediated secret-output endpoint next to /memory.
 		// The runner POSTs a captured secret value here; the operator (which
 		// holds Secret-write RBAC; the runner does not) writes it into the

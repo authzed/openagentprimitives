@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"time"
 
 	"github.com/authzed/openagentprimitives/pkg/memory"
 )
@@ -50,11 +51,17 @@ func (h *hooks) OnSignal(ctx context.Context, sig memory.Signal) error {
 	// write seeds the chain first, fatal on any ordering (or restart) where none
 	// does.
 	ctx = memory.WithSystemApproval(ctx, "operator:lifecycle")
+	at := sig.At
+	if at.IsZero() {
+		// Some senders omit event time. Stamp receipt time before signing:
+		// SQLite's UnixNano encoding cannot round-trip Go's zero time.
+		at = time.Now().UTC()
+	}
 	_, err := m.Put(ctx, memory.Entry{
 		Scope:     sig.Scope,
 		Kind:      Kind{}.Name(),
 		ID:        Kind{}.IDPrefix() + signalIDInfix + sanitize(string(sig.Kind)) + "-" + randSuffix(),
-		CreatedAt: sig.At,
+		CreatedAt: at,
 		Tags:      []string{SignalTag(sig.Kind)},
 		Content:   sig.Payload,
 	})

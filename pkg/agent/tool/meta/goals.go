@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 )
@@ -59,7 +60,7 @@ func (t *goalTool) Permission() authz.Permission {
 	return authz.Permission{StateImpact: authz.Readwrite, Check: &authz.PermissionCheck{ResourceType: GoalResourceType, Permission: "manage", ResourceIDExpr: "args.resource.split(':')[1]"}}
 }
 func (t *goalTool) Description() string {
-	return "Manage private durable goals for this session's verified human and AgentClass. Call list_goals first to obtain the resource for writes. Goals survive sessions. list_goal_runs returns durable execution history; session_ended is not proof of goal success, and effects marked unknown are not delivery receipts. A due time is schedule intent only. request_goal_execution asks the human to authorize one bounded future private reporting session; it does not authorize external actions. Use UTC dueAt and expiresAt and finite duration, turn, token and approval ceilings. Updates require the current revision and a unique requestID; reuse the same requestID only when retrying identical arguments. Completion is reported success with evidence, not independent verification. A different employee must use their own session."
+	return "Manage private durable goals for this session's verified human and AgentClass. Call list_goals first to obtain the resource for writes. Goals survive sessions. list_goal_runs returns durable execution history; session_ended is not proof of goal success, and effects marked unknown are not delivery receipts. A due time is schedule intent only. request_goal_execution asks the human to authorize a bounded future private reporting session or finite recurring series; it does not authorize external actions. Use UTC dueAt and expiresAt and finite per-run duration, turn, token and approval ceilings. Optional schedule supports once, interval, daily or weekly in an explicit IANA timezone, at most 100 nominal runs within 30 days, with per-run windows and optional local quiet hours. Quiet hours defer runs and coalesce collisions; missed windows are skipped. Each created session still requires its own fresh action plan approval. Updates require the current revision and a unique requestID; reuse the same requestID only when retrying identical arguments. Completion is reported success with evidence, not independent verification. A different employee must use their own session."
 }
 func (t *goalTool) InputSchema() json.RawMessage {
 	props := map[string]any{}
@@ -72,7 +73,8 @@ func (t *goalTool) InputSchema() json.RawMessage {
 		props["id"] = str()
 		props["revision"] = map[string]any{"type": "integer", "minimum": 1}
 		props["terms"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"dueAt", "expiresAt", "bounds", "allowedOperations", "evidence"}, "properties": map[string]any{
-			"dueAt": map[string]any{"type": "string", "format": "date-time"}, "expiresAt": map[string]any{"type": "string", "format": "date-time"},
+			"schedule": sessionScheduleSchema(),
+			"dueAt":    map[string]any{"type": "string", "format": "date-time"}, "expiresAt": map[string]any{"type": "string", "format": "date-time"},
 			"bounds":            map[string]any{"type": "object", "additionalProperties": false, "required": []string{"durationSeconds", "turns", "tokens", "approvalSeconds"}, "properties": map[string]any{"durationSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400}, "turns": map[string]any{"type": "integer", "minimum": 1, "maximum": 10000}, "tokens": map[string]any{"type": "integer", "minimum": 1, "maximum": 10000000}, "approvalSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400}}},
 			"allowedOperations": map[string]any{"type": "array", "minItems": 1, "maxItems": 1, "items": map[string]any{"type": "string", "enum": []string{"respond_to_user"}}}, "evidence": map[string]any{"type": "array", "minItems": 1, "maxItems": 32, "items": str()}}}
 		required = []string{"resource", "requestID", "id", "revision", "terms"}
@@ -149,4 +151,21 @@ func (t *goalTool) Execute(ctx context.Context, raw json.RawMessage, sess *tool.
 		return tool.Result{}, err
 	}
 	return tool.Result{Content: string(b)}, nil
+}
+
+func sessionScheduleSchema() map[string]any {
+	days := func() map[string]any {
+		return map[string]any{"type": "array", "minItems": 1, "maxItems": 7, "uniqueItems": true, "items": map[string]any{"type": "integer", "minimum": 0, "maximum": 6}, "description": "Sunday=0 through Saturday=6. Weekly schedule days, or days a quiet period starts."}
+	}
+	clock := func() map[string]any {
+		return map[string]any{"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}
+	}
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "timezone", "maxRuns", "runWindowSeconds"}, "properties": map[string]any{
+		"kind":            map[string]any{"type": "string", "enum": sessionschedule.Kinds()},
+		"timezone":        map[string]any{"type": "string", "description": "Explicit IANA timezone, e.g. America/New_York. Daily/weekly use the local clock time of dueAt; nonexistent times skip, repeated times run once."},
+		"intervalSeconds": map[string]any{"type": "integer", "minimum": 60, "maximum": 2592000, "description": "Required only for interval."},
+		"weekdays":        days(), "maxRuns": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+		"runWindowSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400, "description": "Each run expires this many seconds after its effective due time, shortened at quiet hours or expiresAt. expiresAt ends the entire series."},
+		"quietHours":       map[string]any{"type": "array", "maxItems": 14, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"start", "end"}, "properties": map[string]any{"start": clock(), "end": clock(), "weekdays": days()}}},
+	}}
 }

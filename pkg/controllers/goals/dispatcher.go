@@ -56,6 +56,11 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 	}
 }
 func (d *Dispatcher) Tick(ctx context.Context) error {
+	if sweeper, ok := d.Store.(domain.QueuedSweeper); ok {
+		if _, err := sweeper.SweepQueued(ctx, d.now(), 100); err != nil {
+			return err
+		}
+	}
 	due, err := d.Store.Due(ctx, d.now(), 100)
 	if err != nil {
 		return err
@@ -123,7 +128,7 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 		reason = domain.RunConsentExpired
 	}
 	if reason == "" {
-		if err := d.Service.Dispatchable(ctx, g); err != nil {
+		if err := d.Service.DispatchOccurrence(ctx, g, o); err != nil {
 			if !errors.Is(err, domain.ErrDenied) {
 				return err
 			}
@@ -217,7 +222,7 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 	if latest.Fence != o.Fence || latest.Worker != o.Worker || !d.now().Before(latest.LeaseUntil) {
 		return domain.ErrConflict
 	}
-	if err := d.Service.Dispatchable(ctx, g); err != nil {
+	if err := d.Service.DispatchOccurrence(ctx, g, o); err != nil {
 		return err
 	}
 	if err := d.Client.Create(ctx, &sess); err != nil {
@@ -333,7 +338,7 @@ func (d *Dispatcher) ValidateGoalSession(ctx context.Context, sess *v1.AgentSess
 	if sess.Spec.Budget.MaxDuration.Duration > time.Duration(g.Execution.Terms.Bounds.DurationSeconds)*time.Second || int64(sess.Spec.Budget.MaxTurns) > g.Execution.Terms.Bounds.Turns || sess.Spec.Budget.MaxTokens > g.Execution.Terms.Bounds.Tokens {
 		return domain.ErrDenied
 	}
-	return d.Service.Dispatchable(ctx, g)
+	return d.Service.DispatchOccurrence(ctx, g, o)
 }
 
 // ConstrainGoalSettings narrows resolved tier policy to the reviewed ceilings.

@@ -2131,7 +2131,7 @@ func (h *runnerHost) buildPlanGatePending(
 		}
 	}
 	if len(pl.Consents) > 0 {
-		noun := "private reminder"
+		noun := "reminder schedule"
 		if len(pl.Consents) != 1 {
 			noun += "s"
 		}

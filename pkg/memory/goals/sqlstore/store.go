@@ -44,7 +44,7 @@ func replaceParams(q string, n *int) string {
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
-	// Additive migrations are transactional and repeatable after a crash.
+	// Migrations are transactional and repeatable after a crash.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS oap_goal_events_pending ON oap_goal_events(published,domain,goal_id,revision)`,
 		`CREATE TABLE IF NOT EXISTS oap_goal_dispatch_lock (id INTEGER PRIMARY KEY, generation BIGINT NOT NULL)`,
 		`INSERT INTO oap_goal_dispatch_lock(id,generation) VALUES(1,0) ON CONFLICT(id) DO NOTHING`,
-		`CREATE TABLE IF NOT EXISTS oap_goal_occurrences (id TEXT PRIMARY KEY, domain TEXT NOT NULL, owner_key TEXT NOT NULL, class_key TEXT NOT NULL, goal_id TEXT NOT NULL, goal_revision BIGINT NOT NULL, consent_digest TEXT NOT NULL, due_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, state TEXT NOT NULL, worker TEXT NOT NULL DEFAULT '', fence BIGINT NOT NULL DEFAULT 0, lease_until BIGINT NOT NULL DEFAULT 0, session_name TEXT NOT NULL, session_uid TEXT NOT NULL DEFAULT '', UNIQUE(domain,goal_id,goal_revision))`,
+		`CREATE TABLE IF NOT EXISTS oap_goal_occurrences (id TEXT PRIMARY KEY, domain TEXT NOT NULL, owner_key TEXT NOT NULL, class_key TEXT NOT NULL, goal_id TEXT NOT NULL, goal_revision BIGINT NOT NULL, consent_digest TEXT NOT NULL, due_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, state TEXT NOT NULL, worker TEXT NOT NULL DEFAULT '', fence BIGINT NOT NULL DEFAULT 0, lease_until BIGINT NOT NULL DEFAULT 0, session_name TEXT NOT NULL, session_uid TEXT NOT NULL DEFAULT '', CONSTRAINT oap_goal_occurrences_window_key UNIQUE(domain,goal_id,goal_revision,due_at))`,
 		`CREATE INDEX IF NOT EXISTS oap_goal_occurrences_due ON oap_goal_occurrences(state,due_at,lease_until)`,
 		`CREATE INDEX IF NOT EXISTS oap_goal_occurrences_owner ON oap_goal_occurrences(owner_key,state)`,
 		`CREATE INDEX IF NOT EXISTS oap_goal_occurrences_class ON oap_goal_occurrences(class_key,state)`,
@@ -79,13 +79,25 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	var newer int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>5`).Scan(&newer); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>6`).Scan(&newer); err != nil {
 		return err
 	}
 	if newer > 0 {
 		return fmt.Errorf("goals schema is newer than this operator")
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(5) ON CONFLICT(version) DO NOTHING`); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE oap_goal_dispatch_lock SET generation=generation+1 WHERE id=1`); err != nil {
+		return err
+	}
+	var upgraded int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version=6`).Scan(&upgraded); err != nil {
+		return err
+	}
+	if upgraded == 0 {
+		if err := s.migrateScheduleWindows(ctx, tx); err != nil {
+			return fmt.Errorf("goal schedule migration: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(6) ON CONFLICT(version) DO NOTHING`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -284,6 +296,36 @@ func affected(r sql.Result, err error) error {
 	}
 	if n != 1 {
 		return goals.ErrConflict
+	}
+	return nil
+}
+
+// SQLite cannot remove an inline UNIQUE constraint. Rebuild only the ledger,
+// preserving every identity, lease and state; the related audit/result tables
+// refer to the stable occurrence IDs and remain untouched. PostgreSQL can alter
+// the constraint directly. Version 6 is committed with this change atomically.
+func (s *Store) migrateScheduleWindows(ctx context.Context, tx *sql.Tx) error {
+	var queries []string
+	if s.postgres {
+		queries = []string{
+			`ALTER TABLE oap_goal_occurrences DROP CONSTRAINT IF EXISTS oap_goal_occurrences_domain_goal_id_goal_revision_key`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS oap_goal_occurrences_window_key ON oap_goal_occurrences(domain,goal_id,goal_revision,due_at)`,
+		}
+	} else {
+		queries = []string{
+			`CREATE TABLE oap_goal_occurrences_v6 (id TEXT PRIMARY KEY, domain TEXT NOT NULL, owner_key TEXT NOT NULL, class_key TEXT NOT NULL, goal_id TEXT NOT NULL, goal_revision BIGINT NOT NULL, consent_digest TEXT NOT NULL, due_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, state TEXT NOT NULL, worker TEXT NOT NULL DEFAULT '', fence BIGINT NOT NULL DEFAULT 0, lease_until BIGINT NOT NULL DEFAULT 0, session_name TEXT NOT NULL, session_uid TEXT NOT NULL DEFAULT '', UNIQUE(domain,goal_id,goal_revision,due_at))`,
+			`INSERT INTO oap_goal_occurrences_v6 SELECT id,domain,owner_key,class_key,goal_id,goal_revision,consent_digest,due_at,expires_at,state,worker,fence,lease_until,session_name,session_uid FROM oap_goal_occurrences`,
+			`DROP TABLE oap_goal_occurrences`,
+			`ALTER TABLE oap_goal_occurrences_v6 RENAME TO oap_goal_occurrences`,
+			`CREATE INDEX oap_goal_occurrences_due ON oap_goal_occurrences(state,due_at,lease_until)`,
+			`CREATE INDEX oap_goal_occurrences_owner ON oap_goal_occurrences(owner_key,state)`,
+			`CREATE INDEX oap_goal_occurrences_class ON oap_goal_occurrences(class_key,state)`,
+		}
+	}
+	for _, query := range queries {
+		if _, err := tx.ExecContext(ctx, query); err != nil {
+			return err
+		}
 	}
 	return nil
 }

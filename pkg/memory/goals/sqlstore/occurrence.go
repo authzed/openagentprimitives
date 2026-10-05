@@ -162,6 +162,11 @@ func (s *Store) auditOccurrence(ctx context.Context, tx *sql.Tx, o goals.Occurre
 	if err != nil {
 		return err
 	}
+	// A series materialization or sweep can append several events in one
+	// transaction. Allocate a sequence per event under the held dispatch lock.
+	if _, err := tx.ExecContext(ctx, `UPDATE oap_goal_dispatch_lock SET generation=generation+1 WHERE id=1`); err != nil {
+		return err
+	}
 	var sequence int64
 	if err := tx.QueryRowContext(ctx, `SELECT generation FROM oap_goal_dispatch_lock WHERE id=1`).Scan(&sequence); err != nil {
 		return err
@@ -179,8 +184,6 @@ func (s *Store) Schedule(ctx context.Context, g goals.Goal) (goals.Occurrence, e
 	if g.Execution == nil || !executionMatches(g, g.Revision, g.Execution.Digest) {
 		return goals.Occurrence{}, goals.ErrDenied
 	}
-	h := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%d/%s", g.Domain.ID(), g.ID, g.Revision, g.Execution.Digest)))
-	id := "occ-" + hex.EncodeToString(h[:])
 	return s.dispatchTx(ctx, func(tx *sql.Tx) (goals.Occurrence, error) {
 		current, err := s.lockedGoal(ctx, tx, g.Domain, g.ID)
 		if err != nil {
@@ -189,27 +192,42 @@ func (s *Store) Schedule(ctx context.Context, g goals.Goal) (goals.Occurrence, e
 		if !executionMatches(current, g.Revision, g.Execution.Digest) {
 			return goals.Occurrence{}, goals.ErrConflict
 		}
-		t := current.Execution.Terms
-		// Length-prefixed hashing via the domain's JSON representation preserves
-		// namespace and class UID boundaries without separator ambiguities.
-		owner := goals.Domain{Namespace: g.Domain.Namespace, Owner: g.Domain.Owner}.ID()
-		class := goals.Domain{Namespace: g.Domain.Namespace, ClassUID: g.Domain.ClassUID}.ID()
-		res, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_occurrences(id,domain,owner_key,class_key,goal_id,goal_revision,consent_digest,due_at,expires_at,state,session_name) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`), id, g.Domain.ID(), owner, class, g.ID, g.Revision, current.Execution.Digest, t.DueAt.UnixNano(), t.ExpiresAt.UnixNano(), string(goals.OccurrenceQueued), "goal-"+hex.EncodeToString(h[:16]))
+		windows, err := current.Execution.Terms.ExecutionWindows()
 		if err != nil {
 			return goals.Occurrence{}, err
 		}
-		o, err := s.occurrence(ctx, tx, id)
-		if err != nil {
-			return o, err
+		owner := goals.Domain{Namespace: g.Domain.Namespace, Owner: g.Domain.Owner}.ID()
+		class := goals.Domain{Namespace: g.Domain.Namespace, ClassUID: g.Domain.ClassUID}.ID()
+		var first goals.Occurrence
+		for i, w := range windows {
+			seed := fmt.Sprintf("%s/%s/%d/%s", g.Domain.ID(), g.ID, g.Revision, g.Execution.Digest)
+			if current.Execution.Terms.Schedule != nil {
+				seed += fmt.Sprintf("/%d/%d", w.DueAt.UnixNano(), w.ExpiresAt.UnixNano())
+			}
+			h := sha256.Sum256([]byte(seed))
+			id := "occ-" + hex.EncodeToString(h[:])
+			res, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_occurrences(id,domain,owner_key,class_key,goal_id,goal_revision,consent_digest,due_at,expires_at,state,session_name) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`), id, g.Domain.ID(), owner, class, g.ID, g.Revision, current.Execution.Digest, w.DueAt.UnixNano(), w.ExpiresAt.UnixNano(), string(goals.OccurrenceQueued), "goal-"+hex.EncodeToString(h[:16]))
+			if err != nil {
+				return first, err
+			}
+			o, err := s.occurrence(ctx, tx, id)
+			if err != nil {
+				return first, err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return first, err
+			}
+			if n == 1 {
+				if err := s.auditOccurrence(ctx, tx, o, "execution_scheduled", current.UpdatedAt); err != nil {
+					return first, err
+				}
+			}
+			if i == 0 {
+				first = o
+			}
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return o, err
-		}
-		if n == 1 {
-			err = s.auditOccurrence(ctx, tx, o, "execution_scheduled", current.UpdatedAt)
-		}
-		return o, err
+		return first, nil
 	})
 }
 
@@ -270,7 +288,7 @@ func (s *Store) Claim(ctx context.Context, r goals.ClaimRequest) (goals.Occurren
 			if err != nil {
 				return o, err
 			}
-			if !executionMatches(g, o.GoalRevision, o.ConsentDigest) {
+			if !executionMatches(g, o.GoalRevision, o.ConsentDigest) || !g.Execution.Terms.ContainsWindow(o.DueAt, o.ExpiresAt) {
 				return o, goals.ErrConflict
 			}
 			for _, cap := range []struct {
@@ -476,4 +494,87 @@ func (s *Store) proposeResult(ctx context.Context, tx *sql.Tx, current, o goals.
 		return current, err
 	}
 	return s.occurrence(ctx, tx, current.ID)
+}
+
+var _ goals.QueuedSweeper = (*Store)(nil)
+
+// SweepQueued observes only sessions that never started, under the same write
+// lock used by Claim. Missed windows are not catch-up work. Revoked future slots
+// are cancelled immediately, so a pause/resume cannot revive an old series.
+func (s *Store) SweepQueued(ctx context.Context, now time.Time, limit int) (int, error) {
+	if limit < 1 || limit > 100 {
+		return 0, goals.ErrInvalid
+	}
+	count := 0
+	_, err := s.dispatchTx(ctx, func(tx *sql.Tx) (goals.Occurrence, error) {
+		rows, err := tx.QueryContext(ctx, s.query(`SELECT o.id FROM oap_goal_occurrences o JOIN oap_goals g ON g.domain=o.domain AND g.id=o.goal_id WHERE o.state='queued' AND (o.expires_at<=? OR g.state<>'active' OR g.revision<>o.goal_revision) ORDER BY o.expires_at,o.id LIMIT ?`), now.UnixNano(), limit)
+		if err != nil {
+			return goals.Occurrence{}, err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return goals.Occurrence{}, errors.Join(err, rows.Close())
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			return goals.Occurrence{}, errors.Join(err, rows.Close())
+		}
+		if err := rows.Close(); err != nil {
+			return goals.Occurrence{}, err
+		}
+		for _, id := range ids {
+			o, err := s.occurrence(ctx, tx, id)
+			if err != nil {
+				return o, err
+			}
+			g, err := s.lockedGoal(ctx, tx, o.Domain, o.GoalID)
+			if err != nil {
+				return o, err
+			}
+			reason := goals.RunMissed
+			state := goals.OccurrenceSkipped
+			switch {
+			case g.State == goals.Cancelled:
+				reason = goals.RunCancelled
+				state = goals.OccurrenceCancelled
+			case g.State == goals.Paused:
+				reason = goals.RunPaused
+				state = goals.OccurrenceCancelled
+			case !executionMatches(g, o.GoalRevision, o.ConsentDigest):
+				reason = goals.RunSuperseded
+				state = goals.OccurrenceCancelled
+			case now.Before(o.ExpiresAt):
+				continue
+			}
+			if o.SessionUID != "" || o.State != goals.OccurrenceQueued {
+				return o, goals.ErrConflict
+			}
+			raw, err := json.Marshal(goals.RunOutcome{Reason: reason, ObservedAt: now.UTC(), Effects: "none"})
+			if err != nil {
+				return o, err
+			}
+			if _, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_run_outcomes(occurrence_id,payload) VALUES(?,?)`), id, string(raw)); err != nil {
+				return o, err
+			}
+			if _, err := tx.ExecContext(ctx, s.query(`UPDATE oap_goal_occurrences SET state=? WHERE id=?`), string(state), id); err != nil {
+				return o, err
+			}
+			changed, err := s.occurrence(ctx, tx, id)
+			if err != nil {
+				return changed, err
+			}
+			if err := s.auditOccurrence(ctx, tx, changed, "execution_"+string(state), now); err != nil {
+				return changed, err
+			}
+			count++
+		}
+		return goals.Occurrence{}, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }

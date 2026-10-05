@@ -198,6 +198,10 @@ knowledge-graph layer and durable artifacts.
   `authzdecision/`, `scopeaudit/`, `relwritesaudit/`, `toolguardaudit/`,
   `toolchainaudit/`, `contentguardaudit/`, `metaagentaudit/`,
   `infoleakage{audit,decision,taint}/`
+- **Session schedules:** `pkg/agent/sessionschedule/` resolves bounded one-time,
+  interval, daily, and weekly schedules with timezone-aware quiet hours. It is
+  independent of goals and grants no execution authority. Goals currently supply
+  the approval, durable run ledger, and session activation adapter.
 - **Private durable goals:** `pkg/agent/goals/` (lifecycle and ownership),
   `pkg/memory/goals/` (transactional SQLite/PostgreSQL stores),
   `pkg/web/goals/` (authenticated API and signed outbox),

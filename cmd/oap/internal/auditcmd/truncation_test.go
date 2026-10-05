@@ -29,3 +29,7 @@ func TestRequireCompleteAuditRead(t *testing.T) {
 		assert.NoError(t, requireCompleteAuditRead(memory.QueryResult{}))
 	})
 }
+
+func TestRequireCompleteAuditReadRejectsPartialExport(t *testing.T) {
+	require.ErrorContains(t, requireCompleteAuditRead(memory.QueryResult{Partial: true}), "incomplete audit export")
+}

@@ -123,6 +123,12 @@ func unmarshalProvenance(raw string) (*memory.Provenance, error) {
 }
 
 func (b *Backend) Put(ctx context.Context, e memory.Entry) error {
+	createdNS := e.CreatedAt.UTC().UnixNano()
+	if e.Provenance != nil && !time.Unix(0, createdNS).Equal(e.CreatedAt) {
+		// Reject rather than silently overflowing a signed timestamp. The
+		// caller can then reseed its chain from the unchanged durable tail.
+		return fmt.Errorf("sqlite put %s/%s: signed CreatedAt is outside the nanosecond timestamp range", e.Kind, e.ID)
+	}
 	tx, err := b.client.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sqlite put begin: %w", err)
@@ -147,7 +153,7 @@ func (b *Backend) Put(ctx context.Context, e memory.Entry) error {
 			links = excluded.links,
 			provenance = excluded.provenance`,
 		e.Scope.Kind, e.Scope.ID, e.Kind, e.ID,
-		e.CreatedAt.UTC().UnixNano(), marshalTags(e.Tags), content, marshalLinks(e.Links), prov)
+		createdNS, marshalTags(e.Tags), content, marshalLinks(e.Links), prov)
 	if err != nil {
 		return fmt.Errorf("sqlite put entry: %w", err)
 	}

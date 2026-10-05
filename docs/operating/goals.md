@@ -25,7 +25,7 @@ complete the broader goal.
 ## Scheduling a private reminder
 
 Activating a goal or setting its due date does not authorize the agent to run
-later. Scheduling requires your approval of a specific, one-time execution.
+later. Scheduling requires your approval of a specific execution or a finite series of runs.
 
 For example, you can ask:
 
@@ -51,6 +51,32 @@ after refreshing the page. It leaves your current conversation open.
 Changing or pausing the goal invalidates its scheduled authorization. Resuming
 it requires a new scheduling request. Denied, cancelled, or expired requests do
 not authorize later work.
+
+## Recurring reminders and quiet hours
+
+You can request reminders at regular intervals, daily, or on chosen days of the
+week. Choose your timezone, an end date, and a maximum number of reminders.
+Each approval covers a finite series of up to 100 scheduled times within 30 days.
+Every session still needs a fresh action-plan approval before sending anything.
+
+For example:
+
+> Remind me privately to drink water every weekday at 10 a.m. in New York,
+> for the next two weeks. Avoid reminders between 10 p.m. and 8 a.m., and
+> include the schedule in your plan for me to review.
+
+Quiet hours use the schedule's timezone. Reminders due during quiet hours move
+to the next allowed time; reminders that move to the same time become one session.
+A session's window also ends when quiet hours begin, so approving it late cannot
+cause a reminder during that period. Runs whose windows are missed appear as
+skipped in history, instead of sending a burst of reminders after downtime.
+
+Daily and weekly reminders follow local clock time when daylight saving changes.
+A time that does not exist on a spring-forward day is skipped. A repeated local
+time on a fall-back day runs once. The approval's exact details include the
+resolved run times for the series.
+
+Changing the schedule or quiet hours requires a new scheduling approval.
 
 ## Reviewing a session
 
@@ -82,7 +108,7 @@ and tokens; they are not a dollar spending limit.
 
 ## Current scope
 
-Scheduled goals currently support explicitly approved, one-time private reminders
-and reports. Durable delivery evidence is supported for private browser replies.
-Recurring work, external actions, and delivery evidence for other transports
-remain future work.
+Scheduled goals support explicitly approved one-time and recurring private reminders
+and reports, with timezone-aware quiet hours. Durable delivery evidence is supported
+for private browser replies. External actions and delivery evidence for other
+transports remain future work.
