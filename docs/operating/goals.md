@@ -79,6 +79,24 @@ resolved run times for the series.
 
 Changing the schedule or quiet hours requires a new scheduling approval.
 
+## Watching for changes
+
+A goal can also respond to matching events from an available, trusted source.
+Approve what to watch, when monitoring ends, and the maximum number of private
+reports. A watch does not add access to accounts or authorize other actions.
+
+Each matching event creates a separate goal session. You can choose a fresh
+approval for each report, or explicitly approve unattended private delivery.
+The browser alerts you when the session appears, and its exact instructions
+remain available to inspect.
+
+Quiet hours can defer an event report only within its original deadline.
+Expired events are skipped. Additional events arriving while a launch is pending
+are also skipped; they do not replace its evidence. Duplicate events do not create
+extra reports or spend another run. Pause, cancel, or change the goal to stop the
+watch; resuming requires renewed approval. Monitoring also stops if source access
+is revoked or the source is replaced.
+
 ## Unattended private reminders
 
 You can approve private delivery for a finite schedule without approving each
@@ -135,3 +153,21 @@ Scheduled goals support explicitly approved one-time and recurring private remin
 and reports, with timezone-aware quiet hours. Durable delivery evidence is supported
 for private browser replies. External actions and delivery evidence for other
 transports remain future work.
+
+### Private suggestions
+
+You can also enable suggestions from a specific source for a limited time. The
+approval shows what the agent may look for and how many questions it may ask.
+Access to a source alone does not enable suggestions.
+
+When the agent notices something in that scope, it can ask whether you would
+like it monitored. Review the proposed outcome, watch, end time and private
+reporting limits before approving. The question includes a way to inspect the
+exact terms and the evidence behind it. Answering a different conversation with
+“yes” does not approve the suggestion.
+
+A suggestion is separate from your goals until you approve it. Declining it or
+letting it expire prevents duplicate questions about the same item. Stopping
+suggestions prevents new questions; goals you already accepted can still be
+paused or cancelled separately. Monitoring never creates missing access or
+permission to take other actions.

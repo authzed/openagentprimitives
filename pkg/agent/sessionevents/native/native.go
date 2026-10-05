@@ -6,6 +6,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -25,11 +26,27 @@ type Authority interface {
 	CheckSource(context.Context, sessionevents.Source, memory.Entry) ([]sessionevents.Dependency, error)
 }
 type Adapter struct {
+	// Memory retains the verified signed witness before intake may acknowledge it.
+	Memory    memory.Memory
+	Access    sessionevents.SourceAccess
 	Keys      provenance.PublisherKeyLookup
 	Authority Authority
 	// Only explicitly configured platform publishers are accepted. Session
 	// publishers remain refused even when their keys verify cryptographically.
 	Publishers map[string]bool
+}
+
+func (a *Adapter) Resolve(ctx context.Context, principal string, source sessionevents.Source) (sessionevents.Source, error) {
+	if a == nil || a.Access == nil {
+		return sessionevents.Source{}, sessionevents.ErrDenied
+	}
+	return a.Access.Resolve(ctx, principal, source)
+}
+func (a *Adapter) Check(ctx context.Context, principal string, source sessionevents.Source, deps []sessionevents.Dependency) error {
+	if a == nil || a.Access == nil {
+		return sessionevents.ErrDenied
+	}
+	return a.Access.Check(ctx, principal, source, deps)
 }
 
 func (*Adapter) Kind() string { return Key }
@@ -43,17 +60,17 @@ func (a *Adapter) Verify(ctx context.Context, raw json.RawMessage) (sessionevent
 	}
 	var entry memory.Entry
 	if err := json.Unmarshal(raw, &entry); err != nil {
-		return result, fmt.Errorf("decode native observation: %w", err)
+		return result, fmt.Errorf("%w: decode native observation: %v", sessionevents.ErrInvalid, err)
 	}
 	if entry.Kind != sessionobservation.KindName || entry.Provenance == nil || !strings.HasPrefix(entry.Provenance.Publisher, "system:") || !a.Publishers[entry.Provenance.Publisher] {
 		return result, sessionevents.ErrDenied
 	}
 	if err := provenance.VerifyEntrySignature(a.Keys, entry); err != nil {
-		return result, err
+		return result, errors.Join(sessionevents.ErrDenied, err)
 	}
 	var content sessionobservation.Content
 	if err := json.Unmarshal(entry.Content, &content); err != nil {
-		return result, fmt.Errorf("decode native observation content: %w", err)
+		return result, fmt.Errorf("%w: decode native observation content: %v", sessionevents.ErrInvalid, err)
 	}
 	observation := content.Observation
 	if err := observation.Validate(); err != nil {
@@ -68,7 +85,7 @@ func (a *Adapter) Verify(ctx context.Context, raw json.RawMessage) (sessionevent
 	}
 	// Retain signed dependencies even when a current lookup adds more. A
 	// normalization step can never erase an information-flow restriction.
-	seen := map[sessionevents.Dependency]bool{{ResourceType: "agentsession", ResourceID: observation.Source.ID, Permission: "view_memory"}: true}
+	seen := map[sessionevents.Dependency]bool{{ResourceType: "agentsession", ResourceID: observation.Source.ID, Permission: "read_transcript"}: true}
 	for _, dep := range append(observation.Dependencies, deps...) {
 		seen[dep] = true
 	}
@@ -93,6 +110,11 @@ func (a *Adapter) Verify(ctx context.Context, raw json.RawMessage) (sessionevent
 	result = sessionevents.Input{Observation: observation, Publisher: entry.Provenance.Publisher, Sequence: int64(entry.Provenance.Seq)}
 	if err = result.Validate(); err != nil {
 		return sessionevents.Input{}, err
+	}
+	if a.Memory != nil {
+		if _, err := a.Memory.Put(ctx, entry); err != nil {
+			return sessionevents.Input{}, fmt.Errorf("retain native witness: %w", err)
+		}
 	}
 	return result, nil
 }

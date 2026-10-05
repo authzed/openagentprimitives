@@ -33,16 +33,20 @@ import (
 )
 
 type authority struct {
-	denied          bool
-	denySource      bool
-	denyStart       bool
-	startPermission string
-	owners          map[string]string
+	denied             bool
+	denySource         bool
+	denyStart          bool
+	failExecutionGrant bool
+	startPermission    string
+	owners             map[string]string
 }
 
 func (a *authority) Relations() authz.RelWriter { return a }
 func (a *authority) WriteRelationships(_ context.Context, rels []authz.Relation) error {
 	for _, r := range rels {
+		if r.ResourceType == ExecutionResourceType && a.failExecutionGrant {
+			return fmt.Errorf("test execution grant publication failure")
+		}
 		a.owners[r.ResourceID] = r.SubjectID
 	}
 	return nil
@@ -65,7 +69,7 @@ func (a *authority) CheckOnResource(_ context.Context, typ, id, perm string, u i
 	if a.denied {
 		return false, nil
 	}
-	if typ == ResourceType {
+	if typ == ResourceType || typ == ExecutionResourceType {
 		return a.owners[id] == u.String(), nil
 	}
 	return !a.denySource, nil

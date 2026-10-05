@@ -81,6 +81,29 @@ func Note(ctx context.Context, m memory.Memory, scope memory.Scope, c Content) e
 	return nil
 }
 
+// Find reads the durable receipt for a request, including resolved tombstones.
+// A publisher may use its presence to confirm that the relay retained a notice.
+func Find(ctx context.Context, m memory.Memory, scope memory.Scope, requestRef string) (Content, bool, error) {
+	res, err := m.Query(ctx, memory.Query{Scope: scope, Kinds: []string{KindName}, IDs: []string{entryID(requestRef)}, Limit: 1})
+	if err != nil {
+		return Content{}, false, err
+	}
+	if res.Partial || res.Truncated {
+		return Content{}, false, fmt.Errorf("parkedprompt.Find: incomplete receipt query")
+	}
+	if len(res.Entries) == 0 {
+		return Content{}, false, nil
+	}
+	var c Content
+	if err := json.Unmarshal(res.Entries[0].Content, &c); err != nil {
+		return c, false, err
+	}
+	if c.RequestRef != requestRef {
+		return c, false, fmt.Errorf("parkedprompt.Find: request reference mismatch")
+	}
+	return c, true, nil
+}
+
 // Outstanding returns every still-pending prompt for the scope, skipping
 // resolved tombstones. A decode failure on one entry is skipped rather than
 // failing the whole read: one unreadable record must not cost the user every

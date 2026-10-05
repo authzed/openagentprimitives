@@ -60,6 +60,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/outbound"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/pipeline"
 	"github.com/authzed/openagentprimitives/pkg/cli/clikit"
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/sessionobservation" // include native event evidence when resuming the channels publisher audit chain
 	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
 	"github.com/authzed/openagentprimitives/pkg/platform/deplogs"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"

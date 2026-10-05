@@ -167,6 +167,42 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(a Adapter) { r.kinds.Register(a) }
 func (r *Registry) Kinds() []string    { return r.kinds.Keys() }
 
+// SourceAccess resolves a reviewed source incarnation and rechecks access. Each
+// adapter owns its resource mapping; consumers never branch on a source kind.
+type SourceAccess interface {
+	Resolve(context.Context, string, Source) (Source, error)
+	Check(context.Context, string, Source, []Dependency) error
+}
+
+func (r *Registry) Resolve(ctx context.Context, principal string, source Source) (Source, error) {
+	if r == nil {
+		return Source{}, ErrDenied
+	}
+	a, ok := r.kinds.Get(source.Kind)
+	if !ok {
+		return Source{}, ErrDenied
+	}
+	access, ok := a.(SourceAccess)
+	if !ok {
+		return Source{}, ErrDenied
+	}
+	return access.Resolve(ctx, principal, source)
+}
+func (r *Registry) Check(ctx context.Context, principal string, source Source, deps []Dependency) error {
+	if r == nil {
+		return ErrDenied
+	}
+	a, ok := r.kinds.Get(source.Kind)
+	if !ok {
+		return ErrDenied
+	}
+	access, ok := a.(SourceAccess)
+	if !ok {
+		return ErrDenied
+	}
+	return access.Check(ctx, principal, source, deps)
+}
+
 type Ingester struct {
 	Store    Store
 	Adapters *Registry

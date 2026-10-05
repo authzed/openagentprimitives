@@ -73,6 +73,8 @@ import (
 	// depth — a second reason an agent process can never reach kind="mcpui",
 	// not the reason. See pkg/channels/channelassets/mcpui's package doc.
 	goalmodel "github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
+	eventnative "github.com/authzed/openagentprimitives/pkg/agent/sessionevents/native"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	_ "github.com/authzed/openagentprimitives/pkg/authz/contentguard/kinds/promptinjection" // register for settings-webhook content-inspector validation
 	_ "github.com/authzed/openagentprimitives/pkg/authz/contentguard/kinds/urlallowlist"    // register for settings-webhook content-inspector validation
@@ -164,9 +166,12 @@ import (
 	searchinmem "github.com/authzed/openagentprimitives/pkg/memory/search/inmem"
 	pgsearch "github.com/authzed/openagentprimitives/pkg/memory/search/postgres"
 	searchsqlite "github.com/authzed/openagentprimitives/pkg/memory/search/sqlite"
+	eventsql "github.com/authzed/openagentprimitives/pkg/memory/sessionevents/sqlstore"
 	memshadow "github.com/authzed/openagentprimitives/pkg/memory/shadow"
 	"github.com/authzed/openagentprimitives/pkg/memory/spicedbauthorizer"
 	memsqlite "github.com/authzed/openagentprimitives/pkg/memory/sqlite"
+	eventweb "github.com/authzed/openagentprimitives/pkg/web/sessionevents"
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
@@ -2246,9 +2251,11 @@ func run(cfg *config) {
 		PoolsReader:         spiceDBClient.Pools(),
 		KGProvider:          kgProvider,
 	})
+	var eventStore *eventsql.Store
 	var goalStore goalmodel.Store
 	switch backendKind {
 	case memoryBackendSqlite:
+		eventStore = eventsql.New(sqliteClient.DB(), false)
 		gs := goalsqlite.New(sqliteClient.DB())
 		if err := gs.Migrate(context.Background()); err != nil {
 			log.Error(err, "goals SQLite migration failed")
@@ -2256,6 +2263,7 @@ func run(cfg *config) {
 		}
 		goalStore = gs
 	case memoryBackendPostgres:
+		eventStore = eventsql.New(stdlib.OpenDBFromPool(pgClient.Pool()), true)
 		gs := goalpostgres.New(pgClient.Pool())
 		if err := gs.Migrate(context.Background()); err != nil {
 			log.Error(err, "goals PostgreSQL migration failed")
@@ -2274,6 +2282,12 @@ func run(cfg *config) {
 	if backendKind == memoryBackendPostgres {
 		goalMemory = memorypkg.NewLocal(mempostgres.NewBackend(pgClient), memorypkg.WithProvenanceVerifier(verifier), memorypkg.WithLogger(log.WithName("goal-memory")))
 	}
+	if eventStore != nil {
+		if err := eventStore.Migrate(context.Background()); err != nil {
+			log.Error(err, "event ledger migration failed")
+			os.Exit(1)
+		}
+	}
 	goalService := &goalmodel.Service{Store: goalStore}
 	var goalAuth goalweb.Authority
 	if spiceDBClient != nil {
@@ -2281,6 +2295,34 @@ func run(cfg *config) {
 	}
 	goalHandler := &goalweb.Server{Service: goalService, Reader: mgr.GetAPIReader(), Memory: goalMemory, Tokens: memTokens, Keys: keyLookup, Auth: goalAuth, ColdRegistryUntil: time.Now().Add(memoryColdRegistryGrace)}
 	goalService.Auth = goalHandler
+	var eventHandler *eventweb.Server
+	var eventRouter *sessionevents.Router
+	var eventDispatcher *sessionevents.Dispatcher
+	if eventStore != nil && goalAuth != nil {
+		nativeAccess := &eventweb.NativeSessions{Reader: mgr.GetAPIReader(), Memory: goalMemory, Auth: goalAuth}
+		sources := sessionevents.NewRegistry()
+		sources.Register(&eventnative.Adapter{Memory: goalMemory, Keys: keyLookup, Authority: nativeAccess, Access: nativeAccess, Publishers: map[string]bool{"system:channelsd": true}})
+		execution := &goalmodel.EventExecution{Service: goalService, Sources: sources}
+		consumers := sessionevents.NewConsumers()
+		consumers.Legacy = "goals"
+		consumers.Register("goals", execution)
+		triggers := &sessionevents.Triggers{Store: eventStore, Observations: eventStore, Authority: consumers}
+		if discoveryStore, ok := goalStore.(goalmodel.DiscoveryStore); ok {
+			discovery := &goalweb.Discovery{Server: goalHandler, Store: discoveryStore, Triggers: triggers, Sources: sources}
+			goalHandler.Discovery = discovery
+			consumers.Register("goal-discovery", discovery)
+			if err := mgr.Add(discovery); err != nil {
+				log.Error(err, "register goal discovery")
+				os.Exit(1)
+			}
+		}
+		execution.Triggers = triggers
+		goalService.Events = execution
+		goalHandler.EventSources = sources
+		eventRouter = &sessionevents.Router{Triggers: triggers, Store: eventStore}
+		eventDispatcher = &sessionevents.Dispatcher{Triggers: triggers, Consumer: consumers}
+		eventHandler = &eventweb.Server{Ingester: &sessionevents.Ingester{Store: eventStore, Adapters: sources}, Tokens: memTokens}
+	}
 	consentPublisher := &goalweb.ConsentPublisher{Service: goalService, Memory: goalMemory, Signer: opSigner, Publish: monitoringPublish}
 	goalHandler.Consent = consentPublisher
 	goalPublisher := &goalweb.Publisher{Store: goalStore, Memory: goalMemory, Signer: opSigner, Notify: consentPublisher.Notify}
@@ -2291,7 +2333,7 @@ func run(cfg *config) {
 	var goalValidator agentsessionctrl.GoalSessionValidator
 	if occurrenceStore, ok := goalStore.(goalmodel.OccurrenceStore); ok && goalAuth != nil && monitoringPublish != nil {
 		goalService.ExecutionAuth = goalHandler
-		dispatcher := &goalctrl.Dispatcher{Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString(), DeliveryMemory: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}}
+		dispatcher := &goalctrl.Dispatcher{EventRouter: eventRouter, EventDispatcher: eventDispatcher, Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString(), DeliveryMemory: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}}
 		goalValidator = dispatcher
 		goalHandler.ExecutionSessions = dispatcher
 		if err := mgr.Add(dispatcher); err != nil {
@@ -3180,6 +3222,9 @@ func run(cfg *config) {
 		// per-session secret-output Secret. Auth reuses the per-session token
 		// registry — session-scoped, so a token may only write its own session.
 		debugHandler.Handle("/goals/", goalHandler)
+		if eventHandler != nil {
+			debugHandler.Handle("/session-events/", eventHandler)
+		}
 		debugHandler.Handle("/secret-output/", secretoutsrv.NewHandler(mgr.GetClient(), memTokens))
 		// The tuple-authorized workshop draft-export route (agent-builder plan
 		// 3b, Task 6 — Ruling A). A workshop sidecar's operator bearer is

@@ -21,6 +21,7 @@ type Predicate struct {
 func validText(value string) bool {
 	return strings.TrimSpace(value) != "" && len(value) <= 1024 && utf8.ValidString(value)
 }
+
 func (p Predicate) Validate() error {
 	if !validText(p.Kind) || !validText(p.Subject) || len(p.Equals) > 16 {
 		return ErrInvalid
@@ -32,6 +33,7 @@ func (p Predicate) Validate() error {
 	}
 	return nil
 }
+
 func (p Predicate) Matches(o Observation) bool {
 	if p.Kind != o.Kind || p.Subject != o.Subject {
 		return false
@@ -57,6 +59,7 @@ func (p Predicate) Matches(o Observation) bool {
 // resolved by the consumer's live authority adapter. Target identifies that
 // consumer's durable work; neither field is itself a permission grant.
 type Subscription struct {
+	Consumer         string                       `json:"consumer,omitempty"`
 	ID               string                       `json:"id"`
 	Principal        string                       `json:"principal"`
 	Target           string                       `json:"target"`
@@ -87,6 +90,7 @@ func (s Subscription) Validate() error {
 	}
 	return nil
 }
+
 func (s Subscription) Digest() (string, error) { return jsonDigest(s) }
 
 type SubscriptionState struct {
@@ -138,6 +142,7 @@ type TriggerAuthority interface {
 	CheckSubscription(context.Context, Subscription) error
 	CheckObservation(context.Context, Subscription, Observation) error
 }
+
 type Triggers struct {
 	Store        TriggerStore
 	Observations Store
@@ -158,6 +163,7 @@ func (t *Triggers) Activate(ctx context.Context, s Subscription) (SubscriptionSt
 	}
 	return t.Store.CreateSubscription(ctx, s)
 }
+
 func (t *Triggers) Accept(ctx context.Context, id string, source Source, eventID string, now time.Time) (Admission, error) {
 	if t == nil || t.Store == nil || t.Observations == nil || t.Authority == nil {
 		return Admission{}, ErrDenied

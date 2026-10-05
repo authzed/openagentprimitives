@@ -13,6 +13,7 @@ type PlanApprovalRequest struct {
 }
 
 type Request struct {
+	Discovery    DiscoveryRequest                          `json:"discovery,omitempty"`
 	PlanApproval *PlanApprovalRequest                      `json:"planApproval,omitempty"`
 	Reply        *channelevents.OutboundUserMessagePayload `json:"reply,omitempty"`
 	Proposal     RunProposal                               `json:"proposal,omitempty"`
@@ -25,6 +26,8 @@ type Request struct {
 	ID           string                                    `json:"id,omitempty"`
 }
 type Response struct {
+	DiscoveryPolicy    *DiscoveryPolicy                         `json:"discoveryPolicy,omitempty"`
+	DiscoveryProposal  *DiscoveryProposal                       `json:"discoveryProposal,omitempty"`
 	PlanApproval       *plangateaudit.ApprovalAuthority         `json:"planApproval,omitempty"`
 	Approval           *channelevents.InteractionRequestPayload `json:"approval,omitempty"`
 	Resource           string                                   `json:"resource"`

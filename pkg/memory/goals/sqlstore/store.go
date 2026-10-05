@@ -73,13 +73,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS oap_goal_run_proposals (occurrence_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS oap_goal_run_costs (occurrence_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS oap_goal_run_replies (occurrence_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS oap_discovery_policies(id TEXT PRIMARY KEY,domain TEXT NOT NULL,payload TEXT NOT NULL,used INTEGER NOT NULL,stopped INTEGER NOT NULL,notified INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS oap_discovery_proposals(id TEXT PRIMARY KEY,domain TEXT NOT NULL,policy_id TEXT NOT NULL,subject TEXT NOT NULL,state TEXT NOT NULL,expires_at BIGINT NOT NULL,payload TEXT NOT NULL,notified INTEGER NOT NULL DEFAULT 0,UNIQUE(policy_id,subject))`,
+		`CREATE INDEX IF NOT EXISTS oap_discovery_pending ON oap_discovery_proposals(notified,state,expires_at,id)`,
 	} {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("goals migration: %w", err)
 		}
 	}
 	var newer int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>6`).Scan(&newer); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>8`).Scan(&newer); err != nil {
 		return err
 	}
 	if newer > 0 {
@@ -98,6 +101,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(6) ON CONFLICT(version) DO NOTHING`); err != nil {
+		return err
+	}
+	var events int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version=7`).Scan(&events); err != nil {
+		return err
+	}
+	if events == 0 {
+		if err := s.migrateEventOccurrences(ctx, tx); err != nil {
+			return fmt.Errorf("goal event migration: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(7) ON CONFLICT(version) DO NOTHING`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(8) ON CONFLICT(version) DO NOTHING`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -324,6 +342,30 @@ func (s *Store) migrateScheduleWindows(ctx context.Context, tx *sql.Tx) error {
 	}
 	for _, query := range queries {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Events can have identical due times. Their immutable launch identity, rather
+// than a timestamp, is the uniqueness boundary; calendar IDs remain deterministic.
+func (s *Store) migrateEventOccurrences(ctx context.Context, tx *sql.Tx) error {
+	queries := []string{}
+	if s.postgres {
+		queries = append(queries, `ALTER TABLE oap_goal_occurrences DROP CONSTRAINT IF EXISTS oap_goal_occurrences_window_key`, `DROP INDEX IF EXISTS oap_goal_occurrences_window_key`)
+	} else {
+		queries = append(queries,
+			`CREATE TABLE oap_goal_occurrences_v7 (id TEXT PRIMARY KEY, domain TEXT NOT NULL, owner_key TEXT NOT NULL, class_key TEXT NOT NULL, goal_id TEXT NOT NULL, goal_revision BIGINT NOT NULL, consent_digest TEXT NOT NULL, due_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, state TEXT NOT NULL, worker TEXT NOT NULL DEFAULT '', fence BIGINT NOT NULL DEFAULT 0, lease_until BIGINT NOT NULL DEFAULT 0, session_name TEXT NOT NULL, session_uid TEXT NOT NULL DEFAULT '')`,
+			`INSERT INTO oap_goal_occurrences_v7 SELECT id,domain,owner_key,class_key,goal_id,goal_revision,consent_digest,due_at,expires_at,state,worker,fence,lease_until,session_name,session_uid FROM oap_goal_occurrences`,
+			`DROP TABLE oap_goal_occurrences`, `ALTER TABLE oap_goal_occurrences_v7 RENAME TO oap_goal_occurrences`,
+			`CREATE INDEX oap_goal_occurrences_due ON oap_goal_occurrences(state,due_at,lease_until)`,
+			`CREATE INDEX oap_goal_occurrences_owner ON oap_goal_occurrences(owner_key,state)`,
+			`CREATE INDEX oap_goal_occurrences_class ON oap_goal_occurrences(class_key,state)`)
+	}
+	queries = append(queries, `CREATE TABLE IF NOT EXISTS oap_goal_run_events (occurrence_id TEXT PRIMARY KEY, launch_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL)`)
+	for _, q := range queries {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return err
 		}
 	}

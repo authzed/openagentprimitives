@@ -16,9 +16,12 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
+
+var errConsentDeliveryPending = errors.New("consent notification awaiting durable relay receipt")
 
 type ConsentPublisher struct {
 	mu      sync.Mutex
@@ -60,6 +63,12 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 		}
 		if err := p.Service.ExecutionAuth.AuthorizeDispatch(ctx, g); err != nil {
 			return err
+		}
+		if g.Execution.Terms.Event != nil {
+			if p.Service.Events == nil {
+				return domain.ErrDenied
+			}
+			return p.Service.Events.Activate(ctx, g)
 		}
 		_, err = store.Schedule(ctx, g)
 		return err
@@ -147,8 +156,15 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 				request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Quiet hours", Value: sessionschedule.QuietDescription(*schedule)})
 			}
 		}
+		if event := c.Terms.Event; event != nil {
+			request.Lead = "Monitor this goal for changes?"
+			request.Body = "Matching events create a private session. Each session needs a fresh plan approval. Quiet hours defer work within its original deadline; events arriving while a launch is pending are skipped."
+			request.Fields[0] = channelevents.InteractionField{Label: "Watch", Value: fmt.Sprintf("%s · %s · up to %d sessions", event.Predicate.Kind, event.Predicate.Subject, event.MaxRuns)}
+			request.Fields[2].Label = "Limits per session"
+			request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Source", Value: event.Source.ID}, channelevents.InteractionField{Label: "Event deadline", Value: fmt.Sprintf("%s after observation; authorization expiry may end it sooner", time.Duration(event.RunWindowSeconds)*time.Second)}, channelevents.InteractionField{Label: "Quiet hours", Value: sessionschedule.QuietDescription(sessionschedule.Spec{Timezone: event.Timezone, QuietHours: event.QuietHours})})
+		}
 		if c.Terms.ActionApproval == "standing_private" {
-			request.Body = "Authorize private delivery without another approval for each run. Each fresh plan must stay within this schedule, recipient, and limits. Quiet hours defer reminders; missed windows are skipped. You can pause or cancel the goal."
+			request.Body = "Authorize private delivery without another approval for each run. Each fresh plan must stay within this watch or schedule, recipient, and limits. Quiet hours defer reminders; missed windows are skipped. You can pause or cancel the goal."
 			request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Action approval", Value: "Unattended private delivery only. Other actions require separate approval."})
 		}
 		raw, e := json.Marshal(request)
@@ -185,7 +201,52 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 	if c.ApprovalMode == "plan" {
 		return nil
 	}
-	return channelevents.PublishOut(p.Publish, ns, name, channelevents.KindInteractionRequest, request)
+	return p.publishRetainedRequest(ctx, scope, request)
+}
+
+// publishRetainedRequest keeps the outbox pending until the relay records the
+// exact request. A successful bus publish alone can lose a card during restart.
+func (p *ConsentPublisher) publishRetainedRequest(ctx context.Context, scope memory.Scope, request channelevents.InteractionRequestPayload) error {
+	retained := func() (bool, error) {
+		record, found, err := parkedprompt.Find(ctx, p.Memory, scope, request.RequestRef)
+		if err != nil || !found {
+			return false, err
+		}
+		var envelope channelevents.Envelope
+		if err := json.Unmarshal(record.Envelope, &envelope); err != nil {
+			return false, err
+		}
+		var recorded channelevents.InteractionRequestPayload
+		if err := json.Unmarshal(envelope.Payload, &recorded); err != nil {
+			return false, err
+		}
+		want, err := json.Marshal(request)
+		if err != nil {
+			return false, err
+		}
+		actual, err := json.Marshal(recorded)
+		if err != nil {
+			return false, err
+		}
+		if record.Category != request.Category || string(actual) != string(want) {
+			return false, fmt.Errorf("%w: retained consent request mismatch", domain.ErrConflict)
+		}
+		return true, nil
+	}
+	if found, err := retained(); err != nil || found {
+		return err
+	}
+	ns, name, ok := strings.Cut(scope.ID, "/")
+	if !ok || p.Publish == nil {
+		return domain.ErrDenied
+	}
+	if err := channelevents.PublishOut(p.Publish, ns, name, channelevents.KindInteractionRequest, request); err != nil {
+		return err
+	}
+	if found, err := retained(); err != nil || found {
+		return err
+	}
+	return errConsentDeliveryPending
 }
 
 // Request returns only the exact platform-signed card for this live session's

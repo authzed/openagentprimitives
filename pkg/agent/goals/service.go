@@ -23,15 +23,18 @@ type Actor struct {
 	// event so session cleanup cannot erase its authorship evidence.
 	Attestation string
 }
+
 type Authorizer interface {
 	Authorize(context.Context, Actor, bool) error
 	Sources(context.Context, Actor) ([]Source, error)
 	ReadGoal(context.Context, Actor, Goal) error
 }
+
 type Service struct {
 	Store         Store
 	Auth          Authorizer
 	ExecutionAuth ExecutionAuthority
+	Events        *EventExecution
 	Now           func() time.Time
 }
 
@@ -44,12 +47,14 @@ func (s *Service) authorize(ctx context.Context, a Actor, write bool) error {
 	}
 	return s.Auth.Authorize(ctx, a, write)
 }
+
 func (s *Service) now() time.Time {
 	if s.Now != nil {
 		return s.Now().UTC()
 	}
 	return time.Now().UTC()
 }
+
 func requestHash(v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -58,6 +63,7 @@ func requestHash(v any) (string, error) {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:]), nil
 }
+
 func newID(prefix string) (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -65,6 +71,7 @@ func newID(prefix string) (string, error) {
 	}
 	return prefix + hex.EncodeToString(b[:]), nil
 }
+
 func validRequestID(id string) bool { return len(id) > 0 && len(id) <= 128 }
 
 func (s *Service) Create(ctx context.Context, a Actor, r CreateRequest) (Goal, error) {
@@ -103,6 +110,7 @@ func (s *Service) Create(ctx context.Context, a Actor, r CreateRequest) (Goal, e
 	}
 	return s.commit(ctx, a, g, 0, r.RequestID, h, "create")
 }
+
 func (s *Service) Get(ctx context.Context, a Actor, id string) (Goal, error) {
 	if err := s.authorize(ctx, a, false); err != nil {
 		return Goal{}, err
@@ -116,6 +124,7 @@ func (s *Service) Get(ctx context.Context, a Actor, id string) (Goal, error) {
 	}
 	return g, nil
 }
+
 func (s *Service) List(ctx context.Context, a Actor, r ListRequest) (Page, error) {
 	if err := s.authorize(ctx, a, false); err != nil {
 		return Page{}, err
@@ -143,6 +152,7 @@ func (s *Service) List(ctx context.Context, a Actor, r ListRequest) (Page, error
 	p.Goals = visible
 	return p, nil
 }
+
 func (s *Service) Update(ctx context.Context, a Actor, r Change) (Goal, error) {
 	if err := s.authorize(ctx, a, true); err != nil {
 		return Goal{}, err
@@ -192,6 +202,7 @@ func mergeSources(existing, added []Source) []Source {
 	})
 	return slices.Compact(sources)
 }
+
 func (s *Service) commit(ctx context.Context, a Actor, g Goal, expected int64, key, hash, action string) (Goal, error) {
 	id, err := newID("goalev-")
 	if err != nil {

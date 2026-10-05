@@ -32,6 +32,7 @@ type ExecutionTerms struct {
 	// Empty/manual requires a fresh human decision; standing_private permits
 	// derivation for the exact private reporting ceiling in each occurrence.
 	ActionApproval string                `json:"actionApproval,omitempty"`
+	Event          *EventWatch           `json:"event,omitempty"`
 	Schedule       *sessionschedule.Spec `json:"schedule,omitempty"`
 	// Windows are resolved by the server and committed to the reviewed digest.
 	ScheduleWindows   []sessionschedule.Window `json:"scheduleWindows,omitempty"`
@@ -55,6 +56,7 @@ type ExecutionRequest struct {
 }
 
 type ExecutionConsent struct {
+	Purpose         string             `json:"purpose,omitempty"`
 	ApprovalMode    string             `json:"approvalMode,omitempty"`
 	Session         string             `json:"session"`
 	SessionUID      string             `json:"sessionUID"`
@@ -92,6 +94,14 @@ func (t ExecutionTerms) validate(now time.Time, owner string) error {
 	if t.ActionApproval != "" && t.ActionApproval != "manual" && t.ActionApproval != "standing_private" {
 		return fmt.Errorf("%w: unknown action approval policy", ErrInvalid)
 	}
+	if t.Event != nil {
+		if t.Schedule != nil || len(t.ScheduleWindows) != 0 {
+			return fmt.Errorf("%w: event watches and calendar schedules are exclusive", ErrInvalid)
+		}
+		if err := t.Event.subscription(t.DueAt, t.ExpiresAt).Validate(); err != nil {
+			return fmt.Errorf("%w: invalid event watch", ErrInvalid)
+		}
+	}
 	b := t.Bounds
 	if strings.TrimSpace(t.ClassDigest) == "" || t.DueAt.Before(now) || !t.ExpiresAt.After(t.DueAt) || t.ExpiresAt.Sub(now) > 30*24*time.Hour ||
 		b.DurationSeconds < 1 || b.DurationSeconds > 86400 || b.Turns < 1 || b.Turns > 10000 || b.Tokens < 1 || b.Tokens > 10000000 ||
@@ -123,6 +133,9 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 	// Do not accept caller-supplied windows. Resolution is independent of now,
 	// preserving retry identity after the first due time has passed.
 	r.Terms.ScheduleWindows = nil
+	if r.Terms.Event != nil && r.Terms.Schedule != nil {
+		return Goal{}, ErrInvalid
+	}
 	if r.Terms.Schedule != nil {
 		windows, err := sessionschedule.Resolve(*r.Terms.Schedule, r.Terms.DueAt, r.Terms.ExpiresAt)
 		if err != nil {
@@ -280,6 +293,9 @@ func (s *Service) Dispatchable(ctx context.Context, g Goal) error {
 // ExecutionWindows is the exact finite list reviewed by the human. Legacy
 // one-time requests retain their original window and occurrence identity.
 func (t ExecutionTerms) ExecutionWindows() ([]sessionschedule.Window, error) {
+	if t.Event != nil {
+		return nil, ErrDenied
+	}
 	if t.Schedule == nil {
 		if len(t.ScheduleWindows) != 0 {
 			return nil, ErrDenied
@@ -328,8 +344,18 @@ func (s *Service) DispatchOccurrence(ctx context.Context, g Goal, o Occurrence) 
 	g = current
 
 	if g.Domain != o.Domain || g.ID != o.GoalID || g.Revision != o.GoalRevision || g.Execution == nil ||
-		g.Execution.Digest != o.ConsentDigest || !g.Execution.Terms.ContainsWindow(o.DueAt, o.ExpiresAt) ||
+		g.Execution.Digest != o.ConsentDigest ||
 		s.now().Before(o.DueAt) || !s.now().Before(o.ExpiresAt) {
+		return ErrDenied
+	}
+	if g.Execution.Terms.Event != nil {
+		if s.Events == nil {
+			return ErrDenied
+		}
+		if err := s.Events.CheckOccurrence(ctx, g, o); err != nil {
+			return err
+		}
+	} else if o.Event != nil || !g.Execution.Terms.ContainsWindow(o.DueAt, o.ExpiresAt) {
 		return ErrDenied
 	}
 	return s.Dispatchable(ctx, g)
