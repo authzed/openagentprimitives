@@ -45,6 +45,7 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/relwritesaudit"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/replydelivery"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/scopeaudit"
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/sessionobservation"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/sessionscope"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/systemprompt"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/tool_dispatch_snapshot"
