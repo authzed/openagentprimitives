@@ -13,6 +13,7 @@ import (
 
 	agentcaps "github.com/authzed/openagentprimitives/pkg/agent/agentcaps"
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
@@ -46,6 +47,8 @@ type ExecutionReplyPreparer interface {
 }
 
 type Server struct {
+	Discovery         *Discovery
+	EventSources      *sessionevents.Registry
 	Consent           *ConsentPublisher
 	ExecutionSessions ExecutionSessionAuthority
 	Service           *domain.Service
@@ -199,7 +202,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resource := ResourceType + ":" + a.Domain.ID()
-	if req.Operation == "create" || req.Operation == "update" || req.Operation == "request_execution" {
+	if req.Operation == "create" || req.Operation == "update" || req.Operation == "request_execution" || req.Operation == "request_discovery" || req.Operation == "stop_discovery" {
 		if req.Resource != resource {
 			s.fail(w, r, domain.ErrDenied)
 			return
@@ -210,6 +213,51 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		out.ExecutionAvailable = true
 	}
 	switch req.Operation {
+	case "request_discovery":
+		if s.Discovery == nil {
+			err = domain.ErrDenied
+			break
+		}
+		var p domain.DiscoveryPolicy
+		p, err = s.Discovery.Request(ctx, a, req.Discovery)
+		out.DiscoveryPolicy = &p
+	case "stop_discovery":
+		if s.Discovery == nil {
+			err = domain.ErrDenied
+			break
+		}
+		if err = s.Authorize(ctx, a, true); err == nil {
+			err = s.Discovery.Store.StopDiscoveryPolicy(ctx, a.Domain, req.ID)
+		}
+	case "get_discovery_policy":
+		if s.Discovery == nil {
+			err = domain.ErrDenied
+			break
+		}
+		if err = s.Authorize(ctx, a, false); err == nil {
+			var p domain.DiscoveryPolicy
+			p, err = s.Discovery.Store.DiscoveryPolicy(ctx, a.Domain, req.ID)
+			if err == nil {
+				err = s.ReadGoal(ctx, a, p.Template)
+			}
+			out.DiscoveryPolicy = &p
+		}
+	case "get_discovery_proposal":
+		if s.Discovery == nil {
+			err = domain.ErrDenied
+			break
+		}
+		if err = s.Authorize(ctx, a, false); err == nil {
+			var q domain.DiscoveryProposal
+			q, err = s.Discovery.Store.DiscoveryProposal(ctx, a.Domain, req.ID)
+			if err == nil {
+				err = s.ReadGoal(ctx, a, q.Goal)
+			}
+			if err == nil {
+				err = s.EventSources.Check(ctx, a.Domain.Owner, q.Observation.Source, q.Observation.Dependencies)
+			}
+			out.DiscoveryProposal = &q
+		}
 	case "create":
 		g, e := s.Service.Create(ctx, a, req.Create)
 		err = e
@@ -267,11 +315,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	code, message := 500, "goal operation failed"
 	switch {
-	case errors.Is(err, domain.ErrDenied), errors.Is(err, domain.ErrNotFound):
+	case errors.Is(err, domain.ErrDenied), errors.Is(err, domain.ErrNotFound), errors.Is(err, sessionevents.ErrDenied), errors.Is(err, sessionevents.ErrNotFound):
 		code, message = 404, "goal unavailable"
-	case errors.Is(err, domain.ErrConflict):
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, sessionevents.ErrConflict):
 		code, message = 409, err.Error()
-	case errors.Is(err, domain.ErrInvalid):
+	case errors.Is(err, domain.ErrInvalid), errors.Is(err, sessionevents.ErrInvalid):
 		code, message = 400, err.Error()
 	}
 	log.FromContext(r.Context()).Info("goal operation refused", "path", r.URL.Path, "status", code, "error", err)
@@ -399,9 +447,12 @@ func (s *Server) Authorize(ctx context.Context, a domain.Actor, write bool) erro
 // Sources carries every resource dependency forward, including reads from
 // earlier turns. Goals cannot launder a restricted read into future sessions.
 func (s *Server) Sources(ctx context.Context, a domain.Actor) ([]domain.Source, error) {
-	rows, err := s.Memory.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: a.Session}, Kinds: []string{infoleakagetaint.KindName}})
+	rows, err := s.Memory.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: a.Session}, Kinds: []string{infoleakagetaint.KindName}, Limit: 10000})
 	if err != nil {
 		return nil, err
+	}
+	if rows.Partial || rows.Truncated {
+		return nil, domain.ErrDenied
 	}
 	sources := make([]domain.Source, 0, len(rows.Entries))
 	for _, e := range rows.Entries {

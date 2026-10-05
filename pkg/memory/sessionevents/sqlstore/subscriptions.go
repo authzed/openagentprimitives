@@ -82,6 +82,9 @@ func (s *Store) CreateSubscription(ctx context.Context, sub sessionevents.Subscr
 	if err != nil {
 		return state, err
 	}
+	if _, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_event_subscription_sources(subscription_id,source_key) VALUES(?,?) ON CONFLICT(subscription_id) DO NOTHING`), sub.ID, sub.Source.Key()); err != nil {
+		return state, err
+	}
 	return state, tx.Commit()
 }
 

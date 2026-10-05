@@ -2,10 +2,11 @@ package capability
 
 import (
 	"context"
+	"testing"
+
 	core "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestGoalsCapabilityRequiresSafeEnvironment(t *testing.T) {
@@ -21,7 +22,7 @@ func TestGoalsCapabilityRequiresSafeEnvironment(t *testing.T) {
 	for _, tool := range tools {
 		names = append(names, tool.Name())
 	}
-	assert.ElementsMatch(t, []string{"list_goals", "get_goal", "list_goal_runs", "create_goal", "update_goal", "request_goal_execution"}, names)
+	assert.ElementsMatch(t, []string{"list_goals", "get_goal", "list_goal_runs", "create_goal", "update_goal", "request_goal_execution", "request_goal_discovery", "get_goal_discovery_policy", "get_goal_discovery_proposal", "stop_goal_discovery"}, names)
 	o.Class.Spec.Authz = &v1.AuthzBlock{InformationLeakage: &v1.InformationLeakagePolicy{Mode: "logging"}}
 	tools, skip = c.Offer(o)
 	assert.NotNil(t, skip)

@@ -148,7 +148,7 @@ func TestDurableObservationContract(t *testing.T) {
 			require.ErrorIs(t, err, sessionevents.ErrNotFound)
 			_, err = store.Ingest(ctx, recreated, 0)
 			require.NoError(t, err)
-			_, err = db.ExecContext(ctx, `INSERT INTO oap_session_observation_schema(version) VALUES(3)`)
+			_, err = db.ExecContext(ctx, `INSERT INTO oap_session_observation_schema(version) VALUES(4)`)
 			require.NoError(t, err)
 			require.ErrorContains(t, store.Migrate(ctx), "newer than this operator")
 			_, err = store.Get(ctx, i.Observation.Source, i.Observation.EventID)

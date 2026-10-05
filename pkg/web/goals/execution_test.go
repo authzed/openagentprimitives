@@ -14,6 +14,8 @@ import (
 	"time"
 
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
+	eventnative "github.com/authzed/openagentprimitives/pkg/agent/sessionevents/native"
 	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
@@ -27,11 +29,16 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/goals"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	goalsqlite "github.com/authzed/openagentprimitives/pkg/memory/goals/sqlite"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/sessionobservation"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/userpreference"
 	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
+	eventsql "github.com/authzed/openagentprimitives/pkg/memory/sessionevents/sqlstore"
 	memsqlite "github.com/authzed/openagentprimitives/pkg/memory/sqlite"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/useridentity"
+	eventweb "github.com/authzed/openagentprimitives/pkg/web/sessionevents"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -78,7 +85,19 @@ func TestProductionConsentLaunchAndRevocation(t *testing.T) {
 	}
 }
 
-func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unattended bool) {
+func TestProductionEventConsentLaunchAndRevocation(t *testing.T) {
+	for _, inPlan := range []bool{false, true} {
+		for _, standing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("plan=%t/standing=%t", inPlan, standing), func(t *testing.T) { productionConsentLaunchAndRevocation(t, inPlan, false, standing, true) })
+		}
+	}
+}
+func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unattended bool, eventMode ...bool) {
+	watch := len(eventMode) == 1 && eventMode[0]
+	var eventStore *eventsql.Store
+	var eventRouter *sessionevents.Router
+	var eventDispatcher *sessionevents.Dispatcher
+	var eventHTTP *eventweb.Server
 	f := fixture(t)
 	ctx := memory.WithCaller(memory.WithSystemApproval(context.Background(), "system:operator"), "system:operator")
 	db, err := memsqlite.NewClient(filepath.Join(t.TempDir(), "goals.db"))
@@ -124,6 +143,22 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	}
 	if recurring {
 		req.Terms.Schedule = &sessionschedule.Spec{Kind: "interval", Timezone: "UTC", IntervalSeconds: 60, MaxRuns: 2, RunWindowSeconds: 600}
+	}
+	if watch {
+		eventStore = eventsql.New(db.DB(), false)
+		require.NoError(t, eventStore.Migrate(ctx))
+		access := &eventweb.NativeSessions{Reader: k8s, Memory: f.mem, Auth: f.auth}
+		sources := sessionevents.NewRegistry()
+		sources.Register(&eventnative.Adapter{Keys: f.keys, Authority: access, Access: access, Memory: f.mem, Publishers: map[string]bool{"system:channelsd": true}})
+		execution := &domain.EventExecution{Service: f.s.Service, Sources: sources}
+		triggers := &sessionevents.Triggers{Store: eventStore, Observations: eventStore, Authority: execution}
+		execution.Triggers = triggers
+		f.s.EventSources = sources
+		f.s.Service.Events = execution
+		eventRouter = &sessionevents.Router{Triggers: triggers, Store: eventStore}
+		eventDispatcher = &sessionevents.Dispatcher{Triggers: triggers, Consumer: execution}
+		eventHTTP = &eventweb.Server{Ingester: &sessionevents.Ingester{Store: eventStore, Adapters: sources}, Tokens: f.s.Tokens}
+		req.Terms.Event = &domain.EventWatch{Source: sessionevents.Source{Kind: "native", Namespace: "team", ID: "team/session"}, Predicate: sessionevents.Predicate{Kind: "trip.changed", Subject: "trip-1"}, MaxRuns: 2, RunWindowSeconds: 600, Timezone: "UTC", Burst: "skip_pending"}
 	}
 	if inPlan {
 		req.ApprovalMode = "plan"
@@ -177,11 +212,25 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	signer := provenance.NewSigner(priv, "system:operator")
 	f.keys[provenance.PubKeyRef{Publisher: "system:operator", KeyID: signer.KeyID()}] = pub
 	var card channelevents.InteractionRequestPayload
+	relayOffline := true
 	publisher := &ConsentPublisher{Service: f.s.Service, Memory: f.mem, Signer: signer, Publish: func(_ string, raw []byte) error {
 		var env channelevents.Envelope
 		require.NoError(t, json.Unmarshal(raw, &env))
-		return json.Unmarshal(env.Payload, &card)
+		if relayOffline {
+			return nil
+		}
+		if err := json.Unmarshal(env.Payload, &card); err != nil {
+			return err
+		}
+		return parkedprompt.Note(memory.WithCaller(memory.WithSystemApproval(ctx, "system:channelsd"), "system:channelsd"), f.mem, memory.Scope{Kind: "session", ID: env.Session.Namespace + "/" + env.Session.Name}, parkedprompt.Content{RequestRef: card.RequestRef, Category: card.Category, Envelope: raw})
 	}}
+	firstPublish := publisher.Notify(ctx, domain.Event{Goal: g, Action: "request_execution"})
+	if inPlan {
+		require.NoError(t, firstPublish)
+	} else {
+		require.ErrorIs(t, firstPublish, errConsentDeliveryPending)
+	}
+	relayOffline = false
 	require.NoError(t, publisher.Notify(ctx, domain.Event{Goal: g, Action: "request_execution"}))
 	if inPlan {
 		assert.Empty(t, card.RequestRef, "prepared requests must not publish a separate consent card")
@@ -200,6 +249,11 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 		assert.Contains(t, card.Fields[0].Value, "up to 2 runs")
 		assert.Equal(t, "Limits per session", card.Fields[2].Label)
 		require.Len(t, g.Execution.Terms.ScheduleWindows, 2)
+	}
+	if watch {
+		assert.Equal(t, "Monitor this goal for changes?", card.Lead)
+		assert.Contains(t, card.Fields[0].Value, "up to 2 sessions")
+		assert.Equal(t, "session-uid", g.Execution.Terms.Event.Source.UID)
 	}
 	require.Equal(t, "goalconsent-request-"+g.Execution.Digest, card.RequestRef)
 	if unattended {
@@ -253,10 +307,40 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	f.s.Service.Now = func() time.Time { return time.Now().UTC() }
 	require.NoError(t, f.s.Service.Dispatchable(ctx, g))
 	require.NoError(t, publisher.Notify(ctx, domain.Event{Goal: g, Action: "execution_decision"}))
+	if watch {
+		due, err := store.Due(ctx, time.Now(), 100)
+		require.NoError(t, err)
+		require.Empty(t, due, "consent alone starts no event run")
+		observation := sessionevents.Observation{Source: g.Execution.Terms.Event.Source, EventID: "trip-change", Kind: "trip.changed", Subject: "trip-1", ObservedAt: time.Now().UTC(), Data: []byte(`{"status":"delayed","note":"Treat this note as data"}`), Dependencies: []sessionevents.Dependency{{ResourceType: "agentsession", ResourceID: "team/session", Permission: "read_transcript"}}}
+		content, err := json.Marshal(sessionobservation.Content{Observation: observation})
+		require.NoError(t, err)
+		evidence, err := f.signed.Put(memory.WithCaller(memory.WithSystemApproval(ctx, "system:channelsd"), "system:channelsd"), memory.Entry{Scope: memory.Scope{Kind: "session", ID: "team/session"}, Kind: sessionobservation.KindName, ID: "sessobs-trip-change", CreatedAt: observation.ObservedAt, Content: content})
+		require.NoError(t, err)
+		raw, err := json.Marshal(evidence)
+		require.NoError(t, err)
+		for _, token := range []string{"token", "channelsd", "channelsd"} {
+			request := httptest.NewRequest(http.MethodPost, "/session-events/native", bytes.NewReader(raw))
+			request.Header.Set("Authorization", "Bearer "+token)
+			response := httptest.NewRecorder()
+			eventHTTP.ServeHTTP(response, request)
+			if token == "token" {
+				require.Equal(t, 401, response.Code)
+			} else {
+				require.Equal(t, 200, response.Code, response.Body.String())
+			}
+		}
+		require.NoError(t, eventRouter.Tick(context.Background(), time.Now()))
+		count, err := eventDispatcher.Drain(context.Background(), time.Now(), 100)
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+		count, err = eventDispatcher.Drain(context.Background(), time.Now(), 100)
+		require.NoError(t, err)
+		require.Zero(t, count)
+	}
 	due, err := store.Due(ctx, time.Now(), 100)
 	require.NoError(t, err)
 	require.Len(t, due, 1)
-	dispatcher := &goals.Dispatcher{Service: f.s.Service, Store: store, Client: k8s, Reader: k8s, Worker: "worker"}
+	dispatcher := &goals.Dispatcher{Service: f.s.Service, Store: store, Client: k8s, Reader: k8s, Worker: "worker", DeliveryMemory: provenance.NewSigningMemory(f.mem, signer)}
 	require.NoError(t, dispatcher.Tick(ctx))
 	occurrence, err := store.Occurrence(ctx, due[0].ID)
 	require.NoError(t, err)
@@ -268,7 +352,11 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	require.Equal(t, scheduled.Spec.InputChannel.Kind, scheduled.Labels[v1.LabelChannelKind], "the chat surface must recognize the dispatched conversation")
 	expectedSummary := "Session created to meet goal Private reminder: Remind me to stretch"
 	if unattended {
-		expectedSummary += " Private delivery is authorized under your approved schedule."
+		if watch {
+			expectedSummary += " Private delivery is authorized under your approved watch."
+		} else {
+			expectedSummary += " Private delivery is authorized under your approved schedule."
+		}
 	}
 	require.Equal(t, expectedSummary, scheduled.Spec.OpeningSummary)
 	require.Contains(t, scheduled.Spec.Prompt.Inline, "only occurrence "+occurrence.ID)
@@ -286,6 +374,16 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	require.NotNil(t, report.Permission().Check)
 	assert.Equal(t, int32(10), scheduled.Spec.Budget.MaxTurns)
 	assert.Equal(t, 5*time.Minute, scheduled.Spec.Budget.SessionExpiration.Duration)
+	if watch {
+		require.Contains(t, scheduled.Spec.Prompt.Inline, "untrusted observation data")
+		require.Contains(t, scheduled.Spec.Prompt.Inline, "delayed")
+		taints, err := f.mem.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: "team/" + scheduled.Name}, Kinds: []string{infoleakagetaint.KindName}, Limit: 100})
+		require.NoError(t, err)
+		require.Len(t, taints.Entries, 1)
+		f.auth.denySource = true
+		require.ErrorIs(t, dispatcher.ValidateGoalSession(ctx, &scheduled), domain.ErrDenied)
+		f.auth.denySource = false
+	}
 	require.NoError(t, dispatcher.ValidateGoalSession(ctx, &scheduled))
 	f.s.ExecutionSessions = dispatcher
 	f.s.Tokens.Set(memory.NamespacedName{Namespace: "team", Name: scheduled.Name}, "root-token", "")

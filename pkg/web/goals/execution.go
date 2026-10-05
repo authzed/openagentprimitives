@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 	"io"
 	"net/http"
 	"reflect"
@@ -56,6 +58,16 @@ func (s *Server) PrepareExecution(ctx context.Context, a domain.Actor, r *domain
 	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: a.Domain.Class}, &class); err != nil {
 		return err
 	}
+	if r.Terms.Event != nil {
+		if s.EventSources == nil || s.Service == nil || s.Service.Events == nil {
+			return domain.ErrDenied
+		}
+		source, err := s.EventSources.Resolve(ctx, a.Domain.Owner, r.Terms.Event.Source)
+		if err != nil {
+			return err
+		}
+		r.Terms.Event.Source = source
+	}
 	owner := identity.CanonicalFromTrusted(a.Domain.Owner, "verified goal owner")
 	var catalog v1.UserIdentity
 	if err := s.Reader.Get(ctx, client.ObjectKey{Name: useridentity.NameForSubject(owner.Subject())}, &catalog); err != nil {
@@ -87,9 +99,22 @@ func (s *Server) PrepareExecution(ctx context.Context, a domain.Actor, r *domain
 	return nil
 }
 
-func (s *Server) Validate(ctx context.Context, g domain.Goal, t domain.ExecutionTerms) error {
+func (s *Server) Validate(ctx context.Context, g domain.Goal, t domain.ExecutionTerms) (result error) {
+	defer func() {
+		if errors.Is(result, sessionevents.ErrDenied) {
+			result = errors.Join(domain.ErrDenied, result)
+		}
+	}()
 	if s.Auth == nil || s.Reader == nil {
 		return domain.ErrDenied
+	}
+	if t.Event != nil {
+		if s.EventSources == nil || s.Service == nil || s.Service.Events == nil {
+			return domain.ErrDenied
+		}
+		if err := s.EventSources.Check(ctx, g.Domain.Owner, t.Event.Source, nil); err != nil {
+			return err
+		}
 	}
 	owner := identity.CanonicalFromTrusted(g.Domain.Owner, "verified goal owner")
 	var user v1.UserIdentity
@@ -214,6 +239,13 @@ func (s *Server) Validate(ctx context.Context, g domain.Goal, t domain.Execution
 }
 
 func (s *Server) VerifyDecision(ctx context.Context, g domain.Goal, d domain.ExecutionDecision) error {
+	purpose := ""
+	if g.Execution != nil {
+		purpose = g.Execution.Purpose
+	}
+	return s.verifyConsent(ctx, g, d, purpose)
+}
+func (s *Server) verifyConsent(ctx context.Context, g domain.Goal, d domain.ExecutionDecision, purpose string) error {
 	var entry memory.Entry
 	if err := json.Unmarshal([]byte(d.Witness), &entry); err != nil {
 		return err
@@ -228,7 +260,7 @@ func (s *Server) VerifyDecision(ctx context.Context, g domain.Goal, d domain.Exe
 	if err := json.Unmarshal(entry.Content, &content); err != nil {
 		return err
 	}
-	if g.Execution == nil || content.Approved == nil || *content.Approved != d.Approved || content.Owner != g.Domain.Owner || d.Owner != g.Domain.Owner || content.Goal.Execution == nil || content.Goal.Execution.Digest != g.Execution.Digest || d.Digest != g.Execution.Digest || content.Goal.Domain != g.Domain || content.Goal.ID != g.ID || !reflect.DeepEqual(content.Goal.Execution.Terms, g.Execution.Terms) || content.Goal.Execution.Session != g.Execution.Session || content.Goal.Execution.SessionUID != g.Execution.SessionUID {
+	if content.Purpose != purpose || g.Execution == nil || content.Approved == nil || *content.Approved != d.Approved || content.Owner != g.Domain.Owner || d.Owner != g.Domain.Owner || content.Goal.Execution == nil || content.Goal.Execution.Digest != g.Execution.Digest || d.Digest != g.Execution.Digest || content.Goal.Domain != g.Domain || content.Goal.ID != g.ID || !reflect.DeepEqual(content.Goal.Execution.Terms, g.Execution.Terms) || content.Goal.Execution.Session != g.Execution.Session || content.Goal.Execution.SessionUID != g.Execution.SessionUID {
 		return domain.ErrDenied
 	}
 	var original memory.Entry
@@ -245,7 +277,7 @@ func (s *Server) VerifyDecision(ctx context.Context, g domain.Goal, d domain.Exe
 	if err := json.Unmarshal(original.Content, &reviewed); err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(reviewed.Goal, content.Goal) || !reflect.DeepEqual(reviewed.Request, content.Request) {
+	if reviewed.Purpose != content.Purpose || !reflect.DeepEqual(reviewed.Data, content.Data) || !reflect.DeepEqual(reviewed.Goal, content.Goal) || !reflect.DeepEqual(reviewed.Request, content.Request) {
 		return domain.ErrDenied
 	}
 	var request channelevents.InteractionRequestPayload
@@ -270,6 +302,22 @@ func (s *Server) AuthorizeDispatch(ctx context.Context, g domain.Goal) error {
 		return domain.ErrDenied
 	}
 	return nil
+}
+
+func (s *Server) EnsureDispatchGrant(ctx context.Context, g domain.Goal) error {
+	if s.Auth == nil || g.Execution == nil || g.Execution.Decision == nil || !g.Execution.Decision.Approved {
+		return domain.ErrDenied
+	}
+	if err := s.VerifyDecision(ctx, g, *g.Execution.Decision); err != nil {
+		return err
+	}
+	if err := s.Validate(ctx, g, g.Execution.Terms); err != nil {
+		return err
+	}
+	return s.Auth.Relations().WriteRelationships(ctx, []authz.Relation{
+		{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "domain", SubjectType: ResourceType, SubjectID: g.Domain.ID()},
+		{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "approved", SubjectType: "user", SubjectID: g.Domain.Owner, ExpiresAt: g.Execution.Terms.ExpiresAt},
+	})
 }
 
 func (s *Server) decideHTTP(w http.ResponseWriter, r *http.Request) {
@@ -305,6 +353,18 @@ func (s *Server) decideHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	decision := domain.ExecutionDecision{RequestID: entry.ID, Digest: content.Goal.Execution.Digest, Owner: content.Owner, Approved: *content.Approved, Witness: string(witness)}
 	ctx := memory.WithCaller(memory.WithSystemApproval(r.Context(), "system:operator"), "system:operator")
+	if content.Purpose != "" {
+		if s.Discovery == nil {
+			s.fail(w, r, domain.ErrDenied)
+			return
+		}
+		if err = s.Discovery.Decide(ctx, content, decision); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	g, err := s.Service.DecideExecution(ctx, content.Goal.Domain, content.Goal.ID, decision)
 	if err != nil {
 		s.fail(w, r, err)
@@ -326,6 +386,7 @@ func (s *Server) decideHTTP(w http.ResponseWriter, r *http.Request) {
 // A class may expose the existing confirmed-preference surface as an execution
 // opt-out. Invalid or unset values fail closed whenever the schema declares it.
 func (s *Server) executionPreference(ctx context.Context, class *v1.AgentClass, owner string) error {
+	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
 	const key = "goal_execution_enabled"
 	var schema []v1.UserPreferenceSchema
 	for _, entry := range class.Spec.UserPreferences {

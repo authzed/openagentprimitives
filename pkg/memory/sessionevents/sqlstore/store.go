@@ -66,14 +66,44 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	var newer int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_session_observation_schema WHERE version>2`).Scan(&newer); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_session_observation_schema WHERE version>3`).Scan(&newer); err != nil {
 		return err
 	}
 	if newer > 0 {
 		return fmt.Errorf("session observation schema is newer than this operator")
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO oap_session_observation_schema(version) VALUES(2) ON CONFLICT(version) DO NOTHING`); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO oap_session_observation_schema(version) VALUES(3) ON CONFLICT(version) DO NOTHING`); err != nil {
 		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS oap_event_subscription_sources(subscription_id TEXT PRIMARY KEY,source_key TEXT NOT NULL)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS oap_event_subscription_sources_key ON oap_event_subscription_sources(source_key)`); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,payload FROM oap_event_subscriptions WHERE id NOT IN (SELECT subscription_id FROM oap_event_subscription_sources)`)
+	if err != nil {
+		return err
+	}
+	var subs []sessionevents.Subscription
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		var sub sessionevents.Subscription
+		if err := json.Unmarshal([]byte(raw), &sub); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		subs = append(subs, sub)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, sub := range subs {
+		if _, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_event_subscription_sources(subscription_id,source_key) VALUES(?,?) ON CONFLICT(subscription_id) DO NOTHING`), sub.ID, sub.Source.Key()); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

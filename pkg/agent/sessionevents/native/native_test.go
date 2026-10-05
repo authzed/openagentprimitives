@@ -37,7 +37,7 @@ func (a *authority) CheckSource(_ context.Context, source sessionevents.Source, 
 	if a.denied || source.UID != a.uid {
 		return nil, sessionevents.ErrDenied
 	}
-	return []sessionevents.Dependency{{ResourceType: "agentsession", ResourceID: source.ID, Permission: "view_memory"}}, nil
+	return []sessionevents.Dependency{{ResourceType: "agentsession", ResourceID: source.ID, Permission: "read_transcript"}}, nil
 }
 func TestNativeVerificationAndDurableReplay(t *testing.T) {
 	ctx := context.Background()
@@ -66,7 +66,7 @@ func TestNativeVerificationAndDurableReplay(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, observation.Data, accepted.Data)
 	require.Contains(t, accepted.Dependencies, observation.Dependencies[0]) // cannot strip private source gate
-	require.Contains(t, accepted.Dependencies, sessionevents.Dependency{ResourceType: "agentsession", ResourceID: "team/source", Permission: "view_memory"})
+	require.Contains(t, accepted.Dependencies, sessionevents.Dependency{ResourceType: "agentsession", ResourceID: "team/source", Permission: "read_transcript"})
 	require.Equal(t, provenance.EntryDigest(entry), accepted.Witness.Digest)
 	require.Equal(t, "team/source/"+entry.ID, accepted.Witness.Reference)
 	restarted := &sessionevents.Ingester{Store: sqlstore.New(c.DB(), false), Adapters: registry}

@@ -5,20 +5,24 @@ package goalconsent
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+
 	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/memory"
-	"reflect"
 )
 
 const KindName = "goal_consent"
 
 type Content struct {
+	Purpose        string          `json:"purpose,omitempty"`
+	Data           json.RawMessage `json:"data,omitempty"`
 	Goal           goals.Goal      `json:"goal"`
 	Request        json.RawMessage `json:"request"`
 	Owner          string          `json:"owner,omitempty"`
 	Approved       *bool           `json:"approved,omitempty"`
 	RequestWitness json.RawMessage `json:"requestWitness,omitempty"`
 }
+
 type Kind struct{}
 
 func (Kind) Name() string                          { return KindName }
@@ -28,6 +32,7 @@ func (Kind) SessionReadable() bool                 { return false }
 func (Kind) Retention() memory.Retention {
 	return memory.Retention{AppendOnly: true, EssentialWhileLive: true, NeverForkCopy: true, TTLAfterArchive: -1}
 }
+
 func (Kind) ContentSchema() reflect.Type                  { return reflect.TypeOf(Content{}) }
 func (Kind) IndexedFields() []string                      { return nil }
 func (Kind) NewScopeHooks(memory.Scope) memory.ScopeHooks { return hooks{} }

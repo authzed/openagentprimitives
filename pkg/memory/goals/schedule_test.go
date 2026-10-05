@@ -184,7 +184,7 @@ func checkScheduleMigration(t *testing.T, db *sql.DB, postgres bool) {
 	} else {
 		var ddl string
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE name='oap_goal_occurrences'`).Scan(&ddl))
-		legacyDDL := strings.Replace(ddl, "UNIQUE(domain,goal_id,goal_revision,due_at)", "UNIQUE(domain,goal_id,goal_revision)", 1)
+		legacyDDL := strings.TrimSuffix(ddl, ")") + ", UNIQUE(domain,goal_id,goal_revision))"
 		require.NotEqual(t, ddl, legacyDDL)
 		queries = []string{`ALTER TABLE oap_goal_occurrences RENAME TO oap_goal_occurrences_old`, legacyDDL, `INSERT INTO oap_goal_occurrences SELECT * FROM oap_goal_occurrences_old`, `DROP TABLE oap_goal_occurrences_old`}
 	}

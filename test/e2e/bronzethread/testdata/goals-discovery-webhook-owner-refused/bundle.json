@@ -1,0 +1,188 @@
+{
+  "name": "goals-discovery-webhook-owner-refused",
+  "description": "A real signed webhook with a configured session owner cannot enable private discovery without primary-human evidence. Literal model-supplied discovery scope and retries fail before any proposal, question or watch authority exists.",
+  "agentDir": "testdata/goals-discovery-webhook-owner-refused",
+  "agentClass": "eventgoal",
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Pull request demo-org/demo-repo#4 was opened",
+        "toolOffered": "request_goal_discovery"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "request_goal_discovery",
+            "args": {
+              "resource": "agent_goal_domain:foreign-domain",
+              "requestID": "foreign-discovery",
+              "title": "Trip monitoring",
+              "outcome": "Privately report trip changes",
+              "terms": {
+                "dueAt": "2030-01-01T12:00:00Z",
+                "expiresAt": "2030-01-08T12:10:00Z",
+                "bounds": {
+                  "durationSeconds": 180,
+                  "turns": 10,
+                  "tokens": 10000,
+                  "approvalSeconds": 90
+                },
+                "allowedOperations": [
+                  "respond_to_user"
+                ],
+                "evidence": [
+                  "Delivered private reminder"
+                ],
+                "actionApproval": "standing_private",
+                "event": {
+                  "source": {
+                    "kind": "native",
+                    "namespace": "default",
+                    "id": "default/source",
+                    "uid": "claimed-source"
+                  },
+                  "predicate": {
+                    "kind": "trip.changed",
+                    "subject": "trip-1"
+                  },
+                  "maxRuns": 2,
+                  "runWindowSeconds": 600,
+                  "timezone": "America/New_York",
+                  "quietHours": [
+                    {
+                      "start": "22:00",
+                      "end": "08:00"
+                    }
+                  ],
+                  "burst": "skip_pending"
+                }
+              },
+              "predicate": {
+                "kind": "trip.upcoming",
+                "subject": "inbox"
+              },
+              "subjectField": "tripID",
+              "maxProposals": 2,
+              "maxPending": 1,
+              "proposalSeconds": 180
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "request_goal_discovery",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "declares no standing"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "request_goal_discovery",
+            "args": {
+              "resource": "agent_goal_domain:foreign-domain",
+              "requestID": "foreign-discovery",
+              "title": "Trip monitoring",
+              "outcome": "Privately report trip changes",
+              "terms": {
+                "dueAt": "2030-01-01T12:00:00Z",
+                "expiresAt": "2030-01-08T12:10:00Z",
+                "bounds": {
+                  "durationSeconds": 180,
+                  "turns": 10,
+                  "tokens": 10000,
+                  "approvalSeconds": 90
+                },
+                "allowedOperations": [
+                  "respond_to_user"
+                ],
+                "evidence": [
+                  "Delivered private reminder"
+                ],
+                "actionApproval": "standing_private",
+                "event": {
+                  "source": {
+                    "kind": "native",
+                    "namespace": "default",
+                    "id": "default/source",
+                    "uid": "claimed-source"
+                  },
+                  "predicate": {
+                    "kind": "trip.changed",
+                    "subject": "trip-1"
+                  },
+                  "maxRuns": 2,
+                  "runWindowSeconds": 600,
+                  "timezone": "America/New_York",
+                  "quietHours": [
+                    {
+                      "start": "22:00",
+                      "end": "08:00"
+                    }
+                  ],
+                  "burst": "skip_pending"
+                }
+              },
+              "predicate": {
+                "kind": "trip.upcoming",
+                "subject": "inbox"
+              },
+              "subjectField": "tripID",
+              "maxProposals": 2,
+              "maxPending": 1,
+              "proposalSeconds": 180
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "request_goal_discovery",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "declares no standing"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "The discovery request was refused; no monitoring was authorized."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "reminder request refused"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "toolsCalled": [
+      "request_goal_discovery"
+    ],
+    "approvalPrompts": 0,
+    "agentReplyContains": [
+      "no monitoring was authorized"
+    ]
+  },
+  "trigger": {
+    "channel": "eventgoal-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#4"
+  }
+}

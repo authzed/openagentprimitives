@@ -2,6 +2,7 @@ package goals
 
 import (
 	"context"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 	"strings"
 	"time"
 )
@@ -23,23 +24,24 @@ const (
 // Occurrence persists the session name before any create attempt. Lease expiry
 // only transfers worker ownership; it never forgets or replaces that session.
 type Occurrence struct {
-	ID            string          `json:"id"`
-	Domain        Domain          `json:"domain"`
-	GoalID        string          `json:"goalID"`
-	GoalRevision  int64           `json:"goalRevision"`
-	ConsentDigest string          `json:"consentDigest"`
-	DueAt         time.Time       `json:"dueAt"`
-	ExpiresAt     time.Time       `json:"expiresAt"`
-	State         OccurrenceState `json:"state"`
-	Worker        string          `json:"worker,omitempty"`
-	Fence         int64           `json:"fence"`
-	LeaseUntil    time.Time       `json:"leaseUntil,omitempty"`
-	SessionName   string          `json:"sessionName"`
-	SessionUID    string          `json:"sessionUID,omitempty"`
-	Proposal      *RunProposal    `json:"proposal,omitempty"`
-	Outcome       *RunOutcome     `json:"outcome,omitempty"`
-	Cost          *RunCost        `json:"cost,omitempty"`
-	Reply         *RunReply       `json:"reply,omitempty"`
+	Event         *sessionevents.Launch `json:"event,omitempty"`
+	ID            string                `json:"id"`
+	Domain        Domain                `json:"domain"`
+	GoalID        string                `json:"goalID"`
+	GoalRevision  int64                 `json:"goalRevision"`
+	ConsentDigest string                `json:"consentDigest"`
+	DueAt         time.Time             `json:"dueAt"`
+	ExpiresAt     time.Time             `json:"expiresAt"`
+	State         OccurrenceState       `json:"state"`
+	Worker        string                `json:"worker,omitempty"`
+	Fence         int64                 `json:"fence"`
+	LeaseUntil    time.Time             `json:"leaseUntil,omitempty"`
+	SessionName   string                `json:"sessionName"`
+	SessionUID    string                `json:"sessionUID,omitempty"`
+	Proposal      *RunProposal          `json:"proposal,omitempty"`
+	Outcome       *RunOutcome           `json:"outcome,omitempty"`
+	Cost          *RunCost              `json:"cost,omitempty"`
+	Reply         *RunReply             `json:"reply,omitempty"`
 }
 
 type ClaimRequest struct {
@@ -139,7 +141,15 @@ func (s *Service) Runs(ctx context.Context, a Actor, id string, r ListRequest) (
 		return RunPage{}, err
 	}
 	for _, run := range page.Runs {
-		if run.Proposal != nil || run.Reply != nil {
+		if run.Event != nil {
+			if s.Events == nil || s.Events.Sources == nil {
+				return RunPage{}, ErrDenied
+			}
+			if err := s.Events.Sources.Check(ctx, a.Domain.Owner, run.Event.Observation.Source, run.Event.Observation.Dependencies); err != nil {
+				return RunPage{}, err
+			}
+		}
+		if run.Proposal != nil || run.Reply != nil || run.Event != nil {
 			if err := s.Auth.ReadGoal(ctx, a, Goal{Sources: run.ReadDependencies()}); err != nil {
 				return RunPage{}, err
 			}
@@ -187,6 +197,11 @@ func (p RunProposal) Validate() error {
 // never applied to another session's dependencies.
 func (o Occurrence) ReadDependencies() []Source {
 	var sources []Source
+	if o.Event != nil {
+		for _, dep := range o.Event.Observation.Dependencies {
+			sources = append(sources, Source{ResourceType: dep.ResourceType, ResourceID: dep.ResourceID, Permission: dep.Permission})
+		}
+	}
 	if o.Proposal != nil {
 		sources = append(sources, o.Proposal.Sources...)
 	}

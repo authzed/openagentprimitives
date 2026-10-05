@@ -469,7 +469,7 @@ func TestGoalV1MigrationPreservesStateAndRejectsNewerSchemas(t *testing.T) {
 	events, err := store.Pending(ctx, 100)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	_, err = client.DB().ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(7)`)
+	_, err = client.DB().ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(9)`)
 	require.NoError(t, err)
 	require.ErrorContains(t, store.Migrate(ctx), "newer than this operator")
 }
