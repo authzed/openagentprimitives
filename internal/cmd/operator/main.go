@@ -158,7 +158,6 @@ import (
 	searchinmem "github.com/authzed/openagentprimitives/pkg/memory/search/inmem"
 	pgsearch "github.com/authzed/openagentprimitives/pkg/memory/search/postgres"
 	searchsqlite "github.com/authzed/openagentprimitives/pkg/memory/search/sqlite"
-	memshadow "github.com/authzed/openagentprimitives/pkg/memory/shadow"
 	"github.com/authzed/openagentprimitives/pkg/memory/spicedbauthorizer"
 	memsqlite "github.com/authzed/openagentprimitives/pkg/memory/sqlite"
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
@@ -739,6 +738,7 @@ type config struct {
 	defaultChannelArchiveAfter    time.Duration
 	defaultSessionSleepAfter      time.Duration
 	sessionStorageRetention       time.Duration
+	sessionGCAfter                time.Duration
 	nodePinnedStorageReclaimGrace time.Duration
 	idleStorageReclaimAfter       time.Duration
 	failedSandboxReapGrace        time.Duration
@@ -857,6 +857,8 @@ func newCommand() *cobra.Command {
 		"how long an idle channel session keeps its pods warm before the operator reaps them (0 = never sleep)")
 	fs.DurationVar(&cfg.sessionStorageRetention, "session-storage-retention", 72*time.Hour,
 		"How long a terminal (Succeeded/Failed) AgentSession's workspace + snapshot-store PVCs are kept past finishedAt before deletion. The session record itself is kept. Per-class override on AgentClass.spec.channels.storageRetention. Set to 0 to disable the sweep.")
+	fs.DurationVar(&cfg.sessionGCAfter, "session-gc-after", 720*time.Hour,
+		"How long a terminal (Succeeded/Failed) AgentSession CR is kept past finishedAt before the WHOLE record is deleted — garbage-collecting the ToolCalls/pods/Secrets it owns (which otherwise accumulate unbounded in etcd and the operator's informer cache). The append-only audit log is NOT deleted (it lives in the durable memory backend and finalize keeps it). Must exceed --session-storage-retention. Set to 0 to disable session GC (keep every record forever).")
 	fs.DurationVar(&cfg.nodePinnedStorageReclaimGrace, "node-pinned-storage-reclaim-grace", 15*time.Minute,
 		"When the workspace class is the node-local bundled class (ap-workspace-rwx), CAP a terminal session's workspace + snapshot-store PVC retention at this short grace instead of --session-storage-retention. Bounds the node-local disk-pressure deadlock: local-path PV bytes live on one node's disk with no quota. Kept as a debug window (not instant), and trades away restart-from-here/fork for such sessions. Set to 0 to disable the cap (use the normal retention for node-local too).")
 	fs.DurationVar(&cfg.idleStorageReclaimAfter, "idle-storage-reclaim-after", 30*time.Minute,
@@ -977,6 +979,21 @@ func validateMemoryBackend(backend, postgresURI string) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown MEMORY_BACKEND %q (want inmem|postgres|sqlite)", backend)
 	}
+}
+
+// postgresMemoryBackend builds the memory Backend for MEMORY_BACKEND=postgres:
+// the postgres backend DIRECTLY, with no in-memory shadow.
+//
+// The old shadow dual-wrote every append-only entry (transcript, audit,
+// authz-decision, tool-session) into an inmem backend AS WELL as postgres, while
+// serving reads only from postgres (reads=secondary). That inmem half was a
+// write-only mirror nothing ever read, and scope-delete can never free it —
+// append-only scopes are structurally undeletable — so it grew with the whole
+// cluster's audit history for the operator's entire lifetime and was a primary
+// OOM driver. Reading through the postgres backend directly is byte-for-byte the
+// same data the shadow already served from its secondary, at none of the RAM.
+func postgresMemoryBackend(pg *mempostgres.Client) memorypkg.Backend {
+	return mempostgres.NewBackend(pg)
 }
 
 // validateArtifactStoreURL enforces the fail-closed artifact store contract:
@@ -1215,6 +1232,7 @@ func run(cfg *config) {
 		"natsURL", cfg.natsURL,
 		"defaultChannelArchiveAfter", cfg.defaultChannelArchiveAfter.String(),
 		"defaultSessionSleepAfter", cfg.defaultSessionSleepAfter.String(),
+		"sessionGCAfter", cfg.sessionGCAfter.String(),
 		"failedSandboxReapGrace", cfg.failedSandboxReapGrace.String(),
 		"oauthRefreshThreshold", cfg.oauthRefreshThreshold.String(),
 		"channelsdTokenFile", cfg.channelsdTokenFile,
@@ -1734,28 +1752,23 @@ func run(cfg *config) {
 		if err := pgsearch.Migrate(context.Background(), pgClient.Pool()); err != nil {
 			log.Info("PostgreSQL search migration partial (pgvector may not be installed, text search still works)", "err", err.Error())
 		}
-		// Reads default to SECONDARY (durable postgres): the shadow still
-		// dual-writes inmem+postgres as a safety net, but the read path serves
-		// postgres so a pod roll doesn't wipe what admin UI / agents read.
-		// MEMORY_READ_SOURCE stays an explicit override — honored when set (e.g.
-		// 'primary' to temporarily read ephemeral inmem for debugging).
-		readSource := cfg.memoryReadSource
-		if readSource == "" {
-			readSource = memshadow.ReadFromSecondary
+		// Use the postgres backend DIRECTLY — no in-memory shadow. The shadow
+		// used to dual-write inmem+postgres and read from postgres (secondary),
+		// which made its inmem half a write-only mirror nothing read and that
+		// scope-delete could never free (append-only scopes are undeletable), so
+		// it grew with the whole cluster's audit history for the operator's
+		// lifetime and drove it OOM. See postgresMemoryBackend.
+		memBackend = postgresMemoryBackend(pgClient)
+		// MEMORY_READ_SOURCE selected the shadow's read side; with no shadow it is
+		// inert. Warn rather than fail so a Deployment still carrying the flag
+		// starts — but say plainly that 'primary' (read the ephemeral inmem) can
+		// no longer be honored, since there is no inmem to read.
+		if cfg.memoryReadSource != "" {
+			log.Info("MEMORY_READ_SOURCE is ignored under the direct postgres backend (no inmem shadow to read); remove it",
+				"memoryReadSource", cfg.memoryReadSource)
 		}
-		shadowBackend, err := memshadow.New(
-			memoryinmem.NewBackend(),
-			mempostgres.NewBackend(pgClient),
-			readSource,
-			log.WithName("shadow-backend"),
-		)
-		if err != nil {
-			log.Error(err, "shadow backend config", "readSource", readSource)
-			os.Exit(1)
-		}
-		memBackend = shadowBackend
-		log.Info("using postgres memory backend (shadow inmem+postgres, reads=secondary)",
-			"postgresURI", pgCfg.URI, "readSource", readSource)
+		log.Info("using postgres memory backend (direct, no inmem shadow)",
+			"postgresURI", pgCfg.URI)
 	case memoryBackendInmem:
 		memBackend = memoryinmem.NewBackend()
 		log.Info("using in-memory backend (MEMORY_BACKEND=inmem)")
@@ -2568,6 +2581,7 @@ func run(cfg *config) {
 		DefaultSessionSleepAfter:       cfg.defaultSessionSleepAfter,
 		FailedSandboxReapGrace:         cfg.failedSandboxReapGrace,
 		DefaultSessionStorageRetention: cfg.sessionStorageRetention,
+		SessionGCAfter:                 cfg.sessionGCAfter,
 		NodePinnedStorageReclaimGrace:  cfg.nodePinnedStorageReclaimGrace,
 		IdleStorageReclaimAfter:        cfg.idleStorageReclaimAfter,
 		SpiceDBDeleter:                 spiceDBClient,

@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	memoryinmem "github.com/authzed/openagentprimitives/pkg/memory/inmem"
+	mempostgres "github.com/authzed/openagentprimitives/pkg/memory/postgres"
+	memshadow "github.com/authzed/openagentprimitives/pkg/memory/shadow"
 	memsqlite "github.com/authzed/openagentprimitives/pkg/memory/sqlite"
 )
 
@@ -83,6 +85,24 @@ func TestValidateMemoryBackend(t *testing.T) {
 			assert.Equal(t, tc.wantKind, kind)
 		})
 	}
+}
+
+// TestPostgresMemoryBackendIsDirect pins Contributor-2's fix: under
+// MEMORY_BACKEND=postgres the operator builds the postgres backend DIRECTLY,
+// with no in-memory shadow. The shadow's inmem half was a write-only mirror
+// (reads already came from postgres) that scope-delete can never free, so it
+// grew with the whole cluster's audit history for the operator's lifetime and
+// drove it OOM. A nil client is fine: NewBackend only wraps it, and this asserts
+// the construction's TYPE, not any query.
+func TestPostgresMemoryBackendIsDirect(t *testing.T) {
+	be := postgresMemoryBackend(nil)
+	require.NotNil(t, be, "postgres mode must construct a backend")
+
+	_, isShadow := be.(*memshadow.Backend)
+	assert.False(t, isShadow, "postgres mode must NOT dual-write to an in-memory shadow")
+
+	_, isPostgres := be.(*mempostgres.Backend)
+	assert.True(t, isPostgres, "postgres mode must use the postgres backend directly")
 }
 
 // TestInmemBackendConstructs asserts the inmem selector's construction path

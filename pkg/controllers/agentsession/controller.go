@@ -578,6 +578,17 @@ type Reconciler struct {
 	// 0 disables the sweep. From --session-storage-retention (72h).
 	DefaultSessionStorageRetention time.Duration
 
+	// SessionGCAfter is how long a TERMINAL AgentSession is kept past
+	// status.finishedAt before the whole CR is deleted — the retention the pod
+	// reap comment anticipates ("until retention GCs the AgentSession"). Deleting
+	// the session cascade-removes its owned ToolCalls/pods/Secrets (owner-ref GC)
+	// and runs finalize, which revokes the token and SpiceDB grants but KEEPS the
+	// append-only audit log (DeleteScope refuses it). Measured from finishedAt
+	// (creation as a fallback). 0 or negative disables GC entirely. From
+	// --session-gc-after (720h / 30d). Must exceed DefaultSessionStorageRetention
+	// so storage is reclaimed well before the CR disappears.
+	SessionGCAfter time.Duration
+
 	// FailedSandboxReapGrace is how long a Failed session's sandbox pods are kept
 	// for debugging before teardown. Measured from status.finishedAt; past it the
 	// bundle SpiceboxSessions and runner pod are reaped so a dead session stops
@@ -1223,6 +1234,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// reapable and wakeable — a Failed one is never wakeable — so this narrows to
 	// exactly the resume case.
 	if !shouldWake(&sess) {
+		// Session GC supersedes the reap: a terminal session past its FULL
+		// retention window is deleted outright — the retention this block's reap
+		// comment anticipates ("until retention GCs the AgentSession"). Deleting
+		// the CR cascade-collects the ToolCalls/pods/Secrets it owns (which
+		// otherwise accumulate unbounded in etcd and the informer cache) and runs
+		// finalize, which keeps the append-only audit log. When it fires there is
+		// nothing left to reap or reclaim, so stop here. See reconcileSessionGC.
+		gcAfter, deleted, gerr := r.reconcileSessionGC(ctx, &sess)
+		if gerr != nil {
+			log.FromContext(ctx).Info("session GC failed; retried on the next reconcile",
+				"session", sess.Namespace+"/"+sess.Name, "err", gerr.Error())
+		}
+		if deleted {
+			return ctrl.Result{}, nil
+		}
+
 		// Storage retention runs alongside the pod reap and must thread its
 		// requeue through every branch below: after the pods are reaped, a
 		// terminal session's reconciles keep short-circuiting in this block,
@@ -1233,6 +1260,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if rerr != nil {
 			log.FromContext(ctx).Info("storage reclaim failed; retried on the next reconcile",
 				"session", sess.Namespace+"/"+sess.Name, "err", rerr.Error())
+		}
+		// Fold the GC deadline into the same retention wakeup: once storage is
+		// reclaimed (72h) the GC deadline (far later) is the only event left for a
+		// terminal session, and nothing else in this block would schedule it.
+		if gcAfter > 0 && (reclaimAfter == 0 || gcAfter < reclaimAfter) {
+			reclaimAfter = gcAfter
 		}
 		switch action, remaining := terminalReapAction(sess.Status.Phase, sess.Status.FinishedAt, sess.CreationTimestamp, r.FailedSandboxReapGrace, r.now()); action {
 		case reapActionRequeue:
