@@ -4,7 +4,6 @@
 package all
 
 import (
-	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/approval"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/artifact"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/artifactrevision"
@@ -18,6 +17,7 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/extracted_entity"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/extraction_state"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/goalactor"
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/goalevent"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakageaudit"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagedecision"
@@ -35,6 +35,7 @@ import (
 	// write of it is answered 400 "unknown Kind"; parked_prompt shipped that
 	// way. all_test.go's TestAllKindsRegistered_IncludesLineageAndDispatchSnapshot
 	// now fails on any omission.
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/interactionhistory"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/preferenceaccess"
@@ -42,6 +43,7 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/pttag"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/pttagcontent"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/relwritesaudit"
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/replydelivery"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/scopeaudit"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/sessionscope"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/systemprompt"

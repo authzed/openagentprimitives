@@ -1956,6 +1956,8 @@ func run(cfg *config) error {
 		mergedTools = meta.BoundedGoalTools(mergedTools, sess.Spec.GoalExecution.ConsentDigest, func(ctx context.Context) error {
 			_, err := memHTTP.Goals(ctx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
 			return err
+		}, func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+			return memHTTP.Goals(ctx, ns, name, req)
 		})
 	}
 

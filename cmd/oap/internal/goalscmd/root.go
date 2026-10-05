@@ -15,27 +15,34 @@ import (
 // NewCmd builds the oap goals subtree. Mutation request IDs are explicit so a
 // retry after a connection failure can return the original accepted revision.
 func NewCmd(g *apcmd.Globals) *cobra.Command {
-	root := &cobra.Command{Use: "goals", Short: "Manage private goals for a session's owner and agent class", Long: "Manage durable goals using an authenticated, non-delegated session. Goals do not launch scheduled work. Responses are JSON."}
-	for _, op := range []string{"list", "get", "create", "update"} {
+	root := &cobra.Command{Use: "goals", Short: "Manage private goals for a session's owner and agent class", Long: "Manage durable goals using an authenticated, non-delegated session. Execution requires separate bounded human consent. Responses are JSON."}
+	for _, op := range []string{"list", "get", "runs", "create", "update"} {
 		root.AddCommand(newOperation(g, op))
 	}
 	return root
 }
+
 func newOperation(g *apcmd.Globals, op string) *cobra.Command {
 	var req goals.Request
 	req.Operation = op
 	var due, timezone, title, outcome string
 	use := op + " <session>"
 	argc := 1
-	if op == "get" || op == "update" {
+	if op == "get" || op == "runs" || op == "update" {
 		use += " <goal-id>"
 		argc = 2
 	}
-	cmd := &cobra.Command{Use: use, Short: op + " goals", Args: cobra.ExactArgs(argc)}
+	short := op + " goals"
+	if op == "runs" {
+		short = "List execution history for a goal"
+	}
+	cmd := &cobra.Command{Use: use, Short: short, Args: cobra.ExactArgs(argc)}
 	f := cmd.Flags()
 	switch op {
-	case "list":
-		f.StringVar((*string)(&req.List.State), "state", "", "Filter by state")
+	case "list", "runs":
+		if op == "list" {
+			f.StringVar((*string)(&req.List.State), "state", "", "Filter by state")
+		}
 		f.StringVar(&req.List.After, "after", "", "Continue from the previous response's next cursor")
 		f.IntVar(&req.List.Limit, "limit", 50, "Page size (1–100)")
 	case "create", "update":

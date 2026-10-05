@@ -2306,7 +2306,7 @@ func run(cfg *config) {
 	var goalValidator agentsessionctrl.GoalSessionValidator
 	if occurrenceStore, ok := goalStore.(goalmodel.OccurrenceStore); ok && goalAuth != nil && monitoringPublish != nil {
 		goalService.ExecutionAuth = goalHandler
-		dispatcher := &goalctrl.Dispatcher{Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString()}
+		dispatcher := &goalctrl.Dispatcher{Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString(), DeliveryMemory: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}}
 		goalValidator = dispatcher
 		goalHandler.ExecutionSessions = dispatcher
 		if err := mgr.Add(dispatcher); err != nil {

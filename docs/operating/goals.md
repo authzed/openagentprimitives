@@ -113,6 +113,19 @@ cursor that should still be followed.
 
 ## One-time private execution
 
+Goal executions generate an opening summary from the goal title and outcome,
+such as “Session created to meet goal Desktop reminder test: Remind me to stand
+up and stretch.” Browser chat displays this summary with a **View exact
+instructions** control. Slack posts the same summary with a button that opens
+the exact instructions in an access-checked modal. Long Slack prompts are paged,
+never truncated. Summary and instruction text are rendered literally.
+
+This presentation is available to any asynchronously created AgentSession:
+set `spec.openingSummary` alongside `spec.prompt.inline`. The original inline
+prompt remains the runner's input and durable audit record. Sessions without a
+summary retain their normal opening message. ConfigMap prompts cannot opt into
+this presentation; the inspection control requires the exact inline snapshot.
+
 `request_goal_execution` proposes one execution of an active goal. Its terms
 include a UTC due time and expiry, finite duration/turn/token ceilings, approval
 timeout, evidence requirements, and `allowedOperations: [respond_to_user]`.
@@ -146,8 +159,8 @@ pods disappear. Ledger transitions use the signed durable audit outbox.
 Execution creates an operator-owned root session with reviewed finite budgets,
 user passthrough, the reviewed private route on both channel bindings, and a
 fresh enforcing plan. Its report tool has an explicit
-permission and cannot run outside an approved phase. Only that report tool and
-local plan/completion controls are exposed. The admission gate prevents forged
+permission and cannot run outside an approved phase. Only that report tool, the local `report_goal_result` ledger control, and
+plan/completion controls are exposed. The admission gate prevents forged
 execution references, forks, identity overrides, changed specifications and
 owner takeover; the controller validates the durable claim before credentials
 are materialized.
@@ -156,8 +169,56 @@ This slice supports private single-human channel kinds through their registry
 contracts. For browser channels, the approval and report appear in the new
 `goal-*` session; open that session from the sessions page when it starts.
 A session finishing does not complete the durable goal. Completion remains a
-separate evidence-bearing management update. External tools, recurring triggers,
-structured result proposals and delivery receipts are subsequent slices.
+separate evidence-bearing management update. Browser delivery receipts are supported for one plain-text reply per execution.
+External tools and recurring triggers remain subsequent slices.
+
+### Durable execution results
+
+Each bounded root can call `report_goal_result` before ending its session. It
+records a stable request ID, `reported_success`, `blocked`, `failed` or `unknown`,
+a summary and evidence references. The server binds the report to the exact
+session UID and occurrence, checks current consent and revision, and commits it
+with the current dispatch fence and audit intent in one transaction. Worker
+lease renewal does not invalidate a still-authorized root's report. Identical retries
+preserve the original report; conflicting retries are refused. Reports remain
+agent accounts, not independent delivery verification. Dependencies from trusted
+session memory are retained and checked again when reading historical results.
+The bound root's own private session scope is read under the durable goal domain
+after session cleanup; another session's permissions are still checked directly.
+
+Read history with `list_goal_runs`, or:
+
+```sh
+oap goals runs <human-session> <goal-id> --limit 50
+```
+
+The operator saves its first observed stop reason before deleting a session.
+A normally finished conversation stays readable until its original duration
+limit; the recorded observation prevents further goal actions.
+Periodic reconciliation resumes cleanup after a restart, releasing capacity only
+after the session and all its runner pods disappear. `finished` means the session
+ended, not that the goal succeeded. An unexpectedly missing session is `unknown`
+and retains its reservation; it is never recreated or silently retried. Other
+reasons distinguish cancellation, pause, changed goal revision, expired consent,
+duration limits, authority denial, session failure and failed runner pods.
+Authorization service errors are returned for retry rather than treated as denials.
+
+Neither these observations nor a `reported_success` proposal complete the goal.
+The first stop observation retains its original effects assessment. A separate
+reply receipt records transport acceptance when available, including recovery
+after that observation. Existing message publication markers are not transport
+receipts; older runs without receipts retain unknown effects.
+
+Replies now carry a framework-generated delivery operation descriptor. Its ID
+depends on the immutable session UID and durable tool-use ID, so retrying the
+same recorded call retains the ID, while recreating the session changes it.
+The descriptor also hashes the exact reply and attachment references. It is
+included in the signed outbound envelope and the subsequent `replyPublication`
+audit note. The assistant tool-use record is persisted before execution, so the
+ID can also be reconstructed if the process dies before writing that note.
+Legacy publishers without these identities omit the descriptor. Neither the
+descriptor nor the publication note proves transport acceptance, permits a
+resend, or grants authority to a receiver.
 
 ### Desktop execution test
 
@@ -195,11 +256,22 @@ authz:
    Ask for one execution five minutes from now, expiry ten minutes from now,
    duration 180 seconds, ten turns, 10,000 tokens, and approval timeout 90 seconds.
    Permit only `respond_to_user`, with a private reminder as the required evidence.
+   Explicitly scope this chat to scheduling: it must not deliver the reminder,
+   record execution results or complete the goal. After consent is approved, it
+   should acknowledge the schedule and wait. The separate bounded session owns
+   delivery and `report_goal_result`; attaching a result with `update_goal` is
+   a completion operation and invalidates pending execution consent.
 2. Check the operator consent card and authorize it. Approval should survive an
    operator restart and create exactly one new `goal-*` session when due.
 3. Open that session promptly (within its 90-second approval window) and approve
    its fresh plan. Confirm the private reminder and
-   inspect its finite budget. The original goal should remain active.
+   inspect its finite budget. Ask it to record its result with `report_goal_result`
+   before ending the session. Confirm `list_goal_runs` shows its proposal and
+   the eventual stop reason, including after an operator restart. The original
+   goal should remain active. Confirm the run also has an accepted reply receipt
+   with transport `browser-transcript`, and reload the session to verify the
+   reminder appears once. This confirms durable transcript acceptance, not that
+   the human read it.
 4. For a second goal, authorize execution and then pause or cancel before it is
    due. No runner should start. Resume requires a new execution request.
 5. Deny another request and confirm it never launches. Separately, suspend the
@@ -207,5 +279,63 @@ authz:
    refusal. Restore the catalog afterward. Never substitute a fabricated click
    for the real browser approval.
 
-The next slice adds evidence-bearing result proposals and delivery receipts,
-then external-operation idempotency and recurring employee-bot work.
+### Durable private browser replies
+
+For bounded goal executions, `respond_to_user` first records a delivery intent
+in the goal ledger. The server pins the exact session UID, tool-use ID, body,
+private recipient, channel UID and approved binding digest. This slice permits
+one plain-text reply of at most 16,000 bytes per execution, without attachments.
+A retry with a changed body or destination is refused.
+
+The operator rechecks current execution authority before accepting the reply.
+Browser acceptance writes the reply and receipt together into a signed,
+append-only `reply_delivery` memory entry. A live websocket notification follows
+as a convenience; acceptance does not depend on an open tab or a successful
+notification. Session history reads the accepted body from that durable entry,
+and operation IDs suppress duplicates between history and live events. Persisted
+reply tool arguments stay hidden while approval or acceptance is pending; a
+legacy publication note or a durable receipt is required before replaying them.
+A receipt
+means the private browser transcript accepted the message. It does not prove
+human readership, approve another action, or complete the durable goal.
+
+If a worker loses acknowledgement after acceptance, its replacement reads the
+existing receipt rather than creating another reply. Cancellation still stops
+the runner when receipt storage is unavailable. An unresolved attempted reply
+retains the occurrence's capacity reservation after root cleanup until the
+operator can reconcile it. Definitive non-acceptance requires a durable closure,
+not merely a read that currently finds no message: a browser closure tombstone
+and an acceptance compete for the same append-only entry, fencing an older
+worker that is still in flight. Whichever wins determines the recorded result.
+
+Other channel kinds can implement the optional `DeliveryReceiverProvider`
+registry contract, with receipt lookup, acceptance and an explicit safe-retry
+policy. The optional `delivery.Closer` contract must durably settle outstanding
+attempts before reporting non-acceptance. Unsupported transports are refused
+when preparing a bounded reply; an ordinary sender or websocket enqueue cannot
+supply a receipt. Transport outages and unresolvable attempts remain unknown.
+Receipt and result dependencies retain the same private-source authorization
+checks when historical runs are read after root cleanup.
+
+The remaining work includes receipts for other transports, external-operation
+idempotency, cost accounting and recurring employee-bot execution. A fresh live
+reminder test requires both the human's execution consent and the new session's
+plan approval; neither can be fabricated or reused from an expired execution.
+
+### Approval cards after refresh
+
+Cached interaction categories, including plan approval and goal execution
+consent, now retain the routed request and resolution as separate signed,
+append-only `interaction_history` entries. Chat history folds them into one card
+at the request's original position, preserving the original review text and
+approved, denied or expired outcome. Plan updates continue to update the covered
+checklist in that card. Initial history loading and reconnects preserve newer
+live outcomes instead of replacing them with a stale pending snapshot.
+
+These records are display evidence only. Replaying an approved card grants no
+new authority, and decision endpoints still perform their normal current checks.
+Regenerated prompts, including credential links, keep their existing policy and
+are not archived here. Surface callback URLs and minted links are omitted from
+resolution records. Older interactions without a recorded resolution cannot be
+reconstructed byte-for-byte; the full replay guarantee applies to newly recorded
+cached interactions.

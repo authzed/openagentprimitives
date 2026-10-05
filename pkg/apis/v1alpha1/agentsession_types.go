@@ -44,6 +44,7 @@ type AgentSessionList struct {
 // different session, which silently moves a running session's approval and
 // transcript-read standing to a different set of humans.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.parent) || (has(self.parent) && self.parent == oldSelf.parent)",message="spec.parent is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(self.openingSummary) || size(self.openingSummary) == 0 || (has(self.prompt.inline) && size(self.prompt.inline) > 0)",message="openingSummary requires inline instructions"
 type AgentSessionSpec struct {
 	// GoalExecution binds an operator-created root session to a durable claim.
 	// +optional
@@ -55,6 +56,13 @@ type AgentSessionSpec struct {
 	// Prompt is the initial user message. Immutable after the session
 	// transitions out of Pending.
 	Prompt PromptSource `json:"prompt"`
+
+	// OpeningSummary optionally replaces the initial instruction bubble with a
+	// readable summary and a control to inspect the exact inline instructions.
+	// Intended for asynchronously created sessions. Render as plain text.
+	// +optional
+	// +kubebuilder:validation:MaxLength=2000
+	OpeningSummary string `json:"openingSummary,omitempty"`
 
 	// AgentIdentity overrides AgentClass.spec.agentIdentity; a per-bundle
 	// agentIdentity still wins over this.

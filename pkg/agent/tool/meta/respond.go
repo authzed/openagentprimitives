@@ -23,6 +23,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	chregistry "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
+	"github.com/authzed/openagentprimitives/pkg/channels/delivery"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/platform/artifacts"
 )
@@ -36,6 +37,10 @@ const defaultMaxAttachments = 10
 // memory client. Capabilities and ChannelKind shape the JSON schema and
 // description so the model sees an honest description of what's supported.
 type RespondConfig struct {
+	// AcceptReply, when set, commits a durable transport acceptance before the
+	// live notification. Bounded goal replies require this path; publication
+	// alone is not their delivery evidence.
+	AcceptReply       func(context.Context, channelevents.OutboundUserMessagePayload) (delivery.Receipt, error)
 	Capabilities      []string // {"text","markdown","asset:text/html",...}
 	ChannelKind       string   // "fake", "slack", etc.
 	NATSPublish       func(ctx context.Context, subject string, payload []byte) error
@@ -308,16 +313,43 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	if ids, ok := sandbox.IDsFromCtx(ctx); ok {
 		toolUseID = ids.ToolUseID
 	}
+	payload := channelevents.OutboundUserMessagePayload{Text: outText, Attachments: attachments}
+	if sess.AgentSessionUID != "" && toolUseID != "" {
+		var err error
+		payload.Delivery, err = channelevents.NewDeliveryOperation(string(sess.AgentSessionUID), toolUseID, payload)
+		if err != nil {
+			return tool.Result{Trusted: true}, err
+		}
+	}
+	var receipt *delivery.Receipt
+	if t.cfg.AcceptReply != nil {
+		if payload.Delivery == nil {
+			return tool.Result{Trusted: true}, errors.New("durable reply identity unavailable")
+		}
+		accepted, err := t.cfg.AcceptReply(ctx, payload)
+		if err != nil {
+			return tool.Result{Trusted: true, IsError: true, Content: "Private reply acceptance is unconfirmed: " + err.Error() + ". Do not blindly resend."}, nil
+		}
+		if accepted.OperationID != payload.Delivery.ID || accepted.SessionUID != payload.Delivery.SessionUID || accepted.PayloadDigest != payload.Delivery.PayloadDigest || accepted.Transport == "" || accepted.Reference == "" || accepted.AcceptedAt.IsZero() {
+			return tool.Result{Trusted: true}, delivery.ErrConflict
+		}
+		receipt = &accepted
+	}
 	logger.Info("respond_to_user: publishing user_message envelope",
 		"session", sess.Namespace+"/"+sess.Name, "toolUseID", toolUseID, "textLen", len(outText), "attachments", len(attachments))
 	publish := func(subject string, data []byte) error {
 		return publishWithRetry(ctx, t.cfg.NATSPublish, subject, data)
 	}
+	published := true
 	if err := t.cfg.EnvelopeSigner.PublishOut(publish, sess.Namespace, sess.Name,
 		channelevents.KindUserMessage,
-		channelevents.OutboundUserMessagePayload{Text: outText, Attachments: attachments},
+		payload,
 	); err != nil {
-		return tool.Result{Content: fmt.Sprintf("publish failed: %v", err), IsError: true, Trusted: true}, nil
+		if receipt == nil {
+			return tool.Result{Content: fmt.Sprintf("publish failed: %v", err), IsError: true, Trusted: true}, nil
+		}
+		published = false
+		logger.Info("durable reply accepted; live notification failed", "session", sess.Namespace+"/"+sess.Name, "operation", receipt.OperationID, "error", err)
 	}
 
 	// Record WHICH renders this reply carried, now that the envelope is on the
@@ -368,9 +400,16 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	// exists to prevent.
 	if t.cfg.AppendSystemNote != nil {
 		if ids, ok := sandbox.IDsFromCtx(ctx); ok && ids.ToolUseID != "" {
-			if err := t.cfg.AppendSystemNote(ctx, map[string]any{
+			note := map[string]any{
 				"delivered": []string{ids.ToolUseID},
-			}); err != nil {
+			}
+			if published && payload.Delivery != nil {
+				note["replyPublication"] = payload.Delivery
+			}
+			if receipt != nil {
+				note["replyReceipt"] = receipt
+			}
+			if err := t.cfg.AppendSystemNote(ctx, note); err != nil {
 				log.FromContext(ctx).Info(
 					"respond_to_user: failed to record delivered system_note; resume may re-publish",
 					"session", sess.Namespace+"/"+sess.Name,
@@ -381,6 +420,9 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 		}
 	}
 
+	if receipt != nil {
+		return tool.Result{Content: "Private reply accepted by " + receipt.Transport + ". Receipt: " + receipt.Reference + ". This does not prove the user read it.", Trusted: true}, nil
+	}
 	return tool.Result{Content: "delivered", IsError: false, Terminal: false, Trusted: true}, nil
 }
 

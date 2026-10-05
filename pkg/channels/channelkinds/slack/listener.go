@@ -704,6 +704,11 @@ func (l *slackListener) onInteraction(ctx context.Context, cb slackapi.Interacti
 	} else if handled {
 		return nil
 	}
+	if handled, err := l.handleSessionInstructionsAction(ctx, cb); err != nil {
+		return err
+	} else if handled {
+		return nil
+	}
 	// metaagent scope-approval buttons. Discriminated by action_id
 	// prefix "metaagent_". handleMetaagentApprovalAction returns true
 	// when it recognized and processed the click; false falls through.
@@ -2041,6 +2046,10 @@ func (a *concreteClientAdapter) GetUserInfoContext(ctx context.Context, user str
 
 func (a *concreteClientAdapter) OpenViewContext(ctx context.Context, triggerID string, view slackapi.ModalViewRequest) (*slackapi.ViewResponse, error) {
 	return a.c.OpenViewContext(ctx, triggerID, view)
+}
+
+func (a *concreteClientAdapter) UpdateViewContext(ctx context.Context, view slackapi.ModalViewRequest, externalID, hash, viewID string) (*slackapi.ViewResponse, error) {
+	return a.c.UpdateViewContext(ctx, view, externalID, hash, viewID)
 }
 
 func (a *concreteClientAdapter) GetUsersContext(ctx context.Context, options ...slackapi.GetUsersOption) ([]slackapi.User, error) {

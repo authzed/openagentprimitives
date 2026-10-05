@@ -15,6 +15,7 @@ import (
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalactor"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
@@ -36,6 +37,14 @@ type Authority interface {
 type ExecutionSessionAuthority interface {
 	ValidateGoalSession(context.Context, *v1.AgentSession) error
 }
+type ExecutionResultRecorder interface {
+	RecordGoalResult(context.Context, *v1.AgentSession, domain.RunProposal) (domain.Occurrence, error)
+}
+
+type ExecutionReplyPreparer interface {
+	PrepareGoalReply(context.Context, *v1.AgentSession, channelevents.OutboundUserMessagePayload, []domain.Source) (domain.Occurrence, error)
+}
+
 type Server struct {
 	ExecutionSessions ExecutionSessionAuthority
 	Service           *domain.Service
@@ -104,7 +113,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := memory.WithCaller(memory.WithSystemApproval(r.Context(), "system:operator"), "system:operator")
-	if req.Operation == "authorize_execution" {
+	if req.Operation == "authorize_execution" || req.Operation == "report_execution_result" || req.Operation == "prepare_reply" {
 		var sess v1.AgentSession
 		if s.ExecutionSessions == nil {
 			s.fail(w, r, domain.ErrDenied)
@@ -132,8 +141,46 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, domain.ErrDenied)
 			return
 		}
+		out := Response{ExecutionAvailable: true}
+		if req.Operation == "prepare_reply" {
+			preparer, ok := s.ExecutionSessions.(ExecutionReplyPreparer)
+			if !ok || req.Reply == nil {
+				s.fail(w, r, domain.ErrDenied)
+				return
+			}
+			sources, err := s.Sources(ctx, domain.Actor{Session: ns + "/" + name, Domain: domain.Domain{Owner: owner.String()}})
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			run, err := preparer.PrepareGoalReply(ctx, &sess, *req.Reply, sources)
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			out.Run = &run
+		}
+		if req.Operation == "report_execution_result" {
+			recorder, ok := s.ExecutionSessions.(ExecutionResultRecorder)
+			if !ok {
+				s.fail(w, r, domain.ErrDenied)
+				return
+			}
+			// Source dependencies come from trusted session memory, not wire fields.
+			req.Proposal.Sources, err = s.Sources(ctx, domain.Actor{Session: ns + "/" + name, Domain: domain.Domain{Owner: owner.String()}})
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			run, err := recorder.RecordGoalResult(ctx, &sess, req.Proposal)
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			out.Run = &run
+		}
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(Response{ExecutionAvailable: true}); err != nil {
+		if err := json.NewEncoder(w).Encode(out); err != nil {
 			log.FromContext(ctx).Info("goal authority response failed", "session", ns+"/"+name, "error", err)
 		}
 		return
@@ -170,6 +217,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			g, err = s.Service.RequestExecution(ctx, a, req.Execution)
 			out.Goal = &g
 		}
+	case "runs":
+		p, e := s.Service.Runs(ctx, a, req.ID, req.List)
+		err = e
+		out.Runs = &p
 	case "get":
 		g, e := s.Service.Get(ctx, a, req.ID)
 		err = e

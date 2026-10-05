@@ -13,6 +13,7 @@ import type {
   LiveViewOfferPayload,
   MsgAttachment,
   SessionRef,
+  SessionOpening,
   MessageResponse,
   MessagesResponse,
   NoticeWire,
@@ -62,15 +63,41 @@ export function endedText(p: SessionEndedPayload): string {
 }
 
 // timelineToLines maps a replayed transcript (GET .../messages) to the UI's
-// ChatLine model — a plan snapshot keyed stably by plan name, everything else
-// a role/text bubble. Shared by the initial load and the reconnect resync so
-// both rebuild the timeline identically.
+// ChatLine model, with stable IDs for plan snapshots and interaction cards.
+// Initial load and reconnect resync share this mapping to rebuild identically.
 function timelineToLines(timeline: TimelineItem[], newId: () => string): ChatLine[] {
   return timeline.map((it) =>
-    it.kind === "plan"
+    it.kind === "interaction"
+      ? { id: `interaction:${it.interactionRequest.requestRef}`, role: "interaction" as const, text: "", interactionRequest: it.interactionRequest, interactionApplied: it.interactionApplied }
+      : it.kind === "opening"
+      ? { id: newId(), role: "opening" as const, text: "", opening: it.opening }
+      : it.kind === "notice"
+      ? { id: newId(), role: "notice" as const, text: "", notice: it.notice }
+      : it.kind === "plan"
       ? { id: `plan:${it.plan.planName}`, role: "plan" as const, text: "", plan: it.plan }
-      : { id: newId(), role: it.role, text: it.text },
+      : { id: newId(), role: it.role, text: it.text, operationId: it.operationID },
   );
+}
+
+// Preserve cards and outcomes that arrived while the history request was in
+// flight. Stable request IDs make bootstrap and live frames one interaction.
+function mergeReplayedInteractions(
+  replay: ChatLine[],
+  live: ChatLine[],
+  outcomes: Map<string, InteractionAppliedPayload["payload"]>,
+): ChatLine[] {
+  const liveCards = new Map(live.filter((line) => line.role === "interaction").map((line) => [line.id, line]));
+  const restored = replay.map((line) => {
+    if (line.role !== "interaction" || !line.interactionRequest) return line;
+    const current = liveCards.get(line.id);
+    liveCards.delete(line.id);
+    return {
+      ...line,
+      interactionRequest: current?.interactionRequest ?? line.interactionRequest,
+      interactionApplied: outcomes.get(line.interactionRequest.requestRef) ?? current?.interactionApplied ?? line.interactionApplied,
+    };
+  });
+  return [...restored, ...liveCards.values()];
 }
 
 // HISTORY_UNAVAILABLE is what a transcript load that failed for any reason
@@ -250,6 +277,7 @@ export function ChatView({ ns, name, readOnly, onUserSend, onSessionEnded }: Cha
   // streamingRef mirrors streamingText so a flush-on-finalize can read the
   // current draft synchronously without nesting one setState inside another's
   // updater (which React discourages). setStreaming keeps the two in lockstep.
+  const interactionOutcomes = useRef(new Map<string, InteractionAppliedPayload["payload"]>());
   const streamingRef = useRef("");
   const setStreaming = useCallback((updater: (cur: string) => string) => {
     const next = updater(streamingRef.current);
@@ -275,8 +303,10 @@ export function ChatView({ ns, name, readOnly, onUserSend, onSessionEnded }: Cha
   const nextId = useRef(0);
   const newId = useCallback(() => `l${nextId.current++}`, []);
   const appendLine = useCallback(
-    (role: ChatLine["role"], text: string, opts?: { queued?: boolean; attachments?: ChatAttachment[] }) => {
-      setLines((prev) => [...prev, { id: newId(), role, text, queued: opts?.queued, attachments: opts?.attachments }]);
+    (role: ChatLine["role"], text: string, opts?: { queued?: boolean; attachments?: ChatAttachment[]; operationId?: string }) => {
+      setLines((prev) => opts?.operationId && prev.some((line) => line.operationId === opts.operationId)
+        ? prev
+        : [...prev, { id: newId(), role, text, queued: opts?.queued, attachments: opts?.attachments, operationId: opts?.operationId }]);
     },
     [newId],
   );
@@ -368,7 +398,7 @@ export function ChatView({ ns, name, readOnly, onUserSend, onSessionEnded }: Cha
         // Every await has resolved — apply the recovered state ONLY if this is
         // still the open conversation (see stillOpen).
         if (!stillOpen(key)) return;
-        setLines(timelineToLines(data.timeline ?? [], newId));
+        setLines((prev) => mergeReplayedInteractions(timelineToLines(data.timeline ?? [], newId), prev, interactionOutcomes.current));
       }
       if (!detailResp.ok) {
         console.error("chat: resync session detail failed", { ns, name, status: detailResp.status });
@@ -404,6 +434,7 @@ export function ChatView({ ns, name, readOnly, onUserSend, onSessionEnded }: Cha
     // old session can tell (stillOpen) that its result is no longer wanted.
     openRef.current = `${ns}/${name}`;
     setLines([]);
+    interactionOutcomes.current.clear();
     setEndedLive(false);
     resetLiveTurn();
     setPendingInterrupt(null);
@@ -428,7 +459,7 @@ export function ChatView({ ns, name, readOnly, onUserSend, onSessionEnded }: Cha
         if (resp.ok) {
           const data = (await resp.json()) as MessagesResponse;
           if (cancelled) return;
-          setLines(timelineToLines(data.timeline ?? [], newId));
+          setLines((prev) => mergeReplayedInteractions(timelineToLines(data.timeline ?? [], newId), prev, interactionOutcomes.current));
           return;
         }
         console.error("chat: load transcript failed", { ns, name, status: resp.status });
@@ -458,6 +489,22 @@ export function ChatView({ ns, name, readOnly, onUserSend, onSessionEnded }: Cha
   const handleFrame = useCallback(
     (f: ChatFrame) => {
       switch (f.type) {
+        case "session_opening": {
+          const opening = (f.payload as { opening?: SessionOpening } | undefined)?.opening;
+          if (!opening) break;
+          // Bootstrap and the live relay describe the same opening. Update its
+          // card in place; never finalize a streamed reply or add a chat bubble.
+          setLines((prev) => {
+            const index = prev.findIndex((line) => line.role === "opening");
+            if (index >= 0) {
+              const next = prev.slice();
+              next[index] = { ...prev[index], opening };
+              return next;
+            }
+            return [{ id: newId(), role: "opening", text: "", opening }, ...prev];
+          });
+          break;
+        }
         case "user_message": {
           // Despite the name this carries the AGENT's reply text (see
           // builtin.MsgUserMessage). It finalizes any in-progress streamed
@@ -469,7 +516,7 @@ export function ChatView({ ns, name, readOnly, onUserSend, onSessionEnded }: Cha
           const attachments = (p.attachments ?? [])
             .filter((a) => a.artifactId)
             .map((a) => ({ filename: a.filename || a.artifactId, mime: a.mime, url: artifactDownloadURL(p.session, a) }));
-          appendLine("agent", replyText, attachments.length ? { attachments } : undefined);
+          appendLine("agent", replyText, { attachments, operationId: p.delivery?.id });
           break;
         }
         case "user_echo": {
@@ -665,15 +712,15 @@ export function ChatView({ ns, name, readOnly, onUserSend, onSessionEnded }: Cha
               copy[idx] = { ...prev[idx], interactionRequest: inner };
               return copy;
             }
-            return [...prev, { id: cardId, role: "interaction", text: "", interactionRequest: inner }];
+            return [...prev, { id: cardId, role: "interaction", text: "", interactionRequest: inner, interactionApplied: interactionOutcomes.current.get(inner.requestRef) }];
           });
           break;
         }
         case "interaction_applied": {
           // Resolves the matching card (by requestRef) in place: the card
           // stays in the timeline showing the outcome instead of its actions.
-          // A frame for a requestRef with no matching card (e.g. one that
-          // arrived before this tab attached) is a no-op — nothing to resolve.
+          // Retain unmatched outcomes too: their request may still be loading
+          // from history or arrive later on the socket.
           //
           // KNOWN SLICE-1 GAP: credential_link's out-of-band "linked"
           // confirmation (CredentialLinkedWatcher.emit, in
@@ -689,6 +736,7 @@ export function ChatView({ ns, name, readOnly, onUserSend, onSessionEnded }: Cha
           // live requestRef) — out of scope for Slice 1, tracked for the
           // credential-polish follow-up.
           const inner = (f.payload as InteractionAppliedPayload).payload;
+          interactionOutcomes.current.set(inner.requestRef, inner);
           const cardId = `interaction:${inner.requestRef}`;
           setLines((prev) => prev.map((l) => (l.id === cardId ? { ...l, interactionApplied: inner } : l)));
           break;

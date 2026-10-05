@@ -232,6 +232,12 @@ type InboundUserMessagePayload struct{}
 // OutboundUserMessagePayload is the payload for ap.session.<ns>.<name>.out.user_message.
 // channelsd's kind-specific Sender consumes Text to render the reply.
 type OutboundUserMessagePayload struct {
+	// Delivery correlates this reply with future transport receipts. A NATS
+	// publish or this descriptor alone does not establish delivery.
+	Delivery *DeliveryOperation `json:"delivery,omitempty"`
+	// Opening is a producer-authored session summary with inspectable exact
+	// instructions. Surfaces render both as inert text, never as markup.
+	Opening *SessionOpening `json:"opening,omitempty"`
 	// Text is the agent's reply body; the kind's Sender renders it.
 	Text string `json:"text"`
 	// Attachments references rendered artifacts that channelsd should
@@ -239,6 +245,13 @@ type OutboundUserMessagePayload struct {
 	// time via the operator's HTTP /artifact/... endpoint and never travel
 	// via NATS. Empty means a text-only reply.
 	Attachments []AttachmentRef `json:"attachments,omitempty"`
+}
+
+// SessionOpening is the generic presentation of an async session's initial
+// instructions. Instructions are the original inline prompt, without rewriting.
+type SessionOpening struct {
+	Summary      string `json:"summary"`
+	Instructions string `json:"instructions"`
 }
 
 // AttachmentRef references an ArtifactRender CR whose status.outputRef
@@ -274,7 +287,7 @@ func (p OutboundUserMessagePayload) Validate() error {
 			return fmt.Errorf("attachments[%d]: renderName empty", i)
 		}
 	}
-	return nil
+	return p.validateDelivery()
 }
 
 // NotificationPayload is the payload for ap.session.<ns>.<name>.out.notification.

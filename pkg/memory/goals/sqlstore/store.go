@@ -69,19 +69,22 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS oap_goal_occurrences_class ON oap_goal_occurrences(class_key,state)`,
 		`CREATE TABLE IF NOT EXISTS oap_goal_execution_events (id TEXT PRIMARY KEY, domain TEXT NOT NULL, goal_id TEXT NOT NULL, revision BIGINT NOT NULL, sequence BIGINT NOT NULL UNIQUE, payload TEXT NOT NULL, envelope TEXT NOT NULL DEFAULT '', published INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE INDEX IF NOT EXISTS oap_goal_execution_events_pending ON oap_goal_execution_events(published,sequence)`,
+		`CREATE TABLE IF NOT EXISTS oap_goal_run_outcomes (occurrence_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS oap_goal_run_proposals (occurrence_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS oap_goal_run_replies (occurrence_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL)`,
 	} {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("goals migration: %w", err)
 		}
 	}
 	var newer int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>2`).Scan(&newer); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>4`).Scan(&newer); err != nil {
 		return err
 	}
 	if newer > 0 {
 		return fmt.Errorf("goals schema is newer than this operator")
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(2) ON CONFLICT(version) DO NOTHING`); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(4) ON CONFLICT(version) DO NOTHING`); err != nil {
 		return err
 	}
 	return tx.Commit()

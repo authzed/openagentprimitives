@@ -236,6 +236,9 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 	if pl.Text == "" {
 		return channelkinds.SubChannelSendResult{}, errors.New("slack sender: empty text payload")
 	}
+	if pl.Opening != nil {
+		return s.sendSessionOpening(ctx, sess, channelID, threadTS, *pl.Opening)
+	}
 	// LLMs occasionally emit HTML-escaped sequences (e.g. "&amp;") that
 	// Slack would render literally; unescape so users see real "&".
 	pl.Text = slackifyText(pl.Text)

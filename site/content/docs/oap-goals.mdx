@@ -8,7 +8,7 @@ export const meta = {
 
 # oap goals
 
-Manage durable goals using an authenticated, non-delegated session. Goals do not launch scheduled work. Responses are JSON.
+Manage durable goals using an authenticated, non-delegated session. Execution requires separate bounded human consent. Responses are JSON.
 
 ## `oap goals create <session>`
 
@@ -40,6 +40,17 @@ Flags:
 --state string  Filter by state
 ```
 
+## `oap goals runs <session> <goal-id>`
+
+List execution history for a goal
+
+Flags:
+
+```text
+--after string  Continue from the previous response's next cursor
+--limit int     Page size (1–100) (default "50")
+```
+
 ## `oap goals update <session> <goal-id>`
 
 update goals
@@ -58,3 +69,4 @@ Flags:
 --timezone string       IANA timezone
 --title string          Short goal title
 ```
+

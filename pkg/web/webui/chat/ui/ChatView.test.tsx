@@ -156,6 +156,56 @@ describe("endedText", () => {
 // answer to "which conversation is this", and the server's route gate only ever
 // checked the first one.
 describe("ChatView — the session it addresses", () => {
+  it("renders an accepted reply once across bootstrap and repeated live events", async () => {
+    stubFetch({ timeline: [{ kind: "message", role: "agent", text: "Stand up and stretch!", createdAt: "2026-10-03T08:00:00Z", operationID: "reply-1" }] });
+    render(view());
+    expect(await screen.findByText("Stand up and stretch!")).toBeTruthy();
+    const frame: ChatFrame = {
+      type: "user_message", session: S,
+      payload: { session: S, text: "Stand up and stretch!", delivery: { id: "reply-1" } },
+    };
+    act(() => { capturedOnFrame!(frame); capturedOnFrame!(frame); });
+    expect(screen.getAllByText("Stand up and stretch!")).toHaveLength(1);
+    act(() => capturedOnFrame!({ ...frame, payload: { session: S, text: "Stand up and stretch!", delivery: { id: "reply-2" } } }));
+    expect(screen.getAllByText("Stand up and stretch!")).toHaveLength(2);
+  });
+  it("renders an async opening summary with inspectable exact instructions beside ordinary replies", async () => {
+    stubFetch({ timeline: [
+      { kind: "opening", opening: { summary: "Session created to meet goal Stretch: Stand up and stretch.", instructions: "  Only respond_to_user may perform actions.\n<script>literal</script>" }, createdAt: "2026-10-03T05:57:00Z" },
+      { kind: "message", role: "agent", text: "Stand up and stretch!", createdAt: "2026-10-03T05:57:20Z" },
+    ] });
+    render(view());
+    const card = await screen.findByTestId("opening-card");
+    expect(card.textContent).toContain("Session created to meet goal Stretch: Stand up and stretch.");
+    const details = card.querySelector("details")!;
+    expect(details.open).toBe(false);
+    fireEvent.click(screen.getByText("View exact instructions"));
+    expect(details.open).toBe(true);
+    expect(card.querySelector("pre")!.textContent).toBe("  Only respond_to_user may perform actions.\n<script>literal</script>");
+    expect(card.querySelector("script")).toBeNull();
+    expect(await screen.findByText("Stand up and stretch!")).toBeTruthy();
+    act(() => capturedOnFrame!({
+      type: "session_opening",
+      session: S,
+      payload: {
+        session: S,
+        opening: {
+          summary: "Session created to meet goal Stretch: Stand up and stretch.",
+          instructions: "  Only respond_to_user may perform actions.\n<script>literal</script>",
+        },
+      },
+    }));
+    expect(screen.getAllByTestId("opening-card")).toHaveLength(1);
+    expect(screen.getAllByText("Session created to meet goal Stretch: Stand up and stretch.")).toHaveLength(1);
+    expect(details.open).toBe(true);
+    // An ordinary assistant reply with identical wording is still an ordinary reply.
+    act(() => capturedOnFrame!({
+      type: "user_message",
+      session: S,
+      payload: { session: S, text: "Session created to meet goal Stretch: Stand up and stretch." },
+    }));
+    expect(screen.getAllByText("Session created to meet goal Stretch: Stand up and stretch.")).toHaveLength(2);
+  });
   it("addresses the ns/name it was given — in every request URL and on the socket — and never a default", async () => {
     const fetchMock = stubFetch({});
     render(view());
@@ -1885,4 +1935,45 @@ describe("the shell's startup line owns pre-start", () => {
     render(view());
     expect(await screen.findByTestId("session-notice-scheduling")).toBeTruthy();
   });
+});
+
+
+describe("durable approval replay", () => {
+ const request = {
+  agentSessionRef: S, category: "plan_phase", requestRef: "durable-plan-review",
+  lead: "Approve the private reminder", body: "Original review instructions",
+  fields: [{label:"Why",value:"Deliver one private reminder"}],
+  actions: [{id:"approve",label:"Approve",kind:"decision" as const}],
+  audience: {scope:"approvers"},
+ };
+ const applied = {agentSessionRef:S,category:request.category,requestRef:request.requestRef,outcome:"approved"};
+ const timeline: TimelineItem[] = [
+  {kind:"plan",plan:{planName:"reminder",items:[{id:"send",label:"Deliver private reminder",status:"done"}]},createdAt:"2026-10-03T16:54:08Z"},
+  {kind:"interaction",interactionRequest:request,interactionApplied:applied,createdAt:"2026-10-03T16:54:11Z"},
+ ];
+ it("restores the same approved plan card after remount and repeated live requests", async () => {
+  stubFetch({timeline});
+  const first=render(view());
+  await waitFor(()=>expect(screen.getByText("Approved")).toBeTruthy());
+  expect(screen.getByText("Original review instructions")).toBeTruthy();
+  expect(screen.getAllByText("Deliver private reminder")).toHaveLength(1);
+  expect(screen.queryByRole("button",{name:"Approve"})).toBeNull();
+  first.unmount();
+  render(view());
+  await waitFor(()=>expect(screen.getByText("Approved")).toBeTruthy());
+  act(()=>capturedOnFrame!({type:"interaction_request",session:S,payload:{session:S,payload:request}}));
+  expect(screen.getAllByText("Approved")).toHaveLength(1);
+  expect(screen.getAllByText("Deliver private reminder")).toHaveLength(1);
+  expect(screen.queryByRole("button",{name:"Approve"})).toBeNull();
+ });
+ it("retains a live approval that arrives before transcript bootstrap completes", async () => {
+  let finish!: (value:Response)=>void;
+  const waiting=new Promise<Response>((resolve)=>{finish=resolve;});
+  vi.stubGlobal("fetch",vi.fn((url:string)=>url===`${API}/messages` ? waiting : Promise.resolve(json(sampleDetail))));
+  render(view());
+  act(()=>capturedOnFrame!({type:"interaction_applied",session:S,payload:{session:S,payload:applied}}));
+  await act(async()=>finish(json({timeline:[{kind:"interaction",interactionRequest:request,createdAt:"2026-10-03T16:54:11Z"}]})));
+  await waitFor(()=>expect(screen.getByText("Approved")).toBeTruthy());
+  expect(screen.queryByRole("button",{name:"Approve"})).toBeNull();
+ });
 });

@@ -203,6 +203,8 @@ func TestProductionConsentLaunchAndRevocation(t *testing.T) {
 	require.NoError(t, k8s.Get(ctx, client.ObjectKey{Namespace: "team", Name: occurrence.SessionName}, &scheduled))
 	assert.Nil(t, scheduled.Spec.Parent)
 	require.Equal(t, scheduled.Spec.OutputChannel, scheduled.Spec.InputChannel, "the reviewed private route must enable the runner's conversation tools")
+	require.Equal(t, scheduled.Spec.InputChannel.Kind, scheduled.Labels[v1.LabelChannelKind], "the chat surface must recognize the dispatched conversation")
+	require.Equal(t, "Session created to meet goal Private reminder: Remind me to stretch", scheduled.Spec.OpeningSummary)
 	conversation, ok := capability.Lookup("channel_interaction")
 	require.True(t, ok)
 	conversationTools, skip := conversation.Offer(capability.OfferContext{Ctx: ctx, Class: class, Session: &scheduled, Binding: scheduled.Spec.InputChannel, OutBinding: scheduled.Spec.OutputChannel, Env: capability.RunnerEnv{ChannelAttached: true}})
@@ -220,6 +222,37 @@ func TestProductionConsentLaunchAndRevocation(t *testing.T) {
 	require.Equal(t, 200, status)
 	status, _ = f.callSession(t, "foreign-token", scheduled.Name, domain.Request{Operation: "authorize_execution"})
 	require.Equal(t, 401, status)
+	dispatcher.DeliveryMemory = provenance.NewSigningMemory(f.mem, signer)
+	reply := channelevents.OutboundUserMessagePayload{Text: "Stand up and stretch!"}
+	reply.Delivery, err = channelevents.NewDeliveryOperation(string(scheduled.UID), "approved-reply", reply)
+	require.NoError(t, err)
+	status, prepared := f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "prepare_reply", Reply: &reply})
+	require.Equal(t, 200, status)
+	require.NotNil(t, prepared.Run.Reply)
+	require.Equal(t, "prepared", prepared.Run.Reply.State)
+	status, _ = f.callSession(t, "foreign-token", scheduled.Name, domain.Request{Operation: "prepare_reply", Reply: &reply})
+	require.Equal(t, 401, status)
+	status, _ = f.callSession(t, "token", "session", domain.Request{Operation: "prepare_reply", Reply: &reply})
+	require.NotEqual(t, 200, status, "management sessions cannot impersonate execution roots")
+	// The dispatch worker polls after its current lease; avoid a wall-clock
+	// sleep while exercising that same lease boundary.
+	dispatcher.Now = func() time.Time { return time.Now().UTC().Add(6 * time.Second) }
+	require.NoError(t, dispatcher.Tick(ctx))
+	status, accepted := f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "prepare_reply", Reply: &reply})
+	require.Equal(t, 200, status)
+	require.Equal(t, "accepted", accepted.Run.Reply.State)
+	require.NoError(t, accepted.Run.Reply.Receipt.Validate(accepted.Run.Reply.Intent))
+	proposal := domain.RunProposal{RequestID: "result", Status: "reported_success", Summary: "Private reminder published", Evidence: []string{"tool-call:reminder"}}
+	status, result := f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "report_execution_result", Proposal: proposal})
+	require.Equal(t, 200, status)
+	require.NotNil(t, result.Run)
+	require.Equal(t, occurrence.ID, result.Run.ID)
+	require.Equal(t, proposal.Summary, result.Run.Proposal.Summary)
+	// Caller fields never choose a domain or a run, and submittedAt is stamped by the server.
+	status, _ = f.callSession(t, "token", "session", domain.Request{Operation: "report_execution_result", Proposal: proposal})
+	require.NotEqual(t, 200, status, "a human management session is not an execution root")
+	status, _ = f.callSession(t, "foreign-token", scheduled.Name, domain.Request{Operation: "report_execution_result", Proposal: proposal})
+	require.Equal(t, 401, status)
 	status, _ = f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "list"})
 	require.Equal(t, 404, status, "report roots cannot gain management authority from an invented actor")
 	// A confirmed user opt-out is checked again before each report.
@@ -231,6 +264,8 @@ func TestProductionConsentLaunchAndRevocation(t *testing.T) {
 	_, err = f.mem.Put(ctx, entry)
 	require.NoError(t, err)
 	require.ErrorIs(t, dispatcher.ValidateGoalSession(ctx, &scheduled), domain.ErrDenied)
+	status, _ = f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "report_execution_result", Proposal: proposal})
+	require.Equal(t, 404, status, "revocation is checked even for identical report retries")
 	preference, err = json.Marshal(userpreference.Preference{ClassNamespace: "team", ClassName: "assistant", Key: "goal_execution_enabled", Value: json.RawMessage(`true`)})
 	require.NoError(t, err)
 	entry.Content = preference
