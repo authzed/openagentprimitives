@@ -1952,6 +1952,12 @@ func run(cfg *config) error {
 		Logger:       logr.FromSlogHandler(slog.Default().Handler()),
 	})
 	mergedTools := assembled.Tools
+	if sess.Spec.GoalExecution != nil {
+		mergedTools = meta.BoundedGoalTools(mergedTools, sess.Spec.GoalExecution.ConsentDigest, func(ctx context.Context) error {
+			_, err := memHTTP.Goals(ctx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
+			return err
+		})
+	}
 
 	// toolLookupFn late-binds now that mergedTools is final, so a
 	// request_credential_update call mid-session resolves against the complete
@@ -2254,8 +2260,13 @@ func run(cfg *config) error {
 		PlanGateResourceDisplays:   runner.ResourceDisplaysOf(&class),
 		ResourceStandings:          runner.ResourceStandingsOf(&class),
 		PlanGateMaxCardHandles:     runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
-		PlanGateMaxAutoApprove:     runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings),
-		PlanGateRequirePlan:        runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
+		PlanGateMaxAutoApprove: func() int {
+			if sess.Spec.GoalExecution != nil {
+				return 0
+			}
+			return runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings)
+		}(),
+		PlanGateRequirePlan: runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
 
 		// Live CR pointers, so the loop can dispatch autofill and
 		// per-user-message binding. Nil disables those paths, as a defence

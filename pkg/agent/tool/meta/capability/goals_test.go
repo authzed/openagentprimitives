@@ -17,7 +17,7 @@ func TestGoalsCapabilityRequiresSafeEnvironment(t *testing.T) {
 	o.Env.GoalsCaller = func(context.Context, core.Request) (core.Response, error) { return core.Response{}, nil }
 	tools, skip := c.Offer(o)
 	assert.Nil(t, skip)
-	assert.Len(t, tools, 4)
+	assert.Len(t, tools, 5)
 	o.Class.Spec.Authz = &v1.AuthzBlock{InformationLeakage: &v1.InformationLeakagePolicy{Mode: "logging"}}
 	tools, skip = c.Offer(o)
 	assert.NotNil(t, skip)

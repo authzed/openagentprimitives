@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"log/slog"
 	"net"
@@ -109,6 +110,7 @@ import (
 	clusterskillctrl "github.com/authzed/openagentprimitives/pkg/controllers/clusterskill"
 	clusterskillsourcectrl "github.com/authzed/openagentprimitives/pkg/controllers/clusterskillsource"
 	"github.com/authzed/openagentprimitives/pkg/controllers/credentialupdaterequest"
+	goalctrl "github.com/authzed/openagentprimitives/pkg/controllers/goals"
 	guardianctrl "github.com/authzed/openagentprimitives/pkg/controllers/guardian"
 	"github.com/authzed/openagentprimitives/pkg/controllers/inboxwake"
 	"github.com/authzed/openagentprimitives/pkg/controllers/mcpserver"
@@ -129,6 +131,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/toolcall"
 	"github.com/authzed/openagentprimitives/pkg/controllers/useridentity"
 	websession "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/agentsession"
+	webgoalexecution "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/goalexecution"
 	websettings "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/settings"
 	webskill "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/skill"
 	websubagentreq "github.com/authzed/openagentprimitives/pkg/controllers/webhooks/subagentrequest"
@@ -2294,10 +2297,22 @@ func run(cfg *config) {
 	}
 	goalHandler := &goalweb.Server{Service: goalService, Reader: mgr.GetAPIReader(), Memory: goalMemory, Tokens: memTokens, Keys: keyLookup, Auth: goalAuth, ColdRegistryUntil: time.Now().Add(memoryColdRegistryGrace)}
 	goalService.Auth = goalHandler
-	goalPublisher := &goalweb.Publisher{Store: goalStore, Memory: goalMemory, Signer: opSigner}
+	consentPublisher := &goalweb.ConsentPublisher{Service: goalService, Memory: goalMemory, Signer: opSigner, Publish: monitoringPublish}
+	goalPublisher := &goalweb.Publisher{Store: goalStore, Memory: goalMemory, Signer: opSigner, Notify: consentPublisher.Notify}
 	if err := mgr.Add(goalPublisher); err != nil {
 		log.Error(err, "register goal audit publisher")
 		os.Exit(1)
+	}
+	var goalValidator agentsessionctrl.GoalSessionValidator
+	if occurrenceStore, ok := goalStore.(goalmodel.OccurrenceStore); ok && goalAuth != nil && monitoringPublish != nil {
+		goalService.ExecutionAuth = goalHandler
+		dispatcher := &goalctrl.Dispatcher{Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString()}
+		goalValidator = dispatcher
+		goalHandler.ExecutionSessions = dispatcher
+		if err := mgr.Add(dispatcher); err != nil {
+			log.Error(err, "register goal dispatcher")
+			os.Exit(1)
+		}
 	}
 	memHandler := httpsrv.NewHandler(memLocal, memTokens, memHandlerOpts...)
 	log.V(1).Info("startup: memory HTTP handler + search providers ready")
@@ -2589,8 +2604,9 @@ func run(cfg *config) {
 	}
 
 	if err := (&agentsessionctrl.Reconciler{
-		Client:    mgr.GetClient(),
-		APIReader: mgr.GetAPIReader(),
+		GoalValidator: goalValidator,
+		Client:        mgr.GetClient(),
+		APIReader:     mgr.GetAPIReader(),
 		// On local/desktop clusters, images are loaded by mutable tag and are not
 		// pullable by digest, so the per-session SidecarToolbox by-digest launch
 		// rewrite must be skipped (mirrors `oap install --no-digest-pin`).
@@ -2993,6 +3009,7 @@ func run(cfg *config) {
 	ws.Register(webtoolcall.Path, &admission.Webhook{Handler: webtoolcall.New(dec)})
 	ws.Register(webskill.PathClusterSkill, &admission.Webhook{Handler: newClusterSkillWebhook(mgr.GetClient(), dec, operatorSAUsername)})
 	ws.Register(websession.Path, &admission.Webhook{Handler: websession.New(dec)})
+	ws.Register(webgoalexecution.Path, &admission.Webhook{Handler: &webgoalexecution.Handler{Decoder: dec, OperatorSubject: "system:serviceaccount:" + systemNS + ":spicebox-operator"}})
 	ws.Register(websubagentreq.Path, &admission.Webhook{Handler: websubagentreq.New(dec)})
 	ws.Register(webworkspacejob.Path, &admission.Webhook{Handler: webworkspacejob.New(mgr.GetAPIReader(), dec)})
 	// spiceDBClient is a real, non-nil *spicedb.Client here (construction
@@ -3011,6 +3028,7 @@ func run(cfg *config) {
 		"skill", webskill.PathSkill,
 		"clusterskill", webskill.PathClusterSkill,
 		"agentsessionIdentity", websession.Path,
+		"goalExecution", webgoalexecution.Path,
 		"subagentRequestParent", websubagentreq.Path,
 		"workspaceJob", webworkspacejob.Path,
 		"workshopObject", webworkshop.PathWorkshopObject,

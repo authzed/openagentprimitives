@@ -282,7 +282,8 @@ type Pipeline struct {
 	// same *httpclient.Client the memory facade already holds. Nil disables
 	// the handler with a loud, non-silent programming-error return rather than
 	// a nil-interface panic — see preferenceCommitHandler's committer==nil check.
-	PreferenceCommitter PreferenceCommitter
+	PreferenceCommitter  PreferenceCommitter
+	GoalConsentCommitter GoalConsentCommitter
 
 	// resolvedCache remembers recently-resolved interaction/approval decisions
 	// so a late spectator click (after the matching pending entry has been

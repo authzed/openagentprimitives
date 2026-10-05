@@ -34,6 +34,11 @@ status update.
 | `spec.class` \* | `string` | Class names the AgentClass in the same namespace. |
 | `spec.forkedAtTurn` | `integer (int32)` | ForkedAtTurn is the index of the last turn copied from ForkedFrom (inclusive). The new user text became turn ForkedAtTurn+1. |
 | `spec.forkedFrom` | `string` | ForkedFrom names the prior AgentSession (same namespace) this session was forked from via Restart-from-here. Immutable. Distinct from ChannelBinding.InheritFrom (set on auto-inherit after archive); ForkedFrom is set on explicit user-triggered restart. |
+| `spec.goalExecution` | `object` | GoalExecution binds an operator-created root session to a durable claim. |
+| `spec.goalExecution.consentDigest` \* | `string` |  |
+| `spec.goalExecution.goalID` \* | `string` |  |
+| `spec.goalExecution.goalRevision` \* | `integer (int64)` |  |
+| `spec.goalExecution.occurrenceID` \* | `string` |  |
 | `spec.inputChannel` | `object` | InputChannel records the channel-driven origin — the Channel whose listener (or scheduler, for bento) produced the inbound message that created this session. Set by channelsd at session creation; nil for kubectl-driven sessions. |
 | `spec.inputChannel.capabilities` \* | `[]string` | Capabilities lists the format capabilities advertised by the kind (e.g., &#123;"text","markdown"&#125;). The runner consumes these to shape the respond_to_user tool's JSON schema. |
 | `spec.inputChannel.external` | `map[string]string` | External carries kind-specific opaque routing metadata that the kind's Sender consumes to render outbound (e.g., Slack channel_id, thread_ts). Treated as opaque by the rest of the system. |

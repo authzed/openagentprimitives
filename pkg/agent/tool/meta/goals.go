@@ -16,15 +16,17 @@ type GoalsCaller func(context.Context, goals.Request) (goals.Response, error)
 
 func IsGoalTool(name string) bool {
 	switch name {
-	case "list_goals", "get_goal", "create_goal", "update_goal":
+	case "list_goals", "get_goal", "create_goal", "update_goal", "request_goal_execution":
 		return true
 	}
 	return false
 }
-func IsGoalWrite(name string) bool { return name == "create_goal" || name == "update_goal" }
+func IsGoalWrite(name string) bool {
+	return name == "create_goal" || name == "update_goal" || name == "request_goal_execution"
+}
 func NewGoalTools(call GoalsCaller) []tool.Tool {
 	out := []tool.Tool{}
-	for _, op := range []string{"list", "get", "create", "update"} {
+	for _, op := range []string{"list", "get", "create", "update", "request_execution"} {
 		out = append(out, &goalTool{op: op, call: call})
 	}
 	return out
@@ -36,6 +38,9 @@ type goalTool struct {
 }
 
 func (t *goalTool) Name() string {
+	if t.op == "request_execution" {
+		return "request_goal_execution"
+	}
 	if t.op == "list" {
 		return "list_goals"
 	}
@@ -51,13 +56,23 @@ func (t *goalTool) Permission() authz.Permission {
 	return authz.Permission{StateImpact: authz.Readwrite, Check: &authz.PermissionCheck{ResourceType: GoalResourceType, Permission: "manage", ResourceIDExpr: "args.resource.split(':')[1]"}}
 }
 func (t *goalTool) Description() string {
-	return "Manage private durable goals for this session's verified human and AgentClass. Call list_goals first to obtain the resource for writes. Goals survive sessions. A due time is schedule intent only; it does not execute work or grant permission. Updates require the current revision and a unique requestID; reuse the same requestID only when retrying identical arguments. Completion is reported success with evidence, not independent verification. A different employee must use their own session."
+	return "Manage private durable goals for this session's verified human and AgentClass. Call list_goals first to obtain the resource for writes. Goals survive sessions. A due time is schedule intent only. request_goal_execution asks the human to authorize one bounded future private reporting session; it does not authorize external actions. Use UTC dueAt and expiresAt and finite duration, turn, token and approval ceilings. Updates require the current revision and a unique requestID; reuse the same requestID only when retrying identical arguments. Completion is reported success with evidence, not independent verification. A different employee must use their own session."
 }
 func (t *goalTool) InputSchema() json.RawMessage {
 	props := map[string]any{}
 	required := []string{}
 	str := func() map[string]any { return map[string]any{"type": "string"} }
 	switch t.op {
+	case "request_execution":
+		props["resource"] = str()
+		props["requestID"] = str()
+		props["id"] = str()
+		props["revision"] = map[string]any{"type": "integer", "minimum": 1}
+		props["terms"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"dueAt", "expiresAt", "bounds", "allowedOperations", "evidence"}, "properties": map[string]any{
+			"dueAt": map[string]any{"type": "string", "format": "date-time"}, "expiresAt": map[string]any{"type": "string", "format": "date-time"},
+			"bounds":            map[string]any{"type": "object", "additionalProperties": false, "required": []string{"durationSeconds", "turns", "tokens", "approvalSeconds"}, "properties": map[string]any{"durationSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400}, "turns": map[string]any{"type": "integer", "minimum": 1, "maximum": 10000}, "tokens": map[string]any{"type": "integer", "minimum": 1, "maximum": 10000000}, "approvalSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400}}},
+			"allowedOperations": map[string]any{"type": "array", "minItems": 1, "maxItems": 1, "items": map[string]any{"type": "string", "enum": []string{"respond_to_user"}}}, "evidence": map[string]any{"type": "array", "minItems": 1, "maxItems": 32, "items": str()}}}
+		required = []string{"resource", "requestID", "id", "revision", "terms"}
 	case "list":
 		props["state"] = map[string]any{"type": "string", "enum": []string{"draft", "active", "paused", "completed", "cancelled"}}
 		props["after"] = str()
@@ -104,6 +119,8 @@ func (t *goalTool) Execute(ctx context.Context, raw json.RawMessage, sess *tool.
 	req := goals.Request{Operation: t.op, Resource: base.Resource, ID: base.ID}
 	var err error
 	switch t.op {
+	case "request_execution":
+		err = json.Unmarshal(raw, &req.Execution)
 	case "create":
 		err = json.Unmarshal(raw, &req.Create)
 	case "update":

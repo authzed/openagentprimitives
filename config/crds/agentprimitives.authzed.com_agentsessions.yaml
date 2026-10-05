@@ -146,6 +146,25 @@ spec:
                   after archive); ForkedFrom is set on explicit user-triggered
                   restart.
                 type: string
+              goalExecution:
+                description: GoalExecution binds an operator-created root session
+                  to a durable claim.
+                properties:
+                  consentDigest:
+                    type: string
+                  goalID:
+                    type: string
+                  goalRevision:
+                    format: int64
+                    type: integer
+                  occurrenceID:
+                    type: string
+                required:
+                - consentDigest
+                - goalID
+                - goalRevision
+                - occurrenceID
+                type: object
               inputChannel:
                 description: |-
                   InputChannel records the channel-driven origin — the Channel

@@ -61,7 +61,7 @@ func TestStorageContract(t *testing.T) {
 			s := goalpostgres.New(c.Pool())
 			require.NoError(t, s.Migrate(context.Background()))
 			t.Cleanup(func() {
-				for _, q := range []string{"DELETE FROM oap_goal_events", "DELETE FROM oap_goal_receipts", "DELETE FROM oap_goals"} {
+				for _, q := range []string{"DELETE FROM oap_goal_execution_events", "DELETE FROM oap_goal_occurrences", "DELETE FROM oap_goal_events", "DELETE FROM oap_goal_receipts", "DELETE FROM oap_goals"} {
 					_, err := c.Pool().Exec(context.Background(), q)
 					assert.NoError(t, err)
 				}

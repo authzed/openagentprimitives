@@ -44,7 +44,7 @@ func replaceParams(q string, n *int) string {
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
-	// The additive v1 migration is transactional and repeatable after a crash.
+	// Additive migrations are transactional and repeatable after a crash.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -61,19 +61,27 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS oap_goal_events (id TEXT PRIMARY KEY, domain TEXT NOT NULL, goal_id TEXT NOT NULL, revision BIGINT NOT NULL, payload TEXT NOT NULL, envelope TEXT NOT NULL DEFAULT '', published INTEGER NOT NULL DEFAULT 0, UNIQUE(domain,goal_id,revision))`,
 		`CREATE INDEX IF NOT EXISTS oap_goals_list ON oap_goals(domain,state,id)`,
 		`CREATE INDEX IF NOT EXISTS oap_goal_events_pending ON oap_goal_events(published,domain,goal_id,revision)`,
+		`CREATE TABLE IF NOT EXISTS oap_goal_dispatch_lock (id INTEGER PRIMARY KEY, generation BIGINT NOT NULL)`,
+		`INSERT INTO oap_goal_dispatch_lock(id,generation) VALUES(1,0) ON CONFLICT(id) DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS oap_goal_occurrences (id TEXT PRIMARY KEY, domain TEXT NOT NULL, owner_key TEXT NOT NULL, class_key TEXT NOT NULL, goal_id TEXT NOT NULL, goal_revision BIGINT NOT NULL, consent_digest TEXT NOT NULL, due_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, state TEXT NOT NULL, worker TEXT NOT NULL DEFAULT '', fence BIGINT NOT NULL DEFAULT 0, lease_until BIGINT NOT NULL DEFAULT 0, session_name TEXT NOT NULL, session_uid TEXT NOT NULL DEFAULT '', UNIQUE(domain,goal_id,goal_revision))`,
+		`CREATE INDEX IF NOT EXISTS oap_goal_occurrences_due ON oap_goal_occurrences(state,due_at,lease_until)`,
+		`CREATE INDEX IF NOT EXISTS oap_goal_occurrences_owner ON oap_goal_occurrences(owner_key,state)`,
+		`CREATE INDEX IF NOT EXISTS oap_goal_occurrences_class ON oap_goal_occurrences(class_key,state)`,
+		`CREATE TABLE IF NOT EXISTS oap_goal_execution_events (id TEXT PRIMARY KEY, domain TEXT NOT NULL, goal_id TEXT NOT NULL, revision BIGINT NOT NULL, sequence BIGINT NOT NULL UNIQUE, payload TEXT NOT NULL, envelope TEXT NOT NULL DEFAULT '', published INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE INDEX IF NOT EXISTS oap_goal_execution_events_pending ON oap_goal_execution_events(published,sequence)`,
 	} {
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("goals migration: %w", err)
 		}
 	}
 	var newer int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>1`).Scan(&newer); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>2`).Scan(&newer); err != nil {
 		return err
 	}
 	if newer > 0 {
 		return fmt.Errorf("goals schema is newer than this operator")
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(1) ON CONFLICT(version) DO NOTHING`); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(2) ON CONFLICT(version) DO NOTHING`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -220,7 +228,7 @@ func (s *Store) commit(ctx context.Context, m goals.Mutation) (goals.Goal, error
 	return decode(string(gb))
 }
 func (s *Store) Pending(ctx context.Context, limit int) ([]goals.Event, error) {
-	rows, err := s.db.QueryContext(ctx, s.query(`SELECT payload FROM oap_goal_events WHERE published=0 ORDER BY CASE WHEN envelope='' THEN 1 ELSE 0 END,domain,goal_id,revision LIMIT ?`), limit)
+	rows, err := s.db.QueryContext(ctx, s.query(`SELECT payload FROM (SELECT domain,goal_id,revision,payload,envelope,published,0 AS sequence FROM oap_goal_events UNION ALL SELECT domain,goal_id,revision,payload,envelope,published,sequence FROM oap_goal_execution_events) AS events WHERE published=0 ORDER BY CASE WHEN envelope='' THEN 1 ELSE 0 END,domain,goal_id,revision,sequence LIMIT ?`), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -240,20 +248,27 @@ func (s *Store) Pending(ctx context.Context, limit int) ([]goals.Event, error) {
 	return out, rows.Err()
 }
 func (s *Store) SaveEnvelope(ctx context.Context, id string, b json.RawMessage) error {
-	res, err := s.db.ExecContext(ctx, s.query(`UPDATE oap_goal_events SET envelope=? WHERE id=? AND (envelope='' OR envelope=?)`), string(b), id, string(b))
+	res, err := s.db.ExecContext(ctx, s.query(`UPDATE `+eventTable(id)+` SET envelope=? WHERE id=? AND (envelope='' OR envelope=?)`), string(b), id, string(b))
 	return affected(res, err)
 }
 func (s *Store) Envelope(ctx context.Context, id string) (json.RawMessage, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, s.query(`SELECT envelope FROM oap_goal_events WHERE id=?`), id).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, s.query(`SELECT envelope FROM `+eventTable(id)+` WHERE id=?`), id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, goals.ErrNotFound
 	}
 	return json.RawMessage(raw), err
 }
 func (s *Store) Published(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, s.query(`UPDATE oap_goal_events SET published=1 WHERE id=? AND envelope<>''`), id)
+	res, err := s.db.ExecContext(ctx, s.query(`UPDATE `+eventTable(id)+` SET published=1 WHERE id=? AND envelope<>''`), id)
 	return affected(res, err)
+}
+
+func eventTable(id string) string {
+	if strings.HasPrefix(id, "goalev-occ-") {
+		return "oap_goal_execution_events"
+	}
+	return "oap_goal_events"
 }
 func affected(r sql.Result, err error) error {
 	if err != nil {

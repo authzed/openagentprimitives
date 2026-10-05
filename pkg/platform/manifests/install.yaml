@@ -4770,6 +4770,25 @@ spec:
                   after archive); ForkedFrom is set on explicit user-triggered
                   restart.
                 type: string
+              goalExecution:
+                description: GoalExecution binds an operator-created root session
+                  to a durable claim.
+                properties:
+                  consentDigest:
+                    type: string
+                  goalID:
+                    type: string
+                  goalRevision:
+                    format: int64
+                    type: integer
+                  occurrenceID:
+                    type: string
+                required:
+                - consentDigest
+                - goalID
+                - goalRevision
+                - occurrenceID
+                type: object
               inputChannel:
                 description: |-
                   InputChannel records the channel-driven origin — the Channel
@@ -24022,6 +24041,11 @@ spec:
                   deterministic hash of this value (see pkg/platform/identity/useridentity).
                 minLength: 1
                 type: string
+              suspended:
+                description: |-
+                  Suspended prevents future goal execution and stops active goal sessions.
+                  This field is controlled by the cluster administrator.
+                type: boolean
             required:
             - subject
             type: object
@@ -31309,6 +31333,40 @@ spec:
       app.kubernetes.io/name: spicebox-webd
   policyTypes:
   - Ingress
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: spicebox-goal-execution
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    caBundle: ""
+    service:
+      name: spicebox-webhook
+      namespace: agentprimitives-system
+      path: /validate-goal-execution
+      port: 443
+  failurePolicy: Fail
+  matchConditions:
+  - expression: (object != null && has(object.spec.goalExecution)) || (oldObject !=
+      null && has(oldObject.spec.goalExecution))
+    name: goal-session
+  name: goalexecution.agentprimitives.authzed.com
+  rules:
+  - apiGroups:
+    - agentprimitives.authzed.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - agentsessions
+    - agentsessions/status
+    scope: Namespaced
+  sideEffects: None
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration

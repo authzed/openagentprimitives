@@ -342,3 +342,30 @@ webhooks:
         operations: ["CREATE", "UPDATE"]
         resources: ["toolcalls"]
         scope: Namespaced
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: spicebox-goal-execution
+webhooks:
+  - name: goalexecution.agentprimitives.authzed.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchConditions:
+      - name: goal-session
+        expression: "(object != null && has(object.spec.goalExecution)) || (oldObject != null && has(oldObject.spec.goalExecution))"
+    clientConfig:
+      caBundle: ""
+      service:
+        name: spicebox-webhook
+        namespace: agentprimitives-system
+        path: /validate-goal-execution
+        port: 443
+    rules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["agentsessions", "agentsessions/status"]
+        scope: Namespaced

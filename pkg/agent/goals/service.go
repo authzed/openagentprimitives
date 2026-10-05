@@ -18,6 +18,7 @@ import (
 type Actor struct {
 	Domain         Domain
 	Session, Proof string
+	SessionUID     string
 	// Attestation is the verified channelsd envelope, retained in each audit
 	// event so session cleanup cannot erase its authorship evidence.
 	Attestation string
@@ -28,9 +29,10 @@ type Authorizer interface {
 	ReadGoal(context.Context, Actor, Goal) error
 }
 type Service struct {
-	Store Store
-	Auth  Authorizer
-	Now   func() time.Time
+	Store         Store
+	Auth          Authorizer
+	ExecutionAuth ExecutionAuthority
+	Now           func() time.Time
 }
 
 func (s *Service) authorize(ctx context.Context, a Actor, write bool) error {
@@ -169,8 +171,17 @@ func (s *Service) Update(ctx context.Context, a Actor, r Change) (Goal, error) {
 	if err != nil {
 		return Goal{}, err
 	}
-	g.Sources = append(g.Sources, sources...)
-	slices.SortFunc(g.Sources, func(a, b Source) int {
+	g.Sources = mergeSources(g.Sources, sources)
+	next, err := Revise(g, r, s.now())
+	if err != nil {
+		return Goal{}, err
+	}
+	return s.commit(ctx, a, next, r.Revision, r.RequestID, h, r.Action)
+}
+
+func mergeSources(existing, added []Source) []Source {
+	sources := append(existing, added...)
+	slices.SortFunc(sources, func(a, b Source) int {
 		if n := cmp.Compare(a.ResourceType, b.ResourceType); n != 0 {
 			return n
 		}
@@ -179,12 +190,7 @@ func (s *Service) Update(ctx context.Context, a Actor, r Change) (Goal, error) {
 		}
 		return cmp.Compare(a.Permission, b.Permission)
 	})
-	g.Sources = slices.Compact(g.Sources)
-	next, err := Revise(g, r, s.now())
-	if err != nil {
-		return Goal{}, err
-	}
-	return s.commit(ctx, a, next, r.Revision, r.RequestID, h, r.Action)
+	return slices.Compact(sources)
 }
 func (s *Service) commit(ctx context.Context, a Actor, g Goal, expected int64, key, hash, action string) (Goal, error) {
 	id, err := newID("goalev-")

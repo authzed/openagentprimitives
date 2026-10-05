@@ -47,6 +47,7 @@ referenced Secrets live in the agentprimitives-identities namespace.
 | `spec.displayName` | `string` | DisplayName is a human-friendly label (e.g. an email address) surfaced in CLI output and the web UI. |
 | `spec.refreshThreshold` | `string` | RefreshThreshold overrides the operator-wide default OAuth refresh threshold for this identity. No effect on type=static credentials. |
 | `spec.subject` \* | `string` | Subject is the canonical SpiceDB subject of the user this catalog belongs to, e.g. "user:YWxpY2VAZXhhbXBsZS5jb20=". metadata.name is a deterministic hash of this value (see pkg/platform/identity/useridentity). |
+| `spec.suspended` | `boolean` | Suspended prevents future goal execution and stops active goal sessions. This field is controlled by the cluster administrator. |
 
 <small>\* required</small>
 

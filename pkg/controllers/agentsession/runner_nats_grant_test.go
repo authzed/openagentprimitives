@@ -141,3 +141,13 @@ func TestRunnerNATSUserGrantPublishSurface(t *testing.T) {
 			"runner must NOT be able to publish %s — %s", subject, why)
 	}
 }
+
+func TestRunnerCannotManufactureComponentDecision(t *testing.T) {
+	grant, err := runnerNATSUserGrant(grantNS, grantName)
+	require.NoError(t, err)
+	h := natstest.New(t)
+	subject := "ap.component.interaction_decision." + grantNS + "." + grantName
+	assert.False(t, h.PublishAllowed(t, grant, subject), "the actual production runner grant cannot manufacture a human decision")
+	legacy := apnats.UserGrant{Name: "legacy-goal-runner", PubAllow: []string{"ap.session." + grantNS + "." + grantName + ".>"}}
+	assert.False(t, h.PublishAllowed(t, legacy, subject), "even an old whole-session grant cannot reach component ingress")
+}

@@ -45,6 +45,10 @@ type AgentSessionList struct {
 // transcript-read standing to a different set of humans.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.parent) || (has(self.parent) && self.parent == oldSelf.parent)",message="spec.parent is immutable once set"
 type AgentSessionSpec struct {
+	// GoalExecution binds an operator-created root session to a durable claim.
+	// +optional
+	GoalExecution *GoalExecutionReference `json:"goalExecution,omitempty"`
+
 	// Class names the AgentClass in the same namespace.
 	Class string `json:"class"`
 
@@ -1479,4 +1483,12 @@ type PermissionSurfaceEntry struct {
 	// permission and a variant appears once — it is one route, not two.
 	// +optional
 	Tools []string `json:"tools,omitempty"`
+}
+
+// GoalExecutionReference is immutable and may be created only by the operator.
+type GoalExecutionReference struct {
+	GoalID        string `json:"goalID"`
+	OccurrenceID  string `json:"occurrenceID"`
+	GoalRevision  int64  `json:"goalRevision"`
+	ConsentDigest string `json:"consentDigest"`
 }

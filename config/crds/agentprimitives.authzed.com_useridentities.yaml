@@ -238,6 +238,11 @@ spec:
                   deterministic hash of this value (see pkg/platform/identity/useridentity).
                 minLength: 1
                 type: string
+              suspended:
+                description: |-
+                  Suspended prevents future goal execution and stops active goal sessions.
+                  This field is controlled by the cluster administrator.
+                type: boolean
             required:
             - subject
             type: object

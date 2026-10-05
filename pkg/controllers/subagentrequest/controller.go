@@ -444,6 +444,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.deny(ctx, &sr, "ParentMissing",
 			fmt.Sprintf("the delegating session %q no longer exists", sr.Spec.Parent.Name))
 	}
+	if parent.Spec.GoalExecution != nil {
+		return r.deny(ctx, &sr, "GoalExecutionDelegationDenied", "A bounded goal session cannot delegate; request a separately reviewed execution instead.")
+	}
 	if parentClass == nil {
 		return r.deny(ctx, &sr, "ParentClassMissing",
 			fmt.Sprintf("the delegating session %q's AgentClass %q no longer exists", parent.Name, parent.Spec.Class))

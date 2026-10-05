@@ -20,6 +20,7 @@ type Publisher struct {
 	Store  domain.Store
 	Memory memory.Memory
 	Signer *provenance.Signer
+	Notify func(context.Context, domain.Event) error
 	mu     sync.Mutex
 }
 
@@ -62,6 +63,9 @@ func (p *Publisher) Flush(ctx context.Context) error {
 				return err
 			}
 			entry = memory.Entry{Scope: scope, Kind: goalevent.KindName, ID: event.ID, CreatedAt: event.Goal.UpdatedAt.UTC().Truncate(time.Microsecond), Content: content}
+			if event.OccurredAt != nil {
+				entry.CreatedAt = event.OccurredAt.UTC().Truncate(time.Microsecond)
+			}
 			if err := p.Signer.EnsureSeeded(ctx, p.Memory, scope); err != nil {
 				return err
 			}
@@ -92,6 +96,11 @@ func (p *Publisher) Flush(ctx context.Context) error {
 		// The saved envelope may belong to a previous operator key. Re-seed from
 		// what actually landed before signing the next event in this scope.
 		p.Signer.InvalidateSeed(scope)
+		if p.Notify != nil {
+			if err := p.Notify(ctx, event); err != nil {
+				return err
+			}
+		}
 		if err := p.Store.Published(ctx, event.ID); err != nil {
 			return err
 		}

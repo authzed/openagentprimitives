@@ -67,6 +67,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/passthroughlink"
 	"github.com/authzed/openagentprimitives/pkg/platform/kube"
 	apnats "github.com/authzed/openagentprimitives/pkg/platform/nats"
+	"github.com/authzed/openagentprimitives/pkg/platform/nats/subjects"
 	"github.com/authzed/openagentprimitives/pkg/x/externalurl"
 )
 
@@ -316,6 +317,27 @@ func envelopeHandler(
 	}
 }
 
+// componentDecisionHandler receives only a platform-owned subject tree, outside
+// the publish grant of both existing and newly minted per-session credentials.
+func componentDecisionHandler(logger logr.Logger, fn func(context.Context, channelevents.Envelope) error) func(*nats.Msg) {
+	ctx := channelevents.WithComponentDecisionIngress(handlerContext(logger))
+	return func(message *nats.Msg) {
+		var env channelevents.Envelope
+		if err := json.Unmarshal(message.Data, &env); err != nil {
+			logger.Error(err, "component decision decode")
+			return
+		}
+		ns, name, ok := subjects.ParseComponentDecision(message.Subject)
+		if !ok || env.Kind != channelevents.KindInteractionDecision || env.Session.Namespace != ns || env.Session.Name != name {
+			logger.Info("component decision subject mismatch", "subject", message.Subject, "session", env.Session)
+			return
+		}
+		if err := fn(ctx, env); err != nil {
+			logger.Error(err, "component decision refused", "session", env.Session)
+		}
+	}
+}
+
 // handlerContext is the context every inbound handler runs under: a
 // NON-CANCELLING base carrying the live logger.
 //
@@ -559,6 +581,7 @@ func run(rootCtx context.Context, cfg *config) error {
 	// no per-write signing needed — CommitPreference is not an append-only
 	// write). Satisfies pipeline.PreferenceCommitter's one method.
 	pl.PreferenceCommitter = mem.client
+	pl.GoalConsentCommitter = mem.client
 
 	// Wire RestartCapable kinds. No kind implements it yet, so this loop is
 	// currently a no-op.
@@ -682,6 +705,7 @@ func run(rootCtx context.Context, cfg *config) error {
 		subject string
 		handler func(*nats.Msg)
 	}{
+		{"component_decision", subjects.ComponentDecision("*", "*"), componentDecisionHandler(logger, pl.HandleInteractionDecision)},
 		// There are deliberately no per-category subscriptions here. Every
 		// approval flow — session-join, tool_approval, info_leakage — travels as
 		// a category-generic interaction_request / _decision / _applied
@@ -1189,6 +1213,7 @@ func run(rootCtx context.Context, cfg *config) error {
 	// and nothing on deny. Depends on pl.PreferenceCommitter (wired above) and
 	// pl.Mem (wired above, the cross-restart details fallback).
 	pipeline.BindPreferenceCommitHandler(pl)
+	pipeline.BindGoalConsentHandler(pl)
 
 	// Portal-access chat trigger: intercepts "manage my accounts" /
 	// "link my accounts" / "!my/accounts" on inbound user messages,
