@@ -31,6 +31,7 @@ import (
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
 	"github.com/authzed/openagentprimitives/pkg/agent/modality/files"
+	_ "github.com/authzed/openagentprimitives/pkg/agent/postsession/cost" // mirror production session accounting hook
 	"github.com/authzed/openagentprimitives/pkg/agent/runner"
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/identityadvisor"
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/leakagewiring"
@@ -75,6 +76,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/spicedb/toolcheck"
 	"github.com/authzed/openagentprimitives/pkg/authz/toolguard"
 	"github.com/authzed/openagentprimitives/pkg/authz/trifecta"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 	// The renderer kinds, mirroring internal/cmd/runner. AvailableAssetKinds
 	// reads this registry, and an empty one makes the artifacts capability skip
 	// with "no renderer registered" — so a scenario granting `artifacts` would
@@ -123,6 +125,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/tools/toolspec/toolkit"
 	goalweb "github.com/authzed/openagentprimitives/pkg/web/goals"
 	"github.com/authzed/openagentprimitives/pkg/web/secretoutsrv"
+	eventweb "github.com/authzed/openagentprimitives/pkg/web/sessionevents"
 	"github.com/authzed/openagentprimitives/pkg/web/uigrant"
 	"github.com/authzed/openagentprimitives/pkg/web/uiview"
 	"github.com/authzed/openagentprimitives/toolkits"
@@ -446,6 +449,8 @@ type InProcessRunnerFactory struct {
 	// PreferenceCommitter (POST, wired in startChannelsdPlumbing) point an
 	// httpclient.Client at this SAME server. Started on first
 	// preferencesClientFor when f.K8s is set; closed in Shutdown.
+	GoalServer  *goalweb.Server
+	EventServer *eventweb.Server
 	prefsOnce   sync.Once
 	prefsSrv    *httptest.Server
 	prefsTokens *tokens.Registry
@@ -548,7 +553,7 @@ func (f *InProcessRunnerFactory) Start(ctx context.Context, sess *spiceboxv1alph
 	// reliably ~14s to intermittently 40s+ once this ran unconditionally).
 	// Gating it keeps non-identity sessions byte-for-byte on the pre-Task-10
 	// (no placeholder Pod) code path.
-	hasPlaceholderPod := identityGatePending(sess, class)
+	hasPlaceholderPod := identityGatePending(sess, class) || sess.Spec.GoalExecution != nil
 	if hasPlaceholderPod {
 		if err := f.ensureRunnerPodPresent(ctx, sess); err != nil {
 			slog.Default().Info("inprocess: ensure placeholder runner pod failed (best-effort)",
@@ -995,7 +1000,14 @@ func (f *InProcessRunnerFactory) ensurePrefsServer() bool {
 		}
 		mux := http.NewServeMux()
 		mux.Handle("/", httpsrv.NewHandler(f.MemStore, f.prefsTokens, opts...))
-		if f.SpiceDB != nil {
+		if f.GoalServer != nil {
+			f.GoalServer.Tokens = f.prefsTokens
+			mux.Handle("/goals/", f.GoalServer)
+			if f.EventServer != nil {
+				f.EventServer.Tokens = f.prefsTokens
+				mux.Handle("/session-events/", f.EventServer)
+			}
+		} else if f.SpiceDB != nil {
 			svc := &goalcore.Service{Store: goalinmem.New()}
 			var keys provenance.PublisherKeyLookup
 			if f.Tokens != nil {
@@ -1713,6 +1725,15 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		Logger:       logr.FromSlogHandler(slog.Default().Handler()),
 	})
 	tools := assembled.Tools
+	if sess.Spec.GoalExecution != nil {
+		call := func(ctx context.Context, req goalcore.Request) (goalcore.Response, error) {
+			return f.preferencesClientFor(sess).Goals(ctx, sess.Namespace, sess.Name, req)
+		}
+		tools = meta.BoundedGoalTools(tools, sess.Spec.GoalExecution.ConsentDigest, func(ctx context.Context) error {
+			_, err := call(ctx, goalcore.Request{Operation: "authorize_execution"})
+			return err
+		}, call)
+	}
 
 	// A whole-session replay may CAN one of the assembled meta tools: its
 	// Execute is swapped for a recorded reply and everything else about it —
@@ -1922,8 +1943,21 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		PlanGateResourceDisplays:   runner.ResourceDisplaysOf(class),
 		ResourceStandings:          runner.ResourceStandingsOf(class),
 		PlanGateRequirePlan:        runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
-		PlanGateMaxAutoApprove:     runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings),
-		PlanGateMaxCardHandles:     runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
+		PlanGateMaxAutoApprove: func() int {
+			if sess.Spec.GoalExecution != nil {
+				return 0
+			}
+			return runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings)
+		}(),
+		PlanApprovalDeriver: func() func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error) {
+			if sess.Spec.GoalExecution == nil {
+				return nil
+			}
+			return runner.GoalPlanApprovalDeriver(func(ctx context.Context, req goalcore.Request) (goalcore.Response, error) {
+				return f.preferencesClientFor(sess).Goals(ctx, sess.Namespace, sess.Name, req)
+			})
+		}(),
+		PlanGateMaxCardHandles: runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
 
 		System:            composedSystem,
 		UserPrompt:        userPrompt,
@@ -1931,6 +1965,7 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		RunClock:          runClock,
 		Model:             sess.Status.EffectiveSettings.Model.Name,
 		ReportSessionCost: sess.Status.EffectiveSettings.ReportSessionCost,
+		RecordSessionCost: sess.Spec.GoalExecution != nil,
 		// Mirror internal/cmd/runner/main.go: the resolved catalog price flows to the cost
 		// hook so the in-process runner's session cost is catalog-authoritative
 		// (matches the admin dashboard). Without this the hook falls back to the
@@ -2160,7 +2195,7 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 	// under suite contention (test/e2e/scenarios/centerdot/contacts_owner_timeout).
 	// Gating it keeps non-identity sessions on the pre-Task-10 (nil
 	// LifecycleMemory, fold short-circuits) code path.
-	if identityGatePending(sess, class) {
+	if identityGatePending(sess, class) || sess.Spec.GoalExecution != nil {
 		loop.LifecycleMemory = memSigned
 	}
 
@@ -2396,34 +2431,12 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 
 		if f.NATS != nil {
 			nc := f.NATS
-			// TimeoutAppliedPublish mirrors internal/cmd/runner/main.go: when a
-			// host-driven approval (tool_call / leakage_share /
-			// content_inspection) reaches its per-kind approval-WAIT deadline
-			// with no decision, the runner's publishTimeoutApplied builds a
-			// deny-only Applied envelope and hands it here. We fan it to BOTH
-			// the IN subject (channelsd's Handle*Applied clears the pending
-			// queue + condition on the CR) and the OUT subject (the channel
-			// sender edits the prompt to "expired"). Dormant for every
-			// existing scenario: the default approvalTimeout is 10 minutes, so
-			// only a fixture that opts into a short authz.approvalTimeout ever
-			// activates this path. Errors are wrapped + returned (no silent
-			// drop) so publishTimeoutApplied logs a failed fan-out.
+			// Match production: timeout reports pass through channelsd's canonical
+			// terminal-transition path before any surface receives an outcome.
 			loop.TimeoutAppliedPublish = func(_ context.Context, envNS, envName string, env channelevents.Envelope) error {
-				body, merr := json.Marshal(env)
-				if merr != nil {
-					return fmt.Errorf("marshal timeout applied envelope: %w", merr)
-				}
-				prefix := channelevents.SubjectPrefix(envNS, envName)
-				inSubj := channelevents.SubjectIn(prefix, env.Kind)
-				outSubj := channelevents.SubjectOut(prefix, env.Kind)
-				if err := nc.Publish(inSubj, body); err != nil {
-					return fmt.Errorf("publish timeout applied on IN: %w", err)
-				}
-				if err := nc.Publish(outSubj, body); err != nil {
-					return fmt.Errorf("publish timeout applied on OUT: %w", err)
-				}
-				return nil
+				return runner.PublishTimeoutApplied(nc.Publish, nil, envNS, envName, env)
 			}
+
 			f.registerOrchestrator(sess, loop.Approval)
 
 			// The applied-answer back-channel is wired for EVERY session with NATS,

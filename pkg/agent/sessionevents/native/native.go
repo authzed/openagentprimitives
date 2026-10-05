@@ -25,6 +25,7 @@ const Key = "native"
 type Authority interface {
 	CheckSource(context.Context, sessionevents.Source, memory.Entry) ([]sessionevents.Dependency, error)
 }
+
 type Adapter struct {
 	// Memory retains the verified signed witness before intake may acknowledge it.
 	Memory    memory.Memory
@@ -42,6 +43,7 @@ func (a *Adapter) Resolve(ctx context.Context, principal string, source sessione
 	}
 	return a.Access.Resolve(ctx, principal, source)
 }
+
 func (a *Adapter) Check(ctx context.Context, principal string, source sessionevents.Source, deps []sessionevents.Dependency) error {
 	if a == nil || a.Access == nil {
 		return sessionevents.ErrDenied
@@ -120,3 +122,14 @@ func (a *Adapter) Verify(ctx context.Context, raw json.RawMessage) (sessionevent
 }
 
 var _ sessionevents.Adapter = (*Adapter)(nil)
+
+func (a *Adapter) Dependencies(ctx context.Context, principal string, source sessionevents.Source) ([]sessionevents.Dependency, error) {
+	if a == nil || a.Access == nil {
+		return nil, sessionevents.ErrDenied
+	}
+	d, ok := a.Access.(sessionevents.SourceDependencies)
+	if !ok {
+		return nil, sessionevents.ErrDenied
+	}
+	return d.Dependencies(ctx, principal, source)
+}

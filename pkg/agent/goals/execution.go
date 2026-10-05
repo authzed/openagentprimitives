@@ -99,16 +99,34 @@ func (t ExecutionTerms) validate(now time.Time, owner string) error {
 			return fmt.Errorf("%w: event watches and calendar schedules are exclusive", ErrInvalid)
 		}
 		if err := t.Event.subscription(t.DueAt, t.ExpiresAt).Validate(); err != nil {
-			return fmt.Errorf("%w: invalid event watch", ErrInvalid)
+			return fmt.Errorf("%w: invalid event watch: %v", ErrInvalid, err)
 		}
 	}
+	if t.DueAt.Before(now) {
+		return fmt.Errorf("%w: dueAt must be in the future; server time is %s; choose a later start with time for approval", ErrInvalid, now.UTC().Format(time.RFC3339))
+	}
+	if !t.ExpiresAt.After(t.DueAt) || t.ExpiresAt.Sub(now) > 30*24*time.Hour {
+		return fmt.Errorf("%w: expiresAt must be after dueAt and within 30 days of server time %s", ErrInvalid, now.UTC().Format(time.RFC3339))
+	}
 	b := t.Bounds
-	if strings.TrimSpace(t.ClassDigest) == "" || t.DueAt.Before(now) || !t.ExpiresAt.After(t.DueAt) || t.ExpiresAt.Sub(now) > 30*24*time.Hour ||
-		b.DurationSeconds < 1 || b.DurationSeconds > 86400 || b.Turns < 1 || b.Turns > 10000 || b.Tokens < 1 || b.Tokens > 10000000 ||
-		b.ApprovalSeconds < 1 || b.ApprovalSeconds > b.DurationSeconds ||
-		t.Destination.Channel == "" || t.Destination.ChannelUID == "" || t.Destination.Recipient != owner ||
-		len(t.AllowedOperations) < 1 || len(t.AllowedOperations) > 32 || len(t.Evidence) < 1 || len(t.Evidence) > 32 {
-		return fmt.Errorf("%w: execution requires a finite schedule, bounds, evidence and private destination", ErrInvalid)
+	for _, limit := range []struct {
+		name           string
+		value, maximum int64
+	}{
+		{"durationSeconds", b.DurationSeconds, 86400}, {"turns", b.Turns, 10000}, {"tokens", b.Tokens, 10000000},
+	} {
+		if limit.value < 1 || limit.value > limit.maximum {
+			return fmt.Errorf("%w: bounds.%s must be between 1 and %d (received %d); class limits may be lower", ErrInvalid, limit.name, limit.maximum, limit.value)
+		}
+	}
+	if b.ApprovalSeconds < 1 || b.ApprovalSeconds > b.DurationSeconds {
+		return fmt.Errorf("%w: bounds.approvalSeconds must be between 1 and bounds.durationSeconds=%d (received %d)", ErrInvalid, b.DurationSeconds, b.ApprovalSeconds)
+	}
+	if strings.TrimSpace(t.ClassDigest) == "" || t.Destination.Channel == "" || t.Destination.ChannelUID == "" || t.Destination.Recipient != owner {
+		return fmt.Errorf("%w: execution requires a pinned class and private destination", ErrInvalid)
+	}
+	if len(t.AllowedOperations) < 1 || len(t.AllowedOperations) > 32 || len(t.Evidence) < 1 || len(t.Evidence) > 32 {
+		return fmt.Errorf("%w: allowedOperations and evidence each require between 1 and 32 entries", ErrInvalid)
 	}
 	for _, values := range [][]string{t.AllowedOperations, t.Evidence} {
 		for _, value := range values {

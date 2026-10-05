@@ -7,13 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 	"io"
 	"net/http"
 	"reflect"
 	"strings"
 
+	agentcaps "github.com/authzed/openagentprimitives/pkg/agent/agentcaps"
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
@@ -29,6 +30,7 @@ import (
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"time"
 )
 
@@ -57,6 +59,9 @@ func (s *Server) PrepareExecution(ctx context.Context, a domain.Actor, r *domain
 	var class v1.AgentClass
 	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: a.Domain.Class}, &class); err != nil {
 		return err
+	}
+	if r.Terms.Bounds == (domain.ExecutionBounds{}) {
+		r.Terms.Bounds = executionPolicy(&class).DefaultBounds
 	}
 	if r.Terms.Event != nil {
 		if s.EventSources == nil || s.Service == nil || s.Service.Events == nil {
@@ -175,9 +180,18 @@ func (s *Server) Validate(ctx context.Context, g domain.Goal, t domain.Execution
 	if err := s.ReadGoal(ctx, domain.Actor{Domain: g.Domain}, g); err != nil {
 		return err
 	}
-	b := class.Spec.Budget
-	if b != nil && ((b.MaxTurns > 0 && t.Bounds.Turns > int64(b.MaxTurns)) || (b.MaxTokens > 0 && t.Bounds.Tokens > b.MaxTokens) || (b.MaxDuration.Duration > 0 && time.Duration(t.Bounds.DurationSeconds)*time.Second > b.MaxDuration.Duration) || (b.SessionExpiration.Duration > 0 && time.Duration(t.Bounds.DurationSeconds)*time.Second > b.SessionExpiration.Duration)) {
-		return fmt.Errorf("%w: reviewed bounds exceed class policy", domain.ErrInvalid)
+	maximum := executionPolicy(&class).MaxBounds
+	for _, limit := range []struct {
+		name           string
+		value, maximum int64
+	}{
+		{"durationSeconds", t.Bounds.DurationSeconds, maximum.DurationSeconds},
+		{"turns", t.Bounds.Turns, maximum.Turns},
+		{"tokens", t.Bounds.Tokens, maximum.Tokens},
+	} {
+		if limit.value > limit.maximum {
+			return fmt.Errorf("%w: bounds.%s=%d exceeds class maximum %d; reduce this field or omit bounds to use defaults", domain.ErrInvalid, limit.name, limit.value, limit.maximum)
+		}
 	}
 	if g.Execution == nil || g.Execution.SessionUID == "" {
 		return domain.ErrDenied
@@ -435,4 +449,96 @@ func (s *Server) executionPreference(ctx context.Context, class *v1.AgentClass, 
 		return domain.ErrDenied
 	}
 	return nil
+}
+
+// executionPolicy reports constraints without granting authority. Defaults are
+// deterministic for the pinned class, so retries retain identical consent terms.
+func executionPolicy(class *v1.AgentClass) domain.ExecutionPolicy {
+	maximum := domain.ExecutionBounds{DurationSeconds: 86400, Turns: 10000, Tokens: 10000000, ApprovalSeconds: 86400}
+	if b := class.Spec.Budget; b != nil {
+		if b.MaxTurns > 0 {
+			maximum.Turns = min(maximum.Turns, int64(b.MaxTurns))
+		}
+		if b.MaxTokens > 0 {
+			maximum.Tokens = min(maximum.Tokens, b.MaxTokens)
+		}
+		for _, duration := range []time.Duration{b.MaxDuration.Duration, b.SessionExpiration.Duration} {
+			if duration > 0 {
+				maximum.DurationSeconds = min(maximum.DurationSeconds, int64(duration/time.Second))
+			}
+		}
+	}
+	maximum.ApprovalSeconds = maximum.DurationSeconds
+	defaults := domain.ExecutionBounds{
+		DurationSeconds: min(int64(180), maximum.DurationSeconds),
+		Turns:           min(int64(10), maximum.Turns),
+		Tokens:          min(int64(10000), maximum.Tokens),
+		ApprovalSeconds: min(int64(90), maximum.DurationSeconds),
+	}
+	return domain.ExecutionPolicy{DefaultBounds: defaults, MaxBounds: maximum}
+}
+
+func (s *Server) executionPolicyFor(ctx context.Context, a domain.Actor) (*domain.ExecutionPolicy, error) {
+	var class v1.AgentClass
+	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: a.Domain.Namespace, Name: a.Domain.Class}, &class); err != nil {
+		return nil, err
+	}
+	if string(class.UID) != a.Domain.ClassUID || !class.DeletionTimestamp.IsZero() {
+		return nil, domain.ErrDenied
+	}
+	policy := executionPolicy(&class)
+	policy.ServerTime = time.Now().UTC()
+	return &policy, nil
+}
+
+func (s *Server) eventFeedsFor(ctx context.Context, a domain.Actor) ([]domain.EventFeed, error) {
+	var class v1.AgentClass
+	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: a.Domain.Namespace, Name: a.Domain.Class}, &class); err != nil {
+		return nil, err
+	}
+	if string(class.UID) != a.Domain.ClassUID || !class.DeletionTimestamp.IsZero() {
+		return nil, domain.ErrDenied
+	}
+	grant, err := agentcaps.GrantOf(&class, "goals")
+	if err != nil {
+		return nil, err
+	}
+	if !agentcaps.Active(false, grant) {
+		return nil, domain.ErrDenied
+	}
+	config, err := domain.ParseConfig(grant.Raw)
+	if err != nil {
+		return nil, err
+	}
+	var feeds []domain.EventFeed
+	if s.EventSources == nil {
+		return feeds, nil
+	}
+	for _, feed := range config.EventFeeds {
+		source, err := s.EventSources.Resolve(ctx, a.Domain.Owner, feed.Source)
+		if err != nil {
+			if errors.Is(err, sessionevents.ErrDenied) || errors.Is(err, sessionevents.ErrNotFound) {
+				log.FromContext(ctx).Info("configured goal feed unavailable", "session", a.Session, "feed", feed.Name, "error", err)
+				continue
+			}
+			return nil, err
+		}
+		deps, err := s.EventSources.Dependencies(ctx, a.Domain.Owner, source)
+		if err != nil {
+			if errors.Is(err, sessionevents.ErrDenied) || errors.Is(err, sessionevents.ErrNotFound) {
+				log.FromContext(ctx).Info("configured goal feed unavailable", "session", a.Session, "feed", feed.Name, "error", err)
+				continue
+			}
+			return nil, err
+		}
+		if len(deps) > 64 {
+			return nil, fmt.Errorf("%w: event feed has too many dependencies", domain.ErrInvalid)
+		}
+		feed.Source = source
+		for _, dep := range deps {
+			feed.Sources = append(feed.Sources, domain.Source{ResourceType: dep.ResourceType, ResourceID: dep.ResourceID, Permission: dep.Permission})
+		}
+		feeds = append(feeds, feed)
+	}
+	return feeds, nil
 }

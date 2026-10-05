@@ -42,6 +42,7 @@ func (s Source) Validate() error {
 	}
 	return nil
 }
+
 func (s Source) Key() string { return mustDigest(s) }
 
 // Dependency retains the current access checks needed before exposing data or
@@ -87,12 +88,14 @@ func (o Observation) Validate() error {
 	}
 	return nil
 }
+
 func (o Observation) ID() string {
 	return "obs-" + mustDigest(struct {
 		Source  Source
 		EventID string
 	}{o.Source, o.EventID})
 }
+
 func (o Observation) Digest() (string, error) {
 	// A redelivery may have another signed envelope. Retain the first witness,
 	// while identity and conflict checks commit to the data and restrictions.
@@ -109,6 +112,7 @@ func mustDigest(value any) string {
 	}
 	return result
 }
+
 func jsonDigest(value any) (string, error) {
 	b, err := json.Marshal(value)
 	if err != nil {
@@ -164,6 +168,7 @@ type Registry struct {
 func NewRegistry() *Registry {
 	return &Registry{kinds: kindregistry.New[Adapter]("session event sources", func(a Adapter) string { return a.Kind() })}
 }
+
 func (r *Registry) Register(a Adapter) { r.kinds.Register(a) }
 func (r *Registry) Kinds() []string    { return r.kinds.Keys() }
 
@@ -188,6 +193,7 @@ func (r *Registry) Resolve(ctx context.Context, principal string, source Source)
 	}
 	return access.Resolve(ctx, principal, source)
 }
+
 func (r *Registry) Check(ctx context.Context, principal string, source Source, deps []Dependency) error {
 	if r == nil {
 		return ErrDenied
@@ -234,4 +240,25 @@ func (s *Ingester) Ingest(ctx context.Context, kind string, raw json.RawMessage)
 		return Observation{}, err
 	}
 	return s.Store.Ingest(ctx, input, checkpoint.Sequence)
+}
+
+// SourceDependencies exposes the live flow dependencies for discovered sources.
+// Source kinds without this contract cannot advertise private feed metadata.
+type SourceDependencies interface {
+	Dependencies(context.Context, string, Source) ([]Dependency, error)
+}
+
+func (r *Registry) Dependencies(ctx context.Context, principal string, source Source) ([]Dependency, error) {
+	if r == nil {
+		return nil, ErrDenied
+	}
+	a, ok := r.kinds.Get(source.Kind)
+	if !ok {
+		return nil, ErrDenied
+	}
+	d, ok := a.(SourceDependencies)
+	if !ok {
+		return nil, ErrDenied
+	}
+	return d.Dependencies(ctx, principal, source)
 }

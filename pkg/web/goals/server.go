@@ -300,6 +300,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		err = e
 		p.ExecutionAvailable = out.ExecutionAvailable
 		out.Page = &p
+		if err == nil && out.ExecutionAvailable {
+			out.ExecutionPolicy, err = s.executionPolicyFor(ctx, a)
+			if err == nil {
+				out.EventFeeds, err = s.eventFeedsFor(ctx, a)
+			}
+		}
 	default:
 		err = domain.ErrInvalid
 	}
@@ -316,7 +322,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	code, message := 500, "goal operation failed"
 	switch {
 	case errors.Is(err, domain.ErrDenied), errors.Is(err, domain.ErrNotFound), errors.Is(err, sessionevents.ErrDenied), errors.Is(err, sessionevents.ErrNotFound):
-		code, message = 404, "goal unavailable"
+		code, message = 404, "goal or requested source unavailable"
 	case errors.Is(err, domain.ErrConflict), errors.Is(err, sessionevents.ErrConflict):
 		code, message = 409, err.Error()
 	case errors.Is(err, domain.ErrInvalid), errors.Is(err, sessionevents.ErrInvalid):

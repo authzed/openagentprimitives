@@ -85,6 +85,16 @@ A goal can also respond to matching events from an available, trusted source.
 Approve what to watch, when monitoring ends, and the maximum number of private
 reports. A watch does not add access to accounts or authorize other actions.
 
+You can ask naturally, for example, “I have an upcoming flight on FA1234;
+let me know if anything changes.” Your agent must have a suitable connected
+source. It can discover sources configured for it and ask for missing details,
+such as the departure date and when to stop watching. If no suitable source is
+available, it should explain that monitoring needs a connection first.
+
+Sources can send updates when something happens or collect them on a schedule.
+The watch reacts to those updates; approving notifications does not itself
+connect an account or authorize a source to collect data.
+
 Each matching event creates a separate goal session. You can choose a fresh
 approval for each report, or explicitly approve unattended private delivery.
 The browser alerts you when the session appears, and its exact instructions

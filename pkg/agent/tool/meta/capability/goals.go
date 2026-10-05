@@ -3,6 +3,7 @@ package capability
 import (
 	"encoding/json"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
 )
@@ -11,10 +12,13 @@ func init() { Register(goalsCapability{}) }
 
 type goalsCapability struct{}
 
-func (goalsCapability) Name() string                                { return "goals" }
-func (goalsCapability) DefaultOn() bool                             { return false }
-func (goalsCapability) Infrastructural() bool                       { return false }
-func (goalsCapability) ParseConfig(json.RawMessage) (Config, error) { return nil, nil }
+func (goalsCapability) Name() string          { return "goals" }
+func (goalsCapability) DefaultOn() bool       { return false }
+func (goalsCapability) Infrastructural() bool { return false }
+func (goalsCapability) ParseConfig(raw json.RawMessage) (Config, error) {
+	return goals.ParseConfig(raw)
+}
+
 func (goalsCapability) Offer(o OfferContext) ([]tool.Tool, *SkipReason) {
 	if o.Session != nil && o.Session.Spec.Parent != nil {
 		return nil, &SkipReason{Capability: "goals", Reason: "delegated children propose goal changes to their parent"}
