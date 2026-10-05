@@ -37,6 +37,7 @@ func TestDispatcherDurableStopRecovery(t *testing.T) {
 		reason domain.RunReason
 		state  domain.OccurrenceState
 	}{
+		{"accounting restarts", corev1.PodSucceeded, domain.RunSessionEnded, domain.OccurrenceFinished},
 		{"idle session with finished runner", corev1.PodSucceeded, domain.RunSessionEnded, domain.OccurrenceFinished},
 		{"failed runner", corev1.PodFailed, domain.RunInfrastructureFailed, domain.OccurrenceFailed},
 		{"time limit", corev1.PodRunning, domain.RunDurationExpired, domain.OccurrenceFailed},
@@ -68,7 +69,7 @@ func TestDispatcherDurableStopRecovery(t *testing.T) {
 			require.NoError(t, err)
 			o, err := store.Schedule(ctx, g)
 			require.NoError(t, err)
-			sess := &v1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: o.SessionName, UID: "session-uid", CreationTimestamp: metav1.NewTime(now)}, Spec: v1.AgentSessionSpec{Class: "assistant", GoalExecution: ref(o)}, Status: v1.AgentSessionStatus{Phase: v1.AgentSessionPhaseIdle}}
+			sess := &v1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: o.SessionName, UID: "session-uid", CreationTimestamp: metav1.NewTime(now)}, Spec: v1.AgentSessionSpec{Class: "assistant", GoalExecution: ref(o)}, Status: v1.AgentSessionStatus{Phase: v1.AgentSessionPhaseIdle, EstimatedCost: &v1.EstimatedSessionCost{AmountMicroUSD: 3000, Currency: "USD", PricingKnown: true, AsOf: metav1.NewTime(now), ByModel: []v1.ModelCostBucket{{Model: "served-model", AmountMicroUSD: 2000, PricingKnown: true}}, ByTool: []v1.ToolCostBucket{{Tool: "inner-tool", AmountMicroUSD: 1000, PricingKnown: true}}}}}
 			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "runner", OwnerReferences: []metav1.OwnerReference{{UID: sess.UID}}}, Status: corev1.PodStatus{Phase: test.phase}}
 			scheme := runtime.NewScheme()
 			require.NoError(t, v1.AddToScheme(scheme))
@@ -78,6 +79,13 @@ func TestDispatcherDurableStopRecovery(t *testing.T) {
 			require.NoError(t, err)
 			o, err = store.Attach(ctx, o, string(sess.UID), now)
 			require.NoError(t, err)
+			if test.name == "accounting restarts" {
+				older := sess.Status.EstimatedCost.DeepCopy()
+				older.AmountMicroUSD = 10000
+				older.ByModel[0].AmountMicroUSD = 9000
+				o, err = store.RecordCost(ctx, o, domain.RunCost{SessionUID: o.SessionUID, Estimate: older, Reason: "runner_active_or_interrupted"}, now)
+				require.NoError(t, err)
+			}
 			now = now.Add(2 * time.Second)
 			d := &Dispatcher{Service: svc, Store: store, Client: k8s, Reader: k8s, Worker: "first-controller", Now: func() time.Time { return now }}
 			auth.err = errors.New("authorization service unavailable")
@@ -121,6 +129,21 @@ func TestDispatcherDurableStopRecovery(t *testing.T) {
 			require.NotNil(t, observed.Outcome)
 			require.Equal(t, test.reason, observed.Outcome.Reason)
 			require.Equal(t, "unknown", observed.Outcome.Effects)
+			require.NotNil(t, observed.Cost)
+			if test.reason == domain.RunSessionMissing {
+				require.Nil(t, observed.Cost.Estimate)
+				require.Equal(t, "session_missing", observed.Cost.Reason)
+			} else if test.name == "accounting restarts" {
+				require.Equal(t, int64(10000), observed.Cost.Estimate.AmountMicroUSD)
+				require.False(t, observed.Cost.Final)
+				require.Equal(t, "accounting_regressed", observed.Cost.Reason)
+			} else {
+				require.Equal(t, sess.Status.EstimatedCost.AmountMicroUSD, observed.Cost.Estimate.AmountMicroUSD)
+				require.Equal(t, sess.Status.EstimatedCost.ByModel, observed.Cost.Estimate.ByModel)
+				require.Equal(t, sess.Status.EstimatedCost.ByTool, observed.Cost.Estimate.ByTool)
+				require.True(t, sess.Status.EstimatedCost.AsOf.Equal(&observed.Cost.Estimate.AsOf))
+				require.Equal(t, test.reason == domain.RunSessionEnded, observed.Cost.Final)
+			}
 			// Restart between the durable observation and pod GC acknowledgement.
 			d.Worker = "restarted-controller"
 			now = now.Add(6 * time.Second)
@@ -141,6 +164,7 @@ func TestDispatcherDurableStopRecovery(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.state, finished.State)
 			require.Equal(t, observed.Outcome, finished.Outcome)
+			require.Equal(t, observed.Cost, finished.Cost, "session GC and controller takeover preserve accounting")
 			current, err := store.Get(ctx, g.Domain, g.ID)
 			require.NoError(t, err)
 			require.NotEqual(t, domain.Completed, current.State)

@@ -116,6 +116,9 @@ type Loop struct {
 	// ReportSessionCost gates the post-session cost reporter hook. Resolved from
 	// status.effectiveSettings.reportSessionCost by internal/cmd/runner.
 	ReportSessionCost bool
+	// RecordSessionCost stamps accounting even when the user suppresses notices.
+	// Bounded goal executions need durable accounting before root cleanup.
+	RecordSessionCost bool
 
 	// ModelInputPerMTok/ModelOutputPerMTok are the resolved catalog price for the
 	// session's model (USD/MTok), 0 when the catalog carries no price. When >0 the
@@ -524,6 +527,12 @@ type Loop struct {
 	// accumulate into the existing bucket instead of appending a duplicate.
 	usageByModel    []modelUsageBucket
 	usageByModelIdx map[string]int
+	// usageByTool is the per-interactive-toolkit running cost accumulation, in
+	// first-encountered order, keyed by outer tool name in usageByToolIdx. Also
+	// guarded by usageMu (see above) — addToolCost fires from the same terminal
+	// bookkeeping path as addUsage/addModelUsage.
+	usageByTool    []toolUsageBucket
+	usageByToolIdx map[string]int
 
 	// Engine is the runner's single authz dependency. Production wiring comes from
 	// internal/cmd/runner/main.go; tests inject a fake or leave nil (falling back to the

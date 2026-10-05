@@ -537,6 +537,15 @@ func (a *Admind) handleOverview(w http.ResponseWriter, r *http.Request) {
 		estCost += prices.Estimate(bareModel(m.Model), m.InputTokens, m.OutputTokens)
 		tokensSpent += m.InputTokens + m.OutputTokens
 	}
+	// Inner interactive-toolkit spend (e.g. a passthrough `claude` sub-run) is
+	// not token-based, so it never appears in ov.ByModel. Add it over the SAME
+	// session scope that produced ov.ByModel — the overview engine's own live
+	// input is liveSessionSnapshot(a.agg), so a.agg.Snapshot() is exactly that
+	// set (no double-count). Without this the headline spend understates a
+	// sub-agent session by the full tool cost (see the codebot case).
+	for _, s := range a.agg.Snapshot() {
+		estCost += toolCostUSD(s.ByTool)
+	}
 	writeJSON(w, http.StatusOK, overviewResponse{
 		Overview: ov,
 		Budget:   budgetInfo{TokensSpent: tokensSpent, EstimatedCostUSD: estCost, Estimated: true},
@@ -670,7 +679,7 @@ func (a *Admind) enrichSessionRows(r *http.Request, rows []audit.EntityRow) {
 			rows[i].OutputTokens = st.OutputTokens
 			// st.Model is the uniform "<provider>/<model>" display id; strip the
 			// provider prefix before the bare-keyed price lookup.
-			rows[i].EstimatedCostUSD = prices.Estimate(bareModel(st.Model), st.InputTokens, st.OutputTokens)
+			rows[i].EstimatedCostUSD = prices.Estimate(bareModel(st.Model), st.InputTokens, st.OutputTokens) + toolCostUSD(st.ByTool)
 		}
 		if m, ok := meta[key]; ok {
 			rows[i].StartedBy = m.StartedBy

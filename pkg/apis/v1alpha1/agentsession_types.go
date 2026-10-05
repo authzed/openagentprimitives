@@ -987,12 +987,16 @@ type AgentSessionProgress struct {
 
 // EstimatedSessionCost is a best-effort USD estimate of a session's LLM spend,
 // stamped at SessionEnd from cumulative token usage × the provider's per-model
-// pricing. Money is stored as integer micro-USD (1e-6 USD) to avoid float drift.
-// PricingKnown=false means the model had no price; AmountMicroUSD is then 0 and
-// must not be shown as a real cost.
+// pricing PLUS any interactive toolkit's own provider-reported cost (ByTool).
+// Money is stored as integer micro-USD (1e-6 USD) to avoid float drift.
+// PricingKnown=false means a served model had no price, so AmountMicroUSD is a
+// lower bound (the priced components only), not the full cost.
 type EstimatedSessionCost struct {
-	// AmountMicroUSD is the session total in micro-USD (1e-6 USD); 0 and
-	// meaningless when PricingKnown is false.
+	// AmountMicroUSD is the session total in micro-USD (1e-6 USD): the sum of
+	// every priced component (ByModel + ByTool). When PricingKnown is false, at
+	// least one served MODEL had no rate, so this is a LOWER BOUND on spend (the
+	// components that could be priced), not the full session cost — it is no
+	// longer necessarily 0, because provider-reported tool cost is always priced.
 	// +optional
 	AmountMicroUSD int64 `json:"amountMicroUSD,omitempty"`
 	// Currency is the ISO code the amount is denominated in ("USD").
@@ -1001,8 +1005,9 @@ type EstimatedSessionCost struct {
 	// Model is the configured model the session ran under.
 	// +optional
 	Model string `json:"model,omitempty"`
-	// PricingKnown is false when the model had no price; the amount is then 0
-	// and must not be shown as a real cost.
+	// PricingKnown is false when a served model had no price. The amount is then
+	// a lower bound (priced components only), not the full cost. Tool buckets are
+	// always priced, so this tracks model-pricing coverage specifically.
 	// +optional
 	PricingKnown bool `json:"pricingKnown,omitempty"`
 	// AsOf is when the estimate was computed.
@@ -1017,6 +1022,16 @@ type EstimatedSessionCost struct {
 	// +optional
 	// +listType=atomic
 	ByModel []ModelCostBucket `json:"byModel,omitempty"`
+
+	// ByTool breaks out the cost of inner interactive toolkits (e.g. a `claude`
+	// Claude Code sub-run's own provider-reported spend) a session drove. These
+	// are ADDED to AmountMicroUSD alongside ByModel — a session's total is model
+	// spend plus tool spend. Empty when no interactive toolkit reported a cost.
+	// Tool cost is always provider-reported, never table-priced, so a bucket's
+	// PricingKnown is always true.
+	// +optional
+	// +listType=atomic
+	ByTool []ToolCostBucket `json:"byTool,omitempty"`
 }
 
 // ModelCostBucket is one served model's slice of a session's cost estimate.
@@ -1039,6 +1054,20 @@ type ModelCostBucket struct {
 	// provider reported it directly, or the pricing table had a rate for
 	// this model. False means AmountMicroUSD is 0 and must not be shown as
 	// real spend (same no-fabrication contract as EstimatedSessionCost).
+	// +optional
+	PricingKnown bool `json:"pricingKnown,omitempty"`
+}
+
+// ToolCostBucket is one interactive toolkit's slice of a session's cost.
+type ToolCostBucket struct {
+	// Tool is the outer tool name (e.g. "claude-oauth").
+	Tool string `json:"tool"`
+	// AmountMicroUSD is this tool's provider-reported cost, summed across its
+	// invocations, in micro-USD (1e-6 USD).
+	// +optional
+	AmountMicroUSD int64 `json:"amountMicroUSD,omitempty"`
+	// PricingKnown is true when AmountMicroUSD is a real cost. Tool cost is
+	// always provider-reported, so this is true whenever a cost was reported.
 	// +optional
 	PricingKnown bool `json:"pricingKnown,omitempty"`
 }

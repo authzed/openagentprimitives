@@ -98,16 +98,18 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 	// A persisted stop observation wins after a crash, including after the
 	// AgentSession has disappeared. Never reinterpret cleanup as a lost session.
 	if o.Outcome != nil {
+		var costErr error
+		o, costErr = d.captureCost(ctx, o, &sess, lookup == nil, o.Outcome.Reason == domain.RunSessionEnded || o.Outcome.Reason == domain.RunSessionFailed)
 		if o.Outcome.Reason == domain.RunSessionMissing {
 			_, err := d.Store.Finish(ctx, o, domain.OccurrenceUnknown, d.now())
-			return err
+			return errors.Join(costErr, err)
 		}
 		// Keep the completed conversation inspectable for its original bounded
 		// window. Its observed outcome already prevents further goal actions.
 		if lookup == nil && o.Outcome.Reason == domain.RunSessionEnded && g.State == domain.Active && g.Revision == o.GoalRevision && g.Execution != nil && d.now().Before(o.ExpiresAt) && d.now().Before(sess.CreationTimestamp.Add(time.Duration(g.Execution.Terms.Bounds.DurationSeconds)*time.Second)) {
-			return nil
+			return costErr
 		}
-		return d.stop(ctx, o, &sess, lookup == nil)
+		return errors.Join(costErr, d.stop(ctx, o, &sess, lookup == nil))
 	}
 	reason := domain.RunReason("")
 	switch {
@@ -165,7 +167,8 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 		if reason != "" {
 			return d.observeAndStop(ctx, o, &sess, true, reason)
 		}
-		return nil
+		_, err = d.captureCost(ctx, o, &sess, true, false)
+		return err
 	}
 	// A missing known UID is an unknown result, never permission to recreate.
 	if o.SessionUID != "" {
@@ -174,6 +177,10 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 			if err != nil {
 				return err
 			}
+		}
+		o, err = d.captureCost(ctx, o, &sess, false, false)
+		if err != nil {
+			return err
 		}
 		_, err = d.Store.Finish(ctx, o, domain.OccurrenceUnknown, d.now())
 		return err
@@ -369,14 +376,16 @@ func (d *Dispatcher) observeAndStop(ctx context.Context, o domain.Occurrence, se
 			return err
 		}
 	}
+	o, costErr := d.captureCost(ctx, o, sess, exists, reason == domain.RunSessionEnded || reason == domain.RunSessionFailed)
 	o, err := d.recordOutcome(ctx, o, reason)
 	if err != nil {
-		return err
+		return errors.Join(costErr, err)
 	}
 	if reason == domain.RunSessionEnded && exists {
-		return nil
+		return costErr
 	}
-	return d.stop(ctx, o, sess, exists)
+	// Accounting outages must not prevent cancellation or bounded termination.
+	return errors.Join(costErr, d.stop(ctx, o, sess, exists))
 }
 func (d *Dispatcher) runnerOutcome(ctx context.Context, sess *v1.AgentSession) (domain.RunReason, error) {
 	var pods corev1.PodList

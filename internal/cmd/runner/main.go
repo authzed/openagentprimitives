@@ -2219,6 +2219,7 @@ func run(cfg *config) error {
 		Model:              sess.Status.EffectiveSettings.Model.Name,
 		Routing:            routingToLLM(sess.Status.EffectiveSettings.ModelRouting),
 		ReportSessionCost:  sess.Status.EffectiveSettings.ReportSessionCost,
+		RecordSessionCost:  sess.Spec.GoalExecution != nil,
 		ModelInputPerMTok:  sess.Status.EffectiveSettings.ModelInputPerMTok,
 		ModelOutputPerMTok: sess.Status.EffectiveSettings.ModelOutputPerMTok,
 		UserID:             string(sess.UID),
@@ -3006,7 +3007,8 @@ func run(cfg *config) error {
 				}
 			},
 			OnEvent: buildToolSessionEventPublisher(
-				rootCtx, pub, memSigned, scope, class.Spec.ToolSessionLog, hooksNS, hooksName, envSigner),
+				rootCtx, pub, memSigned, scope, class.Spec.ToolSessionLog, hooksNS, hooksName, envSigner,
+				loop.AddToolCost),
 			Register: toolSessionReg.register,
 		}
 	}
@@ -3263,6 +3265,7 @@ func buildToolSessionEventPublisher(
 	logMode string,
 	ns, name string,
 	signer *channelevents.EnvelopeSigner,
+	onResult func(outerTool string, costUSD float64, ok bool),
 ) func(toolCallRef, reason, outerTool string, ev toolkitstream.Event) {
 	return func(toolCallRef, reason, outerTool string, ev toolkitstream.Event) {
 		// NATS -> channelsd -> Slack — unchanged, always runs.
@@ -3308,6 +3311,14 @@ func buildToolSessionEventPublisher(
 				"session", ns+"/"+name,
 				"toolCallRef", toolCallRef,
 				"eventType", string(ev.Type))
+		}
+
+		// Fold this interactive toolkit's own provider-reported cost into the
+		// session total. Fires on the terminal result event only, and regardless
+		// of the ToolSessionLog persist gate above — accumulation must not depend
+		// on logging being on.
+		if ev.Type == toolkitstream.EventResult && onResult != nil {
+			onResult(outerTool, ev.CostUSD, ev.OK)
 		}
 	}
 }

@@ -37,6 +37,7 @@ type Occurrence struct {
 	SessionUID    string          `json:"sessionUID,omitempty"`
 	Proposal      *RunProposal    `json:"proposal,omitempty"`
 	Outcome       *RunOutcome     `json:"outcome,omitempty"`
+	Cost          *RunCost        `json:"cost,omitempty"`
 	Reply         *RunReply       `json:"reply,omitempty"`
 }
 

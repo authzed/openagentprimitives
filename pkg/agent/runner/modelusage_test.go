@@ -89,3 +89,18 @@ func TestFireSessionEnd_PopulatesByModel(t *testing.T) {
 	assert.True(t, b.CostReported)
 	assert.Equal(t, int64(50_000), b.ReportedCostMicroUSD)
 }
+
+func TestFireSessionEnd_PopulatesByTool(t *testing.T) {
+	cr := &endCapturingRunner{}
+	l := &Loop{Model: "claude-sonnet-5"}
+	l.pipelineExec = cr
+	l.pipelineOnce.Do(func() {})
+
+	l.AddToolCost("claude-oauth", 5.43, true)
+	l.fireSessionEnd(context.Background(), "completed")
+
+	require.NotNil(t, cr.in.End)
+	require.Len(t, cr.in.End.ByTool, 1)
+	assert.Equal(t, "claude-oauth", cr.in.End.ByTool[0].Tool)
+	assert.Equal(t, int64(5_430_000), cr.in.End.ByTool[0].CostMicroUSD)
+}

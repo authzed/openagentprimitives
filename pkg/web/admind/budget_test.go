@@ -422,3 +422,35 @@ func TestAdmindBudget_EmptyIsNonNilSlices(t *testing.T) {
 		assert.Contains(t, body, "\""+axis+"\":[]", axis+" must be an empty array, not null")
 	}
 }
+
+func TestAdmindBudget_ByToolAddsToEstimate(t *testing.T) {
+	s := &spiceboxv1alpha1.AgentSession{}
+	s.Namespace, s.Name = "default", "s-codebot"
+	s.Spec.Class = "codebot"
+	s.Status.Phase = "Completed"
+	s.Status.StartedAt = &metav1.Time{Time: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	s.Status.EffectiveSettings = &spiceboxv1alpha1.EffectiveSettings{
+		Model: spiceboxv1alpha1.ModelConfig{Provider: "anthropic", Name: "claude-opus-4-8"},
+	}
+	// Zero tokens -> $0 model estimate, isolating the tool-cost contribution.
+	s.Status.Progress = &spiceboxv1alpha1.AgentSessionProgress{InputTokens: 0, OutputTokens: 0}
+	s.Status.EstimatedCost = &spiceboxv1alpha1.EstimatedSessionCost{
+		ByTool: []spiceboxv1alpha1.ToolCostBucket{
+			{Tool: "claude-oauth", AmountMicroUSD: 19_020_000, PricingKnown: true},
+		},
+	}
+
+	k8s := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(s).Build()
+	a := newTestAdmind(t, k8s)
+	a.Aggregator().UpsertSession(s)
+
+	w := do(t, a.Handler(), http.MethodGet, "/admin/v1/budget", "test-token", "user:YWRtaW4", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	var bd admind.BudgetBreakdown
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &bd))
+
+	sess := rowsByKey(bd.BySession)
+	require.Contains(t, sess, "default/s-codebot")
+	assert.InDelta(t, 19.02, float64(sess["default/s-codebot"].EstimatedCostUSD), 1e-9,
+		"$0 model (0 tokens) + $19.02 tool cost")
+}
