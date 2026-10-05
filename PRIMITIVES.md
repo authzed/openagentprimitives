@@ -198,6 +198,12 @@ knowledge-graph layer and durable artifacts.
   `authzdecision/`, `scopeaudit/`, `relwritesaudit/`, `toolguardaudit/`,
   `toolchainaudit/`, `contentguardaudit/`, `metaagentaudit/`,
   `infoleakage{audit,decision,taint}/`
+- **Private durable goals:** `pkg/agent/goals/` (lifecycle and ownership),
+  `pkg/memory/goals/` (transactional SQLite/PostgreSQL stores),
+  `pkg/web/goals/` (authenticated API and signed outbox),
+  `pkg/agent/tool/meta/capability/goals.go` (opt-in tools), and
+  `cmd/oap/internal/goalscmd/` (CLI). See `docs/operating/goals.md`.
+  Active state records intent; scheduling and execution consent are separate.
 - **Authorization of recall:** `pkg/memory/spicedbauthorizer/`
 - **Artifacts:** `pkg/platform/artifacts/` (versioning, labels, resolve),
   `pkg/platform/artifactstore/` (the `Store` interface + `blob/`, a gocloud.dev

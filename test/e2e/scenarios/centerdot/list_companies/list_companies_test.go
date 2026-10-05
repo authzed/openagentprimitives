@@ -85,5 +85,8 @@ func TestCenterdot_ListCompanies_HappyPath(t *testing.T) {
 	// Drive.
 	h.SendUserMessage("companies created in the last 2 weeks")
 	h.ExpectAgentReply(e2e.Contains("Acme", "Beta", "Centerdot"))
+	// Delivery precedes the respond_to_user result and final LLM turn. Wait
+	// for the turn to finish before asserting that its last rule was consumed.
+	e2e.WaitForSessionIdle(t, h)
 	h.AssertAllRulesConsumed()
 }

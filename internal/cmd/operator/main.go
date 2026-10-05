@@ -71,6 +71,7 @@ import (
 	// css/html/image/svg which are imported into all three, is defence in
 	// depth — a second reason an agent process can never reach kind="mcpui",
 	// not the reason. See pkg/channels/channelassets/mcpui's package doc.
+	goalmodel "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	_ "github.com/authzed/openagentprimitives/pkg/authz/contentguard/kinds/promptinjection" // register for settings-webhook content-inspector validation
 	_ "github.com/authzed/openagentprimitives/pkg/authz/contentguard/kinds/urlallowlist"    // register for settings-webhook content-inspector validation
@@ -139,6 +140,9 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/workspacesource"
 	"github.com/authzed/openagentprimitives/pkg/controllers/workspacevolume"
 	memorypkg "github.com/authzed/openagentprimitives/pkg/memory"
+	goalinmem "github.com/authzed/openagentprimitives/pkg/memory/goals/inmem"
+	goalpostgres "github.com/authzed/openagentprimitives/pkg/memory/goals/postgres"
+	goalsqlite "github.com/authzed/openagentprimitives/pkg/memory/goals/sqlite"
 	"github.com/authzed/openagentprimitives/pkg/memory/httpsrv"
 	memoryinmem "github.com/authzed/openagentprimitives/pkg/memory/inmem"
 	kggraphiti "github.com/authzed/openagentprimitives/pkg/memory/kg/graphiti"
@@ -161,6 +165,7 @@ import (
 	memshadow "github.com/authzed/openagentprimitives/pkg/memory/shadow"
 	"github.com/authzed/openagentprimitives/pkg/memory/spicedbauthorizer"
 	memsqlite "github.com/authzed/openagentprimitives/pkg/memory/sqlite"
+
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/deplogs"
@@ -191,6 +196,7 @@ import (
 	toolspecregistry "github.com/authzed/openagentprimitives/pkg/tools/toolspec/registry"
 	"github.com/authzed/openagentprimitives/pkg/web/gateway"
 	gatewayv1 "github.com/authzed/openagentprimitives/pkg/web/gateway/v1"
+	goalweb "github.com/authzed/openagentprimitives/pkg/web/goals"
 	_ "github.com/authzed/openagentprimitives/pkg/web/localtunnel/ngrok" // register "ngrok" localtunnel provider: PublicEndpoint controller dispatches via registry.Get (stub is test-only, not registered here)
 	localtunnelregistry "github.com/authzed/openagentprimitives/pkg/web/localtunnel/registry"
 	"github.com/authzed/openagentprimitives/pkg/web/secretoutsrv"
@@ -2253,6 +2259,46 @@ func run(cfg *config) {
 		PoolsReader:         spiceDBClient.Pools(),
 		KGProvider:          kgProvider,
 	})
+	var goalStore goalmodel.Store
+	switch backendKind {
+	case memoryBackendSqlite:
+		gs := goalsqlite.New(sqliteClient.DB())
+		if err := gs.Migrate(context.Background()); err != nil {
+			log.Error(err, "goals SQLite migration failed")
+			os.Exit(1)
+		}
+		goalStore = gs
+	case memoryBackendPostgres:
+		gs := goalpostgres.New(pgClient.Pool())
+		if err := gs.Migrate(context.Background()); err != nil {
+			log.Error(err, "goals PostgreSQL migration failed")
+			os.Exit(1)
+		}
+		goalStore = gs
+	case memoryBackendInmem:
+		goalStore = goalinmem.New()
+	}
+	// Goal evidence and audit chains must follow durable storage even when the
+	// general memory facade is explicitly set to shadow's ephemeral read source.
+	// This private facade is used only by the trusted goal endpoint/publisher;
+	// it shares the existing database and signature verifier, without indexing
+	// historical snapshots into ordinary memory search.
+	goalMemory := memLocal
+	if backendKind == memoryBackendPostgres {
+		goalMemory = memorypkg.NewLocal(mempostgres.NewBackend(pgClient), memorypkg.WithProvenanceVerifier(verifier), memorypkg.WithLogger(log.WithName("goal-memory")))
+	}
+	goalService := &goalmodel.Service{Store: goalStore}
+	var goalAuth goalweb.Authority
+	if spiceDBClient != nil {
+		goalAuth = spiceDBClient
+	}
+	goalHandler := &goalweb.Server{Service: goalService, Reader: mgr.GetAPIReader(), Memory: goalMemory, Tokens: memTokens, Keys: keyLookup, Auth: goalAuth, ColdRegistryUntil: time.Now().Add(memoryColdRegistryGrace)}
+	goalService.Auth = goalHandler
+	goalPublisher := &goalweb.Publisher{Store: goalStore, Memory: goalMemory, Signer: opSigner}
+	if err := mgr.Add(goalPublisher); err != nil {
+		log.Error(err, "register goal audit publisher")
+		os.Exit(1)
+	}
 	memHandler := httpsrv.NewHandler(memLocal, memTokens, memHandlerOpts...)
 	log.V(1).Info("startup: memory HTTP handler + search providers ready")
 
@@ -3129,6 +3175,7 @@ func run(cfg *config) {
 		// holds Secret-write RBAC; the runner does not) writes it into the
 		// per-session secret-output Secret. Auth reuses the per-session token
 		// registry — session-scoped, so a token may only write its own session.
+		debugHandler.Handle("/goals/", goalHandler)
 		debugHandler.Handle("/secret-output/", secretoutsrv.NewHandler(mgr.GetClient(), memTokens))
 		// The tuple-authorized workshop draft-export route (agent-builder plan
 		// 3b, Task 6 — Ruling A). A workshop sidecar's operator bearer is

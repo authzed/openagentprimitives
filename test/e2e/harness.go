@@ -86,6 +86,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/channel_msg_ref"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/envelopefact"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/factcontent"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalactor"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/pttag"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/triggerdelivery"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/turn"
@@ -419,7 +420,8 @@ type Harness struct {
 	// pipeline writes, standing in for channelsd's registered publisher key.
 	// Exposed via SignRestartMarker for scenarios that patch a marker directly
 	// instead of driving it through an inbound message.
-	markerSigner *restartmarker.Signer
+	markerSigner    *restartmarker.Signer
+	goalActorSigned pkgmemory.Memory
 
 	// FakeGitHub backs the kind=github webhook e2e (Task 6, reviewbot dedup):
 	// an httptest stand-in for the three GitHub REST surfaces the review loop
@@ -1176,6 +1178,7 @@ func (h *Harness) startManager(t *testing.T, env *testenv.Env, spdbCli *spicedb.
 	chPub := chPriv.Public().(ed25519.PublicKey)
 	tokensReg.SetPublisherKey(restartmarker.Publisher, provenance.KeyID(chPub), chPub)
 	h.markerSigner = restartmarker.NewSigner(chPriv, restartmarker.Publisher)
+	h.goalActorSigned = provenance.NewSigningMemory(h.memStore, provenance.NewSigner(chPriv, "system:channelsd"))
 
 	// Token-use authorization (externaltoken): opt-in via Options.WithTokenAuthz
 	// (see its doc). Declared as the interface types — not the *spicedb.Client
@@ -1610,6 +1613,9 @@ func (h *Harness) startChannelsdPlumbing(t *testing.T, mgrCtx context.Context) {
 	// AgentSession controllers above), so a SpiceDB schema mismatch
 	// surfaces here as a test failure rather than a silent deny.
 	pl := pipeline.NewPipeline(h.K8s, h.SpiceDB, mem, pubAdapter, caps)
+	pl.RecordGoalActor = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alpha1.AgentClass, owner identity.CanonicalUserID) error {
+		return goalactor.Record(ctx, h.goalActorSigned, pkgmemory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}, goalactor.Content{Owner: owner.String(), SessionUID: string(sess.UID), ClassUID: string(class.UID)})
+	}
 
 	// The durable memory facade, mirroring internal/cmd/channelsd/main.go's pl.Mem. It
 	// backs BOTH the resource-owner decision recovery and the parked prompts a

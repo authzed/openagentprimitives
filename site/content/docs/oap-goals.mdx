@@ -1,0 +1,60 @@
+export const meta = {
+  title: 'oap goals',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2810,
+  description: 'Manage private goals for a session\'s owner and agent class',
+}
+
+# oap goals
+
+Manage durable goals using an authenticated, non-delegated session. Goals do not launch scheduled work. Responses are JSON.
+
+## `oap goals create <session>`
+
+create goals
+
+Flags:
+
+```text
+--due-at string      Intent only: RFC3339 due timestamp
+--outcome string     Desired outcome
+--request-id string  Stable idempotency key; reuse for identical retries
+--timezone string    IANA timezone
+--title string       Short goal title
+```
+
+## `oap goals get <session> <goal-id>`
+
+get goals
+
+## `oap goals list <session>`
+
+list goals
+
+Flags:
+
+```text
+--after string  Continue from the previous response's next cursor
+--limit int     Page size (1–100) (default "50")
+--state string  Filter by state
+```
+
+## `oap goals update <session> <goal-id>`
+
+update goals
+
+Flags:
+
+```text
+--action string         revise, activate, pause, resume, cancel, or complete (default "revise")
+--clear-due             Remove due timestamp
+--due-at string         Intent only: RFC3339 due timestamp
+--evidence stringSlice  Completion evidence references
+--outcome string        Desired outcome
+--request-id string     Stable idempotency key; reuse for identical retries
+--revision int64        Expected current revision (required)
+--summary string        Reported completion summary
+--timezone string       IANA timezone
+--title string          Short goal title
+```
