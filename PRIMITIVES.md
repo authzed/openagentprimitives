@@ -202,13 +202,13 @@ knowledge-graph layer and durable artifacts.
   interval, daily, and weekly schedules with timezone-aware quiet hours. It is
   independent of goals and grants no execution authority. Goals currently supply
   the approval, durable run ledger, and session activation adapter.
-- **Event sessions:** `pkg/agent/sessionevents/` and
-  `pkg/memory/sessionevents/` retain verified events and finite watches, with
-  quiet hours, duplicate suppression, and current source access. Registered
-  consumers decide what a watch can do; an event itself grants no authority.
+- **Event sessions:** `pkg/agent/sessionevents/` and `pkg/memory/sessionevents/`
+  retain verified events and finite watches, with quiet hours, duplicate
+  suppression, and current source access. Registered consumers decide what a
+  watch can do; an event itself grants no authority.
 - **Private durable goals:** `pkg/agent/goals/` (lifecycle and ownership),
-  `pkg/memory/goals/` (transactional SQLite/PostgreSQL stores),
-  `pkg/web/goals/` (authenticated API and signed outbox),
+  `pkg/memory/goals/` (transactional SQLite/PostgreSQL stores), `pkg/web/goals/`
+  (authenticated API and signed outbox),
   `pkg/agent/tool/meta/capability/goals.go` (opt-in tools), and
   `cmd/oap/internal/goalscmd/` (CLI). See `docs/operating/goals.md`.
   `pkg/controllers/goals/` activates bounded private report sessions only after
@@ -217,12 +217,12 @@ knowledge-graph layer and durable artifacts.
   standing consent can authorize its private-delivery phase without another
   human decision; the signed phase record names the original consent and run.
   Scheduled collectors can publish explicitly approved private observations from
-  immutable run results. A registered source adapter retains source dependencies;
-  a durable outbox retries publication independently of runner cleanup. These
-  records authenticate the agent report, not independent external facts.
-  Separately approved discovery policies can suggest monitoring goals. Each
-  proposal needs exact human acceptance before a goal or watch exists; finite
-  question limits, expiry, and source access constrain those suggestions.
+  immutable run results. A registered source adapter retains source
+  dependencies; a durable outbox retries publication independently of runner
+  cleanup. These records authenticate the agent report, not independent external
+  facts. Separately approved discovery policies can suggest monitoring goals.
+  Each proposal needs exact human acceptance before a goal or watch exists;
+  finite question limits, expiry, and source access constrain those suggestions.
 - **Authorization of recall:** `pkg/memory/spicedbauthorizer/`
 - **Artifacts:** `pkg/platform/artifacts/` (versioning, labels, resolve),
   `pkg/platform/artifactstore/` (the `Store` interface + `blob/`, a gocloud.dev
