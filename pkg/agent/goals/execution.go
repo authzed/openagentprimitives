@@ -193,6 +193,13 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 		return Goal{}, err
 	}
 	g.Execution = &ExecutionConsent{ApprovalMode: r.ApprovalMode, Session: a.Session, SessionUID: a.SessionUID, RequestID: r.RequestID, RequestRevision: g.Revision, Digest: digest, Terms: r.Terms}
+	if preflight, ok := s.ExecutionAuth.(interface {
+		CheckExecutionConsent(context.Context, Goal) error
+	}); ok {
+		if err := preflight.CheckExecutionConsent(ctx, g); err != nil {
+			return Goal{}, err
+		}
+	}
 	return s.commit(ctx, a, g, r.Revision, r.RequestID, h, "request_execution")
 }
 

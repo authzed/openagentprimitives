@@ -53,6 +53,8 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 	if err := pl.Validate(); err != nil {
 		return fmt.Errorf("interaction decision: %w", err)
 	}
+	unlock := p.lockInteraction(env.Session.Namespace, env.Session.Name, pl.RequestRef)
+	defer unlock()
 	ns, name := env.Session.Namespace, env.Session.Name
 	ref := ns + "/" + name
 	logger := log.FromContext(ctx).WithValues(
@@ -86,8 +88,7 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 	// the callers below already handle a nil req.
 	rec, perr := p.parkedPromptFor(ctx, ns, name, pl.RequestRef)
 	if perr != nil {
-		logger.Info("interaction decision: reading the parked prompt failed; continuing without it",
-			"session", ref, "err", perr.Error())
+		return fmt.Errorf("interaction decision: cannot establish durable decision state: %w", perr)
 	}
 	// Idempotency, durable leg: the tombstone survives the restart that empties
 	// resolvedCache. Without it a second approver's click re-ran the bound
@@ -101,6 +102,11 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 	// interaction was resolved, not who resolved it, and the surfaces render a
 	// nil OriginalDecider as "someone else" rather than inventing an approver.
 	if rec != nil && rec.Resolved {
+		if rec.ResolutionPending {
+			if err := p.deliverInteractionResolution(ctx, *rec); err != nil {
+				return err
+			}
+		}
 		logger.Info("interaction decision: durably already resolved (parked-prompt tombstone); spectator")
 		return p.publishDecisionRejected(ctx, env.Session, pl, "already_resolved", "already resolved", nil, "")
 	}
@@ -282,15 +288,31 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 		DecidedBy:       &pl.Decider,
 		ResponseRef:     pl.ResponseRef,
 	}
-	// Publish first (runner resume + surface edit), THEN clear the pending
-	// prompt — the ordering contract shared with identity_choice.go: a clear
-	// before a failed publish would strand the session with nothing left to
-	// re-surface.
-	if err := channelevents.PublishIn(p.NATS.Publish, ns, name, channelevents.KindInteractionApplied, applied); err != nil {
-		return fmt.Errorf("interaction decision: publish applied (in) failed (session %s): %w", ref, err)
-	}
-	if err := channelevents.PublishOut(p.NATS.Publish, ns, name, channelevents.KindInteractionApplied, applied); err != nil {
-		return fmt.Errorf("interaction decision: publish applied (out) failed (session %s): %w", ref, err)
+	if cat.Resurface == channelinteractions.ResurfaceCached && rec != nil && p.Mem != nil {
+		frozen := applied
+		frozen.ResponseRef, frozen.MintedURL = "", ""
+		resolution, err := channelevents.BuildEnvelope(ns, name, channelevents.KindInteractionApplied, frozen)
+		if err != nil {
+			return err
+		}
+		raw, err := json.Marshal(resolution)
+		if err != nil {
+			return err
+		}
+		retained, err := parkedprompt.ResolveWithOutcome(ctx, p.Mem, promptScope(ns, name), pl.RequestRef, raw)
+		if err != nil {
+			return err
+		}
+		if err := p.deliverInteractionResolution(ctx, retained, applied); err != nil {
+			return err
+		}
+	} else {
+		if err := channelevents.PublishIn(p.NATS.Publish, ns, name, channelevents.KindInteractionApplied, applied); err != nil {
+			return err
+		}
+		if err := channelevents.PublishOut(p.NATS.Publish, ns, name, channelevents.KindInteractionApplied, applied); err != nil {
+			return err
+		}
 	}
 	p.resolvedCache.put(pl.Category, pl.RequestRef, resolvedDecision{
 		Approver:   pl.Decider,

@@ -28,7 +28,8 @@ var ErrEntryAppendedDispatchPut = errors.New("signingmem: refusing an append-onl
 // point; see Put.
 type SigningMemory struct {
 	memory.Memory
-	signer *Signer
+	signer     *Signer
+	seedMemory memory.Memory
 
 	mu      sync.Mutex                   // guards scopeMu
 	scopeMu map[memory.Scope]*sync.Mutex // per-scope append serialization
@@ -36,8 +37,25 @@ type SigningMemory struct {
 
 // NewSigningMemory wraps inner so append-only Puts are attested by
 // signer.
-func NewSigningMemory(inner memory.Memory, signer *Signer) *SigningMemory {
-	return &SigningMemory{Memory: inner, signer: signer, scopeMu: map[memory.Scope]*sync.Mutex{}}
+type SigningMemoryOption func(*SigningMemory)
+
+// WithSeedMemory selects the authoritative ledger used for chain recovery.
+// Writes still use inner, including its normal dual-write and authorization.
+// Configure it at construction, before any writer can seed a scope.
+func WithSeedMemory(reader memory.Memory) SigningMemoryOption {
+	return func(m *SigningMemory) {
+		if reader != nil {
+			m.seedMemory = reader
+		}
+	}
+}
+
+func NewSigningMemory(inner memory.Memory, signer *Signer, options ...SigningMemoryOption) *SigningMemory {
+	m := &SigningMemory{Memory: inner, seedMemory: inner, signer: signer, scopeMu: map[memory.Scope]*sync.Mutex{}}
+	for _, option := range options {
+		option(m)
+	}
+	return m
 }
 
 // lockForScope returns the mutex serializing append-only Sign+Put for
@@ -121,7 +139,7 @@ func (m *SigningMemory) Put(ctx context.Context, e memory.Entry) (memory.Entry, 
 		lk.Lock()
 		defer lk.Unlock()
 
-		if err := m.signer.EnsureSeeded(ctx, m.Memory, e.Scope); err != nil {
+		if err := m.signer.EnsureSeeded(ctx, m.seedMemory, e.Scope); err != nil {
 			return memory.Entry{}, fmt.Errorf("seed chain for %s: %w", e.Scope.ID, err)
 		}
 		if err := m.signer.Sign(&e); err != nil {
@@ -223,7 +241,7 @@ func (m *SigningMemory) PutToPool(ctx context.Context, sessionScope, poolScope m
 	// comment here claimed, a chain discontinuity that degraded loudly after a
 	// restart. poolQuerier routes the read through memory.PoolReader, the read
 	// half of the addressing PutToPool already had.
-	if err := m.signer.EnsureSeeded(ctx, poolQuerier{Memory: m.Memory, sessionScope: sessionScope}, poolScope); err != nil {
+	if err := m.signer.EnsureSeeded(ctx, poolQuerier{Memory: m.seedMemory, sessionScope: sessionScope}, poolScope); err != nil {
 		return memory.Entry{}, fmt.Errorf("seed chain for %s: %w", poolScope.ID, err)
 	}
 	if err := m.signer.Sign(&e); err != nil {

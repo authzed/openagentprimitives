@@ -2784,41 +2784,9 @@ func run(cfg *config) error {
 			return natsRT.conn.Publish(subject, body)
 		}
 		loop.TimeoutAppliedPublish = func(_ context.Context, envNS, envName string, env channelevents.Envelope) error {
-			prefix := channelevents.SubjectPrefix(envNS, envName)
-			// IN: channelsd's Handle*Applied handler clears the pending queue +
-			// condition for this kind. OUT: the outbound relay hands it to the
-			// channel sender to edit the pending prompt to "expired" (a no-op
-			// when no channel is bound); the runner's own applied subscriber
-			// ignores it because the orchestrator already forgot this request.
-			//
-			// Sign is called once per subject (not once for the shared body):
-			// the signature is bound to the exact subject it travels on, so the
-			// IN and OUT copies each need their own signature over their own
-			// digest, computed and marshalled independently.
-			inSubj := channelevents.SubjectIn(prefix, env.Kind)
-			if err := envSigner.Sign(inSubj, &env); err != nil {
-				return fmt.Errorf("sign envelope: %w", err)
-			}
-			inBody, err := json.Marshal(env)
-			if err != nil {
-				return fmt.Errorf("marshal timeout applied envelope: %w", err)
-			}
-			if err := natsRT.conn.Publish(inSubj, inBody); err != nil {
-				return fmt.Errorf("publish timeout applied on IN: %w", err)
-			}
-			outSubj := channelevents.SubjectOut(prefix, env.Kind)
-			if err := envSigner.Sign(outSubj, &env); err != nil {
-				return fmt.Errorf("sign envelope: %w", err)
-			}
-			outBody, err := json.Marshal(env)
-			if err != nil {
-				return fmt.Errorf("marshal timeout applied envelope: %w", err)
-			}
-			if err := natsRT.conn.Publish(outSubj, outBody); err != nil {
-				return fmt.Errorf("publish timeout applied on OUT: %w", err)
-			}
-			return nil
+			return runner.PublishTimeoutApplied(natsRT.conn.Publish, envSigner.Sign, envNS, envName, env)
 		}
+
 		// tool_approval, info_leakage, and content_inspection all resume via the
 		// generic subscribeInteractionApplied bridge.
 		go subscribeInteractionApplied(rootCtx, natsRT, loop.Approval, ns, name)

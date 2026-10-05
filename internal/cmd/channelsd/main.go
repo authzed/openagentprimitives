@@ -897,6 +897,7 @@ func run(rootCtx context.Context, cfg *config) error {
 	// Uses the same senderResolver as the outbound relay — no duplication of
 	// Channel/Secret fetch logic.
 	sw := newSessionWatcher(cli, sr, wd)
+	sw.recoverInteractions = pl.RecoverInteractionResolutions
 	sw.publish = func(subject string, data []byte) error { return nc.Publish(subject, data) }
 	go sw.Run(rootCtx)
 

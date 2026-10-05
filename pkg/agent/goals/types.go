@@ -72,22 +72,23 @@ type Source struct {
 }
 
 type Goal struct {
-	Discovery     *DiscoveryReference `json:"discovery,omitempty"`
-	Sources       []Source            `json:"sources,omitempty"`
-	ID            string              `json:"id"`
-	Domain        Domain              `json:"domain"`
-	Revision      int64               `json:"revision"`
-	Title         string              `json:"title"`
-	Outcome       string              `json:"outcome"`
-	State         State               `json:"state"`
-	DueAt         *time.Time          `json:"dueAt,omitempty"`
-	Timezone      string              `json:"timezone,omitempty"`
-	Plan          *PlanRef            `json:"plan,omitempty"`
-	Result        *Result             `json:"result,omitempty"`
-	Execution     *ExecutionConsent   `json:"execution,omitempty"`
-	OriginSession string              `json:"originSession"`
-	CreatedAt     time.Time           `json:"createdAt"`
-	UpdatedAt     time.Time           `json:"updatedAt"`
+	Discovery *DiscoveryReference `json:"discovery,omitempty"`
+	Sources   []Source            `json:"sources,omitempty"`
+	ID        string              `json:"id"`
+	Domain    Domain              `json:"domain"`
+	Revision  int64               `json:"revision"`
+	Title     string              `json:"title"`
+	Outcome   string              `json:"outcome"`
+	State     State               `json:"state"`
+	// DueAt records descriptive intent; Execution.Terms pins executable authority.
+	DueAt         *time.Time        `json:"dueAt,omitempty"`
+	Timezone      string            `json:"timezone,omitempty"`
+	Plan          *PlanRef          `json:"plan,omitempty"`
+	Result        *Result           `json:"result,omitempty"`
+	Execution     *ExecutionConsent `json:"execution,omitempty"`
+	OriginSession string            `json:"originSession"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
 }
 
 type CreateRequest struct {
@@ -99,7 +100,8 @@ type CreateRequest struct {
 }
 
 // Change uses pointers to distinguish omitted text from an invalid empty edit.
-// ClearDue removes a schedule intent; no schedule in this slice executes work.
+// ClearDue removes descriptive due intent. Executable schedules are separately
+// reviewed and pinned in Execution.Terms.
 type Change struct {
 	RequestID string     `json:"requestID"`
 	ID        string     `json:"id"`
@@ -118,6 +120,7 @@ type ListRequest struct {
 	After string `json:"after,omitempty"`
 	Limit int    `json:"limit,omitempty"`
 }
+
 type Page struct {
 	Goals              []Goal `json:"goals"`
 	Next               string `json:"next,omitempty"`

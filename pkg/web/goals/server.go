@@ -267,7 +267,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		err = e
 		out.Goal = &g
 	case "request_execution":
-		if req.Execution.ApprovalMode == "plan" && (s.Consent == nil || s.Consent.Signer == nil || s.Consent.Memory == nil) {
+		if req.Execution.ApprovalMode == "plan" && (s.Consent == nil || s.Consent.Writer == nil || s.Consent.Memory == nil) {
 			s.fail(w, r, domain.ErrDenied)
 			return
 		}

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -132,4 +133,40 @@ func TestPublisherReplaysSavedEnvelopeBeforeSigningAfterRestart(t *testing.T) {
 	pending, err := store.Pending(ctx, 100)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
+}
+
+type countedHistoryReads struct {
+	memory.Memory
+	rows int
+}
+
+func (m *countedHistoryReads) Query(ctx context.Context, q memory.Query) (memory.QueryResult, error) {
+	result, err := m.Memory.Query(ctx, q)
+	m.rows += len(result.Entries)
+	return result, err
+}
+func TestPublisherFreshEventsDoNotRescanGrowingAuditHistory(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "system:operator")
+	priv := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	signer := provenance.NewSigner(priv, "system:operator")
+	keys := provenance.MapKeyLookup{{Publisher: signer.Publisher(), KeyID: signer.KeyID()}: priv.Public().(ed25519.PublicKey)}
+	mem := &countedHistoryReads{Memory: memory.NewLocal(meminmem.NewBackend(), memory.WithProvenanceVerifier(provenance.NewWriteVerifier(keys)))}
+	store := goalinmem.New()
+	d := core.Domain{Namespace: "team", Owner: "alice", Class: "assistant", ClassUID: "uid"}
+	for n := 0; n < 50; n++ {
+		id := fmt.Sprintf("goal-%03d", n)
+		g := core.Goal{ID: id, Domain: d, Revision: 1, State: core.Draft, UpdatedAt: time.Now().UTC()}
+		_, err := store.Commit(ctx, core.Mutation{Goal: g, RequestID: id, Hash: id, Event: core.Event{ID: "goalev-" + id, Goal: g}})
+		require.NoError(t, err)
+	}
+	p := &Publisher{Store: store, Memory: mem, Signer: signer}
+	require.NoError(t, p.Flush(ctx))
+	require.Less(t, mem.rows, 50, "a fresh append must not reseed from the growing domain log")
+	scope, err := memory.ResourceScope(ResourceType, d.ID())
+	require.NoError(t, err)
+	result, err := mem.Query(ctx, memory.Query{Scope: scope})
+	require.NoError(t, err)
+	require.Len(t, result.Entries, 50)
+	report := provenance.NewVerifier(keys).VerifyChain(signer.Publisher(), result.Entries, nil)
+	require.Empty(t, report.Findings)
 }

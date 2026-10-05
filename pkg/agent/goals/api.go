@@ -37,3 +37,38 @@ type Response struct {
 	Page               *Page                                    `json:"page,omitempty"`
 	ExecutionAvailable bool                                     `json:"executionAvailable"`
 }
+
+// ReadDependencies carries source authority through a goal read into the
+// caller's session. The private domain is an additional audience boundary,
+// rather than a replacement for the sources behind the returned content.
+func (r Response) ReadDependencies() []Source {
+	var sources []Source
+	addGoal := func(g Goal) { sources = mergeSources(sources, g.Sources) }
+	addRun := func(o Occurrence) { sources = mergeSources(sources, o.ReadDependencies()) }
+	if r.Goal != nil {
+		addGoal(*r.Goal)
+	}
+	if r.Page != nil {
+		for _, g := range r.Page.Goals {
+			addGoal(g)
+		}
+	}
+	if r.Run != nil {
+		addRun(*r.Run)
+	}
+	if r.Runs != nil {
+		for _, o := range r.Runs.Runs {
+			addRun(o)
+		}
+	}
+	if r.DiscoveryPolicy != nil {
+		addGoal(r.DiscoveryPolicy.Template)
+	}
+	if r.DiscoveryProposal != nil {
+		addGoal(r.DiscoveryProposal.Goal)
+		for _, dep := range r.DiscoveryProposal.Observation.Dependencies {
+			sources = mergeSources(sources, []Source{{ResourceType: dep.ResourceType, ResourceID: dep.ResourceID, Permission: dep.Permission}})
+		}
+	}
+	return sources
+}

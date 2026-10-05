@@ -27,6 +27,7 @@ func (s *Store) beginEvents(ctx context.Context) (*sql.Tx, error) {
 	}
 	return tx, nil
 }
+
 func (s *Store) subscription(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, id string) (sessionevents.SubscriptionState, error) {
@@ -43,9 +44,11 @@ func (s *Store) subscription(ctx context.Context, q interface {
 	state.Stopped = stopped != 0
 	return state, json.Unmarshal([]byte(payload), &state.Subscription)
 }
+
 func (s *Store) Subscription(ctx context.Context, id string) (sessionevents.SubscriptionState, error) {
 	return s.subscription(ctx, s.db, id)
 }
+
 func (s *Store) CreateSubscription(ctx context.Context, sub sessionevents.Subscription) (sessionevents.SubscriptionState, error) {
 	if err := sub.Validate(); err != nil {
 		return sessionevents.SubscriptionState{}, err
@@ -73,7 +76,8 @@ func (s *Store) CreateSubscription(ctx context.Context, sub sessionevents.Subscr
 	if err == nil && previous != digest {
 		return sessionevents.SubscriptionState{}, sessionevents.ErrConflict
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	created := errors.Is(err, sql.ErrNoRows)
+	if created {
 		if _, err = tx.ExecContext(ctx, s.query(`INSERT INTO oap_event_subscriptions(id,digest,payload,used,stopped,stop_reason) VALUES(?,?,?,0,0,'')`), sub.ID, digest, string(payload)); err != nil {
 			return sessionevents.SubscriptionState{}, err
 		}
@@ -84,6 +88,11 @@ func (s *Store) CreateSubscription(ctx context.Context, sub sessionevents.Subscr
 	}
 	if _, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_event_subscription_sources(subscription_id,source_key) VALUES(?,?) ON CONFLICT(subscription_id) DO NOTHING`), sub.ID, sub.Source.Key()); err != nil {
 		return state, err
+	}
+	if created {
+		if err = s.enqueueExisting(ctx, tx, sub.ID); err != nil {
+			return state, err
+		}
 	}
 	return state, tx.Commit()
 }
@@ -199,9 +208,21 @@ func (s *Store) Admit(ctx context.Context, id string, source sessionevents.Sourc
 	if _, err = tx.ExecContext(ctx, s.query(`INSERT INTO oap_event_admissions(subscription_id,observation_id,payload) VALUES(?,?,?)`), id, observation.ID(), string(encoded)); err != nil {
 		return admission, err
 	}
+	if _, err = tx.ExecContext(ctx, s.query(`DELETE FROM oap_event_route_pending WHERE subscription_id=? AND observation_id=?`), id, observation.ID()); err != nil {
+		return admission, err
+	}
 	return admission, tx.Commit()
 }
+
 func (s *Store) Pending(ctx context.Context, now time.Time, limit int) ([]sessionevents.Launch, error) {
+	return s.pending(ctx, now, nil, limit)
+}
+
+func (s *Store) PendingAfter(ctx context.Context, now time.Time, after string, limit int) ([]sessionevents.Launch, error) {
+	return s.pending(ctx, now, &after, limit)
+}
+
+func (s *Store) pending(ctx context.Context, now time.Time, after *string, limit int) ([]sessionevents.Launch, error) {
 	if now.IsZero() || limit < 1 || limit > 100 {
 		return nil, sessionevents.ErrInvalid
 	}
@@ -214,7 +235,16 @@ func (s *Store) Pending(ctx context.Context, now time.Time, limit int) ([]sessio
 	if _, err = tx.ExecContext(ctx, s.query(`UPDATE oap_event_launches SET state='expired' WHERE state='pending' AND expires_at<=?`), timestamp(now)); err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, s.query(`SELECT l.payload FROM oap_event_launches l JOIN oap_event_subscriptions s ON s.id=l.subscription_id WHERE l.state='pending' AND s.stopped=0 AND l.due_at<=? AND l.expires_at>? ORDER BY l.due_at,l.id LIMIT ?`), timestamp(now), timestamp(now), limit)
+	query := `SELECT l.payload FROM oap_event_launches l JOIN oap_event_subscriptions s ON s.id=l.subscription_id WHERE l.state='pending' AND s.stopped=0 AND l.due_at<=? AND l.expires_at>?`
+	args := []any{timestamp(now), timestamp(now)}
+	if after != nil {
+		query += ` AND l.id>? ORDER BY l.id LIMIT ?`
+		args = append(args, *after, limit)
+	} else {
+		query += ` ORDER BY l.due_at,l.id LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := tx.QueryContext(ctx, s.query(query), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +290,7 @@ func (s *Store) Acknowledge(ctx context.Context, id string) error {
 	}
 	return tx.Commit()
 }
+
 func (s *Store) StopSubscription(ctx context.Context, id, reason string) error {
 	if strings.TrimSpace(reason) == "" || len(reason) > 1024 || !utf8.ValidString(reason) {
 		return sessionevents.ErrInvalid
@@ -281,6 +312,9 @@ func (s *Store) StopSubscription(ctx context.Context, id, reason string) error {
 	}
 	if _, err = tx.ExecContext(ctx, s.query(`UPDATE oap_event_launches SET state='cancelled' WHERE subscription_id=? AND state='pending'`), id); err != nil {
 		return fmt.Errorf("cancel event launches: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, s.query(`DELETE FROM oap_event_route_pending WHERE subscription_id=?`), id); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

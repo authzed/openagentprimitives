@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+
 	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/memory/shadow"
 )
 
 // goalReplyMemory reads the durable goal backend, including when shadow memory
@@ -15,5 +17,14 @@ type goalReplyMemory struct {
 }
 
 func (m *goalReplyMemory) Put(ctx context.Context, entry memory.Entry) (memory.Entry, error) {
-	return m.Writer.Put(ctx, entry)
+	return m.Writer.Put(shadow.WithReadFrom(ctx, shadow.ReadFromSecondary), entry)
+}
+
+// auditSeedMemory always recovers operator chains from the durable shadow half,
+// even when ordinary reads use the ephemeral primary after process restart.
+// Backends without shadow memory ignore this context override.
+type auditSeedMemory struct{ memory.Memory }
+
+func (m auditSeedMemory) Query(ctx context.Context, q memory.Query) (memory.QueryResult, error) {
+	return m.Memory.Query(shadow.WithReadFrom(ctx, shadow.ReadFromSecondary), q)
 }

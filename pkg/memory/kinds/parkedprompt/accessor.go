@@ -6,12 +6,24 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/authzed/openagentprimitives/pkg/memory"
 )
+
+// Prompt updates from the relay and decision subscriptions share a bounded
+// lock set. A re-delivered request must not overwrite a resolved tombstone.
+var mutationLocks [64]sync.Mutex
+
+func lockMutation(scope memory.Scope, request string) func() {
+	digest := sha256.Sum256([]byte(scope.Kind + "/" + scope.ID + "/" + request))
+	lock := &mutationLocks[int(digest[0])%len(mutationLocks)]
+	lock.Lock()
+	return lock.Unlock
+}
 
 // entryID is the deterministic ID for a requestRef, so Note is idempotent and
 // Resolve can address a single prompt without scanning. Hashed rather than
@@ -42,6 +54,8 @@ func entryID(requestRef string) string {
 // caller that genuinely needs to re-park a decided ref needs its own explicit
 // accessor, not this one's side effect.
 func Note(ctx context.Context, m memory.Memory, scope memory.Scope, c Content) error {
+	unlock := lockMutation(scope, c.RequestRef)
+	defer unlock()
 	if c.RequestRef == "" {
 		return fmt.Errorf("parkedprompt.Note: RequestRef is required")
 	}
@@ -134,6 +148,8 @@ func Outstanding(ctx context.Context, m memory.Memory, scope memory.Scope) ([]Co
 // Idempotent and safe for an unknown requestRef — the normal decision path and
 // the gate-side timeout path both call it, and either may run first.
 func Resolve(ctx context.Context, m memory.Memory, scope memory.Scope, requestRef string) error {
+	unlock := lockMutation(scope, requestRef)
+	defer unlock()
 	if requestRef == "" {
 		return nil
 	}
@@ -167,4 +183,61 @@ func Resolve(ctx context.Context, m memory.Memory, scope memory.Scope, requestRe
 		return fmt.Errorf("parkedprompt.Resolve: put: %w", err)
 	}
 	return nil
+}
+
+// ResolveWithOutcome freezes the display outcome before its live publication.
+// It returns an existing outcome on retry. Decision handlers also serialize
+// their terminal transitions so side effects run only for the winning decision.
+func ResolveWithOutcome(ctx context.Context, m memory.Memory, scope memory.Scope, requestRef string, resolution []byte) (Content, error) {
+	unlock := lockMutation(scope, requestRef)
+	defer unlock()
+	c, found, err := Find(ctx, m, scope, requestRef)
+	if err != nil {
+		return c, err
+	}
+	if !found {
+		return c, fmt.Errorf("parkedprompt: missing request %s", requestRef)
+	}
+	if c.Resolved {
+		return c, nil
+	}
+	c.Resolved, c.ResolutionPending, c.Resolution = true, true, resolution
+	return c, saveResolution(ctx, m, scope, c)
+}
+func ResolutionPublished(ctx context.Context, m memory.Memory, scope memory.Scope, c Content) error {
+	unlock := lockMutation(scope, c.RequestRef)
+	defer unlock()
+	c.ResolutionPending = false
+	return saveResolution(ctx, m, scope, c)
+}
+func saveResolution(ctx context.Context, m memory.Memory, scope memory.Scope, c Content) error {
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	_, err = m.Put(ctx, memory.Entry{Scope: scope, Kind: KindName, ID: entryID(c.RequestRef), CreatedAt: time.Now().UTC(), Content: raw})
+	return err
+}
+
+// PendingResolutions includes decided prompts awaiting durable history or bus
+// delivery, independently of whether the session still has a parked phase.
+func PendingResolutions(ctx context.Context, m memory.Memory, scope memory.Scope) ([]Content, error) {
+	result, err := m.Query(ctx, memory.Query{Scope: scope, Kinds: []string{KindName}, FieldEquals: []memory.FieldFilter{{Path: "resolutionPending", Value: true}}, Limit: 10000})
+	if err != nil {
+		return nil, err
+	}
+	if result.Partial || result.Truncated {
+		return nil, fmt.Errorf("parkedprompt: incomplete resolution outbox query")
+	}
+	var pending []Content
+	for _, entry := range result.Entries {
+		var c Content
+		if err := json.Unmarshal(entry.Content, &c); err != nil {
+			return nil, err
+		}
+		if c.Resolved && c.ResolutionPending && len(c.Resolution) > 0 {
+			pending = append(pending, c)
+		}
+	}
+	return pending, nil
 }

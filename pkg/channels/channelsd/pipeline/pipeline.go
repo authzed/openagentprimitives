@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -253,6 +254,10 @@ func init() {
 
 // Pipeline implements channelkinds.InboundPipeline.
 type Pipeline struct {
+	// Terminal interaction transitions share a lock because decision and timeout
+	// envelopes arrive on independent subscriptions.
+	interactionTransitions [64]sync.Mutex
+
 	RecordGoalActor GoalActorRecorder
 	K8s             client.Client
 
@@ -3318,4 +3323,13 @@ type InboundAssetMember struct {
 	Ref       string
 	TextRef   string
 	Pages     int
+}
+
+// lockInteraction bounds lock storage while serializing competing outcomes for
+// the same request, including recovery.
+func (p *Pipeline) lockInteraction(namespace, session, request string) func() {
+	digest := sha256.Sum256([]byte(namespace + "/" + session + "/" + request))
+	lock := &p.interactionTransitions[int(digest[0])%len(p.interactionTransitions)]
+	lock.Lock()
+	return lock.Unlock
 }
