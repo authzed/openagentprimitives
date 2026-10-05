@@ -9,11 +9,13 @@ import (
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
 )
 
-// reregisterMemoryToken re-installs this session's memory-API bearer token in
-// the operator's in-process token registry, reading the value back out of the
-// per-session Secret that already holds it.
+// reregisterMemoryToken re-installs this session's memory-API bearer token AND
+// its audit verify key in the operator's in-process token registry, reading the
+// token back out of the per-session Secret that already holds it and the key off
+// the status the operator anchored it on.
 //
 // WHY it exists. tokens.Registry is process memory — plain maps, nothing
 // rehydrates them at startup — while the <session>-memory-token Secret and
@@ -97,4 +99,41 @@ func (r *Reconciler) reregisterMemoryToken(ctx context.Context, sess *spiceboxv1
 	r.Tokens.Set(key, token, "", extras...)
 	log.FromContext(ctx).Info("memory token: restored this session's registration from its Secret",
 		"session", sess.Namespace+"/"+sess.Name, "extraScopes", len(extras))
+
+	// Restore the per-session audit VERIFY key in the same breath as the token.
+	// Both live in this process-memory registry and both die on restart, but the
+	// token was restored here — above every short-circuit — while the key was
+	// registered only at step 4 of Reconcile, ~900 lines and ~30 early returns
+	// below. The gap meant a restarted operator accepted the session's bearer (no
+	// 401) yet held no key to verify what that bearer signed, so every
+	// append-only write failed `403 ... no usable key <keyID>`. A terminal
+	// session, whose reap returns before step 4 forever, could never recover.
+	//
+	// It is best-effort: a session whose status carries no key yet has not
+	// completed a full reconcile, and step 4 registers it (and witnesses it
+	// durably) once reached. Unlike the token, restoring the key never widens
+	// anything — a verify key only lets the facade check a signature it would
+	// otherwise reject.
+	r.registerAuditVerifyKey(sess)
+}
+
+// registerAuditVerifyKey installs this session's audit public key into the
+// in-process verify-on-write registry, read from status.auditPublicKey/
+// auditKeyID — the K8s-witnessed trust root. It is the single source both the
+// restart-restoration above and step 4 of Reconcile register from, so
+// verify-on-write cannot disagree with itself across the two call sites.
+//
+// Idempotent, and a no-op when status carries no decodable key yet (a session
+// that has not completed a full reconcile). Returns whether a key was
+// registered, so the caller holding the context can chain the durable witness
+// (reregisterMemoryToken deliberately does not — a terminal session was already
+// witnessed during its life, and restoring the in-memory verify key is the only
+// thing a restart actually lost).
+func (r *Reconciler) registerAuditVerifyKey(sess *spiceboxv1alpha1.AgentSession) bool {
+	pub, err := provenance.DecodePubKey(sess.Status.AuditPublicKey)
+	if err != nil {
+		return false
+	}
+	r.Tokens.SetPublisherKey(provenance.SessionPublisher(sess.Namespace, sess.Name), sess.Status.AuditKeyID, pub)
+	return true
 }

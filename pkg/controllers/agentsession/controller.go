@@ -2042,9 +2042,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Register the per-session audit public key for verify-on-write. Read from
 	// status every reconcile — cheap and idempotent — so a restarted operator
-	// re-registers a key it never minted.
-	if pub, decErr := provenance.DecodePubKey(sess.Status.AuditPublicKey); decErr == nil {
-		r.Tokens.SetPublisherKey(provenance.SessionPublisher(sess.Namespace, sess.Name), sess.Status.AuditKeyID, pub)
+	// re-registers a key it never minted. reregisterMemoryToken does the same at
+	// the top of Reconcile, through the same helper, so a session that
+	// short-circuits before here still verifies its own writes.
+	if r.registerAuditVerifyKey(&sess) {
 		// …and witness the same binding DURABLY, in the session's own scope. The
 		// registration above is process memory and the status field above it dies
 		// with the CR, while the records this key signs are permanent and sit in a

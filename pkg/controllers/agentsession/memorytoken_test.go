@@ -27,6 +27,7 @@ import (
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
 )
 
@@ -87,6 +88,54 @@ func TestReconcile_SucceededSession_RestoresMemoryTokenAfterOperatorRestart(t *t
 	assert.Equal(t, key, got, "the restored token must resolve to its own session")
 	assert.True(t, f.r.Tokens.Authorizes(tok, key), "restored token must read its own session")
 	assert.True(t, f.r.Tokens.AuthorizesMutation(tok, key), "restored token keeps the write reach it had before the restart")
+}
+
+// TestReconcile_SucceededSession_RestoresAuditVerifyKeyAfterOperatorRestart is
+// the sibling regression to the memory-token restore above, for the OTHER half
+// of the per-session registration a restart wipes: the Ed25519 audit VERIFY key
+// the facade resolves on every append-only write.
+//
+// Both live in the same process-memory registry. The token was restored on
+// every short-circuit path (reregisterMemoryToken, at the top of Reconcile) but
+// the verify key was registered only at step 4, ~900 lines and ~30 early
+// returns below. So a terminal session — whose reap returns long before step 4,
+// forever — got its token back but not its key, and every append-only write
+// (and every provenance-verifying read) then failed with
+// `403 ... no usable key <keyID> for session:...`, exactly the error a
+// production operator OOMKill produced.
+//
+// The registry starts empty ON PURPOSE — that, not the phase, is the restart.
+func TestReconcile_SucceededSession_RestoresAuditVerifyKeyAfterOperatorRestart(t *testing.T) {
+	const tok = "restored-bearer-value"
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	f := succeededFixture(t, tok)
+
+	// The session's durable audit identity, as it stands on the CR after the
+	// full reconcile that minted it — BEFORE the restart. generateAuditKeypair
+	// is the operator's own mint, so status carries a real (publicKey, keyID).
+	_, pubB64, keyID, err := generateAuditKeypair()
+	require.NoError(t, err, "mint the session's audit keypair")
+	f.sess.Status.AuditPublicKey = pubB64
+	f.sess.Status.AuditKeyID = keyID
+	require.NoError(t, f.c.Status().Update(ctx, f.sess),
+		"persist the audit key on status (the K8s-witnessed trust root the operator registers from)")
+
+	publisher := provenance.SessionPublisher(f.sess.Namespace, f.sess.Name)
+	_, had := f.r.Tokens.PublisherKey(publisher, keyID)
+	require.False(t, had, "precondition: a restarted operator holds no verify key for this session")
+
+	f.reconcile(t)
+
+	// The reap ran, so this reconcile really did take the short-circuit that
+	// step 4's key registration sits below — the same gate the token test pins.
+	assert.True(t, f.sandboxGone(t), "the terminal reap must have run: this is the short-circuiting path")
+
+	gotPub, ok := f.r.Tokens.PublisherKey(publisher, keyID)
+	require.True(t, ok,
+		"the session's audit verify key must be re-registered after the reconcile, or append-only writes 403 with 'no usable key'")
+	wantPub, decErr := provenance.DecodePubKey(pubB64)
+	require.NoError(t, decErr, "decode the status public key")
+	assert.Equal(t, wantPub, gotPub, "the restored verify key must be the one anchored on status")
 }
 
 // TestReconcile_RestoredTokenScopes pins that the restoration reaches exactly
