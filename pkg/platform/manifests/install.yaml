@@ -4882,6 +4882,13 @@ spec:
                 - name
                 - natsSubjectPrefix
                 type: object
+              openingSummary:
+                description: |-
+                  OpeningSummary optionally replaces the initial instruction bubble with a
+                  readable summary and a control to inspect the exact inline instructions.
+                  Intended for asynchronously created sessions. Render as plain text.
+                maxLength: 2000
+                type: string
               outputChannel:
                 description: |-
                   OutputChannel records the Channel the session's outbound
@@ -5008,6 +5015,9 @@ spec:
                 or changed after create'
               rule: has(self.forkedFrom) == has(oldSelf.forkedFrom) && (!has(self.forkedFrom)
                 || self.forkedFrom == oldSelf.forkedFrom)
+            - message: openingSummary requires inline instructions
+              rule: '!has(self.openingSummary) || size(self.openingSummary) == 0 ||
+                (has(self.prompt.inline) && size(self.prompt.inline) > 0)'
           status:
             properties:
               activeWidgets:

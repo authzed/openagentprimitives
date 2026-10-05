@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/goals"
@@ -51,7 +52,38 @@ func (s *Store) occurrence(ctx context.Context, q querier, id string) (goals.Occ
 	}
 	g, err := decode(raw)
 	o.Domain = g.Domain
-	return o, err
+	if err != nil {
+		return o, err
+	}
+	var outcome string
+	err = q.QueryRowContext(ctx, s.query(`SELECT payload FROM oap_goal_run_outcomes WHERE occurrence_id=?`), id).Scan(&outcome)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return o, err
+	}
+	if err == nil {
+		if err := json.Unmarshal([]byte(outcome), &o.Outcome); err != nil {
+			return o, err
+		}
+	}
+	var proposal string
+	err = q.QueryRowContext(ctx, s.query(`SELECT payload FROM oap_goal_run_proposals WHERE occurrence_id=?`), id).Scan(&proposal)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return o, err
+	}
+	if err == nil {
+		if err := json.Unmarshal([]byte(proposal), &o.Proposal); err != nil {
+			return o, err
+		}
+	}
+	var reply string
+	err = q.QueryRowContext(ctx, s.query(`SELECT payload FROM oap_goal_run_replies WHERE occurrence_id=?`), id).Scan(&reply)
+	if errors.Is(err, sql.ErrNoRows) {
+		return o, nil
+	}
+	if err != nil {
+		return o, err
+	}
+	return o, json.Unmarshal([]byte(reply), &o.Reply)
 }
 
 func (s *Store) Occurrence(ctx context.Context, id string) (goals.Occurrence, error) {
@@ -308,7 +340,7 @@ func (s *Store) Renew(ctx context.Context, o goals.Occurrence, now time.Time, le
 }
 
 func (s *Store) Finish(ctx context.Context, o goals.Occurrence, state goals.OccurrenceState, now time.Time) (goals.Occurrence, error) {
-	if state != goals.OccurrenceSucceeded && state != goals.OccurrenceFailed && state != goals.OccurrenceCancelled && state != goals.OccurrenceUnknown {
+	if state != goals.OccurrenceFinished && state != goals.OccurrenceSucceeded && state != goals.OccurrenceFailed && state != goals.OccurrenceCancelled && state != goals.OccurrenceUnknown {
 		return goals.Occurrence{}, goals.ErrInvalid
 	}
 	return s.fenced(ctx, o, now, "execution_"+string(state), func(tx *sql.Tx, current goals.Occurrence) error {
@@ -321,4 +353,117 @@ func (s *Store) Finish(ctx context.Context, o goals.Occurrence, state goals.Occu
 		_, err := tx.ExecContext(ctx, s.query(`UPDATE oap_goal_occurrences SET state=? WHERE id=?`), string(state), o.ID)
 		return err
 	})
+}
+
+var _ goals.RunStore = (*Store)(nil)
+
+func (s *Store) RecordOutcome(ctx context.Context, o goals.Occurrence, reason goals.RunReason, now time.Time) (goals.Occurrence, error) {
+	if !reason.Valid() {
+		return goals.Occurrence{}, goals.ErrInvalid
+	}
+	return s.fenced(ctx, o, now, "execution_outcome_observed", func(tx *sql.Tx, current goals.Occurrence) error {
+		if current.SessionUID != o.SessionUID {
+			return goals.ErrConflict
+		}
+		if current.Outcome != nil {
+			if current.Outcome.Reason != reason {
+				return goals.ErrConflict
+			}
+			return nil
+		}
+		payload, err := json.Marshal(goals.RunOutcome{Reason: reason, ObservedAt: now.UTC(), Effects: "unknown"})
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_run_outcomes(occurrence_id,payload) VALUES(?,?)`), o.ID, string(payload))
+		return err
+	})
+}
+func (s *Store) Runs(ctx context.Context, d goals.Domain, id string, r goals.ListRequest) (goals.RunPage, error) {
+	if r.Limit < 1 || r.Limit > 100 {
+		return goals.RunPage{}, goals.ErrInvalid
+	}
+	rows, err := s.db.QueryContext(ctx, s.query(`SELECT id FROM oap_goal_occurrences WHERE domain=? AND goal_id=? AND id>? ORDER BY id LIMIT ?`), d.ID(), id, r.After, r.Limit+1)
+	if err != nil {
+		return goals.RunPage{}, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return goals.RunPage{}, errors.Join(err, rows.Close())
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return goals.RunPage{}, errors.Join(err, rows.Close())
+	}
+	if err := rows.Close(); err != nil {
+		return goals.RunPage{}, err
+	}
+	p := goals.RunPage{Runs: []goals.Occurrence{}}
+	if len(ids) > r.Limit {
+		ids = ids[:r.Limit]
+		p.Next = ids[len(ids)-1]
+	}
+	for _, id := range ids {
+		o, err := s.Occurrence(ctx, id)
+		if err != nil {
+			return goals.RunPage{}, err
+		}
+		p.Runs = append(p.Runs, o)
+	}
+	return p, nil
+}
+
+func (s *Store) ProposeResult(ctx context.Context, o goals.Occurrence, p goals.RunProposal, now time.Time) (goals.Occurrence, error) {
+	if err := p.Validate(); err != nil {
+		return goals.Occurrence{}, err
+	}
+	if len(p.Sources) == 0 {
+		p.Sources = nil
+	}
+	p.SubmittedAt = now.UTC()
+	// The runner owns its session identity, not the dispatch worker's lease.
+	// Lock and read the current fence inside the transaction; worker takeover
+	// cannot make an otherwise current root's report spuriously stale.
+	return s.dispatchTx(ctx, func(tx *sql.Tx) (goals.Occurrence, error) {
+		current, err := s.occurrence(ctx, tx, o.ID)
+		if err != nil {
+			return current, err
+		}
+		changed, err := s.proposeResult(ctx, tx, current, o, p)
+		if err != nil {
+			return current, err
+		}
+		return changed, s.auditOccurrence(ctx, tx, changed, "execution_result_proposed", now)
+	})
+}
+func (s *Store) proposeResult(ctx context.Context, tx *sql.Tx, current, o goals.Occurrence, p goals.RunProposal) (goals.Occurrence, error) {
+	if current.SessionUID == "" || current.SessionUID != o.SessionUID || current.GoalRevision != o.GoalRevision || current.ConsentDigest != o.ConsentDigest || current.State != goals.OccurrenceRunning || current.Outcome != nil {
+		return current, goals.ErrConflict
+	}
+	g, err := s.lockedGoal(ctx, tx, current.Domain, current.GoalID)
+	if err != nil {
+		return current, err
+	}
+	if !executionMatches(g, current.GoalRevision, current.ConsentDigest) {
+		return current, goals.ErrConflict
+	}
+	if current.Proposal != nil {
+		p.SubmittedAt = current.Proposal.SubmittedAt
+		if !reflect.DeepEqual(*current.Proposal, p) {
+			return current, goals.ErrConflict
+		}
+		return current, nil
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return current, err
+	}
+	_, err = tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_run_proposals(occurrence_id,payload) VALUES(?,?)`), current.ID, string(raw))
+	if err != nil {
+		return current, err
+	}
+	return s.occurrence(ctx, tx, current.ID)
 }

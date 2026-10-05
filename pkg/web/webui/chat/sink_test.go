@@ -151,6 +151,7 @@ func TestToFrame_MapsRenderEventsToWireFrames(t *testing.T) {
 		msg      any
 		wantType string
 	}{
+		{"session_opening", browser.MsgSessionOpening{Session: ref, Opening: &channelevents.SessionOpening{Summary: "Async task", Instructions: "Exact prompt"}}, "session_opening"},
 		{"user_message", browser.MsgUserMessage{Session: ref, Text: "hi"}, "user_message"},
 		{"user_echo", browser.MsgUserEcho{Session: ref, Text: "from the artifact view", Author: "a@example.com", RequestID: "req-9"}, "user_echo"},
 		{"notification", browser.MsgNotification{Session: ref, Text: "working"}, "notification"},

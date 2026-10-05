@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -43,6 +44,47 @@ func TestSessionTitle(t *testing.T) {
 func TestReadTranscript_NoMemoryAccessReturnsSentinel(t *testing.T) {
 	_, err := readTranscript(context.Background(), &fakeDeps{}, newChatSessionNamespace, "s")
 	assert.True(t, errors.Is(err, ErrNoMemoryAccess))
+}
+
+func TestReadTranscript_AsyncOpeningIsInspectable(t *testing.T) {
+	const prompt = "Private machine instructions for the goal runner"
+	const name = "goal-opening"
+	at := time.Now().UTC().Truncate(time.Second)
+	for _, durable := range []bool{false, true} {
+		t.Run("durable="+fmt.Sprint(durable), func(t *testing.T) {
+			var entries []memory.Entry
+			if durable {
+				entries = []memory.Entry{
+					turnTestEntry(t, name, 0, "user", prompt, at),
+					turnTestEntry(t, name, 1, "assistant", "Your reminder", at.Add(time.Second)),
+					turnTestEntry(t, name, 2, "user", prompt, at.Add(2*time.Second)),
+				}
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(w).Encode(memory.QueryResult{Entries: entries}))
+			}))
+			defer srv.Close()
+			sess := &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: newChatSessionNamespace, CreationTimestamp: metav1.NewTime(at)}, Spec: spiceboxv1alpha1.AgentSessionSpec{
+				Prompt: spiceboxv1alpha1.PromptSource{Inline: prompt}, OpeningSummary: "Session created for an asynchronous task",
+			}}
+			d := &fakeDeps{operatorURL: srv.URL, memoryToken: "webd-token", k8s: newFakeK8sClient(t, sess)}
+			got, err := readTranscript(context.Background(), d, newChatSessionNamespace, name)
+			require.NoError(t, err)
+			require.NotEmpty(t, got)
+			require.Equal(t, "opening", got[0].Kind)
+			require.Equal(t, sess.Spec.OpeningSummary, got[0].Opening.Summary)
+			require.Equal(t, prompt, got[0].Opening.Instructions)
+			require.Empty(t, got[0].Text)
+			if durable {
+				require.Len(t, got, 3)
+				require.Equal(t, "Your reminder", got[1].Text)
+				require.Equal(t, prompt, got[2].Text, "a later human message must remain visible")
+			} else {
+				require.Len(t, got, 1)
+			}
+		})
+	}
 }
 
 func TestReadTranscript_MapsRolesSkipsEmptyAndPreservesOrder(t *testing.T) {

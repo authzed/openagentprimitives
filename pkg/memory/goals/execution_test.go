@@ -37,7 +37,7 @@ func terms(a goals.Actor) goals.ExecutionTerms {
 	return goals.ExecutionTerms{ClassDigest: "sha256:class-policy", DueAt: executionNow.Add(time.Minute), ExpiresAt: executionNow.Add(time.Hour),
 		Bounds:            goals.ExecutionBounds{DurationSeconds: 300, Turns: 20, Tokens: 10000, ApprovalSeconds: 120},
 		AllowedOperations: []string{"private_reminder"}, Evidence: []string{"memory:source-1"},
-		Destination: goals.PrivateDestination{Channel: "private-inbox", ChannelUID: "channel-uid", Recipient: a.Domain.Owner}}
+		Destination: goals.PrivateDestination{Channel: "private-inbox", ChannelUID: "channel-uid", Recipient: a.Domain.Owner, BindingDigest: "binding-digest"}}
 }
 
 func executionService(store goals.Store) (*goals.Service, *executionAuthority) {
@@ -171,7 +171,7 @@ func durableFixtures() []struct {
 			s := goalpostgres.New(c.Pool())
 			require.NoError(t, s.Migrate(context.Background()))
 			t.Cleanup(func() {
-				for _, q := range []string{"DELETE FROM oap_goal_execution_events", "DELETE FROM oap_goal_occurrences", "DELETE FROM oap_goal_events", "DELETE FROM oap_goal_receipts", "DELETE FROM oap_goals"} {
+				for _, q := range []string{"DELETE FROM oap_goal_run_proposals", "DELETE FROM oap_goal_run_outcomes", "DELETE FROM oap_goal_execution_events", "DELETE FROM oap_goal_occurrences", "DELETE FROM oap_goal_events", "DELETE FROM oap_goal_receipts", "DELETE FROM oap_goals"} {
 					_, err := c.Pool().Exec(context.Background(), q)
 					assert.NoError(t, err)
 				}
@@ -469,7 +469,163 @@ func TestGoalV1MigrationPreservesStateAndRejectsNewerSchemas(t *testing.T) {
 	events, err := store.Pending(ctx, 100)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	_, err = client.DB().ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(3)`)
+	_, err = client.DB().ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(5)`)
 	require.NoError(t, err)
 	require.ErrorContains(t, store.Migrate(ctx), "newer than this operator")
+}
+
+func TestRunOutcomesRemainFencedAndDoNotCompleteGoals(t *testing.T) {
+	for _, fixture := range durableFixtures() {
+		t.Run(fixture.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := fixture.new(t)
+			ledger := store.(goals.OccurrenceStore)
+			runs := store.(goals.RunStore)
+			svc, _ := executionService(store)
+			g := approveExecution(t, svc, actor(), "outcome")
+			o, err := ledger.Schedule(ctx, g)
+			require.NoError(t, err)
+			now := executionNow.Add(2 * time.Minute)
+			o, err = ledger.Claim(ctx, goals.ClaimRequest{ID: o.ID, Worker: "first", Now: now, Lease: time.Minute, OwnerLimit: 1, ClassLimit: 1})
+			require.NoError(t, err)
+			o, err = ledger.Attach(ctx, o, "session-uid", now)
+			require.NoError(t, err)
+			proposal := goals.RunProposal{RequestID: "result", Status: "reported_success", Summary: "Published private reminder", Evidence: []string{"tool-call:reminder"}, Sources: []goals.Source{{ResourceType: "document", ResourceID: "private", Permission: "view"}}}
+			proposed, err := runs.ProposeResult(ctx, o, proposal, now)
+			require.NoError(t, err)
+			require.Equal(t, now, proposed.Proposal.SubmittedAt)
+			replay, err := runs.ProposeResult(ctx, o, proposal, now.Add(time.Second))
+			require.NoError(t, err)
+			require.Equal(t, proposed.Proposal, replay.Proposal)
+			conflicting := proposal
+			conflicting.Summary = "Different result"
+			_, err = runs.ProposeResult(ctx, o, conflicting, now)
+			require.ErrorIs(t, err, goals.ErrConflict)
+			wrong := o
+			wrong.SessionUID = "replacement"
+			_, err = runs.ProposeResult(ctx, wrong, proposal, now)
+			require.ErrorIs(t, err, goals.ErrConflict)
+			_, err = runs.RecordOutcome(ctx, wrong, goals.RunSessionEnded, now)
+			require.ErrorIs(t, err, goals.ErrConflict)
+			observed, err := runs.RecordOutcome(ctx, o, goals.RunSessionEnded, now)
+			require.NoError(t, err)
+			require.Equal(t, "unknown", observed.Outcome.Effects)
+			repeated, err := runs.RecordOutcome(ctx, observed, goals.RunSessionEnded, now.Add(time.Second))
+			require.NoError(t, err)
+			require.Equal(t, observed.Outcome, repeated.Outcome, "retries preserve original observation")
+			_, err = runs.RecordOutcome(ctx, observed, goals.RunCancelled, now)
+			require.ErrorIs(t, err, goals.ErrConflict)
+			recovered, err := ledger.Claim(ctx, goals.ClaimRequest{ID: o.ID, Worker: "restarted", Now: o.LeaseUntil, Lease: time.Minute, OwnerLimit: 1, ClassLimit: 1})
+			require.NoError(t, err)
+			require.Equal(t, observed.Outcome, recovered.Outcome)
+			_, err = runs.RecordOutcome(ctx, observed, goals.RunSessionEnded, o.LeaseUntil)
+			require.ErrorIs(t, err, goals.ErrConflict)
+			recovered, err = ledger.Finish(ctx, recovered, goals.OccurrenceFinished, o.LeaseUntil)
+			require.NoError(t, err)
+			page, err := svc.Runs(ctx, actor(), g.ID, goals.ListRequest{Limit: 1})
+			require.NoError(t, err)
+			require.Len(t, page.Runs, 1)
+			require.Equal(t, recovered, page.Runs[0])
+			svc.Auth = denyRestricted{}
+			hidden, err := svc.Runs(ctx, actor(), g.ID, goals.ListRequest{Limit: 1})
+			require.ErrorIs(t, err, goals.ErrDenied)
+			require.Empty(t, hidden.Runs, "result dependencies survive root cleanup")
+			svc.Auth = allow{}
+			private := actor()
+			private.Domain.Owner = "another-owner"
+			_, err = svc.Runs(ctx, private, g.ID, goals.ListRequest{Limit: 1})
+			require.ErrorIs(t, err, goals.ErrNotFound)
+			_, err = svc.Runs(ctx, actor(), g.ID, goals.ListRequest{Limit: 101})
+			require.ErrorIs(t, err, goals.ErrInvalid)
+			current, err := store.Get(ctx, g.Domain, g.ID)
+			require.NoError(t, err)
+			require.Equal(t, g, current)
+			events, err := store.Pending(ctx, 100)
+			require.NoError(t, err)
+			seen := false
+			for _, event := range events {
+				if event.Action == "execution_outcome_observed" {
+					seen = true
+					require.Equal(t, observed.Outcome, event.Occurrence.Outcome)
+				}
+			}
+			require.True(t, seen)
+		})
+	}
+}
+
+func TestV2LedgerMigrationPreservesScheduledRun(t *testing.T) {
+	ctx := context.Background()
+	db, err := memsqlite.NewClient(filepath.Join(t.TempDir(), "v2.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	store := goalsqlite.New(db.DB())
+	require.NoError(t, store.Migrate(ctx))
+	svc, _ := executionService(store)
+	g := approveExecution(t, svc, actor(), "v2-existing")
+	scheduled, err := store.Schedule(ctx, g)
+	require.NoError(t, err)
+	for _, query := range []string{"DROP TABLE oap_goal_run_proposals", "DROP TABLE oap_goal_run_outcomes", "DELETE FROM oap_goal_schema", "INSERT INTO oap_goal_schema(version) VALUES(2)"} {
+		_, err = db.DB().ExecContext(ctx, query)
+		require.NoError(t, err)
+	}
+	require.NoError(t, store.Migrate(ctx))
+	require.NoError(t, store.Migrate(ctx))
+	recovered, err := store.Occurrence(ctx, scheduled.ID)
+	require.NoError(t, err)
+	require.Equal(t, scheduled, recovered)
+	current, err := store.Get(ctx, g.Domain, g.ID)
+	require.NoError(t, err)
+	require.Equal(t, g, current)
+	page, err := svc.Runs(ctx, actor(), g.ID, goals.ListRequest{Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, []goals.Occurrence{scheduled}, page.Runs)
+}
+
+func TestResultSubmissionSurvivesLeaseRenewalAndStillRejectsChangedGoal(t *testing.T) {
+	for _, fixture := range durableFixtures() {
+		t.Run(fixture.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := fixture.new(t)
+			ledger := store.(goals.OccurrenceStore)
+			runs := store.(goals.RunStore)
+			svc, _ := executionService(store)
+			g := approveExecution(t, svc, actor(), "report-lease")
+			o, err := ledger.Schedule(ctx, g)
+			require.NoError(t, err)
+			now := executionNow.Add(2 * time.Minute)
+			o, err = ledger.Claim(ctx, goals.ClaimRequest{ID: o.ID, Worker: "first", Now: now, Lease: time.Second, OwnerLimit: 1, ClassLimit: 1})
+			require.NoError(t, err)
+			o, err = ledger.Attach(ctx, o, "root-uid", now)
+			require.NoError(t, err)
+			replacement, err := ledger.Claim(ctx, goals.ClaimRequest{ID: o.ID, Worker: "second", Now: now.Add(time.Second), Lease: time.Second, OwnerLimit: 1, ClassLimit: 1})
+			require.NoError(t, err)
+			// The authenticated root has the same UID and revision across worker takeover.
+			// Even an expired dispatch lease cannot invalidate a still-authorized result.
+			proposal := goals.RunProposal{RequestID: "report", Status: "reported_success", Summary: "Reminder published", Evidence: []string{"tool-call:reminder"}, Sources: []goals.Source{{ResourceType: "agentsession", ResourceID: o.Domain.Namespace + "/" + o.SessionName, Permission: "unknown_provenance"}}}
+			saved, err := runs.ProposeResult(ctx, o, proposal, now.Add(3*time.Second))
+			require.NoError(t, err)
+			require.Equal(t, replacement.Fence, saved.Fence)
+			svc.Auth = denyEphemeralSessions{}
+			page, err := svc.Runs(ctx, actor(), g.ID, goals.ListRequest{})
+			require.NoError(t, err)
+			require.Len(t, page.Runs, 1)
+			require.Equal(t, proposal.Sources, page.Runs[0].Proposal.Sources, "original dependencies remain in the audit record")
+			_, err = svc.Update(ctx, actor(), goals.Change{ID: g.ID, Revision: g.Revision, RequestID: "cancel", Action: "cancel"})
+			require.NoError(t, err)
+			_, err = runs.ProposeResult(ctx, o, proposal, now.Add(4*time.Second))
+			require.ErrorIs(t, err, goals.ErrConflict)
+		})
+	}
+}
+
+type denyEphemeralSessions struct{ allow }
+
+func (denyEphemeralSessions) ReadGoal(_ context.Context, _ goals.Actor, g goals.Goal) error {
+	for _, source := range g.Sources {
+		if source.ResourceType == "agentsession" {
+			return goals.ErrDenied
+		}
+	}
+	return nil
 }

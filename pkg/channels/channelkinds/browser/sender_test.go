@@ -203,3 +203,16 @@ func TestBrowserSender_UnsupportedKind_EmitsSendError(t *testing.T) {
 	require.Len(t, sink.Events(), 1)
 	assert.IsType(t, MsgSendError{}, sink.Events()[0])
 }
+
+func TestBrowserSenderOpeningIsNotAnOrdinaryReply(t *testing.T) {
+	sink := &RecordingSink{}
+	sender := &browserSender{sink: sink}
+	opening := &channelevents.SessionOpening{Summary: "Session created for an asynchronous task", Instructions: "exact instructions"}
+	_, err := sender.Send(context.Background(), sessInfo(), mustEnv(t, channelevents.KindUserMessage, channelevents.OutboundUserMessagePayload{Text: opening.Summary, Opening: opening}))
+	require.NoError(t, err)
+	events := sink.Events()
+	require.Len(t, events, 1)
+	notice, ok := events[0].(MsgSessionOpening)
+	require.True(t, ok)
+	require.Equal(t, opening, notice.Opening)
+}

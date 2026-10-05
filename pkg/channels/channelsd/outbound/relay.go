@@ -805,6 +805,9 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 	default:
 		sender, err = r.Senders.SenderFor(ctx, &sess)
 	}
+	if historyErr := noteInteractionHistory(ctx, r.Mem, memory.Scope{Kind: "session", ID: bindingOwner.Namespace + "/" + bindingOwner.Name}, string(sess.UID), env); historyErr != nil {
+		logger.Info("outbound relay: interaction history write failed; delivering live", "requestSession", ns+"/"+name, "destinationSession", bindingOwner.Namespace+"/"+bindingOwner.Name, "error", historyErr)
+	}
 	if err != nil {
 		logger.Info("outbound relay: drop, sender resolution errored", "err", err.Error())
 		return
@@ -940,6 +943,11 @@ func (r *Relay) surfaceDeliveryFailure(
 // text's mere presence can no longer be that signal.
 func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess *spiceboxv1alpha1.AgentSession) {
 	opening := sess.Annotations[spiceboxv1alpha1.AnnotationSessionOpening]
+	var presentation *channelevents.SessionOpening
+	if sess.Spec.OpeningSummary != "" && sess.Spec.Prompt.Inline != "" {
+		opening = sess.Spec.OpeningSummary
+		presentation = &channelevents.SessionOpening{Summary: opening, Instructions: sess.Spec.Prompt.Inline}
+	}
 	if opening == "" {
 		return
 	}
@@ -947,7 +955,7 @@ func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess
 	// already posted by a kind that never reports a root back: the anchor
 	// question is settled either way.
 	if sess.Spec.OutputChannel == nil ||
-		sess.Spec.OutputChannel.External["thread_ts"] != "" ||
+		(presentation == nil && sess.Spec.OutputChannel.External["thread_ts"] != "") ||
 		sess.Annotations[spiceboxv1alpha1.AnnotationSessionOpeningSent] != "" {
 		return
 	}
@@ -965,7 +973,7 @@ func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess
 	}
 	env, err := channelevents.BuildEnvelope(sess.Namespace, sess.Name,
 		channelevents.KindUserMessage,
-		channelevents.OutboundUserMessagePayload{Text: opening})
+		channelevents.OutboundUserMessagePayload{Text: opening, Opening: presentation})
 	if err != nil {
 		logger.Info("outbound relay: session opening skipped, envelope build failed",
 			"session", sessRef, "err", err.Error())
@@ -989,7 +997,7 @@ func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess
 	// signal via patchOutputChannel below; a kind that does not would otherwise
 	// have no record that this already happened, and would re-post the line
 	// ahead of every subsequent envelope for the session's life.
-	if err := r.markSessionOpeningSent(ctx, sess); err != nil {
+	if err := r.markSessionOpeningSent(ctx, sess, res.OpeningMessage); err != nil {
 		logger.Info("outbound relay: marking the session opening as sent failed; it may be posted again",
 			"session", sessRef, "err", err.Error())
 	}
@@ -1009,12 +1017,15 @@ func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess
 // edit to the session must merge rather than 409. The in-memory copy is
 // updated to match so the caller's remaining work sees the same object the
 // server holds.
-func (r *Relay) markSessionOpeningSent(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) error {
+func (r *Relay) markSessionOpeningSent(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ref *channelkinds.MessageRef) error {
+	annotations := map[string]string{spiceboxv1alpha1.AnnotationSessionOpeningSent: "true"}
+	if ref != nil {
+		annotations[spiceboxv1alpha1.AnnotationSessionOpeningMessageChannel] = ref.ChannelID
+		annotations[spiceboxv1alpha1.AnnotationSessionOpeningMessageID] = ref.TS
+	}
 	patchBytes, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{
-			"annotations": map[string]any{
-				spiceboxv1alpha1.AnnotationSessionOpeningSent: "true",
-			},
+			"annotations": annotations,
 		},
 	})
 	if err != nil {
@@ -1031,7 +1042,9 @@ func (r *Relay) markSessionOpeningSent(ctx context.Context, sess *spiceboxv1alph
 	if sess.Annotations == nil {
 		sess.Annotations = map[string]string{}
 	}
-	sess.Annotations[spiceboxv1alpha1.AnnotationSessionOpeningSent] = "true"
+	for key, value := range annotations {
+		sess.Annotations[key] = value
+	}
 	return nil
 }
 

@@ -51,6 +51,7 @@ type AgentSessionList struct {
 // it never runs when the field is absent on either side — hence the spec-level
 // transition rule comparing presence as well as value.
 // +kubebuilder:validation:XValidation:rule="has(self.forkedFrom) == has(oldSelf.forkedFrom) && (!has(self.forkedFrom) || self.forkedFrom == oldSelf.forkedFrom)",message="spec.forkedFrom is immutable: it cannot be added, removed or changed after create"
+// +kubebuilder:validation:XValidation:rule="!has(self.openingSummary) || size(self.openingSummary) == 0 || (has(self.prompt.inline) && size(self.prompt.inline) > 0)",message="openingSummary requires inline instructions"
 type AgentSessionSpec struct {
 	// GoalExecution binds an operator-created root session to a durable claim.
 	// +optional
@@ -62,6 +63,13 @@ type AgentSessionSpec struct {
 	// Prompt is the initial user message. Immutable after the session
 	// transitions out of Pending.
 	Prompt PromptSource `json:"prompt"`
+
+	// OpeningSummary optionally replaces the initial instruction bubble with a
+	// readable summary and a control to inspect the exact inline instructions.
+	// Intended for asynchronously created sessions. Render as plain text.
+	// +optional
+	// +kubebuilder:validation:MaxLength=2000
+	OpeningSummary string `json:"openingSummary,omitempty"`
 
 	// AgentIdentity overrides AgentClass.spec.agentIdentity; a per-bundle
 	// agentIdentity still wins over this.

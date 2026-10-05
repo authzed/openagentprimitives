@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -41,6 +42,38 @@ func TestBoundedReportRechecksAuthorityBeforePublishing(t *testing.T) {
 				assert.Zero(t, published)
 			} else {
 				assert.Positive(t, published)
+			}
+		})
+	}
+}
+
+func TestBoundedResultReportingRechecksConsent(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		t.Run(map[bool]string{false: "allowed", true: "revoked"}[denied], func(t *testing.T) {
+			calls := 0
+			bounded := BoundedGoalTools(nil, "consent-digest", func(context.Context) error {
+				if denied {
+					return errors.New("revoked")
+				}
+				return nil
+			}, func(_ context.Context, req goals.Request) (goals.Response, error) {
+				calls++
+				require.Equal(t, "report_execution_result", req.Operation)
+				require.Equal(t, "reported_success", req.Proposal.Status)
+				return goals.Response{}, nil
+			})
+			require.Len(t, bounded, 1)
+			require.Equal(t, "report_goal_result", bounded[0].Name())
+			require.Equal(t, "agent_goal_execution", bounded[0].Permission().Check.ResourceType)
+			result, err := bounded[0].Execute(context.Background(), json.RawMessage(`{"requestID":"result","status":"reported_success","summary":"Reminder published","evidence":["tool-call:reminder"]}`), &tool.SessionContext{})
+			require.NoError(t, err)
+			require.Equal(t, denied, result.IsError)
+			if denied {
+				require.Zero(t, calls)
+			} else {
+				require.Equal(t, 1, calls)
+				require.True(t, result.Trusted)
+				require.Contains(t, result.Content, "not verified delivery")
 			}
 		})
 	}

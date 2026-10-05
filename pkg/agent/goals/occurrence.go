@@ -2,6 +2,7 @@ package goals
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,7 @@ const (
 	OccurrenceClaimed   OccurrenceState = "claimed"
 	OccurrenceRunning   OccurrenceState = "running"
 	OccurrenceUnknown   OccurrenceState = "unknown"
+	OccurrenceFinished  OccurrenceState = "finished"
 	OccurrenceSucceeded OccurrenceState = "succeeded"
 	OccurrenceFailed    OccurrenceState = "failed"
 	OccurrenceCancelled OccurrenceState = "cancelled"
@@ -33,6 +35,9 @@ type Occurrence struct {
 	LeaseUntil    time.Time       `json:"leaseUntil,omitempty"`
 	SessionName   string          `json:"sessionName"`
 	SessionUID    string          `json:"sessionUID,omitempty"`
+	Proposal      *RunProposal    `json:"proposal,omitempty"`
+	Outcome       *RunOutcome     `json:"outcome,omitempty"`
+	Reply         *RunReply       `json:"reply,omitempty"`
 }
 
 type ClaimRequest struct {
@@ -58,4 +63,133 @@ type OccurrenceStore interface {
 	// Finish requires authoritative terminal acknowledgement. Unknown keeps
 	// the reservation until reconciliation determines whether effects occurred.
 	Finish(context.Context, Occurrence, OccurrenceState, time.Time) (Occurrence, error)
+}
+
+// RunOutcome records operator observations, not verification of the goal's
+// outcome or transport delivery. Session termination alone proves neither.
+type RunOutcome struct {
+	Reason     RunReason `json:"reason"`
+	ObservedAt time.Time `json:"observedAt"`
+	Effects    string    `json:"effects"`
+}
+type RunReason string
+
+const (
+	RunSessionEnded         RunReason = "session_ended"
+	RunSessionFailed        RunReason = "session_failed"
+	RunInfrastructureFailed RunReason = "infrastructure_failed"
+	RunDurationExpired      RunReason = "duration_expired"
+	RunConsentExpired       RunReason = "consent_expired"
+	RunCancelled            RunReason = "cancelled"
+	RunPaused               RunReason = "paused"
+	RunSuperseded           RunReason = "superseded"
+	RunAuthorityDenied      RunReason = "authority_denied"
+	RunSessionMissing       RunReason = "session_missing"
+)
+
+func (r RunReason) Valid() bool {
+	switch r {
+	case RunSessionEnded, RunSessionFailed, RunInfrastructureFailed, RunDurationExpired, RunConsentExpired, RunCancelled, RunPaused, RunSuperseded, RunAuthorityDenied, RunSessionMissing:
+		return true
+	}
+	return false
+}
+
+// RunStore retains the first observed stop reason before session cleanup.
+// Controller observations require the current dispatch fence and exact session
+// UID. Result proposals
+// bind the authenticated root UID and revision and use the transaction's
+// current fence independently of the worker lease. The reservation is
+// released separately, only after termination acknowledgement.
+type RunStore interface {
+	RecordOutcome(context.Context, Occurrence, RunReason, time.Time) (Occurrence, error)
+	Runs(context.Context, Domain, string, ListRequest) (RunPage, error)
+	ProposeResult(context.Context, Occurrence, RunProposal, time.Time) (Occurrence, error)
+}
+type RunPage struct {
+	Runs []Occurrence `json:"runs"`
+	Next string       `json:"next,omitempty"`
+}
+
+func (s *Service) Runs(ctx context.Context, a Actor, id string, r ListRequest) (RunPage, error) {
+	if _, err := s.Get(ctx, a, id); err != nil {
+		return RunPage{}, err
+	}
+	if r.Limit == 0 {
+		r.Limit = 50
+	}
+	if r.Limit < 1 || r.Limit > 100 || len(r.After) > 128 || r.State != "" {
+		return RunPage{}, ErrInvalid
+	}
+	store, ok := s.Store.(RunStore)
+	if !ok {
+		return RunPage{}, ErrDenied
+	}
+	page, err := store.Runs(ctx, a.Domain, id, r)
+	if err != nil {
+		return RunPage{}, err
+	}
+	for _, run := range page.Runs {
+		if run.Proposal != nil || run.Reply != nil {
+			if err := s.Auth.ReadGoal(ctx, a, Goal{Sources: run.ReadDependencies()}); err != nil {
+				return RunPage{}, err
+			}
+		}
+	}
+	return page, nil
+}
+
+// RunProposal is an agent's account, never a transport receipt or authorization
+// to complete the goal. The authenticated root is bound by the controller; the
+// caller cannot choose its occurrence, owner, revision, fence or session UID.
+type RunProposal struct {
+	RequestID   string    `json:"requestID"`
+	Status      string    `json:"status"`
+	Summary     string    `json:"summary"`
+	Evidence    []string  `json:"evidence"`
+	Sources     []Source  `json:"sources,omitempty"`
+	SubmittedAt time.Time `json:"submittedAt"`
+}
+
+func (p RunProposal) Validate() error {
+	if !validRequestID(p.RequestID) || strings.TrimSpace(p.Summary) == "" || len(p.Summary) > 4000 || len(p.Evidence) > 32 {
+		return ErrInvalid
+	}
+	switch p.Status {
+	case "reported_success", "blocked", "failed", "unknown":
+	default:
+		return ErrInvalid
+	}
+	if p.Status == "reported_success" && len(p.Evidence) == 0 {
+		return ErrInvalid
+	}
+	for _, ref := range p.Evidence {
+		if strings.TrimSpace(ref) == "" || len(ref) > 512 {
+			return ErrInvalid
+		}
+	}
+	return nil
+}
+
+// ReadDependencies preserves external source gates while retaining the run's
+// own private conversation under its durable goal domain. Its authenticated
+// root name/UID were bound by the operator; deleting ephemeral agentsession
+// relationships must not make the owner's stored result unreadable. This is
+// never applied to another session's dependencies.
+func (o Occurrence) ReadDependencies() []Source {
+	var sources []Source
+	if o.Proposal != nil {
+		sources = append(sources, o.Proposal.Sources...)
+	}
+	if o.Reply != nil {
+		sources = append(sources, o.Reply.Sources...)
+	}
+	deps := make([]Source, 0, len(sources))
+	for _, src := range sources {
+		if o.SessionUID != "" && src.ResourceType == "agentsession" && src.ResourceID == o.Domain.Namespace+"/"+o.SessionName {
+			src = Source{ResourceType: "agent_goal_domain", ResourceID: o.Domain.ID(), Permission: "view_memory"}
+		}
+		deps = mergeSources(deps, []Source{src})
+	}
+	return deps
 }

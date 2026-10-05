@@ -54,6 +54,21 @@ func TestDesired(t *testing.T) {
 	assert.Equal(t, v1alpha1.OpeningBadgeDone, c.Badge)
 }
 
+func TestSummaryUpdatesItsOwnMessage(t *testing.T) {
+	sess := anchored(v1alpha1.AgentSessionPhaseRunning, nil)
+	sess.Spec.OpeningSummary = "Session created to meet goal Stretch: Stand up."
+	sess.Spec.Prompt.Inline = "  exact instructions\n"
+	_, ok := pinnededit.Desired(sess)
+	require.False(t, ok, "a summary without a posted-message reference must never edit the existing thread root")
+	sess.Annotations[v1alpha1.AnnotationSessionOpeningMessageChannel] = "C_OUT"
+	sess.Annotations[v1alpha1.AnnotationSessionOpeningMessageID] = "summary-message"
+	content, ok := pinnededit.Desired(sess)
+	require.True(t, ok)
+	require.Equal(t, "summary-message", content.Ref.TS)
+	require.Equal(t, sess.Spec.OpeningSummary, content.OpeningText)
+	require.Equal(t, sess.Spec.Prompt.Inline, content.Instructions)
+}
+
 // TestDesiredGate covers the candidate gate's three independent rejection
 // reasons: an OutputChannel present but missing exactly one of channel_id,
 // thread_ts, or the opening-text annotation each yields ok=false.
