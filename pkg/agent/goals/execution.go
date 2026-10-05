@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
 )
 
 // ExecutionBounds are launch ceilings. They do not authorize external actions:
@@ -26,15 +28,18 @@ type PrivateDestination struct {
 }
 
 type ExecutionTerms struct {
-	SkillVersions     []string           `json:"skillVersions,omitempty"`
-	OwnerCatalogUID   string             `json:"ownerCatalogUID"`
-	ClassDigest       string             `json:"classDigest"`
-	DueAt             time.Time          `json:"dueAt"`
-	ExpiresAt         time.Time          `json:"expiresAt"`
-	Bounds            ExecutionBounds    `json:"bounds"`
-	AllowedOperations []string           `json:"allowedOperations"`
-	Evidence          []string           `json:"evidence"`
-	Destination       PrivateDestination `json:"destination"`
+	Schedule *sessionschedule.Spec `json:"schedule,omitempty"`
+	// Windows are resolved by the server and committed to the reviewed digest.
+	ScheduleWindows   []sessionschedule.Window `json:"scheduleWindows,omitempty"`
+	SkillVersions     []string                 `json:"skillVersions,omitempty"`
+	OwnerCatalogUID   string                   `json:"ownerCatalogUID"`
+	ClassDigest       string                   `json:"classDigest"`
+	DueAt             time.Time                `json:"dueAt"`
+	ExpiresAt         time.Time                `json:"expiresAt"`
+	Bounds            ExecutionBounds          `json:"bounds"`
+	AllowedOperations []string                 `json:"allowedOperations"`
+	Evidence          []string                 `json:"evidence"`
+	Destination       PrivateDestination       `json:"destination"`
 }
 
 type ExecutionRequest struct {
@@ -86,7 +91,7 @@ func (t ExecutionTerms) validate(now time.Time, owner string) error {
 		b.ApprovalSeconds < 1 || b.ApprovalSeconds > b.DurationSeconds ||
 		t.Destination.Channel == "" || t.Destination.ChannelUID == "" || t.Destination.Recipient != owner ||
 		len(t.AllowedOperations) < 1 || len(t.AllowedOperations) > 32 || len(t.Evidence) < 1 || len(t.Evidence) > 32 {
-		return fmt.Errorf("%w: execution requires a one-time trigger, finite bounds, evidence and private destination", ErrInvalid)
+		return fmt.Errorf("%w: execution requires a finite schedule, bounds, evidence and private destination", ErrInvalid)
 	}
 	for _, values := range [][]string{t.AllowedOperations, t.Evidence} {
 		for _, value := range values {
@@ -107,6 +112,16 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 	}
 	if !validRequestID(r.RequestID) || r.Revision < 1 || (r.ApprovalMode != "" && r.ApprovalMode != "plan") {
 		return Goal{}, ErrInvalid
+	}
+	// Do not accept caller-supplied windows. Resolution is independent of now,
+	// preserving retry identity after the first due time has passed.
+	r.Terms.ScheduleWindows = nil
+	if r.Terms.Schedule != nil {
+		windows, err := sessionschedule.Resolve(*r.Terms.Schedule, r.Terms.DueAt, r.Terms.ExpiresAt)
+		if err != nil {
+			return Goal{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		r.Terms.ScheduleWindows = windows
 	}
 	h, err := requestHash(r)
 	if err != nil {
@@ -253,4 +268,62 @@ func (s *Service) Dispatchable(ctx context.Context, g Goal) error {
 		return err
 	}
 	return s.ExecutionAuth.AuthorizeDispatch(ctx, g)
+}
+
+// ExecutionWindows is the exact finite list reviewed by the human. Legacy
+// one-time requests retain their original window and occurrence identity.
+func (t ExecutionTerms) ExecutionWindows() ([]sessionschedule.Window, error) {
+	if t.Schedule == nil {
+		if len(t.ScheduleWindows) != 0 {
+			return nil, ErrDenied
+		}
+		return []sessionschedule.Window{{DueAt: t.DueAt, ExpiresAt: t.ExpiresAt}}, nil
+	}
+	if len(t.ScheduleWindows) < 1 || len(t.ScheduleWindows) > sessionschedule.MaxRuns || len(t.ScheduleWindows) > t.Schedule.MaxRuns {
+		return nil, ErrDenied
+	}
+	var last time.Time
+	for _, w := range t.ScheduleWindows {
+		if w.DueAt.Before(t.DueAt) || !w.ExpiresAt.After(w.DueAt) || w.ExpiresAt.After(t.ExpiresAt) || (!last.IsZero() && !w.DueAt.After(last)) {
+			return nil, ErrDenied
+		}
+		last = w.DueAt
+	}
+	return t.ScheduleWindows, nil
+}
+func (t ExecutionTerms) ContainsWindow(due, expiry time.Time) bool {
+	windows, err := t.ExecutionWindows()
+	if err != nil {
+		return false
+	}
+	for _, w := range windows {
+		if w.DueAt.Equal(due) && w.ExpiresAt.Equal(expiry) {
+			return true
+		}
+	}
+	return false
+}
+
+// DispatchOccurrence binds activation and every governed action to an exact
+// approved window, rather than the enclosing series authorization period.
+func (s *Service) DispatchOccurrence(ctx context.Context, g Goal, o Occurrence) error {
+	if s.Store == nil {
+		return ErrDenied
+	}
+	current, err := s.Store.Get(ctx, g.Domain, g.ID)
+	if err != nil {
+		return err
+	}
+	if current.Revision != g.Revision {
+		return ErrDenied
+	}
+	// Window membership must come from durable consent, never a caller snapshot.
+	g = current
+
+	if g.Domain != o.Domain || g.ID != o.GoalID || g.Revision != o.GoalRevision || g.Execution == nil ||
+		g.Execution.Digest != o.ConsentDigest || !g.Execution.Terms.ContainsWindow(o.DueAt, o.ExpiresAt) ||
+		s.now().Before(o.DueAt) || !s.now().Before(o.ExpiresAt) {
+		return ErrDenied
+	}
+	return s.Dispatchable(ctx, g)
 }

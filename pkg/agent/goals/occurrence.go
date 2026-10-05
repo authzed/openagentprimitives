@@ -10,6 +10,7 @@ type OccurrenceState string
 
 const (
 	OccurrenceQueued    OccurrenceState = "queued"
+	OccurrenceSkipped   OccurrenceState = "skipped"
 	OccurrenceClaimed   OccurrenceState = "claimed"
 	OccurrenceRunning   OccurrenceState = "running"
 	OccurrenceUnknown   OccurrenceState = "unknown"
@@ -66,6 +67,12 @@ type OccurrenceStore interface {
 	Finish(context.Context, Occurrence, OccurrenceState, time.Time) (Occurrence, error)
 }
 
+// QueuedSweeper records work that can no longer launch without reserving
+// capacity or pretending a session existed. The transaction must serialize with Claim.
+type QueuedSweeper interface {
+	SweepQueued(context.Context, time.Time, int) (int, error)
+}
+
 // RunOutcome records operator observations, not verification of the goal's
 // outcome or transport delivery. Session termination alone proves neither.
 type RunOutcome struct {
@@ -81,6 +88,7 @@ const (
 	RunInfrastructureFailed RunReason = "infrastructure_failed"
 	RunDurationExpired      RunReason = "duration_expired"
 	RunConsentExpired       RunReason = "consent_expired"
+	RunMissed               RunReason = "missed_window"
 	RunCancelled            RunReason = "cancelled"
 	RunPaused               RunReason = "paused"
 	RunSuperseded           RunReason = "superseded"
@@ -90,7 +98,7 @@ const (
 
 func (r RunReason) Valid() bool {
 	switch r {
-	case RunSessionEnded, RunSessionFailed, RunInfrastructureFailed, RunDurationExpired, RunConsentExpired, RunCancelled, RunPaused, RunSuperseded, RunAuthorityDenied, RunSessionMissing:
+	case RunMissed, RunSessionEnded, RunSessionFailed, RunInfrastructureFailed, RunDurationExpired, RunConsentExpired, RunCancelled, RunPaused, RunSuperseded, RunAuthorityDenied, RunSessionMissing:
 		return true
 	}
 	return false

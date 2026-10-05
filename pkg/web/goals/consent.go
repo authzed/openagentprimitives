@@ -11,6 +11,7 @@ import (
 	"time"
 
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -122,6 +123,30 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 			Excerpt: &channelevents.InteractionExcerpt{Label: fmt.Sprintf("Goal · revision %d", g.Revision), Content: fmt.Sprintf("%s\n\nOutcome: %s\n\nRequired evidence:\n%s", g.Title, g.Outcome, strings.Join(evidence, "\n"))},
 			Details: details, Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceRequester, Requester: &audience}, ExpiresAt: &expiry,
 			Actions: []channelevents.InteractionAction{{ID: "approve", Label: "Authorize", Kind: channelevents.ActionKindDecision}, {ID: "deny", Label: "Decline", Kind: channelevents.ActionKindDecision}}}
+		if schedule := c.Terms.Schedule; schedule != nil {
+			description, err := sessionschedule.Describe(*schedule)
+			if err != nil {
+				return err
+			}
+			windows, err := c.Terms.ExecutionWindows()
+			if err != nil {
+				return err
+			}
+			loc, err := time.LoadLocation(schedule.Timezone)
+			if err != nil {
+				return err
+			}
+			request.Lead = "Allow scheduled private reminders?"
+			request.Body = "Each session needs a fresh plan approval before sending. Quiet hours defer reminders; missed run windows are skipped."
+			request.Fields[0] = channelevents.InteractionField{Label: "Schedule", Value: fmt.Sprintf("%s at %s · %s · up to %d runs", description, c.Terms.DueAt.In(loc).Format("15:04:05"), schedule.Timezone, schedule.MaxRuns)}
+			request.Fields = append(request.Fields, channelevents.InteractionField{Label: "First run", Value: windows[0].DueAt.In(loc).Format("2 Jan 2006, 15:04:05 MST")},
+				channelevents.InteractionField{Label: "Run window", Value: fmt.Sprintf("%s; ends sooner at quiet hours or authorization expiry", (time.Duration(schedule.RunWindowSeconds) * time.Second).String())},
+				channelevents.InteractionField{Label: "Series limits", Value: fmt.Sprintf("%d planned sessions · at most %d turns and %d tokens total", len(windows), int64(len(windows))*b.Turns, int64(len(windows))*b.Tokens)})
+			request.Fields[2].Label = "Limits per session"
+			if len(schedule.QuietHours) > 0 {
+				request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Quiet hours", Value: sessionschedule.QuietDescription(*schedule)})
+			}
+		}
 		raw, e := json.Marshal(request)
 		if e != nil {
 			return e

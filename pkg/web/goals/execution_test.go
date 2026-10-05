@@ -14,6 +14,7 @@ import (
 	"time"
 
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta/capability"
@@ -69,11 +70,13 @@ func (e *statusError) Error() string { return http.StatusText(e.code) }
 
 func TestProductionConsentLaunchAndRevocation(t *testing.T) {
 	for _, mode := range []string{"standalone", "plan"} {
-		t.Run(mode, func(t *testing.T) { productionConsentLaunchAndRevocation(t, mode == "plan") })
+		for _, recurring := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/recurring=%t", mode, recurring), func(t *testing.T) { productionConsentLaunchAndRevocation(t, mode == "plan", recurring) })
+		}
 	}
 }
 
-func productionConsentLaunchAndRevocation(t *testing.T, inPlan bool) {
+func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring bool) {
 	f := fixture(t)
 	ctx := memory.WithCaller(memory.WithSystemApproval(context.Background(), "system:operator"), "system:operator")
 	db, err := memsqlite.NewClient(filepath.Join(t.TempDir(), "goals.db"))
@@ -107,13 +110,16 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan bool) {
 	f.proof(t, owner.String())
 	actor, err := f.s.resolve(ctx, "team", "session")
 	require.NoError(t, err)
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Second)
 	f.s.Service.Now = func() time.Time { return now.Add(-time.Minute) }
 	g, err := f.s.Service.Create(ctx, actor, domain.CreateRequest{RequestID: "create", Title: "Private reminder", Outcome: "Remind me to stretch"})
 	require.NoError(t, err)
 	g, err = f.s.Service.Update(ctx, actor, domain.Change{ID: g.ID, Revision: g.Revision, RequestID: "activate", Action: "activate"})
 	require.NoError(t, err)
 	req := domain.ExecutionRequest{RequestID: "request-execution", ID: g.ID, Revision: g.Revision, Terms: domain.ExecutionTerms{DueAt: now.Add(-time.Second), ExpiresAt: now.Add(time.Hour), Bounds: domain.ExecutionBounds{DurationSeconds: 300, Turns: 10, Tokens: 10000, ApprovalSeconds: 120}, AllowedOperations: []string{"respond_to_user"}, Evidence: []string{"A private reminder delivery"}}}
+	if recurring {
+		req.Terms.Schedule = &sessionschedule.Spec{Kind: "interval", Timezone: "UTC", IntervalSeconds: 60, MaxRuns: 2, RunWindowSeconds: 600}
+	}
 	if inPlan {
 		req.ApprovalMode = "plan"
 		status, _ := f.call(t, "token", domain.Request{Operation: "request_execution", Resource: ResourceType + ":" + actor.Domain.ID(), Execution: req})
@@ -171,6 +177,12 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan bool) {
 		assert.Equal(t, response.Approval, retry.Approval, "repeated full plan updates reuse the exact reviewed card")
 	}
 
+	if recurring {
+		assert.Equal(t, "Allow scheduled private reminders?", card.Lead)
+		assert.Contains(t, card.Fields[0].Value, "up to 2 runs")
+		assert.Equal(t, "Limits per session", card.Fields[2].Label)
+		require.Len(t, g.Execution.Terms.ScheduleWindows, 2)
+	}
 	require.Equal(t, "goalconsent-request-"+g.Execution.Digest, card.RequestRef)
 	require.NoError(t, card.Validate())
 	require.NotContains(t, card.Body, g.Title, "untrusted goal content belongs in the inert excerpt")
@@ -321,6 +333,16 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan bool) {
 	occurrence, err = store.Occurrence(ctx, occurrence.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.OccurrenceCancelled, occurrence.State)
+	if recurring {
+		history, err := store.Runs(ctx, g.Domain, g.ID, domain.ListRequest{Limit: 100})
+		require.NoError(t, err)
+		require.Len(t, history.Runs, 2)
+		for _, run := range history.Runs {
+			assert.Equal(t, domain.OccurrenceCancelled, run.State)
+			require.NotNil(t, run.Outcome)
+			assert.Equal(t, domain.RunCancelled, run.Outcome.Reason)
+		}
+	}
 }
 
 func TestDecisionRequiresComponentSignature(t *testing.T) {

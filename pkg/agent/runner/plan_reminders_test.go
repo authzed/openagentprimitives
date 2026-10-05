@@ -58,7 +58,7 @@ func TestPlanRemindersPrepareExactCardsWithoutAutoApproval(t *testing.T) {
 	var parent channelevents.InteractionRequestPayload
 	require.NoError(t, json.Unmarshal(published.Payload, &parent))
 	require.Len(t, parent.Consents, 1)
-	assert.Equal(t, "Approve this plan and 1 private reminder?", parent.Lead)
+	assert.Equal(t, "Approve this plan and 1 reminder schedule?", parent.Lead)
 	require.Len(t, parent.Audience.Approvers, 1, "private reminder terms must not reach other plan approvers")
 	assert.Equal(t, card.RequestRef, parent.Consents[0].RequestRef)
 	assert.Equal(t, channelevents.PlanConsentExcerpt(parent.Consents), parent.Excerpt)

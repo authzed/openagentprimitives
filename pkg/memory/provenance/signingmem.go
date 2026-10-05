@@ -74,12 +74,19 @@ func errEmptyIDSign(kind string) error {
 		kind)
 }
 
+func errZeroTimeSign(kind string) error {
+	return fmt.Errorf("signingmem: refusing to sign a %q entry with zero CreatedAt: set its timestamp before Put/PutToPool so storage preserves the signed digest", kind)
+}
+
 // Put signs append-only entries before forwarding them; mutable-Kind
 // entries pass through untouched (Provenance stays nil).
 func (m *SigningMemory) Put(ctx context.Context, e memory.Entry) (memory.Entry, error) {
 	if memory.KindAppendOnly(e.Kind) {
 		if e.ID == "" {
 			return memory.Entry{}, errEmptyIDSign(e.Kind)
+		}
+		if e.CreatedAt.IsZero() {
+			return memory.Entry{}, errZeroTimeSign(e.Kind)
 		}
 		// A ScopeHooks reaction to Local's entry-appended fan-out (memory.
 		// InEntryAppendedDispatch) must not reach lockForScope below: the Put that
@@ -185,6 +192,9 @@ func (m *SigningMemory) PutToPool(ctx context.Context, sessionScope, poolScope m
 
 	if e.ID == "" {
 		return memory.Entry{}, errEmptyIDSign(e.Kind)
+	}
+	if e.CreatedAt.IsZero() {
+		return memory.Entry{}, errZeroTimeSign(e.Kind)
 	}
 
 	// See Put's identical guard: a ScopeHooks reaction to Local's
