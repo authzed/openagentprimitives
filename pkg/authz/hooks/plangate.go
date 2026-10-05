@@ -186,6 +186,25 @@ func NewPlanGate(deps PlanGateDeps) *PlanGate { return &PlanGate{deps: deps} }
 func (h *PlanGate) Name() string             { return "plan_gate" }
 func (h *PlanGate) Points() []pipeline.Point { return []pipeline.Point{pipeline.PreToolCall} }
 
+// ConsentApproval makes an explicit request for a phase with prepared consents,
+// including a phase with no governed calls to trigger the normal lazy gate.
+// It uses the same card and durable approval identity as a permissioned call.
+func (h *PlanGate) ConsentApproval(ctx context.Context, session pipeline.SessionRef, index int) (pipeline.Decision, error) {
+	plan := h.activePlan()
+	if !h.enforcing() || index < 0 || index >= len(plan.Phases) || len(plan.Phases[index].Consents) == 0 {
+		return pipeline.Decision{}, fmt.Errorf("explicit consent requires an enforcing declared plan phase")
+	}
+	st, folded, err := h.foldOnce()
+	if err != nil || !folded || st.Doubtful {
+		return pipeline.Decision{}, fmt.Errorf("cannot establish plan consent approval history: %v", err)
+	}
+	needs, denied := h.phaseNeedsApproval(st, folded, index)
+	if !needs {
+		return pipeline.Decision{}, nil
+	}
+	return h.requestPhaseApproval(ctx, pipeline.Input{Session: session}, plangateaudit.Content{Mode: h.deps.Mode}, index, denied), nil
+}
+
 func (h *PlanGate) now() time.Time {
 	if h.deps.Now != nil {
 		return h.deps.Now()

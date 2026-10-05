@@ -2298,6 +2298,7 @@ func run(cfg *config) {
 	goalHandler := &goalweb.Server{Service: goalService, Reader: mgr.GetAPIReader(), Memory: goalMemory, Tokens: memTokens, Keys: keyLookup, Auth: goalAuth, ColdRegistryUntil: time.Now().Add(memoryColdRegistryGrace)}
 	goalService.Auth = goalHandler
 	consentPublisher := &goalweb.ConsentPublisher{Service: goalService, Memory: goalMemory, Signer: opSigner, Publish: monitoringPublish}
+	goalHandler.Consent = consentPublisher
 	goalPublisher := &goalweb.Publisher{Store: goalStore, Memory: goalMemory, Signer: opSigner, Notify: consentPublisher.Notify}
 	if err := mgr.Add(goalPublisher); err != nil {
 		log.Error(err, "register goal audit publisher")

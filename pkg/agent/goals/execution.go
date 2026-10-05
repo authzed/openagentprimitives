@@ -38,13 +38,15 @@ type ExecutionTerms struct {
 }
 
 type ExecutionRequest struct {
-	RequestID string         `json:"requestID"`
-	ID        string         `json:"id"`
-	Revision  int64          `json:"revision"`
-	Terms     ExecutionTerms `json:"terms"`
+	ApprovalMode string         `json:"approvalMode,omitempty"`
+	RequestID    string         `json:"requestID"`
+	ID           string         `json:"id"`
+	Revision     int64          `json:"revision"`
+	Terms        ExecutionTerms `json:"terms"`
 }
 
 type ExecutionConsent struct {
+	ApprovalMode    string             `json:"approvalMode,omitempty"`
 	Session         string             `json:"session"`
 	SessionUID      string             `json:"sessionUID"`
 	RequestID       string             `json:"requestID"`
@@ -103,7 +105,7 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 	if s.ExecutionAuth == nil {
 		return Goal{}, ErrDenied
 	}
-	if !validRequestID(r.RequestID) || r.Revision < 1 {
+	if !validRequestID(r.RequestID) || r.Revision < 1 || (r.ApprovalMode != "" && r.ApprovalMode != "plan") {
 		return Goal{}, ErrInvalid
 	}
 	h, err := requestHash(r)
@@ -146,15 +148,16 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 	g.Execution = nil
 	// Commit to the entire reviewed goal, dependencies, revision and terms.
 	digest, err := requestHash(struct {
-		Goal       Goal
-		Session    string
-		SessionUID string
-		Terms      ExecutionTerms
-	}{g, a.Session, a.SessionUID, r.Terms})
+		Goal         Goal
+		Session      string
+		SessionUID   string
+		Terms        ExecutionTerms
+		ApprovalMode string
+	}{g, a.Session, a.SessionUID, r.Terms, r.ApprovalMode})
 	if err != nil {
 		return Goal{}, err
 	}
-	g.Execution = &ExecutionConsent{Session: a.Session, SessionUID: a.SessionUID, RequestID: r.RequestID, RequestRevision: g.Revision, Digest: digest, Terms: r.Terms}
+	g.Execution = &ExecutionConsent{ApprovalMode: r.ApprovalMode, Session: a.Session, SessionUID: a.SessionUID, RequestID: r.RequestID, RequestRevision: g.Revision, Digest: digest, Terms: r.Terms}
 	return s.commit(ctx, a, g, r.Revision, r.RequestID, h, "request_execution")
 }
 

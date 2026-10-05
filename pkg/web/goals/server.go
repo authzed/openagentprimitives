@@ -46,6 +46,7 @@ type ExecutionReplyPreparer interface {
 }
 
 type Server struct {
+	Consent           *ConsentPublisher
 	ExecutionSessions ExecutionSessionAuthority
 	Service           *domain.Service
 	Reader            client.Reader
@@ -211,11 +212,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		err = e
 		out.Goal = &g
 	case "request_execution":
+		if req.Execution.ApprovalMode == "plan" && (s.Consent == nil || s.Consent.Signer == nil || s.Consent.Memory == nil) {
+			s.fail(w, r, domain.ErrDenied)
+			return
+		}
 		err = s.PrepareExecution(ctx, a, &req.Execution)
 		if err == nil {
 			var g domain.Goal
 			g, err = s.Service.RequestExecution(ctx, a, req.Execution)
 			out.Goal = &g
+			if err == nil && req.Execution.ApprovalMode == "plan" {
+				if g.Execution == nil || g.Execution.Session != a.Session || g.Execution.SessionUID != a.SessionUID {
+					s.fail(w, r, domain.ErrDenied)
+					return
+				}
+				err = s.Consent.Notify(ctx, domain.Event{Action: "request_execution", Goal: g})
+				if err == nil {
+					out.Approval, err = s.Consent.Request(ctx, g)
+				}
+			}
 		}
 	case "runs":
 		p, e := s.Service.Runs(ctx, a, req.ID, req.List)

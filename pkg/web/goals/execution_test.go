@@ -68,6 +68,12 @@ type statusError struct{ code int }
 func (e *statusError) Error() string { return http.StatusText(e.code) }
 
 func TestProductionConsentLaunchAndRevocation(t *testing.T) {
+	for _, mode := range []string{"standalone", "plan"} {
+		t.Run(mode, func(t *testing.T) { productionConsentLaunchAndRevocation(t, mode == "plan") })
+	}
+}
+
+func productionConsentLaunchAndRevocation(t *testing.T, inPlan bool) {
 	f := fixture(t)
 	ctx := memory.WithCaller(memory.WithSystemApproval(context.Background(), "system:operator"), "system:operator")
 	db, err := memsqlite.NewClient(filepath.Join(t.TempDir(), "goals.db"))
@@ -108,6 +114,15 @@ func TestProductionConsentLaunchAndRevocation(t *testing.T) {
 	g, err = f.s.Service.Update(ctx, actor, domain.Change{ID: g.ID, Revision: g.Revision, RequestID: "activate", Action: "activate"})
 	require.NoError(t, err)
 	req := domain.ExecutionRequest{RequestID: "request-execution", ID: g.ID, Revision: g.Revision, Terms: domain.ExecutionTerms{DueAt: now.Add(-time.Second), ExpiresAt: now.Add(time.Hour), Bounds: domain.ExecutionBounds{DurationSeconds: 300, Turns: 10, Tokens: 10000, ApprovalSeconds: 120}, AllowedOperations: []string{"respond_to_user"}, Evidence: []string{"A private reminder delivery"}}}
+	if inPlan {
+		req.ApprovalMode = "plan"
+		status, _ := f.call(t, "token", domain.Request{Operation: "request_execution", Resource: ResourceType + ":" + actor.Domain.ID(), Execution: req})
+		require.Equal(t, http.StatusNotFound, status, "missing signing collaborators fail closed before goal mutation")
+		unchanged, err := f.s.Service.Get(ctx, actor, g.ID)
+		require.NoError(t, err)
+		assert.Equal(t, g.Revision, unchanged.Revision)
+		assert.Nil(t, unchanged.Execution)
+	}
 	require.NoError(t, f.s.PrepareExecution(ctx, actor, &req))
 	validationGoal := g
 	validationGoal.Execution = &domain.ExecutionConsent{Session: actor.Session, SessionUID: actor.SessionUID}
@@ -144,6 +159,18 @@ func TestProductionConsentLaunchAndRevocation(t *testing.T) {
 		return json.Unmarshal(env.Payload, &card)
 	}}
 	require.NoError(t, publisher.Notify(ctx, domain.Event{Goal: g, Action: "request_execution"}))
+	if inPlan {
+		assert.Empty(t, card.RequestRef, "prepared requests must not publish a separate consent card")
+		f.s.Consent = publisher
+		status, response := f.call(t, "token", domain.Request{Operation: "request_execution", Resource: ResourceType + ":" + actor.Domain.ID(), Execution: req})
+		require.Equal(t, http.StatusOK, status)
+		require.NotNil(t, response.Approval)
+		card = *response.Approval
+		status, retry := f.call(t, "token", domain.Request{Operation: "request_execution", Resource: ResourceType + ":" + actor.Domain.ID(), Execution: req})
+		require.Equal(t, http.StatusOK, status)
+		assert.Equal(t, response.Approval, retry.Approval, "repeated full plan updates reuse the exact reviewed card")
+	}
+
 	require.Equal(t, "goalconsent-request-"+g.Execution.Digest, card.RequestRef)
 	require.NoError(t, card.Validate())
 	require.NotContains(t, card.Body, g.Title, "untrusted goal content belongs in the inert excerpt")

@@ -18,6 +18,7 @@ package plangateaudit
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"time"
 
@@ -130,7 +131,8 @@ type SlotRef struct {
 
 // Content is one plan-gate record.
 type Content struct {
-	Event string `json:"event"`
+	Consents []json.RawMessage `json:"consents,omitempty"`
+	Event    string            `json:"event"`
 
 	// PlanDigest identifies the frozen approved plan this record belongs to.
 	// It covers the ordered phase list and each phase's authority (permissions,

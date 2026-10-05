@@ -36,6 +36,9 @@ type goalReport struct {
 }
 
 func (*goalReport) PipelineRouted() bool { return true }
+func (t *goalReport) Description() string {
+	return t.Tool.Description() + " In this bounded goal session, both respond_to_user and report_goal_result require perm:execute:agent_goal_execution. Declare that permission in the fresh delivery phase before requesting approval, and cover both delivery and result reporting in that phase. These actions change state; do not declare an empty or readonly permission ceiling for them."
+}
 func (t *goalReport) Permission() authz.Permission {
 	return authz.Permission{StateImpact: authz.Readwrite, Check: &authz.PermissionCheck{ResourceType: "agent_goal_execution", Permission: "execute", ResourceIDExpr: "'" + t.digest + "'"}}
 }

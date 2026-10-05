@@ -52,6 +52,7 @@ import (
 type pendingApproval struct {
 	kind      string
 	onPublish func(ctx context.Context) error
+	expiresAt *time.Time
 
 	// tool_call fields
 	toolCallPayload *pendingToolCall
@@ -117,7 +118,8 @@ type pendingPlanGate struct {
 	// The fields above stay the ACTIVE phase's, and a no still writes one
 	// denial: refusing refuses the call in front of the human, not two phases
 	// nobody has reached.
-	covered []plangateaudit.Content
+	covered  []plangateaudit.Content
+	consents []json.RawMessage
 }
 
 // pendingContentInspection carries per-request state for a content_inspection
@@ -324,6 +326,11 @@ func (h *runnerHost) AwaitDecision(ctx context.Context, reqID string, timeout ti
 	}
 	if h.l.Approval == nil {
 		return false, "", false, fmt.Errorf("host: l.Approval not wired; cannot await decision for request %q", reqID)
+	}
+	if pa.expiresAt != nil {
+		if remaining := time.Until(*pa.expiresAt); remaining < timeout {
+			timeout = remaining
+		}
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -2085,6 +2092,94 @@ func (h *runnerHost) buildPlanGatePending(
 		ExpiresAt:     expiresAtPtr(hostNow().Add(h.l.resolvedApprovalTimeout())),
 		Interruptible: false,
 	}
+	covered := extractCoveredPhases(ask.Payload)
+	var consentRaw []json.RawMessage
+	var approvedPhases map[string]bool
+	if plan, declared := h.l.ActiveFrozenPlan(ctx); declared {
+		state, err := plangate.Fold(plan, h.l.PlanGateRecords())
+		if err != nil {
+			return nil, fmt.Errorf("read existing plan consent authority: %w", err)
+		}
+		approvedPhases = make(map[string]bool)
+		for i := range plan.Phases {
+			approvedPhases[plan.Phases[i].AuthorityKey()] = state.PhaseApproved(i)
+		}
+	}
+	for _, phase := range covered {
+		// A new phase must not re-request an already approved phase's expired
+		// consent. Keep its full authority in the audit coverage, while only
+		// applying child decisions for phases that need this approval.
+		if approvedPhases[phase.PhaseKey] {
+			continue
+		}
+		consentRaw = append(consentRaw, phase.Consents...)
+	}
+	for _, raw := range consentRaw {
+		var child channelevents.InteractionRequestPayload
+		if err := json.Unmarshal(raw, &child); err != nil {
+			return nil, fmt.Errorf("decode plan consent: %w", err)
+		}
+		if child.AgentSessionRef != pl.AgentSessionRef {
+			return nil, fmt.Errorf("plan consent belongs to another session")
+		}
+		pl.Consents = append(pl.Consents, child)
+		if child.ExpiresAt == nil {
+			return nil, fmt.Errorf("plan consent has no expiry")
+		}
+		if child.ExpiresAt.Before(*pl.ExpiresAt) {
+			pl.ExpiresAt = child.ExpiresAt
+		}
+	}
+	if len(pl.Consents) > 0 {
+		noun := "private reminder"
+		if len(pl.Consents) != 1 {
+			noun += "s"
+		}
+		pl.Lead = fmt.Sprintf("Approve this plan and %d %s?", len(pl.Consents), noun)
+		pl.Body = "Authorizes the exact requests below. Each future session will ask for a fresh action plan before sending its reminder."
+		owners := make(map[string]bool)
+		for _, child := range pl.Consents {
+			if child.Audience.Requester == nil {
+				return nil, fmt.Errorf("plan consent has no private owner")
+			}
+			owner, err := child.Audience.Requester.Principal().Canonical()
+			if err != nil {
+				return nil, err
+			}
+			owners[owner.String()] = true
+		}
+		if len(owners) != 1 {
+			return nil, fmt.Errorf("plan consents must address the same private owner")
+		}
+		var privateApprovers []channelevents.ExternalIdentity
+		for _, approver := range pl.Audience.Approvers {
+			canonical, err := approver.Principal().Canonical()
+			if err != nil {
+				return nil, err
+			}
+			if owners[canonical.String()] {
+				privateApprovers = append(privateApprovers, approver)
+			}
+		}
+		if len(privateApprovers) == 0 {
+			return nil, fmt.Errorf("private reminder owner cannot approve this plan")
+		}
+		pl.Audience.Approvers = privateApprovers
+		var err error
+		pl.Details, err = json.Marshal(pl.Consents)
+		if err != nil {
+			return nil, err
+		}
+		pl.Fields = append(pl.Fields, channelevents.PlanConsentFields(pl.Consents)...)
+		pl.Excerpt = channelevents.PlanConsentExcerpt(pl.Consents)
+		if h.l.Mem == nil {
+			return nil, fmt.Errorf("plan consent durable details unavailable")
+		}
+		scope := memory.Scope{Kind: "session", ID: sessNS + "/" + sessName}
+		if err := memapproval.RecordRequest(ctx, h.l.Mem, scope, reqID, memapproval.Request{RequestID: reqID, Details: pl.Details}); err != nil {
+			return nil, fmt.Errorf("record plan consent details: %w", err)
+		}
+	}
 	env, eerr := channelevents.BuildEnvelope(sessNS, sessName, channelevents.KindInteractionRequest, pl)
 	if eerr != nil {
 		return nil, fmt.Errorf("build %s interaction envelope: %w", category, eerr)
@@ -2092,7 +2187,8 @@ func (h *runnerHost) buildPlanGatePending(
 
 	publish := h.l.InteractionRequestPublish
 	return &pendingApproval{
-		kind: category,
+		kind:      category,
+		expiresAt: pl.ExpiresAt,
 		onPublish: func(c context.Context) error {
 			return publish(c, sessNS, sessName, env)
 		},
@@ -2106,7 +2202,8 @@ func (h *runnerHost) buildPlanGatePending(
 			slotValues: extractStringMap(ask.Payload, "slotValues"),
 			maxCount:   extractInt(ask.Payload, "maxCount"),
 			requires:   extractIntSlice(ask.Payload, "requires"),
-			covered:    extractCoveredPhases(ask.Payload),
+			covered:    covered,
+			consents:   consentRaw,
 		},
 	}, nil
 }
@@ -2671,6 +2768,7 @@ func approvedPhaseRecords(pg *pendingPlanGate) []plangateaudit.Content {
 		// the approval clears the call in front of it and nothing more.
 		Handle:   pg.handle,
 		Slots:    pg.slots,
+		Consents: pg.consents,
 		MaxCount: pg.maxCount,
 		Requires: pg.requires,
 	}}

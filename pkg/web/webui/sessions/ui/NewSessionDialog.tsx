@@ -167,8 +167,27 @@ export function EmptyDashboardExplanation() {
   return (
     <p className="text-sm text-muted-foreground" data-testid="session-shell-no-startable-classes">
       You do not have access to any agents yet. Access arrives by being added to a session someone else started, or
-      through a channel an agent is connected to.
+      through a channel an agent is connected to. Ask your administrator to install at least one agent or give you
+      access to an existing agent.
     </p>
+  );
+}
+
+export function NoAgentsDialog() {
+  const [open, setOpen] = useState(true);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>No agents available</DialogTitle>
+          <DialogDescription>
+            You need an available agent to start a chat. Ask your administrator to install at least one agent or
+            give you access to an existing agent.
+          </DialogDescription>
+        </DialogHeader>
+        <Button type="button" onClick={() => setOpen(false)}>Got it</Button>
+      </DialogContent>
+    </Dialog>
   );
 }
 

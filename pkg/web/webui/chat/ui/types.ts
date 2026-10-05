@@ -444,6 +444,7 @@ export interface InteractionRequestInner {
   excerpt?: InteractionExcerpt;
   actions?: InteractionAction[];
   details?: unknown;
+  consents?: InteractionRequestInner[];
   audience: { scope: string };
   expiresAt?: string;
   interruptible?: boolean;
