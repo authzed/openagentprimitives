@@ -523,6 +523,11 @@ type PermissionDecisionAppliedPayload struct {
 // identity.FromExternal(...).Canonical() with allowSynthetic=false, and
 // re-checks agentsession#interact. Never trust it as an authorization input.
 type ViewMessagePayload struct {
+	// AttestOnly asks channelsd to authorize and attest the human behind an
+	// opening prompt already stored in spec.prompt.inline. It never appends
+	// another turn or wakes the runner. The same identity and Interact gates
+	// as ordinary view input apply, including on every retry.
+	AttestOnly bool `json:"attestOnly,omitempty"`
 	// Text is the message body — one of two inbound kinds that carries content
 	// directly (KindAgentMessageSend is the other; see its own doc for why).
 	Text   string           `json:"text"`

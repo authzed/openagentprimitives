@@ -52,6 +52,8 @@ type SkipReason struct {
 // factory. Fields are added by the tasks that need them; unused fields are the
 // zero value (capabilities that don't need a field ignore it).
 type RunnerEnv struct {
+	GoalsCaller meta.GoalsCaller
+
 	// AllToolsSoFar is set by Assemble immediately before invoking the
 	// introspection capability's Offer, so introspection can resolve over the
 	// full merged tool list (meta + non-meta) assembled so far. Every other

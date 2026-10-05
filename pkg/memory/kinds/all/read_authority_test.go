@@ -20,6 +20,8 @@ import (
 // TestSessionWritableSet_MatchesTheReviewedPin, and it exists for the same
 // reason: the failure it guards is silent.
 var sessionUnreadable = map[string]string{
+	"goal_actor":     "platform attestation of the current human; goal ownership is resolved by the operator, not by agent-authored memory",
+	"goal_event":     "historical goal snapshots may contain revoked source data; sessions must use the goal API, which rechecks retained sources",
 	"pt_tag_content": "redacted content the model was deliberately not shown; readable back through query_memory would make redaction a formality",
 }
 

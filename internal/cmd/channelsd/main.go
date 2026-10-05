@@ -543,6 +543,7 @@ func run(rootCtx context.Context, cfg *config) error {
 	// Inbound pipeline: authz + memory + NATS publish + session correlation.
 	// NewPipeline constructs Engine internally from the Authz arg.
 	pl := pipeline.NewPipeline(cli, az, mem, &natsPub{nc}, caps)
+	pl.RecordGoalActor = mem.RecordGoalActor
 
 	// The durable memory facade. Two consumers: the resource-owner decision
 	// gate reads the memapproval record back after a restart, and the parked

@@ -1,0 +1,94 @@
+{
+  "name": "goals-private-read",
+  "description": "An opted-in human session resolves its private goal domain through the production operator HTTP handler. Goal reads declare their resource to the enforcing information-flow pipeline. A missing goal is refused, and a subsequent list still succeeds. Tool results assert that scheduling is unavailable and no unowned goal data appears.",
+  "agentDir": "testdata/agent-goaldemo",
+  "agentClass": "goaldemo",
+  "userTurns": [
+    "List my goals and check whether goal-not-mine is available"
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "List my goals",
+        "toolOffered": "list_goals"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "list_goals",
+            "args": {}
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "list_goals",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"executionAvailable\":false"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "get_goal",
+            "args": {
+              "id": "goal-not-mine"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "get_goal",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "goal unavailable"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "list_goals",
+            "args": {}
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "list_goals",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"goals\":[]"
+      },
+      "reply": [
+        {
+          "text": "Your private goal list is empty. Scheduled execution is unavailable."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "checked private goals"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "toolsCalled": [
+      "list_goals",
+      "get_goal"
+    ],
+    "approvalPrompts": 0,
+    "agentReplyContains": [
+      "Your private goal list is empty"
+    ]
+  }
+}

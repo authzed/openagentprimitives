@@ -996,6 +996,26 @@ func (l *Loop) scopeDeps() hooks.ScopeDeps {
 // it was. record_observation is the one other name it answers, and with the
 // opposite shape — a declared opt-out rather than a declaration; see there.
 func (l *Loop) memoryPoolReadsDecl(toolName string) *hooks.ToolReadsDecl {
+	if meta.IsGoalTool(toolName) {
+		return &hooks.ToolReadsDecl{ResultResources: func(result string) ([]hooks.ToolReadResource, error) {
+			var response struct {
+				Resource string `json:"resource"`
+			}
+			if err := json.Unmarshal([]byte(result), &response); err != nil {
+				return nil, err
+			}
+			scope, err := memory.ParseResourceRef(response.Resource)
+			if err != nil {
+				return nil, err
+			}
+			typ, id, ok := memory.ResourceRef(scope)
+			if !ok || typ != meta.GoalResourceType {
+				return nil, hooks.ErrUnattributableResource
+			}
+			return []hooks.ToolReadResource{{Type: typ, ID: id, Permission: memory.PermissionViewMemory, Content: result}}, nil
+		}}
+	}
+
 	if toolName == meta.RecordObservationToolName {
 		// The declared OPT-OUT, in the same shape the CRD's NoTaint takes
 		// (infoleakread.go's "NoTaint equivalent"): a decl carrying only
@@ -1062,7 +1082,7 @@ func (l *Loop) memoryPoolReadsDecl(toolName string) *hooks.ToolReadsDecl {
 // Returns nil for every other tool, which is what leaves the PreToolCall
 // pool-write gate inert for everything but this one.
 func (l *Loop) memoryPoolWritesDecl(toolName string) *hooks.ToolWritesDecl {
-	if toolName != meta.RecordObservationToolName {
+	if toolName != meta.RecordObservationToolName && !meta.IsGoalWrite(toolName) {
 		return nil
 	}
 	return &hooks.ToolWritesDecl{DestinationArg: "resource"}

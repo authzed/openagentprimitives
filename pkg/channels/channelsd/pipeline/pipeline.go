@@ -253,7 +253,8 @@ func init() {
 
 // Pipeline implements channelkinds.InboundPipeline.
 type Pipeline struct {
-	K8s client.Client
+	RecordGoalActor GoalActorRecorder
+	K8s             client.Client
 
 	// envVerify enforces the inter-agent envelope contract (signature,
 	// session-window binding, freshness, anti-replay) at the top of
@@ -875,6 +876,9 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 			}
 		}
 		// Allow (or a service subject, which skips the check) means fall through.
+		if err := p.recordGoalActor(ctx, active, ev); err != nil {
+			return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
+		}
 
 		// Portal-access chat trigger: "manage my accounts" and friends are UI
 		// commands, not work for the agent. The triggerer publishes an
@@ -1772,6 +1776,12 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 
 			besteffort.Log(log.FromContext(ctx).Info, "apply InteractPolicyApplied status", applyApprovalStatus(ctx, p.K8s, patched, sess),
 				"session", sess.Namespace+"/"+sess.Name)
+		}
+	}
+
+	if created {
+		if err := p.recordGoalActor(ctx, sess, ev); err != nil {
+			return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
 		}
 	}
 
@@ -3165,6 +3175,9 @@ func (p *Pipeline) handlePermissionDeny(
 // written and the matching PendingRequester confirmed removed. Otherwise this
 // smuggles an unauthorized message past the permission check.
 func (p *Pipeline) ResubmitAuthorized(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ev channelkinds.InboundEvent) error {
+	if err := p.recordGoalActor(ctx, sess, ev); err != nil {
+		return err
+	}
 	if ev.MessageText == "" && len(ev.Attachments) == 0 {
 		return nil // nothing to replay
 	}

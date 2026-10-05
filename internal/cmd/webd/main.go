@@ -1069,7 +1069,35 @@ func (d *artifactViewDeps) StartBrowserSession() browsersession.StartFunc {
 	}
 	bd := browserSessionDeps{k8s: d.K8s(), granter: d.spdb, logger: d.Logger(), checker: d.spdb}
 	return func(ctx context.Context, p browsersession.Params) (browsersession.Created, error) {
-		return browsersession.Create(ctx, bd, p)
+		created, err := browsersession.Create(ctx, bd, p)
+		if err != nil {
+			return created, err
+		}
+		grant, err := agentcaps.GrantOf(created.Class, "goals")
+		if err != nil {
+			d.Logger().Info("browser start: could not resolve goals capability", "session", created.Session.Name, "err", err)
+			return created, nil
+		}
+		if !agentcaps.Active(false, grant) {
+			return created, nil
+		}
+		// The opening prompt is already on the session. Route its authenticated
+		// actor through channelsd without appending or waking a duplicate turn.
+		dec, err := channelkinds.RequestViewActor(channelkinds.Deps{NATSRequest: func(subject string, data []byte, timeout time.Duration) ([]byte, error) {
+			requestCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			msg, err := d.nc.RequestWithContext(requestCtx, subject, data)
+			if err != nil {
+				return nil, err
+			}
+			return msg.Data, nil
+		}}, created.Session.Namespace, created.Session.Name, created.Identity)
+		if err != nil || dec.Outcome != channelkinds.OutcomeRouted {
+			// Keep the existing session addressable and adopted. Goals fail closed
+			// until a subsequent accepted input can record the actor successfully.
+			d.Logger().Info("browser start: initial actor attestation failed", "session", created.Session.Namespace+"/"+created.Session.Name, "outcome", dec.Outcome.String(), "err", err)
+		}
+		return created, nil
 	}
 }
 

@@ -67,6 +67,7 @@ import (
 	// Registers the "openingsummary" state kind, which the enrichment tool
 	// writes and the runner reads to keep a triggered session's pinned
 	// opening message current.
+	goalmodel "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	_ "github.com/authzed/openagentprimitives/pkg/agent/session/state/openingsummary"
 	"github.com/authzed/openagentprimitives/pkg/agent/session/state/plans"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
@@ -1584,6 +1585,9 @@ func run(cfg *config) error {
 	}
 
 	env := capability.RunnerEnv{
+		GoalsCaller: func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+			return memHTTP.Goals(ctx, ns, name, req)
+		},
 		NATSPublish:      pubFn,
 		EnvelopeSigner:   envSigner,
 		NATSRequest:      natsRequestFn,

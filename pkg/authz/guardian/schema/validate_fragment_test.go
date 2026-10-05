@@ -84,6 +84,8 @@ func TestReservedDefinitionNames_MatchesScaffold(t *testing.T) {
 		// it without depending on Slack being installed; being reserved is
 		// what stops a fragment from redeclaring it once it moved.
 		"agent": {},
+		// A private goal domain is platform-owned; fragments cannot redefine it.
+		"agent_goal_domain": {},
 	}
 	assert.Equal(t, want, schema.ReservedDefinitionNames(), "ReservedDefinitionNames must track the scaffold's definitions exactly")
 }

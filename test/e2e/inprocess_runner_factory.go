@@ -79,6 +79,7 @@ import (
 	// reads this registry, and an empty one makes the artifacts capability skip
 	// with "no renderer registered" — so a scenario granting `artifacts` would
 	// silently get no artifact tools at all.
+	goalcore "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelassets/css"
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelassets/html"
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelassets/image"
@@ -91,6 +92,7 @@ import (
 	agentsession "github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession/cosidecar"
 	"github.com/authzed/openagentprimitives/pkg/memory"
+	goalinmem "github.com/authzed/openagentprimitives/pkg/memory/goals/inmem"
 	"github.com/authzed/openagentprimitives/pkg/memory/httpclient"
 	"github.com/authzed/openagentprimitives/pkg/memory/httpsrv"
 	memoryinmem "github.com/authzed/openagentprimitives/pkg/memory/inmem"
@@ -119,6 +121,7 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/tools/toolkitstream/claude" // registers claude-stream-json
 	"github.com/authzed/openagentprimitives/pkg/tools/toolspec/spec"
 	"github.com/authzed/openagentprimitives/pkg/tools/toolspec/toolkit"
+	goalweb "github.com/authzed/openagentprimitives/pkg/web/goals"
 	"github.com/authzed/openagentprimitives/pkg/web/secretoutsrv"
 	"github.com/authzed/openagentprimitives/pkg/web/uigrant"
 	"github.com/authzed/openagentprimitives/pkg/web/uiview"
@@ -990,7 +993,19 @@ func (f *InProcessRunnerFactory) ensurePrefsServer() bool {
 		if f.OpSigned != nil {
 			opts = append(opts, httpsrv.WithPreferenceAudit(f.OpSigned))
 		}
-		f.prefsSrv = httptest.NewServer(httpsrv.NewHandler(f.MemStore, f.prefsTokens, opts...))
+		mux := http.NewServeMux()
+		mux.Handle("/", httpsrv.NewHandler(f.MemStore, f.prefsTokens, opts...))
+		if f.SpiceDB != nil {
+			svc := &goalcore.Service{Store: goalinmem.New()}
+			var keys provenance.PublisherKeyLookup
+			if f.Tokens != nil {
+				keys = f.Tokens
+			}
+			handler := &goalweb.Server{Keys: keys, Service: svc, Reader: f.K8s, Memory: f.MemStore, Tokens: f.prefsTokens, Auth: f.SpiceDB}
+			svc.Auth = handler
+			mux.Handle("/goals/", handler)
+		}
+		f.prefsSrv = httptest.NewServer(mux)
 	})
 	return true
 }
@@ -1506,6 +1521,15 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		//     call. Off → the knowledge capability gracefully skips (logged
 		//     SkipReason) instead of injecting a broken tool.
 		// Turn KG on here only once the factory grows a real KG client to back it.
+		GoalsCaller: func() meta.GoalsCaller {
+			c := f.preferencesClientFor(sess)
+			if c == nil || f.SpiceDB == nil {
+				return nil
+			}
+			return func(ctx context.Context, r goalcore.Request) (goalcore.Response, error) {
+				return c.Goals(ctx, sess.Namespace, sess.Name, r)
+			}
+		}(),
 		MemoryAvailable: true,
 		SearchAvailable: f.MemStore != nil,
 		KGAvailable:     false,

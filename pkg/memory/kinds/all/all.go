@@ -16,6 +16,8 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/envelopefact"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/extracted_entity"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/extraction_state"
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/goalactor"
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/goalevent"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakageaudit"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagedecision"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
