@@ -209,12 +209,20 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 	if err != nil {
 		return err
 	}
+	approvalInstructions := "Create a fresh plan and obtain human approval before acting."
+	if g.Execution.Terms.ActionApproval == "standing_private" {
+		terms, err := json.Marshal(g.Execution.Terms)
+		if err != nil {
+			return err
+		}
+		approvalInstructions = "Create a fresh plan before acting. The operator may authorize private delivery under the user's standing consent; do not ask for an additional human approval when the plan fits it. Both respond_to_user and report_goal_result require perm:execute:agent_goal_execution in the delivery phase. Do not attach reminders or request a new schedule in this plan; the reviewed series is context, not additional work for this session. Exact reviewed execution terms: " + string(terms)
+	}
 	sess = v1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: o.Domain.Namespace, Name: o.SessionName, Labels: map[string]string{v1.LabelChannelKind: output.Kind}, Annotations: map[string]string{
 		v1.AnnotationStartedByCanonicalID: owner.Subject().String(), v1.AnnotationStartedByEmail: source.Annotations[v1.AnnotationStartedByEmail], v1.AnnotationStartedByExternalID: source.Annotations[v1.AnnotationStartedByExternalID],
 	}}, Spec: v1.AgentSessionSpec{Class: g.Domain.Class, GoalExecution: ref(o), InputChannel: output.DeepCopy(), OutputChannel: &output,
 		OpeningSummary: openingSummary(g),
 		Budget:         &v1.BudgetConfig{MaxDuration: duration, SessionExpiration: duration, MaxTurns: int32(b.Turns), MaxTokens: b.Tokens},
-		Prompt:         v1.PromptSource{Inline: fmt.Sprintf("This is one bounded execution of private goal %q. Required outcome: %q. Required evidence: %s. Only respond_to_user may perform actions. Create a fresh plan and obtain approval before acting. Report a concise private result with evidence. Before agent_work_complete, call report_goal_result with a stable requestID, status reported_success, blocked, failed or unknown, a summary, and evidence references. This records your account, not verified delivery. Do not claim the durable goal is completed; session success alone is insufficient.", g.Title, g.Outcome, evidence)}}}
+		Prompt:         v1.PromptSource{Inline: fmt.Sprintf("This is one bounded execution of private goal %q. This session handles only occurrence %s, due %s: deliver at most one private message. Other scheduled occurrences run in separate sessions; do not deliver them here. Required outcome: %q. Required evidence: %s. Only respond_to_user may perform actions. %s Report a concise private result with evidence. Before agent_work_complete, call report_goal_result with a stable requestID, status reported_success, blocked, failed or unknown, a summary, and evidence references. This records your account, not verified delivery. Do not claim the durable goal is completed; session success alone is insufficient.", g.Title, o.ID, o.DueAt.UTC().Format(time.RFC3339), g.Outcome, evidence, approvalInstructions)}}}
 	latest, err := d.Store.Occurrence(ctx, o.ID)
 	if err != nil {
 		return err
@@ -233,7 +241,11 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 }
 
 func openingSummary(g domain.Goal) string {
-	text := []rune(fmt.Sprintf("Session created to meet goal %s: %s", strings.Join(strings.Fields(g.Title), " "), strings.Join(strings.Fields(g.Outcome), " ")))
+	summary := fmt.Sprintf("Session created to meet goal %s: %s", strings.Join(strings.Fields(g.Title), " "), strings.Join(strings.Fields(g.Outcome), " "))
+	if g.Execution != nil && g.Execution.Terms.ActionApproval == "standing_private" {
+		summary += " Private delivery is authorized under your approved schedule."
+	}
+	text := []rune(summary)
 	if len(text) > 2000 {
 		return string(text[:1999]) + "…"
 	}

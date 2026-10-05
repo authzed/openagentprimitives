@@ -209,7 +209,9 @@ knowledge-graph layer and durable artifacts.
   `cmd/oap/internal/goalscmd/` (CLI). See `docs/operating/goals.md`.
   `pkg/controllers/goals/` activates bounded private report sessions only after
   signed human consent and an expiring execution grant. Active state alone
-  records intent; each session requires a fresh enforcing plan.
+  records intent; each session requires a fresh enforcing plan. Explicit finite
+  standing consent can authorize its private-delivery phase without another
+  human decision; the signed phase record names the original consent and run.
 - **Authorization of recall:** `pkg/memory/spicedbauthorizer/`
 - **Artifacts:** `pkg/platform/artifacts/` (versioning, labels, resolve),
   `pkg/platform/artifactstore/` (the `Store` interface + `blob/`, a gocloud.dev

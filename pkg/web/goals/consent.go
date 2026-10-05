@@ -147,6 +147,10 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 				request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Quiet hours", Value: sessionschedule.QuietDescription(*schedule)})
 			}
 		}
+		if c.Terms.ActionApproval == "standing_private" {
+			request.Body = "Authorize private delivery without another approval for each run. Each fresh plan must stay within this schedule, recipient, and limits. Quiet hours defer reminders; missed windows are skipped. You can pause or cancel the goal."
+			request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Action approval", Value: "Unattended private delivery only. Other actions require separate approval."})
+		}
 		raw, e := json.Marshal(request)
 		if e != nil {
 			return e

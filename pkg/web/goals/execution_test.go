@@ -71,12 +71,14 @@ func (e *statusError) Error() string { return http.StatusText(e.code) }
 func TestProductionConsentLaunchAndRevocation(t *testing.T) {
 	for _, mode := range []string{"standalone", "plan"} {
 		for _, recurring := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/recurring=%t", mode, recurring), func(t *testing.T) { productionConsentLaunchAndRevocation(t, mode == "plan", recurring) })
+			for _, unattended := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/recurring=%t/unattended=%t", mode, recurring, unattended), func(t *testing.T) { productionConsentLaunchAndRevocation(t, mode == "plan", recurring, unattended) })
+			}
 		}
 	}
 }
 
-func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring bool) {
+func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unattended bool) {
 	f := fixture(t)
 	ctx := memory.WithCaller(memory.WithSystemApproval(context.Background(), "system:operator"), "system:operator")
 	db, err := memsqlite.NewClient(filepath.Join(t.TempDir(), "goals.db"))
@@ -117,6 +119,9 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring bool) 
 	g, err = f.s.Service.Update(ctx, actor, domain.Change{ID: g.ID, Revision: g.Revision, RequestID: "activate", Action: "activate"})
 	require.NoError(t, err)
 	req := domain.ExecutionRequest{RequestID: "request-execution", ID: g.ID, Revision: g.Revision, Terms: domain.ExecutionTerms{DueAt: now.Add(-time.Second), ExpiresAt: now.Add(time.Hour), Bounds: domain.ExecutionBounds{DurationSeconds: 300, Turns: 10, Tokens: 10000, ApprovalSeconds: 120}, AllowedOperations: []string{"respond_to_user"}, Evidence: []string{"A private reminder delivery"}}}
+	if unattended {
+		req.Terms.ActionApproval = "standing_private"
+	}
 	if recurring {
 		req.Terms.Schedule = &sessionschedule.Spec{Kind: "interval", Timezone: "UTC", IntervalSeconds: 60, MaxRuns: 2, RunWindowSeconds: 600}
 	}
@@ -152,8 +157,21 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring bool) 
 			require.NoError(t, k8s.Update(ctx, restricted))
 		})
 	}
+	unknownApproval := req
+	unknownApproval.RequestID = "unknown-approval"
+	unknownApproval.Terms.ActionApproval = "unlimited"
+	_, err = f.s.Service.RequestExecution(ctx, actor, unknownApproval)
+	require.ErrorIs(t, err, domain.ErrInvalid)
 	g, err = f.s.Service.RequestExecution(ctx, actor, req)
 	require.NoError(t, err)
+	changedApproval := req
+	if unattended {
+		changedApproval.Terms.ActionApproval = "manual"
+	} else {
+		changedApproval.Terms.ActionApproval = "standing_private"
+	}
+	_, err = f.s.Service.RequestExecution(ctx, actor, changedApproval)
+	require.ErrorIs(t, err, domain.ErrConflict, "the same request cannot silently change its action approval policy")
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	signer := provenance.NewSigner(priv, "system:operator")
@@ -184,6 +202,11 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring bool) 
 		require.Len(t, g.Execution.Terms.ScheduleWindows, 2)
 	}
 	require.Equal(t, "goalconsent-request-"+g.Execution.Digest, card.RequestRef)
+	if unattended {
+		require.Contains(t, card.Body, "without another approval")
+	} else {
+		require.Contains(t, card.Body, "fresh plan")
+	}
 	require.NoError(t, card.Validate())
 	require.NotContains(t, card.Body, g.Title, "untrusted goal content belongs in the inert excerpt")
 	require.Contains(t, card.Excerpt.Content, g.Title)
@@ -243,7 +266,16 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring bool) 
 	assert.Nil(t, scheduled.Spec.Parent)
 	require.Equal(t, scheduled.Spec.OutputChannel, scheduled.Spec.InputChannel, "the reviewed private route must enable the runner's conversation tools")
 	require.Equal(t, scheduled.Spec.InputChannel.Kind, scheduled.Labels[v1.LabelChannelKind], "the chat surface must recognize the dispatched conversation")
-	require.Equal(t, "Session created to meet goal Private reminder: Remind me to stretch", scheduled.Spec.OpeningSummary)
+	expectedSummary := "Session created to meet goal Private reminder: Remind me to stretch"
+	if unattended {
+		expectedSummary += " Private delivery is authorized under your approved schedule."
+	}
+	require.Equal(t, expectedSummary, scheduled.Spec.OpeningSummary)
+	require.Contains(t, scheduled.Spec.Prompt.Inline, "only occurrence "+occurrence.ID)
+	require.Contains(t, scheduled.Spec.Prompt.Inline, "deliver at most one private message")
+	if unattended {
+		require.Contains(t, scheduled.Spec.Prompt.Inline, "Do not attach reminders or request a new schedule")
+	}
 	conversation, ok := capability.Lookup("channel_interaction")
 	require.True(t, ok)
 	conversationTools, skip := conversation.Offer(capability.OfferContext{Ctx: ctx, Class: class, Session: &scheduled, Binding: scheduled.Spec.InputChannel, OutBinding: scheduled.Spec.OutputChannel, Env: capability.RunnerEnv{ChannelAttached: true}})
@@ -257,6 +289,7 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring bool) 
 	require.NoError(t, dispatcher.ValidateGoalSession(ctx, &scheduled))
 	f.s.ExecutionSessions = dispatcher
 	f.s.Tokens.Set(memory.NamespacedName{Namespace: "team", Name: scheduled.Name}, "root-token", "")
+	verifyProductionPlanApproval(t, f, &scheduled, g, unattended, signer)
 	status, _ := f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "authorize_execution"})
 	require.Equal(t, 200, status)
 	status, _ = f.callSession(t, "foreign-token", scheduled.Name, domain.Request{Operation: "authorize_execution"})
@@ -303,6 +336,8 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring bool) 
 	_, err = f.mem.Put(ctx, entry)
 	require.NoError(t, err)
 	require.ErrorIs(t, dispatcher.ValidateGoalSession(ctx, &scheduled), domain.ErrDenied)
+	status, _ = f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "authorize_plan", PlanApproval: &domain.PlanApprovalRequest{Digest: "revoked", Phase: 0}})
+	require.Equal(t, 404, status, "a retained plan approval cannot revive revoked authority")
 	status, _ = f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "report_execution_result", Proposal: proposal})
 	require.Equal(t, 404, status, "revocation is checked even for identical report retries")
 	preference, err = json.Marshal(userpreference.Preference{ClassNamespace: "team", ClassName: "assistant", Key: "goal_execution_enabled", Value: json.RawMessage(`true`)})

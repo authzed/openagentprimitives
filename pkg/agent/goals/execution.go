@@ -28,7 +28,11 @@ type PrivateDestination struct {
 }
 
 type ExecutionTerms struct {
-	Schedule *sessionschedule.Spec `json:"schedule,omitempty"`
+	// ActionApproval is independent of how the source consent is presented.
+	// Empty/manual requires a fresh human decision; standing_private permits
+	// derivation for the exact private reporting ceiling in each occurrence.
+	ActionApproval string                `json:"actionApproval,omitempty"`
+	Schedule       *sessionschedule.Spec `json:"schedule,omitempty"`
 	// Windows are resolved by the server and committed to the reviewed digest.
 	ScheduleWindows   []sessionschedule.Window `json:"scheduleWindows,omitempty"`
 	SkillVersions     []string                 `json:"skillVersions,omitempty"`
@@ -85,6 +89,9 @@ type ExecutionAuthority interface {
 }
 
 func (t ExecutionTerms) validate(now time.Time, owner string) error {
+	if t.ActionApproval != "" && t.ActionApproval != "manual" && t.ActionApproval != "standing_private" {
+		return fmt.Errorf("%w: unknown action approval policy", ErrInvalid)
+	}
 	b := t.Bounds
 	if strings.TrimSpace(t.ClassDigest) == "" || t.DueAt.Before(now) || !t.ExpiresAt.After(t.DueAt) || t.ExpiresAt.Sub(now) > 30*24*time.Hour ||
 		b.DurationSeconds < 1 || b.DurationSeconds > 86400 || b.Turns < 1 || b.Turns > 10000 || b.Tokens < 1 || b.Tokens > 10000000 ||

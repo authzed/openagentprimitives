@@ -101,10 +101,11 @@ func init() {
 			// CurrentPlan must be a live read: the frozen plan appears mid-session
 			// when the agent declares phases, so a snapshot here would pin the gate
 			// to the whole-surface fallback forever.
-			CurrentPlan: l.ActiveFrozenPlanNow,
-			Records:     l.PlanGateRecords,
-			Recorder:    planGateRecorder{l: l},
-			Logger:      slog.Default(),
+			CurrentPlan:    l.ActiveFrozenPlanNow,
+			Records:        l.PlanGateRecords,
+			DeriveApproval: l.PlanApprovalDeriver,
+			Recorder:       planGateRecorder{l: l},
+			Logger:         slog.Default(),
 			// Advisory: used only to render a slot MOVE on the card. The MovePin
 			// MUST_MATCH at decision time, not this read, is what makes the move
 			// safe; a nil pinner just renders first-fills.

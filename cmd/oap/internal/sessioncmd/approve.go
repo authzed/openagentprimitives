@@ -4,7 +4,7 @@
 // testing the approval flows without a Slack workspace.
 //
 // It drives registered yes/no approvals, including plans and reminder consent,
-// by resolving the request id in PendingInteractions and publishing through
+// by resolving the request id in status or signed history and publishing through
 // the component-only decision ingress used by human transports. It can also
 // wait for the channelsd-side Applied outcome.
 //
@@ -35,12 +35,15 @@ import (
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/apcmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/clilogin"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/clinats"
+	"github.com/authzed/openagentprimitives/cmd/oap/internal/memclient"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/portforward"
 	apspicedb "github.com/authzed/openagentprimitives/cmd/oap/internal/spicedb"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
+	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/interactionhistory"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	apnats "github.com/authzed/openagentprimitives/pkg/platform/nats"
 )
@@ -63,8 +66,8 @@ const (
 	approvalKindContentInspection approvalKind = "content_inspection"
 )
 
-// pendingEntry is the unified view over the generic PendingInteractions list
-// on AgentSession.status. It carries just what the resolution + publish
+// pendingEntry is the unified view over parked status requests and signed
+// non-parking interaction history. It carries just what the resolution + publish
 // need: the request id, the required approver subject set (for the
 // server-agreeing pre-check), and which approval family (Kind) it belongs to
 // (so publish stamps the right interaction Category).
@@ -376,7 +379,7 @@ func runSessionApprove(
 		return err
 	}
 	// 1. Resolve the AgentSession + match against the unified pending
-	// view across all three kinds. With requestID empty the command
+	// view of registered yes/no approvals. With requestID empty the command
 	// auto-picks when exactly one approval is pending; with multiple it
 	// errors listing each id + kind.
 	var sess spiceboxv1alpha1.AgentSession
@@ -384,6 +387,29 @@ func runSessionApprove(
 		return fmt.Errorf("get AgentSession %s/%s: %w", b.Namespace, sessionName, err)
 	}
 	pendings := collectPendings(&sess)
+	// An explicit parked request needs no history lookup. Auto-selection must
+	// read the complete history so it cannot overlook asynchronous consent.
+	parkedMatch := false
+	for _, p := range pendings {
+		if requestID != "" && p.RequestID == requestID {
+			parkedMatch = true
+		}
+	}
+	if !parkedMatch {
+		conn, err := memclient.Connect(ctx, b, sessionName, "")
+		if err != nil {
+			return fmt.Errorf("read asynchronous approvals: %w", err)
+		}
+		defer conn.Close()
+		history, err := conn.Client.Query(ctx, memory.Query{Scope: conn.Scope, Kinds: []string{interactionhistory.KindName}})
+		if err != nil {
+			return fmt.Errorf("read asynchronous approvals: %w", err)
+		}
+		pendings, err = collectHistoryPendings(&sess, history, time.Now())
+		if err != nil {
+			return err
+		}
+	}
 	autoPicked := requestID == ""
 	matched, err := resolvePending(pendings, requestID, b.Namespace, sessionName)
 	if err != nil {

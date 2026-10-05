@@ -37,6 +37,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakageaudit"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 	"github.com/authzed/openagentprimitives/pkg/platform/artifacts"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
@@ -818,6 +819,8 @@ type Loop struct {
 	// PlanGateRequirePlan denies permissioned calls until the agent declares a
 	// plan, closing the "never call update_plan" bypass. Resolved, like the mode.
 	PlanGateRequirePlan bool
+
+	PlanApprovalDeriver func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error)
 
 	// planGateFrozen is the frozen plan currently in force, set when the agent
 	// declares phases. Guarded because select_phase and the gate read it from

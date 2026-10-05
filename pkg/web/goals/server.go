@@ -114,7 +114,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := memory.WithCaller(memory.WithSystemApproval(r.Context(), "system:operator"), "system:operator")
-	if req.Operation == "authorize_execution" || req.Operation == "report_execution_result" || req.Operation == "prepare_reply" {
+	if req.Operation == "authorize_execution" || req.Operation == "authorize_plan" || req.Operation == "report_execution_result" || req.Operation == "prepare_reply" {
 		var sess v1.AgentSession
 		if s.ExecutionSessions == nil {
 			s.fail(w, r, domain.ErrDenied)
@@ -143,6 +143,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out := Response{ExecutionAvailable: true}
+		if req.Operation == "authorize_plan" {
+			out.PlanApproval, err = s.derivePlanApproval(ctx, &sess, req.PlanApproval)
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+		}
 		if req.Operation == "prepare_reply" {
 			preparer, ok := s.ExecutionSessions.(ExecutionReplyPreparer)
 			if !ok || req.Reply == nil {

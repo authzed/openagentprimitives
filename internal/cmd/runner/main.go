@@ -138,6 +138,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/label"
 	lifecyclekind "github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/systemprompt"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/toolsession"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/turn"
@@ -2280,6 +2281,14 @@ func run(cfg *config) error {
 			return runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings)
 		}(),
 		PlanGateRequirePlan: runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
+		PlanApprovalDeriver: func() func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error) {
+			if sess.Spec.GoalExecution == nil {
+				return nil
+			}
+			return runner.GoalPlanApprovalDeriver(func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+				return memHTTP.Goals(ctx, ns, name, req)
+			})
+		}(),
 
 		// Live CR pointers, so the loop can dispatch autofill and
 		// per-user-message binding. Nil disables those paths, as a defence
