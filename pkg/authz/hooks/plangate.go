@@ -89,6 +89,11 @@ type PlanGateDeps struct {
 	// the single-phase shape.
 	Records func() []plangateaudit.Content
 
+	// DeriveApproval checks a separately approved, current authority ceiling.
+	// It returns nil when human approval is required. Successful derivation is
+	// recorded and folded before use; an error cannot clear the phase.
+	DeriveApproval func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error)
+
 	// ActivePhase is the fallback index used when Records is nil.
 	ActivePhase int
 
@@ -354,7 +359,39 @@ func (h *PlanGate) Eval(ctx context.Context, in pipeline.Input) pipeline.Decisio
 				// first and allowing on a yes would make one approved phase
 				// authorize the whole surface — the opposite of a ceiling.
 				if needs, denied := h.phaseNeedsApproval(st, folded, activePhase); needs {
-					return h.requestPhaseApproval(ctx, in, rec, activePhase, denied)
+					if !denied && folded && !st.Doubtful && h.deps.DeriveApproval != nil {
+						approvalPlan := h.activePlan()
+						approvalDigest := approvalPlan.Digest()
+						authority, err := h.deps.DeriveApproval(ctx, approvalPlan, activePhase)
+						if err != nil {
+							return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: standing authorization could not be established: " + err.Error()}
+						}
+						if authority != nil {
+							if h.activePlan().Digest() != approvalDigest {
+								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: plan changed during standing approval"}
+							}
+							if h.deps.Recorder == nil || authority.Kind == "" || authority.Reference == "" || authority.DecisionRef == "" || authority.OccurrenceID == "" || authority.SessionUID == "" {
+								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: incomplete standing approval authority"}
+							}
+							approval := plangate.PhaseAuthorityRecord(approvalPlan, activePhase, h.deps.SlotStanding)
+							approval.Event = plangateaudit.EventPhaseApproved
+							approval.PlanDigest = approvalDigest
+							approval.ApprovalAuthority = authority
+							approval.Mode, approval.Provenance, approval.At = h.deps.Mode, "standing_authorization", h.now()
+							if err := h.deps.Recorder.Record(ctx, approval); err != nil {
+								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: recording standing approval failed: " + err.Error()}
+							}
+							state, ok, err := h.foldOnce()
+							if err != nil || !ok || state.Doubtful || !state.PhaseApproved(activePhase) {
+								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: standing approval was not durably established"}
+							}
+							// Continue through the normal per-call gates and budgets.
+						} else {
+							return h.requestPhaseApproval(ctx, in, rec, activePhase, false)
+						}
+					} else {
+						return h.requestPhaseApproval(ctx, in, rec, activePhase, denied)
+					}
 				}
 			} else {
 				rec.Event = plangateaudit.EventGateWouldDeny

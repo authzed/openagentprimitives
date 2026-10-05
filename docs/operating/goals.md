@@ -40,9 +40,10 @@ approve the plan and its listed reminders together. You can open the exact
 requests included in that approval for a fuller view.
 
 At the scheduled time, the agent starts a separate private session. That session
-still needs a fresh action-plan approval before delivering the reminder. Approving
-the schedule does not approve every future action or grant additional capabilities.
-Open the session promptly: an unanswered approval can time out.
+creates a fresh action plan before delivering the reminder. By default, you approve
+that plan in the new session. Open the session promptly: an unanswered approval
+can time out. You can instead explicitly authorize unattended private delivery
+when approving the schedule, as described below.
 
 In the browser, a new goal session shows an alert with a link to open it.
 The alert stays visible until you open the session or dismiss it, including
@@ -57,7 +58,7 @@ not authorize later work.
 You can request reminders at regular intervals, daily, or on chosen days of the
 week. Choose your timezone, an end date, and a maximum number of reminders.
 Each approval covers a finite series of up to 100 scheduled times within 30 days.
-Every session still needs a fresh action-plan approval before sending anything.
+By default, each session asks you to approve its fresh action plan before sending.
 
 For example:
 
@@ -77,6 +78,28 @@ time on a fall-back day runs once. The approval's exact details include the
 resolved run times for the series.
 
 Changing the schedule or quiet hours requires a new scheduling approval.
+
+## Unattended private reminders
+
+You can approve private delivery for a finite schedule without approving each
+reminder again. Ask the agent to include this choice in the scheduling request:
+
+> Remind me privately to stretch at 10 a.m. every weekday for the next two weeks.
+> Ask me to approve the schedule and unattended delivery together, so I do not
+> need to approve each reminder when it arrives.
+
+The approval explicitly states that delivery is unattended. It still identifies
+the timing, recipient, limits, and end date. Approving an ordinary schedule does
+not turn on unattended delivery.
+
+Each run creates a fresh plan and checks that it fits your approval. The session
+explains that private delivery is authorized under your approved schedule, and
+**View exact instructions** lets you inspect the reviewed terms. This permission
+covers private reminders and reports; other actions need separate approval.
+
+You can pause or cancel the goal to stop future work. Changes to the goal or its
+schedule require renewed authorization. Delivery also stops if your access or
+the agent's approved configuration changes.
 
 ## Reviewing a session
 

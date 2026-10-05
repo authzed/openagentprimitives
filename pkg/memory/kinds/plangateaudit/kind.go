@@ -131,8 +131,11 @@ type SlotRef struct {
 
 // Content is one plan-gate record.
 type Content struct {
-	Consents []json.RawMessage `json:"consents,omitempty"`
-	Event    string            `json:"event"`
+	// ApprovalAuthority names the source of an automatically derived approval.
+	// Empty on existing human/tier approvals; never inferred from prose.
+	ApprovalAuthority *ApprovalAuthority `json:"approvalAuthority,omitempty"`
+	Consents          []json.RawMessage  `json:"consents,omitempty"`
+	Event             string             `json:"event"`
 
 	// PlanDigest identifies the frozen approved plan this record belongs to.
 	// It covers the ordered phase list and each phase's authority (permissions,
@@ -264,6 +267,14 @@ type Content struct {
 
 	Provenance string    `json:"provenance"`
 	At         time.Time `json:"at"`
+}
+
+type ApprovalAuthority struct {
+	Kind         string `json:"kind"`
+	Reference    string `json:"reference"`
+	DecisionRef  string `json:"decisionRef"`
+	OccurrenceID string `json:"occurrenceID"`
+	SessionUID   string `json:"sessionUID"`
 }
 
 type Kind struct{}
