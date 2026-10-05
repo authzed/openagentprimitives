@@ -157,7 +157,7 @@ func (s *Store) lockedGoal(ctx context.Context, tx *sql.Tx, d goals.Domain, id s
 	return decode(raw)
 }
 
-// auditOccurrence commits the audit intent in the SAME transaction as every
+// auditOccurrence commits the audit intent in the same transaction as every
 // dispatch state change. The existing goal publisher signs and drains it.
 func (s *Store) auditOccurrence(ctx context.Context, tx *sql.Tx, o goals.Occurrence, action string, now time.Time) error {
 	var raw string
@@ -248,7 +248,7 @@ func (s *Store) Due(ctx context.Context, now time.Time, limit int) ([]goals.Occu
 	if limit < 1 || limit > 100 {
 		return nil, goals.ErrInvalid
 	}
-	rows, err := s.db.QueryContext(ctx, s.query(`SELECT id FROM (SELECT o.id,o.due_at,ROW_NUMBER() OVER(PARTITION BY o.owner_key ORDER BY o.due_at,o.id) AS owner_rank FROM oap_goal_occurrences o JOIN oap_goals g ON g.domain=o.domain AND g.id=o.goal_id WHERE (o.state='queued' AND o.due_at<=? AND o.expires_at>? AND g.state='active' AND g.revision=o.goal_revision) OR (o.state IN ('claimed','running','unknown') AND o.lease_until<=?)) AS due ORDER BY owner_rank,due_at,id LIMIT ?`), now.UnixNano(), now.UnixNano(), now.UnixNano(), limit)
+	rows, err := s.db.QueryContext(ctx, s.query(`SELECT id FROM (SELECT o.id,o.due_at,ROW_NUMBER() OVER(PARTITION BY o.owner_key ORDER BY o.due_at,o.id) AS owner_rank FROM oap_goal_occurrences o JOIN oap_goals g ON g.domain=o.domain AND g.id=o.goal_id WHERE (o.state='queued' AND o.due_at<=? AND o.expires_at>? AND g.state='active' AND g.revision=o.goal_revision) OR (o.state IN ('claimed','running','unknown','retained') AND o.lease_until<=?)) AS due ORDER BY owner_rank,due_at,id LIMIT ?`), now.UnixNano(), now.UnixNano(), now.UnixNano(), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +313,7 @@ func (s *Store) Claim(ctx context.Context, r goals.ClaimRequest) (goals.Occurren
 					return o, goals.ErrConflict
 				}
 			}
-		} else if (o.State != goals.OccurrenceClaimed && o.State != goals.OccurrenceRunning && o.State != goals.OccurrenceUnknown) || r.Now.Before(o.LeaseUntil) {
+		} else if (o.State != goals.OccurrenceClaimed && o.State != goals.OccurrenceRunning && o.State != goals.OccurrenceUnknown && o.State != goals.OccurrenceRetained) || r.Now.Before(o.LeaseUntil) {
 			return o, goals.ErrConflict
 		}
 		// Recovery preserves the reservation and session identity even if the
@@ -340,7 +340,7 @@ func (s *Store) fenced(ctx context.Context, o goals.Occurrence, now time.Time, a
 		if err != nil {
 			return current, err
 		}
-		if current.Fence != o.Fence || current.Worker != o.Worker || !now.Before(current.LeaseUntil) || (current.State != goals.OccurrenceClaimed && current.State != goals.OccurrenceRunning && current.State != goals.OccurrenceUnknown) {
+		if current.Fence != o.Fence || current.Worker != o.Worker || !now.Before(current.LeaseUntil) || (current.State != goals.OccurrenceClaimed && current.State != goals.OccurrenceRunning && current.State != goals.OccurrenceUnknown && current.State != goals.OccurrenceRetained) {
 			return current, goals.ErrConflict
 		}
 		if err := f(tx, current); err != nil {
@@ -359,6 +359,9 @@ func (s *Store) Attach(ctx context.Context, o goals.Occurrence, uid string, now 
 		return goals.Occurrence{}, goals.ErrInvalid
 	}
 	return s.fenced(ctx, o, now, "execution_attached", func(tx *sql.Tx, current goals.Occurrence) error {
+		if current.State == goals.OccurrenceRetained {
+			return goals.ErrConflict
+		}
 		if current.SessionUID != "" && current.SessionUID != uid {
 			return goals.ErrConflict
 		}
@@ -378,12 +381,15 @@ func (s *Store) Renew(ctx context.Context, o goals.Occurrence, now time.Time, le
 }
 
 func (s *Store) Finish(ctx context.Context, o goals.Occurrence, state goals.OccurrenceState, now time.Time) (goals.Occurrence, error) {
-	if state != goals.OccurrenceFinished && state != goals.OccurrenceSucceeded && state != goals.OccurrenceFailed && state != goals.OccurrenceCancelled && state != goals.OccurrenceUnknown {
+	if state != goals.OccurrenceRetained && state != goals.OccurrenceFinished && state != goals.OccurrenceSucceeded && state != goals.OccurrenceFailed && state != goals.OccurrenceCancelled && state != goals.OccurrenceUnknown {
 		return goals.Occurrence{}, goals.ErrInvalid
 	}
 	return s.fenced(ctx, o, now, "execution_"+string(state), func(tx *sql.Tx, current goals.Occurrence) error {
 		if current.SessionUID != o.SessionUID {
 			return goals.ErrConflict
+		}
+		if state == goals.OccurrenceRetained && (current.Outcome == nil || current.Outcome.Reason != goals.RunSessionEnded || current.SessionUID == "") {
+			return goals.ErrInvalid
 		}
 		if current.SessionUID == "" && state != goals.OccurrenceUnknown && state != goals.OccurrenceCancelled {
 			return goals.ErrInvalid
@@ -417,6 +423,7 @@ func (s *Store) RecordOutcome(ctx context.Context, o goals.Occurrence, reason go
 		return err
 	})
 }
+
 func (s *Store) Runs(ctx context.Context, d goals.Domain, id string, r goals.ListRequest) (goals.RunPage, error) {
 	if r.Limit < 1 || r.Limit > 100 {
 		return goals.RunPage{}, goals.ErrInvalid
@@ -477,6 +484,7 @@ func (s *Store) ProposeResult(ctx context.Context, o goals.Occurrence, p goals.R
 		return changed, s.auditOccurrence(ctx, tx, changed, "execution_result_proposed", now)
 	})
 }
+
 func (s *Store) proposeResult(ctx context.Context, tx *sql.Tx, current, o goals.Occurrence, p goals.RunProposal) (goals.Occurrence, error) {
 	if current.SessionUID == "" || current.SessionUID != o.SessionUID || current.GoalRevision != o.GoalRevision || current.ConsentDigest != o.ConsentDigest || current.State != goals.OccurrenceRunning || current.Outcome != nil {
 		return current, goals.ErrConflict
@@ -487,6 +495,24 @@ func (s *Store) proposeResult(ctx context.Context, tx *sql.Tx, current, o goals.
 	}
 	if !executionMatches(g, current.GoalRevision, current.ConsentDigest) {
 		return current, goals.ErrConflict
+	}
+	if p.Observation != nil {
+		policy := g.Execution.Terms.Report
+		permitted := false
+		for _, op := range g.Execution.Terms.AllowedOperations {
+			if op == "report_goal_event" {
+				permitted = true
+			}
+		}
+		if !permitted || policy == nil || policy.Kind != p.Observation.Kind || policy.Subject != p.Observation.Subject {
+			return current, goals.ErrDenied
+		}
+		reported := current
+		reported.Proposal = &p
+		if len(goals.ReportedDependencies(g, reported)) > 32 {
+			return current, fmt.Errorf("%w: observation reporting cannot carry more than 32 source dependencies", goals.ErrInvalid)
+		}
+
 	}
 	if current.Proposal != nil {
 		p.SubmittedAt = current.Proposal.SubmittedAt
@@ -502,6 +528,11 @@ func (s *Store) proposeResult(ctx context.Context, tx *sql.Tx, current, o goals.
 	_, err = tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_run_proposals(occurrence_id,payload) VALUES(?,?)`), current.ID, string(raw))
 	if err != nil {
 		return current, err
+	}
+	if p.Observation != nil {
+		if _, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_report_outbox(occurrence_id) VALUES(?) ON CONFLICT(occurrence_id) DO NOTHING`), current.ID); err != nil {
+			return current, err
+		}
 	}
 	return s.occurrence(ctx, tx, current.ID)
 }

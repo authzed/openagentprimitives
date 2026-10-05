@@ -32,6 +32,15 @@ func (d *Dispatcher) PrepareGoalReply(ctx context.Context, sess *v1.AgentSession
 	if err != nil {
 		return o, err
 	}
+	permitted := false
+	for _, op := range g.Execution.Terms.AllowedOperations {
+		if op == "respond_to_user" {
+			permitted = true
+		}
+	}
+	if !permitted {
+		return o, domain.ErrDenied
+	}
 	binding := v1.OutboundBinding(sess)
 	kind, ok := registry.Get(binding.Kind)
 	if !ok {

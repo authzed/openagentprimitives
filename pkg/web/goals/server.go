@@ -35,9 +35,15 @@ type Authority interface {
 	CheckInteract(context.Context, string, string, identity.CanonicalUserID, bool) (bool, error)
 	CheckOnResource(context.Context, string, string, string, identity.CanonicalUserID, bool) (bool, error)
 }
+
 type ExecutionSessionAuthority interface {
 	ValidateGoalSession(context.Context, *v1.AgentSession) error
 }
+
+type ExecutionTermsReader interface {
+	GoalExecutionTerms(context.Context, *v1.AgentSession) (domain.ExecutionTerms, error)
+}
+
 type ExecutionResultRecorder interface {
 	RecordGoalResult(context.Context, *v1.AgentSession, domain.RunProposal) (domain.Occurrence, error)
 }
@@ -64,6 +70,7 @@ type Server struct {
 	// unknown bearers. Registered tokens still undergo the primary-token gate.
 	ColdRegistryUntil time.Time
 }
+
 type Request = domain.Request
 type Response = domain.Response
 
@@ -146,6 +153,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out := Response{ExecutionAvailable: true}
+		if req.Operation == "authorize_execution" {
+			reader, ok := s.ExecutionSessions.(ExecutionTermsReader)
+			if !ok {
+				s.fail(w, r, domain.ErrDenied)
+				return
+			}
+			terms, err := reader.GoalExecutionTerms(ctx, &sess)
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			out.ExecutionTerms = &terms
+		}
 		if req.Operation == "authorize_plan" {
 			out.PlanApproval, err = s.derivePlanApproval(ctx, &sess, req.PlanApproval)
 			if err != nil {
@@ -313,11 +333,39 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// Discover streams produced by goals already visible to this actor. The
+	// source adapter supplies the current audience and dependency checks.
+	if s.EventSources != nil {
+		candidates := []domain.Goal{}
+		if out.Goal != nil {
+			candidates = append(candidates, *out.Goal)
+		}
+		if out.Page != nil {
+			candidates = append(candidates, out.Page.Goals...)
+		}
+		for _, g := range candidates {
+			if g.Execution == nil || g.Execution.Terms.Report == nil {
+				continue
+			}
+			source := domain.ReportStream(g)
+			deps, err := s.EventSources.Dependencies(ctx, a.Domain.Owner, source)
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			feed := domain.EventFeed{Name: g.Title, Description: "Private observations reported by this goal", Source: source, EventKinds: []string{g.Execution.Terms.Report.Kind}}
+			for _, dep := range deps {
+				feed.Sources = append(feed.Sources, domain.Source{ResourceType: dep.ResourceType, ResourceID: dep.ResourceID, Permission: dep.Permission})
+			}
+			out.EventFeeds = append(out.EventFeeds, feed)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		log.FromContext(ctx).Info("goal response failed", "session", a.Session, "error", err)
 	}
 }
+
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	code, message := 500, "goal operation failed"
 	switch {
@@ -331,6 +379,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	log.FromContext(r.Context()).Info("goal operation refused", "path", r.URL.Path, "status", code, "error", err)
 	http.Error(w, message, code)
 }
+
 func (s *Server) resolve(ctx context.Context, ns, name string) (domain.Actor, error) {
 	var sess v1.AgentSession
 	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sess); err != nil {
@@ -473,6 +522,7 @@ func (s *Server) Sources(ctx context.Context, a domain.Actor) ([]domain.Source, 
 	}
 	return sources, nil
 }
+
 func (s *Server) ReadGoal(ctx context.Context, a domain.Actor, g domain.Goal) error {
 	owner := identity.CanonicalFromTrusted(a.Domain.Owner, "channelsd goal actor")
 	for _, src := range g.Sources {

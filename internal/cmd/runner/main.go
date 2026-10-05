@@ -1964,7 +1964,14 @@ func run(cfg *config) error {
 	})
 	mergedTools := assembled.Tools
 	if sess.Spec.GoalExecution != nil {
-		mergedTools = meta.BoundedGoalTools(mergedTools, sess.Spec.GoalExecution.ConsentDigest, func(ctx context.Context) error {
+		authority, err := memHTTP.Goals(rootCtx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
+		if err != nil {
+			return fmt.Errorf("read goal execution terms: %w", err)
+		}
+		if authority.ExecutionTerms == nil {
+			return fmt.Errorf("goal execution terms unavailable")
+		}
+		mergedTools = meta.BoundedGoalToolsForTerms(mergedTools, sess.Spec.GoalExecution.ConsentDigest, *authority.ExecutionTerms, func(ctx context.Context) error {
 			_, err := memHTTP.Goals(ctx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
 			return err
 		}, func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {

@@ -150,8 +150,29 @@ func TestDispatcherDurableStopRecovery(t *testing.T) {
 			require.NoError(t, d.Tick(ctx))
 			held, err := store.Occurrence(ctx, o.ID)
 			require.NoError(t, err)
-			if test.reason != domain.RunSessionMissing {
-				require.Equal(t, domain.OccurrenceRunning, held.State, "pod still owns capacity")
+			if test.reason == domain.RunSessionEnded {
+				require.Equal(t, domain.OccurrenceRetained, held.State, "terminal runner no longer reserves capacity")
+				// A different goal for the same owner may launch while this
+				// completed conversation is still available for inspection.
+				other, err := svc.Create(ctx, a, domain.CreateRequest{RequestID: "create-next", Title: "Next", Outcome: "Report an update"})
+				require.NoError(t, err)
+				other, err = svc.Update(ctx, a, domain.Change{ID: other.ID, Revision: other.Revision, RequestID: "activate-next", Action: "activate"})
+				require.NoError(t, err)
+				terms := g.Execution.Terms
+				terms.DueAt = now
+				other, err = svc.RequestExecution(ctx, a, domain.ExecutionRequest{ID: other.ID, Revision: other.Revision, RequestID: "request-next", Terms: terms})
+				require.NoError(t, err)
+				other, err = svc.DecideExecution(ctx, a.Domain, other.ID, domain.ExecutionDecision{RequestID: "approve-next", Digest: other.Execution.Digest, Owner: a.Domain.Owner, Approved: true, Witness: "test-human"})
+				require.NoError(t, err)
+				next, err := store.Schedule(ctx, other)
+				require.NoError(t, err)
+				next, err = store.Claim(ctx, domain.ClaimRequest{ID: next.ID, Worker: "next-run", Now: now, Lease: time.Second, OwnerLimit: 1, ClassLimit: 1})
+				require.NoError(t, err, "retained session must not block the next goal")
+				require.NoError(t, k8s.Get(ctx, client.ObjectKeyFromObject(sess), &existing), "completed conversation remains inspectable")
+				_, err = store.Finish(ctx, next, domain.OccurrenceCancelled, now)
+				require.NoError(t, err)
+			} else if test.reason != domain.RunSessionMissing {
+				require.Equal(t, domain.OccurrenceRunning, held.State, "nonterminal or uncertain pod still owns capacity")
 			}
 			require.NoError(t, k8s.Delete(ctx, pod))
 			now = now.Add(301 * time.Second)

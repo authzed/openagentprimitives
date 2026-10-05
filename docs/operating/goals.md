@@ -92,6 +92,11 @@ such as the departure date and when to stop watching. If no suitable source is
 available, it should explain that monitoring needs a connection first.
 
 Sources can send updates when something happens or collect them on a schedule.
+A scheduled collector goal can also report private observations for another goal
+to watch. You approve the collector’s reporting scope and schedule separately
+from the notifications. An observation preserves what the collector reported;
+it is not independent proof of an airline’s status. Simulated updates are labeled
+as test data. Collection does not add access to tools or external services.
 The watch reacts to those updates; approving notifications does not itself
 connect an account or authorize a source to collect data.
 

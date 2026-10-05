@@ -50,6 +50,15 @@ func (s *Store) PrepareReply(ctx context.Context, o goals.Occurrence, reply goal
 		if !executionMatches(g, current.GoalRevision, current.ConsentDigest) {
 			return current, goals.ErrConflict
 		}
+		permitted := false
+		for _, op := range g.Execution.Terms.AllowedOperations {
+			if op == "respond_to_user" {
+				permitted = true
+			}
+		}
+		if !permitted {
+			return current, goals.ErrDenied
+		}
 		dest := reply.Intent.Destination
 		pin := g.Execution.Terms.Destination
 		if dest.Recipient != current.Domain.Owner || dest.ChannelUID != pin.ChannelUID || dest.BindingDigest != pin.BindingDigest {

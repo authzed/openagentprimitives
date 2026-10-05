@@ -28,6 +28,7 @@ type PrivateDestination struct {
 }
 
 type ExecutionTerms struct {
+	Report *ReportPolicy `json:"report,omitempty"`
 	// ActionApproval is independent of how the source consent is presented.
 	// Empty/manual requires a fresh human decision; standing_private permits
 	// derivation for the exact private reporting ceiling in each occurrence.
@@ -107,6 +108,20 @@ func (t ExecutionTerms) validate(now time.Time, owner string) error {
 	}
 	if !t.ExpiresAt.After(t.DueAt) || t.ExpiresAt.Sub(now) > 30*24*time.Hour {
 		return fmt.Errorf("%w: expiresAt must be after dueAt and within 30 days of server time %s", ErrInvalid, now.UTC().Format(time.RFC3339))
+	}
+	permittedReport := false
+	for _, op := range t.AllowedOperations {
+		if op == "report_goal_event" {
+			permittedReport = true
+		}
+	}
+	if permittedReport != (t.Report != nil) {
+		return fmt.Errorf("%w: observation reporting requires an exact report policy and operation", ErrInvalid)
+	}
+	if t.Report != nil {
+		if err := t.Report.Validate(); err != nil {
+			return err
+		}
 	}
 	b := t.Bounds
 	for _, limit := range []struct {
@@ -339,6 +354,7 @@ func (t ExecutionTerms) ExecutionWindows() ([]sessionschedule.Window, error) {
 	}
 	return t.ScheduleWindows, nil
 }
+
 func (t ExecutionTerms) ContainsWindow(due, expiry time.Time) bool {
 	windows, err := t.ExecutionWindows()
 	if err != nil {

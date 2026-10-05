@@ -2,18 +2,22 @@ package goals
 
 import (
 	"context"
-	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 	"strings"
 	"time"
+
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 )
 
 type OccurrenceState string
 
 const (
-	OccurrenceQueued    OccurrenceState = "queued"
-	OccurrenceSkipped   OccurrenceState = "skipped"
-	OccurrenceClaimed   OccurrenceState = "claimed"
-	OccurrenceRunning   OccurrenceState = "running"
+	OccurrenceQueued  OccurrenceState = "queued"
+	OccurrenceSkipped OccurrenceState = "skipped"
+	OccurrenceClaimed OccurrenceState = "claimed"
+	OccurrenceRunning OccurrenceState = "running"
+	// Retained sessions have verified terminal runners and no execution authority.
+	// They remain inspectable until cleanup without reserving execution capacity.
+	OccurrenceRetained  OccurrenceState = "retained"
 	OccurrenceUnknown   OccurrenceState = "unknown"
 	OccurrenceFinished  OccurrenceState = "finished"
 	OccurrenceSucceeded OccurrenceState = "succeeded"
@@ -82,6 +86,7 @@ type RunOutcome struct {
 	ObservedAt time.Time `json:"observedAt"`
 	Effects    string    `json:"effects"`
 }
+
 type RunReason string
 
 const (
@@ -108,15 +113,15 @@ func (r RunReason) Valid() bool {
 
 // RunStore retains the first observed stop reason before session cleanup.
 // Controller observations require the current dispatch fence and exact session
-// UID. Result proposals
-// bind the authenticated root UID and revision and use the transaction's
-// current fence independently of the worker lease. The reservation is
-// released separately, only after termination acknowledgement.
+// UID. Result proposals bind the authenticated root UID and revision, using
+// the transaction's current fence independently of the worker lease. Capacity
+// is released separately, only after termination acknowledgement.
 type RunStore interface {
 	RecordOutcome(context.Context, Occurrence, RunReason, time.Time) (Occurrence, error)
 	Runs(context.Context, Domain, string, ListRequest) (RunPage, error)
 	ProposeResult(context.Context, Occurrence, RunProposal, time.Time) (Occurrence, error)
 }
+
 type RunPage struct {
 	Runs []Occurrence `json:"runs"`
 	Next string       `json:"next,omitempty"`
@@ -162,15 +167,24 @@ func (s *Service) Runs(ctx context.Context, a Actor, id string, r ListRequest) (
 // to complete the goal. The authenticated root is bound by the controller; the
 // caller cannot choose its occurrence, owner, revision, fence or session UID.
 type RunProposal struct {
-	RequestID   string    `json:"requestID"`
-	Status      string    `json:"status"`
-	Summary     string    `json:"summary"`
-	Evidence    []string  `json:"evidence"`
-	Sources     []Source  `json:"sources,omitempty"`
-	SubmittedAt time.Time `json:"submittedAt"`
+	Observation *ObservationReport `json:"observation,omitempty"`
+	RequestID   string             `json:"requestID"`
+	Status      string             `json:"status"`
+	Summary     string             `json:"summary"`
+	Evidence    []string           `json:"evidence"`
+	Sources     []Source           `json:"sources,omitempty"`
+	SubmittedAt time.Time          `json:"submittedAt"`
 }
 
 func (p RunProposal) Validate() error {
+	if p.Observation != nil {
+		if p.Status != "reported_success" {
+			return ErrInvalid
+		}
+		if err := p.Observation.Validate(); err != nil {
+			return err
+		}
+	}
 	if !validRequestID(p.RequestID) || strings.TrimSpace(p.Summary) == "" || len(p.Summary) > 4000 || len(p.Evidence) > 32 {
 		return ErrInvalid
 	}

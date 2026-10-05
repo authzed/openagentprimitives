@@ -30,6 +30,7 @@ func (s *Store) query(q string) string {
 	n := 0
 	return replaceParams(q, &n)
 }
+
 func replaceParams(q string, n *int) string {
 	var b strings.Builder
 	for _, r := range q {
@@ -70,6 +71,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS oap_goal_execution_events (id TEXT PRIMARY KEY, domain TEXT NOT NULL, goal_id TEXT NOT NULL, revision BIGINT NOT NULL, sequence BIGINT NOT NULL UNIQUE, payload TEXT NOT NULL, envelope TEXT NOT NULL DEFAULT '', published INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE INDEX IF NOT EXISTS oap_goal_execution_events_pending ON oap_goal_execution_events(published,sequence)`,
 		`CREATE TABLE IF NOT EXISTS oap_goal_run_outcomes (occurrence_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS oap_goal_report_outbox (occurrence_id TEXT PRIMARY KEY, disposition TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE IF NOT EXISTS oap_goal_run_proposals (occurrence_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS oap_goal_run_costs (occurrence_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS oap_goal_run_replies (occurrence_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL)`,
@@ -82,7 +84,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	var newer int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>8`).Scan(&newer); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_goal_schema WHERE version>9`).Scan(&newer); err != nil {
 		return err
 	}
 	if newer > 0 {
@@ -118,13 +120,18 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(8) ON CONFLICT(version) DO NOTHING`); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(9) ON CONFLICT(version) DO NOTHING`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
+
 func decode(raw string) (goals.Goal, error) {
 	var g goals.Goal
 	err := json.Unmarshal([]byte(raw), &g)
 	return g, err
 }
+
 func (s *Store) Get(ctx context.Context, d goals.Domain, id string) (goals.Goal, error) {
 	var raw string
 	err := s.db.QueryRowContext(ctx, s.query(`SELECT payload FROM oap_goals WHERE domain=? AND id=?`), d.ID(), id).Scan(&raw)
@@ -136,6 +143,7 @@ func (s *Store) Get(ctx context.Context, d goals.Domain, id string) (goals.Goal,
 	}
 	return decode(raw)
 }
+
 func (s *Store) List(ctx context.Context, d goals.Domain, r goals.ListRequest) (goals.Page, error) {
 	q := `SELECT payload FROM oap_goals WHERE domain=? AND id>?`
 	args := []any{d.ID(), r.After}
@@ -191,9 +199,11 @@ func (s *Store) receipt(ctx context.Context, q querier, d goals.Domain, key, has
 	g, err := decode(raw)
 	return g, true, err
 }
+
 func (s *Store) Receipt(ctx context.Context, d goals.Domain, key, hash string) (goals.Goal, bool, error) {
 	return s.receipt(ctx, s.db, d, key, hash)
 }
+
 func (s *Store) Commit(ctx context.Context, m goals.Mutation) (goals.Goal, error) {
 	g, err := s.commit(ctx, m)
 	if err != nil {
@@ -206,6 +216,7 @@ func (s *Store) Commit(ctx context.Context, m goals.Mutation) (goals.Goal, error
 	}
 	return g, err
 }
+
 func (s *Store) commit(ctx context.Context, m goals.Mutation) (goals.Goal, error) {
 	gb, err := json.Marshal(m.Goal)
 	if err != nil {
@@ -261,6 +272,7 @@ func (s *Store) commit(ctx context.Context, m goals.Mutation) (goals.Goal, error
 	}
 	return decode(string(gb))
 }
+
 func (s *Store) Pending(ctx context.Context, limit int) ([]goals.Event, error) {
 	rows, err := s.db.QueryContext(ctx, s.query(`SELECT payload FROM (SELECT domain,goal_id,revision,payload,envelope,published,0 AS sequence FROM oap_goal_events UNION ALL SELECT domain,goal_id,revision,payload,envelope,published,sequence FROM oap_goal_execution_events) AS events WHERE published=0 ORDER BY CASE WHEN envelope='' THEN 1 ELSE 0 END,domain,goal_id,revision,sequence LIMIT ?`), limit)
 	if err != nil {
@@ -281,10 +293,12 @@ func (s *Store) Pending(ctx context.Context, limit int) ([]goals.Event, error) {
 	}
 	return out, rows.Err()
 }
+
 func (s *Store) SaveEnvelope(ctx context.Context, id string, b json.RawMessage) error {
 	res, err := s.db.ExecContext(ctx, s.query(`UPDATE `+eventTable(id)+` SET envelope=? WHERE id=? AND (envelope='' OR envelope=?)`), string(b), id, string(b))
 	return affected(res, err)
 }
+
 func (s *Store) Envelope(ctx context.Context, id string) (json.RawMessage, error) {
 	var raw string
 	err := s.db.QueryRowContext(ctx, s.query(`SELECT envelope FROM `+eventTable(id)+` WHERE id=?`), id).Scan(&raw)
@@ -293,6 +307,7 @@ func (s *Store) Envelope(ctx context.Context, id string) (json.RawMessage, error
 	}
 	return json.RawMessage(raw), err
 }
+
 func (s *Store) Published(ctx context.Context, id string) error {
 	res, err := s.db.ExecContext(ctx, s.query(`UPDATE `+eventTable(id)+` SET published=1 WHERE id=? AND envelope<>''`), id)
 	return affected(res, err)
@@ -304,6 +319,7 @@ func eventTable(id string) string {
 	}
 	return "oap_goal_events"
 }
+
 func affected(r sql.Result, err error) error {
 	if err != nil {
 		return err

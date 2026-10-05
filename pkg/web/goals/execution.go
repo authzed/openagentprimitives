@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"time"
 
 	agentcaps "github.com/authzed/openagentprimitives/pkg/agent/agentcaps"
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
@@ -31,7 +32,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"time"
 )
 
 const ExecutionResourceType = "agent_goal_execution"
@@ -244,11 +244,24 @@ func (s *Server) Validate(ctx context.Context, g domain.Goal, t domain.Execution
 	if len(audience) != 1 || audience[0] != owner.String() {
 		return domain.ErrDenied
 	}
-	// First execution slice permits a private report only. Tools that can cause
-	// external effects require the later result/idempotency contract.
-	if len(t.AllowedOperations) != 1 || t.AllowedOperations[0] != "respond_to_user" {
-		return fmt.Errorf("%w: supported execution operation is respond_to_user", domain.ErrInvalid)
+	// Execution consent covers private replies and observations only. External
+	// tools require separately scoped authority.
+	operations := map[string]bool{}
+	for _, op := range t.AllowedOperations {
+		if operations[op] || (op != "respond_to_user" && op != "report_goal_event") {
+			return fmt.Errorf("%w: unsupported or duplicate execution operation", domain.ErrInvalid)
+		}
+		operations[op] = true
 	}
+	if operations["report_goal_event"] != (t.Report != nil) {
+		return fmt.Errorf("%w: report_goal_event requires an exact report policy, and a report policy requires that operation", domain.ErrInvalid)
+	}
+	if t.Report != nil {
+		if err := t.Report.Validate(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -259,6 +272,7 @@ func (s *Server) VerifyDecision(ctx context.Context, g domain.Goal, d domain.Exe
 	}
 	return s.verifyConsent(ctx, g, d, purpose)
 }
+
 func (s *Server) verifyConsent(ctx context.Context, g domain.Goal, d domain.ExecutionDecision, purpose string) error {
 	var entry memory.Entry
 	if err := json.Unmarshal([]byte(d.Witness), &entry); err != nil {
@@ -303,6 +317,7 @@ func (s *Server) verifyConsent(ctx context.Context, g domain.Goal, d domain.Exec
 	}
 	return nil
 }
+
 func (s *Server) AuthorizeDispatch(ctx context.Context, g domain.Goal) error {
 	if s.Auth == nil || g.Execution == nil {
 		return domain.ErrDenied

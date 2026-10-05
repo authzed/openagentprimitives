@@ -36,7 +36,7 @@ var executionNow = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
 func terms(a goals.Actor) goals.ExecutionTerms {
 	return goals.ExecutionTerms{ClassDigest: "sha256:class-policy", DueAt: executionNow.Add(time.Minute), ExpiresAt: executionNow.Add(time.Hour),
 		Bounds:            goals.ExecutionBounds{DurationSeconds: 300, Turns: 20, Tokens: 10000, ApprovalSeconds: 120},
-		AllowedOperations: []string{"private_reminder"}, Evidence: []string{"memory:source-1"},
+		AllowedOperations: []string{"respond_to_user"}, Evidence: []string{"memory:source-1"},
 		Destination: goals.PrivateDestination{Channel: "private-inbox", ChannelUID: "channel-uid", Recipient: a.Domain.Owner, BindingDigest: "binding-digest"}}
 }
 
@@ -171,7 +171,7 @@ func durableFixtures() []struct {
 			s := goalpostgres.New(c.Pool())
 			require.NoError(t, s.Migrate(context.Background()))
 			t.Cleanup(func() {
-				for _, q := range []string{"DELETE FROM oap_goal_run_costs", "DELETE FROM oap_goal_run_replies", "DELETE FROM oap_goal_run_proposals", "DELETE FROM oap_goal_run_outcomes", "DELETE FROM oap_goal_execution_events", "DELETE FROM oap_goal_occurrences", "DELETE FROM oap_goal_events", "DELETE FROM oap_goal_receipts", "DELETE FROM oap_goals"} {
+				for _, q := range []string{"DELETE FROM oap_goal_report_outbox", "DELETE FROM oap_goal_run_costs", "DELETE FROM oap_goal_run_replies", "DELETE FROM oap_goal_run_proposals", "DELETE FROM oap_goal_run_outcomes", "DELETE FROM oap_goal_execution_events", "DELETE FROM oap_goal_occurrences", "DELETE FROM oap_goal_events", "DELETE FROM oap_goal_receipts", "DELETE FROM oap_goals"} {
 					_, err := c.Pool().Exec(context.Background(), q)
 					assert.NoError(t, err)
 				}
@@ -469,7 +469,7 @@ func TestGoalV1MigrationPreservesStateAndRejectsNewerSchemas(t *testing.T) {
 	events, err := store.Pending(ctx, 100)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	_, err = client.DB().ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(9)`)
+	_, err = client.DB().ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(10)`)
 	require.NoError(t, err)
 	require.ErrorContains(t, store.Migrate(ctx), "newer than this operator")
 }
