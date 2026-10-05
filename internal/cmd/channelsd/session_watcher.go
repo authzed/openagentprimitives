@@ -62,7 +62,8 @@ const schedulingWaitingText = "⏳ " + sessionnotice.SchedulingLead
 // sessionWatcher polls AgentSessions and posts failure messages to the
 // originating channel when a session transitions to phase=Failed.
 type sessionWatcher struct {
-	cli client.Client
+	cli                 client.Client
+	recoverInteractions func(context.Context, *spiceboxv1alpha1.AgentSession) error
 	// senders is the outbound.SenderResolver interface (not the concrete
 	// *senderResolver) so tests can inject a lightweight capturing fake
 	// without standing up a real Channel CR + registered channelkinds.Kind.
@@ -163,6 +164,11 @@ func (w *sessionWatcher) reconcile(ctx context.Context, logger logr.Logger) {
 	w.pruneMarkers(sessions.Items)
 	for i := range sessions.Items {
 		sess := &sessions.Items[i]
+		if w.recoverInteractions != nil {
+			if err := w.recoverInteractions(ctx, sess); err != nil {
+				logger.Info("interaction resolution recovery pending", "session", sess.Namespace+"/"+sess.Name, "error", err)
+			}
+		}
 		if sess.Spec.InputChannel == nil {
 			continue
 		}

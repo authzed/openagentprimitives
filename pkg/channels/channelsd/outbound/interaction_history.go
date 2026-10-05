@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 
+	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/interactionhistory"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // noteInteractionHistory runs after routing and attribution have been checked.
@@ -64,4 +67,24 @@ func noteInteractionHistory(ctx context.Context, mem memory.Memory, destination 
 		return fmt.Errorf("record interaction history: %w", err)
 	}
 	return nil
+}
+
+// RetainInteractionResolution resolves the same human destination as the relay.
+// Decisions persist history before a live notification can claim success.
+func RetainInteractionResolution(ctx context.Context, mem memory.Memory, reader client.Reader, env channelevents.Envelope) error {
+	if mem == nil || reader == nil {
+		return nil
+	}
+	var session spiceboxv1alpha1.AgentSession
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: env.Session.Namespace, Name: env.Session.Name}, &session); err != nil {
+		return err
+	}
+	target, err := spiceboxv1alpha1.ResolveHumanDirectedBinding(ctx, reader, &session, registry.DeliversToHuman)
+	if err != nil {
+		return err
+	}
+	if target == nil {
+		return fmt.Errorf("interaction resolution has no human destination")
+	}
+	return noteInteractionHistory(ctx, mem, memory.Scope{Kind: "session", ID: target.Owner.Namespace + "/" + target.Owner.Name}, string(session.UID), env)
 }

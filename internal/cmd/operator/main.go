@@ -2025,7 +2025,7 @@ func run(cfg *config) {
 	// verifier. memLocal (UNwrapped) is handed to the HTTP handler, where
 	// token-authenticated callers sign for themselves, and to read-only /
 	// DeleteScope consumers.
-	opSigned := provenance.NewSigningMemory(memLocal, opSigner)
+	opSigned := provenance.NewSigningMemory(memLocal, opSigner, provenance.WithSeedMemory(auditSeedMemory{Memory: memLocal}))
 	log.V(1).Info("startup: memory facade + provenance verifier ready")
 
 	// Sandbox runtimes: one per registered sandbox kind (pkg/tools/sandboxkinds/registry),
@@ -2323,7 +2323,7 @@ func run(cfg *config) {
 		eventDispatcher = &sessionevents.Dispatcher{Triggers: triggers, Consumer: consumers}
 		eventHandler = &eventweb.Server{Ingester: &sessionevents.Ingester{Store: eventStore, Adapters: sources}, Tokens: memTokens}
 	}
-	consentPublisher := &goalweb.ConsentPublisher{Service: goalService, Memory: goalMemory, Signer: opSigner, Publish: monitoringPublish}
+	consentPublisher := &goalweb.ConsentPublisher{Service: goalService, Memory: goalMemory, Writer: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}, Publish: monitoringPublish}
 	goalHandler.Consent = consentPublisher
 	goalPublisher := &goalweb.Publisher{Store: goalStore, Memory: goalMemory, Signer: opSigner, Notify: consentPublisher.Notify}
 	if err := mgr.Add(goalPublisher); err != nil {

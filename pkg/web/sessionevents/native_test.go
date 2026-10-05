@@ -3,6 +3,7 @@ package sessionevents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -66,4 +67,39 @@ func TestNativeSessionAccessPinsIncarnationAndAllFlowDependencies(t *testing.T) 
 	var replacement v1.AgentSession
 	require.NoError(t, k8s.Get(ctx, client.ObjectKeyFromObject(sess), &replacement))
 	require.EqualValues(t, "replacement", replacement.UID)
+}
+
+type incompleteNativeMemory struct {
+	memory.Memory
+	result memory.QueryResult
+	err    error
+}
+
+func (m incompleteNativeMemory) Query(context.Context, memory.Query) (memory.QueryResult, error) {
+	return m.result, m.err
+}
+func TestNativeAccessRefusesIncompleteOrMalformedDependencies(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddToScheme(scheme))
+	sess := &v1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "source", UID: "original"}}
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sess).Build()
+	for _, tc := range []struct {
+		name   string
+		result memory.QueryResult
+		err    error
+	}{
+		{name: "partial", result: memory.QueryResult{Partial: true}},
+		{name: "truncated", result: memory.QueryResult{Truncated: true}},
+		{name: "malformed JSON", result: memory.QueryResult{Entries: []memory.Entry{{Content: json.RawMessage(`{"resourceType":`)}}}},
+		{name: "missing permission", result: memory.QueryResult{Entries: []memory.Entry{{Content: json.RawMessage(`{"resourceType":"document","resourceID":"restricted"}`)}}}},
+		{name: "store outage", err: errors.New("taint store unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := &access{}
+			n := &NativeSessions{Reader: k8s, Memory: incompleteNativeMemory{result: tc.result, err: tc.err}, Auth: auth}
+			err := n.Check(ctx, "owner", events.Source{Kind: "native", Namespace: "team", ID: "team/source", UID: "original"}, nil)
+			require.Error(t, err, "missing dependency evidence cannot permit unattended work")
+		})
+	}
 }

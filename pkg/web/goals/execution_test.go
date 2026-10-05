@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,6 +198,25 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	unknownApproval.Terms.ActionApproval = "unlimited"
 	_, err = f.s.Service.RequestExecution(ctx, actor, unknownApproval)
 	require.ErrorIs(t, err, domain.ErrInvalid)
+
+	// Separate create/request payloads can each fit ingress while the combined
+	// signed consent is too large. Reject before mutation in either mode.
+	large, err := f.s.Service.Create(ctx, actor, domain.CreateRequest{RequestID: "create-large", Title: "Large evidence", Outcome: strings.Repeat("\"\n", 8000)})
+	require.NoError(t, err)
+	large, err = f.s.Service.Update(ctx, actor, domain.Change{ID: large.ID, Revision: large.Revision, RequestID: "activate-large", Action: "activate"})
+	require.NoError(t, err)
+	oversized := req
+	oversized.ID, oversized.Revision, oversized.RequestID = large.ID, large.Revision, "large-consent"
+	oversized.Terms.Evidence = make([]string, 20)
+	for n := range oversized.Terms.Evidence {
+		oversized.Terms.Evidence[n] = strings.Repeat("e", 1000)
+	}
+	_, err = f.s.Service.RequestExecution(ctx, actor, oversized)
+	require.ErrorIs(t, err, domain.ErrInvalid)
+	unchanged, err := f.s.Service.Get(ctx, actor, large.ID)
+	require.NoError(t, err)
+	require.Equal(t, large.Revision, unchanged.Revision)
+	require.Nil(t, unchanged.Execution)
 	g, err = f.s.Service.RequestExecution(ctx, actor, req)
 	require.NoError(t, err)
 	changedApproval := req
@@ -213,7 +233,7 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	f.keys[provenance.PubKeyRef{Publisher: "system:operator", KeyID: signer.KeyID()}] = pub
 	var card channelevents.InteractionRequestPayload
 	relayOffline := true
-	publisher := &ConsentPublisher{Service: f.s.Service, Memory: f.mem, Signer: signer, Publish: func(_ string, raw []byte) error {
+	publisher := &ConsentPublisher{Service: f.s.Service, Memory: f.mem, Writer: provenance.NewSigningMemory(f.mem, signer), Publish: func(_ string, raw []byte) error {
 		var env channelevents.Envelope
 		require.NoError(t, json.Unmarshal(raw, &env))
 		if relayOffline {

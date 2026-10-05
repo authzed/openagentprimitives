@@ -12,8 +12,9 @@ import (
 // anywhere between ingest and route is therefore replayable without data loss.
 type RoutingStore interface {
 	ActiveSubscriptions(context.Context, string, int) ([]SubscriptionState, error)
-	Unadmitted(context.Context, string, int) ([]Observation, error)
+	Unadmitted(context.Context, string, time.Time, int) ([]Observation, error)
 }
+
 type Router struct {
 	Triggers *Triggers
 	Store    RoutingStore
@@ -55,7 +56,7 @@ func (r *Router) Tick(ctx context.Context, now time.Time) error {
 		if now.Before(sub.StartsAt) {
 			continue
 		}
-		observations, err := r.Store.Unadmitted(ctx, sub.ID, 100)
+		observations, err := r.Store.Unadmitted(ctx, sub.ID, now, 100)
 		if err != nil {
 			failures = append(failures, err)
 			continue

@@ -34,9 +34,11 @@ func (d *Discovery) now() time.Time {
 	}
 	return time.Now().UTC()
 }
+
 func (d *Discovery) available() bool {
 	return d != nil && d.Server != nil && d.Server.Service != nil && d.Store != nil && d.Triggers != nil && d.Sources != nil && d.Server.Consent != nil
 }
+
 func (d *Discovery) Request(ctx context.Context, a domain.Actor, r domain.DiscoveryRequest) (domain.DiscoveryPolicy, error) {
 	if !d.available() {
 		return domain.DiscoveryPolicy{}, domain.ErrDenied
@@ -86,12 +88,16 @@ func (d *Discovery) Request(ctx context.Context, a domain.Actor, r domain.Discov
 		return p, err
 	}
 	p.Template.Execution.Digest = h
+	if _, err := policyConsentEntry(p, now); err != nil {
+		return p, err
+	}
 	p, err = d.Store.CreateDiscoveryPolicy(ctx, p)
 	if err != nil {
 		return p, err
 	}
 	return p, d.NotifyPolicy(ctx, p)
 }
+
 func (d *Discovery) livePolicy(ctx context.Context, p domain.DiscoveryPolicy) error {
 	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
 	if !d.available() || p.Stopped || p.Decision == nil || !p.Decision.Approved || !d.now().Before(p.Template.Execution.Terms.ExpiresAt) {
@@ -116,6 +122,7 @@ func (d *Discovery) livePolicy(ctx context.Context, p domain.DiscoveryPolicy) er
 	}
 	return d.Sources.Check(ctx, p.Template.Domain.Owner, p.Template.Execution.Terms.Event.Source, nil)
 }
+
 func (d *Discovery) policyFor(ctx context.Context, s sessionevents.Subscription) (domain.DiscoveryPolicy, error) {
 	if !d.available() {
 		return domain.DiscoveryPolicy{}, sessionevents.ErrDenied
@@ -137,12 +144,14 @@ func (d *Discovery) policyFor(ctx context.Context, s sessionevents.Subscription)
 	}
 	return p, nil
 }
+
 func discoveryDenied(err error) error {
 	if errors.Is(err, domain.ErrDenied) || errors.Is(err, domain.ErrNotFound) {
 		return errors.Join(sessionevents.ErrDenied, err)
 	}
 	return err
 }
+
 func (d *Discovery) CheckSubscription(ctx context.Context, s sessionevents.Subscription) error {
 	p, err := d.policyFor(ctx, s)
 	if err != nil {
@@ -150,6 +159,7 @@ func (d *Discovery) CheckSubscription(ctx context.Context, s sessionevents.Subsc
 	}
 	return discoveryDenied(d.livePolicy(ctx, p))
 }
+
 func (d *Discovery) CheckObservation(ctx context.Context, s sessionevents.Subscription, o sessionevents.Observation) error {
 	if o.Source != s.Source || o.Validate() != nil {
 		return sessionevents.ErrDenied
@@ -159,6 +169,7 @@ func (d *Discovery) CheckObservation(ctx context.Context, s sessionevents.Subscr
 	}
 	return discoveryDenied(d.Sources.Check(ctx, s.Principal, s.Source, o.Dependencies))
 }
+
 func (d *Discovery) Materialize(ctx context.Context, l sessionevents.Launch) error {
 	if !d.available() {
 		return sessionevents.ErrDenied
@@ -178,9 +189,13 @@ func (d *Discovery) Materialize(ctx context.Context, l sessionevents.Launch) err
 	if err != nil {
 		return err
 	}
+	if _, err = proposalConsentEntry(q, d.now()); err != nil {
+		return err
+	}
 	_, err = d.Store.CreateDiscoveryProposal(ctx, p, q)
 	return err
 }
+
 func (d *Discovery) NotifyPolicy(ctx context.Context, p domain.DiscoveryPolicy) error {
 	if p.Decision != nil || p.Stopped {
 		return nil
@@ -189,12 +204,20 @@ func (d *Discovery) NotifyPolicy(ctx context.Context, p domain.DiscoveryPolicy) 
 	if err != nil || notified {
 		return err
 	}
-	expiry := p.Template.CreatedAt.Add(time.Duration(p.Template.Execution.Terms.Bounds.ApprovalSeconds) * time.Second)
-	if expiry.After(p.Template.Execution.Terms.ExpiresAt) {
-		expiry = p.Template.Execution.Terms.ExpiresAt
+	entry, err := policyConsentEntry(p, d.now())
+	if err != nil {
+		return err
 	}
-	fields := []channelevents.InteractionField{{Label: "Scope", Value: p.Request.Predicate.Kind + " · " + p.Request.Predicate.Subject}, {Label: "Source", Value: p.Template.Execution.Terms.Event.Source.ID}, {Label: "Limits", Value: fmt.Sprintf("Up to %d questions · %d pending at once", p.Request.MaxProposals, p.Request.MaxPending)}, {Label: "Until", Value: p.Template.Execution.Terms.ExpiresAt.Format("2 Jan 2006, 15:04 MST")}}
-	if err = d.publish(ctx, p.Template, "discovery_policy", p, expiry, "Suggest goals from these changes?", "Allow private monitoring suggestions within this scope. Each suggestion needs your approval before a goal or watch is created. This does not authorize execution.", fields); err != nil {
+	var content goalconsent.Content
+	if err = json.Unmarshal(entry.Content, &content); err != nil {
+		return err
+	}
+	var request channelevents.InteractionRequestPayload
+	if err = json.Unmarshal(content.Request, &request); err != nil {
+		return err
+	}
+
+	if err = d.publish(ctx, p.Template, "discovery_policy", p, *request.ExpiresAt, request.Lead, request.Body, request.Fields); err != nil {
 		if errors.Is(err, errConsentDeliveryPending) {
 			return nil
 		}
@@ -202,6 +225,7 @@ func (d *Discovery) NotifyPolicy(ctx context.Context, p domain.DiscoveryPolicy) 
 	}
 	return d.Store.DiscoveryPolicyNotified(ctx, p.ID)
 }
+
 func (d *Discovery) NotifyProposal(ctx context.Context, q domain.DiscoveryProposal) error {
 	p, err := d.Store.DiscoveryPolicy(ctx, q.Goal.Domain, q.PolicyID)
 	if err != nil {
@@ -216,14 +240,31 @@ func (d *Discovery) NotifyProposal(ctx context.Context, q domain.DiscoveryPropos
 	if err = d.Server.Validate(ctx, q.Goal, q.Goal.Execution.Terms); err != nil {
 		return err
 	}
+	entry, err := proposalConsentEntry(q, d.now())
+	if err != nil {
+		return err
+	}
+	var content goalconsent.Content
+	if err := json.Unmarshal(entry.Content, &content); err != nil {
+		return err
+	}
+	var request channelevents.InteractionRequestPayload
+	if err := json.Unmarshal(content.Request, &request); err != nil {
+		return err
+	}
+	return d.publish(ctx, q.Goal, "discovery_proposal", q, q.ExpiresAt, request.Lead, request.Body, request.Fields)
+}
+
+func proposalConsentEntry(q domain.DiscoveryProposal, now time.Time) (memory.Entry, error) {
 	watch := q.Goal.Execution.Terms.Event
 	fields := []channelevents.InteractionField{{Label: "Monitor", Value: watch.Predicate.Subject}, {Label: "Until", Value: q.Goal.Execution.Terms.ExpiresAt.Format("2 Jan 2006, 15:04 MST")}, {Label: "Limits", Value: fmt.Sprintf("Up to %d private sessions", watch.MaxRuns)}}
 	body := "Approval creates this goal and its finite watch. Each run needs your plan approval."
 	if q.Goal.Execution.Terms.ActionApproval == "standing_private" {
 		body = "Approval creates this goal and permits unattended private reports within the exact watch, recipient and limits. Other actions need separate approval."
 	}
-	return d.publish(ctx, q.Goal, "discovery_proposal", q, q.ExpiresAt, "Shall I monitor this for you?", body, fields)
+	return discoveryConsentEntry(q.Goal, "discovery_proposal", q, q.ExpiresAt, "Shall I monitor this for you?", body, fields, now)
 }
+
 func (d *Discovery) publish(ctx context.Context, g domain.Goal, purpose string, data any, expires time.Time, lead, body string, fields []channelevents.InteractionField) error {
 	if !d.available() {
 		return domain.ErrDenied
@@ -234,7 +275,7 @@ func (d *Discovery) publish(ctx context.Context, g domain.Goal, purpose string, 
 	publisher := d.Server.Consent
 	publisher.mu.Lock()
 	defer publisher.mu.Unlock()
-	if publisher.Memory == nil || publisher.Signer == nil || publisher.Publish == nil {
+	if publisher.Memory == nil || publisher.Writer == nil || publisher.Publish == nil {
 		return domain.ErrDenied
 	}
 	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
@@ -245,53 +286,12 @@ func (d *Discovery) publish(ctx context.Context, g domain.Goal, purpose string, 
 		return err
 	}
 	if !found {
-		ns, name, ok := strings.Cut(g.Execution.Session, "/")
-		if !ok {
-			return domain.ErrDenied
-		}
-		email := identity.DecodeForDisplay(g.Domain.Owner)
-		audience := channelevents.ExternalIdentity{Kind: "email", ExternalID: identity.RawExternalID(email), Email: identity.Email(email)}
-		owner, err := audience.Principal().Canonical()
-		if err != nil || owner.String() != g.Domain.Owner {
-			return domain.ErrDenied
-		}
-		detail, err := json.Marshal(struct {
-			Goal      domain.Goal `json:"goal"`
-			Authority any         `json:"authority"`
-		}{g, data})
+		entry, err = discoveryConsentEntry(g, purpose, data, expires, lead, body, fields, d.now())
 		if err != nil {
 			return err
 		}
-		// Bound signed decision size rather than creating an unapprovable request.
-		if len(detail) > 48000 {
-			return fmt.Errorf("%w: discovery evidence too large", domain.ErrInvalid)
-		}
-		request := channelevents.InteractionRequestPayload{AgentSessionRef: channelevents.SessionRef{Namespace: ns, Name: name}, Category: categories.GoalExecutionConsent, RequestRef: id, Lead: lead, Body: body, Fields: fields, Excerpt: &channelevents.InteractionExcerpt{Label: g.Title, Content: g.Outcome}, Details: detail, Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceRequester, Requester: &audience}, ExpiresAt: &expires, Actions: []channelevents.InteractionAction{{ID: "approve", Label: "Allow", Kind: channelevents.ActionKindDecision}, {ID: "deny", Label: "Decline", Kind: channelevents.ActionKindDecision}}}
-		requestRaw, err := json.Marshal(request)
+		entry, err = publisher.Writer.Put(ctx, entry)
 		if err != nil {
-			return err
-		}
-		extra, err := json.Marshal(data)
-		if err != nil {
-			return err
-		}
-		content, err := json.Marshal(goalconsent.Content{Purpose: purpose, Data: extra, Goal: g, Request: requestRaw})
-		if err != nil {
-			return err
-		}
-		if len(content) > 30000 {
-			return fmt.Errorf("%w: discovery consent too large", domain.ErrInvalid)
-		}
-		entry = memory.Entry{Scope: scope, ID: id, Kind: goalconsent.KindName, CreatedAt: d.now().Truncate(time.Microsecond), Content: content}
-		if err = publisher.Signer.EnsureSeeded(ctx, publisher.Memory, scope); err != nil {
-			return err
-		}
-		if err = publisher.Signer.Sign(&entry); err != nil {
-			return err
-		}
-		entry, err = publisher.Memory.Put(ctx, entry)
-		if err != nil {
-			publisher.Signer.InvalidateSeed(scope)
 			return err
 		}
 	}
@@ -305,6 +305,7 @@ func (d *Discovery) publish(ctx context.Context, g domain.Goal, purpose string, 
 	}
 	return publisher.publishRetainedRequest(ctx, scope, request)
 }
+
 func (d *Discovery) Decide(ctx context.Context, content goalconsent.Content, decision domain.ExecutionDecision) error {
 	if !d.available() {
 		return domain.ErrDenied
@@ -414,6 +415,7 @@ func (d *Discovery) Start(ctx context.Context) error {
 		}
 	}
 }
+
 func (d *Discovery) NeedLeaderElection() bool { return true }
 func (d *Discovery) Tick(ctx context.Context) error {
 	if !d.available() {
@@ -435,6 +437,8 @@ func (d *Discovery) Tick(ctx context.Context) error {
 				if err = d.NotifyPolicy(ctx, p); err != nil {
 					failures = append(failures, err)
 				}
+			} else if err = d.Store.StopDiscoveryPolicy(ctx, p.Template.Domain, p.ID); err != nil {
+				failures = append(failures, err)
 			}
 			continue
 		}
@@ -479,4 +483,57 @@ func (d *Discovery) Tick(ctx context.Context) error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func discoveryConsentEntry(g domain.Goal, purpose string, data any, expires time.Time, lead, body string, fields []channelevents.InteractionField, now time.Time) (memory.Entry, error) {
+	scope := memory.Scope{Kind: "session", ID: g.Execution.Session}
+	id := "goalconsent-request-" + g.Execution.Digest
+	ns, name, ok := strings.Cut(g.Execution.Session, "/")
+	if !ok {
+		return memory.Entry{}, domain.ErrDenied
+	}
+	email := identity.DecodeForDisplay(g.Domain.Owner)
+	audience := channelevents.ExternalIdentity{Kind: "email", ExternalID: identity.RawExternalID(email), Email: identity.Email(email)}
+	owner, err := audience.Principal().Canonical()
+	if err != nil || owner.String() != g.Domain.Owner {
+		return memory.Entry{}, domain.ErrDenied
+	}
+	detail, err := json.Marshal(struct {
+		Goal      domain.Goal `json:"goal"`
+		Authority any         `json:"authority"`
+	}{g, data})
+	if err != nil {
+		return memory.Entry{}, err
+	}
+	// Bound signed decision size rather than creating an unapprovable request.
+	if len(detail) > 48000 {
+		return memory.Entry{}, fmt.Errorf("%w: discovery evidence too large", domain.ErrInvalid)
+	}
+	request := channelevents.InteractionRequestPayload{AgentSessionRef: channelevents.SessionRef{Namespace: ns, Name: name}, Category: categories.GoalExecutionConsent, RequestRef: id, Lead: lead, Body: body, Fields: fields, Excerpt: &channelevents.InteractionExcerpt{Label: g.Title, Content: g.Outcome}, Details: detail, Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceRequester, Requester: &audience}, ExpiresAt: &expires, Actions: []channelevents.InteractionAction{{ID: "approve", Label: "Allow", Kind: channelevents.ActionKindDecision}, {ID: "deny", Label: "Decline", Kind: channelevents.ActionKindDecision}}}
+	requestRaw, err := json.Marshal(request)
+	if err != nil {
+		return memory.Entry{}, err
+	}
+	extra, err := json.Marshal(data)
+	if err != nil {
+		return memory.Entry{}, err
+	}
+	content, err := json.Marshal(goalconsent.Content{Purpose: purpose, Data: extra, Goal: g, Request: requestRaw})
+	if err != nil {
+		return memory.Entry{}, err
+	}
+	if err := checkConsentSize(content); err != nil {
+		return memory.Entry{}, err
+	}
+	entry := memory.Entry{Scope: scope, ID: id, Kind: goalconsent.KindName, CreatedAt: now.Truncate(time.Microsecond), Content: content}
+	return entry, nil
+}
+
+func policyConsentEntry(p domain.DiscoveryPolicy, now time.Time) (memory.Entry, error) {
+	expiry := p.Template.CreatedAt.Add(time.Duration(p.Template.Execution.Terms.Bounds.ApprovalSeconds) * time.Second)
+	if expiry.After(p.Template.Execution.Terms.ExpiresAt) {
+		expiry = p.Template.Execution.Terms.ExpiresAt
+	}
+	fields := []channelevents.InteractionField{{Label: "Scope", Value: p.Request.Predicate.Kind + " · " + p.Request.Predicate.Subject}, {Label: "Source", Value: p.Template.Execution.Terms.Event.Source.ID}, {Label: "Limits", Value: fmt.Sprintf("Up to %d questions · %d pending at once", p.Request.MaxProposals, p.Request.MaxPending)}, {Label: "Until", Value: p.Template.Execution.Terms.ExpiresAt.Format("2 Jan 2006, 15:04 MST")}}
+	return discoveryConsentEntry(p.Template, "discovery_policy", p, expiry, "Suggest goals from these changes?", "Allow private monitoring suggestions within this scope. Each suggestion needs your approval before a goal or watch is created. This does not authorize execution.", fields, now)
 }

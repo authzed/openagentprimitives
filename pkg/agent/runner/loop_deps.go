@@ -1144,15 +1144,10 @@ type Loop struct {
 	// renderer. nil ⇒ the gate fails closed (there is no channel to ask on).
 	InteractionRequestPublish func(ctx context.Context, ns, name string, env channelevents.Envelope) error
 
-	// TimeoutAppliedPublish publishes an approval "applied" envelope on BOTH the
-	// IN subject (so channelsd's Handle*Applied handler clears its pending queue +
-	// condition) and the OUT subject (so the channel sender edits the pending
-	// message to show the request expired). Called when a per-kind approval
-	// deadline elapses with no decision, for tool_call / leakage_share /
-	// content_inspection; the envelope always carries a deny/timeout outcome — a
-	// lapsed deadline never synthesizes an approval. nil disables (kubectl/test
-	// sessions have no channel surface to clear and rely on the orchestrator
-	// ctx-deadline alone).
+	// TimeoutAppliedPublish reports timeout on IN. Channelsd serializes it
+	// with human decisions and publishes the canonical retained outcome on OUT.
+	// A lapsed deadline never synthesizes approval. nil disables surface cleanup.
+
 	TimeoutAppliedPublish func(ctx context.Context, ns, name string, env channelevents.Envelope) error
 
 	// UIPublish publishes one agent-UI push envelope on the session's out subject,

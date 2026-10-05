@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/agent/session/state/plans"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
@@ -992,15 +993,13 @@ func (l *Loop) scopeDeps() hooks.ScopeDeps {
 // naming plural arbitrary-typed resources would let a spec author decide the
 // audience of its own results.
 //
-// Returns nil for every other tool, leaving the single-resource path exactly as
-// it was. record_observation is the one other name it answers, and with the
-// opposite shape — a declared opt-out rather than a declaration; see there.
+// Goal reads declare their durable domain and retained source dependencies.
+// record_observation opts out because it returns the caller's own content.
+// Other tools retain the single-resource path.
 func (l *Loop) memoryPoolReadsDecl(toolName string) *hooks.ToolReadsDecl {
 	if meta.IsGoalTool(toolName) {
 		return &hooks.ToolReadsDecl{ResultResources: func(result string) ([]hooks.ToolReadResource, error) {
-			var response struct {
-				Resource string `json:"resource"`
-			}
+			var response goals.Response
 			if err := json.Unmarshal([]byte(result), &response); err != nil {
 				return nil, err
 			}
@@ -1012,7 +1011,14 @@ func (l *Loop) memoryPoolReadsDecl(toolName string) *hooks.ToolReadsDecl {
 			if !ok || typ != meta.GoalResourceType {
 				return nil, hooks.ErrUnattributableResource
 			}
-			return []hooks.ToolReadResource{{Type: typ, ID: id, Permission: memory.PermissionViewMemory, Content: result}}, nil
+			resources := []hooks.ToolReadResource{{Type: typ, ID: id, Permission: memory.PermissionViewMemory, Content: result}}
+			for _, source := range response.ReadDependencies() {
+				if strings.TrimSpace(source.ResourceType) == "" || strings.TrimSpace(source.ResourceID) == "" || strings.TrimSpace(source.Permission) == "" {
+					return nil, fmt.Errorf("goal response has incomplete source authority: %w", hooks.ErrUnattributableResource)
+				}
+				resources = append(resources, hooks.ToolReadResource{Type: source.ResourceType, ID: source.ResourceID, Permission: source.Permission, Content: result})
+			}
+			return resources, nil
 		}}
 	}
 
@@ -1069,18 +1075,10 @@ func (l *Loop) memoryPoolReadsDecl(toolName string) *hooks.ToolReadsDecl {
 	}
 }
 
-// memoryPoolWritesDecl declares that the observation-recording tool writes
-// into the pool named by its `resource` argument.
-//
-// Built-in only, and for a stronger reason than the read declaration's. A CRD
-// field naming a tool's write destination would let a spec author decide where
-// the session's data LANDS — not merely what a result's audience is — and the
-// audience gate would then compare the session's reads against whatever pool
-// that author pointed at. Naming the argument in code keeps the destination a
-// property of the tool.
-//
-// Returns nil for every other tool, which is what leaves the PreToolCall
-// pool-write gate inert for everything but this one.
+// memoryPoolWritesDecl declares the destination resource for observation and
+// goal mutations. Keeping this built-in prevents tool authors from changing the
+// audience gate by declaring their own destination argument. Other tools return
+// nil and retain their existing write-gate behavior.
 func (l *Loop) memoryPoolWritesDecl(toolName string) *hooks.ToolWritesDecl {
 	if toolName != meta.RecordObservationToolName && !meta.IsGoalWrite(toolName) {
 		return nil

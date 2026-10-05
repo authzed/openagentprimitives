@@ -492,9 +492,8 @@ func (h *runnerHost) AwaitDecision(ctx context.Context, reqID string, timeout ti
 // publishTimeoutApplied notifies channelsd that a host-driven approval
 // (tool_call / leakage_share / content_inspection) reached its per-kind deadline
 // with no decision. It builds the matching "applied" envelope with a
-// deny/timeout outcome and hands it to l.TimeoutAppliedPublish, which fans it to
-// the IN subject (channelsd clears its pending queue + condition) and the OUT
-// subject (the channel sender edits the prompt to "expired"). Deny-only: a
+// deny/timeout outcome and hands it to l.TimeoutAppliedPublish on IN.
+// Channelsd retains the winning outcome before publishing it on OUT. Deny-only: a
 // lapsed deadline never approves. Best-effort — without the publish hook (a
 // kubectl/test session) there is no channel surface to clear, and a build or
 // publish failure is logged, never fatal to the turn.

@@ -39,11 +39,13 @@ func (s *Store) query(query string) string {
 	}
 	return b.String()
 }
+
 func rollback(tx *sql.Tx) {
 	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 		slog.Info("session event transaction rollback failed", "error", err)
 	}
 }
+
 func (s *Store) Migrate(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -58,6 +60,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS oap_event_admissions (subscription_id TEXT NOT NULL,observation_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(subscription_id,observation_id))`,
 		`CREATE TABLE IF NOT EXISTS oap_event_launches (id TEXT PRIMARY KEY,subscription_id TEXT NOT NULL,observation_id TEXT NOT NULL,due_at TEXT NOT NULL,expires_at TEXT NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS oap_event_launch_pending ON oap_event_launches(state,due_at)`,
+		`CREATE TABLE IF NOT EXISTS oap_event_route_pending(subscription_id TEXT NOT NULL,observation_id TEXT NOT NULL,observed_at TEXT NOT NULL,PRIMARY KEY(subscription_id,observation_id))`,
+		`CREATE INDEX IF NOT EXISTS oap_event_route_due ON oap_event_route_pending(subscription_id,observed_at,observation_id)`,
 		`CREATE TABLE IF NOT EXISTS oap_session_observation_lock (id INTEGER PRIMARY KEY,generation BIGINT NOT NULL)`,
 		`INSERT INTO oap_session_observation_lock(id,generation) VALUES(1,0) ON CONFLICT(id) DO NOTHING`,
 	} {
@@ -66,14 +70,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	var newer int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_session_observation_schema WHERE version>3`).Scan(&newer); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_session_observation_schema WHERE version>4`).Scan(&newer); err != nil {
 		return err
 	}
 	if newer > 0 {
 		return fmt.Errorf("session observation schema is newer than this operator")
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO oap_session_observation_schema(version) VALUES(3) ON CONFLICT(version) DO NOTHING`); err != nil {
-		return err
 	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS oap_event_subscription_sources(subscription_id TEXT PRIMARY KEY,source_key TEXT NOT NULL)`); err != nil {
 		return err
@@ -105,8 +106,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	var migrated int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oap_session_observation_schema WHERE version=4`).Scan(&migrated); err != nil {
+		return err
+	}
+	if migrated == 0 {
+		if err = s.enqueueExisting(ctx, tx, ""); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO oap_session_observation_schema(version) VALUES(4) ON CONFLICT(version) DO NOTHING`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
+
 func (s *Store) Checkpoint(ctx context.Context, source sessionevents.Source, publisher string) (sessionevents.Checkpoint, error) {
 	result := sessionevents.Checkpoint{Source: source, Publisher: publisher}
 	if source.Validate() != nil || publisher == "" {
@@ -118,6 +132,7 @@ func (s *Store) Checkpoint(ctx context.Context, source sessionevents.Source, pub
 	}
 	return result, err
 }
+
 func (s *Store) Get(ctx context.Context, source sessionevents.Source, eventID string) (sessionevents.Observation, error) {
 	var result sessionevents.Observation
 	if source.Validate() != nil || eventID == "" {
@@ -133,6 +148,7 @@ func (s *Store) Get(ctx context.Context, source sessionevents.Source, eventID st
 	}
 	return result, json.Unmarshal([]byte(payload), &result)
 }
+
 func (s *Store) Ingest(ctx context.Context, input sessionevents.Input, expected int64) (sessionevents.Observation, error) {
 	if err := input.Validate(); err != nil {
 		return sessionevents.Observation{}, err
@@ -193,6 +209,9 @@ func (s *Store) Ingest(ctx context.Context, input sessionevents.Input, expected 
 	}
 	if !exists {
 		if _, err = tx.ExecContext(ctx, s.query(`INSERT INTO oap_session_observations(id,source_key,event_id,digest,payload) VALUES(?,?,?,?,?)`), observation.ID(), sourceKey, observation.EventID, digest, string(payload)); err != nil {
+			return sessionevents.Observation{}, err
+		}
+		if _, err = tx.ExecContext(ctx, s.query(`INSERT INTO oap_event_route_pending(subscription_id,observation_id,observed_at) SELECT x.subscription_id,?,? FROM oap_event_subscription_sources x JOIN oap_event_subscriptions s ON s.id=x.subscription_id WHERE x.source_key=? AND s.stopped=0 ON CONFLICT(subscription_id,observation_id) DO NOTHING`), observation.ID(), timestamp(observation.ObservedAt), sourceKey); err != nil {
 			return sessionevents.Observation{}, err
 		}
 		var stored sessionevents.Observation

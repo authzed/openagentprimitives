@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -39,6 +40,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 		}
 	}
 }
+
 func (p *Publisher) Flush(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -57,7 +59,8 @@ func (p *Publisher) Flush(ctx context.Context) error {
 			return err
 		}
 		var entry memory.Entry
-		if len(raw) == 0 {
+		fresh := len(raw) == 0
+		if fresh {
 			content, err := json.Marshal(event)
 			if err != nil {
 				return err
@@ -89,13 +92,16 @@ func (p *Publisher) Flush(ctx context.Context) error {
 				return fmt.Errorf("goal audit envelope mismatch: %s", event.ID)
 			}
 		}
-		if _, err := p.Memory.Put(ctx, entry); err != nil {
+		stored, err := p.Memory.Put(ctx, entry)
+		if err != nil {
 			p.Signer.InvalidateSeed(scope)
 			return err
 		}
-		// The saved envelope may belong to a previous operator key. Re-seed from
-		// what actually landed before signing the next event in this scope.
-		p.Signer.InvalidateSeed(scope)
+		// Fresh appends retain the known chain head. Replayed envelopes may
+		// belong to another key or have landed at an earlier sequence.
+		if !fresh || entry.Provenance == nil || stored.Provenance == nil || !reflect.DeepEqual(entry.Provenance, stored.Provenance) {
+			p.Signer.InvalidateSeed(scope)
+		}
 		if p.Notify != nil {
 			if err := p.Notify(ctx, event); err != nil {
 				return err

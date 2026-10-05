@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/sessionevents/sqlstore"
 	memsqlite "github.com/authzed/openagentprimitives/pkg/memory/sqlite"
 	"github.com/authzed/openagentprimitives/test/testpostgres"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
@@ -376,4 +376,164 @@ func TestDispatchLostAcknowledgmentDoesNotCreateSecondRequest(t *testing.T) {
 	state, err := store.Subscription(ctx, sub.ID)
 	require.NoError(t, err)
 	require.Equal(t, 1, state.Used)
+}
+
+// A future observation must remain replayable without occupying a due batch.
+// Rebuilding the operator and backfilling a pre-index database retain late
+// observations, including ones whose hashed IDs precede earlier admissions.
+func TestRoutingBacklogFutureLateAndMigration(t *testing.T) {
+	for _, backend := range []string{"sqlite", "postgres"} {
+		t.Run(backend, func(t *testing.T) {
+			ctx := context.Background()
+			db := eventDB(t, backend)
+			store := sqlstore.New(db, backend == "postgres")
+			require.NoError(t, store.Migrate(ctx))
+			now := input().Observation.ObservedAt
+			i := input()
+			for n := 1; n <= 105; n++ {
+				i.Sequence = int64(n)
+				i.Observation.EventID = fmt.Sprintf("future-%03d", n)
+				i.Observation.ObservedAt = now.Add(time.Minute)
+				_, err := store.Ingest(ctx, i, int64(n-1))
+				require.NoError(t, err)
+			}
+			sub := watch("watch-backlog", now)
+			_, err := store.CreateSubscription(ctx, sub)
+			require.NoError(t, err)
+			i.Sequence++
+			i.Observation.EventID = "ready-now"
+			i.Observation.ObservedAt = now
+			_, err = store.Ingest(ctx, i, i.Sequence-1)
+			require.NoError(t, err)
+			store = sqlstore.New(db, backend == "postgres")
+			due, err := store.Unadmitted(ctx, sub.ID, now, 100)
+			require.NoError(t, err)
+			require.Len(t, due, 1)
+			require.Equal(t, "ready-now", due[0].EventID)
+			accepted, err := store.Admit(ctx, sub.ID, sub.Source, due[0].EventID, now)
+			require.NoError(t, err)
+			require.Equal(t, "accepted", accepted.Disposition)
+			require.NoError(t, store.Acknowledge(ctx, accepted.LaunchID))
+			due, err = store.Unadmitted(ctx, sub.ID, now, 100)
+			require.NoError(t, err)
+			require.Empty(t, due)
+			// Simulate upgrading the previous schema, which stored admissions and
+			// observations but had no retained unadmitted working index.
+			_, err = db.ExecContext(ctx, `DELETE FROM oap_event_route_pending`)
+			require.NoError(t, err)
+			_, err = db.ExecContext(ctx, `DELETE FROM oap_session_observation_schema WHERE version=4`)
+			require.NoError(t, err)
+			require.NoError(t, store.Migrate(ctx))
+			due, err = store.Unadmitted(ctx, sub.ID, now.Add(time.Minute), 100)
+			require.NoError(t, err)
+			require.Len(t, due, 100)
+			for _, o := range due {
+				require.NotEqual(t, "ready-now", o.EventID)
+			}
+			for _, o := range due {
+				_, err = store.Admit(ctx, sub.ID, sub.Source, o.EventID, now.Add(time.Minute))
+				require.NoError(t, err)
+			}
+			due, err = store.Unadmitted(ctx, sub.ID, now.Add(time.Minute), 100)
+			require.NoError(t, err)
+			require.Len(t, due, 5)
+			// Exhaustion never cancels the final already-approved launch.
+			pending, err := store.Pending(ctx, now.Add(time.Minute), 100)
+			require.NoError(t, err)
+			require.Len(t, pending, 1)
+			i.Sequence++
+			i.Observation.EventID = "late-arrival"
+			i.Observation.ObservedAt = now.Add(-time.Second)
+			_, err = store.Ingest(ctx, i, i.Sequence-1)
+			require.NoError(t, err)
+			due, err = store.Unadmitted(ctx, sub.ID, now.Add(time.Minute), 100)
+			require.NoError(t, err)
+			require.Len(t, due, 6)
+			_, err = store.CreateSubscription(ctx, sub)
+			require.NoError(t, err)
+			due, err = store.Unadmitted(ctx, sub.ID, now.Add(time.Minute), 100)
+			require.NoError(t, err)
+			require.Len(t, due, 6, "activation retries must not rebuild already admitted events")
+		})
+	}
+}
+
+type failingLaunchConsumer struct {
+	failing   map[string]bool
+	delivered map[string]bool
+}
+
+func (c *failingLaunchConsumer) Materialize(_ context.Context, l sessionevents.Launch) error {
+	if c.failing[l.Admission.LaunchID] {
+		return errors.New("transient consumer outage")
+	}
+	c.delivered[l.Admission.LaunchID] = true
+	return nil
+}
+func TestDispatcherAdvancesPastMoreThanOneBatchOfFailures(t *testing.T) {
+	ctx := context.Background()
+	store := sqlstore.New(eventDB(t, "sqlite"), false)
+	require.NoError(t, store.Migrate(ctx))
+	now := input().Observation.ObservedAt
+	_, err := store.Ingest(ctx, input(), 0)
+	require.NoError(t, err)
+	for n := 0; n < 105; n++ {
+		sub := watch(fmt.Sprintf("watch-%03d", n), now)
+		_, err := store.CreateSubscription(ctx, sub)
+		require.NoError(t, err)
+		_, err = store.Admit(ctx, sub.ID, sub.Source, "trip-1", now)
+		require.NoError(t, err)
+	}
+	launches, err := store.PendingAfter(ctx, now, "", 100)
+	require.NoError(t, err)
+	require.Len(t, launches, 100)
+	consumer := &failingLaunchConsumer{failing: map[string]bool{}, delivered: map[string]bool{}}
+	for _, l := range launches {
+		consumer.failing[l.Admission.LaunchID] = true
+	}
+	dispatcher := &sessionevents.Dispatcher{Triggers: &sessionevents.Triggers{Store: store, Observations: store, Authority: &triggerAuthority{}}, Consumer: consumer}
+	count, err := dispatcher.Drain(ctx, now, 100)
+	require.ErrorContains(t, err, "transient consumer outage")
+	require.Zero(t, count)
+	count, err = dispatcher.Drain(ctx, now, 100)
+	require.NoError(t, err)
+	require.Equal(t, 5, count)
+	count, err = dispatcher.Drain(ctx, now, 100)
+	require.NoError(t, err)
+	require.Zero(t, count)
+	consumer.failing = map[string]bool{}
+	count, err = dispatcher.Drain(ctx, now, 100)
+	require.NoError(t, err)
+	require.Equal(t, 100, count)
+	require.Len(t, consumer.delivered, 105)
+}
+
+func TestDispatcherStopsRevokedObservationAuthority(t *testing.T) {
+	ctx := context.Background()
+	store := sqlstore.New(eventDB(t, "sqlite"), false)
+	require.NoError(t, store.Migrate(ctx))
+	now := input().Observation.ObservedAt
+	sub := watch("watch", now)
+	_, err := store.Ingest(ctx, input(), 0)
+	require.NoError(t, err)
+	_, err = store.CreateSubscription(ctx, sub)
+	require.NoError(t, err)
+	_, err = store.Admit(ctx, sub.ID, sub.Source, "trip-1", now)
+	require.NoError(t, err)
+	consumer := &failingLaunchConsumer{delivered: map[string]bool{}}
+	dispatcher := &sessionevents.Dispatcher{Triggers: &sessionevents.Triggers{Store: store, Observations: store, Authority: &triggerAuthority{denyObservation: true}}, Consumer: consumer}
+	count, err := dispatcher.Drain(ctx, now, 100)
+	require.ErrorIs(t, err, sessionevents.ErrDenied)
+	require.Zero(t, count)
+	state, err := store.Subscription(ctx, sub.ID)
+	require.NoError(t, err)
+	require.True(t, state.Stopped)
+	require.Equal(t, 1, state.Used)
+	dispatcher.Triggers.Authority = &triggerAuthority{}
+	_, err = dispatcher.Triggers.Activate(ctx, sub)
+	require.NoError(t, err)
+	count, err = dispatcher.Drain(ctx, now, 100)
+	require.NoError(t, err)
+	require.Zero(t, count)
+	require.Empty(t, consumer.delivered, "restoring access must not resurrect cancelled launch intent")
 }

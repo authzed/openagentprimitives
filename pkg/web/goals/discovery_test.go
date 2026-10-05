@@ -5,6 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"net/http"
+	"path/filepath"
+	"testing"
+	"time"
+
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 	eventnative "github.com/authzed/openagentprimitives/pkg/agent/sessionevents/native"
@@ -27,12 +32,8 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
-	"net/http"
-	"path/filepath"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"testing"
-	"time"
 )
 
 func TestProductionDiscoveryConsentAndAcceptance(t *testing.T) {
@@ -65,7 +66,7 @@ func TestProductionDiscoveryConsentAndAcceptance(t *testing.T) {
 	f.keys[provenance.PubKeyRef{Publisher: "system:operator", KeyID: signer.KeyID()}] = pub
 	var cards []channelevents.InteractionRequestPayload
 	relayOffline := true
-	f.s.Consent = &ConsentPublisher{Service: f.s.Service, Memory: f.mem, Signer: signer, Publish: func(_ string, raw []byte) error {
+	f.s.Consent = &ConsentPublisher{Service: f.s.Service, Memory: f.mem, Writer: provenance.NewSigningMemory(f.mem, signer), Publish: func(_ string, raw []byte) error {
 		var env channelevents.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			return err
