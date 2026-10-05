@@ -289,7 +289,19 @@ func TestApplyPreparedRefusesReplacementAfterPrepare(t *testing.T) {
 	assert.Equal(t, "foreign replacement", got.Spec.SystemPrompt.Inline)
 }
 
-func TestApplyPreparedRefusesUpdateAfterPrepare(t *testing.T) {
+// TestApplyPreparedRetriesSameUIDUpdateAfterPrepare is the real-apiserver analog
+// of TestInstall_ControllerWriteBetweenCreateAndApply_RetriesOnCurrentVersion: an
+// intervening write that keeps the SAME uid — the object's own controller adding
+// a status/finalizer, or any external actor touching a field the install does not
+// manage — is a benign race, not a seizure. The conditional apply must re-read,
+// confirm the uid it approved, and retry on the current resourceVersion so the
+// install's desired state still lands, rather than aborting the whole install on
+// a bare resourceVersion conflict.
+//
+// Only a uid CHANGE (a same-name replacement) or the object's disappearance still
+// fails closed — those remain TestApplyPreparedRefusesReplacementAfterPrepare and
+// TestApplyPreparedRefusesDisappearedApprovedObject.
+func TestApplyPreparedRetriesSameUIDUpdateAfterPrepare(t *testing.T) {
 	env := testenv.Start(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -303,16 +315,21 @@ func TestApplyPreparedRefusesUpdateAfterPrepare(t *testing.T) {
 	require.NoError(t, env.Client.Create(ctx, existing))
 	p, err := install.Prepare(ctx, env.Client, bundleFromCRs(t, minimalAgentClass("stable-agent")), nil, nil, install.InstallOpts{Namespace: ns})
 	require.NoError(t, err)
+
+	// A write that lands after Prepare but keeps the same uid: the exact shape of
+	// the object's own controller adding a finalizer/status in the apply window.
 	var updated v1alpha1.AgentClass
 	require.NoError(t, env.Client.Get(ctx, client.ObjectKeyFromObject(existing), &updated))
 	updated.Labels["external.example/change"] = "after-prepare"
 	require.NoError(t, env.Client.Update(ctx, &updated))
 
 	_, err = install.ApplyPrepared(ctx, env.Client, p)
-	require.Error(t, err, "SSA must remain conditional on the resourceVersion approved by Prepare")
+	require.NoError(t, err, "a same-uid intervening update is a benign race: the apply must re-read and retry, not abort")
 	var got v1alpha1.AgentClass
 	require.NoError(t, env.Client.Get(ctx, client.ObjectKeyFromObject(existing), &got))
-	assert.Equal(t, "after-prepare", got.Labels["external.example/change"])
+	assert.Equal(t, updated.UID, got.UID, "the retry must stay on the object this run approved, not replace it")
+	assert.Equal(t, "fake test agent", got.Spec.SystemPrompt.Inline, "the install's desired spec must land on the retry")
+	assert.Equal(t, "after-prepare", got.Labels["external.example/change"], "a field owned by another manager must survive the force-ownership apply")
 }
 
 func TestApplyPreparedRefusesReplacementBetweenCreateAndSSA(t *testing.T) {
