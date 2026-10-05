@@ -82,7 +82,7 @@ func (l *Listener) SubmitUserMessage(_ context.Context, ext channelkinds.Externa
 }
 
 // SubmitInteractionDecision publishes a KindInteractionDecision envelope on the
-// session's IN subject. channelsd's category-generic decision pipe validates
+// component-only subject. channelsd's category-generic decision pipe validates
 // the decider's standing per the category's DeciderPolicy, invokes the bound
 // handler, and re-emits a KindInteractionApplied envelope the surface sees via
 // the outbound relay.
@@ -106,8 +106,7 @@ func (l *Listener) SubmitInteractionDecision(_ context.Context, ext channelkinds
 			TeamScope:  ext.TeamScope,
 		},
 	}
-	if err := channelevents.PublishIn(l.Deps.NATSPublish, ns, name,
-		channelevents.KindInteractionDecision, pl); err != nil {
+	if err := channelevents.PublishComponentDecision(l.Deps.NATSPublish, ns, name, pl); err != nil {
 		return fmt.Errorf("%s listener: publish interaction_decision: %w", l.Kind, err)
 	}
 	return nil

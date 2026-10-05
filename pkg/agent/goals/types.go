@@ -72,20 +72,21 @@ type Source struct {
 }
 
 type Goal struct {
-	Sources       []Source   `json:"sources,omitempty"`
-	ID            string     `json:"id"`
-	Domain        Domain     `json:"domain"`
-	Revision      int64      `json:"revision"`
-	Title         string     `json:"title"`
-	Outcome       string     `json:"outcome"`
-	State         State      `json:"state"`
-	DueAt         *time.Time `json:"dueAt,omitempty"`
-	Timezone      string     `json:"timezone,omitempty"`
-	Plan          *PlanRef   `json:"plan,omitempty"`
-	Result        *Result    `json:"result,omitempty"`
-	OriginSession string     `json:"originSession"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+	Sources       []Source          `json:"sources,omitempty"`
+	ID            string            `json:"id"`
+	Domain        Domain            `json:"domain"`
+	Revision      int64             `json:"revision"`
+	Title         string            `json:"title"`
+	Outcome       string            `json:"outcome"`
+	State         State             `json:"state"`
+	DueAt         *time.Time        `json:"dueAt,omitempty"`
+	Timezone      string            `json:"timezone,omitempty"`
+	Plan          *PlanRef          `json:"plan,omitempty"`
+	Result        *Result           `json:"result,omitempty"`
+	Execution     *ExecutionConsent `json:"execution,omitempty"`
+	OriginSession string            `json:"originSession"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
 }
 
 type CreateRequest struct {
@@ -130,6 +131,8 @@ type Event struct {
 	Action     string          `json:"action"`
 	Session    string          `json:"session"`
 	Proof      string          `json:"proof"`
+	Occurrence *Occurrence     `json:"occurrence,omitempty"`
+	OccurredAt *time.Time      `json:"occurredAt,omitempty"`
 }
 
 func validState(s State) bool {
@@ -229,6 +232,9 @@ func Revise(g Goal, c Change, now time.Time) (Goal, error) {
 		return Goal{}, fmt.Errorf("%w: unknown action", ErrInvalid)
 	}
 	g.Revision++
+	// Any management mutation conservatively requires fresh execution consent.
+	// In particular, resume must never revive authority withdrawn by pause.
+	g.Execution = nil
 	g.UpdatedAt = now.UTC()
 	return g, validateGoal(g)
 }

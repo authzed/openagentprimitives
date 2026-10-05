@@ -33,13 +33,17 @@ type Authority interface {
 	CheckInteract(context.Context, string, string, identity.CanonicalUserID, bool) (bool, error)
 	CheckOnResource(context.Context, string, string, string, identity.CanonicalUserID, bool) (bool, error)
 }
+type ExecutionSessionAuthority interface {
+	ValidateGoalSession(context.Context, *v1.AgentSession) error
+}
 type Server struct {
-	Service *domain.Service
-	Reader  client.Reader
-	Memory  memory.Memory
-	Tokens  *tokens.Registry
-	Keys    provenance.PublisherKeyLookup
-	Auth    Authority
+	ExecutionSessions ExecutionSessionAuthority
+	Service           *domain.Service
+	Reader            client.Reader
+	Memory            memory.Memory
+	Tokens            *tokens.Registry
+	Keys              provenance.PublisherKeyLookup
+	Auth              Authority
 	// ActorWait bounds the initial Create-to-attestation race; negative disables
 	// waiting in tests. Every result still requires a trusted actor record.
 	ActorWait time.Duration
@@ -53,6 +57,10 @@ type Response = domain.Response
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if r.URL.Path == "/goals/decision" {
+		s.decideHTTP(w, r)
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/goals/"), "/")
@@ -96,19 +104,56 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := memory.WithCaller(memory.WithSystemApproval(r.Context(), "system:operator"), "system:operator")
+	if req.Operation == "authorize_execution" {
+		var sess v1.AgentSession
+		if s.ExecutionSessions == nil {
+			s.fail(w, r, domain.ErrDenied)
+			return
+		}
+		if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sess); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if sess.Spec.GoalExecution == nil {
+			s.fail(w, r, domain.ErrDenied)
+			return
+		}
+		if err := s.ExecutionSessions.ValidateGoalSession(ctx, &sess); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		owner := v1.StartedByCanonical(&sess)
+		allowed, err := s.Auth.CheckInteract(ctx, ns, name, owner, true)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if !allowed {
+			s.fail(w, r, domain.ErrDenied)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(Response{ExecutionAvailable: true}); err != nil {
+			log.FromContext(ctx).Info("goal authority response failed", "session", ns+"/"+name, "error", err)
+		}
+		return
+	}
 	a, err := s.resolve(ctx, ns, name)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	resource := ResourceType + ":" + a.Domain.ID()
-	if req.Operation == "create" || req.Operation == "update" {
+	if req.Operation == "create" || req.Operation == "update" || req.Operation == "request_execution" {
 		if req.Resource != resource {
 			s.fail(w, r, domain.ErrDenied)
 			return
 		}
 	}
 	out := Response{Resource: resource}
+	if _, ok := s.Service.Store.(domain.OccurrenceStore); ok && s.Service.ExecutionAuth != nil {
+		out.ExecutionAvailable = true
+	}
 	switch req.Operation {
 	case "create":
 		g, e := s.Service.Create(ctx, a, req.Create)
@@ -118,6 +163,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g, e := s.Service.Update(ctx, a, req.Change)
 		err = e
 		out.Goal = &g
+	case "request_execution":
+		err = s.PrepareExecution(ctx, a, &req.Execution)
+		if err == nil {
+			var g domain.Goal
+			g, err = s.Service.RequestExecution(ctx, a, req.Execution)
+			out.Goal = &g
+		}
 	case "get":
 		g, e := s.Service.Get(ctx, a, req.ID)
 		err = e
@@ -125,6 +177,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "list":
 		p, e := s.Service.List(ctx, a, req.List)
 		err = e
+		p.ExecutionAvailable = out.ExecutionAvailable
 		out.Page = &p
 	default:
 		err = domain.ErrInvalid
@@ -221,7 +274,7 @@ func (s *Server) resolve(ctx context.Context, ns, name string) (domain.Actor, er
 	if err != nil {
 		return domain.Actor{}, err
 	}
-	a := domain.Actor{Domain: domain.Domain{Namespace: ns, Owner: proof.Owner, Class: class.Name, ClassUID: string(class.UID)}, Session: ns + "/" + name, Proof: latest.ID, Attestation: string(attestation)}
+	a := domain.Actor{Domain: domain.Domain{Namespace: ns, Owner: proof.Owner, Class: class.Name, ClassUID: string(class.UID)}, Session: ns + "/" + name, SessionUID: string(sess.UID), Proof: latest.ID, Attestation: string(attestation)}
 	// The pin survives grant expiry. Another employee in this conversation must
 	// start their own session, rather than move a framework-owned private slot.
 	id, err := authz.NewObjectID(a.Domain.ID(), nil)

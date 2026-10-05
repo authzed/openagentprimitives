@@ -85,7 +85,8 @@ func TestReservedDefinitionNames_MatchesScaffold(t *testing.T) {
 		// what stops a fragment from redeclaring it once it moved.
 		"agent": {},
 		// A private goal domain is platform-owned; fragments cannot redefine it.
-		"agent_goal_domain": {},
+		"agent_goal_domain":    {},
+		"agent_goal_execution": {},
 	}
 	assert.Equal(t, want, schema.ReservedDefinitionNames(), "ReservedDefinitionNames must track the scaffold's definitions exactly")
 }

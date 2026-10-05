@@ -1803,3 +1803,13 @@ func withDigest(in []plangateaudit.Content, digest string) []plangateaudit.Conte
 	}
 	return out
 }
+
+func TestGoalExecutionRefusesAutomaticContinuation(t *testing.T) {
+	parent := &spiceboxv1alpha1.AgentSession{Spec: spiceboxv1alpha1.AgentSessionSpec{GoalExecution: &spiceboxv1alpha1.GoalExecutionReference{GoalID: "goal"}}, Status: spiceboxv1alpha1.AgentSessionStatus{PendingRestart: &spiceboxv1alpha1.PendingRestart{TargetSessionName: "continuation"}}}
+	r := &agentsession.Reconciler{}
+	proceed, _, err := r.ReconcileRestart(context.Background(), parent)
+	require.ErrorContains(t, err, "cannot fork")
+	assert.False(t, proceed)
+	_, err = agentsession.EnsureChildSession(context.Background(), nil, parent, parent.Status.PendingRestart)
+	require.ErrorContains(t, err, "cannot create a continuation")
+}

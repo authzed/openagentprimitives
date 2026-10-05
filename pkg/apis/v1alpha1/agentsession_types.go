@@ -52,6 +52,10 @@ type AgentSessionList struct {
 // transition rule comparing presence as well as value.
 // +kubebuilder:validation:XValidation:rule="has(self.forkedFrom) == has(oldSelf.forkedFrom) && (!has(self.forkedFrom) || self.forkedFrom == oldSelf.forkedFrom)",message="spec.forkedFrom is immutable: it cannot be added, removed or changed after create"
 type AgentSessionSpec struct {
+	// GoalExecution binds an operator-created root session to a durable claim.
+	// +optional
+	GoalExecution *GoalExecutionReference `json:"goalExecution,omitempty"`
+
 	// Class names the AgentClass in the same namespace.
 	Class string `json:"class"`
 
@@ -1577,4 +1581,12 @@ type PermissionSurfaceEntry struct {
 	// permission and a variant appears once — it is one route, not two.
 	// +optional
 	Tools []string `json:"tools,omitempty"`
+}
+
+// GoalExecutionReference is immutable and may be created only by the operator.
+type GoalExecutionReference struct {
+	GoalID        string `json:"goalID"`
+	OccurrenceID  string `json:"occurrenceID"`
+	GoalRevision  int64  `json:"goalRevision"`
+	ConsentDigest string `json:"consentDigest"`
 }

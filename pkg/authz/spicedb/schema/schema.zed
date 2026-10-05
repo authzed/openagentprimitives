@@ -677,3 +677,12 @@ definition agent_goal_domain {
     relation executor: user with expiration
     permission execute = executor & owner - denied
 }
+
+// An approval grants only the exact reviewed request, with bounded lifetime.
+definition agent_goal_execution {
+ relation domain: agent_goal_domain
+ relation approved: user with expiration
+ permission owner = domain->manage
+ permission approve = domain->manage
+ permission execute = approved & domain->manage
+}

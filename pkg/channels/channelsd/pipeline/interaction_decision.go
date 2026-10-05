@@ -58,6 +58,15 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 	logger := log.FromContext(ctx).WithValues(
 		"session", ref, "category", pl.Category, "requestRef", pl.RequestRef, "actionId", pl.ActionID)
 
+	if !channelevents.ComponentDecisionIngress(ctx) && p.K8s != nil {
+		var session spiceboxv1alpha1.AgentSession
+		if err := p.K8s.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &session); err != nil {
+			return fmt.Errorf("decision session trust lookup: %w", err)
+		}
+		if session.Spec.GoalExecution != nil {
+			return fmt.Errorf("bounded goal decisions require component-only ingress")
+		}
+	}
 	cat, ok := channelinteractions.Get(pl.Category)
 	if !ok {
 		return fmt.Errorf("interaction decision: unknown category %q (session %s)", pl.Category, ref)

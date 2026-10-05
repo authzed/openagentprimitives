@@ -4,6 +4,7 @@
 package all
 
 import (
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/approval"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/artifact"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/artifactrevision"

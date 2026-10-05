@@ -112,7 +112,7 @@ func TestListener_SubmitInteractionDecision_PublishesEnvelope(t *testing.T) {
 	l := newPublishingListener(t, &subj, &body)
 
 	require.NoError(t, l.SubmitInteractionDecision(context.Background(), l.Ext, "default", "s1", "tool_approval", "req-1", "approve"))
-	assert.Equal(t, "ap.session.default.s1.in.interaction_decision", subj)
+	assert.Equal(t, "ap.component.interaction_decision.default.s1", subj)
 
 	var env channelevents.Envelope
 	require.NoError(t, json.Unmarshal(body, &env))

@@ -32,7 +32,7 @@ func TestListener_SubmitInteractionDecision_PublishesEnvelope(t *testing.T) {
 	})
 	err := l.SubmitInteractionDecision(context.Background(), "default", "s1", "req-1", "tool_approval", "approve")
 	require.NoError(t, err)
-	assert.Contains(t, gotSubj, "ap.session.default.s1.in.interaction_decision")
+	assert.Contains(t, gotSubj, "ap.component.interaction_decision.default.s1")
 
 	var env channelevents.Envelope
 	require.NoError(t, json.Unmarshal(gotBody, &env))

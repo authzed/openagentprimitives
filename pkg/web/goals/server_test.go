@@ -33,9 +33,11 @@ import (
 )
 
 type authority struct {
-	denied     bool
-	denySource bool
-	owners     map[string]string
+	denied          bool
+	denySource      bool
+	denyStart       bool
+	startPermission string
+	owners          map[string]string
 }
 
 func (a *authority) Relations() authz.RelWriter { return a }
@@ -53,6 +55,13 @@ func (a *authority) CheckInteract(context.Context, string, string, identity.Cano
 	return !a.denied, nil
 }
 func (a *authority) CheckOnResource(_ context.Context, typ, id, perm string, u identity.CanonicalUserID, _ bool) (bool, error) {
+	if perm == "" {
+		return false, fmt.Errorf("empty resource permission")
+	}
+	if typ == "agentclass" {
+		a.startPermission = perm
+		return !a.denyStart, nil
+	}
 	if a.denied {
 		return false, nil
 	}
