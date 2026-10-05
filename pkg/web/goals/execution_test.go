@@ -93,6 +93,10 @@ func TestProductionEventConsentLaunchAndRevocation(t *testing.T) {
 		}
 	}
 }
+func TestProductionDefaultBoundsConsentAndDispatch(t *testing.T) {
+	productionConsentLaunchAndRevocation(t, true, false, true, false, true)
+}
+
 func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unattended bool, eventMode ...bool) {
 	watch := len(eventMode) == 1 && eventMode[0]
 	var eventStore *eventsql.Store
@@ -142,6 +146,9 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	if unattended {
 		req.Terms.ActionApproval = "standing_private"
 	}
+	if len(eventMode) > 1 && eventMode[1] {
+		req.Terms.Bounds = domain.ExecutionBounds{}
+	}
 	if recurring {
 		req.Terms.Schedule = &sessionschedule.Spec{Kind: "interval", Timezone: "UTC", IntervalSeconds: 60, MaxRuns: 2, RunWindowSeconds: 600}
 	}
@@ -174,6 +181,24 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	validationGoal := g
 	validationGoal.Execution = &domain.ExecutionConsent{Session: actor.Session, SessionUID: actor.SessionUID}
 	require.NoError(t, f.s.Validate(ctx, validationGoal, req.Terms), "a class with no start gate must not check an empty permission")
+	// Omitted limits become exact reviewed defaults; explicit oversized limits
+	// remain invalid rather than being silently narrowed.
+	defaultRequest := req
+	defaultRequest.Terms.Bounds = domain.ExecutionBounds{}
+	require.NoError(t, f.s.PrepareExecution(ctx, actor, &defaultRequest))
+	assert.Equal(t, executionPolicy(class).DefaultBounds, defaultRequest.Terms.Bounds)
+	require.NoError(t, f.s.Validate(ctx, validationGoal, defaultRequest.Terms))
+	listStatus, listed := f.call(t, "token", domain.Request{Operation: "list"})
+	require.Equal(t, http.StatusOK, listStatus)
+	require.NotNil(t, listed.ExecutionPolicy)
+	assert.Equal(t, defaultRequest.Terms.Bounds, listed.ExecutionPolicy.DefaultBounds)
+	assert.False(t, listed.ExecutionPolicy.ServerTime.IsZero())
+	oversizedTerms := req.Terms
+	oversizedTerms.Bounds.Tokens = listed.ExecutionPolicy.MaxBounds.Tokens + 1
+	err = f.s.Validate(ctx, validationGoal, oversizedTerms)
+	require.ErrorIs(t, err, domain.ErrInvalid)
+	require.ErrorContains(t, err, "bounds.tokens")
+	assert.Equal(t, listed.ExecutionPolicy.MaxBounds.Tokens+1, oversizedTerms.Bounds.Tokens, "explicit limits are never silently clipped")
 	for _, explicit := range []bool{false, true} {
 		t.Run("restricted start gate explicit="+fmt.Sprint(explicit), func(t *testing.T) {
 			restricted := &v1.AgentClass{}
@@ -392,8 +417,8 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	report, ok := tool.LookupByName(bounded)("respond_to_user")
 	require.True(t, ok, "a dispatched root must expose its reviewed report action")
 	require.NotNil(t, report.Permission().Check)
-	assert.Equal(t, int32(10), scheduled.Spec.Budget.MaxTurns)
-	assert.Equal(t, 5*time.Minute, scheduled.Spec.Budget.SessionExpiration.Duration)
+	assert.Equal(t, int32(req.Terms.Bounds.Turns), scheduled.Spec.Budget.MaxTurns)
+	assert.Equal(t, time.Duration(req.Terms.Bounds.DurationSeconds)*time.Second, scheduled.Spec.Budget.SessionExpiration.Duration)
 	if watch {
 		require.Contains(t, scheduled.Spec.Prompt.Inline, "untrusted observation data")
 		require.Contains(t, scheduled.Spec.Prompt.Inline, "delayed")

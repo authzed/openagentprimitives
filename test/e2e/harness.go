@@ -125,6 +125,9 @@ import (
 
 // Options shape what Start boots.
 type Options struct {
+	// WithGoalExecution enables the durable goals runtime and bounded roots.
+	WithGoalExecution bool
+
 	// AgentDir is a path to a testdata directory whose *.yaml files
 	// are applied + waited on before tests run. The harness substitutes
 	// the literal `{{MCP_URL}}` with the live MCPStub URL before apply.
@@ -422,6 +425,7 @@ type Harness struct {
 	// instead of driving it through an inbound message.
 	markerSigner    *restartmarker.Signer
 	goalActorSigned pkgmemory.Memory
+	goals           *goalRuntime
 
 	// FakeGitHub backs the kind=github webhook e2e (Task 6, reviewbot dedup):
 	// an httptest stand-in for the three GitHub REST surfaces the review loop
@@ -1161,7 +1165,8 @@ func (h *Harness) startManager(t *testing.T, env *testenv.Env, spdbCli *spicedb.
 	opPriv := ed25519.NewKeyFromSeed(opSeed)
 	opPub := opPriv.Public().(ed25519.PublicKey)
 	tokensReg.SetPublisherKey("system:operator", provenance.KeyID(opPub), opPub)
-	opSigned := provenance.NewSigningMemory(h.memStore, provenance.NewSigner(opPriv, "system:operator"))
+	opSigner := provenance.NewSigner(opPriv, "system:operator")
+	opSigned := provenance.NewSigningMemory(h.memStore, opSigner)
 	h.opSigned = opSigned
 
 	// Restart-marker signing key, standing in for the one channelsd mints and
@@ -1228,6 +1233,11 @@ func (h *Harness) startManager(t *testing.T, env *testenv.Env, spdbCli *spicedb.
 		FilterOfferedTools:    h.opts.FilterOfferedTools,
 		ReplaceAssembledTool:  h.opts.ReplaceAssembledTool,
 	}
+	var goalValidator agentsessionctrl.GoalSessionValidator
+	if h.opts.WithGoalExecution {
+		h.goals = h.startGoalsRuntime(t, mgr, opSigner)
+		goalValidator = h.goals.dispatcher
+	}
 	t.Cleanup(h.runnerFactory.Shutdown)
 	if err := (&agentsessionctrl.Reconciler{
 		Client:          mgr.GetClient(),
@@ -1262,6 +1272,7 @@ func (h *Harness) startManager(t *testing.T, env *testenv.Env, spdbCli *spicedb.
 		// internal/cmd/operator — the durable witness of each session's audit key.
 		AuditKeyMemory:             opSigned,
 		RunnerFactory:              h.runnerFactory,
+		GoalValidator:              goalValidator,
 		DefaultChannelArchiveAfter: 4 * time.Hour,
 		SpiceDBDeleter:             spdbCli,
 		WorkspaceStorageClass:      h.opts.WorkspaceStorageClass,
@@ -1627,7 +1638,7 @@ func (h *Harness) startChannelsdPlumbing(t *testing.T, mgrCtx context.Context) {
 	// reads/writes session_scope through this on every call, cache-warm or
 	// not, so it must be non-nil even though this harness never exercises the
 	// cold-cache path.
-	pl.Mem = sysApprovedMem{inner: h.memStore}
+	pl.Mem = sysApprovedMem{inner: h.goalActorSigned}
 	pl.MarkerSigner = h.markerSigner
 
 	// Pending-prompt re-surfacing (an outstanding "waiting for the user"
@@ -1824,6 +1835,8 @@ func (h *Harness) startChannelsdPlumbing(t *testing.T, mgrCtx context.Context) {
 	// PreferenceCommitter into the interface field.
 	if c := h.runnerFactory.preferencesChannelsdClient(); c != nil {
 		pl.PreferenceCommitter = c
+		pl.GoalConsentCommitter = c
+		pipeline.BindGoalConsentHandler(pl)
 		pipeline.BindPreferenceCommitHandler(pl)
 	}
 
@@ -1889,7 +1902,7 @@ func (h *Harness) startChannelsdPlumbing(t *testing.T, mgrCtx context.Context) {
 		// (notePendingPrompt on every resurfaceable REQUEST it dispatches) and
 		// the pipeline is the READER (resurfacePending). Mirrors
 		// internal/cmd/channelsd/main.go:660.
-		Mem: sysApprovedMem{inner: h.memStore},
+		Mem: sysApprovedMem{inner: h.goalActorSigned},
 		// Mirrors channelsd's wiring: send outcomes stamp the Channel
 		// Deliverable condition, so scenarios exercise the same status
 		// writes the live relay makes.

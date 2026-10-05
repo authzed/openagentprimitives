@@ -3,6 +3,7 @@ package goals
 import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
+	"time"
 )
 
 // PlanApprovalRequest names an already frozen plan in the authenticated root's
@@ -26,6 +27,7 @@ type Request struct {
 	ID           string                                    `json:"id,omitempty"`
 }
 type Response struct {
+	EventFeeds         []EventFeed                              `json:"eventFeeds,omitempty"`
 	DiscoveryPolicy    *DiscoveryPolicy                         `json:"discoveryPolicy,omitempty"`
 	DiscoveryProposal  *DiscoveryProposal                       `json:"discoveryProposal,omitempty"`
 	PlanApproval       *plangateaudit.ApprovalAuthority         `json:"planApproval,omitempty"`
@@ -36,6 +38,15 @@ type Response struct {
 	Goal               *Goal                                    `json:"goal,omitempty"`
 	Page               *Page                                    `json:"page,omitempty"`
 	ExecutionAvailable bool                                     `json:"executionAvailable"`
+	ExecutionPolicy    *ExecutionPolicy                         `json:"executionPolicy,omitempty"`
+}
+
+// ExecutionPolicy is guidance for proposing limits, not execution authority.
+// Every request still requires validation and approval of its resolved terms.
+type ExecutionPolicy struct {
+	DefaultBounds ExecutionBounds `json:"defaultBounds"`
+	MaxBounds     ExecutionBounds `json:"maxBounds"`
+	ServerTime    time.Time       `json:"serverTime"`
 }
 
 // ReadDependencies carries source authority through a goal read into the
@@ -45,6 +56,9 @@ func (r Response) ReadDependencies() []Source {
 	var sources []Source
 	addGoal := func(g Goal) { sources = mergeSources(sources, g.Sources) }
 	addRun := func(o Occurrence) { sources = mergeSources(sources, o.ReadDependencies()) }
+	for _, feed := range r.EventFeeds {
+		sources = mergeSources(sources, feed.Sources)
+	}
 	if r.Goal != nil {
 		addGoal(*r.Goal)
 	}

@@ -47,6 +47,7 @@ func (n *NativeSessions) session(ctx context.Context, source sessionevents.Sourc
 	}
 	return &sess, nil
 }
+
 func (n *NativeSessions) dependencies(ctx context.Context, source sessionevents.Source) ([]sessionevents.Dependency, error) {
 	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
 	page, err := n.Memory.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: source.ID}, Kinds: []string{infoleakagetaint.KindName}, Limit: 10000})
@@ -66,6 +67,7 @@ func (n *NativeSessions) dependencies(ctx context.Context, source sessionevents.
 	}
 	return deps, nil
 }
+
 func (n *NativeSessions) CheckSource(ctx context.Context, source sessionevents.Source, entry memory.Entry) ([]sessionevents.Dependency, error) {
 	if source.UID == "" || entry.Scope != (memory.Scope{Kind: "session", ID: source.ID}) {
 		return nil, sessionevents.ErrDenied
@@ -75,6 +77,7 @@ func (n *NativeSessions) CheckSource(ctx context.Context, source sessionevents.S
 	}
 	return n.dependencies(ctx, source)
 }
+
 func (n *NativeSessions) Resolve(ctx context.Context, principal string, source sessionevents.Source) (sessionevents.Source, error) {
 	sess, err := n.session(ctx, source)
 	if err != nil {
@@ -83,6 +86,7 @@ func (n *NativeSessions) Resolve(ctx context.Context, principal string, source s
 	source.UID = string(sess.UID)
 	return source, n.Check(ctx, principal, source, nil)
 }
+
 func (n *NativeSessions) Check(ctx context.Context, principal string, source sessionevents.Source, deps []sessionevents.Dependency) error {
 	if n == nil || n.Auth == nil || principal == "" || source.UID == "" {
 		return sessionevents.ErrDenied
@@ -108,4 +112,18 @@ func (n *NativeSessions) Check(ctx context.Context, principal string, source ses
 		}
 	}
 	return nil
+}
+
+func (n *NativeSessions) Dependencies(ctx context.Context, principal string, source sessionevents.Source) ([]sessionevents.Dependency, error) {
+	if n == nil || n.Reader == nil || n.Memory == nil || n.Auth == nil {
+		return nil, sessionevents.ErrDenied
+	}
+	deps, err := n.dependencies(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.Check(ctx, principal, source, deps); err != nil {
+		return nil, err
+	}
+	return deps, nil
 }

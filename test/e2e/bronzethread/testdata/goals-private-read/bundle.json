@@ -42,7 +42,7 @@
       "expect": {
         "lastToolResult": "get_goal",
         "lastToolResultIsError": true,
-        "lastToolResultContains": "goal unavailable"
+        "lastToolResultContains": "goal or requested source unavailable"
       },
       "reply": [
         {
