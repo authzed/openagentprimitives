@@ -116,6 +116,9 @@ type Loop struct {
 	// ReportSessionCost gates the post-session cost reporter hook. Resolved from
 	// status.effectiveSettings.reportSessionCost by internal/cmd/runner.
 	ReportSessionCost bool
+	// RecordSessionCost stamps accounting even when the user suppresses notices.
+	// Bounded goal executions need durable accounting before root cleanup.
+	RecordSessionCost bool
 
 	// ModelInputPerMTok/ModelOutputPerMTok are the resolved catalog price for the
 	// session's model (USD/MTok), 0 when the catalog carries no price. When >0 the

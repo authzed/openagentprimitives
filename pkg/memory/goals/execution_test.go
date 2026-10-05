@@ -171,7 +171,7 @@ func durableFixtures() []struct {
 			s := goalpostgres.New(c.Pool())
 			require.NoError(t, s.Migrate(context.Background()))
 			t.Cleanup(func() {
-				for _, q := range []string{"DELETE FROM oap_goal_run_proposals", "DELETE FROM oap_goal_run_outcomes", "DELETE FROM oap_goal_execution_events", "DELETE FROM oap_goal_occurrences", "DELETE FROM oap_goal_events", "DELETE FROM oap_goal_receipts", "DELETE FROM oap_goals"} {
+				for _, q := range []string{"DELETE FROM oap_goal_run_costs", "DELETE FROM oap_goal_run_replies", "DELETE FROM oap_goal_run_proposals", "DELETE FROM oap_goal_run_outcomes", "DELETE FROM oap_goal_execution_events", "DELETE FROM oap_goal_occurrences", "DELETE FROM oap_goal_events", "DELETE FROM oap_goal_receipts", "DELETE FROM oap_goals"} {
 					_, err := c.Pool().Exec(context.Background(), q)
 					assert.NoError(t, err)
 				}
@@ -469,7 +469,7 @@ func TestGoalV1MigrationPreservesStateAndRejectsNewerSchemas(t *testing.T) {
 	events, err := store.Pending(ctx, 100)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	_, err = client.DB().ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(5)`)
+	_, err = client.DB().ExecContext(ctx, `INSERT INTO oap_goal_schema(version) VALUES(6)`)
 	require.NoError(t, err)
 	require.ErrorContains(t, store.Migrate(ctx), "newer than this operator")
 }

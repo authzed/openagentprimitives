@@ -75,6 +75,16 @@ func (s *Store) occurrence(ctx context.Context, q querier, id string) (goals.Occ
 			return o, err
 		}
 	}
+	var cost string
+	err = q.QueryRowContext(ctx, s.query(`SELECT payload FROM oap_goal_run_costs WHERE occurrence_id=?`), id).Scan(&cost)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return o, err
+	}
+	if err == nil {
+		if err := json.Unmarshal([]byte(cost), &o.Cost); err != nil {
+			return o, err
+		}
+	}
 	var reply string
 	err = q.QueryRowContext(ctx, s.query(`SELECT payload FROM oap_goal_run_replies WHERE occurrence_id=?`), id).Scan(&reply)
 	if errors.Is(err, sql.ErrNoRows) {

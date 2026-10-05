@@ -318,7 +318,7 @@ Receipt and result dependencies retain the same private-source authorization
 checks when historical runs are read after root cleanup.
 
 The remaining work includes receipts for other transports, external-operation
-idempotency, cost accounting and recurring employee-bot execution. A fresh live
+idempotency and recurring employee-bot execution. A fresh live
 reminder test requires both the human's execution consent and the new session's
 plan approval; neither can be fabricated or reused from an expired execution.
 
@@ -339,3 +339,39 @@ are not archived here. Surface callback URLs and minted links are omitted from
 resolution records. Older interactions without a recorded resolution cannot be
 reconstructed byte-for-byte; the full replay guarantee applies to newly recorded
 cached interactions.
+
+### Goal run accounting
+
+`oap goals runs` retains a `cost` observation for each bounded root, including
+its exact session UID, observation time and the session's cumulative estimate.
+The estimate reuses the itemized accounting from the local cost-accounting
+branch: `byModel` and `byTool` are components of `amountMicroUSD`, not additional
+charges to add to that total. Current bounded goal tools do not allow delegation;
+accounting for a future delegated goal tree must preserve each child's UID and
+count its own spend once before enabling that execution mode.
+
+`cost.final` means the estimate was captured after the runner pod completed
+without an observed accounting regression.
+It does not make missing model pricing known or turn an estimate into a billed
+amount. When `pricingKnown` is false, a nonzero amount represents the priced
+components only. Missing estimates have no fabricated zero-dollar amount.
+Forced termination or a missing runner can leave the last partial estimate;
+its `final` flag remains false with a reason explaining the missing accounting.
+If a restarted runner reports smaller counters or a different currency, the
+previously observed lower bound is retained and `accounting_regressed` remains
+visible; later counters catching up do not establish complete accounting.
+Older runs without a retained snapshot continue to have no cost observation.
+
+The runner records accounting for goal executions even when session-cost notices
+are disabled. The operator retains snapshots and their audit intent in the same
+transaction, checks the dispatch fence and exact root UID, and preserves them
+through session cleanup and restart. Duplicate observations do not create new
+accounting events, stale observations cannot erase spend, and accounting outages
+are reported without preventing cancellation. The additive goals schema version
+is now 5; an older operator refuses that schema rather than reading it partially.
+
+This is accounting, not a hard dollar budget. Each reviewed occurrence still
+has enforced duration, turn and token ceilings. The first release schedules one
+explicitly approved occurrence and performs no automatic retries; another run
+requires fresh consent and its own ceilings. Cumulative budget enforcement and
+recurring employee-bot execution remain follow-up work.

@@ -2219,6 +2219,7 @@ func run(cfg *config) error {
 		Model:              sess.Status.EffectiveSettings.Model.Name,
 		Routing:            routingToLLM(sess.Status.EffectiveSettings.ModelRouting),
 		ReportSessionCost:  sess.Status.EffectiveSettings.ReportSessionCost,
+		RecordSessionCost:  sess.Spec.GoalExecution != nil,
 		ModelInputPerMTok:  sess.Status.EffectiveSettings.ModelInputPerMTok,
 		ModelOutputPerMTok: sess.Status.EffectiveSettings.ModelOutputPerMTok,
 		UserID:             string(sess.UID),
