@@ -178,3 +178,46 @@ func TestAnUnreadableDecisionSetIsAnErrorNotACleanClosure(t *testing.T) {
 		memory.Signal{Scope: memory.Scope{Kind: "session", ID: "demo/root"}})
 	require.Error(t, err)
 }
+
+// TestOnSignalMintsItsOwnReadApprovalForTheDeniedLookup is the regression for
+// the "capability door denied — likely a missing-mint bug" the operator logged
+// hundreds of times. The real Denied dep is infoleakagedecision.List — a
+// memory:read — and a signal arrives on whatever ctx the Put that raised it
+// carried: for a turn.completed that is the sender's memory:write, never a read
+// of this hook's own. OnSignal must mint its own system approval before calling
+// Denied (as kg_ingestion's, lifecycle's and DenialStreak's signal handlers all
+// do), or the lookup is refused at the facade's capability door and the §2.8
+// closure-denial stamp silently never runs for those signals.
+//
+// The sibling tests pass a Denied that ignores ctx, so they never exercise this
+// path — which is exactly how the missing mint shipped.
+func TestOnSignalMintsItsOwnReadApprovalForTheDeniedLookup(t *testing.T) {
+	scope := memory.Scope{Kind: "session", ID: "demo/solo"}
+	sch := runtime.NewScheme()
+	require.NoError(t, spiceboxv1alpha1.AddToScheme(sch))
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(treeSession("solo", "")).
+		WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).Build()
+
+	s := hold.NewClosureDenialStamper(hold.ClosureDenialStamperDeps{
+		Client: c,
+		// Stand in for infoleakagedecision.List: it reads memory, so it fails the
+		// same way the facade's capability door does when the ctx carries no
+		// read/system approval.
+		Denied: func(ctx context.Context, sc memory.Scope) (bool, error) {
+			if err := memory.EnsureApproval(ctx, memory.ReadMemory, sc.ID); err != nil {
+				return false, err
+			}
+			return true, nil
+		},
+	})
+
+	// The ctx SendSignal hands a hook for a turn.completed: only the sender's
+	// memory:write approval (SendSignal's own door requires it), never a read.
+	ctx := memory.WithApproval(context.Background(),
+		memory.ForBearerToken(memory.WriteMemory, scope.ID, "tok"))
+
+	require.NoError(t, s.OnSignal(ctx, memory.Signal{Scope: scope}),
+		"OnSignal must mint its own read approval so the denial lookup is not refused at the capability door")
+	assert.True(t, closureDeniedOf(t, c, "solo"),
+		"with the lookup permitted, a denied closure is stamped")
+}

@@ -63,6 +63,14 @@ func (s *ClosureDenialStamper) OnSignal(ctx context.Context, sig memory.Signal) 
 	if s.deps.Client == nil || s.deps.Denied == nil {
 		return nil
 	}
+	// s.deps.Denied reads memory (infoleakagedecision.List, a memory:read), and a
+	// signal arrives on whatever ctx the Put that raised it carried — for a
+	// turn.completed that is the sender's memory:write, never a read of this
+	// hook's own. Mint a system approval first, the same way kg_ingestion's,
+	// lifecycle's and DenialStreak's signal handlers do (see
+	// memory.Local.SendSignal), or the lookup is refused at the facade's
+	// capability door and this stamp silently never runs for those signals.
+	ctx = memory.WithSystemApproval(ctx, "operator:closure-denial-stamp")
 	denied, err := s.deps.Denied(ctx, sig.Scope)
 	if err != nil {
 		return fmt.Errorf("closure denial stamp: reading decisions for %s: %w", sig.Scope.ID, err)
