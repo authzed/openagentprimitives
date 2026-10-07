@@ -38,7 +38,7 @@ func TestBuildToolSessionEventPublisher_PublishesKindToolSessionEvent(t *testing
 	mem := memory.NewLocal(inmem.NewBackend())
 	scope := memory.Scope{Kind: "session", ID: "default/agent-1"}
 	onEvent := buildToolSessionEventPublisher(
-		context.Background(), pub, mem, scope, "off", "default", "agent-1", nil)
+		context.Background(), pub, mem, scope, "off", "default", "agent-1", nil, nil)
 	onEvent("tc-abc", "", "", toolkitstream.Event{Type: toolkitstream.EventTextDelta, Text: "hi"})
 
 	mu.Lock()
@@ -60,7 +60,7 @@ func TestBuildToolSessionEventPublisher_CarriesReasonAndOuterTool(t *testing.T) 
 		return nil
 	}
 	emit := buildToolSessionEventPublisher(context.Background(), pub,
-		nil /*mem*/, memory.Scope{} /*scope*/, spiceboxv1alpha1.ToolSessionLogOff /*no persist*/, "ns", "sess", nil)
+		nil /*mem*/, memory.Scope{} /*scope*/, spiceboxv1alpha1.ToolSessionLogOff /*no persist*/, "ns", "sess", nil, nil)
 
 	emit("tc-1", "Have claude write the README", "claude",
 		toolkitstream.Event{Type: toolkitstream.EventTextDelta, Text: "hi"})
@@ -91,7 +91,7 @@ func TestBuildToolSessionEventPublisher_AllFieldsRoundTrip(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	scope := memory.Scope{Kind: "session", ID: "default/agent-1"}
 	onEvent := buildToolSessionEventPublisher(
-		context.Background(), pub, mem, scope, "off", "default", "agent-1", nil)
+		context.Background(), pub, mem, scope, "off", "default", "agent-1", nil, nil)
 
 	onEvent("tc-1", "", "", toolkitstream.Event{
 		Type:    toolkitstream.EventToolUseStop,
@@ -109,4 +109,32 @@ func TestBuildToolSessionEventPublisher_AllFieldsRoundTrip(t *testing.T) {
 	assert.Equal(t, "tu_1", pl.ToolID)
 	assert.False(t, pl.OK)
 	assert.Equal(t, "exit code 1", pl.Summary)
+}
+
+func TestBuildToolSessionEventPublisher_InvokesOnResultForResultEvent(t *testing.T) {
+	type call struct {
+		tool string
+		cost float64
+		ok   bool
+	}
+	var got []call
+	onResult := func(tool string, cost float64, ok bool) {
+		got = append(got, call{tool, cost, ok})
+	}
+	pub := func(_ context.Context, _ string, _ []byte) error { return nil }
+
+	emit := buildToolSessionEventPublisher(context.Background(), pub,
+		nil, memory.Scope{}, spiceboxv1alpha1.ToolSessionLogOff, "ns", "sess", nil, onResult)
+
+	// A non-result event must NOT trigger onResult.
+	emit("tc-1", "reason", "claude-oauth",
+		toolkitstream.Event{Type: toolkitstream.EventTextDelta, Text: "hi"})
+	// A result event MUST trigger it once, carrying tool/cost/ok.
+	emit("tc-1", "reason", "claude-oauth",
+		toolkitstream.Event{Type: toolkitstream.EventResult, OK: true, CostUSD: 5.43})
+
+	require.Len(t, got, 1, "onResult fires only on EventResult")
+	assert.Equal(t, "claude-oauth", got[0].tool)
+	assert.Equal(t, 5.43, got[0].cost)
+	assert.True(t, got[0].ok)
 }
