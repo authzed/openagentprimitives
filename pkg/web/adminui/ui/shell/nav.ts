@@ -1,14 +1,14 @@
 import type { LucideIcon } from "lucide-react";
 import {
   LayoutDashboard, Activity, Terminal, Shield,
-  Bot, Wrench, Sparkles, GitBranch, FolderSync, Hash, KeyRound, Users, Lock, SlidersHorizontal,
+  Bot, Wrench, Sparkles, GitBranch, FolderSync, Hash, KeyRound, Users, Lock, SlidersHorizontal, KeySquare,
   ScrollText, History, File, Database, Network, Wallet, Hammer,
 } from "lucide-react";
 
 export type ViewId =
   | "overview"
   | "sessions" | "toolcalls" | "approvals" | "workshops"
-  | "agents" | "tools" | "skills" | "sources" | "directory" | "channels" | "identity" | "users" | "access" | "settings"
+  | "agents" | "tools" | "skills" | "sources" | "directory" | "channels" | "identity" | "users" | "access" | "tokens" | "settings"
   | "logs" | "sessionsAudit" | "budget" | "artifacts" | "memory" | "knowledge";
 
 export interface NavItem {
@@ -42,6 +42,7 @@ export const NAV: NavGroup[] = [
     { id: "identity",  label: "Identity",  icon: KeyRound         },
     { id: "users",     label: "Users",     icon: Users            },
     { id: "access",    label: "Access",    icon: Lock             },
+    { id: "tokens",    label: "Tokens",    icon: KeySquare        },
     { id: "settings",  label: "Settings",  icon: SlidersHorizontal},
   ]},
   { group: "Audit", items: [
@@ -69,6 +70,7 @@ export const VIEW_META: Record<ViewId, { title: string; sub: string }> = {
   identity:     { title: "Identity",          sub: "Agent identities, credentials, and login providers · oap identity / oap idp" },
   users:        { title: "Users",             sub: "People linked to the platform · oap user-identity" },
   access:       { title: "Access",            sub: "Platform admins & the SpiceDB authorization schema · oap platform / oap spicedb" },
+  tokens:       { title: "Tokens",            sub: "Delegated OAuth access tokens minted via MCP consent — view and revoke" },
   settings:     { title: "Settings",          sub: "Cluster configuration — defaults, ceilings, security · oap settings" },
   logs:         { title: "Logs",              sub: "Cross-session audit — approvals, authz, tool calls, scope changes · oap audit" },
   sessionsAudit:{ title: "Sessions",          sub: "Every agent session, current and historical" },

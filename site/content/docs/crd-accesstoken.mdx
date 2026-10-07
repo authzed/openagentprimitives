@@ -1,0 +1,49 @@
+export const meta = {
+  title: 'AccessToken',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3010,
+  description: 'AccessToken is the AUTHENTICATION record for one inbound delegated',
+}
+
+# AccessToken
+
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `atok`
+
+AccessToken is the AUTHENTICATION record for one inbound delegated
+credential minted at OAuth consent: hash → token identity, plus display
+metadata and expiry. It deliberately carries NO role and NO scope — the
+authorization truth lives entirely in SpiceDB on accesstoken:&lt;name&gt;
+(see pkg/authz/spicedb/schema/schema.zed). Deleting this object is
+revocation: the finalizer removes the SpiceDB tuples.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.clientID` | `string` | ClientID is the OAuth client the token was issued to. |
+| `spec.clientName` | `string` | ClientName is the DCR-supplied display name, sanitized at mint. |
+| `spec.expiresAt` \* | `string (date-time)` | ExpiresAt is when the token stops authenticating. The SpiceDB tuples carry the same instant via the expiration trait; this copy gates the authentication (hash-lookup) step without a SpiceDB round trip. |
+| `spec.owner` \* | `string` | Owner is the canonical user id the token acts as. |
+| `spec.tokenHash` \* | `string` | TokenHash is hex(sha256(bearer value)). The value itself is never stored server-side. |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.conditions` | `[]object` |  |
+| `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | `integer (int64)` | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. _(min 0)_ |
+| `status.conditions[].reason` \* | `string` | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` \* | `string` | status of the condition, one of True, False, Unknown. _(enum: True \| False \| Unknown)_ |
+| `status.conditions[].type` \* | `string` | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.lastUsedAt` | `string (date-time)` | LastUsedAt is observation, controller-owned, updated on meaningful change only (not every request). |
+| `status.observedGeneration` | `integer (int64)` |  |
+
+<small>\* required</small>
+

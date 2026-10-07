@@ -85,32 +85,34 @@ rules:
 - apiGroups:
   - agentprimitives.authzed.com
   resources:
-  - agentclasses
-  - agentidentities
-  - agentsessions
-  - agentuis
-  - channels
-  - clusterskills
-  - mcpservers
-  - sidecartoolboxes
-  - skills
-  - spiceboxsessions
-  - spiceboxtoolkits
-  - spiceboxtoolspecs
-  - subagentrequests
-  - toolcalls
-  - workshops
+  - accesstokens
   verbs:
-  - create
   - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
   - agentprimitives.authzed.com
   resources:
+  - accesstokens/finalizers
+  - agentsessions/finalizers
+  - artifactrenders/finalizers
+  - credentialupdaterequests/finalizers
+  - publicendpoints/finalizers
+  - sidecartoolboxes/finalizers
+  - spiceboxsessions/finalizers
+  - spicedbbootstraps/finalizers
+  - toolcalls/finalizers
+  - useridentities/finalizers
+  - workshops/finalizers
+  - workspacesources/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - accesstokens/status
   - agentclasses/status
   - agentidentities/status
   - agentsessiongrants/status
@@ -151,6 +153,32 @@ rules:
 - apiGroups:
   - agentprimitives.authzed.com
   resources:
+  - agentclasses
+  - agentidentities
+  - agentsessions
+  - agentuis
+  - channels
+  - clusterskills
+  - mcpservers
+  - sidecartoolboxes
+  - skills
+  - spiceboxsessions
+  - spiceboxtoolkits
+  - spiceboxtoolspecs
+  - subagentrequests
+  - toolcalls
+  - workshops
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
   - agentsessiongrants
   verbs:
   - create
@@ -158,22 +186,6 @@ rules:
   - list
   - update
   - watch
-- apiGroups:
-  - agentprimitives.authzed.com
-  resources:
-  - agentsessions/finalizers
-  - artifactrenders/finalizers
-  - credentialupdaterequests/finalizers
-  - publicendpoints/finalizers
-  - sidecartoolboxes/finalizers
-  - spiceboxsessions/finalizers
-  - spicedbbootstraps/finalizers
-  - toolcalls/finalizers
-  - useridentities/finalizers
-  - workshops/finalizers
-  - workspacesources/finalizers
-  verbs:
-  - update
 - apiGroups:
   - agentprimitives.authzed.com
   resources:

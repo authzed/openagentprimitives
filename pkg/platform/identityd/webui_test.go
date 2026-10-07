@@ -1,6 +1,7 @@
 package identityd
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/passthroughlink"
 	"github.com/authzed/openagentprimitives/pkg/web/webui"
 	webuiregistry "github.com/authzed/openagentprimitives/pkg/web/webui/registry"
@@ -40,6 +42,14 @@ func (d fakeWebDeps) Authenticators() map[string]channelkinds.WebAuthenticator {
 	return map[string]channelkinds.WebAuthenticator{}
 }
 func (d fakeWebDeps) InsecureTrustLinks() bool { return false }
+
+// ConsentClasses makes fakeWebDeps satisfy identityd.ConsentDeps (the Task 7
+// optional interface), so the OAuth authorization-server routes (metadata,
+// register, authorize, consent) are part of the base route set these tests
+// assert against.
+func (d fakeWebDeps) ConsentClasses(_ context.Context, _ identity.CanonicalUserID) ([]ConsentClass, error) {
+	return []ConsentClass{{ID: "default/demo-agent", DisplayName: "Demo"}}, nil
+}
 
 // routeKey is patterns paired with the auth level we expect.
 func routeIndex(routes []webui.Route) map[string]webui.Route {
@@ -76,21 +86,26 @@ func TestIdentityUI_Routes_PatternsAndAuthLevels(t *testing.T) {
 		methods []string
 	}
 	expected := map[string]want{
-		"/link":                  {webui.AuthNone, []string{http.MethodGet}},
-		"/link/agent-oauth/":     {webui.AuthNone, []string{http.MethodGet}},
-		"/oidc/login":            {webui.AuthNone, []string{http.MethodGet}},
-		"/oidc/callback/":        {webui.AuthNone, []string{http.MethodGet}},
-		"/oauth/callback/":       {webui.AuthNone, []string{http.MethodGet}},
-		"/oauth/agent-callback/": {webui.AuthNone, []string{http.MethodGet}},
-		"/my/accounts":           {webui.AuthNone, []string{http.MethodGet}},
-		"/cli/login":             {webui.AuthNone, []string{http.MethodGet}},
-		"/cli/exchange":          {webui.AuthHandlerManaged, []string{http.MethodPost}},
-		"/password/login":        {webui.AuthNone, []string{http.MethodGet}},
-		"/password/verify":       {webui.AuthHandlerManaged, []string{http.MethodPost}},
-		"/link/submit":           {webui.AuthAuthenticated, []string{http.MethodPost}},
-		"/my/accounts/":          {webui.AuthAuthenticated, []string{http.MethodGet, http.MethodPost}},
-		"/heartbeat":             {webui.AuthAuthenticated, []string{http.MethodPost}},
-		"/link/oauth/":           {webui.AuthAuthenticated, []string{http.MethodGet}},
+		"/.well-known/oauth-authorization-server": {webui.AuthNone, []string{http.MethodGet}},
+		"/oauth/register":                         {webui.AuthHandlerManaged, []string{http.MethodPost}},
+		"/oauth/authorize":                        {webui.AuthLoginIfNecessary, []string{http.MethodGet}},
+		"/oauth/consent":                          {webui.AuthAuthenticated, []string{http.MethodPost}},
+		"/oauth/token":                            {webui.AuthHandlerManaged, []string{http.MethodPost}},
+		"/link":                                   {webui.AuthNone, []string{http.MethodGet}},
+		"/link/agent-oauth/":                      {webui.AuthNone, []string{http.MethodGet}},
+		"/oidc/login":                             {webui.AuthNone, []string{http.MethodGet}},
+		"/oidc/callback/":                         {webui.AuthNone, []string{http.MethodGet}},
+		"/oauth/callback/":                        {webui.AuthNone, []string{http.MethodGet}},
+		"/oauth/agent-callback/":                  {webui.AuthNone, []string{http.MethodGet}},
+		"/my/accounts":                            {webui.AuthNone, []string{http.MethodGet}},
+		"/cli/login":                              {webui.AuthNone, []string{http.MethodGet}},
+		"/cli/exchange":                           {webui.AuthHandlerManaged, []string{http.MethodPost}},
+		"/password/login":                         {webui.AuthNone, []string{http.MethodGet}},
+		"/password/verify":                        {webui.AuthHandlerManaged, []string{http.MethodPost}},
+		"/link/submit":                            {webui.AuthAuthenticated, []string{http.MethodPost}},
+		"/my/accounts/":                           {webui.AuthAuthenticated, []string{http.MethodGet, http.MethodPost}},
+		"/heartbeat":                              {webui.AuthAuthenticated, []string{http.MethodPost}},
+		"/link/oauth/":                            {webui.AuthAuthenticated, []string{http.MethodGet}},
 	}
 	assert.Len(t, routes, len(expected), "no-icon deps yields exactly the base route set")
 	for pattern, w := range expected {
@@ -107,21 +122,26 @@ func TestIdentityUI_Routes_IconConditional(t *testing.T) {
 	// expected mirrors the base route set from TestIdentityUI_Routes_PatternsAndAuthLevels
 	// so that "icon adds exactly one route" is expressed as len(expected)+1.
 	expected := map[string]struct{}{
-		"/link":                  {},
-		"/link/agent-oauth/":     {},
-		"/oidc/login":            {},
-		"/oidc/callback/":        {},
-		"/oauth/callback/":       {},
-		"/oauth/agent-callback/": {},
-		"/my/accounts":           {},
-		"/cli/login":             {},
-		"/cli/exchange":          {},
-		"/password/login":        {},
-		"/password/verify":       {},
-		"/link/submit":           {},
-		"/my/accounts/":          {},
-		"/heartbeat":             {},
-		"/link/oauth/":           {},
+		"/.well-known/oauth-authorization-server": {},
+		"/oauth/register":                         {},
+		"/oauth/authorize":                        {},
+		"/oauth/consent":                          {},
+		"/oauth/token":                            {},
+		"/link":                                   {},
+		"/link/agent-oauth/":                      {},
+		"/oidc/login":                             {},
+		"/oidc/callback/":                         {},
+		"/oauth/callback/":                        {},
+		"/oauth/agent-callback/":                  {},
+		"/my/accounts":                            {},
+		"/cli/login":                              {},
+		"/cli/exchange":                           {},
+		"/password/login":                         {},
+		"/password/verify":                        {},
+		"/link/submit":                            {},
+		"/my/accounts/":                           {},
+		"/heartbeat":                              {},
+		"/link/oauth/":                            {},
 	}
 	iconH := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {})
 	routes := ui{}.Routes(newFakeWebDeps(t, iconH))

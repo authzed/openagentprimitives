@@ -280,6 +280,37 @@ export interface WorkshopDecisionResponse {
   approvedBy: string;
 }
 
+// AccessTokenRow mirrors pkg/web/admind.accessTokenRow — one AccessToken
+// projected for the admin Tokens table. owner is the BARE canonical user id
+// (spec.owner), not a "user:"-prefixed subject — decode it by prefixing
+// "user:" before calling decodeSubject, the same way EntityRollups/AccessView
+// decode a users-axis key. role is "unknown" when the SpiceDB grant could not
+// be read (never the same claim as revoked — see tokens.go). Nothing here
+// ever carries spec.tokenHash.
+export interface AccessTokenRow {
+  name: string;
+  owner: string;
+  clientName?: string;
+  role: string;
+  scopeClasses?: string[];
+  unfiltered: boolean;
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt?: string;
+  revoked: boolean;
+}
+
+// AccessTokensData mirrors pkg/web/admind.tokensResponse (GET /tokens).
+export interface AccessTokensData {
+  tokens: AccessTokenRow[];
+}
+
+// AccessTokenRevokeResponse mirrors pkg/web/admind.accessTokenRevokeResponse
+// (the 200 body for POST /tokens/revoke).
+export interface AccessTokenRevokeResponse {
+  ok: boolean;
+}
+
 // MemoryKindRollup mirrors pkg/web/admind.memoryKindRollup — one per-Kind rollup.
 export interface MemoryKindRollup {
   kind: string;
@@ -1028,6 +1059,16 @@ export const getArtifactDetail = (apiBase: string, ns: string, name: string): Pr
 // admin Workshops page.
 export const getWorkshops = (apiBase: string): Promise<WorkshopRow[]> =>
   getJSON<WorkshopRow[]>(`${apiBase}/workshops`);
+
+// getTokens fetches every AccessToken in the configured namespace for the
+// admin Tokens page.
+export const getTokens = (apiBase: string): Promise<AccessTokenRow[]> =>
+  getJSON<AccessTokensData>(`${apiBase}/tokens`).then((d) => d.tokens ?? []);
+
+// revokeToken deletes the named AccessToken CR — POST /admin/api/tokens/revoke
+// (handleTokensRevoke). The CR's finalizer removes its SpiceDB tuples.
+export const revokeToken = (apiBase: string, name: string): Promise<AccessTokenRevokeResponse> =>
+  postJSON<AccessTokenRevokeResponse>(`${apiBase}/tokens/revoke`, { name });
 
 // getMemory fetches the Memory browser payload: per-Kind rollups, plus an entry
 // list when `kind` (recent entries) or `q` (ranked search) is given.
