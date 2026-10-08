@@ -745,6 +745,13 @@ spec:
 
                             multi: the slot binds a set; each addition is gated as it is today.
                             No pin is written.
+
+                            UPGRADE NOTE. Before this field existed every slot behaved as multi, and a
+                            class written then has no occupancy set, so the apiserver now defaults it
+                            to single. A slot listing two or more defaults is then refused
+                            (SlotDeclarationInvalid), and a thread seed or trigger binding several
+                            instances of one type is refused rather than binding them all. Set
+                            occupancy: multi on such slots before upgrading.
                           enum:
                           - single
                           - multi
@@ -1100,6 +1107,13 @@ spec:
 
                         multi: the slot binds a set; each addition is gated as it is today.
                         No pin is written.
+
+                        UPGRADE NOTE. Before this field existed every slot behaved as multi, and a
+                        class written then has no occupancy set, so the apiserver now defaults it
+                        to single. A slot listing two or more defaults is then refused
+                        (SlotDeclarationInvalid), and a thread seed or trigger binding several
+                        instances of one type is refused rather than binding them all. Set
+                        occupancy: multi on such slots before upgrading.
                       enum:
                       - single
                       - multi

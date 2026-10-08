@@ -158,6 +158,12 @@ type PlanGateDeps struct {
 	// type-asserted to authz.SlotPinner; absent when that assertion fails.
 	SlotPinner authz.SlotPinner
 
+	// SlotRebind maps each declared slot resource type to its rebind mode
+	// (AuthzSlot.Rebind). A type whose mode is authz.SlotRebindNever is never
+	// stamped with a MovedFrom: the slot cannot move by approval, so the card
+	// must not offer a move. Absent means the default ("approval").
+	SlotRebind map[string]string
+
 	// Now is injectable so records are deterministic in tests. Nil ⇒
 	// time.Now. Stamped ONCE per record and reused on retry: the memory
 	// facade's append-only idempotency compares marshaled bytes, so a
@@ -898,7 +904,10 @@ func (h *PlanGate) requestPhaseApproval(
 	addedSlots = threadMovedFrom(addedSlots, covered)
 
 	cardIn := plangate.CardInput{
-		Plan: plan, PhaseIndex: activePhase, Severity: sev,
+		// The plan's own slots carry the move too: a first approval or a
+		// whole-plan card renders phase slots, not AddedSlots, and the move the
+		// covered records now carry executes on approval either way.
+		Plan: planWithMovedFrom(plan, covered), PhaseIndex: activePhase, Severity: sev,
 		Surface: h.deps.Surface, Approvers: h.deps.Approvers,
 		MaxSingleCardHandles: h.deps.MaxSingleCardHandles,
 		AddedHandles:         added,
@@ -1164,6 +1173,9 @@ func slotValuesOf(plan plangate.Plan, index int) map[string]string {
 //     first-fill, which is the pre-move behaviour;
 //   - a multi-occupancy slot holds no pin, so ReadPin returns "" and nothing is
 //     stamped;
+//   - a `rebind: never` slot (SlotRebind) is never stamped: it cannot move by
+//     approval, so the approval binds as a plain request and GrantSlots refuses
+//     it with the new-session route;
 //   - a read failure, or a value that will not derive to an object id, leaves
 //     MovedFrom empty and logs — a first-fill card, never an error at card time.
 //
@@ -1195,6 +1207,13 @@ func (h *PlanGate) stampMovedFrom(ctx context.Context, sess authz.SessionRef, re
 			if ref.ID == "" {
 				// A deferred target names no instance, so there is nothing to
 				// compare and no move to record.
+				continue
+			}
+			if h.deps.SlotRebind[ref.Type] == authz.SlotRebindNever {
+				// rebind: never — the pin is for the session's life. Offering a
+				// move here would have the approval retarget a slot the class
+				// declared unmovable; the bind is refused instead, with the
+				// "start a new session" route.
 				continue
 			}
 			pinned, ok := currentPin(ref.Type)
@@ -1243,6 +1262,23 @@ func threadMovedFrom(slots []plangate.Slot, covered []plangateaudit.Content) []p
 		if mf, ok := moved[out[i].Type+"\x00"+out[i].ID]; ok {
 			out[i].MovedFrom = mf
 		}
+	}
+	return out
+}
+
+// planWithMovedFrom returns plan with every phase's slots run through
+// threadMovedFrom, so a card rendered from the plan itself (a first approval,
+// or a whole-plan card) shows a re-point as a move exactly as an amendment
+// card does. Copies the phase and slot slices; the input plan is never
+// mutated. MovedFrom is outside the digest and AuthorityKey, so threading it
+// cannot re-key the plan.
+func planWithMovedFrom(plan plangate.Plan, covered []plangateaudit.Content) plangate.Plan {
+	if len(plan.Phases) == 0 {
+		return plan
+	}
+	out := plangate.Plan{Phases: append([]plangate.Phase(nil), plan.Phases...)}
+	for i := range out.Phases {
+		out.Phases[i].Slots = threadMovedFrom(out.Phases[i].Slots, covered)
 	}
 	return out
 }

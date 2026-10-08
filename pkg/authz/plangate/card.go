@@ -117,6 +117,14 @@ type CardLine struct {
 	// than by convention. https only; a non-URL, non-https, or ineligible
 	// Detail leaves this empty and Detail renders as plain text.
 	Href string `json:"href,omitempty"`
+
+	// MovedFrom, on a RESOURCE line, is the display label of the instance this
+	// approval displaces: the session is pinned to it on a single-occupancy
+	// slot, and approving moves the pin to Detail and revokes this session's
+	// access to MovedFrom. Structural rather than folded into Detail so Detail
+	// stays the instance itself (and Href stays byte-identical to it), and so a
+	// surface renders the revocation as its own line instead of losing it.
+	MovedFrom string `json:"movedFrom,omitempty"`
 }
 
 func (c Card) JSON() (string, error) {
@@ -495,8 +503,21 @@ func buildProjectedPlanWhat(
 				// explicit rather than relying on that fallthrough.
 				href = ""
 			}
-			b.WriteString("\n  reaches " + text + " — " + detail)
-			out.Resources = append(out.Resources, CardLine{Text: text, Detail: detail, Icon: icon, Href: href})
+			line := CardLine{Text: text, Detail: detail, Icon: icon, Href: href}
+			if shown != "" && s.MovedFrom != "" {
+				// A MOVE, rendered exactly as the single-phase and amendment
+				// cards render it (buildSlotSection): both instances, and the
+				// revocation the approver must not miss. Without this a whole-plan
+				// card showed a re-point as a plain first-fill while the approval
+				// it recorded repointed the pin.
+				displaced := displacedLabel(resourceDisplays, s.Type, s.MovedFrom)
+				line.MovedFrom = displaced
+				b.WriteString("\n  reaches " + text + " — " + displaced + " → " + detail)
+				b.WriteString("\n    Approving moves the pin and revokes this session's access to " + displaced + ".")
+			} else {
+				b.WriteString("\n  reaches " + text + " — " + detail)
+			}
+			out.Resources = append(out.Resources, line)
 		}
 
 		// Instances the CEILING names on EVERY call, which no slot declared.
