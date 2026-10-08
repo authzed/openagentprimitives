@@ -451,6 +451,26 @@ func TestGrantSlots_RefusalAndPlainWriteErrorBothSurface(t *testing.T) {
 	assert.Contains(t, err.Error(), "git_repo:acme/app", "the refusal text must still be present alongside the write error")
 }
 
+// A STORE failure on one single-occupancy type must not abort the call: the
+// multi-occupancy write still lands and the failure still surfaces. Returning
+// on the first EnsurePin error skipped every type after it — grants a human may
+// already have approved.
+func TestGrantSlots_PinStoreErrorDoesNotStrandOtherTypes(t *testing.T) {
+	w := &pinningFake{ensureErr: errors.New("spicedb unavailable")}
+	scope := testScope()
+
+	err := authz.GrantSlots(context.Background(), w, scope, []authz.SlotBinding{
+		{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("acme/app"), Permission: "push"},
+		{ResourceType: "label", ResourceID: authz.TrustedObjectID("bug"), Permission: "apply", Occupancy: "multi"},
+	}, testExpiry())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ensure pin for git_repo:acme/app", "the store failure must surface")
+	assert.NotErrorIs(t, err, authz.ErrSlotPinned, "a store failure is not a pin refusal")
+	require.Len(t, w.plain, 1, "the multi-occupancy type after it must still be written")
+	assert.Equal(t, "label", w.plain[0].ResourceType)
+}
+
 // A plain RelWriter that is not a SlotPinner cannot express the pin's
 // precondition. The gate refuses the single-occupancy type rather than writing
 // the grant through unpinned as if it were unmarked. recordingRelWriter is the

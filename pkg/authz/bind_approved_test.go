@@ -43,6 +43,8 @@ type approvedRecordingWriter struct {
 	moves     []moveCall            // every MovePin, in order
 	ops       []string              // ordered op log: "move", "grant"
 	moveErr   error                 // injected into MovePin
+	pinErr    map[string]error      // per resource type, injected into EnsurePin
+	grantErr  error                 // injected into WriteGrantsPinned
 }
 
 type moveCall struct {
@@ -63,6 +65,9 @@ func (w *approvedRecordingWriter) WriteRelationships(_ context.Context, rels []R
 func (*approvedRecordingWriter) DeleteRelationships(context.Context, []Relation) error { return nil }
 
 func (w *approvedRecordingWriter) EnsurePin(_ context.Context, resourceType, resourceID string, scope SessionRef) (bool, string, error) {
+	if err := w.pinErr[resourceType]; err != nil {
+		return false, "", err
+	}
 	if w.pins == nil {
 		w.pins = map[string]string{}
 	}
@@ -75,6 +80,9 @@ func (w *approvedRecordingWriter) EnsurePin(_ context.Context, resourceType, res
 }
 
 func (w *approvedRecordingWriter) WriteGrantsPinned(_ context.Context, rels []Relation, _, _ string, _ SessionRef) error {
+	if w.grantErr != nil {
+		return w.grantErr
+	}
 	w.ops = append(w.ops, "grant")
 	w.wrote = append(w.wrote, rels...)
 	return nil
@@ -314,7 +322,83 @@ func TestBindApproved_moveFailurePropagatesWrappingErrSlotPinned(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrSlotPinned, "a failed move must propagate, not be swallowed")
+	assert.ErrorIs(t, err, ErrSlotMoveDrifted, "a MUST_MATCH failure is a drifted move, which the approver may retry")
+	assert.NotErrorIs(t, err, ErrSlotMoveCommitted, "nothing moved, so nothing was committed")
 	assert.Empty(t, w.wrote, "a move that failed must not go on to write the new instance's grant")
+}
+
+// The move refusals that must happen BEFORE anything is repointed: each is a
+// deterministic answer that a MovePin followed by a failed grant would turn
+// into "the old instance is revoked and the new one is not granted".
+func TestBindApproved_moveRefusedBeforeAnyMove(t *testing.T) {
+	sess := SessionRef{Namespace: "ns", Name: "s"}
+	cases := []struct {
+		name     string
+		bindings []SlotBinding
+	}{
+		{
+			name: "rebind never: refused with the new-session route, pin untouched",
+			bindings: []SlotBinding{{
+				ResourceType: "git_repo", ResourceID: TrustedObjectID("repoB"), Permission: "push",
+				PriorID: TrustedObjectID("repoA"), Rebind: SlotRebindNever,
+			}},
+		},
+		{
+			name: "same approval also binds a constant instance of the moving type: refused, pin untouched",
+			bindings: []SlotBinding{
+				{ResourceType: "git_repo", ResourceID: TrustedObjectID("repoB"), Permission: "push", PriorID: TrustedObjectID("repoA")},
+				{ResourceType: "git_repo", ResourceID: TrustedObjectID("workspace"), Permission: "read"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := memory.WithSystemApproval(context.Background(), "test")
+			mem := memory.NewLocal(inmem.NewBackend())
+			now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+			priorGrant := SlotGrantRelation("git_repo", "repoA", "push", sess)
+			w := &approvedRecordingWriter{
+				pins:      map[string]string{sess.String() + "\x00git_repo": "repoA"},
+				grantsFor: map[string][]Relation{grantStoreKey("git_repo", "repoA"): {priorGrant}},
+			}
+
+			err := BindApproved(ctx, mem, memory.Scope{Kind: "session", ID: "ns/s"}, sess, w,
+				tc.bindings, EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrSlotPinned)
+			assert.NotErrorIs(t, err, ErrSlotMoveDrifted, "a deterministic refusal is not a retryable drift")
+			assert.Empty(t, w.moves, "no MovePin may run")
+			assert.Equal(t, "repoA", w.pins[sess.String()+"\x00git_repo"], "the pin stays on the prior instance")
+			assert.NotEmpty(t, w.grantsFor[grantStoreKey("git_repo", "repoA")], "the prior instance keeps its grants")
+		})
+	}
+}
+
+// A grant failure AFTER the move landed must say so: the displaced instance's
+// grants are already revoked, so an error that reads as "nothing happened"
+// would have the approver told nothing was granted while access was removed.
+func TestBindApproved_grantFailureAfterMoveReportsCommittedMove(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	mem := memory.NewLocal(inmem.NewBackend())
+	sess := SessionRef{Namespace: "ns", Name: "s"}
+	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+	w := &approvedRecordingWriter{
+		pins:     map[string]string{sess.String() + "\x00git_repo": "repoA"},
+		grantErr: errors.New("spicedb unavailable"),
+	}
+
+	err := BindApproved(ctx, mem, memory.Scope{Kind: "session", ID: "ns/s"}, sess, w,
+		[]SlotBinding{{
+			ResourceType: "git_repo", ResourceID: TrustedObjectID("repoB"),
+			Permission: "push", PriorID: TrustedObjectID("repoA"),
+		}},
+		EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSlotMoveCommitted)
+	assert.Len(t, w.moves, 1, "the move itself landed")
+	assert.Equal(t, "repoB", w.pins[sess.String()+"\x00git_repo"])
 }
 
 // Two DISTINCT move targets for ONE single-occupancy type in one approval

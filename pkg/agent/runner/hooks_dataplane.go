@@ -109,6 +109,9 @@ func init() {
 			// MUST_MATCH at decision time, not this read, is what makes the move
 			// safe; a nil pinner just renders first-fills.
 			SlotPinner: slotPinner,
+			// Which slots may never move by approval, so the card offers no move
+			// for them. Read once at hook-build, like the other slot maps.
+			SlotRebind: l.slotRebindByType(),
 		})}
 	}})
 

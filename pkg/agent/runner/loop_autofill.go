@@ -398,8 +398,8 @@ func (l *Loop) promoteObservedSlots(ctx context.Context) {
 	l.clearSlotPinRefusalsForSpecs(specs)
 	// Mirror any pin the promotion just produced onto status.slotPins —
 	// display-only, read back from SpiceDB per not-yet-mirrored
-	// single-occupancy type (steady-state zero reads once mirrored; see
-	// slot_pin_mirror.go).
+	// single-occupancy type (steady state: no SpiceDB reads once mirrored,
+	// but still one AgentSession GET; see slot_pin_mirror.go).
 	l.mirrorBoundSlotPins(ctx, specs)
 }
 

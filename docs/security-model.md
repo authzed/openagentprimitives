@@ -203,6 +203,14 @@ a split into two resource types — because the pin treats the constant and the
 chosen instance as two distinct instances of one type, and the default
 single-occupancy slot refuses the second as drift away from the first.
 
+**Upgrading changes the default for existing classes.** An AgentClass written
+before slot pinning has no `occupancy` field, and the CRD now defaults it to
+`single`. Any such slot that lists two or more `defaults` is then rejected as
+`SlotDeclarationInvalid`, and a thread seed or trigger that binds several
+instances of one type is refused instead of binding them all. Before upgrading,
+set `occupancy: multi` on every slot that is meant to hold more than one
+instance.
+
 The refusal names a way out, and which way depends on the slot's `rebind`
 setting. The default, `rebind: approval`, routes to a plan amendment: the agent
 proposes a plan naming the new instance, and if a human approves it, the

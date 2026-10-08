@@ -559,10 +559,21 @@ func BindApproved(
 	// bind) rather than a different one (which it would refuse). A move failure
 	// propagates — the human's approval produced nothing, and bindSlots must not
 	// then write the new grant.
-	if err := moveApprovedPins(ctx, w, sess, bound, logger); err != nil {
+	moved, err := moveApprovedPins(ctx, w, sess, bound, logger)
+	if err != nil {
 		return err
 	}
-	return bindSlots(ctx, mem, memScope, sess, w, scope.SourceApproved, logger, now, expiresAt, bound)
+	if err := bindSlots(ctx, mem, memScope, sess, w, scope.SourceApproved, logger, now, expiresAt, bound); err != nil {
+		if moved {
+			// The move is not rolled back: the approver saw and approved it, and
+			// the pin already names the new instance, so a later per-call
+			// approval of that instance is a same-instance bind. What must not
+			// happen is reporting "nothing was granted" when access was revoked.
+			return fmt.Errorf("%w: %w", ErrSlotMoveCommitted, err)
+		}
+		return err
+	}
+	return nil
 }
 
 // moveApprovedPins executes the human-approved pin MOVE for every
@@ -596,7 +607,7 @@ func BindApproved(
 // lapses rather than lingering forever. The pin itself moves atomically (the
 // MUST_MATCH guards that), so the single-occupancy identity is never in doubt;
 // only a stray expiring grant on the old instance can briefly outlive the move.
-func moveApprovedPins(ctx context.Context, w RelWriter, sess SessionRef, bound []slotCandidate, logger logr.Logger) error {
+func moveApprovedPins(ctx context.Context, w RelWriter, sess SessionRef, bound []slotCandidate, logger logr.Logger) (moved bool, err error) {
 	type pinMove struct {
 		fromID string
 		toID   ObjectID
@@ -616,6 +627,14 @@ func moveApprovedPins(ctx context.Context, w RelWriter, sess SessionRef, bound [
 			// same-instance GrantSlots re-binds it. Skip it.
 			continue
 		}
+		if c.Rebind == SlotRebindNever {
+			// rebind: never — the class declared this slot unmovable, so no
+			// approval may retarget it. The card does not offer the move
+			// (stampMovedFrom skips these types); this refuses it here too, so
+			// a PriorID that arrives anyway cannot revoke the pinned instance.
+			return false, fmt.Errorf("%w: this session is pinned to %s:%s for its lifetime; start a new session to target %s:%s",
+				ErrSlotPinned, c.ResourceType, c.PriorID.String(), c.ResourceType, c.ResourceID.String())
+		}
 		if existing, ok := moves[c.ResourceType]; ok {
 			if existing.toID.String() != c.ResourceID.String() {
 				// Two DISTINCT move targets for one single-occupancy type in one
@@ -625,7 +644,7 @@ func moveApprovedPins(ctx context.Context, w RelWriter, sess SessionRef, bound [
 				// instance the approver was not necessarily shown as THE move.
 				// errors.Is(…, ErrSlotPinned) so the plan-gate failure path treats
 				// it as a pin refusal, not a store error.
-				return fmt.Errorf("%w: slot type %s has two distinct move targets in one approval (%s and %s); it is single-occupancy",
+				return false, fmt.Errorf("%w: slot type %s has two distinct move targets in one approval (%s and %s); it is single-occupancy",
 					ErrSlotPinned, c.ResourceType, existing.toID.String(), c.ResourceID.String())
 			}
 			// Same target named twice (a second permission on the moving
@@ -636,26 +655,51 @@ func moveApprovedPins(ctx context.Context, w RelWriter, sess SessionRef, bound [
 		order = append(order, c.ResourceType)
 	}
 	if len(moves) == 0 {
-		return nil
+		return false, nil
+	}
+	// Refuse, BEFORE any MovePin, a moving type that this same approval also
+	// binds to a DIFFERENT instance (typically a constant such as
+	// git_repo:workspace, which carries no PriorID). GrantSlots would refuse
+	// that type for holding two distinct instances, but only after the move had
+	// already repointed the pin and revoked the prior instance, leaving the
+	// session with access to neither.
+	for _, c := range bound {
+		mv, ok := moves[c.ResourceType]
+		if !ok || occupancyOf(SlotBinding{Occupancy: c.Occupancy}) == SlotOccupancyMulti {
+			continue
+		}
+		if c.ResourceID.String() != mv.toID.String() {
+			return false, fmt.Errorf("%w: slot type %s would hold both %s and %s after this approval; it is single-occupancy",
+				ErrSlotPinned, c.ResourceType, mv.toID.String(), c.ResourceID.String())
+		}
 	}
 	if w == nil {
-		return nil
+		return false, nil
 	}
 	pinner, ok := w.(SlotPinner)
 	if !ok {
-		return fmt.Errorf("authz: moving a filled single-occupancy slot needs a SlotPinner-capable writer, got %T", w)
+		return false, fmt.Errorf("authz: moving a filled single-occupancy slot needs a SlotPinner-capable writer, got %T", w)
 	}
 	for _, rt := range order {
 		mv := moves[rt]
 		revoke, err := pinner.ListGrantsFor(ctx, rt, mv.fromID, sess)
 		if err != nil {
-			return fmt.Errorf("authz: list prior grants for %s:%s to revoke on move: %w", rt, mv.fromID, err)
+			return moved, fmt.Errorf("authz: list prior grants for %s:%s to revoke on move: %w", rt, mv.fromID, err)
 		}
 		logger.Info("approved slot-pin move: repointing a filled single-occupancy slot and revoking the prior instance's grants",
 			"session", sess.String(), "slotType", rt, "from", mv.fromID, "to", mv.toID.String(), "revokeGrants", len(revoke))
 		if err := pinner.MovePin(ctx, rt, mv.fromID, mv.toID.String(), revoke, sess); err != nil {
-			return fmt.Errorf("authz: execute approved slot move for %s: %w", rt, err)
+			if errors.Is(err, ErrSlotPinned) {
+				err = fmt.Errorf("%w: %w", ErrSlotMoveDrifted, err)
+			}
+			err = fmt.Errorf("authz: execute approved slot move for %s: %w", rt, err)
+			if moved {
+				// An earlier type in this approval already moved.
+				return true, fmt.Errorf("%w: %w", ErrSlotMoveCommitted, err)
+			}
+			return false, err
 		}
+		moved = true
 	}
-	return nil
+	return moved, nil
 }

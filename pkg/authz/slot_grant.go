@@ -256,7 +256,7 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 		}
 	}
 
-	// refusals accumulates EVERY per-type refusal (and, below, a failed plain
+	// refusals accumulates EVERY per-type refusal and store failure (and, below, a failed plain
 	// write) so the remaining types still land and NO refusal is silently
 	// dropped. Keeping only the first would hide a second single-occupancy type's
 	// refusal behind the first — the model would be told about one blocked target
@@ -290,7 +290,11 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 		id := grp.firstID
 		held, pinnedID, err := pinner.EnsurePin(ctx, rt, id, scope)
 		if err != nil {
-			return fmt.Errorf("authz: ensure pin for %s:%s: %w", rt, id, err)
+			// Collected, not returned: a store failure on THIS type must not
+			// discard refusals already gathered for others, nor skip the types
+			// and the multi-occupancy write still to come.
+			refusals = append(refusals, fmt.Errorf("authz: ensure pin for %s:%s: %w", rt, id, err))
+			continue
 		}
 		if held && pinnedID != id {
 			// Already pinned to a DIFFERENT instance. The refusal text is
@@ -309,7 +313,11 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 		// held && pinnedID == id: already pinned to this SAME instance (a second
 		// permission, or a re-grant after expiry) — not drift, so it still binds.
 		if err := pinner.WriteGrantsPinned(ctx, grp.rels, rt, id, scope); err != nil {
-			return fmt.Errorf("authz: write pinned slot grants for %s:%s: %w", rt, id, err)
+			// Collected for the same reason as an EnsurePin failure. A pin that
+			// EnsurePin just wrote stays: it names the instance this call meant
+			// to bind, so a retry is a same-instance bind, not a refusal.
+			refusals = append(refusals, fmt.Errorf("authz: write pinned slot grants for %s:%s: %w", rt, id, err))
+			continue
 		}
 	}
 

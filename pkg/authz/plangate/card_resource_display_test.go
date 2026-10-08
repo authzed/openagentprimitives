@@ -355,3 +355,21 @@ func TestBuildCard_AmendmentSlotSentenceNamesTheAddedPermission(t *testing.T) {
 	assert.Contains(t, card.What, "read",
 		"the sentence must name the permission actually being added")
 }
+
+// A whole-plan card renders a slot MOVE exactly as the single-phase card does:
+// both instances in the prose, the revocation stated, and the displaced
+// instance carried structurally on the resource line so a surface can render
+// the revocation as its own line. Detail stays the new instance alone.
+func TestBuildCard_WholePlanResourceLineShowsAMove(t *testing.T) {
+	p := planWithPushPhaseAndRepo(t, "https://github.com/demo-org/new-repo")
+	p.Phases[0].Slots[0].MovedFrom = "demo-org/old-repo"
+	card := BuildCard(CardInput{Plan: p, WholePlan: true})
+
+	assert.Contains(t, card.What, "demo-org/old-repo → https://github.com/demo-org/new-repo")
+	assert.Contains(t, card.What, "revokes this session's access to demo-org/old-repo")
+	require.Len(t, card.Phases, 1)
+	require.Len(t, card.Phases[0].Resources, 1)
+	line := card.Phases[0].Resources[0]
+	assert.Equal(t, "demo-org/old-repo", line.MovedFrom)
+	assert.Equal(t, "https://github.com/demo-org/new-repo", line.Detail, "Detail stays the new instance")
+}

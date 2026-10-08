@@ -5,6 +5,7 @@ package agentsession_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -1429,6 +1430,10 @@ type fakeSpiceDBDeleter struct {
 	// entry present; DeleteSlotGrants clears it, so a test can assert the
 	// stale tuples are actually GONE rather than merely that the call fired.
 	stalePresent map[string]bool
+
+	// slotGrantsFailures makes the next N DeleteSlotGrants calls fail, before
+	// they clear anything — a SpiceDB blip during the admission sweep.
+	slotGrantsFailures int
 }
 
 func (f *fakeSpiceDBDeleter) seedStaleSlotTuples(ns, name string) {
@@ -1452,6 +1457,10 @@ func (f *fakeSpiceDBDeleter) DeleteAgentSessionRelationships(_ context.Context, 
 
 func (f *fakeSpiceDBDeleter) DeleteSlotGrants(_ context.Context, ns, name string) error {
 	f.slotGrantsCalls++
+	if f.slotGrantsFailures > 0 {
+		f.slotGrantsFailures--
+		return errors.New("spicedb unavailable")
+	}
 	f.slotGrantsNS = ns
 	f.slotGrantsName = name
 	f.order = append(f.order, "slots")
@@ -1581,6 +1590,44 @@ func TestReconcile_AdmissionSweepsStaleSlotTuples(t *testing.T) {
 		_, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sess)})
 	}
 	assert.Equal(t, 1, deleter.slotGrantsCalls, "the admission sweep must run exactly once per session, not on every reconcile")
+}
+
+// A FAILED admission sweep must be retried, not skipped. The sweep used to run
+// after the finalizer write, so the requeue saw the finalizer present and never
+// swept again, letting the session proceed with a predecessor's pin live under
+// its name. The finalizer is now added only after a sweep succeeds.
+func TestReconcile_AdmissionSweepRetriesAfterFailure(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+
+	deleter := &fakeSpiceDBDeleter{slotGrantsFailures: 1}
+	r := newReconciler(t, env)
+	r.SpiceDBDeleter = deleter
+
+	ac := validClass("ac-admission-sweep-retry")
+	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass")
+	markValid(t, env, ac)
+
+	sess := validSession("sess-admission-sweep-retry", "ac-admission-sweep-retry")
+	require.NoError(t, env.Client.Create(ctx, sess), "create AgentSession")
+	deleter.seedStaleSlotTuples(sess.Namespace, sess.Name)
+	key := client.ObjectKeyFromObject(sess)
+
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	require.Error(t, err, "a failed sweep must fail the reconcile")
+	var got spiceboxv1alpha1.AgentSession
+	require.NoError(t, env.Client.Get(ctx, key, &got))
+	assert.NotContains(t, got.Finalizers, spiceboxv1alpha1.FinalizerAgentSession,
+		"the finalizer must not be added until the sweep succeeds")
+	assert.True(t, deleter.hasStaleSlotTuples(sess.Namespace, sess.Name), "fixture sanity: the failed sweep cleared nothing")
+
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	require.NoError(t, err, "Reconcile (retry)")
+	assert.Equal(t, 2, deleter.slotGrantsCalls, "the requeue must sweep again")
+	assert.False(t, deleter.hasStaleSlotTuples(sess.Namespace, sess.Name),
+		"the stale tuples must be gone once the retried sweep succeeds")
+	require.NoError(t, env.Client.Get(ctx, key, &got))
+	assert.Contains(t, got.Finalizers, spiceboxv1alpha1.FinalizerAgentSession)
 }
 
 // TestReconcile_AdmissionSweepSparesAForkChildsCopiedTuples: the parent's

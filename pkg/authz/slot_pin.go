@@ -33,6 +33,20 @@ func SlotPinRelation(resourceType, resourceID string, scope SessionRef) Relation
 // the route out.
 var ErrSlotPinned = errors.New("slot already pinned to a different instance")
 
+// ErrSlotMoveDrifted marks an approved pin move whose MUST_MATCH failed: the
+// pin no longer names the instance the card showed as displaced. Nothing moved
+// and nothing was revoked; re-approving rebuilds the card from the current pin.
+// Always wrapped together with ErrSlotPinned, so a caller that only knows the
+// older sentinel still sees a pin refusal.
+var ErrSlotMoveDrifted = errors.New("approved slot move found the pin had changed since the card was shown")
+
+// ErrSlotMoveCommitted marks a BindApproved failure that happened AFTER an
+// approved pin move landed: the pin now names the new instance and the
+// displaced instance's grants are revoked, but the new grant was not written.
+// errors.Is-able so the approval path can tell the approver what actually
+// changed rather than reporting that nothing was granted.
+var ErrSlotMoveCommitted = errors.New("approved slot move committed but the new grant was not written")
+
 // SlotPinner is the precondition-capable surface the single-occupancy gate
 // needs and plain RelWriter cannot express. A non-nil RelWriter that does not
 // also implement it cannot bind a single-occupancy slot: the gate refuses
