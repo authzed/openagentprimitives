@@ -14,7 +14,6 @@ package runner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -2367,7 +2366,7 @@ func (h *runnerHost) recordPlanGateDecision(
 		//
 		// A standing-lookup blip is a recoverable FAULT, not a pin refusal, so the
 		// "fault on our side, try once more" copy is the honest one here.
-		h.publishPlanGateApprovalFailed(ctx, err, false)
+		h.publishPlanGateApprovalFailed(ctx, err, approvalFault)
 		return
 	}
 
@@ -2541,29 +2540,25 @@ func (h *runnerHost) narrowToApproved(
 	if err := authz.BindApproved(writeCtx, h.l.Mem, scp, sess, h.l.SlotBinder, bindings,
 		authz.EnforcePreconditions,
 		authz.SlotGrantExpiry(time.Now(), sessionExpiration), logr.FromContextOrDiscard(ctx), time.Now); err != nil {
-		if errors.Is(err, authz.ErrSlotPinned) {
-			// A pin refusal reached here one of two ways, and they are DIFFERENT
-			// facts the approver needs told apart:
+		if kind, ok := classifyApprovalBindFailure(err); ok {
+			// Three different facts the approver needs told apart:
 			//
+			//   - a MOVE committed and the new grant then failed: the displaced
+			//     instance's access is gone, so "nothing was granted" would hide
+			//     a revocation the approver just caused.
 			//   - a MOVE the card promised could not execute (its MUST_MATCH
-			//     failed: the pin drifted since the card was shown). Nothing bound,
-			//     and re-approving rebuilds the card from the current pin. This is
-			//     a fault, not a refusal.
+			//     failed: the pin drifted since the card was shown). Nothing
+			//     moved, and re-approving rebuilds the card from the current pin.
+			//     A fault, not a refusal.
 			//   - a plain pinned REFUSAL: a binding named a different instance of a
-			//     slot already pinned to another, and no move was approved for it.
-			//     GrantSlots is per-type partitioned, so OTHER types in the same
-			//     approval may well have bound — "nothing was granted" would be a
-			//     lie — and re-approving changes nothing.
-			//
-			// A move was attempted iff some binding carried a PriorID (set from the
-			// record's MovedFrom at card-build).
-			wasMove := anyBindingMovesAPin(bindings)
-			slog.Default().Info("plan_gate: an approved slot bind was refused by the single-occupancy pin; "+
-				"telling the approver",
-				"session", scp.ID, "bindings", len(bindings), "wasMove", wasMove, "err", err.Error())
-			// A drifted move is a recoverable fault (retry); a plain pinned refusal
-			// (no move attempted) is an answer re-approving cannot change.
-			h.publishPlanGateApprovalFailed(ctx, err, !wasMove)
+			//     slot already pinned to another, with no approvable move (none
+			//     was shown, the slot is `rebind: never`, or the approval would
+			//     leave two instances in it). GrantSlots is per-type partitioned,
+			//     so OTHER types may well have bound, and re-approving changes
+			//     nothing.
+			slog.Default().Info("plan_gate: an approved slot bind did not fully apply; telling the approver",
+				"session", scp.ID, "bindings", len(bindings), "failure", kind.String(), "err", err.Error())
+			h.publishPlanGateApprovalFailed(ctx, err, kind)
 			return
 		}
 		slog.Default().Info("plan_gate: the approval was recorded but did not narrow the session; "+
@@ -2629,27 +2624,55 @@ type slotOccupancy struct {
 // planGateSlotOccupancy returns the occupancy/rebind pair per resource type the
 // class declares, for planGateBindings to stamp onto every binding it emits so
 // the plan-gate approval's grant is pinned exactly as a non-approval bind of
-// the same slot would be.
+// the same slot would be. See Loop.slotOccupancyByType.
+func (h *runnerHost) planGateSlotOccupancy() map[string]slotOccupancy {
+	if h.l == nil {
+		return nil
+	}
+	return h.l.slotOccupancyByType()
+}
+
+// slotOccupancyByType returns the occupancy/rebind pair per resource type the
+// class declares.
 //
 // Derived from the SAME boundEntitySpecsForAutofill → slotspec.FromClass source
 // as planGateSlotPreconditions, so occupancy reaches the bind through the one
 // converter that owns the AuthzSlot→BoundEntitySpec mapping — never a second
 // hand-rolled read of the spec. A compile failure in the class's preconditions
-// leaves the map empty (single/default for every type), matching
-// planGateSlotPreconditions' defensive handling; the case is unreachable for a
-// class that passed admission.
-func (h *runnerHost) planGateSlotOccupancy() map[string]slotOccupancy {
-	if h.l == nil || h.l.AgentClass == nil {
+// leaves the map empty (single/default for every type) and is logged, because
+// that silently treats a multi-occupancy slot as single; the case is
+// unreachable for a class that passed admission.
+func (l *Loop) slotOccupancyByType() map[string]slotOccupancy {
+	if l == nil || l.AgentClass == nil {
 		return nil
 	}
-	specs, err := boundEntitySpecsForAutofill(h.l.AgentClass)
+	specs, err := boundEntitySpecsForAutofill(l.AgentClass)
 	if err != nil {
+		slog.Default().Info("slot occupancy: the class's slot declarations did not compile; "+
+			"every slot is treated as single-occupancy with the default rebind",
+			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "err", err.Error())
 		return nil
 	}
 	out := make(map[string]slotOccupancy, len(specs))
 	for _, s := range specs {
 		if s.Occupancy != "" || s.Rebind != "" {
 			out[s.ResourceType] = slotOccupancy{Occupancy: s.Occupancy, Rebind: s.Rebind}
+		}
+	}
+	return out
+}
+
+// slotRebindByType projects slotOccupancyByType onto the rebind mode alone, the
+// shape PlanGateDeps.SlotRebind takes.
+func (l *Loop) slotRebindByType() map[string]string {
+	occ := l.slotOccupancyByType()
+	if len(occ) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(occ))
+	for rt, o := range occ {
+		if o.Rebind != "" {
+			out[rt] = o.Rebind
 		}
 	}
 	return out
@@ -2911,20 +2934,6 @@ func amendmentTouches(pg *pendingPlanGate, rec plangateaudit.Content) bool {
 		return true
 	}
 	return pg.phaseKey == rec.PhaseKey
-}
-
-// anyBindingMovesAPin reports whether any binding in the set is a pin MOVE —
-// carrying a PriorID set at card-build from the approval record's MovedFrom.
-// The plan-gate approval-failed notice branches its copy on this: a move that
-// could not execute (the pin drifted) is a fault that re-approving can fix,
-// while a plain pinned refusal is a refusal that re-approving cannot.
-func anyBindingMovesAPin(bindings []authz.SlotBinding) bool {
-	for _, b := range bindings {
-		if !b.PriorID.IsZero() {
-			return true
-		}
-	}
-	return false
 }
 
 // planGateBindings decides the exact (type, instance, permission) triples an

@@ -116,6 +116,45 @@ func TestRequestPhaseApproval_noMovedFromOnFirstFill(t *testing.T) {
 	assert.Empty(t, ref.MovedFrom, "an empty slot is a first-fill, not a move")
 }
 
+// cardFromPhaseAsk drives requestPhaseApproval and returns the card the ask
+// carries — what the approver is actually shown.
+func cardFromPhaseAsk(t *testing.T, h *PlanGate) plangate.Card {
+	t.Helper()
+	in := pipeline.Input{
+		Point:   pipeline.PreToolCall,
+		Session: pipeline.SessionRef{Namespace: "ns", Name: "s"},
+		Tool:    &pipeline.ToolCallInfo{Name: "push_tool", UseID: "u1"},
+	}
+	d := h.requestPhaseApproval(context.Background(), in, plangateaudit.Content{Mode: "enforcing"}, 0, false)
+	require.NotNil(t, d.Approval)
+	card, ok := d.Approval.Payload["card"].(plangate.Card)
+	require.True(t, ok, "the ask must carry the card")
+	return card
+}
+
+// A FIRST approval (no earlier approved phase, so no AddedSlots delta) must
+// still SHOW the move it records. The card used to render the plan's own
+// slots, which never carried MovedFrom, so the approver saw a plain first-fill
+// while approving repointed the pin and revoked the old instance.
+func TestRequestPhaseApproval_firstApprovalCardShowsTheMove(t *testing.T) {
+	h := enforcingSlotGate(t, fakePinner{pins: map[string]string{"git_repo": "repoA"}})
+	card := cardFromPhaseAsk(t, h)
+	assert.Contains(t, card.What, "repoA → repoB", "the card must show the move it records")
+	assert.Contains(t, card.What, "revokes this session's access to repoA",
+		"the card must show the revocation approving it carries out")
+}
+
+// A `rebind: never` slot cannot move by approval, so the card records no move
+// and shows none, even when the pin names a different instance. The bind is
+// then refused by GrantSlots with the new-session route.
+func TestRequestPhaseApproval_rebindNeverRecordsNoMove(t *testing.T) {
+	h := enforcingSlotGate(t, fakePinner{pins: map[string]string{"git_repo": "repoA"}})
+	h.deps.SlotRebind = map[string]string{"git_repo": authz.SlotRebindNever}
+	ref := firstSlotRef(t, coveredFromPhaseAsk(t, h))
+	assert.Empty(t, ref.MovedFrom, "a never-rebind slot must not be offered as a move")
+	assert.NotContains(t, cardFromPhaseAsk(t, h).What, "→", "and the card must not show one")
+}
+
 // No pinner wired (the unit fixtures, any binary with no SlotBinder): ReadPin is
 // never called, so every card is a first-fill — never an error at card time.
 func TestRequestPhaseApproval_nilPinnerLeavesMovedFromEmpty(t *testing.T) {

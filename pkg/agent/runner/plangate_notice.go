@@ -13,9 +13,11 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
@@ -50,20 +52,25 @@ func approverIDOf(p identity.Principal) string {
 // surface is a chat window, not an operator console; the operator detail is in
 // the log line beside this call.
 //
-// pinnedRefusal branches the copy, because the reasons an approval fails to
-// apply fall into two opposite buckets and the old single wording lied about
-// both halves for one of them:
+// kind branches the copy, because the reasons an approval fails to apply fall
+// into opposite buckets and one wording lies about at least one of them:
 //
-//   - a RECOVERABLE FAULT (pinnedRefusal=false): a standing lookup blipped, or
-//     an approved MOVE could not execute because the pin drifted since the card
+//   - a RECOVERABLE FAULT (approvalFault): a standing lookup blipped, or an
+//     approved MOVE could not execute because the pin drifted since the card
 //     was shown. Nothing bound, and re-approving can take once the transient
 //     condition clears — "a fault on our side, try once more" is true.
-//   - a PLAIN PINNED REFUSAL (pinnedRefusal=true): a binding named a different
-//     instance of a slot already committed to another, with no move approved.
-//     This is NOT a fault, re-approving the same card will not change it, and
-//     because GrantSlots is per-type partitioned OTHER instances the plan named
-//     may well have bound — so "nothing was granted" would be a lie.
-func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error, pinnedRefusal bool) {
+//   - a PLAIN PINNED REFUSAL (approvalPinnedRefusal): a binding named a
+//     different instance of a slot already committed to another, with no
+//     approvable move. This is NOT a fault, re-approving the same card will not
+//     change it, and because GrantSlots is per-type partitioned OTHER instances
+//     the plan named may well have bound — so "nothing was granted" would be a
+//     lie.
+//   - a COMMITTED MOVE (approvalMoveCommitted): the approved move landed, so
+//     the displaced instance's access is already revoked, but the grant on the
+//     new instance was not written. "Nothing was granted" would hide the
+//     revocation; the honest copy says what changed and that the new target
+//     will ask again when the agent reaches it.
+func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error, kind approvalFailure) {
 	if h.l == nil || h.l.InteractionRequestPublish == nil {
 		return
 	}
@@ -79,7 +86,13 @@ func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause er
 		"has not started. This is a fault on our side, not a refusal."
 	nextStep := "Try approving once more. If it fails again, report it — nothing " +
 		"has been granted either way."
-	if pinnedRefusal {
+	switch kind {
+	case approvalMoveCommitted:
+		lead = "Your approval moved this session to the new target and removed its access " +
+			"to the previous one, but access to the new target could not be granted."
+		nextStep = "The agent will ask again when it reaches the new target. If it fails " +
+			"again, report it."
+	case approvalPinnedRefusal:
 		// A plain pinned refusal: the slot is committed elsewhere and this is an
 		// answer, not a fault. Honest that other instances may have bound and that
 		// re-approving the SAME card changes nothing.
@@ -89,6 +102,7 @@ func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause er
 		nextStep = "To target the committed instance, the plan must name it so an approved " +
 			"amendment can move the commitment; otherwise start a new session for it. " +
 			"Re-approving this card will not move it."
+	case approvalFault:
 	}
 
 	pl := channelevents.InteractionRequestPayload{
@@ -186,6 +200,16 @@ func planGateItems(c plangate.Card) []channelevents.InteractionItem {
 			item.Items = append(item.Items, channelevents.InteractionItem{
 				Text: "reaches " + r.Text, Detail: r.Detail, Icon: r.Icon, Href: r.Href,
 			})
+			if r.MovedFrom != "" {
+				// The cost half of a slot move, as its own line: approving
+				// repoints the pin and revokes the displaced instance. External
+				// tone because the approver loses something, and a surface must
+				// not render that at the weight of a read.
+				item.Items = append(item.Items, channelevents.InteractionItem{
+					Text: "moves the pin and revokes this session's access to " + r.MovedFrom,
+					Tone: channelevents.ToneExternal,
+				})
+			}
 		}
 		out = append(out, item)
 	}
@@ -197,4 +221,43 @@ func planGateItems(c plangate.Card) []channelevents.InteractionItem {
 		})
 	}
 	return out
+}
+
+// approvalFailure is why an approved bind did not fully apply; it selects the
+// approver-facing copy in publishPlanGateApprovalFailed.
+type approvalFailure int
+
+const (
+	approvalFault approvalFailure = iota
+	approvalPinnedRefusal
+	approvalMoveCommitted
+)
+
+func (k approvalFailure) String() string {
+	switch k {
+	case approvalPinnedRefusal:
+		return "pinned-refusal"
+	case approvalMoveCommitted:
+		return "move-committed"
+	default:
+		return "fault"
+	}
+}
+
+// classifyApprovalBindFailure maps a BindApproved error onto the notice the
+// approver gets. ok=false means the error is none of the slot-pin outcomes and
+// the caller keeps its own (log-only) handling. Order matters: a committed move
+// can wrap a drifted or pinned error from a later type, and a drifted move also
+// wraps ErrSlotPinned.
+func classifyApprovalBindFailure(err error) (approvalFailure, bool) {
+	switch {
+	case errors.Is(err, authz.ErrSlotMoveCommitted):
+		return approvalMoveCommitted, true
+	case errors.Is(err, authz.ErrSlotMoveDrifted):
+		return approvalFault, true
+	case errors.Is(err, authz.ErrSlotPinned):
+		return approvalPinnedRefusal, true
+	default:
+		return approvalFault, false
+	}
 }
