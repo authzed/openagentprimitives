@@ -13,9 +13,11 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
@@ -49,7 +51,26 @@ func approverIDOf(p identity.Principal) string {
 // lookup" is not something the person clicking Approve can act on, and this
 // surface is a chat window, not an operator console; the operator detail is in
 // the log line beside this call.
-func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error) {
+//
+// kind branches the copy, because the reasons an approval fails to apply fall
+// into opposite buckets and one wording lies about at least one of them:
+//
+//   - a RECOVERABLE FAULT (approvalFault): a standing lookup blipped, or an
+//     approved MOVE could not execute because the pin drifted since the card
+//     was shown. Nothing bound, and re-approving can take once the transient
+//     condition clears — "a fault on our side, try once more" is true.
+//   - a PLAIN PINNED REFUSAL (approvalPinnedRefusal): a binding named a
+//     different instance of a slot already committed to another, with no
+//     approvable move. This is NOT a fault, re-approving the same card will not
+//     change it, and because GrantSlots is per-type partitioned OTHER instances
+//     the plan named may well have bound — so "nothing was granted" would be a
+//     lie.
+//   - a COMMITTED MOVE (approvalMoveCommitted): the approved move landed, so
+//     the displaced instance's access is already revoked, but the grant on the
+//     new instance was not written. "Nothing was granted" would hide the
+//     revocation; the honest copy says what changed and that the new target
+//     will ask again when the agent reaches it.
+func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error, kind approvalFailure) {
 	if h.l == nil || h.l.InteractionRequestPublish == nil {
 		return
 	}
@@ -58,22 +79,41 @@ func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause er
 		sessNS, sessName = h.sess.Namespace, h.sess.Name
 	}
 
+	// Recoverable-fault copy (the default): nothing bound, and re-approving may
+	// take. Bounded rather than "retry"/"don't retry" — one more attempt
+	// distinguishes a transient blip from a persistent one; a third never does.
+	lead := "Your approval could not be applied, so nothing was granted and the plan " +
+		"has not started. This is a fault on our side, not a refusal."
+	nextStep := "Try approving once more. If it fails again, report it — nothing " +
+		"has been granted either way."
+	switch kind {
+	case approvalMoveCommitted:
+		lead = "Your approval moved this session to the new target and removed its access " +
+			"to the previous one, but access to the new target could not be granted."
+		nextStep = "The agent will ask again when it reaches the new target. If it fails " +
+			"again, report it."
+	case approvalPinnedRefusal:
+		// A plain pinned refusal: the slot is committed elsewhere and this is an
+		// answer, not a fault. Honest that other instances may have bound and that
+		// re-approving the SAME card changes nothing.
+		lead = "This session is already committed to a different target for one of its " +
+			"slots, so the instance your approval named was not granted. Other instances " +
+			"the plan named may have been granted; this one was not."
+		nextStep = "To target the committed instance, the plan must name it so an approved " +
+			"amendment can move the commitment; otherwise start a new session for it. " +
+			"Re-approving this card will not move it."
+	case approvalFault:
+	}
+
 	pl := channelevents.InteractionRequestPayload{
 		AgentSessionRef: channelevents.SessionRef{Namespace: sessNS, Name: sessName},
 		Category:        categories.InternalError,
 		RequestRef:      newRequestID(),
-		Lead: "Your approval could not be applied, so nothing was granted and the plan " +
-			"has not started. This is a fault on our side, not a refusal.",
-		// Required of every degraded-tone notice, and the reason the rule
-		// exists: without it this says something went wrong and leaves the
-		// reader holding an unanswered card.
-		//
-		// Bounded rather than "retry" or "don't retry", because BOTH causes are
-		// real and they want opposite advice: an unreachable permission service
-		// clears on its own, and an identity the service cannot accept never
-		// will. One more attempt distinguishes them; a third never does.
-		NextStep: "Try approving once more. If it fails again, report it — nothing " +
-			"has been granted either way.",
+		Lead:            lead,
+		// Required of every degraded-tone notice, and the reason the rule exists:
+		// without it this says something went wrong and leaves the reader holding
+		// an unanswered card.
+		NextStep: nextStep,
 		Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceApprovers},
 	}
 	env, err := channelevents.BuildEnvelope(sessNS, sessName, channelevents.KindInteractionRequest, pl)
@@ -160,6 +200,16 @@ func planGateItems(c plangate.Card) []channelevents.InteractionItem {
 			item.Items = append(item.Items, channelevents.InteractionItem{
 				Text: "reaches " + r.Text, Detail: r.Detail, Icon: r.Icon, Href: r.Href,
 			})
+			if r.MovedFrom != "" {
+				// The cost half of a slot move, as its own line: approving
+				// repoints the pin and revokes the displaced instance. External
+				// tone because the approver loses something, and a surface must
+				// not render that at the weight of a read.
+				item.Items = append(item.Items, channelevents.InteractionItem{
+					Text: "moves the pin and revokes this session's access to " + r.MovedFrom,
+					Tone: channelevents.ToneExternal,
+				})
+			}
 		}
 		out = append(out, item)
 	}
@@ -171,4 +221,43 @@ func planGateItems(c plangate.Card) []channelevents.InteractionItem {
 		})
 	}
 	return out
+}
+
+// approvalFailure is why an approved bind did not fully apply; it selects the
+// approver-facing copy in publishPlanGateApprovalFailed.
+type approvalFailure int
+
+const (
+	approvalFault approvalFailure = iota
+	approvalPinnedRefusal
+	approvalMoveCommitted
+)
+
+func (k approvalFailure) String() string {
+	switch k {
+	case approvalPinnedRefusal:
+		return "pinned-refusal"
+	case approvalMoveCommitted:
+		return "move-committed"
+	default:
+		return "fault"
+	}
+}
+
+// classifyApprovalBindFailure maps a BindApproved error onto the notice the
+// approver gets. ok=false means the error is none of the slot-pin outcomes and
+// the caller keeps its own (log-only) handling. Order matters: a committed move
+// can wrap a drifted or pinned error from a later type, and a drifted move also
+// wraps ErrSlotPinned.
+func classifyApprovalBindFailure(err error) (approvalFailure, bool) {
+	switch {
+	case errors.Is(err, authz.ErrSlotMoveCommitted):
+		return approvalMoveCommitted, true
+	case errors.Is(err, authz.ErrSlotMoveDrifted):
+		return approvalFault, true
+	case errors.Is(err, authz.ErrSlotPinned):
+		return approvalPinnedRefusal, true
+	default:
+		return approvalFault, false
+	}
 }

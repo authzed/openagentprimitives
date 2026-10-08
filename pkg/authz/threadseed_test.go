@@ -83,6 +83,34 @@ func TestSeedFromThread_TrustPolicyDecidesWhoseValuesBind(t *testing.T) {
 	}
 }
 
+// TestSeedFromThread_CarriesOccupancyAndRebindOntoBindings: a thread seed must
+// stamp the slot's occupancy/rebind onto every binding it emits, or a multi
+// slot's thread-seeded instances arrive at GrantSlots reading as single — the
+// second one refused, with nothing red. Empty on the request stays empty on the
+// binding (which pkg/authz reads as single downstream).
+func TestSeedFromThread_CarriesOccupancyAndRebindOntoBindings(t *testing.T) {
+	msgs := []authz.ThreadMessage{msg("owner@example.com", "https://owner.example/a and https://owner.example/b")}
+
+	t.Run("multi/approval propagate", func(t *testing.T) {
+		req := urlSlot(nil)
+		req.Occupancy, req.Rebind = "multi", "approval"
+		got, _ := authz.SeedFromThread(msgs, "owner@example.com", []authz.ThreadSeedRequest{req}, 0)
+		require.NotEmpty(t, got)
+		for _, b := range got {
+			assert.Equal(t, "multi", b.Occupancy, "the slot's occupancy must ride onto every seeded binding")
+			assert.Equal(t, "approval", b.Rebind)
+		}
+	})
+	t.Run("unset stays empty (reads as single)", func(t *testing.T) {
+		got, _ := authz.SeedFromThread(msgs, "owner@example.com", []authz.ThreadSeedRequest{urlSlot(nil)}, 0)
+		require.NotEmpty(t, got)
+		for _, b := range got {
+			assert.Empty(t, b.Occupancy)
+			assert.Empty(t, b.Rebind)
+		}
+	})
+}
+
 // An unattributable author is never trusted, even under participants: an
 // unsigned message is unknown provenance, not "some participant".
 func TestSeedFromThread_UnattributableAuthorNeverBinds(t *testing.T) {

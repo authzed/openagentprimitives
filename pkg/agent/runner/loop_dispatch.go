@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/sandbox"
+	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/toolguard"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credupdate"
@@ -203,6 +205,51 @@ func (l *Loop) executeToolRaw(ctx context.Context, t tool.Tool, name string, arg
 		}, true
 	}
 	return res, false
+}
+
+// pinRefusalApplies reports whether attaching ref's explanation to a denial of
+// this call is truthful. It is false for the one case where the explanation
+// would MISLABEL the denial: the call resolved to the PINNED instance itself,
+// so some other gate (an approval refusal, a scope rule) denied it, and
+// appending "this session is pinned to <that same instance>; propose a plan to
+// move" would send the model chasing a move it does not need.
+//
+// The id is resolved with authz.ResolveResourceID — the same exported resolver
+// the backend checker dispatches through (template, CEL expr, and transforms),
+// over the same unwrapped argsMap — so the comparison cannot drift from what
+// the check itself named. Fails OPEN to attaching: with no pinned id recorded
+// (ReadPin unavailable at record time) or an id that will not resolve (that
+// denial carries its own unresolved-resource message, and the pin context is
+// still true of the type), the explanation is kept rather than guessed away.
+func pinRefusalApplies(ref slotPinRefusal, check authz.PermissionCheck, args map[string]any) bool {
+	if ref.PinnedID == "" {
+		return true
+	}
+	id, err := authz.ResolveResourceID(check, args)
+	if err != nil || id == "" {
+		return true
+	}
+	return id != ref.PinnedID
+}
+
+// withPinRefusalExplanation appends a recorded single-occupancy pin refusal to
+// a denied tool result, so the model reads WHY the instance it named could not
+// be used — the refusal text names the pinned instance and the route out. The
+// base denial is kept and the explanation added after it: the refusal explains
+// the denial, it does not replace the authorization record behind it.
+// Idempotent — a refusal already present (a retry of the same denied call) is
+// not appended twice.
+func withPinRefusalExplanation(res tool.Result, refusal string) tool.Result {
+	if refusal == "" || strings.Contains(res.Content, refusal) {
+		return res
+	}
+	if res.Content == "" {
+		res.Content = refusal
+	} else {
+		res.Content += "\n\n" + refusal
+	}
+	res.IsError = true
+	return res
 }
 
 // approvalObservation reports one observable point of a single contained
@@ -738,8 +785,32 @@ func (l *Loop) dispatchToolUses(ctx context.Context, uses []llm.ToolUseBlock, se
 					// and the per-tool Check below still gates the call.
 					if perr := l.Engine.PromoteExtractedSlots(callCtx, l.bindingScope(), l.authzSessionRef(),
 						specs, l.AuthSubject(), l.CurrentInboxIdx); perr != nil {
-						slog.Default().Info("promoting extracted slot candidates failed; continuing unbound",
-							"tool", t.Name(), "turn", l.CurrentInboxIdx, "err", perr.Error())
+						if errors.Is(perr, authz.ErrSlotPinned) {
+							// An authorization outcome, not a hiccup: a
+							// single-occupancy pin refused this instance. Warn
+							// (louder than a mechanism error), keep the Info-trail
+							// grep key below for an operator, and record the refusal
+							// so the per-tool Check's denial on this type explains
+							// itself to the model rather than reading as a bare
+							// "permission denied".
+							slog.Default().Warn("promoting extracted slot candidates refused by a single-occupancy pin; surfacing to the model",
+								"tool", t.Name(), "turn", l.CurrentInboxIdx, "err", perr.Error())
+							l.recordSlotPinRefusal(callCtx, specs, perr.Error())
+						} else {
+							slog.Default().Info("promoting extracted slot candidates failed; continuing unbound",
+								"tool", t.Name(), "turn", l.CurrentInboxIdx, "err", perr.Error())
+						}
+					} else {
+						// A promotion that succeeded supersedes any recorded
+						// refusal for these types: the facts that refused no
+						// longer hold, and a stale "pinned to A" explanation
+						// must not be appended to a later denial.
+						l.clearSlotPinRefusalsForSpecs(specs)
+						// Mirror any pin the promotion just produced onto
+						// status.slotPins — display-only, read back from SpiceDB
+						// per not-yet-mirrored single-occupancy type (see
+						// slot_pin_mirror.go).
+						l.mirrorBoundSlotPins(callCtx, specs)
 					}
 				}
 				filled, ferr := l.Engine.FillToolArgs(callCtx, l.authzSessionRef(),
@@ -910,6 +981,21 @@ func (l *Loop) dispatchToolUses(ctx context.Context, uses []llm.ToolUseBlock, se
 					// never ran, so return without the Terminal check.
 					return
 				case containPreDeny:
+					// If a slot promotion for this resource type was refused by a
+					// single-occupancy pin earlier this turn, the denial the model
+					// is about to read is a consequence of that pin — append the
+					// pin's own refusal text (pinned instance + route out) so the
+					// model knows which instance IS usable and how to move, rather
+					// than reading a bare "permission denied" as a system fault.
+					// pinRefusalApplies skips a call that resolved to the PINNED
+					// instance itself (denied by some other gate), where "move"
+					// advice would mislabel the denial.
+					if perm.Check != nil {
+						if ref, ok := l.slotPinRefusalFor(perm.Check.ResourceType); ok &&
+							pinRefusalApplies(ref, *perm.Check, argsMap) {
+							results[i] = withPinRefusalExplanation(results[i], ref.Text)
+						}
+					}
 					mu.Lock()
 					preDeny++
 					mu.Unlock()

@@ -181,24 +181,90 @@ Implemented in: `pkg/authz/plangate`, `pkg/agent/runner/plangate_*.go`,
 
 ### Slots
 
-**A slot binds a session to a specific resource, and once filled it cannot be
-changed.**
+**A slot binds a session to a specific resource. A single-occupancy slot cannot
+be silently reopened to a different one — a different instance needs a human's
+approval, and a slot configured `rebind: never` needs a new session.**
 
 Credentials are usually broader than any single task. A GitHub token might reach
 dozens of repositories when the request at hand concerns one. A slot is a named
-placeholder for a resource, filled at plan time or on first encounter, and the
-commitment is recorded as a SpiceDB relationship whose write checks that the
-slot is still empty as a precondition. Every later action is checked against the
-filled slot, so a session cannot drift to another resource even when its
-credentials would allow it. The intended scope of a task becomes an enforced
-boundary.
+placeholder for a resource, filled at plan time or on first encounter. By
+default a slot is single-occupancy: the first bind writes a non-expiring
+`slot_pin` relationship recording the one instance that occupies it, guarded by
+an atomic precondition that the slot was still empty. A bind to a different
+instance is refused rather than silently added alongside it, so the intended
+scope of a task becomes an enforced boundary rather than a hint the agent can
+wander past. (A slot can instead be declared `occupancy: multi`, which keeps the
+unpinned behavior: each addition is gated on its own and no pin is written.)
 
-| Typical agent platform                           | OAP                                                 |
-| ------------------------------------------------ | --------------------------------------------------- |
-| A session can act anywhere its credentials reach | A session acts only on the resource it committed to |
+A class whose tools bind a constant, class-fixed instance (a literal
+`resourceIDTemplate`, not a per-call `resourceIDExpr`) alongside the chosen
+instance under the same resource type needs `occupancy: multi` on that slot — or
+a split into two resource types — because the pin treats the constant and the
+chosen instance as two distinct instances of one type, and the default
+single-occupancy slot refuses the second as drift away from the first.
+
+**Upgrading changes the default for existing classes.** An AgentClass written
+before slot pinning has no `occupancy` field, and the CRD now defaults it to
+`single`. Any such slot that lists two or more `defaults` is then rejected as
+`SlotDeclarationInvalid`, and a thread seed or trigger that binds several
+instances of one type is refused instead of binding them all. Before upgrading,
+set `occupancy: multi` on every slot that is meant to hold more than one
+instance.
+
+The refusal names a way out, and which way depends on the slot's `rebind`
+setting. The default, `rebind: approval`, routes to a plan amendment: the agent
+proposes a plan naming the new instance, and if a human approves it, the
+approval moves the pin and revokes the old instance's grants in the same atomic
+write — the approval card shows the move as current → proposed, with a line
+stating plainly that approving it revokes the session's access to the current
+instance. `rebind: never` admits no such move; the refusal is unconditional and
+retargeting the slot means starting a new session. Neither mode is tripped by a
+second permission check on the already-pinned instance, or by a re-grant of that
+same instance after its prior grant expired — those are not drift, and they bind
+without needing approval.
+
+One honest limitation: the plan-amendment route exists only for a class that
+runs behind the plan gate. A class without it has nowhere to propose the
+amendment, so for such a class `rebind: approval` behaves like a refusal whose
+only remedy is the same as `rebind: never`'s — a new session for the different
+instance.
+
+A grant and a pin carry different things and have different lifetimes. The grant
+is the actual authority to call tools against the instance, and it expires and
+can be revoked by anyone who could have approved it. The pin is only the record
+of which instance was committed to, and it does not expire on its own: it is
+deleted when the session ends, swept again at admission for any session that is
+not a fork (so a reused session name can never inherit a dead predecessor's
+commitment), and copied verbatim onto a forked or restarted session rather than
+re-asked. A tool can never write a `slot_pin` or `slot_grant_*` relation
+directly — those are platform mechanism relations, and the write is refused
+before it reaches SpiceDB.
+
+Two limits are worth stating plainly, because the enforcement is real but
+narrower than it can sound. A pin is scoped to a resource **type**, not to a
+real-world resource: a class that exposes one underlying resource through two
+different SpiceDB types — say a URL-keyed git-repo type and an identity-keyed
+GitHub-repo type for the same repository — pins each independently, and nothing
+stops the two from drifting to different targets at once. And pin equality is
+derived-ID string equality: a type keyed by a transform that does not fully
+canonicalize spelling (a trailing slash, a `.git` suffix, inconsistent casing)
+treats two spellings of the same resource as two different instances, each
+eligible to be "first" into the slot. Where an identity-keyed transform is
+available — an account or repository ID rather than a URL — prefer it for a
+single-occupancy slot.
+
+`AgentSession.status.slotPins` mirrors the current pin for display, and
+`oap session show` renders it, but the status field is an observation, not the
+enforcement point: SpiceDB's relationship is what every check reads, and the
+mirror can lag behind it.
+
+| Typical agent platform                           | OAP                                                                                      |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| A session can act anywhere its credentials reach | A session commits to one resource; changing it takes a human's approval or a new session |
 
 Implemented in: `pkg/authz/slotspec`, `pkg/authz/slot_grant.go`,
-`pkg/authz/data_slot.go`, `pkg/agent/runner/dataslot_*.go`
+`pkg/authz/slot_pin.go`, `pkg/authz/data_slot.go`,
+`pkg/agent/runner/dataslot_*.go`
 
 ### Deterministic approval descriptions
 
@@ -623,10 +689,11 @@ Implemented in: `pkg/platform/oap`, `cmd/oap/internal/agentcmd`
 ## What an attacker has to get through
 
 To misuse an OAP agent, an attacker has to get past a plan a human approved, a
-slot that cannot be reopened, a tool lens that cannot be widened, an
-authorization check on every call, and a sandbox that never held the credential
-in the first place. No single one of these is sufficient on its own, which is
-the point: each assumes the others may fail.
+slot that cannot be silently reopened — a different instance needs a human's
+approval, and `rebind: never` needs a new session — a tool lens that cannot be
+widened, an authorization check on every call, and a sandbox that never held the
+credential in the first place. No single one of these is sufficient on its own,
+which is the point: each assumes the others may fail.
 
 ## Related reading
 

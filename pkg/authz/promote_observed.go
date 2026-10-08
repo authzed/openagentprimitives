@@ -182,8 +182,10 @@ func PromoteObservedSlots(
 			// The RAW subject id, as Record wrote it — the key the slot's
 			// preconditions read their facts back by. The transform chain ran
 			// only for `id` above, for the SpiceDB call.
-			RawID:    s.ResourceID,
-			Requires: et.Requires,
+			RawID:     s.ResourceID,
+			Requires:  et.Requires,
+			Occupancy: et.Occupancy,
+			Rebind:    et.Rebind,
 		})
 	}
 	if len(cands) == 0 {

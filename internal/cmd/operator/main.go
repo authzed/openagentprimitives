@@ -2612,8 +2612,9 @@ func run(cfg *config) {
 		ForkChecker:     spiceDBClient, // *spicedb.Client implements authz.ForkChecker (CheckFork)
 		DeniedLister:    spiceDBClient, // *spicedb.Client implements authz.DeniedLister (ListDeniedUsers)
 		// *spicedb.Client implements authz.SlotGrantCopier (ListSlotGrants +
-		// GrantSlots). Carries a parent's bound instances onto a restart/inherit
-		// child; the takeover carve-out lives in ReconcileRestart.
+		// ListSlotPins + CopySlotTuples). Carries a parent's bound instances AND
+		// pin onto a restart/inherit child, verbatim (no gate); the takeover
+		// carve-out lives in ReconcileRestart.
 		SlotGrantCopier:   spiceDBClient,
 		ForkNoticePublish: forkNoticePublish,
 		// StartChecker enforces spec.authz.session.allowedStarters before any

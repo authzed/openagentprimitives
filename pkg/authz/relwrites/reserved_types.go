@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/authzed/openagentprimitives/pkg/authz"
 	guardianschema "github.com/authzed/openagentprimitives/pkg/authz/guardian/schema"
 )
 
@@ -198,6 +199,18 @@ func ValidateResolvedTuple(t ResolvedTuple) error {
 		return fmt.Errorf("tuple would grant %q a relation on the reserved type %q: a tool may not hand a principal authority over a platform object (resource=%q, relation=%q)",
 			t.Subject, resType, t.Resource, t.Relation)
 	}
+
+	// Platform mechanism relations are never tool-writable. slot_pin is the
+	// single-occupancy commitment the pinning gate writes with an atomic
+	// precondition; slot_grant_* are the session's slot grants. A toolspec
+	// writing either directly would bypass the gate that makes them mean
+	// anything. (slot_grant_* is also rejected by SpiceDB's mandatory
+	// expiration today; refusing it here makes the protection a rule rather
+	// than an accident.)
+	if t.Relation == authz.SlotPinRelationName || strings.HasPrefix(t.Relation, authz.SlotGrantRelationPrefix) {
+		return fmt.Errorf("relation %q is a platform slot mechanism relation and cannot be written by a tool", t.Relation)
+	}
+
 	return nil
 }
 

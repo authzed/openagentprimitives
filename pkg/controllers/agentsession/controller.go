@@ -1151,8 +1151,52 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// fields this reconcile actually changes; agentstatus.WriteOwned diffs
 	// against it.
 	ctx = withReconcileOriginal(ctx, sess.DeepCopy())
-	if added, err := apreconcile.EnsureFinalizer(ctx, r.Client, &sess, spiceboxv1alpha1.FinalizerAgentSession); added || err != nil {
-		return ctrl.Result{Requeue: added}, err
+	// Admission sweep: wipe whatever a DEAD PREDECESSOR with this same name left
+	// behind in SpiceDB, once per creation, BEFORE the finalizer is added. A
+	// slot_pin tuple never expires, so a reused name would otherwise inherit a
+	// stale predecessor's pin and be refused its own first bind —
+	// DeleteSlotGrants is the same call finalize() makes on teardown, and
+	// sweeping it again here, before this session's own first grant can be
+	// written, is what closes that window.
+	//
+	// The finalizer is the "swept" marker, which is why the sweep runs while it
+	// is still ABSENT and the finalizer is added only after the sweep succeeds.
+	// Fail closed: a sweep error returns before EnsureFinalizer, so the requeue
+	// finds the finalizer still missing and sweeps again. Sweeping after the
+	// finalizer write (as this once did) made a failed sweep permanent — the
+	// requeue saw added=false and skipped it, letting the new session proceed
+	// with a leftover pin live under its name. A sweep that succeeds followed by
+	// a failed finalizer write just sweeps again, which is idempotent.
+	//
+	// EXCEPT a fork child. The parent's ReconcileRestart copies the parent's
+	// slot grants AND pin onto the child's (ns, name) — authz.CopySlotGrants,
+	// restart.go step 6c — and BuildChildSession creates the child with no
+	// finalizer, so that copy lands BEFORE this reconcile runs. Sweeping here
+	// would be the last writer and would silently strip every non-takeover fork
+	// of its inherited authority (and could double-pin under the PVC-restore
+	// requeue, wedging EnsurePin's one-pin read). The sweep guards against a
+	// stale write from a dead predecessor REUSING this name; a fork child's name
+	// is generated (PendingRestart.TargetSessionName), so that reuse cannot
+	// happen to it, and the tuples already present under its name are
+	// legitimate by construction. ForkedFrom is the same signal
+	// BuildChildSession stamps on every restart child.
+	//
+	// A channelsd mint pre-stamps the finalizer and runs this same sweep itself,
+	// synchronously ahead of its mint-time binds (pipeline.go), so it never
+	// reaches this branch.
+	if !controllerutil.ContainsFinalizer(&sess, spiceboxv1alpha1.FinalizerAgentSession) &&
+		r.SpiceDBDeleter != nil && sess.Spec.ForkedFrom == "" {
+		if err := r.SpiceDBDeleter.DeleteSlotGrants(ctx, sess.Namespace, sess.Name); err != nil {
+			log.FromContext(ctx).Error(err, "admission sweep: delete stale slot grants/pins failed",
+				"session", sess.Namespace+"/"+sess.Name)
+			return ctrl.Result{}, err
+		}
+	}
+	if addedFinalizer, ferr := apreconcile.EnsureFinalizer(ctx, r.Client, &sess, spiceboxv1alpha1.FinalizerAgentSession); addedFinalizer || ferr != nil {
+		if ferr != nil {
+			return ctrl.Result{}, ferr
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Restore this session's memory-API bearer token into the in-process registry

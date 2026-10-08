@@ -470,6 +470,19 @@ func (s *StatusPatcher) RecordObservedPin(ctx context.Context, name string, pin 
 	})
 }
 
+// RecordSlotPin upserts (by pin.ResourceType) one per-session slot-pin
+// observation onto status.slotPins. DISPLAY-ONLY, mirroring the slot_pin
+// relation SpiceDB already enforces — see SlotPin's doc comment. Callers must
+// treat a non-nil error as advisory: log it (no-silent-errors) and continue,
+// never fail the bind that already succeeded in SpiceDB on account of a
+// status-mirror write failing. See recordSlotPin in slot_pin_mirror.go for
+// the logging wrapper every mirror path routes through.
+func (s *StatusPatcher) RecordSlotPin(ctx context.Context, pin spiceboxv1alpha1.SlotPin) error {
+	return s.mutate(ctx, func(sess *spiceboxv1alpha1.AgentSession) {
+		sess.Status.SlotPins = spiceboxv1alpha1.UpsertSlotPin(sess.Status.SlotPins, pin)
+	})
+}
+
 // RecordSidecarReachability upserts (by name — the LLM-facing prefix) the
 // runner's per-session live-probe result for one sidecar onto
 // status.sidecarReachability. Both the boot pass and the mid-session refresher

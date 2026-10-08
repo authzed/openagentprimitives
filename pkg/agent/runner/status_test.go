@@ -189,6 +189,59 @@ func TestRecordObservedPin(t *testing.T) {
 	assert.Len(t, out.Status.ObservedPins, 2, "second distinct name must produce a second entry")
 }
 
+func TestRecordSlotPin(t *testing.T) {
+	c, sess := newFakeClientWithSession(t)
+	sp := runner.NewStatusPatcher(c, client.ObjectKeyFromObject(sess))
+	ctx := context.Background()
+
+	pin1 := spiceboxv1alpha1.SlotPin{ResourceType: "github_repo", ResourceID: "owner/repo-a"}
+	require.NoError(t, sp.RecordSlotPin(ctx, pin1), "RecordSlotPin (first)")
+
+	var out spiceboxv1alpha1.AgentSession
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &out), "Get after first RecordSlotPin")
+	require.Len(t, out.Status.SlotPins, 1, "expected one entry after first write")
+	assert.Equal(t, "github_repo", out.Status.SlotPins[0].ResourceType)
+	assert.Equal(t, "owner/repo-a", out.Status.SlotPins[0].ResourceID)
+	assert.Empty(t, out.Status.SlotPins[0].MovedBy, "a first-fill pin carries no MovedBy")
+
+	// Upsert (a MOVE): same ResourceType replaces the existing entry, carrying
+	// MovedBy/MovedAt, rather than appending.
+	movedAt := metav1.Now()
+	pin1moved := spiceboxv1alpha1.SlotPin{
+		ResourceType: "github_repo",
+		ResourceID:   "owner/repo-b",
+		MovedBy:      "phase-key-1",
+		MovedAt:      &movedAt,
+	}
+	require.NoError(t, sp.RecordSlotPin(ctx, pin1moved), "RecordSlotPin (move)")
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &out), "Get after move")
+	require.Len(t, out.Status.SlotPins, 1, "a move must not append a second entry")
+	assert.Equal(t, "owner/repo-b", out.Status.SlotPins[0].ResourceID, "move must update the resource id")
+	assert.Equal(t, "phase-key-1", out.Status.SlotPins[0].MovedBy)
+	require.NotNil(t, out.Status.SlotPins[0].MovedAt)
+
+	// Same-instance re-grant (no move metadata): the recorded MovedBy/MovedAt
+	// must be PRESERVED, not clobbered back to a first-fill shape.
+	require.NoError(t, sp.RecordSlotPin(ctx,
+		spiceboxv1alpha1.SlotPin{ResourceType: "github_repo", ResourceID: "owner/repo-b"}),
+		"RecordSlotPin (same-instance re-grant)")
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &out), "Get after same-instance re-grant")
+	require.Len(t, out.Status.SlotPins, 1)
+	assert.Equal(t, "phase-key-1", out.Status.SlotPins[0].MovedBy,
+		"a same-instance re-grant must preserve MovedBy")
+	require.NotNil(t, out.Status.SlotPins[0].MovedAt,
+		"a same-instance re-grant must preserve MovedAt")
+
+	// Different resource type appends independently.
+	pin2 := spiceboxv1alpha1.SlotPin{ResourceType: "github_pr", ResourceID: "owner/repo#42"}
+	require.NoError(t, sp.RecordSlotPin(ctx, pin2), "RecordSlotPin (second resource type)")
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &out), "Get after second resource type write")
+	assert.Len(t, out.Status.SlotPins, 2, "second distinct resource type must produce a second entry")
+}
+
 func TestSetAndClearAwaitingUserInput(t *testing.T) {
 	c, sess := newFakeClientWithSession(t)
 	p := runner.NewStatusPatcher(c, client.ObjectKeyFromObject(sess))

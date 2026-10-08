@@ -2,8 +2,10 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
+	"strings"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
@@ -375,9 +377,30 @@ func (l *Loop) promoteObservedSlots(ctx context.Context) {
 	}
 	if err := l.Engine.PromoteObservedSlots(ctx, l.bindingScope(), l.authzSessionRef(),
 		specs, l.AuthSubject()); err != nil {
+		if errors.Is(err, authz.ErrSlotPinned) {
+			// An authorization outcome, not a hiccup: a single-occupancy pin
+			// refused this instance. Warn (louder than a mechanism error), keep
+			// the Info-trail grep key below for an operator, and record the
+			// refusal so the next gated call on this type explains itself to the
+			// model rather than reading as a bare denial.
+			slog.Default().Warn("promoting observed slot candidates refused by a single-occupancy pin; surfacing to the model",
+				"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "err", err.Error())
+			l.recordSlotPinRefusal(ctx, specs, err.Error())
+			return
+		}
 		slog.Default().Info("promoting observed slot candidates failed; any gated call stays unbound",
 			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "err", err.Error())
+		return
 	}
+	// A promotion that succeeded supersedes any recorded refusal for these
+	// types: the facts that refused no longer hold, and a stale "pinned to A"
+	// explanation must not be appended to a later denial.
+	l.clearSlotPinRefusalsForSpecs(specs)
+	// Mirror any pin the promotion just produced onto status.slotPins —
+	// display-only, read back from SpiceDB per not-yet-mirrored
+	// single-occupancy type (steady state: no SpiceDB reads once mirrored,
+	// but still one AgentSession GET; see slot_pin_mirror.go).
+	l.mirrorBoundSlotPins(ctx, specs)
 }
 
 // explainSlotPrecondition builds the ToolCallAuthz hook's ExplainPrecondition
@@ -506,4 +529,173 @@ func (l *Loop) classDeclaresGateOn(resourceType string) bool {
 		}
 	}
 	return false
+}
+
+// slotOccupancyRebindFor returns the occupancy and rebind modes the class
+// declared for resourceType, read straight off the spec slot — plain spec
+// fields that need no status derivation, the same way classDeclaresGateOn reads
+// `requires`.
+//
+// These are recorded onto a tool_approval / precondition_waiver card's details
+// at RAISE time, because the channelsd decision handler that eventually binds
+// the grant holds no AgentClass to resolve them from. Empty for a type the
+// class does not declare — which also has no slot_grant to write, so there is
+// no bind to pin.
+//
+// Mirrors classDeclaresGateOn: the FIRST slot matching the type answers, since
+// admission refuses a class declaring the same type twice.
+func (l *Loop) slotOccupancyRebindFor(resourceType string) (occupancy, rebind string) {
+	if l.AgentClass == nil || resourceType == "" {
+		return "", ""
+	}
+	for _, s := range l.AgentClass.Spec.GetSlots() {
+		if s.ResourceType == resourceType {
+			return s.Occupancy, s.Rebind
+		}
+	}
+	return "", ""
+}
+
+// slotPinRefusal is one recorded single-occupancy pin refusal: the user-visible
+// text (authz.GrantSlots' own message, naming the pinned instance and the route
+// out) plus the pinned instance id read back from SpiceDB at record time —
+// which is what lets the denial attachment skip a call that named the pinned
+// instance itself (see pinRefusalApplies). PinnedID is "" when the pin could
+// not be read (no SlotPinner wired, or the advisory read failed); the
+// attachment then proceeds without the instance-skip.
+type slotPinRefusal struct {
+	Text     string
+	PinnedID string
+}
+
+// recordSlotPinRefusal remembers a single-occupancy pin's refusal so a later
+// gated tool call denied on the same resource type can explain itself to the
+// model. Keyed per resource type (the declared spec types the text names, via
+// the same token-boundary match slotPinRefusalFor used to do at read time) with
+// NEWEST-WINS overwrite — two refusals for one type across turns keep only the
+// latest, so the model is never handed an explanation older than the most
+// recent ruling. The entry is cleared again when the type binds or its pin
+// moves (clearSlotPinRefusals at the promote/approval success paths).
+func (l *Loop) recordSlotPinRefusal(ctx context.Context, specs []authz.BoundEntitySpec, text string) {
+	if text == "" || len(specs) == 0 {
+		return
+	}
+	pinner, _ := l.SlotBinder.(authz.SlotPinner)
+	for _, et := range specs {
+		if et.ResourceType == "" || !mentionsResourceType(text, et.ResourceType) {
+			continue
+		}
+		ref := slotPinRefusal{Text: text}
+		if pinner != nil {
+			id, err := pinner.ReadPin(ctx, et.ResourceType, l.authzSessionRef())
+			if err != nil {
+				// Advisory read: without it the attachment just loses the
+				// named-the-pinned-instance skip, never the explanation itself.
+				// Said out loud per the no-silent-errors rule.
+				slog.Default().Info("slot pin refusal recorded without the pinned id (ReadPin failed); the denial attachment proceeds without the pinned-instance skip",
+					"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name,
+					"resourceType", et.ResourceType, "err", err.Error())
+			} else {
+				ref.PinnedID = id
+			}
+		}
+		l.slotPinRefusalMu.Lock()
+		if l.slotPinRefusals == nil {
+			l.slotPinRefusals = map[string]slotPinRefusal{}
+		}
+		l.slotPinRefusals[et.ResourceType] = ref // newest wins
+		l.slotPinRefusalMu.Unlock()
+	}
+}
+
+// clearSlotPinRefusals drops the recorded refusal for each named resource type.
+// Called at every path where the type's pin state just CHANGED or was
+// reaffirmed — a nil-error promotion (the facts the refusal described no longer
+// refuse), and narrowToApproved's successful bind/move (the pin may now be on a
+// different instance) — so a stale "pinned to A" explanation cannot be appended
+// to a denial after an approved A→B move.
+func (l *Loop) clearSlotPinRefusals(types []string) {
+	if len(types) == 0 {
+		return
+	}
+	l.slotPinRefusalMu.Lock()
+	defer l.slotPinRefusalMu.Unlock()
+	for _, rt := range types {
+		delete(l.slotPinRefusals, rt)
+	}
+}
+
+// clearSlotPinRefusalsForSpecs is clearSlotPinRefusals over the resource types
+// a promotion's specs declare — the shape the two promote nil-error call sites
+// have in hand.
+func (l *Loop) clearSlotPinRefusalsForSpecs(specs []authz.BoundEntitySpec) {
+	if len(specs) == 0 {
+		return
+	}
+	types := make([]string, 0, len(specs))
+	for _, et := range specs {
+		if et.ResourceType != "" {
+			types = append(types, et.ResourceType)
+		}
+	}
+	l.clearSlotPinRefusals(types)
+}
+
+// bindingResourceTypes returns the distinct resource types a binding set names
+// — the shape narrowToApproved has in hand when its bind/move succeeds.
+func bindingResourceTypes(bindings []authz.SlotBinding) []string {
+	seen := make(map[string]bool, len(bindings))
+	var out []string
+	for _, b := range bindings {
+		if b.ResourceType != "" && !seen[b.ResourceType] {
+			seen[b.ResourceType] = true
+			out = append(out, b.ResourceType)
+		}
+	}
+	return out
+}
+
+// slotPinRefusalFor returns the recorded pin refusal for resourceType, and
+// whether one exists. A map lookup, not a scan: the record is keyed per type
+// at write time, holding only the newest refusal for each.
+func (l *Loop) slotPinRefusalFor(resourceType string) (slotPinRefusal, bool) {
+	if resourceType == "" {
+		return slotPinRefusal{}, false
+	}
+	l.slotPinRefusalMu.Lock()
+	defer l.slotPinRefusalMu.Unlock()
+	ref, ok := l.slotPinRefusals[resourceType]
+	return ref, ok
+}
+
+// mentionsResourceType reports whether text names resourceType as a WHOLE
+// token — bounded on each side by a non-identifier byte or a string edge — so a
+// declared type whose name is a tail of another (a "pull_request" slot against
+// a "github_pull_request" refusal) is not matched by accident. Both refusal
+// shapes end the type on a non-identifier byte (a ':' or a space), so the one
+// rule covers both.
+func mentionsResourceType(text, resourceType string) bool {
+	for from := 0; ; {
+		i := strings.Index(text[from:], resourceType)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(resourceType)
+		leftOK := i == 0 || !isResourceTypeByte(text[i-1])
+		rightOK := end == len(text) || !isResourceTypeByte(text[end])
+		if leftOK && rightOK {
+			return true
+		}
+		from = i + 1
+	}
+}
+
+// isResourceTypeByte reports whether b can appear inside a SpiceDB object type
+// name ([a-zA-Z0-9_]). Used to require a token boundary around a type match.
+func isResourceTypeByte(b byte) bool {
+	return b == '_' ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9')
 }

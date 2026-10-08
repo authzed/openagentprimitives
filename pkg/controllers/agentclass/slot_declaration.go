@@ -107,6 +107,17 @@ func validateSlotDeclarations(ac *spiceboxv1alpha1.AgentClass) ([]compiledSlot, 
 			}
 		}
 
+		occupancy := s.Occupancy
+		if occupancy == "" {
+			occupancy = spiceboxv1alpha1.AuthzSlotOccupancyDefault
+		}
+		if occupancy == spiceboxv1alpha1.AuthzSlotOccupancyDefault && len(s.Defaults) > 1 {
+			return nil, spiceboxv1alpha1.ReasonSlotDeclarationInvalid, fmt.Sprintf(
+				"slot %q is occupancy: single but declares %d defaults; a single-occupancy slot pins exactly one instance. "+
+					"Drop all but one default, or set occupancy: multi.",
+				s.ResourceType, len(s.Defaults))
+		}
+
 		// autoGrantFrom names whose thread contributions may bind without an
 		// approval. With no channel_thread source nothing is ever seeded from a
 		// thread, so the policy never runs — and unlike an omitted field, a

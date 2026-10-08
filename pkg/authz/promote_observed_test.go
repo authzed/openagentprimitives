@@ -44,7 +44,7 @@ func TestPromoteObservedSlots_BindsCheckedCandidates(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/observed"}
 	recordObserved(t, mem, memScope, "git_commit", "ba03f5969a", false)
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{observedSlot("git_commit", "read")}, allowAll(), w, "alice", time.Now, 0))
@@ -116,7 +116,7 @@ func TestPromoteObservedSlots_DropsWhatItMustNotBind(t *testing.T) {
 			mem := memory.NewLocal(inmem.NewBackend())
 			memScope := memory.Scope{Kind: "session", ID: "ns/" + tc.name}
 			recordObserved(t, mem, memScope, tc.factType, tc.factID, false)
-			w := &recordingRelWriter{}
+			w := &pinningFake{}
 
 			require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, bindSession(),
 				tc.declared, tc.chk, w, "alice", time.Now, 0))
@@ -147,7 +147,7 @@ func TestPromoteObservedSlots_OnlyTheDeclaredTypeBinds(t *testing.T) {
 	// One payload, two co-derived subjects — the design's own example.
 	recordObserved(t, mem, memScope, "git_commit", "ba03f5969a", false)
 	recordObserved(t, mem, memScope, "github_pr", "demo-org/demo-repo#6", false)
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{observedSlot("git_commit", "read")}, allowAll(), w, "alice", time.Now, 0))
@@ -163,7 +163,7 @@ func TestPromoteObservedSlots_Idempotent(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/observed-idem"}
 	recordObserved(t, mem, memScope, "git_commit", "ba03f5969a", false)
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	specs := []authz.BoundEntitySpec{observedSlot("git_commit", "read")}
 
 	require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, bindSession(), specs, allowAll(), w, "alice", time.Now, 0))
@@ -188,7 +188,7 @@ func TestPromoteObservedSlots_EnvelopeFactAlsoProposes(t *testing.T) {
 		Facts:    map[string]any{"head_is_fork": true},
 		Source:   factcontent.Source{ChannelKind: "github", Event: "pull_request"},
 	}))
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{observedSlot("github_pr", "fetch")}, allowAll(), w, "alice", time.Now, 0))
@@ -208,7 +208,7 @@ func TestPromoteObservedSlots_SameSubjectInBothKindsBindsOnce(t *testing.T) {
 		Facts:    map[string]any{"head_is_fork": true},
 	}))
 	recordObserved(t, mem, memScope, "github_pr", "demo-org/demo-repo#6", true)
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{observedSlot("github_pr", "fetch")}, allowAll(), w, "alice", time.Now, 0))
@@ -224,7 +224,7 @@ func TestPromoteObservedSlots_RawSubjectRunsThroughTheDeclaredTransformChain(t *
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/observed-transform"}
 	recordObserved(t, mem, memScope, "github_pr", "demo-org/demo-repo#6", false)
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	slot := observedSlot("github_pr", "fetch")
 	slot.ValueTransforms = []string{"spicedb_escape"}
 
@@ -244,7 +244,7 @@ func TestPromoteObservedSlots_UndrivableSubjectIsDroppedNotBoundRaw(t *testing.T
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/observed-badtransform"}
 	recordObserved(t, mem, memScope, "github_pr", "demo-org/demo-repo#6", false)
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	slot := observedSlot("github_pr", "fetch")
 	slot.ValueTransforms = []string{"no_such_transform"}
 
@@ -276,7 +276,7 @@ func TestPromoteObservedSlots_NoOpInputs(t *testing.T) {
 			if tc.seed {
 				recordObserved(t, mem, memScope, "git_commit", "ba03f5969a", false)
 			}
-			w := &recordingRelWriter{}
+			w := &pinningFake{}
 			require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, bindSession(),
 				tc.specs, tc.chk, w, tc.subject, time.Now, 0))
 			assert.Empty(t, w.wrote)
@@ -315,7 +315,7 @@ func TestPromoteObservedSlots_DoesNotRetagAHumanApprovedScopeEntry(t *testing.T)
 	// consecutive dispatch rounds would.
 	recordObserved(t, mem, memScope, "git_commit", "ba03f5969a", false)
 	specs := []authz.BoundEntitySpec{observedSlot("git_commit", "read")}
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, sess, specs, allowAll(), w, "alice", now, 0))
 	require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, sess, specs, allowAll(), w, "alice", now, 0))
 
@@ -343,7 +343,7 @@ func TestPromoteObservedSlots_TagsAnEntryItCreated(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/observed-newtag"}
 	recordObserved(t, mem, memScope, "git_commit", "ba03f5969a", false)
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{observedSlot("git_commit", "read")}, allowAll(), w, "alice", time.Now, 0))

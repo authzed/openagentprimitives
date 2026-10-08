@@ -173,6 +173,11 @@ spec:
         # constant instance gets no grant, and the first inspect raises an
         # amendment for a resource the card already promised to cover.
         permissions: [read]
+        # This class binds a constant "workspace" instance (read) alongside
+        # the chosen repo URL (push) under the same resource type — two
+        # distinct instances of wsrepo_repo by design, so the slot must be
+        # multi-occupancy or the second bind is refused.
+        occupancy: multi
     planGate:
       mode: enforcing
   budget:

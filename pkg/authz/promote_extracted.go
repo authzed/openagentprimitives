@@ -105,8 +105,10 @@ func PromoteExtractedSlots(
 			ResourceID:   id,
 			// The extractor's own pre-transform value: what a fact about this
 			// instance would have been keyed by, had one been recorded.
-			RawID:    f.ResourceID,
-			Requires: et.Requires,
+			RawID:     f.ResourceID,
+			Requires:  et.Requires,
+			Occupancy: et.Occupancy,
+			Rebind:    et.Rebind,
 		})
 	}
 
