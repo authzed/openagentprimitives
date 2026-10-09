@@ -138,6 +138,76 @@ func flattenBlocks(blocks []slackapi.Block) string {
 			}
 		case *slackapi.RichTextBlock:
 			add(flattenRichText(blk.Elements))
+		case *slackapi.MarkdownBlock:
+			add(blk.Text)
+		case *slackapi.TableBlock:
+			for _, row := range blk.Rows {
+				for _, cell := range row {
+					add(flattenTableCell(cell))
+				}
+			}
+		case *slackapi.DataVisualizationBlock:
+			add(blk.Title)
+		case *slackapi.CardBlock:
+			for _, t := range []*slackapi.TextBlockObject{blk.Title, blk.Subtitle, blk.Body, blk.Subtext} {
+				if t != nil {
+					add(t.Text)
+				}
+			}
+		case *slackapi.ContainerBlock:
+			if blk.Title != nil {
+				add(blk.Title.Text)
+			}
+			if blk.Subtitle != nil {
+				add(blk.Subtitle.Text)
+			}
+			if blk.RichTextTitle != nil {
+				add(flattenRichText(blk.RichTextTitle.Elements))
+			}
+			add(flattenBlocks(blk.ChildBlocks.BlockSet))
+		case *slackapi.PlanBlock:
+			add(blk.Title)
+			for i := range blk.Tasks {
+				add(flattenTaskCard(&blk.Tasks[i]))
+			}
+		case *slackapi.TaskCardBlock:
+			add(flattenTaskCard(blk))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// flattenTableCell renders a table cell's readable text. raw_number cells carry
+// no text unless a display override is set; rich_text and raw_text cells carry
+// their content.
+func flattenTableCell(cell slackapi.TableCell) string {
+	switch c := cell.(type) {
+	case *slackapi.TableRichTextCell:
+		return flattenRichText(c.Elements)
+	case *slackapi.TableRawTextCell:
+		return c.Text
+	case *slackapi.TableRawNumberCell:
+		return c.Text
+	}
+	return ""
+}
+
+// flattenTaskCard renders a task card's readable text (title, details, output,
+// and source labels) for transcript/egress projection.
+func flattenTaskCard(tc *slackapi.TaskCardBlock) string {
+	var parts []string
+	if tc.Title != "" {
+		parts = append(parts, tc.Title)
+	}
+	if tc.Details != nil {
+		parts = append(parts, flattenRichText(tc.Details.Elements))
+	}
+	if tc.Output != nil {
+		parts = append(parts, flattenRichText(tc.Output.Elements))
+	}
+	for _, s := range tc.Sources {
+		if s.Text != "" {
+			parts = append(parts, s.Text)
 		}
 	}
 	return strings.Join(parts, "\n")

@@ -59,7 +59,7 @@ type slackClient interface {
 	// GetUserInfoContext resolves a user id to a profile. The sender needs the
 	// direction the other two lookups do not: quoted message text carries ids,
 	// not emails, and an id is what a reader cannot read (see userNamer).
-	GetUserInfoContext(ctx context.Context, user string) (*slackapi.User, error)
+	GetUserInfoContext(ctx context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error)
 	// OpenViewContext opens a Slack modal via views.open. Used by the
 	// approval-flow's Show Details button to surface the full args /
 	// MCP description / op-session refs out-of-thread.
@@ -347,7 +347,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 	//      thereafter via the App Home "Agent settings" button.
 	sessRef := sess.Namespace + "/" + sess.Name
 	includeSettings := s.settingsSeen == nil || !s.settingsSeen.saw(sessRef)
-	blocks := s.buildUserMessageBlocks(ctx, sess, pl.Text, sessRef, includeSettings, logger)
+	blocks := s.buildUserMessageBlocks(ctx, sess, pl.Text, pl.Components, sessRef, includeSettings, logger)
 	opts := []slackapi.MsgOption{
 		slackapi.MsgOptionText(pl.Text, false), // plain-text fallback for push notifications
 		slackapi.MsgOptionBlocks(blocks...),
@@ -430,24 +430,33 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 func (s *slackSender) buildUserMessageBlocks(
 	ctx context.Context,
 	sess channelkinds.SessionInfo,
-	text, sessRef string,
+	text string,
+	components json.RawMessage,
+	sessRef string,
 	includeSettings bool,
 	logger interface{ Info(string, ...any) },
 ) []slackapi.Block {
-	// A section block's mrkdwn is capped at 3000 chars; a single unbounded
-	// block makes chat.postMessage reject the whole reply with invalid_blocks.
-	// Split the reply across as many section blocks as it needs, each under the
-	// limit, preserving all content.
+	// Base body: agent-authored components when present (validated by the slack
+	// kind's ComponentValidator in the runner before publish), otherwise the
+	// reply text split into section blocks. When components ARE the body, text
+	// is only the notification/degrade fallback — not a duplicated section. If
+	// components somehow fail to parse here (they were validated upstream), fall
+	// back to text sections rather than drop the reply.
 	var blocks []slackapi.Block
-	for _, chunk := range chunkForSlackSection(text, slackSectionMaxRunes) {
-		blocks = append(blocks, slackapi.NewSectionBlock(
-			slackapi.NewTextBlockObject("mrkdwn", chunk, false, false),
-			nil, nil,
-		))
+	if len(components) == 0 {
+		blocks = append(blocks, textSectionBlocks(text)...)
+	} else if agent := parseComponentBlocks(components); len(agent) > 0 {
+		blocks = append(blocks, agent...)
+	} else {
+		logger.Info("slack: user_message components did not parse into blocks; falling back to text sections",
+			"session", sess.Name)
+		blocks = append(blocks, textSectionBlocks(text)...)
 	}
 
 	// Muted clamp-warning context line — best-effort; never blocks the send.
-	if s.deps.K8sClient != nil {
+	// Guarded by block headroom so a full (≤50-block) agent-authored body is
+	// not pushed over Slack's per-message cap by a system-appended extra.
+	if s.deps.K8sClient != nil && len(blocks) < slackMaxBlocksPerMessage {
 		var as spiceboxv1alpha1.AgentSession
 		if err := s.deps.K8sClient.Get(ctx, types.NamespacedName{
 			Namespace: sess.Namespace, Name: sess.Name,
@@ -467,14 +476,41 @@ func (s *slackSender) buildUserMessageBlocks(
 
 	// Show settings button — first agent message of the session only;
 	// settings stay reachable anytime via the App Home "Agent settings"
-	// button.
-	if includeSettings {
+	// button. Headroom-guarded, as with the clamp line above.
+	if includeSettings && len(blocks) < slackMaxBlocksPerMessage {
 		blocks = append(blocks, slackapi.NewActionBlock("show_settings_actions",
 			settingsButton(sessRef),
 		))
 	}
 
 	return blocks
+}
+
+// textSectionBlocks splits text into mrkdwn section blocks, each under Slack's
+// 3000-char section cap so chat.postMessage never rejects the reply with
+// invalid_blocks. It is the body when no components are present, and the
+// fallback when components fail to parse.
+func textSectionBlocks(text string) []slackapi.Block {
+	var out []slackapi.Block
+	for _, chunk := range chunkForSlackSection(text, slackSectionMaxRunes) {
+		out = append(out, slackapi.NewSectionBlock(
+			slackapi.NewTextBlockObject("mrkdwn", chunk, false, false),
+			nil, nil,
+		))
+	}
+	return out
+}
+
+// parseComponentBlocks unmarshals agent-authored Block Kit JSON into slack-go
+// blocks. Returns nil on any failure — the caller falls back to text so a reply
+// is never dropped. The payload was already validated by the slack kind's
+// ComponentValidator in the runner; this is the render-time counterpart.
+func parseComponentBlocks(components json.RawMessage) []slackapi.Block {
+	var parsed slackapi.Blocks
+	if err := json.Unmarshal(components, &parsed); err != nil {
+		return nil
+	}
+	return parsed.BlockSet
 }
 
 // forgetWatchdog drops the watchdog's tracking for this session — used after

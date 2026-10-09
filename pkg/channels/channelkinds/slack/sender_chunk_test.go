@@ -111,7 +111,7 @@ func TestBuildUserMessageBlocks_LongReply_SplitsIntoSectionBlocksUnderLimit(t *t
 	long := strings.Repeat("Option: lead with trust, close with the RAG demo link. ", 120)
 	require.Greater(t, len([]rune(long)), 3000, "fixture must exceed the section limit")
 
-	blocks := s.buildUserMessageBlocks(context.Background(), sess, long, "default/foo", true, noopInfoLogger{})
+	blocks := s.buildUserMessageBlocks(context.Background(), sess, long, nil, "default/foo", true, noopInfoLogger{})
 
 	var sections []*slackapi.SectionBlock
 	var actions int

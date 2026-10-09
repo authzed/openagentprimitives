@@ -1930,7 +1930,7 @@ func TestSenderTurnProgress_MalformedPayloadReturnsError(t *testing.T) {
 // GetUserInfoContext is the id→profile direction renderSlackEntities needs.
 // Seeded via userInfo; an unseeded id returns users_not_found, the same shape
 // the real API gives for an id from another workspace.
-func (f *fakeSlackClient) GetUserInfoContext(_ context.Context, id string) (*slackapi.User, error) {
+func (f *fakeSlackClient) GetUserInfoContext(_ context.Context, id string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.userInfoCalls = append(f.userInfoCalls, id)

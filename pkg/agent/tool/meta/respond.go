@@ -88,10 +88,16 @@ func New(cfg RespondConfig) tool.Tool {
 }
 
 type respondTool struct {
-	cfg      RespondConfig
-	schema   json.RawMessage
-	desc     string
-	hasAsset bool
+	cfg           RespondConfig
+	schema        json.RawMessage
+	desc          string
+	hasAsset      bool
+	hasComponents bool
+	// components validates and projects agent-authored `blocks`. Resolved from
+	// the outbound kind at construction; nil when the kind advertises no
+	// "components" capability, or (a wiring bug) advertises it without a
+	// validator — Execute fails closed on the latter.
+	components channelkinds.ComponentValidator
 }
 
 func newRespondTool(cfg RespondConfig) *respondTool {
@@ -109,27 +115,33 @@ func newRespondTool(cfg RespondConfig) *respondTool {
 		}
 	}
 
+	// WHAT a reply may carry and HOW it is authored are the KIND's facts, not
+	// this tool's: the rules land in model-facing prompt text the runner
+	// presents as channel-specific and authoritative, so asking the registry
+	// keeps that promise for every registered kind. An unregistered name yields
+	// a nil Kind — TextFormattingInstructionsFor answers with the generic
+	// CommonMark line, and ComponentValidatorFor answers with nil.
+	kind, _ := chregistry.Get(cfg.ChannelKind)
+
 	props := map[string]any{}
 	required := []string{"text"}
 	textDesc := "The message text."
 	if hasMarkdown {
-		// WHICH markup dialect this surface speaks is the KIND's fact, not this
-		// tool's: the rules land in model-facing prompt text the runner presents
-		// as channel-specific and authoritative, so asking the registry keeps
-		// that promise for every registered kind. An unregistered name yields a
-		// nil Kind, which TextFormattingInstructionsFor answers with the generic
-		// CommonMark line.
-		kind, _ := chregistry.Get(cfg.ChannelKind)
 		textDesc += " " + channelkinds.TextFormattingInstructionsFor(kind)
 	} else {
 		textDesc += " Plain text only — markdown will be sent literally."
 	}
 	props["text"] = map[string]any{"type": "string", "description": textDesc}
 
+	var components channelkinds.ComponentValidator
 	if hasComponents {
+		components = channelkinds.ComponentValidatorFor(kind)
+		desc := "Optional structured UI components in the channel-kind's native format, rendered as the message body with `text` as the notification preview and fallback. " +
+			channelkinds.ComponentFormattingInstructionsFor(kind)
 		props["blocks"] = map[string]any{
 			"type":        "array",
-			"description": "Optional structured components in the channel-kind's native format.",
+			"description": desc,
+			"items":       map[string]any{"type": "object"},
 		}
 	}
 
@@ -156,6 +168,9 @@ func newRespondTool(cfg RespondConfig) *respondTool {
 	} else {
 		descParts = " Plain text only on this channel."
 	}
+	if hasComponents {
+		descParts += " Structured `blocks` components are supported."
+	}
 	desc := fmt.Sprintf(
 		"Send a reply to the user via the %s channel.%s Call this whenever you have a message to surface. "+
 			"After your reply is complete, call await_user_message to yield until the user responds, "+
@@ -163,7 +178,7 @@ func newRespondTool(cfg RespondConfig) *respondTool {
 		cfg.ChannelKind, descParts,
 	)
 
-	return &respondTool{cfg: cfg, schema: schemaBytes, desc: desc, hasAsset: hasAsset}
+	return &respondTool{cfg: cfg, schema: schemaBytes, desc: desc, hasAsset: hasAsset, hasComponents: hasComponents, components: components}
 }
 
 func (t *respondTool) Name() string                 { return "respond_to_user" }
@@ -194,12 +209,35 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 		// Attached are artifact handles to attach; each is gated on the channel's
 		// asset:* capability.
 		Attached []string `json:"attached,omitempty"`
+		// Blocks are agent-authored structured components in the channel-kind's
+		// native format, gated on the channel's "components" capability and
+		// validated by the kind before publish.
+		Blocks json.RawMessage `json:"blocks,omitempty"`
 	}
 	if res, ok := tool.ParseArgs(args, &in, t.Name(), `{"text": "the message body"}`); !ok {
 		return res, nil
 	}
 	if strings.TrimSpace(in.Text) == "" {
 		return tool.Result{Content: "respond_to_user: `text` is required and must be non-empty. Pass the full message body you want the user to see, e.g. {\"text\": \"Here are the results: …\"}. If your previous reply was truncated, you may need to shorten it before retrying.", IsError: true, Trusted: true}, nil
+	}
+
+	// Validate agent-authored components BEFORE anything is published: a
+	// rejection returns IsError with a detailed, correctable message and leaves
+	// no envelope on the wire, exactly like the attachment-resolution guard
+	// below. Only the kind knows its component format, so the kind's validator
+	// (resolved from the outbound binding at construction) is the authority.
+	if len(in.Blocks) > 0 {
+		if !t.hasComponents {
+			return tool.Result{Content: "respond_to_user: `blocks` (structured components) are not supported on this channel. Put your reply in `text` instead.", IsError: true, Trusted: true}, nil
+		}
+		if t.components == nil {
+			// Advertised "components" but no validator: a wiring bug, not the
+			// model's fault. Fail closed rather than publish unvalidated blocks.
+			return tool.Result{Trusted: true}, fmt.Errorf("respond_to_user: channel kind %q advertises components but supplies no validator", t.cfg.ChannelKind)
+		}
+		if err := t.components.ValidateComponents(in.Blocks); err != nil {
+			return tool.Result{Content: err.Error(), IsError: true, Trusted: true}, nil
+		}
 	}
 
 	// Resolve attached artifact handles BEFORE publishing — any failure
@@ -233,7 +271,19 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	// internal config (approver subject, SpiceDB endpoint) that must not reach
 	// channel members.
 	if t.cfg.LeakageGate != nil {
-		if err := t.cfg.LeakageGate(ctx, sess, in.Text, attachments); err != nil {
+		// The gate measures TEXT. Components carry their own text, so feed the
+		// gate the block content too (projected to plain text by the kind) —
+		// otherwise an agent could route blockable content through `blocks` and
+		// bypass the gate, a fail-open egress path. Appended to the TAGGED
+		// in.Text the gate already runs on; the block text is untagged and so
+		// falls to the gate's coarse check, same as an attachment does.
+		gateText := in.Text
+		if len(in.Blocks) > 0 && t.components != nil {
+			if projected := t.components.ComponentsPlainText(in.Blocks); projected != "" {
+				gateText = in.Text + "\n\n" + projected
+			}
+		}
+		if err := t.cfg.LeakageGate(ctx, sess, gateText, attachments); err != nil {
 			logger := log.FromContext(ctx)
 			pub := func(subject string, data []byte) error {
 				return publishWithRetry(ctx, t.cfg.NATSPublish, subject, data)
@@ -309,13 +359,13 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 		toolUseID = ids.ToolUseID
 	}
 	logger.Info("respond_to_user: publishing user_message envelope",
-		"session", sess.Namespace+"/"+sess.Name, "toolUseID", toolUseID, "textLen", len(outText), "attachments", len(attachments))
+		"session", sess.Namespace+"/"+sess.Name, "toolUseID", toolUseID, "textLen", len(outText), "attachments", len(attachments), "components", len(in.Blocks) > 0)
 	publish := func(subject string, data []byte) error {
 		return publishWithRetry(ctx, t.cfg.NATSPublish, subject, data)
 	}
 	if err := t.cfg.EnvelopeSigner.PublishOut(publish, sess.Namespace, sess.Name,
 		channelevents.KindUserMessage,
-		channelevents.OutboundUserMessagePayload{Text: outText, Attachments: attachments},
+		channelevents.OutboundUserMessagePayload{Text: outText, Attachments: attachments, Components: in.Blocks},
 	); err != nil {
 		return tool.Result{Content: fmt.Sprintf("publish failed: %v", err), IsError: true, Trusted: true}, nil
 	}

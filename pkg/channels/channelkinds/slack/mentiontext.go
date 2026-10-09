@@ -44,7 +44,7 @@ const mentionLookupBudget = 24
 // userNamer is the users.info half of slackClient, named separately so the
 // helpers below state the ONE capability they need.
 type userNamer interface {
-	GetUserInfoContext(ctx context.Context, user string) (*slackapi.User, error)
+	GetUserInfoContext(ctx context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error)
 }
 
 // renderSlackEntities rewrites Slack's wire encoding for mentions, channel
