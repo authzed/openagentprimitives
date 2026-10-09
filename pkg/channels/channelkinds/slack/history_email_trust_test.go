@@ -12,7 +12,7 @@ import (
 // trustFakeClient answers users.info from a fixed table.
 type trustFakeClient struct{ users map[string]*slackapi.User }
 
-func (c trustFakeClient) GetUserInfoContext(_ context.Context, id string) (*slackapi.User, error) {
+func (c trustFakeClient) GetUserInfoContext(_ context.Context, id string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	return c.users[id], nil
 }
 

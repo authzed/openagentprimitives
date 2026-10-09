@@ -18,7 +18,7 @@ import (
 // that (outbound-message) surface.
 type historyClient interface {
 	GetConversationRepliesContext(ctx context.Context, params *slackapi.GetConversationRepliesParameters) ([]slackapi.Message, bool, string, error)
-	GetUserInfoContext(ctx context.Context, user string) (*slackapi.User, error)
+	GetUserInfoContext(ctx context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error)
 	GetConversationHistoryContext(ctx context.Context, params *slackapi.GetConversationHistoryParameters) (*slackapi.GetConversationHistoryResponse, error)
 	GetBotInfoContext(ctx context.Context, params slackapi.GetBotInfoParameters) (*slackapi.Bot, error)
 }

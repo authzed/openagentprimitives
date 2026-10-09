@@ -35,7 +35,7 @@ func (*stubClient) PostMessageContext(_ context.Context, channelID string, _ ...
 func (*stubClient) PostEphemeralContext(context.Context, string, string, ...slackapi.MsgOption) (string, error) {
 	return "", nil
 }
-func (*stubClient) GetUserInfoContext(_ context.Context, user string) (*slackapi.User, error) {
+func (*stubClient) GetUserInfoContext(_ context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	return &slackapi.User{ID: user}, nil
 }
 func (*stubClient) OpenViewContext(context.Context, string, slackapi.ModalViewRequest) (*slackapi.ViewResponse, error) {

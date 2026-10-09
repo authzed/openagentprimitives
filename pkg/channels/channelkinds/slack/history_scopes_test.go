@@ -102,7 +102,7 @@ func (c *recordingHistoryClient) AuthTestContext(_ context.Context) (*slackapi.A
 	return &slackapi.AuthTestResponse{TeamID: histTestTeam}, nil
 }
 
-func (c *recordingHistoryClient) GetUserInfoContext(_ context.Context, id string) (*slackapi.User, error) {
+func (c *recordingHistoryClient) GetUserInfoContext(_ context.Context, id string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	c.calls = append(c.calls, "users.info")
 	u := &slackapi.User{ID: id, RealName: "Member One", TeamID: histTestTeam}
 	u.Profile.Email = "member.one@example.test"

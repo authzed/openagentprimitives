@@ -43,7 +43,7 @@ func (f *fakeHistoryClient) GetConversationRepliesContext(_ context.Context, p *
 	return f.replies, f.hasMore, f.cursor, f.repErr
 }
 
-func (f *fakeHistoryClient) GetUserInfoContext(_ context.Context, user string) (*slackapi.User, error) {
+func (f *fakeHistoryClient) GetUserInfoContext(_ context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	if f.userErr != nil {
 		return nil, f.userErr
 	}

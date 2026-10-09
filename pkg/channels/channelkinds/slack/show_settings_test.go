@@ -261,10 +261,10 @@ func TestBuildUserMessageBlocks_SettingsButton_FirstMessageOnly(t *testing.T) {
 	} // no K8sClient: clamp line skipped
 	sess := sessionInfoForTest("default", "my-session")
 
-	first := blocksJSON(t, s.buildUserMessageBlocks(noopCtx(t), sess, "hello", "default/my-session", true, noopLogger{}))
+	first := blocksJSON(t, s.buildUserMessageBlocks(noopCtx(t), sess, "hello", nil, "default/my-session", true, noopLogger{}))
 	assert.Contains(t, first, showSettingsActionID, "first message carries the button")
 
-	later := blocksJSON(t, s.buildUserMessageBlocks(noopCtx(t), sess, "again", "default/my-session", false, noopLogger{}))
+	later := blocksJSON(t, s.buildUserMessageBlocks(noopCtx(t), sess, "again", nil, "default/my-session", false, noopLogger{}))
 	assert.NotContains(t, later, showSettingsActionID, "subsequent messages must not carry the button")
 }
 
@@ -399,7 +399,7 @@ func TestBuildUserMessageBlocks_ClampContextBlock_Present(t *testing.T) {
 		statusCache:  make(map[string]cachedStatus),
 	}
 	sess := sessionInfoForTest("default", "my-session")
-	blocks := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", "default/my-session", true, noopLogger{})
+	blocks := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", nil, "default/my-session", true, noopLogger{})
 
 	txt := blocksText(blocks)
 	assert.Contains(t, txt, "Budget capped by policy",
@@ -423,7 +423,7 @@ func TestBuildUserMessageBlocks_ClampContextBlock_Absent(t *testing.T) {
 		statusCache:  make(map[string]cachedStatus),
 	}
 	sess := sessionInfoForTest("default", "my-session")
-	blocks := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", "default/my-session", true, noopLogger{})
+	blocks := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", nil, "default/my-session", true, noopLogger{})
 
 	txt := blocksText(blocks)
 	assert.NotContains(t, txt, "Budget capped by policy",
@@ -441,7 +441,7 @@ func TestBuildUserMessageBlocks_ClampLine_BestEffort_OnGetError(t *testing.T) {
 	}
 	sess := sessionInfoForTest("default", "nonexistent-session")
 	// Must not panic or return an error.
-	blocks := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", "default/nonexistent-session", true, noopLogger{})
+	blocks := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", nil, "default/nonexistent-session", true, noopLogger{})
 
 	// Button still present; no clamp line.
 	assert.True(t, hasActionBlockWithID(blocks, showSettingsActionID))

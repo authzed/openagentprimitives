@@ -266,6 +266,7 @@ func (*Kind) Capabilities() []string {
 		"text",
 		"markdown",
 		"plan",
+		"components",
 		"asset:text/html",
 		"asset:image/png",
 		"asset:image/jpeg",
