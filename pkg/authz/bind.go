@@ -514,7 +514,25 @@ func BindApproved(
 	// waiver's, and any type declaring no precondition — passes through
 	// untouched, so the enforcing default costs nothing for the common case.
 	bound := make([]slotCandidate, 0, len(bindings))
+	droppedWebAction := 0
 	for _, b := range bindings {
+		// A web_action grant is a PER-ACTION revalidation (Phase E): its
+		// slot_grant_act relation is declared `with pagestate_matches and
+		// expiration`, so SpiceDB REFUSES an uncaveated write to it. BindApproved
+		// assembles ONE atomic GrantSlots batch and carries no caveat fields, so a
+		// single uncaveated web_action binding in the set would fail the WHOLE
+		// batch — taking the coarse web_host grant and every other approved grant
+		// down with it, so a human who approved the phase would see NOTHING bind.
+		// A web_action grant is mintable ONLY via the fingerprinted E9 path
+		// (persistWebActionApproval), which calls GrantSlots directly WITH the
+		// caveat; it never legitimately belongs in an approval batch (a plan phase
+		// that named a web_action slot is the model-reachable way one gets here).
+		// Drop it, mirroring CopySlotGrants' identical web_action filter, so the
+		// rest of the batch still binds. Never silent — logged below.
+		if b.ResourceType == webActionResourceType {
+			droppedWebAction++
+			continue
+		}
 		bound = append(bound, slotCandidate{
 			ResourceType:    b.ResourceType,
 			Permission:      b.Permission,
@@ -523,6 +541,17 @@ func BindApproved(
 			Requires:        b.Requires,
 			NoGrantRelation: b.NoGrantRelation,
 		})
+	}
+	if droppedWebAction > 0 {
+		logger.Info("authz: web_action bindings dropped from an approval batch so the rest still binds; "+
+			"a per-action grant is mintable only via the fingerprinted approval path",
+			"session", sess.String(), "dropped", droppedWebAction)
+	}
+	if len(bound) == 0 {
+		// Every binding was a dropped web_action: there is nothing left to grant,
+		// and bindSlots/checkPreconditions would no-op anyway. Return cleanly rather
+		// than fall through to a scope read + CAS loop that writes nothing.
+		return nil
 	}
 	if policy == EnforcePreconditions {
 		bound = checkPreconditions(ctx, mem, memScope, string(scope.SourceApproved), logger, bound)

@@ -301,7 +301,13 @@ func (h *ToolCallAuthz) Eval(ctx context.Context, in pipeline.Input) pipeline.De
 			// its Payload, so the fingerprint stays out of the approver-facing copy.
 			// ask may be nil only if BuildApprovalAsk returned (nil, nil), which it
 			// does not — but guard anyway so a future builder cannot nil-panic here.
-			if ask != nil && inputs.WebActionRequired {
+			//
+			// perm.OwnsWebActionArgs() is a belt-and-suspenders trust gate: BuildInputs
+			// already sets WebActionRequired only for the acting tool, but this stamp
+			// is what ultimately mints the per-action grant, so re-assert the same
+			// server-resolved discriminator here against perm directly — a future
+			// BuildInputs that forgot to gate cannot re-open the injection path.
+			if ask != nil && inputs.WebActionRequired && perm.OwnsWebActionArgs() {
 				ask.WebActionKey = inputs.WebActionKey
 				ask.WebActionFingerprint = inputs.PresentedPageFingerprint
 				// E10: carries whether this is a changed-page RE-PROMPT (a grant

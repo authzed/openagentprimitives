@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 )
 
@@ -61,4 +62,23 @@ func TestFragment_CarriesWebHostOnce(t *testing.T) {
 	require.Len(t, f.Resources, 1)
 	assert.Equal(t, "web_host", f.Resources[0].Name)
 	assert.Empty(t, f.RawZed, "web_host is structured, not RawZed")
+}
+
+// TestWebHostValueTransforms_CasefoldsBeforeEscaping pins the case-canonicalization
+// fix: a DNS host is case-insensitive, but the two legs that derive a web_host id
+// disagree on case — the acting tool's CHECK keys off the already-lower-cased
+// CurrentHost(), while a plan-gate GRANT write keys off the free-form host a
+// planner named. Folding to lowercase BEFORE the escape makes both land on one
+// id, so an "AA.com" slot value grants where the "aa.com" check looks, instead of
+// silently re-prompting every acting call.
+func TestWebHostValueTransforms_CasefoldsBeforeEscaping(t *testing.T) {
+	upper, err := authz.NewObjectID("AA.com", browserschema.WebHostValueTransforms())
+	require.NoError(t, err)
+	lower, err := authz.NewObjectID("aa.com", browserschema.WebHostValueTransforms())
+	require.NoError(t, err)
+
+	assert.Equal(t, lower.String(), upper.String(),
+		"AA.com and aa.com name the same host, so they must derive the same web_host id")
+	assert.Equal(t, "aa=2Ecom", upper.String(),
+		"the host is lower-cased (casefold_identity) first, then its dots escaped (spicedb_escape)")
 }

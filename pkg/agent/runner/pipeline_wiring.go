@@ -445,20 +445,31 @@ func (l *Loop) toolCallAuthzDeps() hooks.ToolCallAuthzDeps {
 			// Inputs is what lets the checker layer a web_action check on top of the
 			// web_host one, and stripping them keeps these internal gate keys (the
 			// 64-char page fingerprint especially) out of the human-facing approval
-			// card and the durable args hash. argsMap is the tool's own fresh
-			// NamedArgs copy, so the delete never touches the model's original args;
-			// a non-browser call never carries these keys, so the delete is a no-op.
-			if req, _ := argsMap[browserschema.WebActionRequiredArg].(bool); req {
-				ai.WebActionRequired = true
-				if k, ok := argsMap[browserschema.WebActionKeyArg].(string); ok {
-					ai.WebActionKey = k
+			// card and the durable args hash.
+			//
+			// TRUST GATE (perm.OwnsWebActionArgs): honor the stamps ONLY for the
+			// browser acting tool. For an MCP tool the raw model JSON flows straight
+			// through NormalizeArgs (it implements no NamedCallArgs), so a
+			// prompt-injected model could otherwise set these keys and mint a
+			// fabricated web_action grant for a key/fingerprint of its choosing. When
+			// the predicate is false we neither lift NOR strip: the keys stay as
+			// ordinary model args — rendered on the card and passed to Execute — so
+			// an injection attempt is visible rather than silently trusted. For the
+			// acting tool, argsMap is its own fresh NamedArgs copy, so the delete
+			// never touches the model's original args.
+			if perm.OwnsWebActionArgs() {
+				if req, _ := argsMap[browserschema.WebActionRequiredArg].(bool); req {
+					ai.WebActionRequired = true
+					if k, ok := argsMap[browserschema.WebActionKeyArg].(string); ok {
+						ai.WebActionKey = k
+					}
+					if fp, ok := argsMap[browserschema.WebActionFingerprintArg].(string); ok {
+						ai.PresentedPageFingerprint = fp
+					}
+					delete(argsMap, browserschema.WebActionRequiredArg)
+					delete(argsMap, browserschema.WebActionKeyArg)
+					delete(argsMap, browserschema.WebActionFingerprintArg)
 				}
-				if fp, ok := argsMap[browserschema.WebActionFingerprintArg].(string); ok {
-					ai.PresentedPageFingerprint = fp
-				}
-				delete(argsMap, browserschema.WebActionRequiredArg)
-				delete(argsMap, browserschema.WebActionKeyArg)
-				delete(argsMap, browserschema.WebActionFingerprintArg)
 			}
 			// No session-grant fallback to wire: routeViaSessionGrant is gone and
 			// the fallback with it. The tool's natural Check resolves
@@ -657,13 +668,22 @@ func (l *Loop) buildToolCallApprovalAsk(ctx context.Context, toolName string, ar
 	// the displayed args, or the durable record — same reason web_action_key/
 	// fingerprint are lifted out in BuildInputs: this is an internal-gate-derived
 	// presentation value, not a call argument, and it must not leak into
-	// argsHash/ArgsJSON/the args_map payload. A non-browser call, or a browser
-	// call with no judge wired, never carries this key — the delete is then a
-	// no-op and browserDescription stays "".
+	// argsHash/ArgsJSON/the args_map payload.
+	//
+	// TRUST GATE (perm.OwnsWebActionArgs): this description becomes the card's
+	// trusted "what this does" Summary verbatim, so it is lifted ONLY for the
+	// browser acting tool. An MCP tool's args reach here as raw model JSON, so a
+	// prompt-injected model could otherwise set web_action_description and spoof
+	// the approver-facing summary. When the predicate is false we leave the key in
+	// argsMap (an ordinary, visible arg) and browserDescription stays "" — the
+	// summary then falls back to the COMPUTED summarizeToolCall line below. A
+	// browser call with no judge wired also never carries this key.
 	var browserDescription string
-	if d, ok := argsMap[browserschema.WebActionDescriptionArg].(string); ok {
-		browserDescription = d
-		delete(argsMap, browserschema.WebActionDescriptionArg)
+	if perm.OwnsWebActionArgs() {
+		if d, ok := argsMap[browserschema.WebActionDescriptionArg].(string); ok {
+			browserDescription = d
+			delete(argsMap, browserschema.WebActionDescriptionArg)
+		}
 	}
 
 	resourceType := ""

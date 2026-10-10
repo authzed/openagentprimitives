@@ -208,6 +208,40 @@ type Permission struct {
 	ToolName string `json:"toolName,omitempty"`
 }
 
+// webHostResourceType is a literal mirror of
+// pkg/tools/browserschema.WebHostType, duplicated here rather than imported for
+// the same reason webActionResourceType (slot_grant.go) and
+// pkg/authz/plangate/card.go's webHostResourceType are: this is pkg/authz root,
+// and browserschema transitively imports pkg/authz (via pkg/apis/v1alpha1's
+// mcpserver_types.go), so importing it is a cycle. Must stay byte-identical to
+// browserschema.WebHostType; a runner-side test (which MAY import browserschema)
+// pins the two equal so they cannot drift.
+const webHostResourceType = "web_host"
+
+// OwnsWebActionArgs reports whether this RESOLVED permission belongs to the
+// browser ACTING tool — the only tool whose call the runner trusts to carry the
+// web_action control stamps (required / key / fingerprint / description).
+//
+// This is the fail-closed TRUST GATE for those stamps. The acting tool's own
+// NamedArgs classifies a call and stamps the four keys into its parsed view; the
+// runner lifts them into typed Inputs and uses them to mint a per-action,
+// page-fingerprint-caveated web_action grant. But a check reads NAMED args, and
+// an MCP tool implements no NamedCallArgs, so its raw, UNVALIDATED model JSON
+// flows straight through — a prompt-injected model on any MCP call could set
+// those keys and spoof the approval card's "what this does" line or mint a
+// fabricated grant for a model-chosen key/fingerprint. So the stamps are honored
+// ONLY when this predicate holds.
+//
+// The discriminator is the Check's target resource type, resolved SERVER-SIDE
+// from the tool definition and never from model input: the acting tool's coarse
+// per-host check targets web_host. This is the same trusted discriminator the
+// host-approval screenshot gate keys on (see host_approval.go). Fail-closed: a
+// nil Check (a permission that names no per-resource check at all) is not the
+// acting tool, so the keys are ignored.
+func (p Permission) OwnsWebActionArgs() bool {
+	return p.Check != nil && p.Check.ResourceType == webHostResourceType
+}
+
 // PermissionVariant is one branch of a conditional Permission. The
 // dispatcher evaluates each variant's When against the tool-call
 // args in order; the first that returns true wins.

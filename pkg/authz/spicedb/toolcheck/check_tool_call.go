@@ -481,9 +481,12 @@ func (c Checker) checkExternalSlotGrant(ctx context.Context, p authz.Permission,
 		// Flagged as unresolved so the caller routes it back to the agent as a
 		// tool result rather than showing a human a card with an empty object id.
 		return authz.Result{
-			Outcome:            authz.OutcomeDenied,
-			Message:            needsApproval,
-			UnresolvedResource: err != nil || resourceID == "",
+			Outcome: authz.OutcomeDenied,
+			Message: needsApproval,
+			// Tautologically true inside this branch (its guard is the same
+			// disjunction): the call either errored resolving the resource or
+			// produced an empty id, both of which are "the call named no resource".
+			UnresolvedResource: true,
 		}
 	}
 
@@ -495,7 +498,7 @@ func (c Checker) checkExternalSlotGrant(ctx context.Context, p authz.Permission,
 	// drive this path directly with p.Check.ResourceType == web_action.
 	if res := c.checkOneSlotGrant(ctx, p.Check.ResourceType, p.Check.Permission, resourceID,
 		in.AgentSessionRef, in.PresentedPageFingerprint,
-		p.Check.ResourceType == browserschema.WebActionType); res.Outcome != authz.OutcomeAllowed {
+		p.Check.ResourceType == browserschema.WebActionType, in.RequireFreshest); res.Outcome != authz.OutcomeAllowed {
 		return res
 	}
 
@@ -521,7 +524,7 @@ func (c Checker) checkExternalSlotGrant(ctx context.Context, p authz.Permission,
 		return authz.Result{Outcome: authz.OutcomeDenied, Message: needsApproval, UnresolvedResource: true}
 	}
 	res := c.checkOneSlotGrant(ctx, browserschema.WebActionType, p.Check.Permission, waID.String(),
-		in.AgentSessionRef, in.PresentedPageFingerprint, true /* present the pagestate_matches fingerprint */)
+		in.AgentSessionRef, in.PresentedPageFingerprint, true /* present the pagestate_matches fingerprint */, in.RequireFreshest)
 	if res.Outcome == authz.OutcomeAllowed {
 		return res
 	}
@@ -621,9 +624,26 @@ func (c Checker) webActionGrantExistsForReprompt(ctx context.Context, permission
 // presenting the arg keeps that off the hot path. An uncaveated leg (web_host and
 // every non-browser external type) passes presentFingerprint=false and carries
 // no Context.
-func (c Checker) checkOneSlotGrant(ctx context.Context, resourceType, permission, resourceID, agentSessionRef, fingerprint string, presentFingerprint bool) authz.Result {
+func (c Checker) checkOneSlotGrant(ctx context.Context, resourceType, permission, resourceID, agentSessionRef, fingerprint string, presentFingerprint, requireFreshest bool) authz.Result {
 	const needsApproval = "external tool: human approval required"
 
+	// Freshness matters most here: narrowToApproved writes the grant
+	// synchronously and the very next dispatch is this Check, so a snapshot
+	// predating that write would refuse the call the approval exists to
+	// authorize. Float on the cache when it has a token, and demand the freshest
+	// read when it does not.
+	//
+	// requireFreshest (in.RequireFreshest) OVERRIDES that floor with a fully
+	// consistent read. The caller sets it when a grant was just written by ANOTHER
+	// process (channelsd handling a decision) whose revision this process's cache
+	// token is not guaranteed to cover — AtLeastAsFresh(stale-token) could serve a
+	// pre-write snapshot and re-prompt for a call that is already granted. Mirrors
+	// the readonly/readwrite path's identical RequireFreshest handling; the extra
+	// cost is bounded to the freshest-demanding check, not every external call.
+	consistency := externalGrantConsistency(c.Cache, resourceType, resourceID)
+	if requireFreshest {
+		consistency = &v1.Consistency{Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true}}
+	}
 	req := &v1.CheckPermissionRequest{
 		Resource: &v1.ObjectReference{ObjectType: resourceType, ObjectId: resourceID},
 		// The slot_grant_<permission> RELATION, never the permission it feeds.
@@ -631,12 +651,7 @@ func (c Checker) checkOneSlotGrant(ctx context.Context, resourceType, permission
 		Subject: &v1.SubjectReference{
 			Object: &v1.ObjectReference{ObjectType: "agentsession", ObjectId: agentSessionRef},
 		},
-		// Freshness matters most here: narrowToApproved writes the grant
-		// synchronously and the very next dispatch is this Check, so a snapshot
-		// predating that write would refuse the call the approval exists to
-		// authorize. Float on the cache when it has a token, and demand the
-		// freshest read when it does not.
-		Consistency: externalGrantConsistency(c.Cache, resourceType, resourceID),
+		Consistency: consistency,
 	}
 	if presentFingerprint {
 		fpCtx, ctxErr := structpb.NewStruct(map[string]any{

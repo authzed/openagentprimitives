@@ -726,6 +726,11 @@ func (h *runnerHost) buildToolCallPending(ctx context.Context, reqID string, ask
 		// first-time ask, which carries this false and renders without the
 		// notice toolApprovalFields adds below.
 		ChangedPageReprompt: ask.WebActionChangedPageReprompt,
+		// Disclose the standing upgrade: a declared-slot JIT ask (empty web_action
+		// key, External, declared type) has its 30s grant rebound to session length
+		// on approve, so the card must say the approval covers the rest of the
+		// session rather than one call. Mirrors toolCallPostApprove's upgrade gate.
+		StandingAfterApproval: h.willUpgradeDeclaredSlotToStanding(ask.WebActionKey, stateImpact, resourceType, resourceID),
 	}
 	card.What = whatLine(ask.Summary, card)
 
@@ -1643,12 +1648,35 @@ type toolApprovalCopy struct {
 	// saw, so toolApprovalFields prepends a notice saying so. False renders
 	// the ordinary first-time-ask card with no such notice.
 	ChangedPageReprompt bool
+
+	// StandingAfterApproval marks a DECLARED-slot JIT ask whose grant
+	// toolCallPostApprove will rebind to SESSION length on approve
+	// (upgradeDeclaredSlotGrantToStanding). The card otherwise reads as a
+	// single-call approval, so toolApprovalFields adds a disclosure that the
+	// approval actually covers the rest of the session. Mutually exclusive with
+	// ChangedPageReprompt (that path requires a non-empty web_action key; this one
+	// requires an empty one). Set only when the upgrade will truly run — see
+	// willUpgradeDeclaredSlotToStanding — so the card never over-promises.
+	StandingAfterApproval bool
 }
 
 // changedPageRepromptNotice is the copy toolApprovalFields prepends when the
 // card is re-asking about a browser mutate whose page changed since the human
 // last approved it — distinct from a first-time ask, which never shows this.
 const changedPageRepromptNotice = "The page changed since you last approved this action — review the current page before approving again."
+
+// declaredSlotStandingNotice is the disclosure toolApprovalFields adds when
+// approving this JIT ask grants STANDING for the rest of the session rather than
+// authorizing the single call the card otherwise describes (the declared-slot
+// upgrade, see upgradeDeclaredSlotGrantToStanding). label is the resource's human
+// label — the host, for a web_host slot; when empty the notice names the resource
+// generically rather than leaking a wire id.
+func declaredSlotStandingNotice(label string) string {
+	if strings.TrimSpace(label) == "" {
+		return "Approving lets this agent keep acting here for the rest of this session, not only this one call."
+	}
+	return fmt.Sprintf("Approving lets this agent keep acting on %s for the rest of this session, not only this one call.", label)
+}
 
 // toolApprovalFields authors the Why / What / Tool / Permission rows of the
 // approval card.
@@ -1676,6 +1704,13 @@ func toolApprovalFields(c toolApprovalCopy) []channelevents.InteractionField {
 	// they are being asked again.
 	if c.ChangedPageReprompt {
 		fields = append(fields, channelevents.InteractionField{Label: "Note", Value: changedPageRepromptNotice})
+	}
+	// The standing-upgrade disclosure: this card looks like a one-call approval,
+	// but approving it grants acting on this resource for the rest of the session
+	// (upgradeDeclaredSlotGrantToStanding). Say so, next to Why/What, so the human
+	// is consenting to what actually happens.
+	if c.StandingAfterApproval {
+		fields = append(fields, channelevents.InteractionField{Label: "Note", Value: declaredSlotStandingNotice(c.ResourceLabel)})
 	}
 	return append(fields,
 		channelevents.InteractionField{Label: "Why", Value: why},
@@ -1944,6 +1979,26 @@ func (h *runnerHost) toolCallPostApprove(ctx context.Context, tc *pendingToolCal
 		}
 	}
 	return nil
+}
+
+// willUpgradeDeclaredSlotToStanding reports whether approving a tool_call ask
+// with these fields will rebind its grant to SESSION length
+// (upgradeDeclaredSlotGrantToStanding) instead of authorizing a single call. It
+// is the card-build's advance look at the exact decision toolCallPostApprove
+// makes: a declared-slot (∈ PlanGateSlotTypes), External, non-web_action (empty
+// webActionKey) ask — AND the writer wiring the upgrade actually needs
+// (GuardianGrantWriter gates the post-approve block; Mem + SlotBinder are what
+// BindApproved writes the standing grant through). Gating on the wiring too means
+// the card never discloses standing the runner is not configured to grant. Kept
+// beside the post-approve condition it mirrors — change both together.
+func (h *runnerHost) willUpgradeDeclaredSlotToStanding(webActionKey, stateImpact, resourceType, resourceID string) bool {
+	if webActionKey != "" || stateImpact != string(authz.External) || resourceID == "" {
+		return false
+	}
+	if !slices.Contains(h.l.PlanGateSlotTypes, resourceType) {
+		return false
+	}
+	return h.l.GuardianGrantWriter != nil && h.l.Mem != nil && h.l.SlotBinder != nil
 }
 
 // upgradeDeclaredSlotGrantToStanding rebinds a DECLARED slot's just-approved

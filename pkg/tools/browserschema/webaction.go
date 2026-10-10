@@ -26,10 +26,10 @@ const (
 	// WebActionType is the SpiceDB definition name a per-action revalidation
 	// check names (PermissionCheck.ResourceType), and the slot type a browser
 	// acting AgentClass declares in spec.authz.slots alongside — or instead of —
-	// web_host. The id is derived from the canonical page host the same way
-	// web_host's is (WebActionValueTransforms — spicedb_escape), so the two share
-	// an object-id space and a revalidation check keys the same escaped id the
-	// host grant was written on.
+	// web_host. Its id is the escaped ActionKey (host + op + element facts), and
+	// on a canonical lower-cased host it escapes to the same host prefix a
+	// web_host id carries — see WebActionValueTransforms for why this chain is
+	// spicedb_escape alone while web_host's now casefolds first.
 	WebActionType = "web_action"
 
 	// actionIcon is the mark a web_action instance presents with on a
@@ -98,18 +98,25 @@ const (
 	ApprovedFingerprintParam = "approved_fingerprint"
 )
 
-// WebActionValueTransforms is the transform chain that turns a canonical page
-// host into its SpiceDB web_action object id, the SINGLE source of truth for
-// that chain, and byte-for-byte web_host's (WebHostValueTransforms).
+// WebActionValueTransforms is the transform chain that turns a web_action
+// ActionKey (the raw, un-escaped E4 key — host + op + element facts) into its
+// SpiceDB web_action object id, and the SINGLE source of truth for that chain.
 //
 // It is kept as its own function rather than aliasing WebHostValueTransforms so
-// the two can diverge later without a silent coupling — but today they MUST
-// agree: a web_action revalidation check keys the escaped id a web_host grant
-// was written on (the two slots name the same host), so a transform mismatch
-// would make every revalidation miss its grant. spicedb_escape is INJECTIVE
-// (pkg/authz/transforms.go), so distinct hosts never collapse onto one id and a
-// revalidation card stays a truthful claim about exactly which page was
-// approved. A fresh slice per call so no caller can mutate a shared one.
+// the two can diverge without a silent coupling — and they now DO, deliberately:
+// web_host casefolds before escaping (WebHostValueTransforms), this does not.
+// The asymmetry is correct because the two slots differ in where their keys come
+// from. A web_host id is derived by TWO independent legs that disagree on case —
+// the check uses the already-lower-cased Session.CurrentHost(), the plan-gate
+// grant write uses the free-form host a planner typed — so web_host must fold
+// case to make them meet. A web_action id has NO such split: both the grant
+// write (persistWebActionApproval) and the E8 check (toolcheck) key off the SAME
+// tool-stamped ActionKey, whose host segment is already CanonicalHost()'s
+// lower-cased form, so there is no case mismatch to fold out — and casefolding
+// here would needlessly lowercase the non-host ActionKey segments too. spicedb_escape
+// is INJECTIVE (pkg/authz/transforms.go), so distinct keys never collapse onto
+// one id and a revalidation card stays a truthful claim about exactly which
+// action was approved. A fresh slice per call so no caller can mutate a shared one.
 func WebActionValueTransforms() []string {
 	return []string{"spicedb_escape"}
 }
@@ -147,9 +154,13 @@ func WebActionResource() spiceboxv1alpha1.SpiceDBResource {
 				Title: "Take this web action (revalidated against the live page)",
 				PlanningNote: "Gates a SINGLE browser action and is revalidated against the page's " +
 					"deterministic fingerprint at call time — the approval only holds while the page " +
-					"still looks the way it did when approved. Name the host as a web_action slot in " +
-					"the acting phase so each click, keypress or form submit is re-checked against " +
-					"live page state rather than trusting a stale host-level grant.",
+					"still looks the way it did when approved. Do NOT name web_action as a plan slot: " +
+					"this per-action gate is minted automatically at call time and re-approved against " +
+					"live page state on each click, keypress or form submit, so a plan phase cannot " +
+					"grant it ahead of time (and a phase that named it would bind nothing). To let the " +
+					"agent act on a site, name the HOST as a web_host slot in the acting phase — the " +
+					"coarse host-level grant — and the per-action web_action re-check layers on top of " +
+					"it automatically.",
 			},
 		},
 		Display: &spiceboxv1alpha1.SpiceDBResourceDisplay{

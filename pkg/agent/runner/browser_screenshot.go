@@ -208,6 +208,10 @@ func storeScreenshotArtifact(ctx context.Context, deps screenshotStoreDeps, sess
 func awaitScreenshotReady(ctx context.Context, deps screenshotStoreDeps, sess channelevents.SessionRef, cr *spiceboxv1alpha1.ArtifactRender) error {
 	scope := memory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}
 	deadline := time.Now().Add(screenshotRenderTimeout)
+	// lastErr retains the most recent non-NotFound Get failure across poll
+	// iterations so the terminal timeout can report WHY it never saw Ready, rather
+	// than swallowing a persistent transport/RBAC error behind a bare "timed out".
+	var lastErr error
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -217,6 +221,9 @@ func awaitScreenshotReady(ctx context.Context, deps screenshotStoreDeps, sess ch
 			if apierrors.IsNotFound(err) {
 				return fmt.Errorf("ArtifactRender vanished before completion")
 			}
+			// A transient Get fault (cache not synced, transport blip) is worth a
+			// retry, but not worth losing: keep it so a timeout can surface it.
+			lastErr = err
 			time.Sleep(screenshotRenderPollInterval)
 			continue
 		}
@@ -242,6 +249,9 @@ func awaitScreenshotReady(ctx context.Context, deps screenshotStoreDeps, sess ch
 			return fmt.Errorf("render failed: %s — %s", fresh.Status.FailureReason, fresh.Status.FailureMessage)
 		}
 		time.Sleep(screenshotRenderPollInterval)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("timed out waiting for ArtifactRender to become Ready: last error: %w", lastErr)
 	}
 	return fmt.Errorf("timed out waiting for ArtifactRender to become Ready")
 }
