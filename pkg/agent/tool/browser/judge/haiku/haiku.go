@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
@@ -360,6 +361,16 @@ func parseVerdict(raw string) (judge.Verdict, error) {
 		p, ok := vj.Probs[string(t)]
 		if !ok {
 			return judge.Verdict{}, fmt.Errorf("probs missing tier %q", t)
+		}
+		// A probability must be a real value in [0,1]. A model that reports a
+		// negative, >1, or NaN/Inf "probability" has misbehaved exactly like one
+		// reporting a fifth tier or a missing key — so it is an error, not a value
+		// to clamp-and-trust. Rejecting it keeps Classify's fail-closed contract:
+		// the caller maps this error to the gated TierMutate outcome rather than
+		// thresholding a garbage number (e.g. a NaN, for which every comparison is
+		// false, would slip a mutate past a `>= threshold` gate).
+		if p < 0 || p > 1 || math.IsNaN(p) || math.IsInf(p, 0) {
+			return judge.Verdict{}, fmt.Errorf("probs[%q] out of range: %v (must be a real value in [0,1])", t, p)
 		}
 		probs[t] = p
 	}

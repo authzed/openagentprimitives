@@ -239,6 +239,33 @@ func TestClassify_ProbsMissingATier(t *testing.T) {
 	assert.Contains(t, err.Error(), `probs missing tier`)
 }
 
+// TestClassify_ProbsOutOfRange proves a probability outside [0,1] is a
+// model-misbehavior ERROR, not a value to clamp-and-trust — same fail-closed
+// discipline as a fifth tier or a missing key. (NaN/Inf cannot arrive through
+// valid JSON, so the json parser rejects those first; parseVerdict's
+// math.IsNaN/IsInf guard is defensive for any non-JSON future caller.)
+func TestClassify_ProbsOutOfRange(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "mutate > 1 is rejected", body: `{"tier":"observe","probs":{"observe":0.5,"navigate":0,"session":0,"mutate":1.5}}`},
+		{name: "negative prob is rejected", body: `{"tier":"observe","probs":{"observe":1.1,"navigate":-0.1,"session":0,"mutate":0}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prov := fake.New([]fake.Step{{Resp: llm.Response{
+				Content: []llm.ContentBlock{{Type: "text", Text: tc.body}},
+			}}})
+			j := haiku.New(prov, "")
+
+			_, err := j.Classify(context.Background(), judge.Action{Op: "click"}, judge.PageContext{})
+			require.Error(t, err, "an out-of-range probability must fail closed, never clamp")
+			assert.Contains(t, err.Error(), "out of range")
+		})
+	}
+}
+
 func TestClassify_StripsMarkdownFences(t *testing.T) {
 	fenced := "```json\n" + `{"tier":"observe","probs":{"observe":0.9,"navigate":0.05,"session":0.03,"mutate":0.02},"rationale":"fenced"}` + "\n```"
 	prov := fake.New([]fake.Step{{Resp: llm.Response{

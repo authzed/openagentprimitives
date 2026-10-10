@@ -43,7 +43,7 @@ type snapNode struct {
 // therefore persists until a real navigation, which is strictly fail-closed
 // (at worst a field removed mid-document stays over-blanked until the next nav,
 // a usability wart, never a leak).
-func snapshot(ctx context.Context, startBackendID int64, blanked map[int64]bool) ([]snapNode, map[string]refEntry, error) {
+func snapshot(ctx context.Context, startBackendID int64, gen uint64, blanked map[int64]bool) ([]snapNode, map[string]refEntry, error) {
 	var nodes []*accessibility.Node
 	err := runAction(ctx, func(c context.Context) error {
 		var e error
@@ -53,7 +53,7 @@ func snapshot(ctx context.Context, startBackendID int64, blanked map[int64]bool)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading accessibility tree: %w", err)
 	}
-	lines, refs := buildSnapshot(nodes, startBackendID, blanked)
+	lines, refs := buildSnapshot(nodes, startBackendID, gen, blanked)
 	return lines, refs, nil
 }
 
@@ -65,7 +65,11 @@ func snapshot(ctx context.Context, startBackendID int64, blanked map[int64]bool)
 // happens here, once, rather than at render time, so every consumer of the
 // returned []snapNode (read's outline, find's matched lines) is blind to it by
 // construction.
-func buildSnapshot(nodes []*accessibility.Node, startBackendID int64, blanked map[int64]bool) ([]snapNode, map[string]refEntry) {
+// gen is the snapshot's ref generation (Session.nextRefGen): it is baked into
+// every minted ref name as an "s<gen>" prefix so a ref from one snapshot can
+// never resolve against a later re-minted snapshot — see Session.refGen for the
+// concurrent-dispatch hole this closes.
+func buildSnapshot(nodes []*accessibility.Node, startBackendID int64, gen uint64, blanked map[int64]bool) ([]snapNode, map[string]refEntry) {
 	byID := make(map[accessibility.NodeID]*accessibility.Node, len(nodes))
 	for _, n := range nodes {
 		if n != nil {
@@ -125,7 +129,7 @@ func buildSnapshot(nodes []*accessibility.Node, startBackendID int64, blanked ma
 					// typed into (selfBlanked) — render it; render it here, but with
 					// its value redacted rather than shown when selfBlanked.
 					counter++
-					ref := "e" + strconv.Itoa(counter)
+					ref := "s" + strconv.FormatUint(gen, 10) + "e" + strconv.Itoa(counter)
 					name := axName(n)
 					var value string
 					if !selfBlanked {
@@ -194,6 +198,19 @@ func renderLine(ln snapNode) string {
 // interestingRole maps an AX role to its display form, reporting whether the
 // role is one the outline renders. Only "interesting" roles surface; everything
 // else is traversed for its children but not rendered.
+//
+// The selection-control roles (radio/checkbox/option/menuitemradio/
+// menuitemcheckbox) and tab are mapped to their REAL role, not folded into a
+// generic bucket, deliberately: the consequence judge's benign fast-path
+// recognizes a selection toggle (judge.isSelectionToggle) and a tab switch
+// (judge.isTabSwitch) by exactly these role strings, and the approval
+// descriptor phrases "Select '<x>'" for the same set (judge.IsSelectionRole).
+// If the outline folded them away — as an earlier version did, surfacing none
+// of them — the model could never target the control itself (only its text
+// LABEL), those recognizers could never fire, and every radio/checkbox tick
+// would fall through to the fail-closed mutate gate it should not need. So the
+// display role IS the AX role for these: they must round-trip to the judge
+// intact.
 func interestingRole(role string) (string, bool) {
 	switch strings.ToLower(role) {
 	case "rootwebarea", "webarea", "document":
@@ -206,6 +223,18 @@ func interestingRole(role string) (string, bool) {
 		return "button", true
 	case "textbox", "textfield", "searchbox", "combobox":
 		return "textbox", true
+	case "radio":
+		return "radio", true
+	case "checkbox":
+		return "checkbox", true
+	case "option":
+		return "option", true
+	case "menuitemradio":
+		return "menuitemradio", true
+	case "menuitemcheckbox":
+		return "menuitemcheckbox", true
+	case "tab":
+		return "tab", true
 	case "list":
 		return "list", true
 	case "listitem":

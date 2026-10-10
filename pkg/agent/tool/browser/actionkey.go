@@ -78,11 +78,22 @@ func ActionKey(f ActionFacts) string {
 	actionPath := f.FormAction
 	pagePath := urlPath(f.PageURL)
 
-	hashInput := strings.Join([]string{domain, f.Op, f.Role, name, actionPath, pagePath}, "|")
-	sum := sha256.Sum256([]byte(hashInput))
+	hashFields := []string{domain, f.Op, f.Role, name, actionPath, pagePath}
+	readable := truncateKebab(name)
+	// A press carries no element — its identity IS the key it sends — so fold the
+	// key into both the hash (Enter and Space are DIFFERENT commits and must not
+	// share a grant) and the readable segment (so the ObjectID reads
+	// "<domain>/press/enter-<hash>", not the generic "action"). Guarded on
+	// f.Key != "" so every non-press op's key stays byte-identical to before:
+	// Key is only ever set for a press (see stampPress / ActionFacts.Key).
+	if f.Key != "" {
+		hashFields = append(hashFields, f.Key)
+		readable = truncateKebab(kebabName(f.Key))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(hashFields, "|")))
 	suffix := hex.EncodeToString(sum[:])[:8]
 
-	return fmt.Sprintf("%s/%s/%s-%s", domain, f.Op, truncateKebab(name), suffix)
+	return fmt.Sprintf("%s/%s/%s-%s", domain, f.Op, readable, suffix)
 }
 
 // kebabName lowercases text and collapses every run of non-alphanumeric

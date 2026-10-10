@@ -96,6 +96,25 @@ func TestNamedArgsWebActionStamp(t *testing.T) {
 		assert.Regexp(t, fingerprintHex, fp, "a mutate must stamp a 64-hex page fingerprint (E5 PageFingerprint)")
 	})
 
+	t.Run("mutate tier with sub-threshold prob still gates (tier OR prob)", func(t *testing.T) {
+		// A self-inconsistent verdict whose own LABEL is mutate but whose
+		// P(mutate) is below threshold must still gate: the model called it a
+		// mutate, and fail-closed takes the union of tier and probability, never
+		// the probability alone.
+		cj := &countingJudge{verdict: judge.Verdict{
+			Tier:  judge.TierMutate,
+			Probs: map[judge.Tier]float64{judge.TierMutate: 0.05, judge.TierNavigate: 0.95},
+		}}
+		click.judge = cj
+
+		named, ok := click.NamedArgs(map[string]any{"ref": btnRef})
+		require.True(t, ok)
+
+		assert.Equal(t, 1, cj.calls)
+		assert.Equal(t, true, named[browserschema.WebActionRequiredArg],
+			"a verdict whose tier is mutate must gate even when P(mutate) is below the threshold")
+	})
+
 	t.Run("benign model verdict stamps no web_action args", func(t *testing.T) {
 		cj := &countingJudge{verdict: benignVerdict()}
 		click.judge = cj
@@ -133,5 +152,49 @@ func TestNamedArgsWebActionStamp(t *testing.T) {
 
 		assert.Equal(t, 0, cj.calls, "the deterministic fast-path must skip the model for a navigational link")
 		assertNoWebActionArgs(t, named)
+	})
+}
+
+// TestNamedArgsPressWebActionStamp drives the press classify-and-stamp pass
+// against real Chrome: a press carries no ref and is classified by its KEY, so a
+// committing key (Enter) gates with a REAL focus-anchored page fingerprint — an
+// empty one would make the minted web_action grant permanently unapprovable
+// (pagestate_matches denies "") — while a navigation key (ArrowDown) stamps no
+// web_action args. The judge is wired to ERROR throughout to prove press never
+// consults it (unlike click above, it classifies by key alone).
+func TestNamedArgsPressWebActionStamp(t *testing.T) {
+	fx := startFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`<!doctype html><html><body>` +
+			`<form action="/submit" method="post"><input name="q" autofocus><button type="submit">Go</button></form>` +
+			`</body></html>`))
+	}))
+	fx.rt.Spec.Interaction = "act"
+	tools := fx.synthTools(t, false)
+	require.False(t, run(t, toolBy(t, tools, "navigate"), map[string]any{"url": fx.siteBase + "/"}).IsError)
+
+	press, ok := toolBy(t, tools, "press").(*browserTool)
+	require.True(t, ok)
+	press.judge = &countingJudge{err: errors.New("press must not consult the judge; it classifies by key")}
+
+	t.Run("Enter gates with a live focus-anchored fingerprint (approvable, not empty)", func(t *testing.T) {
+		named, ok := press.NamedArgs(map[string]any{"key": "Enter"})
+		require.True(t, ok)
+
+		assert.Equal(t, true, named[browserschema.WebActionRequiredArg], "Enter commits a form → gated")
+		key, _ := named[browserschema.WebActionKeyArg].(string)
+		assert.Contains(t, key, "site.test/press/enter-", "the key names the host and the committing key")
+		fp, _ := named[browserschema.WebActionFingerprintArg].(string)
+		assert.Regexp(t, fingerprintHex, fp,
+			"a committing press must capture a REAL focus-anchored 64-hex fingerprint — an empty one makes the grant permanently unapprovable")
+	})
+
+	t.Run("ArrowDown only navigates → no web_action stamp", func(t *testing.T) {
+		named, ok := press.NamedArgs(map[string]any{"key": "ArrowDown"})
+		require.True(t, ok)
+
+		for _, k := range []string{browserschema.WebActionRequiredArg, browserschema.WebActionKeyArg, browserschema.WebActionFingerprintArg} {
+			_, present := named[k]
+			assert.False(t, present, "a navigation key must NOT stamp %s", k)
+		}
 	})
 }

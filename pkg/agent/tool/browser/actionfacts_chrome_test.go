@@ -84,6 +84,62 @@ func TestActionFactsFormButtonAndLink(t *testing.T) {
 	})
 }
 
+// TestActionFactsNeverLeaksFilledFieldValue proves the credential-leak fix:
+// ActionFacts.Text for a later acting call that targets a FILLED field is empty,
+// never the typed value — so the value reaches neither the approval descriptor
+// nor the web_action object id (both sinks). Two guards, tested separately:
+// text() no longer falls through to el.value (a form control's current value is
+// not an accessible name), and actionFacts blanks Text outright for any node in
+// the session's blanked set (the vector text()'s per-property walk cannot cover,
+// e.g. contenteditable).
+func TestActionFactsNeverLeaksFilledFieldValue(t *testing.T) {
+	const secret = "hunter2-should-never-leak"
+	fx := startFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// A text field pre-filled with a secret (standing in for a credential the
+		// filler typed), with NO aria-label — so text() has nothing but el.value to
+		// fall back to, which is exactly the leak this proves is gone.
+		_, _ = w.Write([]byte(`<!doctype html><html><body>` +
+			`<form action="/login">` +
+			`<input type="text" value="` + secret + `">` +
+			`<button>Sign in</button>` +
+			`</form></body></html>`))
+	}))
+	fx.rt.Spec.Interaction = "act"
+	tools := fx.synthTools(t, false)
+	sess := tools[0].(*browserTool).sess
+
+	require.False(t, run(t, toolBy(t, tools, "navigate"), map[string]any{"url": fx.siteBase + "/"}).IsError)
+
+	read := run(t, toolBy(t, tools, "read"), map[string]any{})
+	require.False(t, read.IsError, "read: %s", read.Content)
+	fieldRef := refForRole(t, read.Content, "textbox")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	t.Run("el.value fallback is gone: a filled field has empty Text (no accessible name)", func(t *testing.T) {
+		facts, err := sess.actionFacts(ctx, "click", fieldRef)
+		require.NoError(t, err, "actionFacts must succeed for a live ref")
+		assert.Empty(t, facts.Text, "a form control's current value is not an accessible name; Text must stay empty")
+		assert.NotContains(t, ActionKey(facts), secret, "the web_action object id must never carry the typed value")
+		assert.NotContains(t, humanActionDescriptor(facts), secret, "the approval descriptor must never carry the typed value")
+	})
+
+	t.Run("a blanked (credential-filled) node has its Text redacted outright", func(t *testing.T) {
+		// Simulate the filler having typed a credential here: record the node in
+		// the blanked set, exactly as the type tool does after a placeholder lands.
+		e, ok := sess.lookupRef(fieldRef)
+		require.True(t, ok, "fieldRef must still be live")
+		sess.markBlanked(e.backendNodeID)
+
+		facts, err := sess.actionFacts(ctx, "submit", fieldRef)
+		require.NoError(t, err, "actionFacts must succeed for a live ref")
+		assert.Empty(t, facts.Text, "a blanked node's Text must be blanked regardless of what the DOM walk returns")
+		assert.NotContains(t, ActionKey(facts), secret)
+		assert.NotContains(t, humanActionDescriptor(facts), secret)
+	})
+}
+
 // formHasSubmitFixturePage serves three textbox fields exercising
 // FormHasSubmit's three cases: inside a form WITH a submit control, inside a
 // form with NO submit control, and with no enclosing form at all.
@@ -110,7 +166,7 @@ func refForRoleAndName(t *testing.T, outline, role, name string) string {
 	want := fmt.Sprintf("%s %q", role, name)
 	for _, line := range strings.Split(outline, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "[e") {
+		if !strings.HasPrefix(trimmed, "[") {
 			continue
 		}
 		closeIdx := strings.Index(trimmed, "]")

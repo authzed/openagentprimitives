@@ -261,6 +261,66 @@ func (s *Session) capturePageState(ctx context.Context, target ActionFacts, targ
 	return ps, nil
 }
 
+// capturePageStateAtFocus captures PageState anchored on the live
+// document.activeElement — the element a `press` keystroke actually targets.
+// It mirrors capturePageState but resolves the focused node via a JS evaluation
+// instead of a ref lookup, because a press carries no ref (see stampPress). The
+// SAME pageStateScript runs with `this` bound to the focused element, so a gated
+// committing press gets a REAL, re-matchable fingerprint; an empty one would
+// make the minted web_action grant permanently unapprovable — pagestate_matches
+// denies a "" approved value. A JS failure (no focused element, a CDP fault)
+// returns a wrapped error, never a silently-zeroed PageState, so the caller
+// fails closed to an empty fingerprint rather than a bogus match.
+func (s *Session) capturePageStateAtFocus(ctx context.Context) (PageState, error) {
+	var ps PageState
+	err := s.do(ctx, shortTimeout, func(c context.Context) error {
+		var obj *runtime.RemoteObject
+		if ae := runAction(c, func(ac context.Context) error {
+			res, exc, e2 := runtime.Evaluate("document.activeElement").Do(ac)
+			if e2 != nil {
+				return e2
+			}
+			if exc != nil {
+				return fmt.Errorf("javascript error resolving document.activeElement: %w", exc)
+			}
+			obj = res
+			return nil
+		}); ae != nil {
+			return fmt.Errorf("resolving document.activeElement: %w", ae)
+		}
+		if obj == nil || obj.ObjectID == "" {
+			return fmt.Errorf("document.activeElement resolved to no JavaScript object")
+		}
+
+		var raw pageStateRaw
+		if ae := runAction(c, func(ac context.Context) error {
+			result, exc, e2 := runtime.CallFunctionOn(pageStateScript).
+				WithObjectID(obj.ObjectID).
+				WithReturnByValue(true).
+				Do(ac)
+			if e2 != nil {
+				return e2
+			}
+			if exc != nil {
+				return fmt.Errorf("javascript error capturing page state at focus: %w", exc)
+			}
+			if result == nil {
+				return fmt.Errorf("callFunctionOn returned no result for document.activeElement")
+			}
+			return json.Unmarshal(result.Value, &raw)
+		}); ae != nil {
+			return fmt.Errorf("extracting page state at focus: %w", ae)
+		}
+
+		ps = buildPageState(raw)
+		return nil
+	})
+	if err != nil {
+		return PageState{}, fmt.Errorf("page state at focus (op press): %w", err)
+	}
+	return ps, nil
+}
+
 // buildPageState normalizes pageStateScript's raw JSON into a PageState,
 // applying E3's own normalizeActionText/urlPath helpers so every signature in
 // this package is normalized by exactly one implementation. Lists are sorted

@@ -79,7 +79,23 @@ type Session struct {
 
 	// refs is the latest snapshot's ref map, rebuilt atomically by read/find.
 	// A ref not present here is stale (the page changed since it was minted).
+	// Its KEYS are generation-scoped ("s<gen>e<N>", minted by buildSnapshot from
+	// refGen below), so a ref minted against one snapshot can never resolve
+	// against a later re-minted snapshot even if the two share an element index.
 	refs map[string]refEntry
+
+	// refGen is the monotonic per-snapshot ref generation. Every fresh snapshot
+	// (read/find/wait_for) allocates the next value via nextRefGen and bakes it
+	// into that snapshot's ref names. It exists to close a concurrent-dispatch
+	// hole: within one turn, a tool call's classify-and-stamp pass (NamedArgs)
+	// and its Execute run as SEPARATE critical sections under mu, and a parallel
+	// read can re-mint refs between them. Without a generation, a ref the model
+	// passes ("e5") could resolve to a DIFFERENT element at Execute than the one
+	// classified — un-gated. With the generation in the name ("s7e5"), a re-mint
+	// (which bumps the generation) renumbers under new names, so the older ref is
+	// simply absent from the current map and lookupRef reports it stale, forcing
+	// a re-read. Guarded by mu, exactly like refs (every access is inside do()).
+	refGen uint64
 
 	// netMu guards the network-event capture below. It is SEPARATE from mu
 	// because the chromedp event listener fires on its own goroutine while mu is
@@ -424,7 +440,21 @@ func (s *Session) blockedHost() string {
 	}
 }
 
-// setRefs atomically replaces the latest snapshot's ref map.
+// nextRefGen bumps and returns the session's ref generation. Must be called
+// with s.mu held (callers are inside do()). It is called once per fresh
+// snapshot, immediately before buildSnapshot mints that snapshot's ref names,
+// so each snapshot's refs live in their own namespace ("s<gen>e<N>") and an
+// older generation's ref can never collide with a newer one. Monotonic and
+// never reset — even clearRefs leaves it advanced — so a cleared-then-repopulated
+// map is a strictly newer generation than anything that came before.
+func (s *Session) nextRefGen() uint64 {
+	s.refGen++
+	return s.refGen
+}
+
+// setRefs atomically replaces the latest snapshot's ref map. The incoming map's
+// keys already carry the generation nonce buildSnapshot minted (see nextRefGen),
+// so replacement is all lookupRef needs to reject every older-generation ref.
 func (s *Session) setRefs(refs map[string]refEntry) {
 	s.refs = refs
 }
@@ -438,6 +468,11 @@ func (s *Session) clearRefs() {
 
 // lookupRef returns the entry for ref, and whether it is present (i.e. not
 // stale). Must be called with s.mu held (callers already hold it inside do).
+// Generation-scoping is enforced structurally, not by a separate check: a ref's
+// name carries the generation it was minted under ("s<gen>e<N>"), and the map
+// only ever holds the CURRENT generation's keys (setRefs replaces it wholesale),
+// so a stale-generation ref is simply not a key here and reports not-present —
+// the same "stale" answer a vanished element gives.
 func (s *Session) lookupRef(ref string) (refEntry, bool) {
 	e, ok := s.refs[ref]
 	return e, ok
@@ -506,6 +541,18 @@ func (s *Session) blankedNodes() []int64 {
 		out = append(out, id)
 	}
 	return out
+}
+
+// isBlanked reports whether a credential placeholder was typed into
+// backendNodeID and the page has not navigated since — i.e. this node's live
+// value is a credential that must never surface as an accessible name. Used by
+// actionFacts to blank ActionFacts.Text for a later acting call that targets a
+// filled field, so the typed value cannot reach the approval card, the judge
+// prompt, or the web_action object id. Takes credMu, never mu.
+func (s *Session) isBlanked(backendNodeID int64) bool {
+	s.credMu.Lock()
+	defer s.credMu.Unlock()
+	return s.blanked[backendNodeID]
 }
 
 // blankedSet returns a copy of the blanked backend-node-ID set, for

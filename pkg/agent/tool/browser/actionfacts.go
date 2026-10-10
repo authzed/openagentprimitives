@@ -63,6 +63,13 @@ type ActionFacts struct {
 	// before clearing a type/selection as benign — see
 	// pkg/agent/tool/browser/judge/deterministic.go.
 	FormHasSubmit bool
+	// Key is the keystroke a `press` call sends (Enter, Space, ArrowDown, a
+	// single character, ...). It is set ONLY for the press op, which has no
+	// element ref and so is classified from its key rather than from a resolved
+	// element (see stampPress). Empty for every other op. It participates in the
+	// web_action ActionKey so two different committing presses (Enter vs Space)
+	// on the same page get distinct grant keys, and in the approval descriptor.
+	Key string
 }
 
 // actionFactsRaw is the JSON shape actionFactsScript returns from the page.
@@ -141,7 +148,15 @@ const actionFactsScript = `function() {
     if (label && label.trim()) { return label.trim(); }
     if (typeof el.innerText === "string" && el.innerText.trim()) { return el.innerText.trim(); }
     if (typeof el.textContent === "string" && el.textContent.trim()) { return el.textContent.trim(); }
-    if (el.value) { return String(el.value).trim(); }
+    // NEVER fall through to el.value: a form control's CURRENT value is the
+    // user-/agent-entered content, not an accessible NAME, and for a filled
+    // field it is a plaintext credential. ActionFacts.Text flows onto the
+    // approval card, into the judge prompt, and into the web_action object id,
+    // so reading el.value here would leak the typed secret through all three.
+    // An input with no label/innerText/textContent simply has no accessible
+    // name, which is the honest answer. (actionFacts also blanks Text outright
+    // when the node is in the session's blanked set, for contenteditable and
+    // any other value vector this per-property walk does not cover.)
     return "";
   }
   var formAction = "";
@@ -177,6 +192,13 @@ func (s *Session) actionFacts(ctx context.Context, op, ref string) (ActionFacts,
 			return fmt.Errorf("%w: ref %s", ErrStaleRef, ref)
 		}
 		facts.Role = e.role
+		// A credential was typed into this exact node (the filler recorded it via
+		// markBlanked) and the page has not navigated since — so its live value is
+		// a secret. Blank Text unconditionally for it, independent of what the DOM
+		// text() walk below returns: Text is a sink that reaches the approval card,
+		// the judge prompt, and the web_action object id, and none of those may
+		// ever carry the typed credential.
+		targetBlanked := s.isBlanked(e.backendNodeID)
 
 		var loc string
 		if ae := runAction(c, func(ac context.Context) error {
@@ -218,7 +240,11 @@ func (s *Session) actionFacts(ctx context.Context, op, ref string) (ActionFacts,
 			return fmt.Errorf("extracting action facts for ref %s: %w", ref, ae)
 		}
 
-		facts.Text = normalizeActionText(raw.Text)
+		if targetBlanked {
+			facts.Text = ""
+		} else {
+			facts.Text = normalizeActionText(raw.Text)
+		}
 		facts.Container = raw.Container
 		facts.FormAction = urlPath(raw.FormAction)
 		facts.Submits = raw.Submits

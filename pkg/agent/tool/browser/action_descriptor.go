@@ -12,15 +12,15 @@ package browser
 // calls humanActionDescriptor right after the actionFacts() call it already
 // makes for every acting call a judge is wired for.
 //
-// CREDENTIAL SAFETY (the one hard rule here): a `type` call's ActionFacts.Text
-// resolves to the target's CURRENT value when it has no aria-label
-// (actionfacts.go's text() falls through to el.value) — which can be a
-// previously-typed credential, same concern classifyMutate's diagnostic
-// logging already guards against. For op=="type" this function NEVER reads
-// Text; it names only the FIELD by its role ("Type into a text field"), never
-// its value. Every other op's Text is a UI LABEL (a button caption, a link's
-// visible text, a radio's label) — content the PAGE AUTHORED for display, not
-// something the agent or a human typed — and is safe to show.
+// CREDENTIAL SAFETY: ActionFacts.Text is already protected at the SOURCE —
+// actionFacts no longer falls through to el.value and blanks Text outright for a
+// credential-filled field (actionfacts.go) — so a typed secret should never
+// reach this renderer. This function keeps a belt-and-suspenders posture on top
+// of that: for op=="type" it NEVER reads Text at all, naming only the FIELD by
+// its role ("Type into a text field"), never a value. Every other op's Text is a
+// UI LABEL (a button caption, a link's visible text, a radio's label) — content
+// the PAGE AUTHORED for display, not something the agent or a human typed — and
+// is safe to show.
 import (
 	"fmt"
 	"strings"
@@ -83,6 +83,13 @@ func humanActionDescriptor(f ActionFacts) string {
 		return fmt.Sprintf("Switch tabs on %s", host)
 
 	case f.Op == "press":
+		if f.Key != "" {
+			// stampPress always sets Key, so a press card names the actual key —
+			// "Press Enter on example.com" reads far more clearly than a generic
+			// "Press a key", and tells the approver whether it is a committing
+			// key (Enter/Space) or a benign one.
+			return fmt.Sprintf("Press %s on %s", f.Key, host)
+		}
 		if f.Text != "" {
 			return fmt.Sprintf("Press a key while focused on %q (%s)", f.Text, humanRole(f.Role))
 		}
