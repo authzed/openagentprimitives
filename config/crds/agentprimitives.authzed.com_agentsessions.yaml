@@ -2733,6 +2733,19 @@ spec:
                         vault-less secret source has no token key, so this is constant there and
                         the catalog carries forward until a wake. It is a digest, never the token.
                       type: string
+                    catalogWakeMarker:
+                      description: |-
+                        CatalogWakeMarker records the wake-requested-at annotation value in
+                        effect when Catalog was most recently (re-)listed -- a wake-generation
+                        marker, not a timestamp to be read for its own sake. resolveBrowserCatalog
+                        compares it to the session's CURRENT wake-requested-at annotation to
+                        decide whether THIS wake has already been listed, so a wake spanning
+                        several reconciles (polling a booting browser pod to Ready) re-lists the
+                        identity backend's catalog at most once, even across reconciles where the
+                        caller's own waking signal has not yet settled back to steady-state.
+                        Empty means "never listed under this scheme" (a toolbox binding no
+                        identity, or a status predating this field).
+                      type: string
                     effectiveSites:
                       description: |-
                         EffectiveSites is the resolved site list the running browser's egress
@@ -2835,6 +2848,20 @@ spec:
                                 reference. Identity name syntax and existence are not checked here --
                                 that is the Task 7 BrowserToolbox reconciler's job (Valid=False when
                                 the reference is missing or has no directCredentials credential).
+
+                                MinLength=1 makes an explicit `identity: ""` unrepresentable at
+                                admission. Without it, CEL's `has(self.access.identity)` reads TRUE for
+                                an explicit empty string -- has() asks only whether the field was set,
+                                not whether it is non-empty -- so `{mode: allowlist, identity: "",
+                                state: persistent}` satisfied the persistent-requires-identity rule
+                                (BrowserToolbox.Spec's XValidation above) while every Go-side read
+                                (`!= ""`) and the CLI mirror treat "" as "no identity bound". That gap
+                                had no runtime backstop: the session controller's ensureBrowserStateSecret
+                                and resolveBrowserIdentityPins honor an explicit persistent state and
+                                grant the runner a reap-surviving cookie jar for a browser with no bound
+                                identity -- the exact tracking surface this field's persistence rule
+                                exists to refuse. MinLength=1 aligns has() with every other reader.
+                              minLength: 1
                               type: string
                             identitySites:
                               default: false
@@ -2943,8 +2970,10 @@ spec:
                       type: object
                     tokenHash:
                       description: |-
-                        TokenHash is a hash of the resolved per-session gate token; a change
-                        triggers pod replacement.
+                        TokenHash is a hash of the resolved per-session gate token. The token is
+                        read-before-mint (mintBrowserToken) and NEVER rotated, so TokenHash never
+                        changes across a session's reconciles, including reap/wake -- unlike a
+                        sidecar's credential hash, a change here does not trigger pod replacement.
                       type: string
                   required:
                   - name

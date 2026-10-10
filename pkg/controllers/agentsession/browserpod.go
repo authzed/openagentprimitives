@@ -189,11 +189,21 @@ var errBrowserCatalogTerminal = stderrors.New("browser catalog: permanent miscon
 // results (no error) for a toolbox that binds no identity.
 //
 // Listing cadence: the directcred Source.List is called ONLY when there is no
-// prior status entry for this ref, when the session is waking this reconcile,
-// or when the credential's token-Secret fingerprint has changed since the
-// prior list. Otherwise the prior entry's catalog and identity-derived hosts
-// are carried forward verbatim, so a steady-state reconcile makes no List call
-// and rewrites nothing. Values never leave the Source: List returns only
+// prior status entry for this ref, when the credential's token-Secret
+// fingerprint has changed since the prior list, or when the session is waking
+// this reconcile AND this wake has not already been listed. The last clause
+// matters because `waking` (the caller's shouldWake-derived signal) does not
+// cleanly settle back to false the reconcile after the wake is detected --
+// polling a booting browser pod to Ready can span many reconciles before the
+// session leaves its waking window, and re-listing on every one of them would
+// hit the directcred backend (e.g. 1Password) roughly once per 2s poll for the
+// whole wake. CatalogWakeMarker on the prior entry is the wake-generation
+// marker that catches this: once a List happens for the CURRENT
+// wake-requested-at annotation value, every subsequent reconcile against that
+// same annotation value carries forward even if `waking` is still true.
+// Otherwise the prior entry's catalog and identity-derived hosts are carried
+// forward verbatim, so a steady-state reconcile makes no List call and
+// rewrites nothing. Values never leave the Source: List returns only
 // {id, label, hosts}.
 //
 // Fails CLOSED on permanent misconfiguration (a missing AgentIdentity, a
@@ -299,7 +309,14 @@ func (r *Reconciler) resolveBrowserCatalog(
 	fingerprint = SecretTokenHash(secretData[secRef.Key])
 
 	prior := findResolvedBrowser(sess.Status.ResolvedBrowserToolboxes, ref)
-	if prior != nil && !waking && prior.CatalogFingerprint == fingerprint {
+	// alreadyListedThisWake catches the case `waking` itself cannot: this ref
+	// was already (re-)listed for the CURRENT wake-requested-at value, so
+	// re-listing again on a later reconcile of the same wake (while polling a
+	// booting browser pod) would be pure waste. wakeMarker=="" (no wake ever
+	// recorded) never counts as "already listed".
+	wakeMarker := sess.Annotations[spiceboxv1alpha1.AnnotationWakeRequestedAt]
+	alreadyListedThisWake := prior != nil && wakeMarker != "" && prior.CatalogWakeMarker == wakeMarker
+	if prior != nil && (!waking || alreadyListedThisWake) && prior.CatalogFingerprint == fingerprint {
 		// Carry forward: no List call, no status churn. Identity hosts come from
 		// the carried catalog so the derive stays a pure function of it.
 		return prior.Catalog, prior.CatalogFingerprint, identityName, browserLoginHosts(prior.Catalog), nil
@@ -596,6 +613,12 @@ type browserPodState struct {
 // fresh 32-byte hex token minted and created (with the adoption label so the
 // operator's later guarded reads find it in the label-filtered cache). A Create
 // race is resolved by re-reading the winner's value.
+//
+// Every error this returns is TRANSIENT (a non-NotFound Get blip, a non-
+// AlreadyExists Create blip, a token-generation failure, or a post-race re-Get
+// blip) -- there is no permanent-misconfiguration case here the way
+// resolveBrowserCatalog has one, so the caller must requeue rather than
+// markBootFailed on any error from this function.
 func (r *Reconciler) mintBrowserToken(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, rt *spiceboxv1alpha1.ResolvedBrowserToolbox) error {
 	name := BrowserTokenSecretName(sess, rt.Ref)
 	key := types.NamespacedName{Namespace: sess.Namespace, Name: name}
@@ -656,6 +679,10 @@ func (r *Reconciler) mintBrowserToken(ctx context.Context, sess *spiceboxv1alpha
 //
 // Called ONLY for a persistent toolbox; an ephemeral one gets no state Secret at
 // all, so there is nothing to inject on its wake and nothing to capture.
+//
+// Every error this returns is TRANSIENT (a non-NotFound Get blip or a non-
+// AlreadyExists Create blip) -- like mintBrowserToken, there is no permanent-
+// misconfiguration case, so the caller must requeue rather than markBootFailed.
 func (r *Reconciler) ensureBrowserStateSecret(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, rt spiceboxv1alpha1.ResolvedBrowserToolbox) error {
 	name := BrowserStateSecretName(sess, rt.Ref)
 	key := types.NamespacedName{Namespace: sess.Namespace, Name: name}
@@ -749,6 +776,16 @@ func (r *Reconciler) ensureBrowserPolicyConfigMap(ctx context.Context, sess *spi
 	return nil
 }
 
+// errBrowserPodTerminal marks reconcileBrowserPod's error as a permanent
+// build-time misconfiguration (BuildBrowserPod's own validation, e.g. an empty
+// image ref) rather than an apiserver blip. The caller (controller.go's
+// browser block) does errors.Is(err, errBrowserPodTerminal) and calls
+// markBootFailed ONLY for this; a Create/Get error against the apiserver is
+// returned unwrapped so the caller requeues instead — a transient blip reading
+// or creating the pod must not permanently fail an otherwise-healthy session.
+// Mirrors errBrowserCatalogTerminal's split.
+var errBrowserPodTerminal = stderrors.New("browser pod: permanent misconfiguration")
+
 // reconcileBrowserPod idempotently creates the per-session browser pod and
 // reflects its readiness. Returns the PodIP once the pod is Ready (the runner
 // then reaches the gate at http://<PodIP>:<GatePort>), or a Failure when the pod
@@ -758,10 +795,15 @@ func (r *Reconciler) ensureBrowserPolicyConfigMap(ctx context.Context, sess *spi
 func (r *Reconciler) reconcileBrowserPod(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, rt spiceboxv1alpha1.ResolvedBrowserToolbox) (browserPodState, error) {
 	desired, berr := BuildBrowserPod(sess, rt, r.BrowserImageRef, r.BrowserSandbox)
 	if berr != nil {
-		return browserPodState{}, berr
+		// Permanent: a bad pod spec (e.g. no image ref configured) that retrying
+		// never fixes. Wrapped so the caller ends the session instead of
+		// requeuing forever.
+		return browserPodState{}, fmt.Errorf("%w: %v", errBrowserPodTerminal, berr)
 	}
 	podKey := types.NamespacedName{Namespace: sess.Namespace, Name: desired.Name}
 	if err := r.Client.Create(ctx, desired); err != nil && !errors.IsAlreadyExists(err) {
+		// Transient: an apiserver Create blip. Returned unwrapped so the caller
+		// requeues instead of ending the session.
 		return browserPodState{}, fmt.Errorf("create browser pod %q: %w", desired.Name, err)
 	}
 	var live corev1.Pod

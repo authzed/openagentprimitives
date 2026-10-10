@@ -17,17 +17,25 @@ import (
 //
 // Namespaced. An AgentClass references it via AgentClassBrowserToolboxRef,
 // and the AgentSession reconciler snapshots the referenced spec into
-// status.resolvedBrowserToolboxes at session start (see
-// ResolvedBrowserToolbox), frozen for the session's lifetime exactly like a
-// SidecarToolbox.
+// status.resolvedBrowserToolboxes (see ResolvedBrowserToolbox). UNLIKE a
+// SidecarToolbox's snapshot, this one is NOT frozen for the session's
+// lifetime: the reconciler re-Gets this CR's spec on every reconcile, not
+// just at session start, so a mid-session edit to Access/Interaction/State
+// propagates on the next reconcile -- into EffectiveSites, the gate's policy
+// ConfigMap, and (per C-R5) the resolved State. A security reader relying on
+// the spec at session start remaining in force for the rest of the session
+// would be wrong; only the per-session pod/token/gate-port allocation and the
+// identity login catalog (barring a wake or a token rotation) are pinned.
 //
-// Phase A deliberately ships a narrow field subset: Access covers only an
-// explicit allowlist/blocklist of sites (Task 1's pkg/tools/browserpolicy
-// decides admission from it), Interaction is act/readonly, and State is
-// pinned to "ephemeral" -- there is no persistent browser profile/identity
-// yet. Those arrive in later phases (identity-sourced sites in Phase B,
-// persistent state in Phase C) as additive fields, not a breaking change to
-// this spec.
+// Phase A shipped a narrow field subset: Access covered only an explicit
+// allowlist/blocklist of sites (Task 1's pkg/tools/browserpolicy decides
+// admission from it) and Interaction was act/readonly. Phase B added
+// identity-sourced sites (Access.Identity, IdentitySites) and Phase C added
+// persistent state (State, BrowserSite.Unattended) -- both as additive
+// fields, not a breaking change to this spec. State is no longer pinned to
+// "ephemeral": an unset value still defaults in code (persistent iff an
+// identity is bound, see BrowserToolboxSpec.State), but an explicit value in
+// either direction is honored as written.
 type BrowserToolbox struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -49,7 +57,19 @@ type BrowserToolbox struct {
 	// standing to grant against) and a bound identity (there is no session
 	// approver to ask if the binding is missing, and the grant is meant to
 	// stand in for that identity's own sign-in).
-	// +kubebuilder:validation:XValidation:rule="!self.access.sites.exists(s, s.unattended) || (self.access.mode == 'allowlist' && has(self.access.identity))",message="an unattended site requires access.mode=allowlist and access.identity"
+	//
+	// The leading `!has(self.access.sites)` guard is load-bearing, not
+	// decorative: Sites is `+optional`, and CEL's list access on an absent
+	// optional field ERRORS rather than reading empty -- so
+	// `self.access.sites.exists(...)` alone throws on every sites-less
+	// BrowserToolbox, and that error is absorbed only when the right `||`
+	// operand happens to be true. A sites-less blocklist (the common
+	// general-access shape) can never satisfy that operand, so without the
+	// guard every sites-less blocklist create was rejected with this rule's own
+	// message -- an admission/CLI-validator disagreement, since
+	// pkg/tools/kinds/browsertoolbox/kind.go accepts a sites-less shape. The
+	// guard short-circuits before the field access is ever attempted.
+	// +kubebuilder:validation:XValidation:rule="!has(self.access.sites) || !self.access.sites.exists(s, s.unattended) || (self.access.mode == 'allowlist' && has(self.access.identity))",message="an unattended site requires access.mode=allowlist and access.identity"
 	// A Phase C (Task C9) rule, same field-scoped reasoning as the four above: an
 	// explicit state=persistent captures cookies + localStorage into a per-session
 	// Secret that survives reap, which is only legitimate for a credentialed
@@ -155,7 +175,21 @@ type BrowserAccess struct {
 	// reference. Identity name syntax and existence are not checked here --
 	// that is the Task 7 BrowserToolbox reconciler's job (Valid=False when
 	// the reference is missing or has no directCredentials credential).
+	//
+	// MinLength=1 makes an explicit `identity: ""` unrepresentable at
+	// admission. Without it, CEL's `has(self.access.identity)` reads TRUE for
+	// an explicit empty string -- has() asks only whether the field was set,
+	// not whether it is non-empty -- so `{mode: allowlist, identity: "",
+	// state: persistent}` satisfied the persistent-requires-identity rule
+	// (BrowserToolbox.Spec's XValidation above) while every Go-side read
+	// (`!= ""`) and the CLI mirror treat "" as "no identity bound". That gap
+	// had no runtime backstop: the session controller's ensureBrowserStateSecret
+	// and resolveBrowserIdentityPins honor an explicit persistent state and
+	// grant the runner a reap-surviving cookie jar for a browser with no bound
+	// identity -- the exact tracking surface this field's persistence rule
+	// exists to refuse. MinLength=1 aligns has() with every other reader.
 	// +optional
+	// +kubebuilder:validation:MinLength=1
 	Identity string `json:"identity,omitempty"`
 
 	// IdentitySites, when true, folds every host Identity's directCredentials
