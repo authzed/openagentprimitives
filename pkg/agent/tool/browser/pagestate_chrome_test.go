@@ -16,6 +16,7 @@ package browser
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,4 +179,51 @@ func TestPageFingerprintStableAcrossBenignChurnChangesOnMeaningfulDrift(t *testi
 		assert.NotEqual(t, fpBefore, PageFingerprint(ps),
 			"a session-expired redirect to /login must flip the fingerprint")
 	})
+}
+
+// TestPageFingerprintIgnoresFieldValue pins the credential-leak fix: a form
+// control's CURRENT value must NEVER enter the page-state fingerprint.
+// pageStateScript.text() reads label/innerText/textContent but must not fall
+// through to el.value, so typing a secret into a field leaves the fingerprint
+// byte-identical and the secret never appears in any captured signature — if it
+// did, it would be sha256'd into WebActionFingerprintArg (a persisted authz
+// input) and would also destabilize the fingerprint on every keystroke. The
+// value is set via JS, NOT the type tool, so this tests text()'s own behavior
+// independent of the node-blanking path.
+func TestPageFingerprintIgnoresFieldValue(t *testing.T) {
+	fx := startFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`<!doctype html><html><body>` +
+			`<form action="/login"><input id="pw" type="password" name="password"><button>Sign in</button></form>` +
+			`</body></html>`))
+	}))
+	tools := fx.synthTools(t, false)
+	sess := tools[0].(*browserTool).sess
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	require.False(t, run(t, toolBy(t, tools, "navigate"), map[string]any{"url": fx.siteBase + "/"}).IsError)
+	read := run(t, toolBy(t, tools, "read"), map[string]any{})
+	require.False(t, read.IsError, "read: %s", read.Content)
+	btnRef := refForRole(t, read.Content, "button")
+	facts, err := sess.actionFacts(ctx, "click", btnRef)
+	require.NoError(t, err)
+
+	ps, err := sess.capturePageState(ctx, facts, btnRef)
+	require.NoError(t, err)
+	fpEmpty := PageFingerprint(ps)
+
+	const secret = "SuperSecretP@ssw0rd-12345"
+	mutate(t, sess, `document.getElementById('pw').value = '`+secret+`'`)
+
+	ps2, err := sess.capturePageState(ctx, facts, btnRef)
+	require.NoError(t, err)
+	assert.Equal(t, fpEmpty, PageFingerprint(ps2),
+		"a filled field's VALUE must never move the page-state fingerprint — it must not enter the hash at all")
+
+	sigs := append([]string{ps2.TargetSig, ps2.URLPath}, ps2.Skeleton...)
+	sigs = append(sigs, ps2.ContainerSigs...)
+	sigs = append(sigs, ps2.ContainerTexts...)
+	assert.NotContains(t, strings.Join(sigs, "\n"), secret,
+		"the typed credential must never appear in any captured page-state signature")
 }

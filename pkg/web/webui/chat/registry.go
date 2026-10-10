@@ -823,8 +823,8 @@ func (r *Registry) rehydrate(ctx context.Context, key sessionKey, subject string
 
 	entry, err := wireExistingSession(r.deps, key, sess, subject,
 		func(tn terminalNotice) { r.teardown(key, tn) })
-	r.endWiring(key)
 	if err != nil {
+		r.endWiring(key)
 		// Release ONLY a reservation this call itself created. A reused
 		// reservation (claim.created == false — left by Reserve, or by an
 		// earlier failed Adopt/rehydrate) deliberately survives: the
@@ -843,8 +843,17 @@ func (r *Registry) rehydrate(ctx context.Context, key sessionKey, subject string
 		// 404 claiming there is no such conversation.
 		return nil, ErrSessionUnavailable
 	}
-	if err := r.publish(key, entry); err != nil {
-		return nil, err
+	// Publish BEFORE clearing inFlight — mirroring Adopt. Once the entry is
+	// published a concurrent claimForWiring sees slot.entry != nil and returns
+	// `live` (it checks entry before inFlight), so no second wiring can start.
+	// Clearing inFlight first would reopen the exact race the marker closes: a
+	// second claimForWiring in the gap would build a duplicate entry whose
+	// health-watcher goroutine publish's slot.entry overwrite then orphans
+	// forever (nothing ever calls its stop()).
+	perr := r.publish(key, entry)
+	r.endWiring(key)
+	if perr != nil {
+		return nil, perr
 	}
 	return entry, nil
 }

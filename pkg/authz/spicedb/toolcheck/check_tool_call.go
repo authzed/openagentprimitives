@@ -521,10 +521,17 @@ func (c Checker) checkExternalSlotGrant(ctx context.Context, p authz.Permission,
 		// The tool stamped no (or an unescapable) key: the mutate cannot name the
 		// action it acts on, so no grant could match. Route it back to the agent
 		// (unresolved) rather than show a human a card with an empty object id.
-		return authz.Result{Outcome: authz.OutcomeDenied, Message: needsApproval, UnresolvedResource: true}
+		// CoarseGrantSatisfied: Layer 1 (web_host) already passed to reach here, so
+		// this is a genuine Layer-2 ask — the hook may stamp the web_action marker.
+		return authz.Result{Outcome: authz.OutcomeDenied, Message: needsApproval, UnresolvedResource: true, CoarseGrantSatisfied: true}
 	}
 	res := c.checkOneSlotGrant(ctx, browserschema.WebActionType, p.Check.Permission, waID.String(),
 		in.AgentSessionRef, in.PresentedPageFingerprint, true /* present the pagestate_matches fingerprint */, in.RequireFreshest)
+	// Reaching the web_action check means Layer 1 (web_host) was satisfied; mark
+	// it so the hook stamps the web_action marker only for a genuine Layer-2
+	// denial, never a Layer-1 (coarse-grant-missing) deny — see
+	// authz.Result.CoarseGrantSatisfied.
+	res.CoarseGrantSatisfied = true
 	if res.Outcome == authz.OutcomeAllowed {
 		return res
 	}

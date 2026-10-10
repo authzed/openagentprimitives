@@ -141,7 +141,9 @@ func TestToolCallAuthz_ExternalAlwaysAsksApproval(t *testing.T) {
 // WITHOUT the builder having to read them from argsMap (where the strip removed
 // them). This pins the Inputs → ask flow the whole close-the-loop depends on.
 func TestToolCallAuthz_ExternalMutate_StampsWebActionOntoAsk(t *testing.T) {
-	chk := &fakeChecker{result: authz.Result{Outcome: authz.OutcomeDenied, Message: "external tool: human approval required"}}
+	// CoarseGrantSatisfied: this is a genuine LAYER-2 denial (web_host present,
+	// web_action missing), the only case that may carry the marker.
+	chk := &fakeChecker{result: authz.Result{Outcome: authz.OutcomeDenied, Message: "external tool: human approval required", CoarseGrantSatisfied: true}}
 	h := hooks.NewToolCallAuthz(hooks.ToolCallAuthzDeps{
 		Mode:    "enforcing",
 		Checker: chk,
@@ -185,6 +187,9 @@ func TestToolCallAuthz_ExternalMutate_ChangedPageReprompt_StampsOntoAsk(t *testi
 		Outcome:             authz.OutcomeDenied,
 		Message:             "external tool: human approval required",
 		ChangedPageReprompt: true,
+		// A changed-page re-prompt means a web_action grant already exists, so
+		// Layer 1 certainly passed — a genuine Layer-2 denial.
+		CoarseGrantSatisfied: true,
 	}}
 	h := hooks.NewToolCallAuthz(hooks.ToolCallAuthzDeps{
 		Mode:    "enforcing",
@@ -211,6 +216,46 @@ func TestToolCallAuthz_ExternalMutate_ChangedPageReprompt_StampsOntoAsk(t *testi
 			"the checker flagged this as a changed-page re-prompt, so the ask must carry that forward")
 		assert.Equal(t, "aa.com/click/place-order-abcd1234", dec.Approval.WebActionKey)
 		assert.Equal(t, "fp-live", dec.Approval.WebActionFingerprint)
+	}
+}
+
+// A MUTATE denied at LAYER 1 (the coarse web_host grant is missing — e.g. the
+// first acting call on a host is itself a mutate) must NOT carry the web_action
+// marker, even though WebActionRequired is true. CoarseGrantSatisfied is false
+// (the check never reached the web_action arm), so the ask is a COARSE web_host
+// ask with an empty WebActionKey — which channelsd writes the web_host grant for
+// and the runner upgrades to standing. Stamping the marker here would make
+// channelsd SKIP the web_host write, re-denying every later mutate at Layer 1.
+func TestToolCallAuthz_ExternalMutate_Layer1Deny_LeavesWebActionAskEmpty(t *testing.T) {
+	chk := &fakeChecker{result: authz.Result{
+		Outcome: authz.OutcomeDenied,
+		Message: "external tool: human approval required",
+		// CoarseGrantSatisfied stays FALSE: web_host (Layer 1) denied.
+	}}
+	h := hooks.NewToolCallAuthz(hooks.ToolCallAuthzDeps{
+		Mode:    "enforcing",
+		Checker: chk,
+		ResolvePermission: permResolverFor(authz.Permission{
+			StateImpact: authz.External,
+			Check:       &authz.PermissionCheck{ResourceType: "web_host", Permission: "act"},
+		}),
+		BuildInputs: func(_ pipeline.Input, _ map[string]any, _ authz.Permission) authz.Inputs {
+			return authz.Inputs{
+				WebActionRequired:        true,
+				WebActionKey:             "aa.com/click/place-order-abcd1234",
+				PresentedPageFingerprint: "fp-live",
+			}
+		},
+		BuildApprovalAsk: simpleApprovalAskBuilder,
+	})
+	dec := h.Eval(context.Background(), pipeline.Input{
+		Point: pipeline.PreToolCall,
+		Tool:  &pipeline.ToolCallInfo{Name: "browser_click", Args: json.RawMessage(`{"args":{}}`)},
+	})
+	if assert.NotNil(t, dec.Approval, "a Layer-1 web_host deny must still raise a (coarse) approval") {
+		assert.Empty(t, dec.Approval.WebActionKey,
+			"a Layer-1 (web_host-missing) mutate deny must raise a COARSE web_host ask, never stamp the web_action marker")
+		assert.Empty(t, dec.Approval.WebActionFingerprint)
 	}
 }
 

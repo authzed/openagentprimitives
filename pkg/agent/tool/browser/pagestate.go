@@ -143,7 +143,15 @@ const pageStateScript = `function() {
     if (label && label.trim()) { return label.trim(); }
     if (typeof el.innerText === "string" && el.innerText.trim()) { return el.innerText.trim(); }
     if (typeof el.textContent === "string" && el.textContent.trim()) { return el.textContent.trim(); }
-    if (el.value) { return String(el.value).trim(); }
+    // NEVER fall through to el.value — mirrors actionFactsScript.text(). A form
+    // control's CURRENT value is user-/agent-entered content, not an accessible
+    // NAME, and for a filled field it is a plaintext credential. This text feeds
+    // the page-state signatures that PageFingerprint hashes into
+    // WebActionFingerprintArg — an authz input persisted in the authz-decision
+    // audit log — so reading el.value here would fold a typed secret into a
+    // stored hash (offline brute-forceable for a low-entropy OTP/PIN) and also
+    // destabilize the fingerprint on every keystroke (spurious re-prompts). An
+    // input with no label/innerText/textContent simply has no name.
     return "";
   }
   function roleOf(el) {

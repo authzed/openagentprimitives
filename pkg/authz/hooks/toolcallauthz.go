@@ -307,7 +307,16 @@ func (h *ToolCallAuthz) Eval(ctx context.Context, in pipeline.Input) pipeline.De
 			// is what ultimately mints the per-action grant, so re-assert the same
 			// server-resolved discriminator here against perm directly — a future
 			// BuildInputs that forgot to gate cannot re-open the injection path.
-			if ask != nil && inputs.WebActionRequired && perm.OwnsWebActionArgs() {
+			// res.CoarseGrantSatisfied gates the marker to a GENUINE Layer-2 denial
+			// (web_host present, web_action missing/caveat-failed). A MUTATE denied
+			// at Layer 1 — the coarse web_host grant is missing, e.g. the first
+			// acting call on a host is itself a mutate — leaves it false, so this
+			// raises a COARSE web_host ask (WebActionKey == "") instead: channelsd
+			// then WRITES the web_host grant and the runner upgrades it to standing.
+			// Keying on WebActionRequired alone would mis-stamp that Layer-1 ask,
+			// making channelsd SKIP the web_host write and re-denying every later
+			// mutate at Layer 1 (an approval storm) — see Result.CoarseGrantSatisfied.
+			if ask != nil && inputs.WebActionRequired && perm.OwnsWebActionArgs() && res.CoarseGrantSatisfied {
 				ask.WebActionKey = inputs.WebActionKey
 				ask.WebActionFingerprint = inputs.PresentedPageFingerprint
 				// E10: carries whether this is a changed-page RE-PROMPT (a grant

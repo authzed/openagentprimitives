@@ -328,6 +328,22 @@ type Result struct {
 	// direction for a cosmetic signal: at worst a genuine re-prompt renders as
 	// a plain first-time ask, never the reverse.
 	ChangedPageReprompt bool
+
+	// CoarseGrantSatisfied is true when the coarse LAYER-1 capability grant
+	// (web_host#act for a browser acting call) was already present, so this
+	// result — Allowed or Denied — came from or past the per-action LAYER-2
+	// (web_action) arm. It is FALSE on a Layer-1 denial (the coarse grant is
+	// missing). The ToolCallAuthz hook keys the web_action marker (ask.WebActionKey)
+	// on this, NOT on WebActionRequired alone: a MUTATE denied at Layer 1 (e.g.
+	// the first acting call on a host is itself a mutate) must still raise a
+	// COARSE web_host ask so channelsd writes the web_host grant and the runner
+	// upgrades it to standing — stamping WebActionKey there would make channelsd
+	// SKIP the web_host write (the Layer-2 clobber-avoidance), leaving the coarse
+	// grant unwritten and every later mutate re-denying at Layer 1 (an approval
+	// storm). Only a genuine Layer-2 denial (web_host present, web_action
+	// missing/caveat-failed) carries the marker. Set by
+	// toolcheck.checkExternalSlotGrant's web_action arm.
+	CoarseGrantSatisfied bool
 }
 
 // PreconditionDenial is the recomputed slot-precondition verdict behind a
