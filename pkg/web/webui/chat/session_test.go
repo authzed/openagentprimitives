@@ -645,7 +645,7 @@ type fakeChannelListener struct {
 
 	gotDecisionExt                                  channelkinds.ExternalIdentity
 	gotDecisionNS, gotDecisionName                  string
-	gotDecisionCategory, gotRequestRef, gotActionID string
+	gotDecisionCategory, gotRequestRef, gotActionID, gotResponseText string
 	decisionErr                                     error
 
 	gotResurfaceNS, gotResurfaceName string
@@ -663,10 +663,11 @@ func (f *fakeChannelListener) SubmitInterrupt(_ context.Context, ext channelkind
 	return f.interruptErr
 }
 
-func (f *fakeChannelListener) SubmitInteractionDecision(_ context.Context, ext channelkinds.ExternalIdentity, ns, name, category, requestRef, actionID string) error {
+func (f *fakeChannelListener) SubmitInteractionDecision(_ context.Context, ext channelkinds.ExternalIdentity, ns, name, category, requestRef, actionID, responseText string) error {
 	f.gotDecisionExt = ext
 	f.gotDecisionNS, f.gotDecisionName = ns, name
 	f.gotDecisionCategory, f.gotRequestRef, f.gotActionID = category, requestRef, actionID
+	f.gotResponseText = responseText
 	return f.decisionErr
 }
 
@@ -711,20 +712,21 @@ func TestBoundListener_SubmitDecision_SuppliesBoundNSAndName(t *testing.T) {
 	fcl := &fakeChannelListener{}
 	bl := &boundListener{l: fcl, ns: "default", sessionName: "sess-1"}
 
-	err := bl.SubmitDecision(context.Background(), channelkinds.ExternalIdentity{}, "identity_choice", "req-1", "agent")
+	err := bl.SubmitDecision(context.Background(), channelkinds.ExternalIdentity{}, "login_human_step", "req-1", "approve", "123456")
 	require.NoError(t, err)
 	assert.Equal(t, "default", fcl.gotDecisionNS)
 	assert.Equal(t, "sess-1", fcl.gotDecisionName)
-	assert.Equal(t, "identity_choice", fcl.gotDecisionCategory)
+	assert.Equal(t, "login_human_step", fcl.gotDecisionCategory)
 	assert.Equal(t, "req-1", fcl.gotRequestRef)
-	assert.Equal(t, "agent", fcl.gotActionID)
+	assert.Equal(t, "approve", fcl.gotActionID)
+	assert.Equal(t, "123456", fcl.gotResponseText, "the typed code must thread through to the channel listener")
 }
 
 func TestBoundListener_SubmitDecision_PropagatesError(t *testing.T) {
 	fcl := &fakeChannelListener{decisionErr: assert.AnError}
 	bl := &boundListener{l: fcl, ns: "default", sessionName: "sess-1"}
 
-	err := bl.SubmitDecision(context.Background(), channelkinds.ExternalIdentity{}, "identity_choice", "req-1", "agent")
+	err := bl.SubmitDecision(context.Background(), channelkinds.ExternalIdentity{}, "identity_choice", "req-1", "agent", "")
 	assert.ErrorIs(t, err, assert.AnError)
 }
 
@@ -750,7 +752,7 @@ func TestBoundListener_PassesCallersExtThroughUnmodified(t *testing.T) {
 	require.NoError(t, bl.SubmitInterrupt(context.Background(), bob, "req-1"))
 	assert.Equal(t, bob, fcl.gotInterruptExt)
 
-	require.NoError(t, bl.SubmitDecision(context.Background(), carol, "identity_choice", "req-1", "agent"))
+	require.NoError(t, bl.SubmitDecision(context.Background(), carol, "identity_choice", "req-1", "agent", ""))
 	assert.Equal(t, carol, fcl.gotDecisionExt)
 }
 

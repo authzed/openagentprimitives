@@ -52,7 +52,7 @@ const newChatSessionNamespace = "default"
 type sessionListener interface {
 	SubmitUserMessage(ctx context.Context, ext channelkinds.ExternalIdentity, text, requestID string) (channelkinds.InboundDecision, error)
 	SubmitInterrupt(ctx context.Context, ext channelkinds.ExternalIdentity, requestID string) error
-	SubmitDecision(ctx context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID string) error
+	SubmitDecision(ctx context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID, responseText string) error
 	SubmitResurface(ctx context.Context) error
 }
 
@@ -65,7 +65,7 @@ type sessionListener interface {
 type channelListener interface {
 	SubmitUserMessage(ctx context.Context, ext channelkinds.ExternalIdentity, text, requestID string) (channelkinds.InboundDecision, error)
 	SubmitInterrupt(ctx context.Context, ext channelkinds.ExternalIdentity, ns, name, requestID string) error
-	SubmitInteractionDecision(ctx context.Context, ext channelkinds.ExternalIdentity, ns, name, category, requestRef, actionID string) error
+	SubmitInteractionDecision(ctx context.Context, ext channelkinds.ExternalIdentity, ns, name, category, requestRef, actionID, responseText string) error
 	SubmitResurface(ctx context.Context, ns, name string) error
 }
 
@@ -88,8 +88,8 @@ func (b *boundListener) SubmitInterrupt(ctx context.Context, ext channelkinds.Ex
 	return b.l.SubmitInterrupt(ctx, ext, b.ns, b.sessionName, requestID)
 }
 
-func (b *boundListener) SubmitDecision(ctx context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID string) error {
-	return b.l.SubmitInteractionDecision(ctx, ext, b.ns, b.sessionName, category, requestRef, actionID)
+func (b *boundListener) SubmitDecision(ctx context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID, responseText string) error {
+	return b.l.SubmitInteractionDecision(ctx, ext, b.ns, b.sessionName, category, requestRef, actionID, responseText)
 }
 
 func (b *boundListener) SubmitResurface(ctx context.Context) error {

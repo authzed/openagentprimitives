@@ -27,14 +27,17 @@ export function useInteractionDecision(
   ns: string,
   name: string,
   onError: (text: string) => void,
-): (requestRef: string, category: string, actionId: string) => void {
+): (requestRef: string, category: string, actionId: string, responseText?: string) => void {
   const submitDecision = useCallback(
-    async (requestRef: string, category: string, actionId: string) => {
+    // responseText is the optional free-text answer for an ask that carries a
+    // responseInput (a login_human_step kind:code login code). JSON.stringify
+    // drops it when undefined, matching the backend's `omitempty`.
+    async (requestRef: string, category: string, actionId: string, responseText?: string) => {
       try {
         const resp = await fetch(`${sessionPath(ns, name)}/decision`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ category, requestRef, actionId }),
+          body: JSON.stringify({ category, requestRef, actionId, responseText }),
         });
         if (!resp.ok) {
           console.error("interaction decision: request failed", { ns, name, status: resp.status });
@@ -50,8 +53,8 @@ export function useInteractionDecision(
   );
 
   return useCallback(
-    (requestRef: string, category: string, actionId: string) => {
-      void submitDecision(requestRef, category, actionId);
+    (requestRef: string, category: string, actionId: string, responseText?: string) => {
+      void submitDecision(requestRef, category, actionId, responseText);
     },
     [submitDecision],
   );

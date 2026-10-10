@@ -60,7 +60,7 @@ func TestListener_MissingTransport_FailsLoudlyNamingTheKind(t *testing.T) {
 		{
 			name: "SubmitInteractionDecision with no NATSPublish: names the kind and the transport",
 			call: func() error {
-				return l.SubmitInteractionDecision(context.Background(), channelkinds.ExternalIdentity{}, "default", "s1", "tool_approval", "req-1", "approve")
+				return l.SubmitInteractionDecision(context.Background(), channelkinds.ExternalIdentity{}, "default", "s1", "tool_approval", "req-1", "approve", "")
 			},
 			want: "no NATS publish wired",
 		},
@@ -111,7 +111,7 @@ func TestListener_SubmitInteractionDecision_PublishesEnvelope(t *testing.T) {
 	var body []byte
 	l := newPublishingListener(t, &subj, &body)
 
-	require.NoError(t, l.SubmitInteractionDecision(context.Background(), l.Ext, "default", "s1", "tool_approval", "req-1", "approve"))
+	require.NoError(t, l.SubmitInteractionDecision(context.Background(), l.Ext, "default", "s1", "tool_approval", "req-1", "approve", ""))
 	assert.Equal(t, "ap.session.default.s1.in.interaction_decision", subj)
 
 	var env channelevents.Envelope
@@ -141,7 +141,7 @@ func TestListener_SubmitInteractionDecision_StampsCallerExtNotListenerExt(t *tes
 	l.Ext = channelkinds.ExternalIdentity{Kind: "idp", ExternalID: "bob@example.com", Email: "bob@example.com"}
 
 	caller := channelkinds.ExternalIdentity{Kind: "idp", ExternalID: "alice@example.com", Email: "alice@example.com"}
-	require.NoError(t, l.SubmitInteractionDecision(context.Background(), caller, "default", "s1", "tool_approval", "req-1", "approve"))
+	require.NoError(t, l.SubmitInteractionDecision(context.Background(), caller, "default", "s1", "tool_approval", "req-1", "approve", ""))
 
 	var env channelevents.Envelope
 	require.NoError(t, json.Unmarshal(body, &env))

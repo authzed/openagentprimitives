@@ -468,6 +468,16 @@ export interface InteractionScreenshot {
   altText?: string;
 }
 
+// InteractionResponseInput mirrors channelevents.InteractionResponseInput: when
+// present on a request, the card renders a free-text input and sends the typed
+// value as the decision's responseText. Today only a login_human_step kind:code
+// ask carries it (the human types an emailed/SMS login code the runner enters
+// into the page for them).
+export interface InteractionResponseInput {
+  placeholder?: string;
+  required?: boolean;
+}
+
 // InteractionRequestInner mirrors channelevents.InteractionRequestPayload —
 // the semantic request body (Lead/Body/Fields/Excerpt/Actions/Audience) that
 // replaced the per-prompt-type kind families (tool approval, credential
@@ -492,6 +502,10 @@ export interface InteractionRequestInner {
   // interaction whose capture failed (best-effort — see
   // channelevents.InteractionRequestPayload.Screenshot).
   screenshot?: InteractionScreenshot;
+  // responseInput, when set, asks the card to render a free-text input and send
+  // the typed value as the decision's responseText (a login_human_step kind:code
+  // login code). Absent for button-only interactions.
+  responseInput?: InteractionResponseInput;
 }
 
 // InteractionRequestPayload mirrors builtin.MsgInteractionRequest

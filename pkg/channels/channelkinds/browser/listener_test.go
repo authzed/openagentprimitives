@@ -45,7 +45,7 @@ func TestListener_SubmitInteractionDecision_PublishesEnvelope(t *testing.T) {
 		},
 		Ext: channelkinds.ExternalIdentity{Kind: "idp", ExternalID: "user@example.com", Email: "user@example.com"},
 	})
-	err := l.SubmitInteractionDecision(context.Background(), l.Listener.Ext, "default", "s1", "identity_choice", "req-1", "agent")
+	err := l.SubmitInteractionDecision(context.Background(), l.Listener.Ext, "default", "s1", "identity_choice", "req-1", "agent", "")
 	require.NoError(t, err)
 	assert.Contains(t, gotSubj, "ap.session.default.s1.in.interaction_decision")
 
@@ -66,7 +66,7 @@ func TestListener_SubmitInteractionDecision_PublishesEnvelope(t *testing.T) {
 
 func TestListener_SubmitInteractionDecision_WithoutTransportFailsLoudly(t *testing.T) {
 	l := newListener(clienthosted.Listener{Deps: channelkinds.Deps{}})
-	err := l.SubmitInteractionDecision(context.Background(), l.Listener.Ext, "default", "s1", "identity_choice", "req-1", "agent")
+	err := l.SubmitInteractionDecision(context.Background(), l.Listener.Ext, "default", "s1", "identity_choice", "req-1", "agent", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no NATS publish wired")
 }

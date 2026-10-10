@@ -113,7 +113,7 @@ func TestWebChatE2E_InteractionDecisionAppliedAndPlanUpdateReachBrowser(t *testi
 	// listener -> browser.Listener -> NATS IN publish), not a synthesized
 	// envelope.
 	require.NoError(t, f.reg.SubmitDecision(context.Background(), newChatKey(f.name), "user:owner",
-		categories.PlanPhase, "plan-req-1", "approve"))
+		categories.PlanPhase, "plan-req-1", "approve", ""))
 
 	select {
 	case pl := <-decided:

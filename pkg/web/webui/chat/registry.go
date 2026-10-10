@@ -903,7 +903,7 @@ func (r *Registry) SubmitInterrupt(ctx context.Context, key sessionKey, subject,
 // and any future decision-kind category) via the session's browser Listener —
 // the same KindInteractionDecision envelope publish path a Slack interactive
 // click (once wired) would use. Gated exactly like SubmitMessage.
-func (r *Registry) SubmitDecision(ctx context.Context, key sessionKey, subject, category, requestRef, actionID string) error {
+func (r *Registry) SubmitDecision(ctx context.Context, key sessionKey, subject, category, requestRef, actionID, responseText string) error {
 	entry, err := r.authorize(ctx, key, subject)
 	if err != nil {
 		return err
@@ -913,7 +913,7 @@ func (r *Registry) SubmitDecision(ctx context.Context, key sessionKey, subject, 
 		return err
 	}
 	entry.touch()
-	return entry.listener.SubmitDecision(ctx, ext, category, requestRef, actionID)
+	return entry.listener.SubmitDecision(ctx, ext, category, requestRef, actionID, responseText)
 }
 
 // callerIdentity derives the ExternalIdentity to stamp on an outbound submit

@@ -1317,6 +1317,16 @@ func (h *runnerHost) buildLoginHumanStepPending(ctx context.Context, reqID strin
 		ExpiresAt:       expiresAtPtr(hostNow().Add(h.loginHumanStepTTL())),
 		Interruptible:   true,
 	}
+	// A kind:code ask (humanStepRequester.RequestCode stamps "wants_code") needs
+	// a free-text answer — the login code the runner types into the page. Signal
+	// the surface to render an input and carry the typed value back as the
+	// decision's ResponseText. A confirm/CAPTCHA leaves this nil (button-only).
+	if wantsCode, _ := ask.Payload["wants_code"].(bool); wantsCode {
+		pl.ResponseInput = &channelevents.InteractionResponseInput{
+			Placeholder: "Enter the code",
+			Required:    true,
+		}
+	}
 	// Best-effort redacted screenshot — see buildPlanGatePending's identical
 	// gate; request_human_step is itself a browser tool (D-R3), so the same
 	// host.captureScreenshot closure is set for this ask kind too.

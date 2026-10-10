@@ -140,10 +140,11 @@ type fakeListener struct {
 // able to see which subject's identity reached the Decider, not just that a
 // decision was submitted.
 type decisionCall struct {
-	ext        channelkinds.ExternalIdentity
-	category   string
-	requestRef string
-	actionID   string
+	ext          channelkinds.ExternalIdentity
+	category     string
+	requestRef   string
+	actionID     string
+	responseText string
 }
 
 func (f *fakeListener) SubmitUserMessage(_ context.Context, ext channelkinds.ExternalIdentity, text, _ string) (channelkinds.InboundDecision, error) {
@@ -162,10 +163,10 @@ func (f *fakeListener) SubmitInterrupt(_ context.Context, ext channelkinds.Exter
 	return f.interruptErr
 }
 
-func (f *fakeListener) SubmitDecision(_ context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID string) error {
+func (f *fakeListener) SubmitDecision(_ context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID, responseText string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.decisions = append(f.decisions, decisionCall{ext: ext, category: category, requestRef: requestRef, actionID: actionID})
+	f.decisions = append(f.decisions, decisionCall{ext: ext, category: category, requestRef: requestRef, actionID: actionID, responseText: responseText})
 	return f.decisionErr
 }
 
@@ -772,7 +773,7 @@ func TestRegistry_SubmitDecision_StampsCallingSubjectNotEntryBuilder(t *testing.
 	}}, newFakeBuilder().build)
 	putTestEntry(reg, newChatKey("shared-2222"), entry)
 
-	err := reg.SubmitDecision(context.Background(), newChatKey("shared-2222"), alice, "identity_choice", "req-1", "agent")
+	err := reg.SubmitDecision(context.Background(), newChatKey("shared-2222"), alice, "identity_choice", "req-1", "agent", "")
 	require.NoError(t, err)
 
 	require.Len(t, fl.decisions, 1)

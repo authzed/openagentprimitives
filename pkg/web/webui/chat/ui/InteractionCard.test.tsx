@@ -68,6 +68,43 @@ describe("InteractionCard", () => {
     expect(onDecision).toHaveBeenCalledWith("req-1", "identity_choice", "agent");
   });
 
+  it("renders a responseInput text box and carries the typed value as responseText on decision", () => {
+    const onDecision = vi.fn();
+    render(
+      <InteractionCard
+        request={{
+          ...baseRequest,
+          category: "login_human_step",
+          responseInput: { placeholder: "6-digit code", required: true },
+          actions: [{ id: "approve", label: "Approve", kind: "decision" }],
+        }}
+        onDecision={onDecision}
+      />,
+    );
+    const input = screen.getByPlaceholderText("6-digit code") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(onDecision).toHaveBeenCalledWith("req-1", "login_human_step", "approve", "123456");
+  });
+
+  it("renders no responseInput box for an ordinary card and calls onDecision with no responseText", () => {
+    const onDecision = vi.fn();
+    render(
+      <InteractionCard
+        request={{
+          ...baseRequest,
+          category: "identity_choice",
+          actions: [{ id: "agent", label: "Let the agent continue", kind: "decision" }],
+        }}
+        onDecision={onDecision}
+      />,
+    );
+    expect(screen.queryByRole("textbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Let the agent continue" }));
+    // Three args only — no trailing responseText — for a button-only card.
+    expect(onDecision).toHaveBeenCalledWith("req-1", "identity_choice", "agent");
+  });
+
   it("disables decision buttons after the first click so a slow round-trip can't double-fire", () => {
     render(
       <InteractionCard
