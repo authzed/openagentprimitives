@@ -142,6 +142,26 @@ func TestDeriveBrowserEffectiveSites_IdentityHostsAppended(t *testing.T) {
 	}, got, "explicit first, then identity hosts canonicalized in order")
 }
 
+// TestDeriveBrowserEffectiveSites_ExplicitBeatsCollidingIdentity proves an
+// explicit site is authoritative for its host: a looser identity-derived entry
+// for the SAME host (a 1Password "AnywhereOnWebsite" record, Exact:false) must
+// NOT be emitted — otherwise browserpolicy.Decide's precedence-free OR would let
+// it WIDEN the operator's explicit Exact:true to cover subdomains. Non-colliding
+// identity hosts are still added.
+func TestDeriveBrowserEffectiveSites_ExplicitBeatsCollidingIdentity(t *testing.T) {
+	spec := browserToolboxSpec("allowlist",
+		spiceboxv1alpha1.BrowserSite{Host: "united.com", Exact: true},
+	)
+	got := agentsession.DeriveBrowserEffectiveSites(spec, []directcred.Host{
+		{Name: "united.com"},        // identity "anywhere" (Exact:false) for the SAME host — must be dropped
+		{Name: "extra.example.net"}, // a host the operator did NOT name — still added
+	})
+	assert.Equal(t, []spiceboxv1alpha1.BrowserEffectiveSite{
+		{Host: "united.com", Exact: true, Source: "explicit"},
+		{Host: "extra.example.net", Source: "identity"},
+	}, got, "the explicit Exact:true entry wins; the colliding looser identity entry is dropped")
+}
+
 func TestDeriveBrowserEffectiveSites_Empty(t *testing.T) {
 	spec := browserToolboxSpec("allowlist")
 	assert.Empty(t, agentsession.DeriveBrowserEffectiveSites(spec, nil))

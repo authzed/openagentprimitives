@@ -819,9 +819,19 @@ func (t *browserTool) typeHumanCode(ctx context.Context, ref, code string) agent
 		}); ae != nil {
 			return ae
 		}
-		return runAction(c, func(ac context.Context) error {
+		if ae := runAction(c, func(ac context.Context) error {
 			return input.InsertText(code).Do(ac)
-		})
+		}); ae != nil {
+			return ae
+		}
+		// The code is a secret: blank the field so read/find/screenshot redact it
+		// until a real navigation clears the blanking (spec §3.6), exactly as a
+		// filled credential field is treated — INSIDE this critical section so a
+		// concurrent CaptureRedacted (which reads the blanked set under the same
+		// session semaphore) cannot capture the code between the keystroke landing
+		// and the field being marked.
+		t.sess.markBlanked(backendNodeID)
+		return nil
 	}); runErr != nil {
 		// runErr carries only the CDP transport error, never the code value.
 		return errResult("entering the code failed: %v", runErr)
@@ -829,10 +839,6 @@ func (t *browserTool) typeHumanCode(ctx context.Context, ref, code string) agent
 	if handled != nil {
 		return *handled
 	}
-	// The code is a secret: blank the field so read/find/screenshot redact it until
-	// a real navigation clears the blanking (spec §3.6), exactly as a filled
-	// credential field is treated.
-	t.sess.markBlanked(backendNodeID)
 	return okResult(fmt.Sprintf("entered the code into ref %s", ref))
 }
 
@@ -1208,11 +1214,16 @@ func (t *browserTool) waitFor(ctx context.Context, text, ref string, seconds int
 	for {
 		var found bool
 		if e := t.sess.do(ctx, snapshotTimeout, func(c context.Context) error {
-			lines, refs, se := snapshot(c, 0, t.sess.nextRefGen(), t.sess.blankedSet())
+			// wait_for only checks PRESENCE (by name or backendNodeID); it must
+			// NOT publish a ref snapshot. setRefs-ing these poll-loop refs under a
+			// fresh generation would replace the ref map and invalidate every ref
+			// the caller already holds — breaking the read -> wait_for -> type
+			// flow with a spurious "ref is stale". The snapshot's refs are
+			// discarded; only its lines are inspected.
+			lines, _, se := snapshot(c, 0, t.sess.nextRefGen(), t.sess.blankedSet())
 			if se != nil {
 				return se
 			}
-			t.sess.setRefs(refs)
 			for _, ln := range lines {
 				if text != "" && strings.Contains(strings.ToLower(ln.name), needle) {
 					found = true
@@ -1323,17 +1334,24 @@ func (t *browserTool) typeInto(ctx context.Context, ref, text string) agenttool.
 		}); ae != nil {
 			return ae
 		}
-		return runAction(c, func(ac context.Context) error {
+		if ae := runAction(c, func(ac context.Context) error {
 			return input.InsertText(filled).Do(ac)
-		})
+		}); ae != nil {
+			return ae
+		}
+		// Record the field for C5's blanking pass IFF a credential actually
+		// landed in it — INSIDE this critical section, before the session
+		// semaphore is released. A plain-text type (no placeholder) leaves
+		// nothing to blank. Marking here (not after do() returns) closes a TOCTOU:
+		// a concurrent CaptureRedacted reads the blanked set under the SAME
+		// semaphore, so it can never capture the just-typed credential in the
+		// window between the keystroke landing and the field being marked.
+		if kinds.any() {
+			t.sess.markBlanked(backendNodeID)
+		}
+		return nil
 	}); runErr != nil {
 		return errResult("type failed: %v", runErr)
-	}
-
-	// Record the field for C5's blanking pass IFF a credential actually landed in
-	// it. A plain-text type (no placeholder) leaves nothing to blank.
-	if kinds.any() {
-		t.sess.markBlanked(backendNodeID)
 	}
 	return okResult(fmt.Sprintf("typed into ref %s", ref))
 }

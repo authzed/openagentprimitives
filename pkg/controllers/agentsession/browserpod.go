@@ -144,11 +144,13 @@ func BrowserNetworkPolicyName(sess *spiceboxv1alpha1.AgentSession, ref string) s
 // rather than relying on this fail-closed default alone.
 func DeriveBrowserEffectiveSites(spec spiceboxv1alpha1.BrowserToolboxSpec, identityHosts []directcred.Host) []spiceboxv1alpha1.BrowserEffectiveSite {
 	sites := make([]spiceboxv1alpha1.BrowserEffectiveSite, 0, len(spec.Access.Sites)+len(identityHosts))
+	explicit := make(map[string]bool, len(spec.Access.Sites))
 	for _, s := range spec.Access.Sites {
 		host, err := browserpolicy.CanonicalHost(s.Host)
 		if err != nil {
 			continue
 		}
+		explicit[host] = true
 		sites = append(sites, spiceboxv1alpha1.BrowserEffectiveSite{
 			Host:   host,
 			Exact:  s.Exact,
@@ -158,6 +160,16 @@ func DeriveBrowserEffectiveSites(spec spiceboxv1alpha1.BrowserToolboxSpec, ident
 	for _, h := range identityHosts {
 		host, err := browserpolicy.CanonicalHost(h.Name)
 		if err != nil {
+			continue
+		}
+		// An explicit site is authoritative for its host: browserpolicy.Decide
+		// ORs across every entry with no precedence, so a looser identity-derived
+		// entry for the SAME host (e.g. a 1Password "AnywhereOnWebsite" record,
+		// Exact:false) would silently WIDEN an operator's explicit Exact:true to
+		// cover subdomains. Skip the identity entry when the host is already
+		// listed explicitly; identity entries only ADD hosts the operator did not
+		// name, never relax a host the operator did.
+		if explicit[host] {
 			continue
 		}
 		sites = append(sites, spiceboxv1alpha1.BrowserEffectiveSite{

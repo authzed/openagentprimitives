@@ -61,13 +61,23 @@ type ScreenshotProvider interface {
 // out on — see the INFO log below for the per-stage timing that pins which
 // stage, on a given run, actually used the budget.
 func (s *Session) CaptureRedacted(ctx context.Context) ([]byte, error) {
-	blanked := s.blankedNodes()
 	var shot []byte
 	var boxes []image.Rectangle
 	var dprDur, boxesDur, captureDur time.Duration
-	fastPath := len(blanked) == 0
+	var blanked []int64
+	var fastPath bool
 
 	timing, runErr := s.doTimed(ctx, redactedScreenshotTimeout, func(c context.Context) error {
+		// Read the blanked set INSIDE the critical section. A type/code op marks
+		// its field blanked inside its OWN do() closure, serialized with this one
+		// by the session semaphore, so reading here — not before acquiring the
+		// semaphore — guarantees we never miss a field a just-completed type
+		// landed a credential in. (TOCTOU: reading it before the semaphore let a
+		// concurrent type land a credential whose node was not yet in the blanked
+		// set, shipping it unredacted in a human-visible, persisted approval
+		// image.)
+		blanked = s.blankedNodes()
+		fastPath = len(blanked) == 0
 		if fastPath {
 			captureStart := time.Now()
 			ae := runAction(c, func(ac context.Context) error {
