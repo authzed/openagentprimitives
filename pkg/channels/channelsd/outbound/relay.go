@@ -106,6 +106,12 @@ type Relay struct {
 	// noteDeliveryOutcome from writing status once per relayed envelope.
 	delivMu       sync.Mutex
 	delivOutcomes map[string]deliverableOutcome
+
+	// noSenderMu guards noSenderLogged, which maps a session's "<ns>/<name>"
+	// to when its "no sender for this kind" drop may next be logged. See
+	// shouldLogNoSender.
+	noSenderMu     sync.Mutex
+	noSenderLogged map[string]time.Time
 }
 
 // defaultStreamDeclineTTL is how long a stream-delta decline is remembered when
@@ -240,6 +246,49 @@ func (r *Relay) streamDeclineTTL() time.Duration {
 		return defaultStreamDeclineTTL
 	}
 	return r.StreamDeclineTTL
+}
+
+// noSenderLogTTL rate-limits "drop, no sender for this kind on this channel"
+// to once per session per window instead of once per envelope — the same
+// shape as streamDeltasDeclined/declineStreamDeltas above, memoizing the
+// NEGATIVE answer only (a kind that starts having a sender again is picked up
+// on the very next envelope; only the "still no sender" case is throttled).
+const noSenderLogTTL = 5 * time.Minute
+
+// maxNoSenderLogEntries caps noSenderLogged the same way
+// maxDeclinedStreamSessions caps declinedStreams: past the cap the relay
+// sweeps expired entries, and if that doesn't free room it just logs again
+// rather than grow without bound — the fail-safe direction, since the cost of
+// not memoizing is only the noise this exists to cut, never a dropped
+// delivery.
+const maxNoSenderLogEntries = 512
+
+// shouldLogNoSender reports whether the "no sender for this kind on this
+// channel" drop should be logged for (ns, name) right now, remembering the
+// answer for noSenderLogTTL.
+func (r *Relay) shouldLogNoSender(ns, name string) bool {
+	key := ns + "/" + name
+	now := time.Now()
+	r.noSenderMu.Lock()
+	defer r.noSenderMu.Unlock()
+	if until, ok := r.noSenderLogged[key]; ok && now.Before(until) {
+		return false
+	}
+	if r.noSenderLogged == nil {
+		r.noSenderLogged = map[string]time.Time{}
+	}
+	if len(r.noSenderLogged) >= maxNoSenderLogEntries {
+		for k, until := range r.noSenderLogged {
+			if !now.Before(until) {
+				delete(r.noSenderLogged, k)
+			}
+		}
+		if _, tracked := r.noSenderLogged[key]; !tracked && len(r.noSenderLogged) >= maxNoSenderLogEntries {
+			return true // at cap with nothing expired — log rather than silently stop
+		}
+	}
+	r.noSenderLogged[key] = now.Add(noSenderLogTTL)
+	return true
 }
 
 // isStatusCaptionKind reports whether env is an ordered status caption that the
@@ -810,7 +859,18 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 		return
 	}
 	if sender == nil {
-		logger.Info("outbound relay: drop, no sender for this kind on this channel")
+		// Rate-limited, not per-envelope: a client-hosted kind (browser today)
+		// resolves SenderFor as (nil, nil) for EVERY outbound envelope on EVERY
+		// one of its sessions — channelsd sets no Accept to skip them pre-Get
+		// (see Accept's own doc on why webd's chat Registry can and channelsd
+		// cannot) — so without this the line fired at the full outbound rate
+		// for every browser-kind session the whole time it was open: noise
+		// that buried the one drop a real misconfiguration needs to be found
+		// by, and the exact kind of per-envelope log #59's own investigation
+		// had to wade through.
+		if r.shouldLogNoSender(ns, name) {
+			logger.Info("outbound relay: drop, no sender for this kind on this channel")
+		}
 		return
 	}
 	sessInfo := channelkinds.SessionInfo{

@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,6 +73,48 @@ func TestInteractionSender_Applied_EmitsMsgInteractionApplied(t *testing.T) {
 	assert.Equal(t, "s1", m.Session.Name)
 	assert.Equal(t, "credential_link", m.Payload.Category)
 	assert.Equal(t, channelevents.OutcomeResolved, m.Payload.Outcome)
+}
+
+// TestInteractionSender_Applied_NeverForwardsResponseText is the C7 defense-
+// in-depth guard for the browser surface, mirroring
+// pkg/channels/channelkinds/slack's
+// TestBuildInteractionAppliedBlocks_NeverLeaksTheHumanStepCode: the OUTBOUND
+// applied envelope legitimately carries the human's typed login code in
+// ResponseText (login_human_step kind:code; see interaction_decision.go —
+// the runner, which subscribes the same subject directly, resumes off it),
+// but this sender forwards straight onto chat's websocket frame
+// (pkg/web/webui/chat/sink.go), fanning out to every tab of every subject
+// holding agentsession#interact on the session. Unlike Slack's renderer
+// (which builds structured blocks from named fields and never serializes the
+// whole struct), this sender used to pass the FULL payload through
+// untouched, so the secret rode the frame bytes. No browser surface renders
+// ResponseText; it must never reach the sink.
+func TestInteractionSender_Applied_NeverForwardsResponseText(t *testing.T) {
+	sink := &RecordingSink{}
+	s := &interactionSender{sink: sink}
+
+	appPl := channelevents.InteractionAppliedPayload{
+		AgentSessionRef: channelevents.SessionRef{Namespace: "default", Name: "s1"},
+		Category:        "login_human_step",
+		RequestRef:      "req-1",
+		Outcome:         channelevents.OutcomeApproved,
+		ResponseText:    "123456", // the SECRET this sender must not forward
+	}
+	env := mustEnv(t, channelevents.KindInteractionApplied, appPl)
+
+	_, err := s.Send(context.Background(), sessInfo(), env)
+	require.NoError(t, err)
+
+	events := sink.Events()
+	require.Len(t, events, 1)
+	m, ok := events[0].(MsgInteractionApplied)
+	require.True(t, ok, "want MsgInteractionApplied, got %T", events[0])
+	assert.Empty(t, m.Payload.ResponseText, "the typed login code must never reach the browser's websocket frame")
+	// Belt-and-suspenders: the FULL wire payload the sink would marshal onto
+	// the frame, not just the named field, must not carry the code either.
+	wire, merr := json.Marshal(m)
+	require.NoError(t, merr)
+	assert.NotContains(t, string(wire), "123456", "the typed login code must not appear anywhere in the frame payload")
 }
 
 // TestInteractionSender_Rejected_EmitsMsgInteractionRejected verifies the

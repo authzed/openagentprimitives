@@ -702,6 +702,14 @@ func (h *runnerHost) buildToolCallPending(ctx context.Context, reqID string, ask
 		ArgsJSON:        extractString(ask.Payload, "args_json"),
 		ToolDescription: extractString(ask.Payload, "tool_description"),
 		Justification:   justification,
+		// Carry the Layer-2 marker so the channelsd handler SKIPS the coarse
+		// primary-resource (web_host) grant write for a browser-mutate ask.
+		// Without it, OPERATION_TOUCH would shorten an existing session-length
+		// web_host grant to the ask's flat 30s expiry, collapsing the standing
+		// grant and re-prompting every later acting call on that host. The
+		// runner already skips mutating the coarse grant for webActionKey != ""
+		// in toolCallPostApprove; this closes the channelsd-side half.
+		WebActionKey: ask.WebActionKey,
 	}
 	detJSON, derr := json.Marshal(det)
 	if derr != nil {

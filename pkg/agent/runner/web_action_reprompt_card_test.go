@@ -26,6 +26,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -297,4 +298,48 @@ func TestBuildToolCallPending_ChangedPageReprompt_CaptureNilNeverBlocksPublish(t
 	// independent best-effort additions to the same card.
 	require.NotEmpty(t, pl.Fields)
 	assert.Equal(t, "Note", pl.Fields[0].Label)
+}
+
+// The Layer-2 web_action marker must travel onto the published
+// ToolApprovalDetails so the channelsd handler can SKIP the coarse web_host
+// grant write. Without it, OPERATION_TOUCH would shorten an existing
+// session-length web_host grant to the ask's flat 30s expiry, collapsing the
+// standing approval and re-prompting every later acting call on that host.
+// An ordinary tool_call ask must carry no marker. This is the runner half of
+// the fix; its channelsd counterpart is
+// TestToolApprovalHandler_WebActionAsk_DoesNotTouchWebHostGrant.
+func TestBuildToolCallPending_WebActionAsk_CarriesWebActionKeyInDetails(t *testing.T) {
+	cases := []struct {
+		name    string
+		ask     pipeline.ApprovalAsk
+		wantKey string
+	}{
+		{
+			name:    "web_action ask carries its key so channelsd skips the web_host clobber",
+			ask:     webActionToolCallAsk(false),
+			wantKey: "aa.com/click/place-order-abcd1234",
+		},
+		{
+			name:    "ordinary tool_call ask carries no web_action key",
+			ask:     toolCallAsk(),
+			wantKey: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var published channelevents.Envelope
+			h := webActionApprovalHost(&published)
+
+			reqID, err := h.PublishApproval(context.Background(), tc.ask)
+			require.NoError(t, err)
+			pa, ok := h.pending().m[reqID]
+			require.True(t, ok)
+			require.NoError(t, pa.onPublish(context.Background()))
+
+			pl := decodeInteractionRequest(t, published)
+			var det channelevents.ToolApprovalDetails
+			require.NoError(t, json.Unmarshal(pl.Details, &det))
+			assert.Equal(t, tc.wantKey, det.WebActionKey)
+		})
+	}
 }

@@ -556,6 +556,20 @@ func waitForSessionReady(ctx context.Context, k8s client.Client, ns, name string
 // per-session memory-token Secret before giving up; sessionReadyPollInterval
 // is how often it re-checks. Consts rather than the test-tunable vars the
 // watchdog uses below, because no test needs to shrink the readiness wait.
+//
+// This is deliberately SHORTER than runnerStartupGrace (5min) below, which
+// acknowledges a cold bring-up can legitimately take minutes (image pull,
+// scheduling, a refused-then-retried pod). Adopt runs synchronously inside
+// the start route's HTTP request (browserstart.Start), so widening this to
+// match runnerStartupGrace would hold that request — and the browser's own
+// fetch — open for up to 5 minutes, which trades a rare, now-recoverable
+// Adopt failure for a routinely slow one. Instead, a timeout here is no
+// longer a dead end: browserstart.Start's own doc already treats an Adopt
+// failure as expected ("stays addressable ... wired on the next open"), and
+// registry.rehydrate now (the #59 fix) actually DELIVERS that promise — a
+// websocket reconnect finds the abandoned reservation idle, not permanently
+// 404, and retries the wiring itself. So the 60s/5min mismatch costs a brief,
+// bounded retry instead of a correctness bug.
 const (
 	sessionReadyTimeout      = 60 * time.Second
 	sessionReadyPollInterval = 1 * time.Second

@@ -53,4 +53,27 @@ type ToolApprovalDetails struct {
 	ArgsJSON        string `json:"argsJSON,omitempty"`
 	ToolDescription string `json:"toolDescription,omitempty"`
 	Justification   string `json:"justification,omitempty"`
+
+	// WebActionKey marks this approval as a Layer-2 (browser mutate) ask — the
+	// E9 per-action revalidation raised when a web_action-level check denies,
+	// as opposed to the coarse Layer-1 web_host ask raised when no plan-gate
+	// grant covers the call at all (WebActionKey == ""). Carried through from
+	// pipeline.ApprovalAsk.WebActionKey — a DEDICATED, never-rendered field on
+	// the ask, not routed through Payload — by the runner at raise time.
+	//
+	// The channelsd grant-write handler reads this to decide WHETHER to bind
+	// the primary (Permission/ResourceType/ResourceID) grant: for a Layer-2
+	// ask, those three name the ACTING tool's own coarse Permission()
+	// (web_host for every browser acting op), not the resource this specific
+	// approval was about. Binding it would TOUCH — replace the expiration
+	// of — an existing session-length web_host grant down to this ask's
+	// short external-effect TTL, silently shortening a standing approval so
+	// every later acting call on that host re-prompts. The runner itself
+	// already mints the real, narrowly-scoped web_action grant for this ask
+	// on approve; this field is what lets the handler skip writing a second,
+	// wrong one.
+	//
+	// Not rendered by any Show-Details modal — it is a gate key, not
+	// approver-facing copy, same as on pipeline.ApprovalAsk.
+	WebActionKey string `json:"webActionKey,omitempty"`
 }
