@@ -56,6 +56,22 @@ type Action struct {
 	Container  string // a stable identifier for the target's nearest ancestor container
 	Host       string // the canonical page host
 	PageURL    string // the current page URL
+	// Submits is true when the target is a form SUBMIT CONTROL — the structural
+	// signal that this action COMMITS a form rather than merely fills one. It
+	// mirrors browser.ActionFacts.Submits (derived in actionfacts.go's injected
+	// JS: an <input type=submit|image>, or a <button> whose resolved type is
+	// submit). A judge uses it to keep a commit (click on a submit control) out
+	// of the benign fast-path even when the same form's field edits (typing,
+	// toggling a radio) are positively cleared.
+	Submits bool
+	// FormHasSubmit is true when the target's enclosing <form> itself contains a
+	// submit control (mirrors browser.ActionFacts.FormHasSubmit). The
+	// deterministic judge's field-entry/selection-toggle recognizers require
+	// this before clearing a type/selection as benign: it is what distinguishes
+	// the fill-THEN-submit pattern from a standalone autosave-on-input field or
+	// an instant-save-on-toggle control that ships its own JS
+	// oninput/onchange -> POST with no sibling submit.
+	FormHasSubmit bool
 }
 
 // PageContext is the minimal page-wide signal a judge sees alongside an

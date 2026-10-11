@@ -3,11 +3,13 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -46,8 +48,22 @@ const (
 // (now browser.redactedScreenshotTimeout's 25s) internal budget, logging
 // "capture failed; publishing text-only" / "context deadline exceeded" on
 // every approval. 30s leaves headroom above that 25s inner budget for the
-// storeScreenshotArtifact call (a single k8s Create) that follows it.
+// storeScreenshotArtifact call (a k8s Create plus a short poll-to-Ready and
+// finalize, bounded by screenshotRenderTimeout below) that follows it.
 const captureScreenshotTimeout = 30 * time.Second
+
+// screenshotRenderPollInterval / screenshotRenderTimeout bound
+// awaitScreenshotReady's wait for the just-created ArtifactRender to reach
+// Ready, mirroring uiResourcePollInterval/uiResourceRenderTimeout in
+// loop_uiresource.go — but with a tighter ceiling, because this wait has to
+// fit inside captureScreenshotTimeout's budget alongside the capture that
+// precedes it. The "image" renderer (pkg/channels/channelassets/image) runs
+// in-process with no external I/O, so Ready lands within one reconcile tick
+// in practice; 5s is a safety bound, not an expected wait.
+const (
+	screenshotRenderPollInterval = 100 * time.Millisecond
+	screenshotRenderTimeout      = 5 * time.Second
+)
 
 // screenshotArtifactPutter is the subset of artifactstore.Store that
 // storeScreenshotArtifact needs: Put, to store a screenshot too large to
@@ -73,23 +89,39 @@ type screenshotStoreDeps struct {
 	ArtifactStore screenshotArtifactPutter
 	SessionUID    types.UID
 
+	// Artifacts finalizes the ArtifactRender once Ready — the same
+	// *artifacts.Service applyUIResource's uiResourceDeps.Artifacts uses. See
+	// awaitScreenshotReady for why this is required, not optional bookkeeping.
+	Artifacts *artifacts.Service
+
 	NewRenderName func(session string) string
 	NewArtifactID func() string
 }
 
 // storeScreenshotArtifact persists a redacted page screenshot (the PNG bytes
-// Task 2 produces) as an ArtifactRender{Kind:"image"} CR and returns the
-// AttachmentRef the interaction request payload's Screenshot field carries.
+// Task 2 produces) as an ArtifactRender{Kind:"image"} CR, finalizes it once
+// Ready, and returns the AttachmentRef the interaction request payload's
+// Screenshot field carries.
 //
 // Mirrors the CR-build shape in pkg/agent/tool/meta/artifact_prepare.go:264-274
 // and pkg/platform/artifacts.NewRender: owned by the session (by UID, as
-// controller, blocking deletion), labeled with the artifact id. Unlike
-// artifact_prepare / persistWidget (loop_uiresource.go) this does NOT poll the
-// CR to Ready: a screenshot attaches to a live interaction request, not a
-// model-facing handle, and AttachmentRef's own contract (see the doc comment
-// on channelevents.AttachmentRef) is that the consumer re-Gets the CR and
-// reads status.outputRef at delivery time — there is nothing for this call to
-// wait on.
+// controller, blocking deletion), labeled with the artifact id.
+//
+// It DOES poll the CR to Ready and call FinalizeRevision (awaitScreenshotReady,
+// below) — unlike an earlier version of this function, which skipped that step
+// on the theory that a screenshot attaches to a live interaction request, not
+// a model-facing handle, so "there is nothing to wait on." That theory missed
+// that FinalizeRevision is also what makes the artifact VIEWABLE at all:
+// pkg/memory/spicedbauthorizer.Authorizer writes the
+// artifact:<id>#parent@agentsession:<ns>/<name> SpiceDB relationship the
+// moment FinalizeRevision Puts the artifact's memory head entry, and that
+// relationship is what artifact:<id>#view (parent->interact + ...) resolves
+// against. Skipping FinalizeRevision left the screenshot's artifactID with no
+// SpiceDB parent and no revision_of memory link, so
+// pkg/web/webui/artifactview.bindView's CheckView/ListRevisions denied every
+// request — the chat UI's <img src="/artifact-download?artifactId=...">
+// (pkg/web/webui/chat/ui/InteractionCard.tsx) 403'd and failed to load even
+// though the ArtifactRender CR itself reported Ready. See Task #54.
 //
 // A PNG at or under screenshotInlineMaxBytes is attached inline
 // (Spec.Payload); a larger one is written to the artifact store first and
@@ -103,6 +135,14 @@ func storeScreenshotArtifact(ctx context.Context, deps screenshotStoreDeps, sess
 	// dispatch goroutine calling it.
 	if deps.Client == nil {
 		return nil, fmt.Errorf("storeScreenshotArtifact: no k8s client wired (Loop.Client is nil)")
+	}
+	// Same fail-closed degrade for a missing Artifacts service: without it
+	// awaitScreenshotReady cannot finalize the revision, and an AttachmentRef
+	// minted without finalizing would point at an artifact nobody can ever
+	// view — worse than shipping no screenshot at all, because it reads as a
+	// broken image rather than a plain text-only card.
+	if deps.Artifacts == nil {
+		return nil, fmt.Errorf("storeScreenshotArtifact: no artifacts service wired (Loop.Artifacts is nil); the screenshot would never become viewable")
 	}
 	newRenderName := deps.NewRenderName
 	if newRenderName == nil {
@@ -140,6 +180,10 @@ func storeScreenshotArtifact(ctx context.Context, deps screenshotStoreDeps, sess
 		return nil, fmt.Errorf("storeScreenshotArtifact: create ArtifactRender: %w", err)
 	}
 
+	if err := awaitScreenshotReady(ctx, deps, sess, cr); err != nil {
+		return nil, fmt.Errorf("storeScreenshotArtifact: %w", err)
+	}
+
 	return &channelevents.AttachmentRef{
 		RenderName: cr.Name,
 		ArtifactID: artifactID,
@@ -149,26 +193,80 @@ func storeScreenshotArtifact(ctx context.Context, deps screenshotStoreDeps, sess
 	}, nil
 }
 
+// awaitScreenshotReady polls the just-created ArtifactRender CR until it
+// reaches Ready or Failed, then finalizes the revision — the SAME
+// CR-create+poll+finalize dance persistWidget (loop_uiresource.go) runs for a
+// widget artifact. See storeScreenshotArtifact's doc comment for why this
+// step is required rather than optional: FinalizeRevision is what wires the
+// SpiceDB artifact#parent relationship and the revision_of memory link that
+// pkg/web/webui/artifactview.bindView needs before it will serve a single
+// byte of this screenshot back to the chat UI.
+//
+// The "image" renderer (pkg/channels/channelassets/image) runs in-process
+// with no external I/O, so Ready lands within one reconcile tick in
+// practice; screenshotRenderTimeout is a safety bound, not an expected wait.
+func awaitScreenshotReady(ctx context.Context, deps screenshotStoreDeps, sess channelevents.SessionRef, cr *spiceboxv1alpha1.ArtifactRender) error {
+	scope := memory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}
+	deadline := time.Now().Add(screenshotRenderTimeout)
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var fresh spiceboxv1alpha1.ArtifactRender
+		if err := deps.Client.Get(ctx, client.ObjectKeyFromObject(cr), &fresh); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("ArtifactRender vanished before completion")
+			}
+			time.Sleep(screenshotRenderPollInterval)
+			continue
+		}
+		switch fresh.Status.Phase {
+		case spiceboxv1alpha1.ArtifactRenderPhaseReady:
+			// A system approval, minted here rather than inherited from ctx —
+			// the same per-write-site idiom host_approval.go's writeCtx
+			// (memory.WithSystemApproval(ctx, "tool_approval") /
+			// "plan_gate") already uses for the runner's own trusted internal
+			// writes. Needed because captureBrowserScreenshotFn's captureCtx is
+			// deliberately rooted at context.Background() (decoupled from the
+			// caller's ctx, see its doc), so no approval the caller's ctx might
+			// have carried would reach here anyway; mirrors production, where
+			// l.Artifacts wraps an HTTP memory client that enforces this
+			// server-side on the bearer token, not from ctx at all — this call
+			// only matters against an in-process memory.Local (every test, any
+			// future in-process deployment).
+			if _, err := deps.Artifacts.FinalizeRevision(memory.WithSystemApproval(ctx, "browser_screenshot"), scope, &fresh); err != nil {
+				return fmt.Errorf("render Ready but recording the revision failed: %w", err)
+			}
+			return nil
+		case spiceboxv1alpha1.ArtifactRenderPhaseFailed:
+			return fmt.Errorf("render failed: %s — %s", fresh.Status.FailureReason, fresh.Status.FailureMessage)
+		}
+		time.Sleep(screenshotRenderPollInterval)
+	}
+	return fmt.Errorf("timed out waiting for ArtifactRender to become Ready")
+}
+
 // screenshotStoreDeps builds storeScreenshotArtifact's backend wiring from
-// this Loop's own fields: l.Client creates the ArtifactRender CR — the same
-// value applyUIResource's own CR create+poll uses (loop.go's
-// uiResourceDeps{Client: l.Client, ...}) — and l.AgentSession's UID owns it
-// (mirrors loop.go's own "var sessionUID types.UID; if l.AgentSession != nil
-// { sessionUID = l.AgentSession.UID }" guard — empty when Loop.AgentSession is
-// unset, e.g. a kubectl-driven session or a unit test).
+// this Loop's own fields: l.Client creates (and awaitScreenshotReady polls)
+// the ArtifactRender CR, l.Artifacts finalizes it once Ready — the exact same
+// pair applyUIResource's own CR create+poll+finalize uses (loop.go's
+// uiResourceDeps{Client: l.Client, Artifacts: l.Artifacts, ...}), wired
+// together for the same reason: either may be nil (a kubectl-driven session,
+// today's e2e in-process harness), and storeScreenshotArtifact fails closed
+// when so — and l.AgentSession's UID owns it (mirrors loop.go's own "var
+// sessionUID types.UID; if l.AgentSession != nil { sessionUID =
+// l.AgentSession.UID }" guard — empty when Loop.AgentSession is unset).
 //
 // ArtifactStore is deliberately left nil: Loop carries no write-capable
-// artifactstore.Store today. l.Artifacts (*artifacts.Service) manages
-// ArtifactRender CR headers/revisions over memory.Memory, and l.ArtifactReader
-// is read-only (modality.ArtifactReader) — neither is a screenshotArtifactPutter.
-// That means only the <=screenshotInlineMaxBytes inline Payload path is
-// reachable from this wiring; a screenshot over the cap makes
-// storeScreenshotArtifact return an error, which the caller
-// (captureBrowserScreenshotFn below) logs and treats as "ship no screenshot" —
-// same as any other capture/store failure, per the best-effort/fail-closed
-// contract. A single-viewport redacted PNG is well under 256 KiB in practice,
-// so this degrades gracefully rather than requiring a new store seam to be
-// threaded through Loop for this feature.
+// artifactstore.Store today. l.ArtifactReader is read-only
+// (modality.ArtifactReader) — not a screenshotArtifactPutter. That means only
+// the <=screenshotInlineMaxBytes inline Payload path is reachable from this
+// wiring; a screenshot over the cap makes storeScreenshotArtifact return an
+// error, which the caller (captureBrowserScreenshotFn below) logs and treats
+// as "ship no screenshot" — same as any other capture/store failure, per the
+// best-effort/fail-closed contract. A single-viewport redacted PNG is well
+// under 256 KiB in practice, so this degrades gracefully rather than
+// requiring a new store seam to be threaded through Loop for this feature.
 func (l *Loop) screenshotStoreDeps() screenshotStoreDeps {
 	var sessionUID types.UID
 	if l.AgentSession != nil {
@@ -176,6 +274,7 @@ func (l *Loop) screenshotStoreDeps() screenshotStoreDeps {
 	}
 	return screenshotStoreDeps{
 		Client:     l.Client,
+		Artifacts:  l.Artifacts,
 		SessionUID: sessionUID,
 	}
 }
@@ -215,8 +314,23 @@ func (l *Loop) screenshotStoreDeps() screenshotStoreDeps {
 // the session ended) still tears the capture down, but ctx's deadline simply
 // elapsing (context.DeadlineExceeded) does not, which is the exact failure
 // mode this fixes.
+//
+// Task #53: #47's decoupling helped (captures now sometimes succeed) but a
+// live desktop run still logged "capture failed ... context deadline
+// exceeded" intermittently — the failure is the kind a second attempt
+// usually clears (a contended browser mutex, a CDP round trip that was
+// merely slow, not stuck). So on a timeout-shaped failure (and ONLY then —
+// see isTimeoutErr) this retries cap.CaptureRedacted ONCE, against the SAME
+// captureCtx rather than a fresh one. Reusing captureCtx is what keeps the
+// retry bounded: it gets whatever is left of the original
+// captureScreenshotTimeout budget, never a second full budget, so the
+// closure's worst-case wall time is unchanged — a card can never hang twice
+// as long waiting for a picture. If captureCtx is already done (its budget
+// fully spent, or the caller genuinely canceled), captureCtx.Err() != nil and
+// the retry is skipped outright.
 func (l *Loop) captureBrowserScreenshotFn(sess channelevents.SessionRef, cap browsertool.BrowserScreenshotCapturer) func(context.Context) *channelevents.AttachmentRef {
 	return func(ctx context.Context) *channelevents.AttachmentRef {
+		captureStart := time.Now()
 		captureCtx, cancel := context.WithTimeout(context.Background(), captureScreenshotTimeout)
 		defer cancel()
 		stop := context.AfterFunc(ctx, func() {
@@ -226,18 +340,43 @@ func (l *Loop) captureBrowserScreenshotFn(sess channelevents.SessionRef, cap bro
 		})
 		defer stop()
 
+		attempts := 1
 		png, err := cap.CaptureRedacted(captureCtx)
+		if err != nil && isTimeoutErr(err) && captureCtx.Err() == nil {
+			attempts = 2
+			png, err = cap.CaptureRedacted(captureCtx)
+		}
 		if err != nil {
 			slog.Info("browser screenshot: capture failed; publishing text-only",
-				"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+				"session", sess.Namespace+"/"+sess.Name, "attempts", attempts,
+				"elapsed_ms", time.Since(captureStart).Milliseconds(), "err", err.Error())
 			return nil
 		}
 		ref, err := storeScreenshotArtifact(captureCtx, l.screenshotStoreDeps(), sess, png)
 		if err != nil {
 			slog.Info("browser screenshot: store failed; publishing text-only",
-				"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+				"session", sess.Namespace+"/"+sess.Name, "attempts", attempts,
+				"elapsed_ms", time.Since(captureStart).Milliseconds(), "err", err.Error())
 			return nil
 		}
+		slog.Info("browser screenshot: capture succeeded",
+			"session", sess.Namespace+"/"+sess.Name, "attempts", attempts,
+			"elapsed_ms", time.Since(captureStart).Milliseconds())
 		return ref
 	}
+}
+
+// isTimeoutErr reports whether err is the deadline/cancellation-shaped
+// failure captureBrowserScreenshotFn retries once: CaptureRedacted's own
+// inner timeout elapsing naturally (context.DeadlineExceeded), or an
+// explicit cancel forwarded into the chromedp run by session.go's do()
+// (context.Canceled — which is what a late-firing deadline on captureCtx
+// itself surfaces as, since do()'s propagation always calls the runCtx
+// CancelFunc explicitly rather than letting runCtx's own timer fire). A
+// non-timeout failure — notably CaptureRedacted's fail-closed redaction
+// errors (a blanked field whose box genuinely can't be resolved) — is NOT
+// retried: the retry targets the Task #53 symptom specifically, not every
+// way the capture can fail.
+func isTimeoutErr(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }

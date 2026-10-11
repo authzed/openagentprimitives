@@ -639,6 +639,39 @@ describe("InteractionCard resolved-state collapsing", () => {
     expect(img?.getAttribute("alt")).toBe("the page");
   });
 
+  it("builds the screenshot img src with the real namespace when agentSessionRef rides the wire as channelevents.SessionRef (json \"ns\"), not browser.SessionRef (json \"namespace\")", () => {
+    // Reproduces the ACTUAL wire shape, not the convenient one: every other
+    // test in this file hand-builds `agentSessionRef: { namespace, name }` as
+    // a plain object literal, which never exercises the bug because
+    // TypeScript's SessionRef type has no runtime effect. InteractionRequestPayload.AgentSessionRef
+    // is channelevents.SessionRef (pkg/channels/channelevents/envelope.go),
+    // which marshals Namespace as "ns" — unlike browser.SessionRef's
+    // "namespace" (pkg/channels/channelkinds/browser/events.go), which is what
+    // the TS SessionRef interface models. Routing the fixture through
+    // JSON.parse(JSON.stringify(...)) with the real "ns" key is what makes
+    // this test fail without the fix: it previously produced
+    // sessionRef=undefined%2Fsess-1, which 403'd against the backend's
+    // CheckView (agentsession:undefined/sess-1 has no parent relationship).
+    const wire = JSON.parse(
+      JSON.stringify({
+        ...baseRequest,
+        agentSessionRef: { ns: "default", name: "sess-1" },
+        screenshot: {
+          artifactId: "art-1",
+          renderName: "shot-1",
+          mime: "image/png",
+          filename: "page.png",
+        },
+      }),
+    ) as InteractionRequestInner;
+
+    const { container } = render(<InteractionCard request={wire} onDecision={vi.fn()} />);
+    const img = container.querySelector("img") as HTMLImageElement | null;
+    const src = img?.getAttribute("src") ?? "";
+    expect(src).toContain("sessionRef=default%2Fsess-1");
+    expect(src).not.toContain("undefined");
+  });
+
   it("renders no img when the request carries no screenshot (the common case)", () => {
     const { container } = render(<InteractionCard request={{ ...baseRequest }} onDecision={vi.fn()} />);
     expect(container.querySelector("img")).toBeNull();

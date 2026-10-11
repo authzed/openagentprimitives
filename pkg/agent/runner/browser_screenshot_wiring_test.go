@@ -215,8 +215,11 @@ func (screenshotAskHook) Eval(_ context.Context, in pipeline.Input) pipeline.Dec
 
 // screenshotDispatchLoop builds a minimal Loop that can run executeToolContained
 // through a plan_phase ask (resolving approvers and publishing), with Client
-// wired to a fake k8s client so the full capture→store→attach path can
-// complete (storeScreenshotArtifact creates an ArtifactRender CR).
+// and Artifacts wired so the full capture→store→poll-to-Ready→finalize→attach
+// path can complete (storeScreenshotArtifact creates an ArtifactRender CR and
+// awaitScreenshotReady finalizes it — see browser_screenshot.go). The
+// readyOnCreateInterceptor flips the CR straight to Ready on Create, mirroring
+// loop_uiresource_test.go's own persistWidget fixture.
 func screenshotDispatchLoop(t *testing.T, tools []tool.Tool, published *channelevents.Envelope) *Loop {
 	t.Helper()
 	l := &Loop{
@@ -226,7 +229,9 @@ func screenshotDispatchLoop(t *testing.T, tools []tool.Tool, published *channele
 		Approval:    approval.New(),
 		ChannelKind: "slack",
 		AgentName:   "demo-agent",
-		Client:      fake.NewClientBuilder().WithScheme(browserScreenshotTestScheme(t)).Build(),
+		Client: fake.NewClientBuilder().WithScheme(browserScreenshotTestScheme(t)).
+			WithInterceptorFuncs(readyOnCreateInterceptor()).Build(),
+		Artifacts: uiResourceTestArtifactsService(),
 		SpiceDBLookupSubjects: func(_ context.Context, _, _ string) ([]string, error) {
 			return []string{"user:owner@example.com"}, nil
 		},

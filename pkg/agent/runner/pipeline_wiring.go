@@ -651,6 +651,21 @@ func redactSensitiveArgs(t tool.Tool, argsMap map[string]any, sessionKey, toolNa
 // approver-facing Requester: on a proxy-exec (app-tool) call it is the widget
 // VIEWER (reqSubject); on the LLM path it is the session's LastInbound requester.
 func (l *Loop) buildToolCallApprovalAsk(ctx context.Context, toolName string, argsMap map[string]any, perm authz.Permission, useID, justification string, reqSubject identity.CanonicalUserID, proxyExec bool) (*pipeline.ApprovalAsk, error) {
+	// Lift the browser acting tool's human-readable "what this does" sentence
+	// (NamedArgs' stampWebAction; see pkg/agent/tool/browser/action_descriptor.go)
+	// out of argsMap FIRST, before anything below reads argsMap for the hash,
+	// the displayed args, or the durable record — same reason web_action_key/
+	// fingerprint are lifted out in BuildInputs: this is an internal-gate-derived
+	// presentation value, not a call argument, and it must not leak into
+	// argsHash/ArgsJSON/the args_map payload. A non-browser call, or a browser
+	// call with no judge wired, never carries this key — the delete is then a
+	// no-op and browserDescription stays "".
+	var browserDescription string
+	if d, ok := argsMap[browserschema.WebActionDescriptionArg].(string); ok {
+		browserDescription = d
+		delete(argsMap, browserschema.WebActionDescriptionArg)
+	}
+
 	resourceType := ""
 	resourceID := ""
 	permission := ""
@@ -794,12 +809,17 @@ func (l *Loop) buildToolCallApprovalAsk(ctx context.Context, toolName string, ar
 		}
 	}
 
-	// Build summary via the summarizer LLM, from the same redacted args the
-	// card shows: the summarizer is a second LLM whose whole purpose is to
-	// describe the call to a human, so it has no more business seeing a
-	// declared-sensitive value than the human does.
+	// The browser acting tool's own deterministic descriptor wins outright when
+	// present: it is built from the DOM facts the consequence judge already
+	// extracted (role, accessible text, submit-control-ness — never a typed
+	// value, see action_descriptor.go's credential-safety note), so it is both
+	// more accurate and cheaper than asking a second LLM to re-describe
+	// "click ref e13" with no facts of its own to go on. Every other tool call
+	// keeps the existing summarizer path unchanged.
 	var summary string
-	if foundTool != nil {
+	if browserDescription != "" {
+		summary = browserDescription
+	} else if foundTool != nil {
 		summary = l.summarizeToolCall(ctx, foundTool, displayArgs, permission, resourceType, resourceID)
 	}
 

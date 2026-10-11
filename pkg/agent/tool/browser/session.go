@@ -14,6 +14,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/directcred"
 	"github.com/authzed/openagentprimitives/pkg/tools/browserpolicy"
@@ -59,7 +61,15 @@ type Session struct {
 	// the per-call resource instance.
 	currentHost func() string
 
-	mu        sync.Mutex
+	// mu is the per-session browser mutex, serializing all CDP access on the
+	// one chromedp connection. It is a binary semaphore (weight 1) rather than
+	// a plain sync.Mutex so do() can bound the acquire wait by the CALLER'S
+	// ctx (Acquire(ctx, 1) returns ctx.Err() the moment ctx is done, even
+	// mid-wait) instead of blocking past a deadline with nothing to show for
+	// it — see do's doc. golang.org/x/sync/semaphore is already a go.mod
+	// dependency, so this is a drop-in acquire/release pair rather than a
+	// hand-rolled ctx-aware mutex.
+	mu        *semaphore.Weighted
 	rootCtx   context.Context
 	rootStop  context.CancelFunc
 	allocStop context.CancelFunc
@@ -134,6 +144,7 @@ func newSession(gateURL, token string) *Session {
 		refs:    map[string]refEntry{},
 		hold:    map[string]heldCred{},
 		blanked: map[int64]bool{},
+		mu:      semaphore.NewWeighted(1),
 	}
 	s.newAllocator = func(parent context.Context) (context.Context, context.CancelFunc) {
 		// The gate rewrites /json/version's webSocketDebuggerUrl back to itself
@@ -219,15 +230,55 @@ func (s *Session) ensureConnected() error {
 	return fmt.Errorf("connecting to browser gate %s: %w", s.gateURL, lastErr)
 }
 
+// doTiming carries do()'s internal stage durations: how long the call waited
+// to acquire mu, how long ensureConnected took, and how long fn itself ran.
+// do() discards them; doTimed returns them for the one caller that needs to
+// explain an intermittent timeout — CaptureRedacted logs them as INFO
+// diagnostics because the browser pod is EPHEMERAL (Task #53): once the pod
+// is gone, these numbers are the only record of which stage was slow.
+type doTiming struct {
+	LockWait        time.Duration
+	EnsureConnected time.Duration
+	Run             time.Duration
+}
+
 // do runs fn against the browser tab, honoring the caller's ctx for
 // cancellation and applying a per-call timeout. It serializes all browser
 // operations and connects lazily. fn receives a context already bound to the
 // chromedp browser context, so it can invoke chromedp.Run / cdproto actions.
 func (s *Session) do(ctx context.Context, timeout time.Duration, fn func(ctx context.Context) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.ensureConnected(); err != nil {
-		return err
+	_, err := s.doTimed(ctx, timeout, fn)
+	return err
+}
+
+// doTimed is do's real implementation, additionally returning the per-stage
+// timing described on doTiming. Every do() call site but CaptureRedacted
+// goes through the do() wrapper above and ignores the timing; doTimed itself
+// is unchanged behavior for them.
+//
+// The mu acquire uses Acquire(ctx, 1) rather than a plain sync.Mutex Lock():
+// a plain Lock() cannot be bounded by ctx, so a call stuck behind another
+// in-flight do() (the gated acting call's Execute, or the classify path's own
+// capturePageState round-trip) blocks past ctx's deadline with no error and
+// no log — the wait is invisible, and whatever time it ate is gone from the
+// budget fn then tries to do its CDP work in. Acquire(ctx, 1) instead returns
+// ctx.Err() the instant ctx is done, even mid-wait, so a contended capture
+// now fails fast and attributably instead of silently eating the deadline.
+func (s *Session) doTimed(ctx context.Context, timeout time.Duration, fn func(ctx context.Context) error) (doTiming, error) {
+	var timing doTiming
+	lockStart := time.Now()
+	if err := s.mu.Acquire(ctx, 1); err != nil {
+		timing.LockWait = time.Since(lockStart)
+		return timing, err
+	}
+	defer s.mu.Release(1)
+	timing.LockWait = time.Since(lockStart)
+
+	connStart := time.Now()
+	connErr := s.ensureConnected()
+	timing.EnsureConnected = time.Since(connStart)
+	if connErr != nil {
+		return timing, connErr
 	}
 	// Inject persisted state on the FIRST attach after a pod boot, before fn runs —
 	// so a wake's restored cookies are in place before the first browser action.
@@ -240,7 +291,11 @@ func (s *Session) do(ctx context.Context, timeout time.Duration, fn func(ctx con
 	// into the chromedp run, which is parented on the long-lived browser ctx.
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
-	return fn(runCtx)
+
+	runStart := time.Now()
+	err := fn(runCtx)
+	timing.Run = time.Since(runStart)
+	return timing, err
 }
 
 // maybeInject performs the once-per-boot state injection on first attach. It is
@@ -388,6 +443,19 @@ func (s *Session) lookupRef(ref string) (refEntry, bool) {
 	return e, ok
 }
 
+// ErrStaleRef is the sentinel a fact-reading helper (actionFacts,
+// capturePageState) wraps into its returned error when lookupRef reports a
+// miss — i.e. the ref named a page element that is simply GONE (the page
+// re-rendered since the agent last read it). It is distinct from every other
+// fact-read fault (a CDP transport error, a JS exception mid-walk): those
+// faults mean "we don't know what this call would do," which must stay
+// fail-closed-to-mutate, while a stale ref means "this call cannot execute at
+// all," because every acting op's Execute path independently re-resolves the
+// same ref and refuses with a clean tool error before touching the page. A
+// caller distinguishes the two with errors.Is(err, ErrStaleRef); never match
+// on the error's string text, which is presentation, not contract.
+var ErrStaleRef = errors.New("ref is stale")
+
 // heldCredential returns the hold's entry for host, and whether it is present
 // and unexpired. An expired entry is dropped and reported absent. Safe for
 // concurrent use; takes credMu, never mu.
@@ -488,8 +556,10 @@ func (s *Session) clearBlanked() {
 // credential hold and blanked-field set. Safe to call more than once. After
 // Close a subsequent tool call reconnects lazily.
 func (s *Session) Close() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Background: Close must always eventually tear the connection down, so
+	// it never bounds the wait by a caller ctx the way do()'s Acquire does.
+	_ = s.mu.Acquire(context.Background(), 1)
+	defer s.mu.Release(1)
 	if s.browseCl != nil {
 		s.browseCl()
 		s.browseCl = nil

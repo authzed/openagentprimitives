@@ -1167,6 +1167,57 @@ describe("ChatView — websocket frame rendering", () => {
     expect(link.getAttribute("href")).toBe("https://link.example.com/x");
   });
 
+  // Reproduces the ACTUAL live wsFrame wire shape end to end — through
+  // handleFrame's real routing, not a direct InteractionCard render (every
+  // existing InteractionCard.test.tsx case, including #55's own "ns" repro,
+  // renders the card directly and so never exercises ChatView's own
+  // frame-to-line unwrap). Two things must both be real here, or the bug this
+  // guards against is invisible:
+  //   1. the wsFrame's own double-nesting (sink.go's toFrame does
+  //      `Payload: m` where m is builtin.MsgInteractionRequest{Session,
+  //      Payload: channelevents.InteractionRequestPayload} — same shape as
+  //      the test above), and
+  //   2. agentSessionRef riding as channelevents.SessionRef (json "ns"), not
+  //      browser.SessionRef (json "namespace") — round-tripped through
+  //      JSON.parse(JSON.stringify(...)) so TypeScript's SessionRef type
+  //      (which has no runtime effect) can't paper over a missing key.
+  // Before the fix this built sessionRef=undefined%2F<name> and 403'd; a
+  // page refresh (which replays through a different, already-correctly-
+  // shaped path) rendered fine, which is why this bug was LIVE-only.
+  it("renders a LIVE interaction_request's screenshot with the real sessionRef, not undefined", async () => {
+    await sendFirstMessage();
+    const S = { namespace: NS, name: NAME };
+    const frame = JSON.parse(
+      JSON.stringify({
+        type: "interaction_request",
+        session: S,
+        payload: {
+          session: S,
+          payload: {
+            agentSessionRef: { ns: "default", name: NAME },
+            category: "acting_approval",
+            requestRef: "req-shot",
+            lead: "Approve this action?",
+            audience: { scope: "requester" },
+            screenshot: {
+              artifactId: "art-1",
+              renderName: "shot-1",
+              mime: "image/png",
+              filename: "page.png",
+            },
+          },
+        },
+      }),
+    ) as ChatFrame;
+    capturedOnFrame!(frame);
+    await waitFor(() => expect(screen.getByText("Approve this action?")).toBeTruthy());
+    const img = document.querySelector("img") as HTMLImageElement | null;
+    expect(img).not.toBeNull();
+    const src = img!.getAttribute("src") ?? "";
+    expect(src).toContain(`sessionRef=default%2F${NAME}`);
+    expect(src).not.toContain("undefined");
+  });
+
   it("resolves the matching card in place on interaction_applied, keyed by requestRef", async () => {
     await sendFirstMessage();
     const S = { namespace: NS, name: NAME };

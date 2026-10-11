@@ -18,6 +18,7 @@ import (
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/platform/artifactstore"
 )
 
@@ -65,11 +66,13 @@ func TestStoreScreenshotArtifact_InlineVsRef(t *testing.T) {
 	sess := channelevents.SessionRef{Namespace: "default", Name: "s1"}
 
 	t.Run("PNG under the 256 KiB cap is stored inline", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(scheme).Build()
+		c := fake.NewClientBuilder().WithScheme(scheme).
+			WithInterceptorFuncs(readyOnCreateInterceptor()).Build()
 		putter := &fakeScreenshotPutter{ref: "mem://should-not-be-used"}
 		deps := screenshotStoreDeps{
 			Client:        c,
 			ArtifactStore: putter,
+			Artifacts:     uiResourceTestArtifactsService(),
 			SessionUID:    types.UID("sess-uid-1"),
 		}
 		small := bytes.Repeat([]byte{0xAB}, 1024) // < 256 KiB
@@ -96,11 +99,13 @@ func TestStoreScreenshotArtifact_InlineVsRef(t *testing.T) {
 	})
 
 	t.Run("PNG over the 256 KiB cap is stored by ref", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(scheme).Build()
+		c := fake.NewClientBuilder().WithScheme(scheme).
+			WithInterceptorFuncs(readyOnCreateInterceptor()).Build()
 		putter := &fakeScreenshotPutter{ref: "mem://default/s1/screenshot.png"}
 		deps := screenshotStoreDeps{
 			Client:        c,
 			ArtifactStore: putter,
+			Artifacts:     uiResourceTestArtifactsService(),
 			SessionUID:    types.UID("sess-uid-1"),
 		}
 		big := bytes.Repeat([]byte{0xCD}, 300*1024) // > 256 KiB
@@ -126,6 +131,7 @@ func TestStoreScreenshotArtifact_InlineVsRef(t *testing.T) {
 		deps := screenshotStoreDeps{
 			Client:        c,
 			ArtifactStore: putter,
+			Artifacts:     uiResourceTestArtifactsService(),
 			SessionUID:    types.UID("sess-uid-1"),
 		}
 		big := bytes.Repeat([]byte{0xEF}, 300*1024)
@@ -147,6 +153,7 @@ func TestStoreScreenshotArtifact_InlineVsRef(t *testing.T) {
 			Build()
 		deps := screenshotStoreDeps{
 			Client:     c,
+			Artifacts:  uiResourceTestArtifactsService(),
 			SessionUID: types.UID("sess-uid-1"),
 		}
 		small := bytes.Repeat([]byte{0x01}, 16)
@@ -156,11 +163,58 @@ func TestStoreScreenshotArtifact_InlineVsRef(t *testing.T) {
 		assert.Nil(t, ref)
 	})
 
+	t.Run("Ready render is finalized so the artifact head resolves in memory", func(t *testing.T) {
+		// Task #54: the chat UI's <img src="/artifact-download?artifactId=..."> 403'd
+		// because the screenshot's artifactID had never been finalized — no
+		// memory artifact head, no artifact#parent SpiceDB relationship. This
+		// pins the fix at the layer this package owns: once
+		// storeScreenshotArtifact returns, artifacts.Service.GetHead must find
+		// the head FinalizeRevision wrote (the same Put that
+		// pkg/memory/spicedbauthorizer.Authorizer hooks to write
+		// artifact#parent in production).
+		c := fake.NewClientBuilder().WithScheme(scheme).
+			WithInterceptorFuncs(readyOnCreateInterceptor()).Build()
+		svc := uiResourceTestArtifactsService()
+		deps := screenshotStoreDeps{
+			Client:     c,
+			Artifacts:  svc,
+			SessionUID: types.UID("sess-uid-1"),
+		}
+		small := bytes.Repeat([]byte{0x05}, 16)
+
+		ref, err := storeScreenshotArtifact(context.Background(), deps, sess, small)
+		require.NoError(t, err)
+		require.NotNil(t, ref)
+
+		scope := memory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}
+		head, found, err := svc.GetHead(memory.WithSystemApproval(context.Background(), "test"), scope, ref.ArtifactID)
+		require.NoError(t, err)
+		assert.True(t, found, "FinalizeRevision must have Put the artifact head — without it the artifact is unresolvable and unviewable")
+		assert.Equal(t, 1, head.RevisionCount)
+	})
+
+	t.Run("missing Artifacts service fails closed rather than minting an unviewable ref", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithScheme(scheme).
+			WithInterceptorFuncs(readyOnCreateInterceptor()).Build()
+		deps := screenshotStoreDeps{
+			Client:     c,
+			SessionUID: types.UID("sess-uid-1"),
+			// Artifacts intentionally left nil.
+		}
+		small := bytes.Repeat([]byte{0x03}, 16)
+
+		ref, err := storeScreenshotArtifact(context.Background(), deps, sess, small)
+		require.Error(t, err, "a nil Artifacts service must fail closed, never mint a ref FinalizeRevision never ran for")
+		assert.Nil(t, ref)
+	})
+
 	t.Run("deterministic name/id seams are honored", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(scheme).Build()
+		c := fake.NewClientBuilder().WithScheme(scheme).
+			WithInterceptorFuncs(readyOnCreateInterceptor()).Build()
 		deps := screenshotStoreDeps{
 			Client:        c,
 			ArtifactStore: &fakeScreenshotPutter{},
+			Artifacts:     uiResourceTestArtifactsService(),
 			SessionUID:    types.UID("sess-uid-1"),
 			NewRenderName: func(session string) string { return "ar-" + session + "-fixed" },
 			NewArtifactID: func() string { return "artifact-fixed" },
@@ -206,7 +260,11 @@ func (s *sleepyCapturer) CaptureRedacted(ctx context.Context) ([]byte, error) {
 // still succeeds.
 func TestCaptureBrowserScreenshotFn_SurvivesCallerCtxShortDeadline(t *testing.T) {
 	scheme := browserScreenshotTestScheme(t)
-	l := &Loop{Client: fake.NewClientBuilder().WithScheme(scheme).Build()}
+	l := &Loop{
+		Client: fake.NewClientBuilder().WithScheme(scheme).
+			WithInterceptorFuncs(readyOnCreateInterceptor()).Build(),
+		Artifacts: uiResourceTestArtifactsService(),
+	}
 	sess := channelevents.SessionRef{Namespace: "ns", Name: "s1"}
 	cap := &sleepyCapturer{delay: 50 * time.Millisecond, png: bytes.Repeat([]byte{0xAA}, 32)}
 	fn := l.captureBrowserScreenshotFn(sess, cap)
@@ -246,4 +304,63 @@ func TestCaptureBrowserScreenshotFn_PropagatesCallerCancellation(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("capture did not observe the caller's cancellation within 2s")
 	}
+}
+
+// flakyCapturer fails with err on its first failTimes calls, then returns png
+// on every call after — standing in for the Task #53 residual symptom: an
+// intermittent "context deadline exceeded" that a second attempt against the
+// same budget usually clears (a contended mutex that cleared, a CDP round
+// trip that was merely slow). calls counts every invocation so a test can
+// assert exactly how many attempts the closure made.
+type flakyCapturer struct {
+	failTimes int
+	err       error
+	png       []byte
+	calls     int
+}
+
+func (f *flakyCapturer) CaptureRedacted(ctx context.Context) ([]byte, error) {
+	f.calls++
+	if f.calls <= f.failTimes {
+		return nil, f.err
+	}
+	return f.png, nil
+}
+
+// TestCaptureBrowserScreenshotFn_RetriesOnceOnTimeout pins the Task #53
+// robustness fix: a single timeout-shaped failure (context.DeadlineExceeded)
+// must be retried exactly once, and a second attempt that succeeds must make
+// the closure return a ref — not give up after the first failure the way #47
+// left it.
+func TestCaptureBrowserScreenshotFn_RetriesOnceOnTimeout(t *testing.T) {
+	scheme := browserScreenshotTestScheme(t)
+	l := &Loop{
+		Client: fake.NewClientBuilder().WithScheme(scheme).
+			WithInterceptorFuncs(readyOnCreateInterceptor()).Build(),
+		Artifacts: uiResourceTestArtifactsService(),
+	}
+	sess := channelevents.SessionRef{Namespace: "ns", Name: "s1"}
+	cap := &flakyCapturer{failTimes: 1, err: context.DeadlineExceeded, png: bytes.Repeat([]byte{0xAA}, 32)}
+	fn := l.captureBrowserScreenshotFn(sess, cap)
+
+	ref := fn(context.Background())
+	require.NotNil(t, ref, "a single timeout-shaped failure must be retried once and succeed")
+	assert.Equal(t, 2, cap.calls, "exactly one retry: two total attempts, not an unbounded loop")
+}
+
+// TestCaptureBrowserScreenshotFn_DoesNotRetryNonTimeoutError proves the retry
+// is scoped to the Task #53 timeout symptom specifically: a fail-closed
+// redaction error (a blanked field whose box genuinely cannot be resolved) is
+// NOT a timeout and must not be masked by a retry that happens to succeed on
+// a since-changed page.
+func TestCaptureBrowserScreenshotFn_DoesNotRetryNonTimeoutError(t *testing.T) {
+	scheme := browserScreenshotTestScheme(t)
+	l := &Loop{Client: fake.NewClientBuilder().WithScheme(scheme).Build()}
+	sess := channelevents.SessionRef{Namespace: "ns", Name: "s1"}
+	cap := &flakyCapturer{failTimes: 1, err: errors.New("redact: empty box for blanked node 7"), png: bytes.Repeat([]byte{0xAA}, 32)}
+	fn := l.captureBrowserScreenshotFn(sess, cap)
+
+	ref := fn(context.Background())
+	assert.Nil(t, ref, "a non-timeout fail-closed error must not be retried into a false success")
+	assert.Equal(t, 1, cap.calls, "no retry for a non-timeout error")
 }

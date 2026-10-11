@@ -217,7 +217,7 @@ func (s *Session) capturePageState(ctx context.Context, target ActionFacts, targ
 	err := s.do(ctx, shortTimeout, func(c context.Context) error {
 		e, ok := s.lookupRef(targetRef)
 		if !ok {
-			return fmt.Errorf("ref %s is stale", targetRef)
+			return fmt.Errorf("%w: ref %s", ErrStaleRef, targetRef)
 		}
 
 		var obj *runtime.RemoteObject

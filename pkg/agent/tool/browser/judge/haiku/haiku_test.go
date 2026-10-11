@@ -5,7 +5,7 @@ package haiku_test
 // scripted pkg/agent/llm/fake.Provider, never a real Anthropic call. It
 // covers three things:
 //
-//  1. Plumbing correctness: for every one of the 51 labeled corpus cases
+//  1. Plumbing correctness: for every one of the 54 labeled corpus cases
 //     (testdata/corpus.json, loaded via corpus_test.go), a fake Provider
 //     scripted to return a JSON distribution peaked on that case's GOLD tier
 //     round-trips to a Verdict carrying the right Tier and Probs. This
@@ -103,7 +103,7 @@ func scriptedResponse(t *testing.T, note string, gold judge.Tier) llm.Response {
 // Verdict carrying that tier and the scripted Probs.
 func TestClassify_MapsScriptedResponseToGoldTier(t *testing.T) {
 	corpus := loadCorpus(t)
-	require.Len(t, corpus, 51, "the ported corpus must carry exactly the 51 spike_corpus.py cases")
+	require.Len(t, corpus, 54, "the corpus must carry the 51 ported spike_corpus.py cases plus the 3 task-52 httpbin form-fill/commit cases")
 
 	for _, tc := range corpus {
 		t.Run(tc.Note, func(t *testing.T) {

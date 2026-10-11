@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -72,7 +73,8 @@ const (
 	// call as a mutate. Kept as a local constant rather than importing the haiku
 	// backend so this CDP/DOM tool package does not pull the LLM-provider
 	// transitive deps in just for a number; threshold_test.go pins it equal to
-	// haiku.DefaultMutateThreshold so the two cannot drift.
+	// haiku.DefaultMutateThreshold so the two cannot drift. See
+	// haiku.DefaultMutateThreshold for why 0.15 (chosen against a live Haiku sweep).
 	defaultMutateThreshold = 0.15
 
 	// webActionClassifyTimeout bounds the whole classify-and-stamp pass NamedArgs
@@ -300,12 +302,22 @@ func (t *browserTool) NamedArgs(args map[string]any) (map[string]any, bool) {
 // stampWebAction classifies this acting call's consequence tier and, for a
 // MUTATE, stamps the web_action key (E4) and the live page fingerprint (E5) into
 // out so the dispatch layer can require a per-action web_action grant on top of
-// the coarse web_host one. An observe/navigate/session verdict stamps nothing.
+// the coarse web_host one. An observe/navigate/session verdict stamps nothing
+// of THOSE three keys — but every call through here (mutate or not) stamps
+// WebActionDescriptionArg, a human-readable "what this does" sentence (see
+// action_descriptor.go): even a benign click can still need approval for the
+// coarse web_host grant (e.g. the agent's first action on a new host), and
+// that card deserves the same phrasing a mutate's does.
 //
-// FAIL-CLOSED throughout: if the action's facts cannot be read (a stale/missing
-// ref, a CDP fault) the call is treated as a mutate and gated; if the judge
-// errors or is unavailable it is treated as a mutate (classifyMutate); and a
-// page-fingerprint capture failure stamps an EMPTY fingerprint, which the
+// FAIL-CLOSED, with ONE deliberate exception: if the action's facts cannot be
+// read because the ref is STALE (errors.Is ErrStaleRef — the element is simply
+// gone), the call is NOT gated, because it cannot execute at all; Execute's own
+// op handler re-resolves the same ref and refuses it independently (see the
+// ErrStaleRef branch below). Every OTHER fact-read fault (a CDP transport
+// error, a JS exception) is treated as a mutate and gated, since those mean
+// "we don't know what this would do," not "this cannot run." If the judge
+// errors or is unavailable the call is treated as a mutate (classifyMutate);
+// and a page-fingerprint capture failure stamps an EMPTY fingerprint, which the
 // web_action check's pagestate_matches caveat refuses — never a silent allow.
 // Every failure is logged (never silently dropped) with toolbox/op/host context.
 func (t *browserTool) stampWebAction(out, args map[string]any, host string) {
@@ -315,16 +327,42 @@ func (t *browserTool) stampWebAction(out, args map[string]any, host string) {
 	ref := stringArg(args, "ref")
 	facts, err := t.sess.actionFacts(ctx, t.op, ref)
 	if err != nil {
-		// Could not read what this call acts on, so it cannot be proven benign:
-		// gate it. The key is best-effort from what is known (op + host); the
-		// empty fingerprint makes the web_action check deny regardless.
+		if errors.Is(err, ErrStaleRef) {
+			// The ref named an element that is simply GONE (the page re-rendered
+			// since the agent last read it) — this call cannot execute, so it
+			// cannot mutate anything either. Gating it as a mutate would only
+			// raise a spurious web_action approval the user has to dismiss, with
+			// no grant ever minted because the call never gets to use it (the
+			// bug this fix addresses). Execute's own op handler (click/type/
+			// press/select/submit) independently re-resolves the same ref via
+			// lookupRef and will refuse with a clean IsError tool result telling
+			// the model to read the page again — nothing runs un-gated. Still
+			// stamp the description: the coarse web_host grant check still
+			// applies to this call (see the doc comment above) and deserves the
+			// same phrasing a mutate's does, even though no per-action check is
+			// being requested.
+			slog.Info("browser: ref is stale while extracting action facts; not gating as mutate (the call cannot execute)",
+				"toolbox", t.rtName, "op", t.op, "host", host, "err", err.Error())
+			out[browserschema.WebActionDescriptionArg] = humanActionDescriptor(ActionFacts{Op: t.op, Host: host})
+			return
+		}
+		// Could not read what this call acts on for some OTHER reason (a CDP
+		// fault, a JS error mid-walk, ...), so it cannot be proven benign: gate
+		// it. The key is best-effort from what is known (op + host); the empty
+		// fingerprint makes the web_action check deny regardless. The descriptor
+		// degrades gracefully to a generic op+host phrase (never the raw ref) —
+		// humanActionDescriptor is a pure function of ActionFacts and handles
+		// every field being empty.
 		slog.Warn("browser: action-fact extraction failed; gating acting call as mutate (fail-closed)",
 			"toolbox", t.rtName, "op", t.op, "host", host, "err", err.Error())
 		out[browserschema.WebActionRequiredArg] = true
 		out[browserschema.WebActionKeyArg] = ActionKey(ActionFacts{Op: t.op, Host: host})
 		out[browserschema.WebActionFingerprintArg] = ""
+		out[browserschema.WebActionDescriptionArg] = humanActionDescriptor(ActionFacts{Op: t.op, Host: host})
 		return
 	}
+
+	out[browserschema.WebActionDescriptionArg] = humanActionDescriptor(facts)
 
 	if !t.classifyMutate(ctx, facts) {
 		return // positively benign (observe/navigate/session): no per-action gate
@@ -353,13 +391,15 @@ func (t *browserTool) stampWebAction(out, args map[string]any, host string) {
 // classifies, and an uncertain classification must gate.
 func (t *browserTool) classifyMutate(ctx context.Context, facts ActionFacts) bool {
 	a := judge.Action{
-		Op:         facts.Op,
-		Role:       facts.Role,
-		Text:       facts.Text,
-		FormAction: facts.FormAction,
-		Container:  facts.Container,
-		Host:       facts.Host,
-		PageURL:    facts.PageURL,
+		Op:            facts.Op,
+		Role:          facts.Role,
+		Text:          facts.Text,
+		FormAction:    facts.FormAction,
+		Container:     facts.Container,
+		Host:          facts.Host,
+		PageURL:       facts.PageURL,
+		Submits:       facts.Submits,
+		FormHasSubmit: facts.FormHasSubmit,
 	}
 	page := judge.PageContext{URLPath: urlPath(facts.PageURL)}
 
@@ -374,11 +414,21 @@ func (t *browserTool) classifyMutate(ctx context.Context, facts ActionFacts) boo
 	// query-stripped by urlPath) + the tier/probability give the full diagnostic
 	// ("which action, what the model decided") with no content sink. Do not add
 	// raw page text back here.
+	//
+	// submits/formHasSubmit ARE included (unlike Text/Container): both are plain
+	// structural booleans about the DOM shape (is this element a submit control;
+	// does its enclosing form have one), never user-entered content, so they
+	// carry no credential risk. They are exactly what distinguishes "the
+	// deterministic path didn't clear this because the role wasn't
+	// radio/checkbox/option/text" from "it didn't clear because FormHasSubmit was
+	// false" — without them, a live-run diagnosis of a gate the fast-path
+	// SHOULD have cleared has to guess between those two causes.
 	detV, _ := judge.NewDeterministic().Classify(ctx, a, page)
 	if detV.Tier != judge.TierMutate {
 		slog.Info("browser: consequence classify = benign (deterministic fast-path cleared it; model NOT consulted)",
 			"toolbox", t.rtName, "op", facts.Op, "host", facts.Host, "role", facts.Role,
-			"formAction", facts.FormAction, "detTier", string(detV.Tier))
+			"formAction", facts.FormAction, "submits", facts.Submits, "formHasSubmit", facts.FormHasSubmit,
+			"detTier", string(detV.Tier))
 		return false
 	}
 
@@ -392,7 +442,8 @@ func (t *browserTool) classifyMutate(ctx context.Context, facts ActionFacts) boo
 	// See the omission note above: no facts.Text / facts.Container (credential sink).
 	slog.Info("browser: consequence classify (model consulted)",
 		"toolbox", t.rtName, "op", facts.Op, "host", facts.Host, "role", facts.Role,
-		"formAction", facts.FormAction, "judge", t.judge.Name(),
+		"formAction", facts.FormAction, "submits", facts.Submits, "formHasSubmit", facts.FormHasSubmit,
+		"judge", t.judge.Name(),
 		"modelTier", string(v.Tier), "pMutate", v.Probs[judge.TierMutate],
 		"threshold", defaultMutateThreshold, "gated", gated)
 	return gated

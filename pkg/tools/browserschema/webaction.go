@@ -62,6 +62,21 @@ const (
 	WebActionFingerprintArg = "web_action_fingerprint"
 	WebActionRequiredArg    = "web_action_required"
 
+	// WebActionDescriptionArg is a FOURTH NamedArgs key, stamped alongside (but
+	// independently of) the three above: a short, human-readable sentence
+	// describing what the pending acting call will do — "Click 'Submit order'",
+	// "Select 'Medium'" — derived from the SAME action facts the consequence
+	// judge classifies, not from the wire-level op/ref. Unlike the other three,
+	// it is stamped for EVERY acting call the tool can read facts for (mutate or
+	// not), because even a benign click can need the coarse web_host approval
+	// (e.g. the agent's first action on a new host) and that card deserves the
+	// same human phrasing. The runner's approval-ask builder reads this key and,
+	// when present, uses it as the card's "What" line INSTEAD OF the generic
+	// tool-call summarizer — then deletes it from the args map before the card's
+	// argsHash/ArgsJSON are computed, exactly like the three keys above, so this
+	// presentation string never leaks into the durable args hash.
+	WebActionDescriptionArg = "web_action_description"
+
 	// PagestateMatchesCaveat is the SpiceDB caveat name the composer emits on
 	// web_action's slot_grant_act relation (`with pagestate_matches and
 	// expiration`) — defined in the canonical scaffold schema (E1,

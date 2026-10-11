@@ -24,6 +24,23 @@ import type {
   SessionRef,
 } from "./types";
 
+// sessionNamespace reads a SessionRef's namespace tolerating the ACTUAL wire
+// shape: request.agentSessionRef rides as channelevents.SessionRef
+// (pkg/channels/channelevents/envelope.go), which marshals the field as
+// "ns" — unlike the wsFrame's own top-level `session` field (and every
+// MsgX.Session), which is browser.SessionRef (pkg/channels/channelkinds/browser/events.go,
+// json:"namespace") and decodes straight into this file's SessionRef type.
+// Both Go types collapse onto the one frontend SessionRef interface, so
+// `session.namespace` is silently undefined for an agentSessionRef-sourced
+// value even though the real namespace is present on the wire, just under
+// `ns`. Without this, screenshotDownloadURL below built
+// sessionRef=undefined%2F<name> — the server then CheckViews
+// agentsession:undefined/<name> (no parent relationship) and 403s, which is
+// how a real approval card's screenshot failed to load.
+function sessionNamespace(ref: SessionRef): string {
+  return ref.namespace ?? (ref as unknown as { ns?: string }).ns ?? "";
+}
+
 // screenshotDownloadURL builds the same-origin download link for the
 // interaction's screenshot attachment — same shape as ChatView's
 // artifactDownloadURL (not exported from there, so replicated here rather
@@ -35,7 +52,7 @@ import type {
 function screenshotDownloadURL(session: SessionRef, shot: InteractionScreenshot): string {
   const params = new URLSearchParams({
     artifactId: shot.artifactId ?? "",
-    sessionRef: `${session.namespace}/${session.name}`,
+    sessionRef: `${sessionNamespace(session)}/${session.name}`,
     fn: shot.filename || shot.renderName,
   });
   return `/artifact-download?${params.toString()}`;

@@ -547,5 +547,41 @@
     "classes": "btn-primary oauth-grant",
     "form_action": "/oauth/authorize",
     "page_url": "https://github.com/login/oauth/authorize?client_id=abc"
+  },
+  {
+    "gold": 1,
+    "note": "type customer name into a form that POSTs to /post (filling, not committing)",
+    "op": "type",
+    "tag": "input",
+    "input_type": "text",
+    "text": "Jane Doe",
+    "field_label": "Customer name",
+    "classes": "field custname",
+    "form_action": "/post",
+    "page_url": "https://httpbin.org/forms/post"
+  },
+  {
+    "gold": 1,
+    "note": "select pizza size radio in a form that POSTs to /post (selection, not commit)",
+    "op": "click",
+    "tag": "input",
+    "input_type": "radio",
+    "role": "radio",
+    "text": "Medium",
+    "classes": "size-radio",
+    "form_action": "/post",
+    "page_url": "https://httpbin.org/forms/post"
+  },
+  {
+    "gold": 3,
+    "note": "submit the pizza order (the one real commit on httpbin /forms/post)",
+    "op": "click",
+    "tag": "button",
+    "role": "button",
+    "text": "Submit order",
+    "input_type": "submit",
+    "classes": "order-submit",
+    "form_action": "/post",
+    "page_url": "https://httpbin.org/forms/post"
   }
 ]

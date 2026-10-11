@@ -1,16 +1,18 @@
 package haiku_test
 
 // corpus_test.go loads testdata/corpus.json -- the 51 labeled cases ported
-// from ~/Projects/laya/spike_corpus.py -- and converts each raw case into the
-// judge.Action/judge.PageContext shape a real ConsequenceJudge consumes, plus
-// its gold tier. Shared by haiku_test.go (fake-provider plumbing + threshold
-// policy tests) and haiku_corpus_eval_test.go (the env-gated live-Haiku
-// accuracy eval), so both exercise the exact same 51 cases.
+// from ~/Projects/laya/spike_corpus.py, plus 3 cases added for task 52 (the
+// httpbin /forms/post form-fill-vs-commit distinction) -- and converts each raw
+// case into the judge.Action/judge.PageContext shape a real ConsequenceJudge
+// consumes, plus its gold tier. Shared by haiku_test.go (fake-provider plumbing
+// + threshold policy tests) and haiku_corpus_eval_test.go (the env-gated
+// live-Haiku accuracy eval), so both exercise the exact same 54 cases.
 import (
 	"encoding/json"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
@@ -152,11 +154,31 @@ func (rc rawCorpusCase) toCorpusCase(t *testing.T) corpusCase {
 			Role:       role,
 			Text:       text,
 			FormAction: formAction,
+			Submits:    submitsFor(rc),
 			Host:       host,
 			PageURL:    rc.PageURL,
 		},
 		Page: judge.PageContext{URLPath: path},
 		Gold: gold,
+	}
+}
+
+// submitsFor mirrors actionfacts.go's isSubmitControl against the fields the
+// corpus records: a <button> whose resolved type is submit (the HTML default,
+// so a bare <button> or an explicit type=submit counts; type=button/reset do
+// not) or an <input type=submit|image>. This is the Action.Submits the real
+// derivation would compute for the same DOM node, so the live eval
+// (haiku_corpus_eval_test.go) feeds the model the same is_submit_control signal
+// production does.
+func submitsFor(rc rawCorpusCase) bool {
+	it := strings.ToLower(rc.InputType)
+	switch strings.ToLower(rc.Tag) {
+	case "button":
+		return it == "" || it == "submit"
+	case "input":
+		return it == "submit" || it == "image"
+	default:
+		return false
 	}
 }
 

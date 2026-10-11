@@ -35,6 +35,115 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/web/webui/internal/wstest"
 )
 
+// TestWebChatE2E_InteractionDecisionAppliedAndPlanUpdateReachBrowser closes a
+// real coverage gap in the acting/plan-gate flow: before this test,
+// `grep -rl "KindInteractionApplied" pkg/web/webui/chat/*_test.go` returned
+// nothing, so a regression in the resolver that resolves interaction_applied
+// / plan_update to a live browser sender had no test to fail it.
+//
+// This was written while investigating a reported production symptom — "the
+// plan card renders, the user approves it, and nothing more ever renders
+// live" with channelsd logging "outbound relay: drop, no sender for this
+// kind on this channel" for interaction_applied/plan_update/turn_progress/
+// operation_activity. That symptom does NOT reproduce through this path: see
+// the investigation notes in the PR/commit description. channelsd's own
+// "no sender" log for a browser-kind session is expected and harmless
+// (browser.Kind.RelayedByChannelsd() is false; channelsd's senderResolver
+// explicitly skips client-hosted kinds — see errClientHostedKind in
+// internal/cmd/channelsd/sender_resolver.go) — delivery is webd's chat
+// Registry's job, exercised here end to end, and it already resolves
+// correctly for interaction_applied and plan_update. This test is therefore
+// coverage, not a regression fix: it passes unmodified today and will FAIL
+// if a future change to sender_resolver.go / relay.go / host.go breaks this
+// path.
+//
+// End to end over the real stack, mirroring
+// TestWebChatE2E_AttachAsksForParkedPromptAndGetsIt: this test's NATS
+// subscriber stands in for channelsd's category-generic decision pipe
+// (pkg/channels/channelsd/pipeline) — it receives the real
+// KindInteractionDecision envelope the browser Listener publishes on submit,
+// and in response publishes the KindInteractionApplied + KindPlanUpdate
+// envelopes the real pipe would emit. Both must reach the SAME websocket the
+// plan card arrived on, through the real outbound.Relay and the real
+// *browser.Host sender — not synthesized by the test.
+func TestWebChatE2E_InteractionDecisionAppliedAndPlanUpdateReachBrowser(t *testing.T) {
+	fastPoll(t, 10*time.Millisecond, time.Hour)
+	f := startWebChatE2E(t, spiceboxv1alpha1.AgentSessionPhaseRunning)
+
+	// Stand in for channelsd's decision pipe: capture the KindInteractionDecision
+	// the browser Listener's SubmitInteractionDecision publishes on the
+	// session's IN subject, then react the way the real pipe does — emit
+	// interaction_applied (resolving the card), followed by a plan_update
+	// snapshot for the now-approved phase.
+	decided := make(chan channelevents.InteractionDecisionPayload, 4)
+	sub, err := f.nc.Subscribe(
+		channelevents.SubjectIn(channelevents.SubjectPrefix(newChatSessionNamespace, f.name), channelevents.KindInteractionDecision),
+		func(m *nats.Msg) {
+			var env channelevents.Envelope
+			if jerr := json.Unmarshal(m.Data, &env); jerr != nil {
+				return
+			}
+			var pl channelevents.InteractionDecisionPayload
+			if jerr := json.Unmarshal(env.Payload, &pl); jerr != nil {
+				return
+			}
+			decided <- pl
+		})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	require.NoError(t, f.nc.Flush())
+
+	conn := f.dialWS(t)
+
+	// The plan card itself — must already reach the tab (same mechanism the
+	// parked-prompt regression test proves).
+	f.publish(t, channelevents.KindInteractionRequest, channelevents.InteractionRequestPayload{
+		AgentSessionRef: channelevents.SessionRef{Namespace: newChatSessionNamespace, Name: f.name},
+		Category:        categories.PlanPhase,
+		RequestRef:      "plan-req-1",
+		Lead:            "Approve phase 1?",
+		Actions: []channelevents.InteractionAction{{
+			ID: "approve", Label: "Approve", Kind: channelevents.ActionKindDecision,
+		}},
+		Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceRequester},
+	})
+	waitForFrame(t, conn, "interaction_request")
+
+	// The user clicks Approve: drive the REAL inbound path (Registry ->
+	// listener -> browser.Listener -> NATS IN publish), not a synthesized
+	// envelope.
+	require.NoError(t, f.reg.SubmitDecision(context.Background(), newChatKey(f.name), "user:owner",
+		categories.PlanPhase, "plan-req-1", "approve"))
+
+	select {
+	case pl := <-decided:
+		require.Equal(t, "plan-req-1", pl.RequestRef, "the decision names the card it resolves")
+	case <-time.After(3 * time.Second):
+		t.Fatal("approving the plan card must publish interaction_decision on the session's IN subject")
+	}
+
+	// What the real decision pipe does in response: resolve the card...
+	f.publish(t, channelevents.KindInteractionApplied, channelevents.InteractionAppliedPayload{
+		AgentSessionRef: channelevents.SessionRef{Namespace: newChatSessionNamespace, Name: f.name},
+		Category:        categories.PlanPhase,
+		RequestRef:      "plan-req-1",
+		Outcome:         channelevents.OutcomeApproved,
+	})
+	appliedFrame := waitForFrame(t, conn, "interaction_applied")
+	require.Equal(t, f.name, appliedFrame.Session.Name)
+
+	// ...then the runner's next plan snapshot, now that phase 1 is approved.
+	f.publish(t, channelevents.KindPlanUpdate, channelevents.PlanUpdatePayload{
+		PlanName: "default",
+		Items: []channelevents.PlanItemRef{{
+			ID: "phase-1", Label: "Phase 1", Status: "in_progress",
+		}},
+		UpdatedAt: time.Now(),
+	})
+	planFrame := waitForFrame(t, conn, "plan_update")
+	require.Equal(t, f.name, planFrame.Session.Name)
+}
+
 // chatVia is the web chat surface's view URN — the same value wireSessionEntry
 // mints and stamps on every envelope the chat publishes.
 func chatVia(t *testing.T) string {

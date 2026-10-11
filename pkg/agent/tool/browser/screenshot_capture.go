@@ -5,13 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
+	"log/slog"
 	"math"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 )
+
+// errString renders err for a structured log field: "" (never nil-as-text)
+// when err is nil, so the diagnostic line's "err" field is grep-friendly on
+// both the success and failure path.
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
 
 // BrowserScreenshotCapturer captures a redacted viewport screenshot of the
 // current page. Injected into the runner's interaction-publish paths; the
@@ -39,15 +51,39 @@ type ScreenshotProvider interface {
 // (blanked) field. It is FAIL-CLOSED: if any blanked field's box cannot be
 // resolved it returns an error and NO bytes, so the caller ships no screenshot
 // rather than one that might reveal a typed secret.
+//
+// When blanked is empty — no credential field is live on the page, the common
+// case outside a login flow — it takes a FAST PATH: the device-pixel-ratio
+// read and the GetBoxModel loop below exist only to scale and locate blanked
+// fields, so with none to redact it skips straight to CaptureScreenshot. That
+// is one fewer CDP round trip (the DPR eval) on every non-redaction capture,
+// which is also the common case the Task #53 desktop run intermittently timed
+// out on — see the INFO log below for the per-stage timing that pins which
+// stage, on a given run, actually used the budget.
 func (s *Session) CaptureRedacted(ctx context.Context) ([]byte, error) {
 	blanked := s.blankedNodes()
 	var shot []byte
 	var boxes []image.Rectangle
-	runErr := s.do(ctx, redactedScreenshotTimeout, func(c context.Context) error {
+	var dprDur, boxesDur, captureDur time.Duration
+	fastPath := len(blanked) == 0
+
+	timing, runErr := s.doTimed(ctx, redactedScreenshotTimeout, func(c context.Context) error {
+		if fastPath {
+			captureStart := time.Now()
+			ae := runAction(c, func(ac context.Context) error {
+				var e error
+				shot, e = page.CaptureScreenshot().Do(ac)
+				return e
+			})
+			captureDur = time.Since(captureStart)
+			return ae
+		}
+
 		// Device pixel ratio: CaptureScreenshot pixels are DPR * CSS pixels,
 		// while GetBoxModel returns CSS pixels, so boxes must be scaled.
 		var dpr float64 = 1
-		if ae := runAction(c, func(ac context.Context) error {
+		dprStart := time.Now()
+		ae := runAction(c, func(ac context.Context) error {
 			r, _, err := runtime.Evaluate("window.devicePixelRatio").Do(ac)
 			if err != nil {
 				// Fail closed: without a trusted DPR we could compute boxes at 1x
@@ -63,9 +99,13 @@ func (s *Session) CaptureRedacted(ctx context.Context) ([]byte, error) {
 				dpr = 1
 			}
 			return nil
-		}); ae != nil {
+		})
+		dprDur = time.Since(dprStart)
+		if ae != nil {
 			return ae
 		}
+
+		boxesStart := time.Now()
 		for _, id := range blanked {
 			var box *dom.BoxModel
 			if ae := runAction(c, func(ac context.Context) error {
@@ -73,6 +113,7 @@ func (s *Session) CaptureRedacted(ctx context.Context) ([]byte, error) {
 				box, e = dom.GetBoxModel().WithBackendNodeID(cdp.BackendNodeID(id)).Do(ac)
 				return e
 			}); ae != nil {
+				boxesDur = time.Since(boxesStart)
 				// Fail closed: a blanked field we can't locate means we can't
 				// prove the screenshot is clean.
 				return fmt.Errorf("redact: box for blanked node %d: %w", id, ae)
@@ -81,20 +122,42 @@ func (s *Session) CaptureRedacted(ctx context.Context) ([]byte, error) {
 			// resolution failure: we cannot prove what region holds the secret,
 			// so fail closed rather than ship an unredacted field.
 			if r := boxFromModelScaled(box, dpr); r.Empty() {
+				boxesDur = time.Since(boxesStart)
 				return fmt.Errorf("redact: empty box for blanked node %d", id)
 			} else {
 				boxes = append(boxes, r)
 			}
 		}
-		if ae := runAction(c, func(ac context.Context) error {
+		boxesDur = time.Since(boxesStart)
+
+		captureStart := time.Now()
+		ae = runAction(c, func(ac context.Context) error {
 			var e error
 			shot, e = page.CaptureScreenshot().Do(ac)
 			return e
-		}); ae != nil {
-			return ae
-		}
-		return nil
+		})
+		captureDur = time.Since(captureStart)
+		return ae
 	})
+
+	// INFO, not Debug: on both success and the timeout path, so the ephemeral
+	// browser pod's logs reveal which stage was slow on the next desktop run
+	// (Task #53) — the pod is gone by the time anyone goes looking otherwise.
+	slog.Info("browser screenshot: CaptureRedacted stage timing",
+		"toolbox", s.logName,
+		"op", "capture_redacted",
+		"blanked_count", len(blanked),
+		"fast_path", fastPath,
+		"lock_wait_ms", timing.LockWait.Milliseconds(),
+		"ensure_connected_ms", timing.EnsureConnected.Milliseconds(),
+		"run_ms", timing.Run.Milliseconds(),
+		"dpr_eval_ms", dprDur.Milliseconds(),
+		"box_resolve_ms", boxesDur.Milliseconds(),
+		"capture_screenshot_ms", captureDur.Milliseconds(),
+		"ok", runErr == nil,
+		"err", errString(runErr),
+	)
+
 	if runErr != nil {
 		return nil, runErr
 	}

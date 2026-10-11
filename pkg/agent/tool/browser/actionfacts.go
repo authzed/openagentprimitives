@@ -41,28 +41,86 @@ type ActionFacts struct {
 	Container  string // stable identifier for the nearest ancestor container: id, else a non-hashed class, else tag; "" if none found
 	Host       string // canonical page host (CurrentHost())
 	PageURL    string // the current page URL
+	// Submits is true when the acted element is a form SUBMIT CONTROL — a
+	// COMMIT, not a field edit. It is the structural fact the consequence judge
+	// uses to tell "filling a form" (type into a field, toggle a radio/checkbox:
+	// local page state, never reaches the server) from "committing a form"
+	// (clicking the control that POSTs it). See actionFactsScript's
+	// isSubmitControl: an <input type=submit|image>, or a <button> whose
+	// resolved type is submit (the HTML default for a bare <button>). A press of
+	// Enter/Return in a form field is a commit too, but that op carries no ref,
+	// so it never resolves an element here — it is gated by stampWebAction's
+	// no-ref fail-closed path, not by this flag.
+	Submits bool
+	// FormHasSubmit is true when the acted element's enclosing <form> itself
+	// contains a submit control (same isSubmitControl test as Submits, applied
+	// to the form's elements rather than to the acted element). It is the
+	// structural signal that distinguishes a FILL-THEN-SUBMIT form (httpbin's
+	// order form, a login form, a search box with a button) from a standalone
+	// autosave-on-input field or an instant-save-on-toggle control that has no
+	// sibling submit and instead ships its own JS oninput/onchange -> POST. The
+	// judge's isFieldEntry/isSelectionToggle recognizers require this to be true
+	// before clearing a type/selection as benign — see
+	// pkg/agent/tool/browser/judge/deterministic.go.
+	FormHasSubmit bool
 }
 
 // actionFactsRaw is the JSON shape actionFactsScript returns from the page.
 type actionFactsRaw struct {
-	FormAction string `json:"formAction"`
-	Container  string `json:"container"`
-	Text       string `json:"text"`
+	FormAction    string `json:"formAction"`
+	Container     string `json:"container"`
+	Text          string `json:"text"`
+	Submits       bool   `json:"submits"`
+	FormHasSubmit bool   `json:"formHasSubmit"`
 }
 
 // actionFactsScript walks the DOM from the resolved node (bound as `this` by
 // Runtime.callFunctionOn): it finds the enclosing form's action (or a link's
-// href when there is no enclosing form), and the nearest ANCESTOR (starting at
-// the parent, never the node itself) carrying an id, else a stable class, else
-// falls back to that ancestor's tag name. All in one evaluate, so the walk sees
-// a single consistent DOM snapshot rather than racing a page mutation between
-// several round trips.
+// href when there is no enclosing form), the nearest ANCESTOR (starting at the
+// parent, never the node itself) carrying an id, else a stable class, else
+// falls back to that ancestor's tag name, whether the node itself is a form
+// SUBMIT CONTROL (`submits`), and whether the enclosing form (if any) CONTAINS
+// a submit control anywhere among its elements (`formHasSubmit`). All in one
+// evaluate, so the walk sees a single consistent DOM snapshot rather than
+// racing a page mutation between several round trips.
+//
+// isSubmitControl is intentionally POSITIVE and narrow: a submit control is an
+// <input type=submit|image> or a <button> whose resolved `.type` is "submit"
+// (the HTML default for a <button> with no explicit type, so a bare <button>
+// counts). type=button / type=reset buttons and every non-button/input element
+// are NOT submit controls — they may still mutate via JS, but that is the
+// judge's fail-closed-to-mutate concern, not a structural submit. We never want
+// a false NEGATIVE here (a real submit reported submits=false could be cleared
+// as a benign field edit), so the few benign over-reports this yields (a bare
+// out-of-form <button>) are the safe direction: they only ever cause gating.
+//
+// formHasSubmit reuses isSubmitControl over form.elements rather than a plain
+// form.querySelector("button, input") descendant scan: HTMLFormElement.elements
+// is the spec's list of every "listed" form-associated control owned by that
+// form, which includes a control associated purely via its own `form="id"`
+// attribute even when it lives OUTSIDE the <form> tag in the DOM — so the one
+// edge case called out in the design note (a submit button linked by `form=`)
+// is covered for free, at no extra DOM walk.
 const actionFactsScript = `function() {
   function isStableClass(c) {
     if (!c) { return false; }
     if (/^(css-|sc-)/.test(c)) { return false; }
     if (c.length > 12 && /^[a-zA-Z0-9_-]+$/.test(c) && /[0-9]/.test(c)) { return false; }
     return true;
+  }
+  function isSubmitControl(el) {
+    if (!el || el.nodeType !== 1) { return false; }
+    var tag = el.tagName;
+    if (tag !== "BUTTON" && tag !== "INPUT") { return false; }
+    var t = (el.type || "").toLowerCase();
+    return t === "submit" || t === "image";
+  }
+  function formContainsSubmit(f) {
+    if (!f || !f.elements) { return false; }
+    for (var i = 0; i < f.elements.length; i++) {
+      if (isSubmitControl(f.elements[i])) { return true; }
+    }
+    return false;
   }
   function containerOf(start) {
     var n = start;
@@ -95,7 +153,13 @@ const actionFactsScript = `function() {
     if (link && link.href) { formAction = link.href; }
   }
   var container = containerOf(this.parentElement);
-  return { formAction: formAction, container: container, text: text(this) };
+  return {
+    formAction: formAction,
+    container: container,
+    text: text(this),
+    submits: isSubmitControl(this),
+    formHasSubmit: formContainsSubmit(form)
+  };
 }`
 
 // actionFacts resolves ref to its backend DOM node and extracts its ActionFacts.
@@ -110,7 +174,7 @@ func (s *Session) actionFacts(ctx context.Context, op, ref string) (ActionFacts,
 	err := s.do(ctx, shortTimeout, func(c context.Context) error {
 		e, ok := s.lookupRef(ref)
 		if !ok {
-			return fmt.Errorf("ref %s is stale", ref)
+			return fmt.Errorf("%w: ref %s", ErrStaleRef, ref)
 		}
 		facts.Role = e.role
 
@@ -157,6 +221,8 @@ func (s *Session) actionFacts(ctx context.Context, op, ref string) (ActionFacts,
 		facts.Text = normalizeActionText(raw.Text)
 		facts.Container = raw.Container
 		facts.FormAction = urlPath(raw.FormAction)
+		facts.Submits = raw.Submits
+		facts.FormHasSubmit = raw.FormHasSubmit
 		return nil
 	})
 	if err != nil {
