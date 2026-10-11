@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	agenttool "github.com/authzed/openagentprimitives/pkg/agent/tool"
+	"github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta/capability"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/originfmt"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/synthesize"
@@ -140,10 +141,14 @@ var queryLoginsOp = opSpec{
 // toolbox (Task C9): the production runner passes a StateStore over the
 // per-session state Secret, tests pass a fake, and an `ephemeral` toolbox (or any
 // caller that does not persist) passes nil, which disables capture and inject
-// entirely. All returned tools share one chromedp session (lazily connected on
-// first use), one origin, one credential filler, one human-step requester, and
-// one state store.
-func Synthesize(rt spiceboxv1alpha1.ResolvedBrowserToolbox, gateURL, token string, acceptsImages bool, fetch CredentialFetcher, humanStep HumanStepRequester, store StateStore) ([]agenttool.Tool, error) {
+// entirely. cj is the consequence judge (Phase E's E8 gate): the production
+// runner passes E7's Haiku-backed judge (falling back to the deterministic one),
+// tests pass a fake, and nil disables per-action (web_action) classification —
+// the tool then stamps no web_action args and only the coarse web_host gate
+// applies. All returned tools share one chromedp session (lazily connected on
+// first use), one origin, one credential filler, one human-step requester, one
+// state store, and one consequence judge.
+func Synthesize(rt spiceboxv1alpha1.ResolvedBrowserToolbox, gateURL, token string, acceptsImages bool, fetch CredentialFetcher, humanStep HumanStepRequester, store StateStore, cj judge.ConsequenceJudge) ([]agenttool.Tool, error) {
 	sites := make([]browserpolicy.Site, 0, len(rt.EffectiveSites))
 	for _, s := range rt.EffectiveSites {
 		sites = append(sites, browserpolicy.Site{Host: s.Host, Exact: s.Exact})
@@ -194,6 +199,7 @@ func Synthesize(rt spiceboxv1alpha1.ResolvedBrowserToolbox, gateURL, token strin
 			catalog:     rt.Catalog,
 			filler:      filler,
 			humanStep:   humanStep,
+			judge:       cj,
 		})
 	}
 	return tools, nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,6 +36,18 @@ const (
 	screenshotFilename = "page.png"
 	screenshotAltText  = "current page (credential fields redacted)"
 )
+
+// captureScreenshotTimeout is the best-effort capture's OWN deadline —
+// deliberately decoupled from whatever deadline the caller's ctx carries
+// (see captureBrowserScreenshotFn's doc). It must be generous enough to
+// survive a cold first capture against a real browser pod: a credentialed
+// desktop run observed the capture losing the race against an ask-raise /
+// dispatch ctx whose deadline was far tighter than the capturer's own 20s
+// (now browser.redactedScreenshotTimeout's 25s) internal budget, logging
+// "capture failed; publishing text-only" / "context deadline exceeded" on
+// every approval. 30s leaves headroom above that 25s inner budget for the
+// storeScreenshotArtifact call (a single k8s Create) that follows it.
+const captureScreenshotTimeout = 30 * time.Second
 
 // screenshotArtifactPutter is the subset of artifactstore.Store that
 // storeScreenshotArtifact needs: Put, to store a screenshot too large to
@@ -178,20 +191,48 @@ func (l *Loop) screenshotStoreDeps() screenshotStoreDeps {
 // browser session, one capturer, two publish call sites, because
 // request_human_step is itself a browser tool): executeToolContained wires it
 // onto the per-call host it builds for the web_host#act acting-approval
-// (plan_phase ask), and humanStepRequester.Confirm/RequestCode wire it onto
-// the host THEY bind for the login_human_step ask — two different *runnerHost
-// values (the latter is bound fresh per round-trip via hostBinder, see its
-// doc), but the SAME Loop and the SAME capturer, which is all this closure
-// needs.
+// (plan_phase ask) AND the web_action/web_host tool_call JIT approval, and
+// humanStepRequester.Confirm/RequestCode wire it onto the host THEY bind for
+// the login_human_step ask — different *runnerHost values (the latter is
+// bound fresh per round-trip via hostBinder, see its doc), but the SAME Loop
+// and the SAME capturer, which is all this closure needs.
+//
+// The returned closure's ctx argument is the CALLER's ask-raise/dispatch ctx
+// — it is NOT used as the capture's deadline. Observed live on a credentialed
+// desktop run: every approval card shipped text-only, logging "capture
+// failed; publishing text-only" / "context deadline exceeded", because the
+// capture inherited that ctx's deadline, which is far tighter than a cold
+// first capture against a real browser pod needs. The capture is best-effort
+// by contract (a failure here never reaches the caller, it only means the
+// card ships without a picture), so it must not die to a deadline that exists
+// to bound the TURN, not the screenshot.
+//
+// captureCtx below gets its OWN deadline (captureScreenshotTimeout), rooted at
+// context.Background() rather than derived from ctx, so the two are
+// decoupled. The caller's CANCELLATION (not its deadline) still propagates:
+// context.AfterFunc fires on ctx.Done() but only calls cancel when
+// ctx.Err() == context.Canceled — an explicit interrupt (the turn aborted,
+// the session ended) still tears the capture down, but ctx's deadline simply
+// elapsing (context.DeadlineExceeded) does not, which is the exact failure
+// mode this fixes.
 func (l *Loop) captureBrowserScreenshotFn(sess channelevents.SessionRef, cap browsertool.BrowserScreenshotCapturer) func(context.Context) *channelevents.AttachmentRef {
 	return func(ctx context.Context) *channelevents.AttachmentRef {
-		png, err := cap.CaptureRedacted(ctx)
+		captureCtx, cancel := context.WithTimeout(context.Background(), captureScreenshotTimeout)
+		defer cancel()
+		stop := context.AfterFunc(ctx, func() {
+			if ctx.Err() == context.Canceled {
+				cancel()
+			}
+		})
+		defer stop()
+
+		png, err := cap.CaptureRedacted(captureCtx)
 		if err != nil {
 			slog.Info("browser screenshot: capture failed; publishing text-only",
 				"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
 			return nil
 		}
-		ref, err := storeScreenshotArtifact(ctx, l.screenshotStoreDeps(), sess, png)
+		ref, err := storeScreenshotArtifact(captureCtx, l.screenshotStoreDeps(), sess, png)
 		if err != nil {
 			slog.Info("browser screenshot: store failed; publishing text-only",
 				"session", sess.Namespace+"/"+sess.Name, "err", err.Error())

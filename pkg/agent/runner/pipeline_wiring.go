@@ -43,6 +43,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/toolguardaudit"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 	mcpspec "github.com/authzed/openagentprimitives/pkg/tools/mcp/spec"
 	"github.com/authzed/openagentprimitives/pkg/tools/redact"
 
@@ -436,6 +437,28 @@ func (l *Loop) toolCallAuthzDeps() hooks.ToolCallAuthzDeps {
 				AgentSessionRef:   l.SessionKey.Namespace + "/" + l.SessionKey.Name,
 				SlotResourceTypes: l.PlanGateSlotTypes,
 				// SessionScope: scope.Scope{} (zero value = identity pass-through)
+			}
+			// Lift the browser per-action revalidation stamps (Phase E's E8 gate)
+			// out of the generic arg map into typed Inputs fields, then DELETE them
+			// from the map. The browser acting tool's NamedArgs stamps these three
+			// keys for a call it classified a MUTATE; carrying them as structured
+			// Inputs is what lets the checker layer a web_action check on top of the
+			// web_host one, and stripping them keeps these internal gate keys (the
+			// 64-char page fingerprint especially) out of the human-facing approval
+			// card and the durable args hash. argsMap is the tool's own fresh
+			// NamedArgs copy, so the delete never touches the model's original args;
+			// a non-browser call never carries these keys, so the delete is a no-op.
+			if req, _ := argsMap[browserschema.WebActionRequiredArg].(bool); req {
+				ai.WebActionRequired = true
+				if k, ok := argsMap[browserschema.WebActionKeyArg].(string); ok {
+					ai.WebActionKey = k
+				}
+				if fp, ok := argsMap[browserschema.WebActionFingerprintArg].(string); ok {
+					ai.PresentedPageFingerprint = fp
+				}
+				delete(argsMap, browserschema.WebActionRequiredArg)
+				delete(argsMap, browserschema.WebActionKeyArg)
+				delete(argsMap, browserschema.WebActionFingerprintArg)
 			}
 			// No session-grant fallback to wire: routeViaSessionGrant is gone and
 			// the fallback with it. The tool's natural Check resolves
@@ -1400,6 +1423,14 @@ func (e *engineChecker) CheckToolCall(ctx context.Context, p authz.Permission, i
 	if e.l.Engine != nil {
 		return e.l.Engine.CheckToolCall(ctx, p, in)
 	}
+	// toolcheck.Checker's RepromptEscalation field (E10) is left at its zero
+	// value here — Enabled: false, Judge: nil — which is the escape-safe
+	// default: a web_action caveat failure always re-prompts and no model is
+	// consulted. This is the documented seam for wiring it: a future config
+	// path (an AgentClass browser-toolbox setting, an env var) would resolve a
+	// RepromptJudge adapter over pkg/agent/tool/browser/judge's registry
+	// (judge.Get("haiku")) and set RepromptEscalation{Enabled: <config>, Judge:
+	// <adapter>} below, never flipping the default.
 	return toolcheck.Checker{Cli: e.l.AuthzCli, Cache: e.l.AuthzCache}.CheckToolCall(ctx, p, in)
 }
 

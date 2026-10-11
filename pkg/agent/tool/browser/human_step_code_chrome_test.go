@@ -37,7 +37,7 @@ func browserCodeFixture(t *testing.T, hs *fakeHumanStep) (tools []agenttool.Tool
 	fx := startFixture(t, codePage())
 	fx.rt.Spec.Interaction = "act"
 	var err error
-	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, nil, hs, nil)
+	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, nil, hs, nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools)
 	sess = tools[0].(*browserTool).sess

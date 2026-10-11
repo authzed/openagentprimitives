@@ -11,6 +11,7 @@ import (
 
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 )
 
 type recordingRelWriter struct {
@@ -271,6 +272,54 @@ func TestCopySlotGrants_NoGrantsAndNilCopierAreNoOps(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, n)
 	assert.Empty(t, empty.granted, "nothing held means nothing written")
+}
+
+// A forked/restarted child must NOT inherit the parent's per-action web_action
+// grants: those are revalidation grants caveated on the page the PARENT's human
+// approved, and the child re-approves each mutate against the page IT sees (the
+// TOCTOU gate). The coarse grants (web_host, etc.) still carry — dropping
+// web_action must not poison the rest of the copy.
+func TestCopySlotGrants_SkipsWebActionGrants(t *testing.T) {
+	// Pin the literal mirror equal to browserschema's constant so the two cannot
+	// drift (pkg/authz root cannot import browserschema — it is a cycle — so the
+	// constant is duplicated; an external test may import it and assert equality).
+	require.Equal(t, browserschema.WebActionType, "web_action",
+		"the CopySlotGrants skip literal must stay equal to browserschema.WebActionType")
+
+	c := &fakeSlotCopier{held: []authz.SlotBinding{
+		{ResourceType: "web_host", ResourceID: authz.TrustedObjectID("aa=2Ecom"), Permission: "act"},
+		{ResourceType: browserschema.WebActionType, ResourceID: authz.TrustedObjectID("aa=2Ecom=2Fclick=2Fplace-order"), Permission: "act"},
+		{ResourceType: "crm_company", ResourceID: authz.TrustedObjectID("acme"), Permission: "contact_access"},
+	}}
+	parent := authz.SessionRef{Namespace: "ns", Name: "parent"}
+	childRef := authz.SessionRef{Namespace: "ns", Name: "child"}
+
+	n, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, testExpiry())
+	require.NoError(t, err, "a web_action grant in the set must not fail the whole copy")
+	assert.Equal(t, 2, n, "web_host + crm_company carry; web_action is dropped")
+	for _, g := range c.granted {
+		assert.NotEqual(t, browserschema.WebActionType, g.ResourceType,
+			"a web_action grant must never be carried live to a forked child")
+	}
+	types := []string{}
+	for _, g := range c.granted {
+		types = append(types, g.ResourceType)
+	}
+	assert.ElementsMatch(t, []string{"web_host", "crm_company"}, types)
+}
+
+// A set of ONLY web_action grants copies nothing and never calls GrantSlots
+// (which refuses an empty binding set) — the child re-approves every mutate.
+func TestCopySlotGrants_OnlyWebActionGrants_CopiesNothing(t *testing.T) {
+	c := &fakeSlotCopier{held: []authz.SlotBinding{
+		{ResourceType: browserschema.WebActionType, ResourceID: authz.TrustedObjectID("aa=2Ecom=2Fclick=2Fx"), Permission: "act"},
+	}}
+	n, err := authz.CopySlotGrants(context.Background(), c,
+		authz.SessionRef{Namespace: "ns", Name: "parent"},
+		authz.SessionRef{Namespace: "ns", Name: "child"}, testExpiry())
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	assert.Empty(t, c.granted, "a web_action-only set carries nothing to the child")
 }
 
 func TestCopySlotGrants_SurfacesBothFailures(t *testing.T) {

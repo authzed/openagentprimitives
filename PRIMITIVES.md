@@ -139,6 +139,28 @@ MCP servers, validated against a toolspec.
   `channelevents.InteractionRequestPayload.Screenshot` — never placed in the
   model's context. Slack uploads it into the approval thread, the web chat
   embeds it inline, and the local TUI links it via a signed artifact-view URL.
+  Phase E gates browser MUTATE actions on CONSEQUENCE, not just on acting-tool
+  identity: a pluggable `ConsequenceJudge`
+  (`pkg/agent/tool/browser/judge/judge.go`, backends self-registered —
+  `deterministic.go`'s fast path and `judge/haiku/`'s Haiku-backed fallback)
+  classifies every click/type/press/select/submit into observe/navigate/
+  session/mutate; only `mutate` additionally requires a per-action
+  `web_action:<key>#act` grant on top of the coarse `web_host#act` — a stable,
+  readable-but-specific key derived from the call's own facts
+  (`pkg/agent/tool/browser/actionkey.go`'s `ActionKey`), scoped as its own
+  SpiceDB resource (`pkg/tools/browserschema/webaction.go`). That grant is
+  written caveated on a deterministic page-state fingerprint
+  (`pkg/agent/tool/browser/pagestate.go`'s `PageFingerprint`, checked by the
+  `pagestate_matches` SpiceDB caveat) captured at approval time, so a page that
+  meaningfully changed between the human's "yes" and the click re-prompts (the
+  TOCTOU revalidation) while benign churn elsewhere on the page does not.
+  Approval persists the grant and appends a `web_action_approval` append-only
+  audit record of what was approved against which page
+  (`pkg/agent/runner/web_action_approval.go`'s `persistWebActionApproval`,
+  `pkg/memory/kinds/webactionapproval/`) — the tamper-evident "what was approved
+  against what page" trail. The model never authorizes anything here: the judge
+  only decides whether the per-action grant is required, and the caveat — not
+  the model's say-so — is what SpiceDB actually enforces at dispatch.
 - **Binaries:** `internal/cmd/streamclient/` (claims a streaming ToolCall via
   the gateway); tool execution is otherwise driven from `internal/cmd/runner/`
 

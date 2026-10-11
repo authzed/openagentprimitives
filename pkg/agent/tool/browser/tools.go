@@ -19,6 +19,7 @@ import (
 	"github.com/chromedp/chromedp/kb"
 
 	agenttool "github.com/authzed/openagentprimitives/pkg/agent/tool"
+	"github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/tools/browserpolicy"
@@ -30,8 +31,19 @@ const (
 	maxPageBytes = 16 * 1024
 	// navigateTimeout bounds a navigation (navigate / follow / back).
 	navigateTimeout = 30 * time.Second
-	// snapshotTimeout bounds an accessibility snapshot (read / find / screenshot).
+	// snapshotTimeout bounds an accessibility snapshot (read / find).
 	snapshotTimeout = 20 * time.Second
+	// redactedScreenshotTimeout bounds CaptureRedacted's own s.do call —
+	// DEDICATED rather than sharing snapshotTimeout, because the approval
+	// screenshot is a best-effort capture whose caller (the runner's
+	// captureBrowserScreenshotFn) already gives it a generous, decoupled outer
+	// deadline (see that closure's doc) to survive a cold first capture
+	// against a real browser pod; read/find have no such margin to spend and
+	// must stay bounded at snapshotTimeout. Kept a few seconds above
+	// snapshotTimeout, not blindly raised to it, so a slow redact (DPR read +
+	// N box-model resolves + the capture itself) has room without widening
+	// every other snapshot-timed call.
+	redactedScreenshotTimeout = 25 * time.Second
 	// shortTimeout bounds a quick action (scroll, a ref resolve).
 	shortTimeout = 10 * time.Second
 	// pollInterval is how often wait_for re-snapshots.
@@ -54,6 +66,21 @@ const (
 	// carries StateImpact Stateless, not External on web_host. See
 	// browserTool.Permission.
 	requestHumanStepOp = "request_human_step"
+
+	// defaultMutateThreshold mirrors haiku.DefaultMutateThreshold (0.15): the
+	// policy cut (ruling E-R3) at or above which the judge's P(mutate) gates a
+	// call as a mutate. Kept as a local constant rather than importing the haiku
+	// backend so this CDP/DOM tool package does not pull the LLM-provider
+	// transitive deps in just for a number; threshold_test.go pins it equal to
+	// haiku.DefaultMutateThreshold so the two cannot drift.
+	defaultMutateThreshold = 0.15
+
+	// webActionClassifyTimeout bounds the whole classify-and-stamp pass NamedArgs
+	// runs on the authz path (action-fact extraction, the model Classify call, and
+	// the page-fingerprint capture). NamedArgs has no caller context to thread, so
+	// this is the standalone deadline for the model round trip; the per-CDP-step
+	// timeouts inside Session.do still apply underneath it.
+	webActionClassifyTimeout = 30 * time.Second
 )
 
 // actingOpNames is the set of ops that reach and mutate external page state
@@ -128,6 +155,18 @@ type browserTool struct {
 	// The runner implements it over the approval host (pkg/agent/runner); a fake
 	// satisfies it in tests.
 	humanStep HumanStepRequester
+
+	// judge is the injected consequence classifier (E7's Haiku backend in
+	// production; a fake in tests) consulted, for an acting op, to decide whether
+	// a call is a MUTATE that needs the per-action web_action grant on top of the
+	// coarse web_host one. A cheap deterministic fast-path (judge.NewDeterministic)
+	// runs first and skips this model call for the obviously-benign cases
+	// (link-follow, search entry, tab switch). nil means per-action revalidation
+	// is NOT wired for this tool (a bare unit test, or an e2e run that did not set
+	// the seam): NamedArgs then stamps no web_action args and the dispatch gate's
+	// second check never fires — the production runner always injects a non-nil
+	// judge so a mutate cannot slip the gate on that path. See NamedArgs.
+	judge judge.ConsequenceJudge
 }
 
 var (
@@ -216,13 +255,27 @@ func (t *browserTool) PermissionVariants() []authz.PermissionVariant { return ni
 
 // NamedArgs surfaces the current page host under hostArgKey so an acting op's
 // web_host check resolves its resource instance from PAGE STATE rather than from
-// a model argument. The host is written LAST so it wins over any "host" key the
-// model may have put in the call — the page the browser is on is a fact, not
-// something the caller gets to assert.
+// a model argument, and — for a call it classifies as a MUTATE — additionally
+// stamps the web_action key + live page fingerprint (Phase E's E8 gate) so the
+// dispatch layer can layer a per-action web_action check on top of the coarse
+// web_host one. Every stamped value is PAGE STATE or a judge verdict, written
+// LAST so it wins over any same-named key the model may have put in the call —
+// the host, the action key and the fingerprint are facts about the page, not
+// things the caller gets to assert.
 //
 // For an observation op the args pass through unchanged (ok=true): those tools
 // are Passthrough and resolve no resource, so there is nothing to surface and no
 // reason to spend a round-trip reading the live location on the authz path.
+//
+// The web_action stamp is attempted only when a judge is injected (t.judge !=
+// nil) AND there is a live page (host != ""). A nil judge means per-action
+// revalidation is not wired for this tool; an empty host is the about:blank /
+// no-page case the web_host check already denies on, so there is nothing to
+// revalidate. A call the judge classifies observe/navigate/session stamps NO
+// web_action args, so the dispatch gate's second check never fires for it. This
+// classification is FAIL-CLOSED: a judge error, an unavailable judge, or a
+// failure to read the action's facts all stamp the mutate flag so the call is
+// gated rather than waved through.
 //
 // ok is always true: a browser call's arguments are plain JSON that always
 // parse, unlike a sandbox argv. CurrentHost returning "" is NOT a parse failure
@@ -232,12 +285,126 @@ func (t *browserTool) NamedArgs(args map[string]any) (map[string]any, bool) {
 	if !isActingOp(t.op) {
 		return args, true
 	}
-	out := make(map[string]any, len(args)+1)
+	out := make(map[string]any, len(args)+4)
 	for k, v := range args {
 		out[k] = v
 	}
-	out[hostArgKey] = t.sess.CurrentHost()
+	host := t.sess.CurrentHost()
+	out[hostArgKey] = host
+	if t.judge != nil && host != "" {
+		t.stampWebAction(out, args, host)
+	}
 	return out, true
+}
+
+// stampWebAction classifies this acting call's consequence tier and, for a
+// MUTATE, stamps the web_action key (E4) and the live page fingerprint (E5) into
+// out so the dispatch layer can require a per-action web_action grant on top of
+// the coarse web_host one. An observe/navigate/session verdict stamps nothing.
+//
+// FAIL-CLOSED throughout: if the action's facts cannot be read (a stale/missing
+// ref, a CDP fault) the call is treated as a mutate and gated; if the judge
+// errors or is unavailable it is treated as a mutate (classifyMutate); and a
+// page-fingerprint capture failure stamps an EMPTY fingerprint, which the
+// web_action check's pagestate_matches caveat refuses — never a silent allow.
+// Every failure is logged (never silently dropped) with toolbox/op/host context.
+func (t *browserTool) stampWebAction(out, args map[string]any, host string) {
+	ctx, cancel := context.WithTimeout(context.Background(), webActionClassifyTimeout)
+	defer cancel()
+
+	ref := stringArg(args, "ref")
+	facts, err := t.sess.actionFacts(ctx, t.op, ref)
+	if err != nil {
+		// Could not read what this call acts on, so it cannot be proven benign:
+		// gate it. The key is best-effort from what is known (op + host); the
+		// empty fingerprint makes the web_action check deny regardless.
+		slog.Warn("browser: action-fact extraction failed; gating acting call as mutate (fail-closed)",
+			"toolbox", t.rtName, "op", t.op, "host", host, "err", err.Error())
+		out[browserschema.WebActionRequiredArg] = true
+		out[browserschema.WebActionKeyArg] = ActionKey(ActionFacts{Op: t.op, Host: host})
+		out[browserschema.WebActionFingerprintArg] = ""
+		return
+	}
+
+	if !t.classifyMutate(ctx, facts) {
+		return // positively benign (observe/navigate/session): no per-action gate
+	}
+
+	key := ActionKey(facts)
+	fingerprint := ""
+	if ps, perr := t.sess.capturePageState(ctx, facts, ref); perr != nil {
+		slog.Warn("browser: page-state capture failed; gating with an empty fingerprint (fail-closed)",
+			"toolbox", t.rtName, "op", t.op, "host", host, "err", perr.Error())
+	} else {
+		fingerprint = PageFingerprint(ps)
+	}
+	out[browserschema.WebActionRequiredArg] = true
+	out[browserschema.WebActionKeyArg] = key
+	out[browserschema.WebActionFingerprintArg] = fingerprint
+}
+
+// classifyMutate reports whether this acting call should be gated as a MUTATE.
+// Per ruling E-R3 the deterministic judge runs first as a cheap fast-path: when
+// it positively recognizes a benign action (link-follow, search entry, tab
+// switch) the model is never consulted. Anything it does not positively clear
+// falls to the injected model (Haiku), the PRIMARY classifier, and the call is a
+// mutate when the model's P(mutate) reaches the policy threshold. FAIL-CLOSED: a
+// judge error is treated as a mutate — the model NEVER authorizes, it only
+// classifies, and an uncertain classification must gate.
+func (t *browserTool) classifyMutate(ctx context.Context, facts ActionFacts) bool {
+	a := judge.Action{
+		Op:         facts.Op,
+		Role:       facts.Role,
+		Text:       facts.Text,
+		FormAction: facts.FormAction,
+		Container:  facts.Container,
+		Host:       facts.Host,
+		PageURL:    facts.PageURL,
+	}
+	page := judge.PageContext{URLPath: urlPath(facts.PageURL)}
+
+	// Fast-path: the deterministic judge never errors and never wrongly clears a
+	// mutate (it fails closed to mutate for anything not positively benign), so a
+	// non-mutate verdict here is a confident benign and skips the model call.
+	// Diagnostic logging below deliberately OMITS facts.Text and facts.Container.
+	// facts.Text resolves to the acted-on element's accessible text, which for an
+	// input FALLS THROUGH TO el.value (actionfacts.go's text()) — i.e. a typed
+	// credential on a password/token field. Logging it at INFO would pipe secrets
+	// into cluster log aggregation; role + formAction (a URL PATH only,
+	// query-stripped by urlPath) + the tier/probability give the full diagnostic
+	// ("which action, what the model decided") with no content sink. Do not add
+	// raw page text back here.
+	detV, _ := judge.NewDeterministic().Classify(ctx, a, page)
+	if detV.Tier != judge.TierMutate {
+		slog.Info("browser: consequence classify = benign (deterministic fast-path cleared it; model NOT consulted)",
+			"toolbox", t.rtName, "op", facts.Op, "host", facts.Host, "role", facts.Role,
+			"formAction", facts.FormAction, "detTier", string(detV.Tier))
+		return false
+	}
+
+	v, err := t.judge.Classify(ctx, a, page)
+	if err != nil {
+		slog.Warn("browser: consequence judge errored; gating acting call as mutate (fail-closed)",
+			"toolbox", t.rtName, "op", t.op, "judge", t.judge.Name(), "err", err.Error())
+		return true
+	}
+	gated := v.Probs[judge.TierMutate] >= defaultMutateThreshold
+	// See the omission note above: no facts.Text / facts.Container (credential sink).
+	slog.Info("browser: consequence classify (model consulted)",
+		"toolbox", t.rtName, "op", facts.Op, "host", facts.Host, "role", facts.Role,
+		"formAction", facts.FormAction, "judge", t.judge.Name(),
+		"modelTier", string(v.Tier), "pMutate", v.Probs[judge.TierMutate],
+		"threshold", defaultMutateThreshold, "gated", gated)
+	return gated
+}
+
+// stringArg reads a string-valued argument, returning "" when absent or of a
+// non-string JSON type.
+func stringArg(args map[string]any, key string) string {
+	if v, ok := args[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // Origin is shared across one toolbox's tools so toolguard's origin-level

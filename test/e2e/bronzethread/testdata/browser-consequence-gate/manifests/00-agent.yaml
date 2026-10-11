@@ -1,0 +1,83 @@
+# Fixture agent for the browser-consequence-gate bronze bundle — Task E11's
+# end-to-end proof of the Phase E consequence-acting gate: a browser MUTATE
+# requires its OWN fingerprint-caveated web_action grant on top of the coarse
+# web_host one, and a page that changed since approval re-prompts.
+#
+# Like browser-login-secret-source, this AgentClass REFERENCES the
+# BrowserToolbox in spec.browserToolboxes (mandatory for a web_host/web_action
+# acting SLOT — see pkg/controllers/agentclass/browser_slot.go), which makes the
+# AgentSession reconciler create a per-session browser pod (the e2e harness
+# fakes its readiness) and own status.resolvedBrowserToolboxes.
+#
+# Unlike that fixture, spec.authz.slots declares BOTH web_host (the standing,
+# coarse acting grant the plan-gate phase binds) AND web_action (the per-action
+# revalidation gate Phase E adds on top). Declaring web_action here is what
+# makes the e2e driver wire the (deterministic, no-network) consequence judge
+# for this bundle — see setupBrowserFixture's agentClassDeclaresWebActionSlot
+# gate in test/e2e/threadrun/driver.go — and what the dispatch checker reads via
+# authz.Inputs.SlotResourceTypes to decide the second (web_action) check is even
+# in scope for this class.
+apiVersion: v1
+kind: Secret
+metadata: {name: browser-consequence-gate-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: browser-consequence-gate-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: browser-consequence-gate, namespace: default}
+spec:
+  displayName: ConsequenceGateBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: browser-consequence-gate-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You have a browser toolbox named `web`, in act mode, with no stored
+      login. Review the dashboard, follow links to look around, and confirm or
+      cancel anything that needs attention by clicking the page's own buttons.
+  # The AgentClass references the browser toolbox — required to declare the
+  # web_host/web_action acting slots below.
+  browserToolboxes:
+    - {name: web, ref: web}
+  authz:
+    slots:
+      # The coarse, standing acting grant: one plan-gate approval of the
+      # phase that names this host covers every acting call on it — Phase C's
+      # gate, unchanged.
+      - resourceType: web_host
+        description: "A web host the browser may act on (click, type, submit)"
+        permission: act
+      # The per-action revalidation gate: a MUTATE click additionally needs
+      # its OWN grant, caveated against the live page's deterministic
+      # fingerprint — Phase E's gate. Declaring it here is what puts
+      # web_action into SlotResourceTypes, the capability flag the dispatch
+      # checker (pkg/authz/spicedb/toolcheck) and the e2e driver's judge-wiring
+      # both gate on.
+      - resourceType: web_action
+        description: "A single browser action (click/type/submit), revalidated against the live page at click time"
+        permission: act
+    # Enforcing: every acting call is gated against the frozen plan.
+    planGate:
+      mode: enforcing
+  budget: {maxTurns: 30, maxTokens: 60000, maxDuration: 5m}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: browser-consequence-gate-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: browser-consequence-gate
+  credentialsRef: {secretName: browser-consequence-gate-fake-creds}
+  fake: {echo: false}

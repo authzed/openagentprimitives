@@ -43,7 +43,7 @@ func (s *Session) CaptureRedacted(ctx context.Context) ([]byte, error) {
 	blanked := s.blankedNodes()
 	var shot []byte
 	var boxes []image.Rectangle
-	runErr := s.do(ctx, snapshotTimeout, func(c context.Context) error {
+	runErr := s.do(ctx, redactedScreenshotTimeout, func(c context.Context) error {
 		// Device pixel ratio: CaptureScreenshot pixels are DPR * CSS pixels,
 		// while GetBoxModel returns CSS pixels, so boxes must be scaled.
 		var dpr float64 = 1

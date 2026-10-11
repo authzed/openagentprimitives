@@ -72,6 +72,8 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/authfail"
 	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
+	browserjudge "github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
+	browserhaiku "github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge/haiku"
 	mcpdispatch "github.com/authzed/openagentprimitives/pkg/agent/tool/mcp"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta/capability"
@@ -1515,6 +1517,14 @@ func run(cfg *config) error {
 	// independent source of PromptSections alongside assembled.Sections below
 	// — merged at the WithPromptSections call rather than decided there.
 	var browserSections []capability.PromptSection
+	// The consequence judge for the per-action (web_action) acting gate (Phase E).
+	// Resolved once per session and shared across this session's browser toolboxes
+	// (each tool holds the same classifier). NEVER nil — a nil judge would skip the
+	// per-action classification entirely; resolveBrowserConsequenceJudge falls back
+	// to the deterministic judge, which fails closed to mutate on anything it does
+	// not positively recognize as benign, so the gate still fires even with no model
+	// key available.
+	browserConsequenceJudge := resolveBrowserConsequenceJudge(sess.Status.EffectiveSettings.Model.Provider, apiKey)
 	for _, rt := range sess.Status.ResolvedBrowserToolboxes {
 		if rt.BrowserPodIP == "" {
 			slog.Info("browser toolbox IP not yet reflected; polling",
@@ -1601,7 +1611,7 @@ func run(cfg *config) error {
 		// disables capture/inject in Synthesize. The operator created the Secret
 		// empty and pinned the runner Role's get;update to exactly it.
 		store := newBrowserStateStore(c, ns, &sess, rt)
-		built, serr := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch, humanStep, store)
+		built, serr := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch, humanStep, store, browserConsequenceJudge)
 		if serr != nil {
 			if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
 				fmt.Sprintf("browser toolbox %q: %v", rt.Name, serr)); werr != nil {
@@ -3681,6 +3691,32 @@ func buildLoopOnStreamEvent(chanAttached bool, rt *natsRuntime, sess *spiceboxv1
 // summarizer.NewForProvider's provider switch, just for identityadvisor
 // (whose Provider needs a caller-supplied client rather than owning its own
 // NewForProvider, since it's only ever constructed here, gated on
+// resolveBrowserConsequenceJudge resolves the browser acting gate's consequence
+// classifier (Phase E's E8). The classifier is Haiku (anthropic): when this
+// session's model provider is anthropic its key is reused directly; otherwise a
+// dedicated ANTHROPIC_API_KEY is tried; failing both, the deterministic judge is
+// returned. The deterministic judge never wrongly clears a mutate — it fails
+// closed to mutate on anything it does not positively recognize as benign — so it
+// is a safe degraded mode, and crucially NOT nil (nil would skip the per-action
+// classification entirely). The session's own (possibly non-anthropic) key is
+// NEVER sent to the anthropic endpoint — only a provider=="anthropic" key is
+// reused for the Haiku call.
+func resolveBrowserConsequenceJudge(modelProvider, sessionAPIKey string) browserjudge.ConsequenceJudge {
+	if modelProvider == "anthropic" && sessionAPIKey != "" {
+		if j, err := browserhaiku.NewFromAPIKey(sessionAPIKey); err == nil {
+			return j
+		}
+	}
+	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+		if j, err := browserhaiku.NewFromAPIKey(key); err == nil {
+			return j
+		}
+	}
+	slog.Info("browser consequence judge: no anthropic key available; using the deterministic judge " +
+		"(benign fast-path only — any non-benign acting call fails closed to the per-action gate)")
+	return browserjudge.NewDeterministic()
+}
+
 // identityMode=dynamic).
 func buildIdentityRecommender(provider, apiKey string) identityadvisor.Provider {
 	switch provider {

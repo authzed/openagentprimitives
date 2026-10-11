@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -171,4 +172,78 @@ func TestStoreScreenshotArtifact_InlineVsRef(t *testing.T) {
 		assert.Equal(t, "ar-s1-fixed", ref.RenderName)
 		assert.Equal(t, "artifact-fixed", ref.ArtifactID)
 	})
+}
+
+// sleepyCapturer is a BrowserScreenshotCapturer stub that blocks for delay
+// before succeeding, unless the ctx it is given finishes first (in which case
+// it returns ctx.Err()). It stands in for a cold real capture that takes real
+// wall-clock time, so a test can prove whether the capture's ctx is tied to
+// the CALLER's short-lived ctx (the bug) or the closure's own, decoupled
+// deadline (the fix).
+type sleepyCapturer struct {
+	delay time.Duration
+	png   []byte
+}
+
+func (s *sleepyCapturer) CaptureRedacted(ctx context.Context) ([]byte, error) {
+	select {
+	case <-time.After(s.delay):
+		return s.png, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// TestCaptureBrowserScreenshotFn_SurvivesCallerCtxShortDeadline pins the
+// Task #47 fix: the closure's capture must NOT inherit the caller's ctx
+// deadline. A caller ctx whose deadline has ALREADY ELAPSED by the time the
+// closure runs (far tighter than any real turn/dispatch deadline would be,
+// but the clearest possible proof) stands in for the live-observed bug — a
+// capture inheriting it would see an already-Done ctx and fail instantly with
+// context.DeadlineExceeded, exactly as the runner logs on a real cluster. The
+// fix gives the capture its own fresh budget rooted at context.Background(),
+// so a capturer that merely takes real time (well under its own budget)
+// still succeeds.
+func TestCaptureBrowserScreenshotFn_SurvivesCallerCtxShortDeadline(t *testing.T) {
+	scheme := browserScreenshotTestScheme(t)
+	l := &Loop{Client: fake.NewClientBuilder().WithScheme(scheme).Build()}
+	sess := channelevents.SessionRef{Namespace: "ns", Name: "s1"}
+	cap := &sleepyCapturer{delay: 50 * time.Millisecond, png: bytes.Repeat([]byte{0xAA}, 32)}
+	fn := l.captureBrowserScreenshotFn(sess, cap)
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+	time.Sleep(5 * time.Millisecond) // guarantee callerCtx's deadline has elapsed before fn runs
+
+	ref := fn(callerCtx)
+	require.NotNil(t, ref, "the capture must survive a caller ctx whose deadline already elapsed — it must run on its own decoupled deadline, not the caller's")
+}
+
+// TestCaptureBrowserScreenshotFn_PropagatesCallerCancellation proves the OTHER
+// half of the contract: decoupling the DEADLINE must not stop a genuine
+// caller CANCELLATION (the turn aborted, the session ended) from tearing the
+// capture down. A capturer that would otherwise run far longer than any
+// caller deadline (5s) must still observe cancellation and return promptly
+// once the caller's ctx is explicitly Cancel()'d.
+func TestCaptureBrowserScreenshotFn_PropagatesCallerCancellation(t *testing.T) {
+	scheme := browserScreenshotTestScheme(t)
+	l := &Loop{Client: fake.NewClientBuilder().WithScheme(scheme).Build()}
+	sess := channelevents.SessionRef{Namespace: "ns", Name: "s1"}
+	cap := &sleepyCapturer{delay: 5 * time.Second} // long enough that only cancellation can end it
+
+	fn := l.captureBrowserScreenshotFn(sess, cap)
+	callerCtx, cancel := context.WithCancel(context.Background())
+
+	resultCh := make(chan *channelevents.AttachmentRef, 1)
+	go func() { resultCh <- fn(callerCtx) }()
+
+	time.Sleep(10 * time.Millisecond) // let fn start and park on the capturer
+	cancel()                          // explicit interrupt, not a deadline
+
+	select {
+	case ref := <-resultCh:
+		assert.Nil(t, ref, "an explicit caller cancellation must abort the best-effort capture (nil, logged) rather than let it run to its own full budget")
+	case <-time.After(2 * time.Second):
+		t.Fatal("capture did not observe the caller's cancellation within 2s")
+	}
 }

@@ -274,6 +274,26 @@ type Result struct {
 	// would be invisible — the stored verdict would be what explains the denial
 	// while the live one is what caused it.
 	Precondition *PreconditionDenial
+
+	// ChangedPageReprompt marks an External denial that is a browser-mutate
+	// RE-PROMPT (Phase E's E10 task): a web_action per-action grant for this
+	// instance already EXISTS — a human already approved this exact action for
+	// this session — but its pagestate_matches caveat no longer matches the
+	// live page, so the call must be asked again. False for every other
+	// denial, including the ordinary "no grant yet" first-time ask: that one
+	// asks "may I do this?"; this one asks "the page changed since you
+	// approved this — still ok?", and the two read differently on the
+	// approval card (see pkg/agent/runner/host_approval.go's
+	// buildToolCallPending).
+	//
+	// Set ONLY by toolcheck.checkExternalSlotGrant's web_action leg, from a
+	// SEPARATE, uncaveated probe run purely to ANNOTATE the human-facing card
+	// — it is never consulted by the authorization decision itself, which is
+	// already final (Denied) by the time this is computed. A probe failure (a
+	// SpiceDB error, a nil response) defaults to false, the fail-QUIET
+	// direction for a cosmetic signal: at worst a genuine re-prompt renders as
+	// a plain first-time ask, never the reverse.
+	ChangedPageReprompt bool
 }
 
 // PreconditionDenial is the recomputed slot-precondition verdict behind a
@@ -377,6 +397,27 @@ type Inputs struct {
 	// scope.CheckScopeWithRefs, which has no caller, so SessionScope.Resources
 	// is inert here. See the NOT WIRED note on CheckScopeWithRefs.
 	SessionScope scope.Scope
+
+	// WebActionKey is the RAW (un-escaped) web_action key (E4 ActionKey) the
+	// browser acting tool stamped for a call it classified as a mutate, lifted
+	// here from the normalized arg map by BuildInputs. The web_action second
+	// check escapes it with browserschema.WebActionValueTransforms into the
+	// SpiceDB object id the per-action grant was written on. Empty for every
+	// non-mutate call and for every non-browser tool; consulted ONLY when
+	// WebActionRequired is set. Lifted into a typed field (not left in Args) so
+	// the human-facing approval card and the durable args hash never carry this
+	// internal gate key.
+	WebActionKey string
+
+	// WebActionRequired is the browser mutate flag: set when the acting tool
+	// classified this call as a mutate and so it needs the SECOND, per-action
+	// web_action#act check layered on top of the coarse web_host#act one (Phase
+	// E's E8 gate). The web_action check additionally requires the class to have
+	// DECLARED a web_action slot (web_action ∈ SlotResourceTypes); an
+	// observe/navigate/session call leaves this false and is gated on the host
+	// grant alone, exactly as before Phase E. Lifted from the normalized arg map
+	// by BuildInputs, same as WebActionKey.
+	WebActionRequired bool
 
 	// PresentedPageFingerprint is the deterministic fingerprint of the browser
 	// page AS IT LOOKS AT CALL TIME, presented as the pagestate_matches caveat's

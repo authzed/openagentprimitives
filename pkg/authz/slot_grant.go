@@ -5,9 +5,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
+
 	"github.com/authzed/openagentprimitives/pkg/authz/precondition"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
+
+// webActionResourceType is a literal mirror of
+// pkg/tools/browserschema.WebActionType, duplicated here rather than imported
+// for the same reason pkg/authz/plangate/card.go mirrors "web_host": this is
+// pkg/authz root, and browserschema transitively imports pkg/authz (via
+// pkg/apis/v1alpha1's mcpserver_types.go), so importing it is a cycle. Must stay
+// byte-identical to browserschema.WebActionType; TestCopySlotGrants_SkipsWebAction
+// pins the two equal so they cannot drift.
+const webActionResourceType = "web_action"
 
 // SlotGrantRelationPrefix begins every slot-grant relation name. Used to
 // recognise one without knowing its permission — teardown and listing sweep by
@@ -238,13 +249,43 @@ func CopySlotGrants(ctx context.Context, c SlotGrantCopier, parent, child Sessio
 	if err != nil {
 		return 0, fmt.Errorf("authz: list parent slot grants %s: %w", parent, err)
 	}
-	if len(held) == 0 {
+	// A web_action grant is a PER-ACTION revalidation (Phase E), caveated on the
+	// page fingerprint the parent's human approved against — it is never carried
+	// live to a child. The child's agent re-approves each mutate against the page
+	// IT sees, which is the whole point of the TOCTOU gate: a grant pinned to the
+	// parent's page would authorize the child's action against a page nobody in
+	// the child's session ever consented to.
+	//
+	// Filtered HERE rather than relied on as an accident. ListSlotGrants does not
+	// read a grant's caveat context back, so a copied web_action grant would be
+	// re-written UNCAVEATED — which SpiceDB refuses today (the relation requires
+	// pagestate_matches), making the whole atomic GrantSlots batch fail and the
+	// child re-ask for EVERYTHING, web_host included. Dropping web_action up front
+	// lets the coarse grants carry while the per-action ones correctly re-ask, and
+	// stays safe even if ListSlotGrants ever starts returning caveats (where a
+	// blind copy would otherwise become the unsafe direction).
+	carried := make([]SlotBinding, 0, len(held))
+	skipped := 0
+	for _, b := range held {
+		if b.ResourceType == webActionResourceType {
+			skipped++
+			continue
+		}
+		carried = append(carried, b)
+	}
+	if skipped > 0 {
+		// Not silent: a dropped per-action grant means the child re-approves that
+		// mutate, which an operator reading logs should be able to see was by design.
+		logr.FromContextOrDiscard(ctx).Info("authz: web_action grants not carried to the child; it re-approves each mutate against its own page",
+			"parent", parent.String(), "child", child.String(), "skipped", skipped)
+	}
+	if len(carried) == 0 {
 		return 0, nil
 	}
-	if err := c.GrantSlots(ctx, child.Namespace, child.Name, held, expiresAt); err != nil {
+	if err := c.GrantSlots(ctx, child.Namespace, child.Name, carried, expiresAt); err != nil {
 		return 0, fmt.Errorf("authz: grant child slot grants %s: %w", child, err)
 	}
-	return len(held), nil
+	return len(carried), nil
 }
 
 // SlotRevokeChecker is the standing gate for removing a slot grant.

@@ -63,6 +63,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -615,6 +616,127 @@ func ServeLoginSite(t *testing.T) (urlForChrome, hostForPolicy string, port int)
 				`<input type="password" name="password" aria-label="Password">`+
 				`<button type="submit" aria-label="Sign in">Sign in</button>`+
 				`</form>`+
+				`</body></html>`)
+	})
+
+	return serveMux(t, mux)
+}
+
+const (
+	// checkoutOrderTotalFirst and checkoutOrderTotalSecond are the two prices
+	// ServeConsequenceGateSite's /checkout page shows on its first and every
+	// subsequent GET — the forced fingerprint divergence a TOCTOU bundle needs.
+	// The button, its form action and its container id are IDENTICAL across
+	// both loads (so the acting call's web_action KEY, a pure function of
+	// op/role/name/action-path/page-path, stays the SAME); only the price text
+	// inside the target's container changes, which is exactly the field Phase
+	// E's page fingerprint (pkg/agent/tool/browser's PageFingerprint) is
+	// designed to catch.
+	checkoutOrderTotalFirst  = "$342"
+	checkoutOrderTotalSecond = "$402"
+)
+
+// ServeConsequenceGateSite starts an httptest server for the Phase E
+// consequence-acting-gate's e2e bundle (browser-consequence-gate): a small
+// multi-page site exercising every tier the gate classifies, plus ONE
+// stateful endpoint that changes its content between requests so a bundle can
+// force the TOCTOU page-changed-since-approval case without any other moving
+// part.
+//
+// Routes (all under host.docker.internal, reached through the gate proxy):
+//
+//   - GET /             a dashboard with a single plain navigational link
+//     ("View details", href=/details) — a benign, non-mutating click the
+//     deterministic judge (pkg/agent/tool/browser/judge) classifies
+//     navigate, so it never reaches the per-action web_action gate at all.
+//   - GET /details       the link's destination; static, inert.
+//   - GET /checkout      a MUTATE target: a "Confirm order" button inside a
+//     form posting to /api/order/confirm (prevented client-side via
+//     onsubmit, so the click never actually leaves the page — it only
+//     flips the page's own status text). THE STATEFUL ROUTE: its FIRST GET
+//     shows "Total: $342"; every GET after that shows "Total: $402". The
+//     button/form/container are byte-identical across both — only the
+//     price line differs — so the SAME web_action key sees a DIFFERENT
+//     fingerprint on the second visit, which is what makes the caveated
+//     grant from the first approval fail to cover the second click.
+//   - GET /subscription  a SECOND, DIFFERENT mutate target ("Cancel
+//     subscription", posting to /api/subscription/cancel): a different
+//     role/text/form-action/page-path quadruple, so it hashes to a
+//     DIFFERENT web_action key than /checkout's — the proof that the gate
+//     is scoped per ACTION, not per host (Phase C's web_host alone cannot
+//     tell these two apart; Phase E's web_action can).
+//
+// The counter is scoped to one server (one test), so parallel bundles never
+// share state; every handler writes an explicit status and never drops a
+// write error silently (repo convention).
+func ServeConsequenceGateSite(t *testing.T) (urlForChrome, hostForPolicy string, port int) {
+	t.Helper()
+	mux := http.NewServeMux()
+
+	write := func(w http.ResponseWriter, status int, body string) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(status)
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Logf("testbrowser consequence-gate site: write response: %v", err)
+		}
+	}
+
+	var checkoutGETs atomic.Int32
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			write(w, http.StatusNotFound, `<!doctype html><html><body><p>NOT-FOUND</p></body></html>`)
+			return
+		}
+		write(w, http.StatusOK,
+			`<!doctype html><html><head><title>Account Dashboard</title></head><body>`+
+				`<h1>Account Dashboard</h1>`+
+				`<p>Welcome to your account.</p>`+
+				`<p><a href="/details">View details</a></p>`+
+				`</body></html>`)
+	})
+
+	mux.HandleFunc("/details", func(w http.ResponseWriter, _ *http.Request) {
+		write(w, http.StatusOK,
+			`<!doctype html><html><head><title>Details</title></head><body>`+
+				`<h1>Order details</h1>`+
+				`<p>Nothing to confirm here.</p>`+
+				`</body></html>`)
+	})
+
+	mux.HandleFunc("/checkout", func(w http.ResponseWriter, _ *http.Request) {
+		n := checkoutGETs.Add(1)
+		total := checkoutOrderTotalFirst
+		if n > 1 {
+			total = checkoutOrderTotalSecond
+		}
+		write(w, http.StatusOK,
+			`<!doctype html><html><head><title>Checkout</title></head><body>`+
+				`<h1>Checkout</h1>`+
+				`<div id="order-summary">`+
+				`<p>Total: `+total+`</p>`+
+				`<form action="/api/order/confirm" method="POST" `+
+				`onsubmit="event.preventDefault(); document.getElementById('status').textContent='CONFIRMED';">`+
+				`<button type="submit">Confirm order</button>`+
+				`</form>`+
+				`</div>`+
+				`<p id="status">AWAITING-CONFIRMATION</p>`+
+				`</body></html>`)
+	})
+
+	mux.HandleFunc("/subscription", func(w http.ResponseWriter, _ *http.Request) {
+		write(w, http.StatusOK,
+			`<!doctype html><html><head><title>Subscription</title></head><body>`+
+				`<h1>Subscription</h1>`+
+				`<div id="subscription-panel">`+
+				`<p>Plan: Pro Monthly</p>`+
+				`<form action="/api/subscription/cancel" method="POST" `+
+				`onsubmit="event.preventDefault(); document.getElementById('status').textContent='CANCELLED';">`+
+				`<button type="submit">Cancel subscription</button>`+
+				`</form>`+
+				`</div>`+
+				`<p id="status">AWAITING-CANCELLATION</p>`+
 				`</body></html>`)
 	})
 

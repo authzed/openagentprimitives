@@ -1,0 +1,26 @@
+# The BrowserToolbox this bundle exercises — interaction: act, state:
+# ephemeral (no stored login, so no identity binding is needed: unlike
+# browser-login-secret-source's `persistent`, which the CRD's CEL rule ties to
+# a bound identity).
+#
+# Named in bundle.json's extraManifests (as "01-browser-toolbox") AND applied
+# via agentDir, exactly like every other browser fixture. Because the
+# AgentClass here DOES reference this toolbox (spec.browserToolboxes), the
+# AgentSession reconciler also resolves it live — creating the per-session pod
+# and owning status.
+#
+# access.sites names host.docker.internal EXPLICITLY — the fixed hostname the
+# testbrowser site is always reached as (the dynamic port is not part of the
+# host). It must be in the applied CR so the reconciler-derived EffectiveSites
+# admits it for the runner's navigate pre-check; the driver independently
+# appends it to the in-process gate's egress policy.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: BrowserToolbox
+metadata: {name: web, namespace: default}
+spec:
+  access:
+    mode: allowlist
+    sites:
+      - host: host.docker.internal
+  interaction: act
+  state: ephemeral

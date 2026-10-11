@@ -60,7 +60,7 @@ func browserRedactFixture(t *testing.T) (tools []agenttool.Tool, sess *Session, 
 	}}
 	ff := &fakeFetcher{}
 	var err error
-	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, ff.fetch(), nil, nil)
+	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, ff.fetch(), nil, nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools)
 	sess = tools[0].(*browserTool).sess

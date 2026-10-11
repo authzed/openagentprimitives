@@ -56,6 +56,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/authfail"
 	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
+	browserjudge "github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
 	mcpdispatch "github.com/authzed/openagentprimitives/pkg/agent/tool/mcp"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta/capability"
@@ -315,6 +316,17 @@ type InProcessRunnerFactory struct {
 	// here (not only in internal/cmd/runner) is the "wire it in both places" rule:
 	// a future persistence bundle sets it, and the control is never silently off.
 	BrowserStateStore func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.StateStore
+
+	// BrowserJudge, when non-nil, supplies the consequence judge for the
+	// per-action (web_action) acting gate (Phase E's E8) — the test analogue of
+	// production's resolveBrowserConsequenceJudge. nil (the default) leaves
+	// per-action classification OFF: the tool stamps no web_action args and an
+	// acting call is gated on the coarse web_host grant alone, exactly as every
+	// pre-Phase-E browser bundle expects. A scenario that deliberately drives the
+	// per-action gate sets it to a fake (or a real) ConsequenceJudge. Wiring the
+	// seam here (not only in internal/cmd/runner) is the "wire it in both places"
+	// rule: the control is present at both Synthesize sites and never silently off.
+	BrowserJudge func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browserjudge.ConsequenceJudge
 
 	// ExtraTools, when non-empty, are appended to every spawned runner.Loop's
 	// tool set. Test seam for scenarios that need a tool the CRD-driven
@@ -3368,7 +3380,15 @@ func (f *InProcessRunnerFactory) synthBrowserToolbox(sess *spiceboxv1alpha1.Agen
 	if f.BrowserStateStore != nil {
 		store = f.BrowserStateStore(rt)
 	}
-	built, err := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch, humanStep, store)
+	// The consequence judge for the per-action gate: nil unless a scenario wires
+	// the seam, which leaves classification off and the coarse web_host gate alone
+	// (the pre-Phase-E posture every current bundle expects). Same fake/real-seam-
+	// wired-by-test shape as BrowserFiller/BrowserHumanStep/BrowserStateStore.
+	var consequenceJudge browserjudge.ConsequenceJudge
+	if f.BrowserJudge != nil {
+		consequenceJudge = f.BrowserJudge(rt)
+	}
+	built, err := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch, humanStep, store, consequenceJudge)
 	if err != nil {
 		return nil, fmt.Errorf("buildBrowserTools: browser %q: %w", rt.Ref, err)
 	}

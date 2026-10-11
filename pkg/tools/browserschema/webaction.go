@@ -38,6 +38,49 @@ const (
 	// host-agnostic. Must be registered in pkg/authz/plangate's knownIcons or it
 	// renders nothing. Shares web_host's "globe" — both are the browser surface.
 	actionIcon = icon
+
+	// WebActionKeyArg, WebActionFingerprintArg and WebActionRequiredArg are the
+	// NamedArgs keys the browser acting tool STAMPS for a call it classified as a
+	// mutate (Phase E's E8 gate), and the dispatch layer (pkg/agent/runner's
+	// BuildInputs) reads back off the normalized arg map to lift into typed
+	// authz.Inputs fields. They are the single shared contract between the two
+	// halves — what the tool writes and what dispatch reads — kept here in
+	// browserschema alongside WebActionType/WebActionValueTransforms so the
+	// web_action gate's whole vocabulary lives in one place and the producer and
+	// consumer cannot drift apart.
+	//
+	//   - WebActionKeyArg carries the raw, un-escaped web_action key (E4 ActionKey);
+	//     dispatch escapes it with WebActionValueTransforms into the SpiceDB object
+	//     id the per-action grant was written on.
+	//   - WebActionFingerprintArg carries the live page fingerprint (E5
+	//     PageFingerprint) presented as the pagestate_matches caveat's check-time
+	//     context.
+	//   - WebActionRequiredArg is the mutate flag: present+true tells dispatch this
+	//     call needs the SECOND (web_action) check on top of the coarse web_host one.
+	//     observe/navigate/session calls stamp none of these.
+	WebActionKeyArg         = "web_action_key"
+	WebActionFingerprintArg = "web_action_fingerprint"
+	WebActionRequiredArg    = "web_action_required"
+
+	// PagestateMatchesCaveat is the SpiceDB caveat name the composer emits on
+	// web_action's slot_grant_act relation (`with pagestate_matches and
+	// expiration`) — defined in the canonical scaffold schema (E1,
+	// pkg/authz/spicedb/schema/schema.zed). The E9 approval-write path pins it as
+	// SlotBinding.CaveatName when minting an approved web_action grant, and the E8
+	// dispatch check (pkg/authz/spicedb/toolcheck) presents this caveat's live
+	// context. Kept here as the single source of truth so the write side and the
+	// check side cannot name two different caveats.
+	PagestateMatchesCaveat = "pagestate_matches"
+
+	// ApprovedFingerprintParam is the pagestate_matches caveat parameter the
+	// GRANT freezes at approval time — the fingerprint of the page the human saw.
+	// The check presents its sibling parameter (presented_fingerprint, the live
+	// page) and the caveat resolves only while `presented_fingerprint != "" &&
+	// approved_fingerprint == presented_fingerprint`. So an approved grant whose
+	// approved_fingerprint is "" is permanently dead (nothing a live page presents
+	// can equal "" past the guard) — which is why the E9 write refuses to mint one
+	// rather than cache an approval against a page it could not fingerprint.
+	ApprovedFingerprintParam = "approved_fingerprint"
 )
 
 // WebActionValueTransforms is the transform chain that turns a canonical page

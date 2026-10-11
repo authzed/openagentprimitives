@@ -57,7 +57,7 @@ func blankingFixture(t *testing.T, handler http.Handler) (tools []agenttool.Tool
 	}}
 	ff := &fakeFetcher{}
 	var err error
-	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, true, ff.fetch(), nil, nil)
+	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, true, ff.fetch(), nil, nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools)
 	sess = tools[0].(*browserTool).sess

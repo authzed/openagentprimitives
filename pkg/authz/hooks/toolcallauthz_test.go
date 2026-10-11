@@ -134,6 +134,113 @@ func TestToolCallAuthz_ExternalAlwaysAsksApproval(t *testing.T) {
 	assert.NotNil(t, dec.Approval)
 }
 
+// E9: when the DENIED check's Inputs carry the browser per-action revalidation
+// stamps (WebActionRequired/Key + the presented fingerprint), the hook must
+// carry them onto the ApprovalAsk's DEDICATED fields — so the runner's
+// approval-write effect can mint the fingerprint-caveated web_action grant —
+// WITHOUT the builder having to read them from argsMap (where the strip removed
+// them). This pins the Inputs → ask flow the whole close-the-loop depends on.
+func TestToolCallAuthz_ExternalMutate_StampsWebActionOntoAsk(t *testing.T) {
+	chk := &fakeChecker{result: authz.Result{Outcome: authz.OutcomeDenied, Message: "external tool: human approval required"}}
+	h := hooks.NewToolCallAuthz(hooks.ToolCallAuthzDeps{
+		Mode:    "enforcing",
+		Checker: chk,
+		ResolvePermission: permResolverFor(authz.Permission{
+			StateImpact: authz.External,
+			Check:       &authz.PermissionCheck{ResourceType: "web_host", Permission: "act"},
+		}),
+		// BuildInputs lifts the stamps into typed Inputs (as the runner's real one
+		// does) so the hook has them to carry onto the ask.
+		BuildInputs: func(_ pipeline.Input, _ map[string]any, _ authz.Permission) authz.Inputs {
+			return authz.Inputs{
+				WebActionRequired:        true,
+				WebActionKey:             "aa.com/click/place-order-abcd1234",
+				PresentedPageFingerprint: "fp-approved",
+			}
+		},
+		// The builder returns a bare ask and deliberately does NOT set the
+		// web_action fields — proving the HOOK stamps them, not the builder.
+		BuildApprovalAsk: simpleApprovalAskBuilder,
+	})
+	dec := h.Eval(context.Background(), pipeline.Input{
+		Point: pipeline.PreToolCall,
+		Tool:  &pipeline.ToolCallInfo{Name: "browser_click", Args: json.RawMessage(`{"args":{}}`)},
+	})
+	if assert.NotNil(t, dec.Approval, "an external mutate deny must raise an approval") {
+		assert.Equal(t, "aa.com/click/place-order-abcd1234", dec.Approval.WebActionKey,
+			"the web_action key must be carried onto the ask from the denied Inputs")
+		assert.Equal(t, "fp-approved", dec.Approval.WebActionFingerprint,
+			"the presented fingerprint must be carried onto the ask so the grant can be caveated on it")
+		assert.False(t, dec.Approval.WebActionChangedPageReprompt,
+			"the checker did not flag this denial as a changed-page re-prompt, so the ask must not claim one either")
+	}
+}
+
+// E10: when the checker's denied Result flags ChangedPageReprompt (a
+// web_action grant already exists for this instance; only its caveat
+// failed), the hook must carry that flag onto the ask too — distinct from an
+// ordinary first-time mutate ask, which the test above covers.
+func TestToolCallAuthz_ExternalMutate_ChangedPageReprompt_StampsOntoAsk(t *testing.T) {
+	chk := &fakeChecker{result: authz.Result{
+		Outcome:             authz.OutcomeDenied,
+		Message:             "external tool: human approval required",
+		ChangedPageReprompt: true,
+	}}
+	h := hooks.NewToolCallAuthz(hooks.ToolCallAuthzDeps{
+		Mode:    "enforcing",
+		Checker: chk,
+		ResolvePermission: permResolverFor(authz.Permission{
+			StateImpact: authz.External,
+			Check:       &authz.PermissionCheck{ResourceType: "web_host", Permission: "act"},
+		}),
+		BuildInputs: func(_ pipeline.Input, _ map[string]any, _ authz.Permission) authz.Inputs {
+			return authz.Inputs{
+				WebActionRequired:        true,
+				WebActionKey:             "aa.com/click/place-order-abcd1234",
+				PresentedPageFingerprint: "fp-live",
+			}
+		},
+		BuildApprovalAsk: simpleApprovalAskBuilder,
+	})
+	dec := h.Eval(context.Background(), pipeline.Input{
+		Point: pipeline.PreToolCall,
+		Tool:  &pipeline.ToolCallInfo{Name: "browser_click", Args: json.RawMessage(`{"args":{}}`)},
+	})
+	if assert.NotNil(t, dec.Approval, "a changed-page deny must still raise an approval (the re-prompt)") {
+		assert.True(t, dec.Approval.WebActionChangedPageReprompt,
+			"the checker flagged this as a changed-page re-prompt, so the ask must carry that forward")
+		assert.Equal(t, "aa.com/click/place-order-abcd1234", dec.Approval.WebActionKey)
+		assert.Equal(t, "fp-live", dec.Approval.WebActionFingerprint)
+	}
+}
+
+// A NON-mutate external deny (WebActionRequired false) leaves the ask's
+// web_action fields empty — the per-action persist must be a no-op for it.
+func TestToolCallAuthz_ExternalNonMutate_LeavesWebActionAskEmpty(t *testing.T) {
+	chk := &fakeChecker{result: authz.Result{Outcome: authz.OutcomeDenied, Message: "external tool: human approval required"}}
+	h := hooks.NewToolCallAuthz(hooks.ToolCallAuthzDeps{
+		Mode:    "enforcing",
+		Checker: chk,
+		ResolvePermission: permResolverFor(authz.Permission{
+			StateImpact: authz.External,
+			Check:       &authz.PermissionCheck{ResourceType: "web_host", Permission: "act"},
+		}),
+		BuildInputs: func(_ pipeline.Input, _ map[string]any, _ authz.Permission) authz.Inputs {
+			return authz.Inputs{} // observe/navigate: no mutate stamps
+		},
+		BuildApprovalAsk: simpleApprovalAskBuilder,
+	})
+	dec := h.Eval(context.Background(), pipeline.Input{
+		Point: pipeline.PreToolCall,
+		Tool:  &pipeline.ToolCallInfo{Name: "browser_read", Args: json.RawMessage(`{"args":{}}`)},
+	})
+	if assert.NotNil(t, dec.Approval) {
+		assert.Empty(t, dec.Approval.WebActionKey)
+		assert.Empty(t, dec.Approval.WebActionFingerprint)
+		assert.False(t, dec.Approval.WebActionChangedPageReprompt)
+	}
+}
+
 func TestToolCallAuthz_PermissionResolutionError_DeniesFailClosed(t *testing.T) {
 	chk := &fakeChecker{}
 	h := hooks.NewToolCallAuthz(hooks.ToolCallAuthzDeps{
