@@ -54,7 +54,7 @@ func AssertCategoryConformance(t *testing.T, c channelinteractions.Category) {
 	require.NoError(t, c.Validate(), "category %q must validate", c.Name)
 	req := SampleRequest(c)
 	require.NoError(t, req.Validate(), "category %q sample payload must be wire-valid", c.Name)
-	out := channelinteractions.RenderText(req, nil)
+	out := channelinteractions.RenderText(req, nil, nil)
 	assert.NotEmpty(t, out, "category %q must render on the text floor", c.Name)
 	assert.Contains(t, out, req.Lead, "text floor must carry the lead")
 }

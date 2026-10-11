@@ -480,6 +480,7 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	// wantSessionPhaseFor is "" and this is a no-op.
 	checkSessionPhase(t, h, b)
 	checkApprovalPromptCount(t, h, b)
+	checkApprovalScreenshotAttached(t, h, b)
 	checkSystemPrompt(t, h, b)
 	checkTriggerStatus(t, h, b)
 	checkChannelPosts(t, h, b)
@@ -1495,6 +1496,30 @@ func checkApprovalPromptCount(t *testing.T, h *e2e.Harness, b bt.Bundle) {
 	}
 	assert.Len(t, h.PublishedApprovalPrompts(), *b.Assert.ApprovalPrompts,
 		"published interaction approval prompts")
+}
+
+// checkApprovalScreenshotAttached asserts that at least one published
+// interaction approval prompt carries a non-empty
+// InteractionRequestPayload.Screenshot.RenderName (Assertions.
+// ApprovalScreenshotAttached). This reads the recorded PAYLOAD, not the
+// reply — a scripted turn says the same words whether or not the redacted
+// page screenshot (Phase D of the browser-approval-screenshots feature) rode
+// along with the card, so only the payload itself can prove it attached.
+func checkApprovalScreenshotAttached(t *testing.T, h *e2e.Harness, b bt.Bundle) {
+	t.Helper()
+	if !b.Assert.ApprovalScreenshotAttached {
+		return
+	}
+	prompts := h.PublishedApprovalPrompts()
+	found := false
+	for _, p := range prompts {
+		if p.Payload.Screenshot != nil && p.Payload.Screenshot.RenderName != "" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"expected at least one published approval prompt to carry a non-empty Screenshot.RenderName (got %d prompts)", len(prompts))
 }
 
 // checkPlanGate evaluates the plan-gate assertions against the recorded log.

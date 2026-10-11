@@ -2026,6 +2026,23 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		// reaches the provider natively could never pass.
 		ArtifactReader: env.ArtifactReader,
 
+		// Client mirrors internal/cmd/runner/main.go's identical field: the real
+		// manager-cached client over this test's envtest apiserver (f.K8s, the
+		// SAME client the placeholder-pod and RunnerEnv.Client wiring above
+		// already use). Wiring it here is scoped to exactly one consumer this
+		// harness previously left dark: browser_screenshot.go's
+		// storeScreenshotArtifact, which fails closed ("no k8s client wired")
+		// and ships every browser approval/human-step card text-only without
+		// it. It does NOT also turn on applyUIResource's widget-persistence
+		// path (loop.go's uiResourceDeps{Client: l.Client, Artifacts:
+		// l.Artifacts, ...}) — that path gates on BOTH deps.Client AND
+		// deps.Artifacts being non-nil, and Artifacts is deliberately left
+		// unset below, so every other e2e scenario's widget behavior is
+		// unchanged by this field. nil only for a factory built directly in a
+		// unit test with no K8s set (f.K8s itself defaults to nil there),
+		// which is exactly today's pre-existing fallback.
+		Client: f.K8s,
+
 		// LabelStore is the same instance threaded into every MCPTool
 		// in buildMCPTools above. The Loop's approval-emit path
 		// snapshots it into the outbound ToolApprovalRequestPayload.

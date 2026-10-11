@@ -420,6 +420,21 @@ export interface InteractionAction {
   url?: string;
 }
 
+// InteractionScreenshot mirrors channelevents.AttachmentRef as carried on
+// InteractionRequestPayload.Screenshot: a redacted page screenshot taken at
+// the moment a browser interaction (e.g. a tool approval) was raised. Refs
+// only — the bytes are fetched same-origin via /artifact-download, gated by
+// the viewer's CheckView, same as an outbound message's attachments
+// (ChatView's artifactDownloadURL). artifactId/filename are the fields that
+// URL needs; mime/altText are display hints only.
+export interface InteractionScreenshot {
+  renderName: string;
+  artifactId?: string;
+  mime: string;
+  filename: string;
+  altText?: string;
+}
+
 // InteractionRequestInner mirrors channelevents.InteractionRequestPayload —
 // the semantic request body (Lead/Body/Fields/Excerpt/Actions/Audience) that
 // replaced the per-prompt-type kind families (tool approval, credential
@@ -438,6 +453,12 @@ export interface InteractionRequestInner {
   audience: { scope: string };
   expiresAt?: string;
   interruptible?: boolean;
+  // screenshot, when set, is a redacted page screenshot taken when a browser
+  // interaction was raised (a tool approval's "what does the page look like
+  // right now"). Absent for every non-browser category and for a browser
+  // interaction whose capture failed (best-effort — see
+  // channelevents.InteractionRequestPayload.Screenshot).
+  screenshot?: InteractionScreenshot;
 }
 
 // InteractionRequestPayload mirrors builtin.MsgInteractionRequest

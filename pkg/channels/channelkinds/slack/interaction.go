@@ -14,7 +14,10 @@
 //     ephemeral-with-DM-fallback) to every identity in Audience.Requester or
 //     Audience.Approvers depending on Scope. The delivery lands in s.delivery,
 //     keyed by RequestRef, whenever deliveryEditable(p) says a later
-//     interaction_applied will need to edit it in place.
+//     interaction_applied will need to edit it in place. When the payload
+//     carries a Screenshot (browser-originated interactions only), the
+//     resolved PNG is uploaded as a threaded file under each recipient's
+//     card right after it posts — best-effort, see uploadScreenshot.
 //   - KindInteractionApplied{Category: credential_link, Outcome: resolved}:
 //     posts a "connected" notice at the resolved tone. credential_link resolves
 //     out-of-band (an OAuth callback, not a click), so there is no response_url
@@ -40,6 +43,7 @@
 package slack
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -344,6 +348,13 @@ func (s *interactionSender) sendRequest(ctx context.Context, sess channelkinds.S
 		}
 		lastRef = ref
 		delivered = true
+		// Screenshot upload is threaded under THIS recipient's card, posted
+		// immediately after it so a fan-out to multiple approvers gives each
+		// their own in-thread picture rather than racing to attach to
+		// whichever card landed last. Best-effort: the card already carries
+		// the full approval text, so a fetch/upload failure must not fail the
+		// interaction send (see uploadScreenshot).
+		s.uploadScreenshot(ctx, sess, p, ref, logger)
 	}
 	// Nothing reached anybody. This is a FAILURE, not a benign skip: the
 	// session parks awaiting a decision no one was asked for, and without a
@@ -421,6 +432,58 @@ func (s *interactionSender) sendRequest(ctx context.Context, sess channelkinds.S
 		}
 	}
 	return nil
+}
+
+// uploadScreenshot resolves p.Screenshot's bytes via the AssetFetcher and
+// uploads the redacted page image as a PNG file threaded under ref — the
+// card's own (channelID, ts) that deliverPrompt / postBroadcast just
+// returned. Mirrors sendWithAttachments' fetch+upload shape (sender.go), not
+// its fallback-text behavior: there is nothing to fall back to here, since
+// the card already landed carrying the full approval text — a missing
+// picture is a cosmetic loss, not a delivery failure.
+//
+// Every exit here is a silent-but-logged skip, never an error returned to
+// the caller (sendRequest): a nil Screenshot is the common case (every
+// non-browser interaction) and logs nothing; a nil AssetFetcher (a surface
+// that never configured one) or ref.TS == "" (nothing was actually posted to
+// thread under, e.g. a delivery that errored before reaching here — though
+// callers only reach this after a successful deliverPrompt/postBroadcast)
+// logs once and returns; a Fetch or UploadFileContext failure logs the
+// session + renderName + error per the repo's no-silent-errors rule and
+// returns, leaving the card as the complete approval surface.
+func (s *interactionSender) uploadScreenshot(ctx context.Context, sess channelkinds.SessionInfo, p channelevents.InteractionRequestPayload, ref deliveryRef, logger logr.Logger) {
+	if p.Screenshot == nil || ref.TS == "" {
+		return
+	}
+	if s.deps.AssetFetcher == nil {
+		logger.Info("interaction sender: no AssetFetcher configured; screenshot upload skipped",
+			"session", sess.Namespace+"/"+sess.Name, "requestRef", p.RequestRef, "render", p.Screenshot.RenderName)
+		return
+	}
+	ab, err := s.deps.AssetFetcher.Fetch(ctx, sess.Namespace, sess.Name, p.Screenshot.RenderName)
+	if err != nil {
+		logger.Info("interaction sender: fetch screenshot failed (best-effort, card already delivered)",
+			"session", sess.Namespace+"/"+sess.Name, "requestRef", p.RequestRef, "render", p.Screenshot.RenderName, "err", err.Error())
+		return
+	}
+	filename := p.Screenshot.Filename
+	if filename == "" {
+		filename = ab.Filename
+	}
+	if filename == "" {
+		filename = "page.png"
+	}
+	if _, err := s.client.UploadFileContext(ctx, slackapi.UploadFileParameters{
+		Reader:          bytes.NewReader(ab.Bytes),
+		FileSize:        len(ab.Bytes),
+		Filename:        filename,
+		Channel:         ref.ChannelID,
+		ThreadTimestamp: ref.TS,
+		AltTxt:          p.Screenshot.AltText,
+	}); err != nil {
+		logger.Info("interaction sender: upload screenshot failed (best-effort, card already delivered)",
+			"session", sess.Namespace+"/"+sess.Name, "requestRef", p.RequestRef, "render", p.Screenshot.RenderName, "err", err.Error())
+	}
 }
 
 // sendApplied renders a resolved interaction outcome. credential_link is a

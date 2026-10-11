@@ -127,7 +127,18 @@ MCP servers, validated against a toolspec.
   cookies + localStorage after each acting call and on graceful stop into a
   per-session Secret — the one Secret the runner is RBAC-allowed to write, never
   model-visible — and re-injects it when the pod wakes after a reap, so a login
-  survives pod churn (`pkg/agent/tool/browser/capture.go`).
+  survives pod churn (`pkg/agent/tool/browser/capture.go`). Phase D attaches a
+  **redacted** page screenshot to every browser approval/human-step card — the
+  acting-approval (`web_host#act`) plan-gate ask, `request_human_step`'s
+  confirm/code prompts, and the CAPTCHA notice — so the human deciding sees the
+  same page the agent does, not just its summary: credential-filled fields are
+  painted opaque black (`pkg/agent/tool/browser/screenshot_capture.go` resolves
+  each filled field's box via `dom.GetBoxModel` and fails closed on any
+  unresolved box; `pkg/agent/tool/browser/screenshot_redact.go` does the pixel
+  paint-over) before the PNG is ever stored, and the screenshot is attached to
+  `channelevents.InteractionRequestPayload.Screenshot` — never placed in the
+  model's context. Slack uploads it into the approval thread, the web chat
+  embeds it inline, and the local TUI links it via a signed artifact-view URL.
 - **Binaries:** `internal/cmd/streamclient/` (claims a streaming ToolCall via
   the gateway); tool execution is otherwise driven from `internal/cmd/runner/`
 

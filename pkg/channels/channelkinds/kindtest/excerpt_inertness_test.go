@@ -33,7 +33,7 @@ func TestExcerptInertness_TextFloor(t *testing.T) {
 			if req.Excerpt == nil {
 				t.Skip("category has no excerpt")
 			}
-			out := channelinteractions.RenderText(req, nil)
+			out := channelinteractions.RenderText(req, nil, nil)
 
 			// Find the longest backtick run in the whole rendered output — that
 			// run is the wrapping fence. It must exist, and its opening/closing

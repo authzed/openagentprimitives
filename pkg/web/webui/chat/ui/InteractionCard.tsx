@@ -20,7 +20,26 @@ import type {
   InteractionField,
   InteractionItem,
   InteractionRequestInner,
+  InteractionScreenshot,
+  SessionRef,
 } from "./types";
+
+// screenshotDownloadURL builds the same-origin download link for the
+// interaction's screenshot attachment — same shape as ChatView's
+// artifactDownloadURL (not exported from there, so replicated here rather
+// than reached across files): gated by the logged-in session + the viewer's
+// CheckView, no signed link needed. /artifact-download sets
+// Content-Disposition: attachment, but that only affects a top-level
+// navigation/click, not an <img src> sub-resource load, so it still renders
+// inline here.
+function screenshotDownloadURL(session: SessionRef, shot: InteractionScreenshot): string {
+  const params = new URLSearchParams({
+    artifactId: shot.artifactId ?? "",
+    sessionRef: `${session.namespace}/${session.name}`,
+    fn: shot.filename || shot.renderName,
+  });
+  return `/artifact-download?${params.toString()}`;
+}
 
 // outcomeIcon maps an InteractionAppliedInner.outcome (channelevents.Outcome*)
 // to its resolved-state glyph, mirroring MessageList's planItemIcon. Unknown
@@ -385,6 +404,19 @@ export function InteractionCard(props: {
       </div>
 
       {request.body && <div className="text-xs leading-snug text-muted-foreground">{request.body}</div>}
+
+      {request.screenshot && (
+        // The screenshot is a visual aid for the approver's judgment call — a
+        // redacted snapshot of the page at the moment the interaction was
+        // raised. Capped at max-height so a tall page can't blow out the
+        // card's layout; a bad/missing src just shows a broken-image glyph
+        // (acceptable — a best-effort render, never worth throwing over).
+        <img
+          src={screenshotDownloadURL(request.agentSessionRef, request.screenshot)}
+          alt={request.screenshot.altText || "current page screenshot"}
+          className="max-h-64 w-full rounded-md border border-border/60 object-contain object-top"
+        />
+      )}
 
       {footer}
 

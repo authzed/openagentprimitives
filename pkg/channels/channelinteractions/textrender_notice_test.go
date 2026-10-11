@@ -45,7 +45,7 @@ func TestRenderText_NoticeCarriesToneMarkerAndNextStep(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			registerNoticeFixture(t, "demo_notice", tc.tone)
-			out := RenderText(noticePayload("demo_notice"), nil)
+			out := RenderText(noticePayload("demo_notice"), nil, nil)
 
 			assert.Contains(t, out, "**Agent stopped**")
 			assert.Contains(t, out, "**Start a new thread to try again.**",
@@ -70,7 +70,7 @@ func TestRenderText_NoticeCarriesToneMarkerAndNextStep(t *testing.T) {
 // respond to.
 func TestRenderText_NoticeHasNoRespondTrailer(t *testing.T) {
 	registerNoticeFixture(t, "demo_notice", ToneRoutine)
-	out := RenderText(noticePayload("demo_notice"), nil)
+	out := RenderText(noticePayload("demo_notice"), nil, nil)
 	assert.NotContains(t, out, "respond from a connected app")
 }
 
@@ -81,7 +81,7 @@ func TestRenderText_PromptRenderingUnchanged(t *testing.T) {
 	t.Cleanup(Reset)
 	Register(Category{Name: "tool_approval", Deciders: DecideOwner, Tone: ToneRoutine, Resurface: ResurfaceNone})
 
-	out := RenderText(renderableRequest(), nil)
+	out := RenderText(renderableRequest(), nil, nil)
 	assert.True(t, len(out) > 0)
 	assert.NotContains(t, out, "[!]")
 	assert.NotContains(t, out, "[degraded]")

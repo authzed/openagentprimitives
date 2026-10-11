@@ -19,7 +19,13 @@ import (
 // decisionURL maps a decision/link_mint action ID to its hosted decision-page
 // URL. Nil renders those actions as plain labels plus a pointer to respond
 // from a connected surface.
-func RenderText(p channelevents.InteractionRequestPayload, decisionURL func(actionID string) string) string {
+//
+// screenshotURL resolves p.Screenshot (when set) to a human-facing reference
+// — a signed view link, a CLI hint, whatever the calling surface can cleanly
+// produce — appended as its own line. Best-effort: a nil callback, or one
+// that returns "", renders no line at all; p.Screenshot == nil never calls
+// the callback.
+func RenderText(p channelevents.InteractionRequestPayload, decisionURL func(actionID string) string, screenshotURL func(*channelevents.AttachmentRef) string) string {
 	var b strings.Builder
 
 	// Tone marker, for notice categories only. The floor has no colour and no
@@ -57,6 +63,12 @@ func RenderText(p channelevents.InteractionRequestPayload, decisionURL func(acti
 		innerText := inner.String()
 		fence := inertFence(innerText)
 		fmt.Fprintf(&b, "%s\n%s\n%s\n", fence, innerText, fence)
+	}
+
+	if p.Screenshot != nil && screenshotURL != nil {
+		if url := screenshotURL(p.Screenshot); url != "" {
+			fmt.Fprintf(&b, "\n📷 Page screenshot: %s\n", url)
+		}
 	}
 
 	if len(p.Actions) > 0 {
