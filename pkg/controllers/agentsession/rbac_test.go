@@ -877,3 +877,31 @@ func TestBrowserIdentityRBACRulesEmptyEmitsNothing(t *testing.T) {
 	assert.Nil(t, findRuleForResource(onlySecrets, "agentprimitives.authzed.com", "agentidentities"),
 		"no identity name means no agentidentities rule")
 }
+
+// TestBrowserStateRBACRulesPinsGetUpdate proves the persistent-state write grant
+// (Task C9): the runner Role gains secrets get;update pinned to EXACTLY the named
+// state Secret(s) — the ONLY Secret the runner may write — and nothing else.
+func TestBrowserStateRBACRulesPinsGetUpdate(t *testing.T) {
+	rules := agentsession.BrowserStateRBACRules([]string{"s-browser-web-state"})
+	require.Len(t, rules, 1, "exactly one secrets rule; rules=%+v", rules)
+
+	assert.True(t, hasPinnedRule(rules, "", "secrets", "s-browser-web-state", "get"),
+		"missing secrets[s-browser-web-state] get rule; rules=%+v", rules)
+	assert.True(t, hasPinnedRule(rules, "", "secrets", "s-browser-web-state", "update"),
+		"missing secrets[s-browser-web-state] update rule; rules=%+v", rules)
+
+	r := rules[0]
+	assert.NotEmpty(t, r.ResourceNames, "state-secret write grant must be pinned by resourceNames")
+	assert.ElementsMatch(t, []string{"get", "update"}, r.Verbs,
+		"the state-secret grant must be exactly get;update — no create/patch/delete; verbs=%+v", r.Verbs)
+}
+
+// TestBrowserStateRBACRulesEmptyEmitsNothing keeps the write grant off for an
+// ephemeral-only session: no persistent toolbox means no state Secret and no
+// secrets-write rule at all.
+func TestBrowserStateRBACRulesEmptyEmitsNothing(t *testing.T) {
+	assert.Empty(t, agentsession.BrowserStateRBACRules(nil),
+		"no persistent browser toolbox means no state-secret write rule")
+	assert.Empty(t, agentsession.BrowserStateRBACRules([]string{}),
+		"an empty state-secret name slice emits no rule")
+}

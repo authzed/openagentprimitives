@@ -33,8 +33,8 @@ func TestActingOpPermissionIsExternalWebHost(t *testing.T) {
 			assert.Equal(t, browserschema.WebHostType, p.Check.ResourceType)
 			assert.Equal(t, browserschema.ActPermission, p.Check.Permission)
 			assert.Equal(t, "{"+hostArgKey+"}", p.Check.ResourceIDTemplate)
-			assert.Empty(t, p.Check.ResourceIDTransforms,
-				"the canonical host is a valid object id as-is; no transforms needed")
+			assert.Equal(t, browserschema.WebHostValueTransforms(), p.Check.ResourceIDTransforms,
+				"a dotted host is not a legal SpiceDB object id; the Check must escape it via spicedb_escape")
 		})
 	}
 
@@ -46,20 +46,21 @@ func TestActingOpPermissionIsExternalWebHost(t *testing.T) {
 }
 
 // TestActingNamedArgsSurfacesPageHost proves the page host reaches the check's
-// ResolveResourceID under hostArgKey, yielding the canonical host — and that it
-// is PAGE STATE: a model-supplied "host" cannot override the real one.
+// ResolveResourceID under hostArgKey, yielding the ESCAPED canonical host — and
+// that it is PAGE STATE: a model-supplied "host" cannot override the real one.
 func TestActingNamedArgsSurfacesPageHost(t *testing.T) {
-	bt := actingTool("click", "aa.com")
+	bt := actingTool("click", "app.example.com")
 
 	named, ok := bt.NamedArgs(map[string]any{"ref": "e3", "host": "attacker.example"})
 	require.True(t, ok)
-	assert.Equal(t, "aa.com", named[hostArgKey],
-		"the live page host must win over a host the model put in the call")
+	assert.Equal(t, "app.example.com", named[hostArgKey],
+		"the live page host must win over a host the model put in the call (NamedArgs surfaces the raw host)")
 	assert.Equal(t, "e3", named["ref"], "other args pass through untouched")
 
 	id, err := authz.ResolveResourceID(*bt.Permission().Check, named)
 	require.NoError(t, err)
-	assert.Equal(t, "aa.com", id, "the check resolves the instance to the canonical page host")
+	assert.Equal(t, "app=2Eexample=2Ecom", id,
+		"the check resolves the instance to the canonical page host, spicedb_escaped into a legal object id (dots are illegal)")
 }
 
 // TestObservationNamedArgsPassThrough proves an observation op does not touch the

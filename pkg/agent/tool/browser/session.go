@@ -15,6 +15,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sync"
 	"time"
@@ -91,6 +92,20 @@ type Session struct {
 	// blanked is the set of DOM backend node IDs a credential was typed into,
 	// recorded by the type tool for Phase C Task C5's blanking pass to consume.
 	blanked map[int64]bool
+
+	// store persists captured session state (cookies + localStorage) across reap
+	// and wake for a `persistent` toolbox (Task C9). nil for an `ephemeral`
+	// toolbox, which disables capture and inject entirely. Written by the runner's
+	// per-session state Secret, the sole writer of that Secret's content.
+	store StateStore
+	// logName is the LLM-facing toolbox name, used only as structured log context
+	// for best-effort capture/inject failures.
+	logName string
+	// injectAttempted guards the once-per-boot inject on first attach. Guarded by
+	// mu (set inside do(), which holds mu), so a concurrent first tool call injects
+	// exactly once. An inject is ATTEMPTED once even if it fails, so a persistently
+	// bad blob cannot wedge every subsequent call behind a retry.
+	injectAttempted bool
 }
 
 // heldCred is one Fetched credential kept briefly in the §5.3 hold so repeated
@@ -214,6 +229,11 @@ func (s *Session) do(ctx context.Context, timeout time.Duration, fn func(ctx con
 	if err := s.ensureConnected(); err != nil {
 		return err
 	}
+	// Inject persisted state on the FIRST attach after a pod boot, before fn runs —
+	// so a wake's restored cookies are in place before the first browser action.
+	// Once per boot, best-effort, under mu (the connection is live here). A nil
+	// store (ephemeral) or an empty Secret (first boot) makes this a no-op.
+	s.maybeInject(ctx)
 	runCtx, cancel := context.WithTimeout(s.browseCtx, timeout)
 	defer cancel()
 	// Propagate the caller's cancellation (an interrupt or the LLM call ending)
@@ -221,6 +241,79 @@ func (s *Session) do(ctx context.Context, timeout time.Duration, fn func(ctx con
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
 	return fn(runCtx)
+}
+
+// maybeInject performs the once-per-boot state injection on first attach. It is
+// called with s.mu held (from do, right after ensureConnected) and runs directly
+// on s.browseCtx — NOT through s.do, which would re-lock mu. A nil store disables
+// it; an empty blob (first boot) injects nothing. Failures are LOGGED with origin
+// context and swallowed (repo rule: never crash the turn on a best-effort restore
+// — the login simply isn't present and the model re-logs-in, spec §5.5). The
+// attempt flag is set unconditionally so a bad blob cannot wedge every later call.
+func (s *Session) maybeInject(ctx context.Context) {
+	if s.store == nil || s.injectAttempted {
+		return
+	}
+	s.injectAttempted = true
+	data, err := s.store.Load(ctx)
+	if err != nil {
+		slog.Warn("browser: load persisted state failed; starting with a clean session",
+			"toolbox", s.logName, "gate", s.gateURL, "err", err.Error())
+		return
+	}
+	blob, err := unmarshalBlob(data)
+	if err != nil {
+		slog.Warn("browser: persisted state is unreadable; starting with a clean session",
+			"toolbox", s.logName, "gate", s.gateURL, "err", err.Error())
+		return
+	}
+	if len(blob.Cookies) == 0 && len(blob.Origins) == 0 {
+		return // first boot: nothing to inject.
+	}
+	ictx, cancel := context.WithTimeout(s.browseCtx, shortTimeout)
+	defer cancel()
+	if err := injectFrom(ictx, blob); err != nil {
+		slog.Warn("browser: inject persisted state failed; the model may need to log in again",
+			"toolbox", s.logName, "gate", s.gateURL, "err", err.Error())
+	}
+}
+
+// captureAndPersist captures the live cookie jar + current-origin localStorage,
+// merges it with the prior saved blob, and writes it back through the StateStore.
+// A no-op for an ephemeral toolbox (nil store). Every failure is RETURNED with
+// context so the caller can log and continue (capture must never fail a turn —
+// the next acting call or the SIGTERM capture retries). Not called with mu held:
+// the capture goes through s.do (which takes mu) and the store I/O runs outside it.
+func (s *Session) captureAndPersist(ctx context.Context) error {
+	if s.store == nil {
+		return nil
+	}
+	var captured stateBlob
+	if err := s.do(ctx, shortTimeout, func(c context.Context) error {
+		return captureInto(c, &captured)
+	}); err != nil {
+		return fmt.Errorf("capture browser state: %w", err)
+	}
+	prior, err := s.store.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("load prior browser state: %w", err)
+	}
+	priorBlob, err := unmarshalBlob(prior)
+	if err != nil {
+		// A corrupt prior blob must not block a fresh capture: start from the
+		// capture alone rather than refusing to persist anything.
+		slog.Warn("browser: prior persisted state is unreadable; overwriting with a fresh capture",
+			"toolbox", s.logName, "err", err.Error())
+		priorBlob = stateBlob{}
+	}
+	data, err := marshalBlob(mergeBlob(priorBlob, captured))
+	if err != nil {
+		return fmt.Errorf("marshal browser state: %w", err)
+	}
+	if err := s.store.Save(ctx, data); err != nil {
+		return fmt.Errorf("persist browser state: %w", err)
+	}
+	return nil
 }
 
 // onNetworkEvent records request URLs and, on a gate/proxy-denied load failure,

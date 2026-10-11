@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -45,6 +46,14 @@ const (
 	// ResourceIDTemplate reads it back from. One constant keeps the two halves —
 	// what the tool writes and what the check reads — from drifting apart.
 	hostArgKey = "host"
+
+	// requestHumanStepOp is the human-handoff op: it asks a person to complete a
+	// sign-in step the agent cannot do itself. It is offered ONLY in act mode (it
+	// is part of the login flow), but it is NOT a mutating acting op — it writes
+	// nothing to the page — so it is deliberately absent from actingOpNames and
+	// carries StateImpact Stateless, not External on web_host. See
+	// browserTool.Permission.
+	requestHumanStepOp = "request_human_step"
 )
 
 // actingOpNames is the set of ops that reach and mutate external page state
@@ -112,6 +121,13 @@ type browserTool struct {
 	// Execute so the transcript only ever records the placeholder. Shared across
 	// a toolbox's tools (one per session, over the session's §5.3 hold).
 	filler CredentialFiller
+
+	// humanStep backs request_human_step only; nil for every other op (and for
+	// request_human_step itself when the toolbox is synthesized without a
+	// requester, e.g. a unit test — Execute guards nil rather than panicking).
+	// The runner implements it over the approval host (pkg/agent/runner); a fake
+	// satisfies it in tests.
+	humanStep HumanStepRequester
 }
 
 var (
@@ -140,12 +156,31 @@ func (t *browserTool) InputSchema() json.RawMessage { return t.schema }
 // no page) resolves the template to "", which the External check treats as an
 // UnresolvedResource denial (fail-closed), never a silent allow.
 //
-// Shaped byte-for-byte like git push's external check (toolkits/git.yaml): the
-// resource id is already the canonical host (Session.CurrentHost runs
-// browserpolicy.CanonicalHost), so no resourceIDTransforms are needed — the host
-// is an acceptable SpiceDB object id as-is, exactly as the C1 web_host slot
-// tests and the real-SpiceDB round-trip fixture assert.
+// Shaped like git push's external check (toolkits/git.yaml), with the one
+// difference a host forces: the resource id is the canonical page host
+// (Session.CurrentHost runs browserpolicy.CanonicalHost), which is NOT a legal
+// SpiceDB object id as-is. SpiceDB's object-id charset forbids dots and every
+// real hostname has them, so `web_host:example.com` is rejected with
+// InvalidArgument — the acting feature could never authorize against real SpiceDB
+// without escaping. ResourceIDTransforms therefore runs browserschema's canonical
+// chain (spicedb_escape: "." → "=2E"), the SAME chain the AgentClass reconciler
+// publishes onto web_host's resolvedSlot so the grant-write legs mint the
+// identical id. spicedb_escape is INJECTIVE, so the plan-gate card can keep
+// DISPLAYING the raw host (derivedInstanceID drops the escape for display) while
+// the grant is written on the escaped id, and the card stays a truthful claim
+// about exactly which host was approved.
 func (t *browserTool) Permission() authz.Permission {
+	// request_human_step is offered only in act mode but is NOT a page mutation:
+	// it posts a human-in-the-loop card (confirm) or a notice (captcha) and
+	// reaches no external page state. Its authorization IS the human login_human_step
+	// card it publishes (DecideApprovers, re-checked server-side), so it needs no
+	// web_host slot gate — layering one would be a redundant second human gate for
+	// one handoff. Stateless, exactly like set_preference, whose confirm is also its
+	// own gate. (The emitted-code half types into the page via the runner, after
+	// the human approves — never a model-driven acting call through this tool.)
+	if t.op == requestHumanStepOp {
+		return authz.Permission{StateImpact: authz.Stateless}
+	}
 	if !isActingOp(t.op) {
 		return authz.Permission{StateImpact: authz.Passthrough}
 	}
@@ -155,6 +190,10 @@ func (t *browserTool) Permission() authz.Permission {
 			ResourceType:       browserschema.WebHostType,
 			Permission:         browserschema.ActPermission,
 			ResourceIDTemplate: "{" + hostArgKey + "}",
+			// Escape the host into a legal SpiceDB object id — dots are illegal in
+			// one. Sourced from browserschema so the check path and every
+			// grant-write leg derive the identical id. See Permission's doc.
+			ResourceIDTransforms: browserschema.WebHostValueTransforms(),
 			ResourceIDHint: "this acts on the page the browser is currently on; open an http(s) page with navigate first — " +
 				"about:blank or no page has no host to authorize against",
 		},
@@ -215,6 +254,8 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage, _ *agent
 		Host           string `json:"host"`
 		Key            string `json:"key"`
 		Option         string `json:"option"`
+		Kind           string `json:"kind"`
+		Prompt         string `json:"prompt"`
 	}
 	if len(strings.TrimSpace(string(raw))) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -244,18 +285,191 @@ func (t *browserTool) Execute(ctx context.Context, raw json.RawMessage, _ *agent
 	case "query_logins":
 		return t.queryLogins(a.Filter, a.Host, a.Page), nil
 	case "type":
-		return t.typeInto(ctx, a.Ref, a.Text), nil
+		return t.afterAct(ctx, t.typeInto(ctx, a.Ref, a.Text)), nil
 	case "click":
-		return t.click(ctx, a.Ref), nil
+		return t.afterAct(ctx, t.click(ctx, a.Ref)), nil
 	case "press":
-		return t.press(ctx, a.Key), nil
+		return t.afterAct(ctx, t.press(ctx, a.Key)), nil
 	case "select":
-		return t.selectOption(ctx, a.Ref, a.Option), nil
+		return t.afterAct(ctx, t.selectOption(ctx, a.Ref, a.Option)), nil
 	case "submit":
-		return t.submit(ctx, a.Ref), nil
+		return t.afterAct(ctx, t.submit(ctx, a.Ref)), nil
+	case requestHumanStepOp:
+		return t.requestHumanStep(ctx, a.Kind, a.Prompt, a.Ref), nil
 	default:
 		return errResult("unknown browser tool %q", t.op), nil
 	}
+}
+
+// StateCapturer is implemented by a browser tool whose toolbox is `persistent`:
+// it captures the live cookie jar + localStorage into the per-session state
+// Secret. The runner calls it on graceful stop (SIGTERM) so the last login state
+// precedes a reap (spec §2.3). Every tool of one toolbox shares one Session, so
+// the runner dedupes by Origin and calls this once per toolbox. An `ephemeral`
+// toolbox's tool implements it as a no-op (nil store), so a type assertion that
+// matches is always safe to invoke.
+type StateCapturer interface {
+	CaptureState(ctx context.Context) error
+}
+
+var _ StateCapturer = (*browserTool)(nil)
+
+// CaptureState implements StateCapturer: it persists the shared Session's state.
+// A no-op for an ephemeral toolbox. Returned errors let the runner log-and-continue.
+func (t *browserTool) CaptureState(ctx context.Context) error {
+	return t.sess.captureAndPersist(ctx)
+}
+
+// afterAct persists session state after a successful acting call for a
+// `persistent` toolbox (spec §2.3 "after every acting tool call"). Best-effort:
+// a capture failure is LOGGED with toolbox + host context and the acting result
+// is returned UNCHANGED — a persistence blip must never turn a successful page
+// action into a tool error (repo rule: log + continue; the next call retries).
+// A no-op for an ephemeral toolbox (nil store), so the common case costs one
+// nil-check.
+func (t *browserTool) afterAct(ctx context.Context, res agenttool.Result) agenttool.Result {
+	if err := t.sess.captureAndPersist(ctx); err != nil {
+		slog.Warn("browser: capture after acting call failed; continuing",
+			"toolbox", t.rtName, "op", t.op, "host", t.sess.CurrentHost(), "err", err.Error())
+	}
+	return res
+}
+
+// requestHumanStep asks a person to complete a sign-in step the agent cannot do
+// itself. It returns a STATUS only — never a code or secret.
+//
+//   - kind=="confirm": post a login_human_step card with a Done button and BLOCK
+//     until the person confirms, declines, or the approval window lapses (a push
+//     approval, say). A timeout is fail-closed: the call reports "timed out", it
+//     does NOT silently succeed.
+//   - no kind (or "captcha"): the agent hit a CAPTCHA or other step it cannot do.
+//     Surface a one-way notice and report that human intervention is needed. This
+//     does not block — a person takes over out of band.
+//
+// kind=="code" (ref REQUIRED): post a login_human_step card asking the person to
+// type an emailed/SMS code, BLOCK until they answer, then type the code into the
+// element `ref` names via the CDP fill path — the same InsertText the type op uses,
+// but sourced from the human's code, not a vault credential. The code is typed by
+// THIS tool (the runner), never by a model-issued type call, and the result is a
+// STATUS only: the code never enters the tool result, the transcript, a log, or the
+// model's context. A timeout is fail-closed.
+func (t *browserTool) requestHumanStep(ctx context.Context, kind, prompt, ref string) agenttool.Result {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return errResult("request_human_step requires a prompt describing what the person should do")
+	}
+	if t.humanStep == nil {
+		// Hand-built tool with no requester (a unit test), or a session with no
+		// human-step wiring. Fail loud rather than nil-panic.
+		return errResult("request_human_step is unavailable: no human-step requester is configured for this session")
+	}
+
+	switch kind {
+	case "confirm":
+		outcome, err := t.humanStep.Confirm(ctx, prompt)
+		if err != nil {
+			return errResult("request_human_step failed: %v", err)
+		}
+		switch {
+		case outcome.Approved:
+			// Status only — the tool never reveals how the step was completed.
+			return okResult("the person confirmed the sign-in step; you can continue")
+		case outcome.Denied:
+			return errResult("request_human_step: the person declined to complete the sign-in step")
+		case outcome.TimedOut:
+			// Fail-closed: a lapsed deadline is NOT a success.
+			return errResult("request_human_step: timed out waiting for the person to complete the sign-in step")
+		default:
+			return errResult("request_human_step: no decision was recorded")
+		}
+	case "code":
+		return t.requestHumanStepCode(ctx, prompt, ref)
+	case "", "captcha":
+		// No actionable kind: a CAPTCHA, or any step the agent cannot do. Surface a
+		// notice and tell the model a person must step in.
+		if err := t.humanStep.Captcha(ctx, prompt); err != nil {
+			return errResult("request_human_step: could not notify anyone that human intervention is needed: %v", err)
+		}
+		return errResult("request_human_step: this step needs a person and cannot be completed automatically; a notice has been sent asking someone to take over in the browser")
+	default:
+		return errResult("request_human_step: unknown kind %q — use \"confirm\" or \"code\", or omit kind to report a CAPTCHA or other step needing a person", kind)
+	}
+}
+
+// requestHumanStepCode drives the kind:code handoff: block for the person's typed
+// code, then type it into the element `ref` names. ref is REQUIRED (the code has to
+// go somewhere), checked before blocking a human. The result is a STATUS only; the
+// code is never echoed into the result, and the field it was typed into is marked
+// for C5 blanking so a later read/screenshot does not surface it either.
+func (t *browserTool) requestHumanStepCode(ctx context.Context, prompt, ref string) agenttool.Result {
+	if ref == "" {
+		return errResult("request_human_step: kind=\"code\" requires a ref naming the input to type the code into — read the page first and pass the code field's ref")
+	}
+	outcome, err := t.humanStep.RequestCode(ctx, prompt)
+	if err != nil {
+		return errResult("request_human_step failed: %v", err)
+	}
+	switch {
+	case outcome.TimedOut:
+		// Fail-closed: a lapsed deadline is NOT a success, and nothing is typed.
+		return errResult("request_human_step: timed out waiting for the person to provide the code")
+	case outcome.Denied:
+		return errResult("request_human_step: the person declined to provide the code")
+	case outcome.Approved:
+		if outcome.Code == "" {
+			// Approved but no code supplied — fail closed rather than type nothing
+			// and report success.
+			return errResult("request_human_step: the person approved but provided no code")
+		}
+		// The runner types the human's code into the page here — NOT a model-issued
+		// type call. The code never enters the tool result below.
+		if res := t.typeHumanCode(ctx, ref, outcome.Code); res.IsError {
+			return res
+		}
+		return okResult(fmt.Sprintf("the person provided the code; it was entered into ref %s", ref))
+	default:
+		return errResult("request_human_step: no decision was recorded")
+	}
+}
+
+// typeHumanCode focuses the element `ref` names and inserts `code` via the same
+// CDP InsertText path typeInto uses for a vault credential — but the source here is
+// the human's typed code, and there is no {{login...}} placeholder or password-slot
+// gate to apply (the human chose the field by reading the page, and the model never
+// saw the value). The filled field is marked for C5 blanking: the code is a secret,
+// so a subsequent read/screenshot must not reveal it. The returned Result never
+// contains `code`.
+func (t *browserTool) typeHumanCode(ctx context.Context, ref, code string) agenttool.Result {
+	var backendNodeID int64
+	var handled *agenttool.Result
+	if runErr := t.sess.do(ctx, shortTimeout, func(c context.Context) error {
+		e, ok := t.sess.lookupRef(ref)
+		if !ok {
+			r := errResult("ref %s is stale; call read again", ref)
+			handled = &r
+			return nil
+		}
+		backendNodeID = e.backendNodeID
+		if ae := runAction(c, func(ac context.Context) error {
+			return dom.Focus().WithBackendNodeID(cdp.BackendNodeID(backendNodeID)).Do(ac)
+		}); ae != nil {
+			return ae
+		}
+		return runAction(c, func(ac context.Context) error {
+			return input.InsertText(code).Do(ac)
+		})
+	}); runErr != nil {
+		// runErr carries only the CDP transport error, never the code value.
+		return errResult("entering the code failed: %v", runErr)
+	}
+	if handled != nil {
+		return *handled
+	}
+	// The code is a secret: blank the field so read/find/screenshot redact it until
+	// a real navigation clears the blanking (spec §3.6), exactly as a filled
+	// credential field is treated.
+	t.sess.markBlanked(backendNodeID)
+	return okResult(fmt.Sprintf("entered the code into ref %s", ref))
 }
 
 // decide evaluates host against the toolbox's egress policy.

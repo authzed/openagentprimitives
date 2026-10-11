@@ -1,0 +1,113 @@
+{
+  "name": "browser-login-secret-source",
+  "description": "The headline Phase C proof: a credentialed sign-in driven through the REAL browser driver end to end — the filler fills a stored login with no secret reaching the model, acting is gated on a web_host#act plan-gate slot, ONE approval covers the whole acting phase, and the run reaches a cookie-gated protected page.\n\nTHE SITE IS STATEFUL (test/testbrowser.ServeLoginSite, selected by this bundle's LOGIN_SITE marker): GET / is a real sign-in form; POST /signin checks the credentials, sets a session cookie, and 303-redirects to /protected; /protected shows PROTECTED-CONTENT-SIGNED-IN only WITH that cookie. So reaching the sentinel proves the credentialed round trip actually happened, not that a scripted reply said so.\n\nTHE CREDENTIAL NEVER REACHES THE MODEL. The two web_type calls carry {{login.host.docker.internal.username}} / {{login.host.docker.internal.password}} placeholders; the filler substitutes the real values strictly inside the type tool's Execute, AFTER the loop recorded the raw placeholder args. The fixture password is \"s3cr3t-fixture\" (test/testbrowser.LoginPassword) and lastToolResultNotContains pins it absent from every type result, the protected-page read, and agentReplyNotContains pins it absent from the delivered reply. The type result is a bare \"typed into ref eN\" status — never the value.\n\nONE APPROVAL, MANY ACTING CALLS (the carried C3 durability check). The acting sequence makes FOUR web_host#act calls on the same host — type username, type password, click submit, then click Continue on the protected page — and approvalPrompts is 1: the single plan-gate card that approves the signin phase binds the web_host slot, and every acting call after it runs on that grant. A regression that re-prompted per call would auto-approve (tool_approval is in autoApprove deliberately) and surface here as a count of 2+, not a hang. planGate.approvalPrompts:1 and the recorded authz decision web_host:host=2Edocker=2Einternal#act = allowed are the airtight form: the escaped host id is C-R4's chain (spicedb_escape, dots are illegal in a SpiceDB object id), and an allow could only have come from the slot grant the approval wrote — this fixture ships no owner tuple for web_host.\n\nThe AgentClass REFERENCES the toolbox (spec.browserToolboxes) — mandatory, because a web_host slot can only be declared by a referencing class (pkg/controllers/agentclass/browser_slot.go). That makes the operator stand up a per-session browser pod and hold the runner until it is Ready; the e2e harness fakes that readiness (no kubelet in envtest) and the reconciler resolves the login catalog from the directCredentials `secret` identity itself.\n\nEverything is asserted on the TOOL RESULT, never the reply.",
+
+  "agentDir": "testdata/browser-login-secret-source/manifests",
+  "agentClass": "browser-login-secret-source",
+  "extraManifests": ["01-browser-toolbox"],
+
+  "autoApprove": ["plan_phase", "plan_amendment", "tool_approval"],
+
+  "userTurns": [
+    "please sign in to my account at http://{{browserSite}}/ using my stored login"
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "sign in" },
+      "reply": [{ "toolUse": { "name": "update_plan", "args": {
+        "name": "main",
+        "items": [{ "id": "s1", "label": "sign in to the account", "status": "pending", "phase": "signin_phase" }],
+        "phases": [{
+          "id": "signin_phase",
+          "label": "Sign in to the account",
+          "why": "the user asked me to sign in with their stored login",
+          "permissions": [{ "handle": "perm:act:web_host", "why": "signing in types into and submits the form on the page" }],
+          "slots": [{ "type": "web_host", "id": "host.docker.internal", "why": "the sign-in page is on this host" }]
+        }]
+      } } }]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "web_navigate", "args": { "url": "http://{{browserSite}}/" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_navigate", "lastToolResultContains": "loaded" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_read",
+        "lastToolResultContains": "Username",
+        "capture": {
+          "userRef": "\\[(e\\d+)\\] textbox \"Username\"",
+          "passRef": "\\[(e\\d+)\\][^\\n]*\"Password\"",
+          "submitRef": "\\[(e\\d+)\\] button \"Sign in\""
+        }
+      },
+      "reply": [{ "toolUse": { "name": "web_type", "args": { "ref": "{{userRef}}", "text": "{{login.host.docker.internal.username}}" } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_type",
+        "lastToolResultContains": "typed into ref",
+        "lastToolResultNotContains": "s3cr3t-fixture"
+      },
+      "reply": [{ "toolUse": { "name": "web_type", "args": { "ref": "{{passRef}}", "text": "{{login.host.docker.internal.password}}" } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_type",
+        "lastToolResultContains": "typed into ref",
+        "lastToolResultNotContains": "s3cr3t-fixture"
+      },
+      "reply": [{ "toolUse": { "name": "web_click", "args": { "ref": "{{submitRef}}" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_click", "lastToolResultContains": "clicked" },
+      "reply": [{ "toolUse": { "name": "web_wait_for", "args": { "text": "PROTECTED-CONTENT-SIGNED-IN" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_wait_for", "lastToolResultContains": "found" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_read",
+        "lastToolResultContains": "PROTECTED-CONTENT-SIGNED-IN",
+        "lastToolResultNotContains": "s3cr3t-fixture",
+        "capture": { "continueRef": "\\[(e\\d+)\\] button \"Continue\"" }
+      },
+      "reply": [{ "toolUse": { "name": "web_click", "args": { "ref": "{{continueRef}}" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_click", "lastToolResultContains": "clicked" },
+      "reply": [{ "toolUse": { "name": "web_wait_for", "args": { "text": "PROTECTED-CONTENT-SIGNED-IN" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_wait_for", "lastToolResultContains": "found" },
+      "reply": [{ "text": "Signed in to your account." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "signed the user in with their stored login" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["Signed in to your account."],
+    "agentReplyNotContains": ["s3cr3t-fixture"],
+    "toolsCalled": ["web_navigate", "web_read", "web_type", "web_click", "web_wait_for"],
+    "approvalPrompts": 1,
+    "authz": {
+      "decisions": {
+        "web_host:host=2Edocker=2Einternal#act": "allowed"
+      }
+    },
+    "planGate": {
+      "frozenPhases": 1,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 1
+    }
+  }
+}

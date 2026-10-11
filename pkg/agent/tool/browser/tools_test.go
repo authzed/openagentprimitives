@@ -47,7 +47,7 @@ func TestScreenshotOfferedOnlyWithImages(t *testing.T) {
 	}
 
 	hasScreenshot := func(acceptsImages bool) bool {
-		tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", acceptsImages, nil)
+		tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", acceptsImages, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("Synthesize: %v", err)
 		}
@@ -80,12 +80,12 @@ func TestActingToolsOfferedOnlyInActMode(t *testing.T) {
 	act := base
 	act.Spec.Interaction = "act"
 
-	ro, err := Synthesize(readonly, "http://127.0.0.1:1", "tok", true, nil)
+	ro, err := Synthesize(readonly, "http://127.0.0.1:1", "tok", true, nil, nil, nil)
 	assert.NoError(t, err)
-	ac, err := Synthesize(act, "http://127.0.0.1:1", "tok", true, nil)
+	ac, err := Synthesize(act, "http://127.0.0.1:1", "tok", true, nil, nil, nil)
 	assert.NoError(t, err)
 
-	actingSuffixes := []string{"_type", "_click", "_press", "_select", "_submit"}
+	actingSuffixes := []string{"_type", "_click", "_press", "_select", "_submit", "_request_human_step"}
 	for _, suf := range actingSuffixes {
 		assert.False(t, hasSuffix(toolNames(ro), suf), "readonly must NOT offer %s", suf)
 		assert.True(t, hasSuffix(toolNames(ac), suf), "act must offer %s", suf)

@@ -94,6 +94,15 @@ var actingOps = []opSpec{
 		description: "Submit the form that the element named by a ref belongs to (its own form, or the nearest enclosing one), running the form's submit handler. Refs from before the submit are stale afterward.",
 		schema:      `{"type":"object","properties":{"ref":{"type":"string","description":"A ref (e.g. e3) from a prior read for an element inside the form to submit."}},"required":["ref"]}`,
 	},
+	{
+		op: requestHumanStepOp,
+		description: "Ask a person to complete a sign-in step you can't do yourself; the result is a STATUS only and never contains a code or secret. " +
+			"With kind=\"confirm\" it posts a card with a Done button and BLOCKS until the person confirms (use this for a push notification they approve on their phone, or any \"do X then press Done\" step). " +
+			"With kind=\"code\" it asks the person for an emailed or texted code and, once they provide it, types it into the input you name with ref and BLOCKS until then — you never see the code, it is entered for you (read the page first to get the code field's ref). " +
+			"Omit kind to report a CAPTCHA or any other step a person must take over — a notice is sent and the call reports that human intervention is needed (it does not wait). " +
+			"The prompt should say plainly what the person needs to do.",
+		schema: `{"type":"object","properties":{"kind":{"type":"string","enum":["confirm","code"],"description":"\"confirm\" posts a Done button and blocks until a person confirms. \"code\" asks for an emailed/SMS code and types it into ref for you. Omit kind entirely to report a CAPTCHA or other step needing a person."},"prompt":{"type":"string","description":"A short message telling the person what to do (e.g. \"approve the push notification on your phone\", or \"enter the 6-digit code we emailed you\")."},"ref":{"type":"string","description":"Required for kind=\"code\": a ref (e.g. e3) from a prior read naming the input the code should be typed into."}},"required":["prompt"]}`,
+	},
 }
 
 // screenshotOp is offered only when the model accepts images.
@@ -123,15 +132,28 @@ var queryLoginsOp = opSpec{
 // bound identity's directcred source (so a {{login...}} placeholder resolves to
 // a real website login at use time), tests and the e2e harness pass a fake, and
 // a toolbox with no bound identity passes nil (its catalog is empty, so no
-// placeholder can resolve anyway). All returned tools share one chromedp session
-// (lazily connected on first use), one origin, and one credential filler.
-func Synthesize(rt spiceboxv1alpha1.ResolvedBrowserToolbox, gateURL, token string, acceptsImages bool, fetch CredentialFetcher) ([]agenttool.Tool, error) {
+// placeholder can resolve anyway). humanStep backs request_human_step's blocking
+// confirm + captcha notice (offered only in act mode); the production runner
+// passes a late-bound requester over its approval host, tests pass a fake, and a
+// nil requester leaves request_human_step offered but erroring at call time.
+// store persists cookies + localStorage across reap/wake for a `persistent`
+// toolbox (Task C9): the production runner passes a StateStore over the
+// per-session state Secret, tests pass a fake, and an `ephemeral` toolbox (or any
+// caller that does not persist) passes nil, which disables capture and inject
+// entirely. All returned tools share one chromedp session (lazily connected on
+// first use), one origin, one credential filler, one human-step requester, and
+// one state store.
+func Synthesize(rt spiceboxv1alpha1.ResolvedBrowserToolbox, gateURL, token string, acceptsImages bool, fetch CredentialFetcher, humanStep HumanStepRequester, store StateStore) ([]agenttool.Tool, error) {
 	sites := make([]browserpolicy.Site, 0, len(rt.EffectiveSites))
 	for _, s := range rt.EffectiveSites {
 		sites = append(sites, browserpolicy.Site{Host: s.Host, Exact: s.Exact})
 	}
 
 	sess := newSession(gateURL, token)
+	// Persistent-state wiring (Task C9): a non-nil store enables capture-after-act,
+	// capture-on-stop, and inject-on-first-attach. nil (ephemeral) leaves them off.
+	sess.store = store
+	sess.logName = rt.Name
 	origin := originfmt.ForBrowser(rt)
 	// One filler per toolbox, sharing the session's §5.3 hold. Built here, after
 	// the session, because the default filler reaches the hold through it.
@@ -171,6 +193,7 @@ func Synthesize(rt spiceboxv1alpha1.ResolvedBrowserToolbox, gateURL, token strin
 			sites:       sites,
 			catalog:     rt.Catalog,
 			filler:      filler,
+			humanStep:   humanStep,
 		})
 	}
 	return tools, nil

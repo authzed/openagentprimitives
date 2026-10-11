@@ -546,6 +546,32 @@ func BrowserIdentityRBACRules(identityNames, secretNames []string) []rbacv1.Poli
 	return rules
 }
 
+// BrowserStateRBACRules returns the runner Role rule that lets the runner WRITE
+// a `persistent` browser toolbox's per-session state Secret (C9): `get` and
+// `update` on EXACTLY the named state Secret(s), pinned by resourceNames. This
+// is the ONLY Secret the runner is permitted to write — every other secrets
+// grant it holds (gate token, MCP/channel creds, directCredentials) is `get`
+// only — so the grant is deliberately narrow: a blanket secrets write would let
+// a compromised runner rewrite any Secret in the namespace.
+//
+// stateSecretNames is resolved controller-side from the AgentClass's browser
+// toolboxes, restricted to the PERSISTENT ones (an ephemeral toolbox has no
+// state Secret and so earns no rule), already deduplicated, sorted, and free of
+// "". An empty slice emits no rule. Returned as a separate rule set (like
+// BrowserIdentityRBACRules) so BuildRunnerRBAC's many callers are untouched; the
+// reconciler appends these to the Role it applies.
+func BrowserStateRBACRules(stateSecretNames []string) []rbacv1.PolicyRule {
+	if len(stateSecretNames) == 0 {
+		return nil
+	}
+	return []rbacv1.PolicyRule{{
+		APIGroups:     []string{""},
+		Resources:     []string{"secrets"},
+		ResourceNames: stateSecretNames,
+		Verbs:         []string{"get", "update"},
+	}}
+}
+
 // ToolspecReaderCRBName returns the cluster-unique name of the per-session
 // toolspec-reader ClusterRoleBinding. It is derived from the AgentSession UID
 // (not namespace+name) because ClusterRoleBinding names are cluster-scoped and

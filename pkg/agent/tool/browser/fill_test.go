@@ -45,7 +45,7 @@ func browserFillFixture(t *testing.T) (tools []agenttool.Tool, ff *fakeFetcher, 
 	}}
 	ff = &fakeFetcher{}
 	var err error
-	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, ff.fetch())
+	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, ff.fetch(), nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools)
 	sess = tools[0].(*browserTool).sess

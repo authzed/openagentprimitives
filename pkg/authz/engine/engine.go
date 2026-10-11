@@ -211,6 +211,22 @@ type BindingLifecycle interface {
 	// returns nil in BOTH cases: a timeout means the caller proceeds without
 	// freshly-extracted bindings, never that it proceeds without a Check.
 	WaitForExtraction(ctx context.Context, scope memory.Scope, inboxIdx int, deadline time.Duration) error
+
+	// GrantUnattendedSlots writes a slot grant per binding UNCONDITIONALLY —
+	// no Check, no session-scope write, no human card. This is deliberately
+	// NOT BindClassDefaults' shape: BindClassDefaults Checks each default
+	// against the subject's EXISTING standing, which is exactly wrong for a
+	// slot whose own standing arm is inert (web_host's `owner` leg is never
+	// written — see browserschema.Resource) — the Check would always deny and
+	// admissibleCandidates would drop every candidate, binding nothing.
+	//
+	// GrantUnattendedSlots exists for the one case where the CALLER'S OWN
+	// DECLARATION is the authorization — an operator's BrowserSite.Unattended
+	// (C8) — exactly as an approved plan-gate card writes its grant directly
+	// with no re-Check (see authz.BindApproved). Mirrors authz.GrantSlots,
+	// with the same session-expiration-derived TTL BindClassDefaults uses. A
+	// nil RelWriter or empty bindings is a no-op.
+	GrantUnattendedSlots(ctx context.Context, sess authz.SessionRef, bindings []authz.SlotBinding) error
 }
 
 // Dependency interfaces — kept narrow so tests fake individual methods.
@@ -498,4 +514,14 @@ func (i *impl) WaitForExtraction(ctx context.Context, scope memory.Scope, inboxI
 		return nil
 	}
 	return authz.WaitForExtraction(ctx, i.d.Memory, scope, inboxIdx, deadline)
+}
+
+// GrantUnattendedSlots writes bindings straight to authz.GrantSlots, with no
+// Check and no session-scope write — see the interface doc for why this must
+// NOT route through BindClassDefaults' admissibleCandidates gate.
+func (i *impl) GrantUnattendedSlots(ctx context.Context, sess authz.SessionRef, bindings []authz.SlotBinding) error {
+	if i.d.RelWriter == nil || len(bindings) == 0 {
+		return nil
+	}
+	return authz.GrantSlots(ctx, i.d.RelWriter, sess, bindings, authz.SlotGrantExpiry(time.Now(), i.d.SessionExpiration))
 }

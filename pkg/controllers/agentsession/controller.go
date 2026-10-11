@@ -1913,8 +1913,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// resolvable this pass appears on the next — before the runner (held until the
 	// browser pod is Ready) ever needs it. These rules are appended to the Role
 	// BuildRunnerRBAC returns, below.
-	browserIdentityNames, browserCredSecretNames := r.resolveBrowserIdentityPins(ctx, &sess, &ac)
+	browserIdentityNames, browserCredSecretNames, browserStateSecretNames := r.resolveBrowserIdentityPins(ctx, &sess, &ac)
 	browserRBACRules := BrowserIdentityRBACRules(browserIdentityNames, browserCredSecretNames)
+	// The runner's ONLY secret-WRITE grant: get;update pinned to each persistent
+	// browser toolbox's per-session state Secret (C9). Appended to the same Role
+	// as the identity read pins above, at both the create and update apply sites.
+	browserRBACRules = append(browserRBACRules, BrowserStateRBACRules(browserStateSecretNames)...)
 
 	memTokenSecretName := MemoryTokenSecretName(&sess)
 	var existingSec corev1.Secret
@@ -2673,6 +2677,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			// cache, and the resolved snapshot is mutated/read downstream.
 			tbSpec := *tb.Spec.DeepCopy()
 
+			// C-R5: resolve the EFFECTIVE state here, at the snapshot, rather than
+			// via a static CRD default (which would mask the identity-driven default,
+			// see browsertoolbox_types.go State). An UNSET state defaults to
+			// persistent iff an identity is bound, else ephemeral (spec §1.4);
+			// an EXPLICIT state is honored as-is (the CEL rule already refuses an
+			// explicit persistent with no identity). The frozen tbSpec.State then
+			// carries the effective value into status, so the operator (state-Secret
+			// lifecycle, RBAC pins) and the runner (capture/inject) read one
+			// consistent answer. The derivation is a pure function of the spec, so
+			// the status write stays idempotent across re-reconciles.
+			if tbSpec.State == "" {
+				if tbSpec.Access.Identity != "" {
+					tbSpec.State = spiceboxv1alpha1.BrowserStatePersistent
+				} else {
+					tbSpec.State = spiceboxv1alpha1.BrowserStateEphemeral
+				}
+			}
+
 			// Resolve the bound identity's login catalog + identity-derived hosts.
 			// Permanent misconfiguration (missing identity, no directCredentials
 			// credential, unregistered credential/source kind, a backing Secret
@@ -2715,6 +2737,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 					fmt.Sprintf("mint gate token for browser %q: %v", ref.Ref, err))
 			}
 			rt.BrowserPodName = BrowserPodName(&sess, rt.Ref)
+			// Persistent toolboxes only: create the per-session state Secret EMPTY so
+			// the runner (the sole writer of its content) has a target to write
+			// captured cookies + localStorage into. Read-before-create and never
+			// overwritten here, exactly like mintBrowserToken, so a re-reconcile and
+			// a reap/wake leave a populated Secret untouched. An ephemeral toolbox
+			// gets no state Secret at all (C-R5, spec §2.3).
+			if rt.Spec.State == spiceboxv1alpha1.BrowserStatePersistent {
+				if err := r.ensureBrowserStateSecret(ctx, &sess, rt); err != nil {
+					return r.markBootFailed(ctx, &sess,
+						spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+						fmt.Sprintf("ensure state Secret for browser %q: %v", ref.Ref, err))
+				}
+			}
 			// Stamp the NetworkPolicy BEFORE the pod exists (an enforcing CNI must
 			// never see an unconstrained browser pod), then the policy ConfigMap the
 			// gate mounts, then create the pod — same ordering the sidecar path uses.
@@ -4198,12 +4233,13 @@ func collectCredentialSecretNames(ctx context.Context, ai *spiceboxv1alpha1.Agen
 // delays it to a later pass, it never grants more than intended. A pin that is
 // resolvable always lands before the runner (held until the browser pod is
 // Ready) needs it.
-func (r *Reconciler) resolveBrowserIdentityPins(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ac *spiceboxv1alpha1.AgentClass) (identityNames, secretNames []string) {
+func (r *Reconciler) resolveBrowserIdentityPins(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ac *spiceboxv1alpha1.AgentClass) (identityNames, secretNames, stateSecretNames []string) {
 	if ac == nil || len(ac.Spec.BrowserToolboxes) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	idSeen := map[string]bool{}
 	secSeen := map[string]bool{}
+	stateSeen := map[string]bool{}
 	for _, ref := range ac.Spec.BrowserToolboxes {
 		if ref.Ref == "" {
 			continue
@@ -4215,6 +4251,20 @@ func (r *Reconciler) resolveBrowserIdentityPins(ctx context.Context, sess *spice
 			continue
 		}
 		idName := tb.Spec.Access.Identity
+		// PERSISTENT-ONLY state-Secret write pin. The effective state is resolved
+		// the SAME way the snapshot resolves it (C-R5): an explicit persistent, or
+		// an unset state with a bound identity. An explicit ephemeral (even with an
+		// identity) and an identity-less toolbox both earn NO state-write rule, so
+		// the runner can only write the Secret the operator actually created.
+		effPersistent := tb.Spec.State == spiceboxv1alpha1.BrowserStatePersistent ||
+			(tb.Spec.State == "" && idName != "")
+		if effPersistent {
+			stateName := BrowserStateSecretName(sess, ref.Ref)
+			if !stateSeen[stateName] {
+				stateSeen[stateName] = true
+				stateSecretNames = append(stateSecretNames, stateName)
+			}
+		}
 		if idName == "" {
 			continue // no bound identity → no filler → nothing to pin.
 		}
@@ -4237,7 +4287,8 @@ func (r *Reconciler) resolveBrowserIdentityPins(ctx context.Context, sess *spice
 	}
 	sort.Strings(identityNames)
 	sort.Strings(secretNames)
-	return identityNames, secretNames
+	sort.Strings(stateSecretNames)
+	return identityNames, secretNames, stateSecretNames
 }
 
 // directCredentialSecretNames returns the backing Secret names of every

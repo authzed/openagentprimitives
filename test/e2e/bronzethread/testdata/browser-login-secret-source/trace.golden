@@ -1,0 +1,9 @@
+authz web_host:host=2Edocker=2Einternal#act allowed
+gate  card_built      phase=0 handle=perm:act:web_host tool=web_type outcome=denied
+gate  gate_allowed    phase=0 handle=perm:act:web_host tool=web_click outcome=allow
+gate  gate_allowed    phase=0 handle=perm:act:web_host tool=web_type outcome=allow
+gate  gate_allowed    phase=0 tool=web_navigate outcome=allow
+gate  gate_allowed    phase=0 tool=web_read outcome=allow
+gate  gate_allowed    phase=0 tool=web_wait_for outcome=allow
+gate  phase_approved  phase=0
+gate  plan_approved   phase=0

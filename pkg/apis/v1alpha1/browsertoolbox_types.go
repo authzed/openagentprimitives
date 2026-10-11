@@ -42,9 +42,44 @@ type BrowserToolbox struct {
 	// the field, not the type.
 	// +kubebuilder:validation:XValidation:rule="self.access.mode != 'blocklist' || (!has(self.access.identity) && !self.access.identitySites)",message="a blocklist (general-access) browser cannot carry an identity or identitySites"
 	// +kubebuilder:validation:XValidation:rule="!self.access.identitySites || has(self.access.identity)",message="identitySites requires identity"
+	// A Phase C rule, same reasoning as the two above: an `unattended` site's
+	// web_host#act grant is written unconditionally at session start (C8, no
+	// human card) for a bound identity's browsing session, so it needs both an
+	// allowlist (a blocklist's "every site but these" shape has no per-site
+	// standing to grant against) and a bound identity (there is no session
+	// approver to ask if the binding is missing, and the grant is meant to
+	// stand in for that identity's own sign-in).
+	// +kubebuilder:validation:XValidation:rule="!self.access.sites.exists(s, s.unattended) || (self.access.mode == 'allowlist' && has(self.access.identity))",message="an unattended site requires access.mode=allowlist and access.identity"
+	// A Phase C (Task C9) rule, same field-scoped reasoning as the four above: an
+	// explicit state=persistent captures cookies + localStorage into a per-session
+	// Secret that survives reap, which is only legitimate for a credentialed
+	// (identity-bound) browser -- a general browser has nothing to keep and a
+	// long-lived profile of arbitrary-site cookies is only a tracking surface
+	// (spec §1.2, §1.4). An UNSET state is left to the AgentSession snapshot to
+	// default (persistent iff an identity is bound, else ephemeral), so the rule
+	// short-circuits on absence; it fires only on an EXPLICIT persistent.
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state != 'persistent' || has(self.access.identity)",message="a persistent browser requires access.identity"
 	Spec   BrowserToolboxSpec   `json:"spec,omitempty"`
 	Status BrowserToolboxStatus `json:"status,omitempty"`
 }
+
+// Browser session-state kinds (BrowserToolboxSpec.State). The CRD states the
+// legal set as a kubebuilder Enum marker on that field; these constants are the
+// Go-side source of truth the AgentSession snapshot defaulting (controller.go),
+// the state-Secret lifecycle (browserpod.go), and the runner's capture/inject
+// wiring compare against, so a literal "persistent"/"ephemeral" never drifts.
+//
+// The field is INTENTIONALLY not defaulted at admission (no kubebuilder:default):
+// the effective value is identity-driven and resolved in code at the snapshot
+// (spec §1.4), so an unset field must stay distinguishably empty at the API --
+// a static default would mask the identity-driven one.
+const (
+	// BrowserStateEphemeral: a clean profile every pod boot; nothing captured.
+	BrowserStateEphemeral = "ephemeral"
+	// BrowserStatePersistent: cookies + localStorage for the effective sites are
+	// captured into a per-session Secret and re-injected across reap/wake.
+	BrowserStatePersistent = "persistent"
+)
 
 // +kubebuilder:object:root=true
 //
@@ -76,10 +111,18 @@ type BrowserToolboxSpec struct {
 	Interaction string `json:"interaction,omitempty"`
 
 	// State selects how the browser's session state (cookies, storage) is
-	// retained across turns.
-	// Phase A: ephemeral is the only state; persistent arrives with identities (Phase C).
-	// +kubebuilder:validation:Enum=ephemeral
-	// +kubebuilder:default=ephemeral
+	// retained across turns: "persistent" captures cookies + localStorage for the
+	// effective sites into a per-session Secret and re-injects them across reap and
+	// wake (spec §1.4); "ephemeral" keeps a clean profile every pod boot and
+	// captures nothing. An explicit "persistent" requires access.identity (the
+	// field-scoped XValidation rule on BrowserToolbox.Spec).
+	//
+	// DELIBERATELY NOT DEFAULTED at admission. An unset value is resolved in code
+	// at the AgentSession snapshot (controller.go) to "persistent" when an identity
+	// is bound and "ephemeral" otherwise -- a static kubebuilder default would mask
+	// that identity-driven default, so the field is left omitempty and
+	// enum-but-not-defaulted so an unset field stays distinguishably empty.
+	// +kubebuilder:validation:Enum=ephemeral;persistent
 	State string `json:"state,omitempty"`
 }
 
@@ -139,6 +182,26 @@ type BrowserSite struct {
 	// suffix-by-label subdomain match.
 	// +optional
 	Exact bool `json:"exact,omitempty"`
+
+	// Unattended marks this site's web_host#act grant as operator-approved: the
+	// AgentSession reconciler's runner writes the slot_grant_act relationship
+	// for this host at session cold start, unconditionally, with no human
+	// plan-gate card -- the operator's declaration of Unattended IS the
+	// authorization, exactly as an approved card would be. A Phase C addition;
+	// the third field-scoped XValidation rule on BrowserToolbox.Spec requires
+	// access.mode=allowlist and access.identity whenever any site sets this, so
+	// an unattended grant is always for a specific, bound-identity session and
+	// never for a general-access (blocklist) browser.
+	//
+	// The default marker below lands a structural default on every site, even
+	// one that omits the field entirely -- without it, the third XValidation
+	// rule's `s.unattended` on a plain site with no explicit value errors
+	// evaluation ("no such key: unattended") instead of reading false, and
+	// CEL's fail-closed-on-error semantics then refuse EVERY BrowserToolbox
+	// create, not just an unattended one.
+	// +optional
+	// +kubebuilder:default=false
+	Unattended bool `json:"unattended,omitempty"`
 }
 
 // BrowserToolboxStatus is intentionally minimal in Phase A: a condition set

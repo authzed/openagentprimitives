@@ -39,12 +39,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
+	"github.com/authzed/openagentprimitives/pkg/agent/runner"
+	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
 	sidecartoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/sidecartoolbox"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	bt "github.com/authzed/openagentprimitives/pkg/bronzethread"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	fakekind "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/fake"
 	"github.com/authzed/openagentprimitives/pkg/controllers/artifactrender"
@@ -57,6 +60,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/artifactstore"
 	blobstore "github.com/authzed/openagentprimitives/pkg/platform/artifactstore/blob"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/directcred"
 	"github.com/authzed/openagentprimitives/pkg/tools/browserpolicy"
 	"github.com/authzed/openagentprimitives/pkg/tools/sandboxkinds/pod"
 	"github.com/authzed/openagentprimitives/test/e2e"
@@ -447,7 +451,7 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 		// no real pod). The browser refresher synthesizes the tools on a later
 		// turn — so, like a secret-gated sidecar, a browser bundle uses the tool
 		// from turn 2 on. No-op for every bundle with no BrowserToolbox.
-		if i == 0 && browserFix != nil {
+		if i == 0 && browserFix != nil && !browserFix.referencesToolbox {
 			markBrowserFixtureReady(t, h, browserFix)
 		}
 		// Contains and NotContains are positional and run on the SAME reply, so a
@@ -1710,6 +1714,20 @@ func loadManifests(t *testing.T, dir string, b bt.Bundle) []string {
 type browserFixture struct {
 	siteValue string // "host.docker.internal:<port>" — the {{browserSite}} value
 	toolboxes []browserFixtureToolbox
+
+	// referencesToolbox is true when the bundle's AgentClass actually names the
+	// BrowserToolbox in spec.browserToolboxes. Then the AgentSession reconciler
+	// owns the resolved status (and the per-session browser pod), so the driver
+	// marks those pods Ready (MarkBrowserPodsReady) and must NOT stamp status by
+	// hand — the stamp would be clobbered every reconcile. When false (the Phase
+	// A/B pattern), the class does not reference the toolbox, nothing resolves it
+	// live, and markBrowserFixtureReady stamps the status directly.
+	//
+	// The reference path is what a web_host acting SLOT needs: the class can only
+	// declare a web_host slot (and so get slot_grant_act into the schema + the
+	// escape transform onto status.resolvedSlots) when it references a toolbox —
+	// see pkg/controllers/agentclass/browser_slot.go.
+	referencesToolbox bool
 }
 
 type browserFixtureToolbox struct {
@@ -1743,9 +1761,23 @@ func setupBrowserFixture(t *testing.T, dir string, h *e2e.Harness, b bt.Bundle) 
 		"browser bundle %q declares %d BrowserToolbox CRs; the shared-Chrome fixture supports one per bundle", b.Name, len(specs))
 
 	cdp := testbrowser.SharedChrome(t)
-	_, hostForPolicy, port := testbrowser.ServeSite(t, browserSitePages(t, dir))
+	// A bundle that carries a LOGIN_SITE marker gets the STATEFUL credentialed
+	// login site (real POST handler, session cookie, cookie-gated protected page)
+	// instead of the static site/ pages — the only way to exercise a real
+	// credentialed sign-in end to end. Every other browser bundle serves its
+	// static site/ dir exactly as before.
+	var hostForPolicy string
+	var port int
+	if loginSiteRequested(dir) {
+		_, hostForPolicy, port = testbrowser.ServeLoginSite(t)
+	} else {
+		_, hostForPolicy, port = testbrowser.ServeSite(t, browserSitePages(t, dir))
+	}
 
-	fix := &browserFixture{siteValue: fmt.Sprintf("%s:%d", hostForPolicy, port)}
+	fix := &browserFixture{
+		siteValue:         fmt.Sprintf("%s:%d", hostForPolicy, port),
+		referencesToolbox: agentClassReferencesBrowserToolbox(t, h, b.AgentClass),
+	}
 	conn := map[string]browserFixtureToolbox{}
 	for ref, spec := range specs {
 		effSpec := spec
@@ -1774,7 +1806,71 @@ func setupBrowserFixture(t *testing.T, dir string, h *e2e.Harness, b bt.Bundle) 
 		}
 		return tb.gateURL, tb.token
 	})
+	// Wire request_human_step's blocking confirm/code path to the production
+	// late-bound requester over the live Loop — exactly what internal/cmd/runner
+	// does with runner.NewLateBoundHumanStepRequester. A bundle whose model calls
+	// request_human_step (e.g. a kind:code login) then publishes a real
+	// login_human_step card, which startAutoApprover answers (and, for kind:code,
+	// answers WITH the bundle's AutoApproveCode via the ResponseText carrier).
+	h.SetBrowserHumanStep(func(loopFn func() *runner.Loop) browsertoolboxsynth.HumanStepRequester {
+		return runner.NewLateBoundHumanStepRequester(loopFn)
+	})
+	// The credential-filler Fetch seam: a FAKE directcred source (never a real
+	// vault), returning the fixture login so a {{login.<host>.username|password}}
+	// placeholder resolves at type time without the value ever reaching the model
+	// or the transcript. The production runner builds this from the bound
+	// identity's directcred source (internal/cmd/runner's
+	// newBrowserCredentialFetcher) — kept fake here so e2e needs no vault, the same
+	// shape as every other browser seam. Inert for a bundle that types no
+	// placeholder (an empty catalog refuses the placeholder before Fetch anyway).
+	h.SetBrowserFiller(func(spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.CredentialFetcher {
+		return fakeBrowserCredentialFetcher
+	})
+
+	// When the AgentClass actually references the toolbox, the reconciler creates
+	// a per-session browser pod and holds the runner until that pod is Ready.
+	// envtest has no kubelet, so the harness fakes that readiness; the reconciler
+	// then resolves the login catalog from the identity itself and owns the
+	// status, so markBrowserFixtureReady is NOT called for these bundles (see
+	// browserFixture.referencesToolbox).
+	if fix.referencesToolbox {
+		h.MarkBrowserPodsReady()
+	}
 	return fix
+}
+
+// fakeBrowserCredentialFetcher is the e2e credential filler: it returns the
+// fixture login (test/testbrowser's constants) for any catalog ID. No real
+// vault is touched, and the VALUE it returns never reaches the model — the
+// filler substitutes it strictly inside the type tool's Execute, after the loop
+// has recorded the raw placeholder args.
+func fakeBrowserCredentialFetcher(_ context.Context, _ string) (directcred.Credential, error) {
+	return directcred.Credential{
+		Username: testbrowser.LoginUser,
+		Password: testbrowser.LoginPassword,
+	}, nil
+}
+
+// loginSiteRequested reports whether the bundle dir carries a LOGIN_SITE marker,
+// which selects testbrowser.ServeLoginSite (the stateful credentialed login
+// flow) over the static site/ pages.
+func loginSiteRequested(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, "LOGIN_SITE"))
+	return err == nil
+}
+
+// agentClassReferencesBrowserToolbox reports whether the named AgentClass
+// declares any spec.browserToolboxes. The manifests are already applied by the
+// time setupBrowserFixture runs, so a direct Get is authoritative. A missing
+// class (Get error) is treated as "no reference" and left for WaitForAgentClassValid
+// to surface.
+func agentClassReferencesBrowserToolbox(t *testing.T, h *e2e.Harness, name string) bool {
+	t.Helper()
+	var ac spiceboxv1alpha1.AgentClass
+	if err := h.K8s.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, &ac); err != nil {
+		return false
+	}
+	return len(ac.Spec.BrowserToolboxes) > 0
 }
 
 // markBrowserFixtureReady stamps each toolbox into the session's status once the
@@ -1976,6 +2072,14 @@ func startAutoApprover(t *testing.T, h *e2e.Harness, b bt.Bundle) {
 				if refuse[cat] {
 					h.DenyInteraction(prompts[i], opts...)
 					continue
+				}
+				// A card that expects a free-text answer (login_human_step kind:code)
+				// is answered WITH the canned code — the carrier a real surface's text
+				// input fills. SCOPED to login_human_step: only that category reads
+				// ResponseText, so attaching the code to an unrelated approve decision
+				// would smear the secret across the wire in a multi-category bundle.
+				if b.AutoApproveCode != "" && cat == categories.LoginHumanStep {
+					opts = append(opts, e2e.WithResponseText(b.AutoApproveCode))
 				}
 				h.ApproveInteraction(prompts[i], opts...)
 			}

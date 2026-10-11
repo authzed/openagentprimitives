@@ -213,6 +213,16 @@ const (
 	// here — being told what was skipped without being told one can ask for it
 	// is the shape of a notice a reader can do nothing with.
 	CompletionRequirementBypassed = "completion_requirement_bypassed"
+
+	// LoginCaptcha — a browser toolbox's request_human_step reported a step the
+	// agent cannot complete on its own (a CAPTCHA, or any challenge with no
+	// actionable kind). Unlike login_human_step this is a NOTICE, not a prompt:
+	// there is no Done button to resume the agent — a person has to take over in
+	// the browser. Unavailable rather than degraded: retrying the same automated
+	// flow cannot help (the agent still can't solve it), so the honest remedy is
+	// that a human does the step, not that the reader tries again. Unavailable
+	// requires a NextStep, which is exactly right here.
+	LoginCaptcha = "login_captcha"
 )
 
 // registerNotices registers every notice category. Kept out of init so a test
@@ -301,6 +311,11 @@ func registerNotices() {
 		// rather than housekeeping precisely because a reader who assumes they
 		// got the whole result will be wrong.
 		{Name: CompletionRequirementBypassed, Tone: channelinteractions.ToneDegraded},
+
+		// The agent hit a sign-in step it cannot do (a CAPTCHA). Unavailable, not
+		// degraded: retrying the automation won't help; a person has to step in.
+		// Not terminal — a human completing it lets the session carry on.
+		{Name: LoginCaptcha, Tone: channelinteractions.ToneUnavailable},
 	}
 	for _, c := range notices {
 		c.Notice = true

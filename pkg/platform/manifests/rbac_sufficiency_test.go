@@ -1000,26 +1000,41 @@ func workspaceProvisionerComponent() component {
 // made-up name; the point is only that each conditional rule in
 // BuildRunnerRBAC has something to pin to, so the maximal Role is emitted.
 const (
-	runnerSessionNS       = "default"
-	runnerSessionName     = "rbac-test-session"
-	runnerSessionClass    = "rbac-test-class"
-	runnerSessionPromptCM = "rbac-test-prompt"
-	runnerSessionBundle   = "rbac-test-bundle"
-	runnerSessionMCP      = "rbac-test-mcp"
-	runnerSessionIdentity = "rbac-test-identity"
-	runnerSessionCredSec  = "rbac-test-cred"
-	runnerSessionChannel  = "rbac-test-channel"
-	runnerSessionChanSec  = "rbac-test-channel-creds"
+	runnerSessionNS              = "default"
+	runnerSessionName            = "rbac-test-session"
+	runnerSessionClass           = "rbac-test-class"
+	runnerSessionPromptCM        = "rbac-test-prompt"
+	runnerSessionBundle          = "rbac-test-bundle"
+	runnerSessionMCP             = "rbac-test-mcp"
+	runnerSessionIdentity        = "rbac-test-identity"
+	runnerSessionCredSec         = "rbac-test-cred"
+	runnerSessionChannel         = "rbac-test-channel"
+	runnerSessionChanSec         = "rbac-test-channel-creds"
+	runnerSessionBrowserRef      = "rbac-test-browser"
+	runnerSessionBrowserIdentity = "rbac-test-browser-identity"
+	runnerSessionBrowserCredSec  = "rbac-test-browser-cred"
 )
+
+// runnerSessionBrowserStateSecretName returns the per-session browser STATE
+// Secret's name for the fixture's one persistent, identity-bound
+// BrowserToolbox ref, computed through the SAME function the controller uses
+// (agentsession.BrowserStateSecretName) so a future change to that naming
+// scheme is caught here too, not just reflected in the literal this test pins.
+func runnerSessionBrowserStateSecretName() string {
+	return agentsession.BrowserStateSecretName(
+		&spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: runnerSessionName}},
+		runnerSessionBrowserRef,
+	)
+}
 
 // applyRunnerSessionRBAC builds the per-session runner ServiceAccount + Role +
 // RoleBinding through the SAME function the AgentSession reconciler calls
 // (agentsession.BuildRunnerRBAC), creates them in envtest, and returns the SA's
 // user string. The AgentClass/AgentSession fixture switches on every optional
 // branch (configMapRef prompt, MCP servers, workspace source, bundle sessions,
-// an MCP identity + its Secrets, a channel binding) so the Role under test is
-// the widest one the builder can emit — a rule that only appears for one of
-// those shapes still gets checked.
+// an MCP identity + its Secrets, a channel binding, a persistent identity-bound
+// browser toolbox) so the Role under test is the widest one the builder can
+// emit — a rule that only appears for one of those shapes still gets checked.
 func applyRunnerSessionRBAC(t *testing.T, ctx context.Context, cl client.Client) string {
 	t.Helper()
 	sess := &spiceboxv1alpha1.AgentSession{
@@ -1042,6 +1057,9 @@ func applyRunnerSessionRBAC(t *testing.T, ctx context.Context, cl client.Client)
 			},
 			MCPServers:      []spiceboxv1alpha1.AgentClassMCPServerRef{{Name: "up", Ref: runnerSessionMCP}},
 			WorkspaceSource: &spiceboxv1alpha1.AgentClassWorkspaceSourceRef{Ref: "rbac-test-ws"},
+			BrowserToolboxes: []spiceboxv1alpha1.AgentClassBrowserToolboxRef{
+				{Name: "web", Ref: runnerSessionBrowserRef},
+			},
 		},
 	}
 	sa, role, rb, _, _ := agentsession.BuildRunnerRBAC(
@@ -1053,6 +1071,20 @@ func applyRunnerSessionRBAC(t *testing.T, ctx context.Context, cl client.Client)
 		runnerSessionIdentity,
 		[]string{runnerSessionCredSec},
 	)
+	// Browser identity/cred-secret read pins + the runner's ONLY secret-WRITE
+	// grant, mirroring the reconciler's append of resolveBrowserIdentityPins'
+	// output onto the SAME Role (controller.go: role.Rules = append(role.Rules,
+	// browserRBACRules...), fed from BrowserIdentityRBACRules +
+	// BrowserStateRBACRules). BuildRunnerRBAC itself only pins the browser
+	// gate-token Secret (from ac.Spec.BrowserToolboxes above); these two rule
+	// sets are appended by the controller as a SEPARATE step and so need the
+	// same separate step here, or the state-secret get;update grant — the
+	// runner's only secret write in the whole system — gets no SAR coverage at
+	// all.
+	role.Rules = append(role.Rules, agentsession.BrowserIdentityRBACRules(
+		[]string{runnerSessionBrowserIdentity}, []string{runnerSessionBrowserCredSec})...)
+	role.Rules = append(role.Rules, agentsession.BrowserStateRBACRules(
+		[]string{runnerSessionBrowserStateSecretName()})...)
 	// The builder stamps an ownerReference at the AgentSession, which this
 	// harness never creates (it runs no reconcilers). Strip it: what is under
 	// test is the RULE SET, and an ownerRef to a nonexistent object would only
@@ -1130,6 +1162,18 @@ func runnerSessionRoleComponent(saUser string) component {
 			{resource: "configmaps", verb: "get", namespace: runnerSessionNS, name: runnerSessionPromptCM},
 			{resource: "secrets", verb: "get", namespace: runnerSessionNS, name: runnerSessionCredSec},
 			{resource: "secrets", verb: "get", namespace: runnerSessionNS, name: runnerSessionChanSec},
+			// Browser credential filler (Phase C Task C4): reads the bound
+			// BrowserToolbox identity and its directCredentials backing Secret
+			// (agentsession.BrowserIdentityRBACRules).
+			named("agentidentities", "get", runnerSessionBrowserIdentity),
+			{resource: "secrets", verb: "get", namespace: runnerSessionNS, name: runnerSessionBrowserCredSec},
+			// The runner's ONLY secret-WRITE grant (C9): get;update pinned to
+			// EXACTLY the persistent browser toolbox's per-session state Secret
+			// (agentsession.BrowserStateRBACRules). This is the gap closed here --
+			// previously nothing in this harness exercised it, so a regression
+			// that widened or dropped this pin would not have failed CI.
+			{resource: "secrets", verb: "get", namespace: runnerSessionNS, name: runnerSessionBrowserStateSecretName()},
+			{resource: "secrets", verb: "update", namespace: runnerSessionNS, name: runnerSessionBrowserStateSecretName()},
 			// Workspace sync/apply reconcile Job.
 			//
 			// create, list and watch are UNNAMED because Kubernetes RBAC cannot
@@ -1154,6 +1198,13 @@ func runnerSessionRoleComponent(saUser string) component {
 			// resolve must be denied. A rule that loses its resourceNames (the
 			// easiest way to over-grant here) flips this to allowed.
 			{resource: "secrets", verb: "get", namespace: runnerSessionNS, name: "some-other-secret"},
+			// Pinning control for the browser state-secret WRITE grant (C9): the
+			// runner's one and only secrets `update` must be denied against a
+			// Secret it can legitimately `get` but was never resolved AS the state
+			// Secret — proving the resourceNames pin actually scopes the write
+			// rather than this Role holding a blanket secrets-update capability
+			// that just happens to be exercised through one name today.
+			{resource: "secrets", verb: "update", namespace: runnerSessionNS, name: runnerSessionCredSec},
 			// The meta tool never deletes a request — owner-ref GC reaps it with
 			// the session.
 			g("credentialupdaterequests", "delete"),

@@ -241,6 +241,18 @@ type CardInput struct {
 	// A type absent from this map is compared on its raw value, which is the
 	// pre-existing behavior: the dedup never merges on a guess.
 	SlotValueTransforms map[string][]string
+
+	// WebHostIdentityLabels maps a web_host slot's host (its resource id) to
+	// the display label of the bound identity login that signs in on it — the
+	// RESOLVED BrowserLoginRef.Label a human reads as "signing in as <label>"
+	// (C8). Keyed by host rather than by resource type because, unlike every
+	// other map on this struct, the detail that varies is PER INSTANCE: a
+	// phase naming two web_host slots for two different hosts can have two
+	// different signing identities, or none at all for a host no login
+	// matches. Display only, and read nowhere but the web_host card line — see
+	// buildSlotSection. Absent (nil, or a host missing from it) renders the
+	// line with no signing-in clause, never a guessed identity.
+	WebHostIdentityLabels map[string]string
 }
 
 // BuildCard renders an approval card.
@@ -299,7 +311,7 @@ func BuildCard(in CardInput) Card {
 	} else {
 		what = buildWhat(phase, impact, described, sev, in.MaxSingleCardHandles)
 		what += buildSlotSection(withConstantInstances(phase.Slots, phase.Permissions, constants),
-			in.SlotStanding, in.SlotPermissions, in.ResourceDisplays, nil)
+			in.SlotStanding, in.SlotPermissions, in.ResourceDisplays, nil, in.WebHostIdentityLabels)
 		why = buildWhySection(phase)
 	}
 	if len(in.AddedHandles) > 0 || len(in.AddedSlots) > 0 {
@@ -339,7 +351,7 @@ func BuildCard(in CardInput) Card {
 		what += buildSlotSection(
 			withConstantInstances(in.AddedSlots, parseHandles(in.AddedHandles), constants),
 			in.SlotStanding, in.SlotPermissions, in.ResourceDisplays,
-			grantingPermissions(in.AddedHandles))
+			grantingPermissions(in.AddedHandles), in.WebHostIdentityLabels)
 		why = in.AgentJustification
 	}
 
@@ -689,6 +701,7 @@ func buildSlotSection(
 	standing, permission map[string]string,
 	displays map[string]ResourceDisplay,
 	granting map[string]string,
+	webHostIdentityLabels map[string]string,
 ) string {
 	if len(slots) == 0 {
 		return ""
@@ -720,7 +733,19 @@ func buildSlotSection(
 		if p, ok := granting[s.Type]; ok && p != "" {
 			perm = p
 		}
-		b.WriteString("\n    " + slotSentence(standing[s.Type], perm))
+		sentence := slotSentence(standing[s.Type], perm)
+		// The browser toolbox's web_host#act line names the signing identity
+		// (C8), which no other slot type does: every other sentence is a
+		// per-TYPE statement reused verbatim across every instance of that
+		// type (deliberately, per slotSentence's own "never takes a resource
+		// type or an instance id" guard — see TestSlotSentence_LeaksNoInternalVocabulary).
+		// web_host is the one instance-level exception, built here rather than
+		// inside slotSentence so that guard stays true for every other
+		// permission.
+		if s.Type == webHostResourceType && perm == webHostActPermission {
+			sentence = webHostActSentence(s.ID, webHostIdentityLabels[s.ID])
+		}
+		b.WriteString("\n    " + sentence)
 	}
 
 	// The coverage state is the actual question being answered: does saying yes
@@ -790,6 +815,46 @@ func humanVerb(permission string) string {
 	default:
 		return permission
 	}
+}
+
+// webHostResourceType and webHostActPermission are literal mirrors of
+// pkg/tools/browserschema.WebHostType / ActPermission, duplicated here
+// (rather than imported) for the same reason resource_display.go's
+// knownIcons registry does not import browserschema either: this package
+// deliberately stays decoupled from any one CRD-specific resource type, the
+// same way it already hardcodes "git_repo"-shaped assumptions nowhere and
+// "act" as a literal in humanVerb above. Must stay byte-identical to
+// browserschema's constants.
+const (
+	webHostResourceType  = "web_host"
+	webHostActPermission = "act"
+)
+
+// webHostActSentence renders the ONE instance-level exception to
+// slotSentence's otherwise per-type, no-instance-data sentence: the web_host
+// acting line names which host is being acted on and, when a login matches
+// it, who is signing in (C8's "act on aa.com, signing in as <label>").
+//
+// Kept OUT of slotSentence itself — see the guard this would otherwise
+// violate, TestSlotSentence_LeaksNoInternalVocabulary — so every other
+// permission keeps that property.
+//
+// host is the derived instance id (already a bare canonical hostname for
+// web_host, never a raw agent string — see Session.CurrentHost), so it carries
+// none of the internal vocabulary (relation names, escaped object ids) that
+// guard is protecting against. label is the matching BrowserLoginRef's
+// display name, or "" when no login in the toolbox's catalog matches this
+// host — in which case the sentence omits the clause entirely rather than
+// naming an identity nobody confirmed.
+func webHostActSentence(host, label string) string {
+	verb := "act on"
+	if host != "" {
+		verb += " " + host
+	}
+	if label != "" {
+		verb += ", signing in as " + label
+	}
+	return "This session will be able to " + verb + " for as long as it runs."
 }
 
 // slotStandingSummary states what saying yes to this SECTION actually buys,

@@ -210,3 +210,58 @@ func TestBuildCard_perSlotSentenceLeaksNoInternalVocabulary(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildCard_WebHostActNamesTheSigningIdentity covers C8: the web_host
+// acting line names the host it is acting on and, when a login matches,
+// names who is signing in — "act on aa.com, signing in as <label>" — while
+// every other permission's sentence (slotSentence's generic form) is
+// unaffected.
+func TestBuildCard_WebHostActNamesTheSigningIdentity(t *testing.T) {
+	h := handle(t, "act", "web_host")
+
+	cases := []struct {
+		name          string
+		identityLabel map[string]string
+		want          string
+		wantNot       string
+	}{
+		{
+			name:          "a matching login's label is named",
+			identityLabel: map[string]string{"aa.com": "Acme SSO"},
+			want:          "This session will be able to act on aa.com, signing in as Acme SSO for as long as it runs.",
+		},
+		{
+			name:          "no matching login: the clause is omitted, not guessed",
+			identityLabel: nil,
+			want:          "This session will be able to act on aa.com for as long as it runs.",
+			wantNot:       "signing in as",
+		},
+		{
+			name:          "a label for a DIFFERENT host does not leak onto this one",
+			identityLabel: map[string]string{"bb.com": "Someone Else"},
+			want:          "This session will be able to act on aa.com for as long as it runs.",
+			wantNot:       "signing in as",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			card := BuildCard(CardInput{
+				Plan: Plan{Phases: []Phase{{
+					Permissions: []permsurface.Handle{h},
+					Slots:       []Slot{{Type: "web_host", ID: "aa.com"}},
+				}}},
+				Severity: Routine,
+				Surface: []permsurface.Descriptor{{
+					Handle: h, Permission: "act", ResourceType: "web_host",
+				}},
+				SlotStanding:          map[string]string{"web_host": spiceboxv1alpha1.StandingSessionOnly},
+				SlotPermissions:       map[string]string{"web_host": "act"},
+				WebHostIdentityLabels: tc.identityLabel,
+			})
+			assert.Contains(t, card.What, tc.want)
+			if tc.wantNot != "" {
+				assert.NotContains(t, card.What, tc.wantNot)
+			}
+		})
+	}
+}

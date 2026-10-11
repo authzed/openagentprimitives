@@ -271,6 +271,15 @@ func (h *runnerHost) PublishApproval(ctx context.Context, ask pipeline.ApprovalA
 		h.recordDecisionAsked(ctx, reqID, ask.Kind)
 		return reqID, nil
 
+	case "login_human_step":
+		pa, err := h.buildLoginHumanStepPending(ctx, reqID, ask)
+		if err != nil {
+			return "", fmt.Errorf("host: build login_human_step approval: %w", err)
+		}
+		h.pending().store(reqID, pa)
+		h.recordDecisionAsked(ctx, reqID, ask.Kind)
+		return reqID, nil
+
 	default:
 		return "", fmt.Errorf("host: unknown approval kind %q", ask.Kind)
 	}
@@ -476,6 +485,21 @@ func (h *runnerHost) AwaitDecision(ctx context.Context, reqID string, timeout ti
 		// verified decider — never anything the runner could supply
 		// post-publish. approved/timedOut flow back to preferencesSaver.Save
 		// unchanged, which is the whole of what this case needs to do.
+
+	case "login_human_step":
+		// No grant-write effect: the approved bool alone tells request_human_step
+		// whether the person completed the sign-in step (pure confirm, like
+		// content_inspection). approved/timedOut flow back to
+		// humanStepRequester.Confirm/RequestCode unchanged.
+		//
+		// The kind:code half additionally captures the human's typed code off the
+		// resolved decision onto this host, where RequestCode reads it back (same
+		// host, one round-trip). It is a SECRET: captured only so the runner can
+		// type it into the page — never returned to the model. Empty for the confirm
+		// half and for every deny/timeout, so this is a no-op there.
+		if d.Approved && d.ResponseText != "" {
+			h.setHumanStepCode(d.ResponseText)
+		}
 	}
 
 	return d.Approved, d.ApproverID, timedOut, nil
@@ -522,6 +546,13 @@ func (h *runnerHost) publishTimeoutApplied(ctx context.Context, reqID, kind stri
 		// tells it the deadline passed. Deny-only: a lapsed deadline never
 		// commits a preference.
 		category = categories.UserPreferenceConfirm
+	case "login_human_step":
+		// Same reason again: a lapsed login_human_step confirm must clear
+		// channelsd's pending queue + the LoginHumanStepPending condition, else
+		// the browser session's card strands with live buttons. Deny-only: a
+		// lapsed deadline never completes a sign-in step — request_human_step
+		// returns fail-closed.
+		category = categories.LoginHumanStep
 	default:
 		return
 	}
@@ -1159,6 +1190,100 @@ func (h *runnerHost) buildContentInspectionPending(ctx context.Context, reqID st
 			sessName: sessName,
 		},
 	}, nil
+}
+
+// buildLoginHumanStepPending constructs the pending state + interaction envelope
+// for a login_human_step confirm — a browser toolbox's request_human_step asking
+// a person to complete a sign-in step the agent cannot do itself (a push approval
+// today).
+//
+// It mirrors buildContentInspectionPending: host-side approver resolution on the
+// session approve-set (DecideApprovers — a sign-in step names no external
+// resource counterparty), approve/deny actions, a future ExpiresAt, and
+// fail-closed on an empty approve-set (surfacing "no one has standing" beats
+// prompting into the void, and InteractionRequestPayload.Validate rejects an
+// empty approvers scope anyway). There is deliberately NO AwaitDecision
+// post-effect and NO grant write: the approved bool alone tells
+// request_human_step whether the person completed the step.
+//
+// The model-authored prompt is UNTRUSTED and travels in Excerpt (rendered inert
+// by every surface), never in the trusted Lead/Body — the same rule
+// content_inspection's excerpt and identity_choice's recommender reason follow.
+func (h *runnerHost) buildLoginHumanStepPending(ctx context.Context, reqID string, ask pipeline.ApprovalAsk) (*pendingApproval, error) {
+	if h.l.InteractionRequestPublish == nil {
+		return nil, fmt.Errorf("login_human_step approval unavailable (interaction publish hook not configured)")
+	}
+	sessNS, sessName := h.sess.Namespace, h.sess.Name
+
+	prompt := extractString(ask.Payload, "prompt")
+
+	sessionApproveSet := "agentsession:" + sessNS + "/" + sessName + "#approve"
+	approvers, aerr := h.resolveInteractionApprovers(ctx, sessionApproveSet, nil)
+	if aerr != nil {
+		return nil, fmt.Errorf("resolve login_human_step approvers: %w", aerr)
+	}
+	if len(approvers) == 0 {
+		return nil, fmt.Errorf("login_human_step approval has no resolvable approvers for %s", sessionApproveSet)
+	}
+
+	pl := channelevents.InteractionRequestPayload{
+		AgentSessionRef: channelevents.SessionRef{Namespace: sessNS, Name: sessName},
+		Category:        categories.LoginHumanStep,
+		RequestRef:      reqID,
+		Lead:            loginHumanStepLead(),
+		Excerpt:         loginHumanStepExcerpt(prompt),
+		Actions:         approveDenyActions(),
+		Audience:        channelevents.InteractionAudience{Scope: channelevents.AudienceApprovers, Approvers: approvers},
+		ExpiresAt:       expiresAtPtr(hostNow().Add(h.loginHumanStepTTL())),
+		Interruptible:   true,
+	}
+	env, eerr := channelevents.BuildEnvelope(sessNS, sessName, channelevents.KindInteractionRequest, pl)
+	if eerr != nil {
+		return nil, fmt.Errorf("build login_human_step interaction envelope: %w", eerr)
+	}
+
+	publish := h.l.InteractionRequestPublish
+	return &pendingApproval{
+		kind: "login_human_step",
+		onPublish: func(c context.Context) error {
+			return publish(c, sessNS, sessName, env)
+		},
+	}, nil
+}
+
+// loginHumanStepTTL is the approval window for a login_human_step confirm — the
+// SAME consolidated, tiered authz.approvalTimeout every other host-driven
+// approval kind waits on (resolvedApprovalTimeout), guarded like
+// contentInspectionTTL so a degenerate resolution never yields a zero-length
+// await.
+func (h *runnerHost) loginHumanStepTTL() time.Duration {
+	ttl := h.l.resolvedApprovalTimeout()
+	if ttl <= 0 {
+		return 10 * time.Minute
+	}
+	return ttl
+}
+
+// loginHumanStepLead is the fixed, trusted headline the generic renderer bolds.
+// The surface draws the tone chip from the category (ToneRoutine). The
+// model-authored prompt goes in the Excerpt below, never here.
+func loginHumanStepLead() string { return "A sign-in step needs you" }
+
+// loginHumanStepExcerpt carries the model-authored prompt as inert content. It
+// is agent-authored and therefore untrusted: the trusted fields (Lead) are
+// rendered as live markup by every surface, so the prompt MUST route through
+// Excerpt, which every surface renders inert — the same discipline
+// content_inspection's flagged excerpt and identity_choice's recommender reason
+// follow. Rune-capped at the shared bound. An empty prompt yields no excerpt.
+func loginHumanStepExcerpt(prompt string) *channelevents.InteractionExcerpt {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil
+	}
+	return &channelevents.InteractionExcerpt{
+		Label:   "What the agent is asking you to do",
+		Content: stringsx.CapRunes(prompt, maxExcerptRunes),
+	}
 }
 
 // buildPreferenceSavePending constructs the pending state + interaction

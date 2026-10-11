@@ -43,6 +43,23 @@ type fakeApprovalHost struct {
 	by         string
 	timedOut   bool
 	awaitErr   error
+
+	// code is the scripted login code the humanStepCodeHost capability returns —
+	// the test analogue of *runnerHost.takeHumanStepCode. takeCodeCall counts reads
+	// so a test can prove RequestCode take-and-clears exactly once (and only on an
+	// approval).
+	code         string
+	takeCodeCall int
+}
+
+// takeHumanStepCode satisfies the runner-local humanStepCodeHost capability so
+// RequestCode can read the typed code off the bound host, as it does from the real
+// *runnerHost. Take-and-clear, like the real one.
+func (f *fakeApprovalHost) takeHumanStepCode() string {
+	f.takeCodeCall++
+	c := f.code
+	f.code = ""
+	return c
 }
 
 func (f *fakeApprovalHost) PublishApproval(_ context.Context, ask pipeline.ApprovalAsk) (string, error) {

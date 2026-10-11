@@ -30,7 +30,9 @@ const (
 	// WebHostType is the SpiceDB definition name an acting tool's
 	// PermissionCheck.ResourceType names, and the slot type an acting
 	// AgentClass declares in spec.authz.slots. One host per instance; the id
-	// is the canonical page host (browserpolicy.CanonicalHost).
+	// is the canonical page host (browserpolicy.CanonicalHost) ESCAPED into a
+	// legal SpiceDB object id — see WebHostValueTransforms for why the raw host
+	// cannot be used as-is.
 	WebHostType = "web_host"
 
 	// ActPermission is the permission an acting call checks. A plan approval
@@ -53,6 +55,33 @@ const (
 	// pkg/authz/plangate's knownIcons or it renders nothing.
 	icon = "globe"
 )
+
+// WebHostValueTransforms is the transform chain that turns a canonical page host
+// into its SpiceDB web_host object id, and the SINGLE source of truth for that
+// chain.
+//
+// It exists because the raw host is NOT a legal SpiceDB object id. SpiceDB's
+// object-id charset is [a-zA-Z0-9_/\-=|+] (spicedb@.../pkg/tuple/parsing.go's
+// resourceIDExpr) — dots are ILLEGAL — and every real hostname has dots, so
+// `web_host:example.com` is rejected with InvalidArgument. spicedb_escape
+// hex-encodes each illegal byte ("." → "=2E", e.g. "app.example.com" →
+// "app=2Eexample=2Ecom") into a valid id. It is INJECTIVE (pkg/authz/transforms.go:
+// injective:true): distinct hosts never collapse onto one id, so the plan-gate
+// card — which DISPLAYS the raw host while the grant is written on the escaped
+// id — stays a truthful claim about exactly which host was approved. A
+// non-injective fold (spicedb_object_id maps "." → "-") would let a second host
+// reach the same grant and make the card a false claim, which is why this is
+// spicedb_escape and not spicedb_object_id.
+//
+// Every leg that keys a web_host id reads it here so none can drift: the acting
+// tool's Check (pkg/agent/tool/browser, so the check path escapes), the
+// AgentClass reconciler (which publishes it onto web_host's resolvedSlot
+// ValueTransforms so every grant-write leg — approval bind, unattended grant —
+// derives the identical id), and C8's unattended fallback. A fresh slice per
+// call so no caller can mutate a shared one.
+func WebHostValueTransforms() []string {
+	return []string{"spicedb_escape"}
+}
 
 // Resource is the structured web_host definition, shaped IDENTICALLY to
 // git_repo's session-only slot (toolkits/git.yaml): an inert `owner` leg plus a
