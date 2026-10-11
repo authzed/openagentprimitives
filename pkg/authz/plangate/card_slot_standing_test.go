@@ -24,6 +24,7 @@ func TestHumanVerb(t *testing.T) {
 		{"write maps to update", "write", "update"},
 		{"fetch maps to fetch", "fetch", "fetch"},
 		{"contact_access maps to contact", "contact_access", "contact"},
+		{"act maps to act on", "act", "act on"},
 		{"unmapped permission falls back to its own name", "list_widgets", "list_widgets"},
 	}
 	for _, tc := range cases {

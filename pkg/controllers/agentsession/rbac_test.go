@@ -837,3 +837,43 @@ func TestBuildRunnerRBAC_SameChannelSessionUnchanged(t *testing.T) {
 		hasPinnedRule(role.Rules, "", "secrets", "ch1-creds", "get"),
 		"rules=%+v", role.Rules)
 }
+
+// TestBrowserIdentityRBACRulesPinsIdentityAndSecret proves the credential
+// filler's runtime RBAC: the runner Role gains `get` on each bound browser
+// AgentIdentity and on each identity's directCredentials backing Secret, both
+// pinned by name. The filler reads both at use time to Fetch a website login
+// into the page (Phase C Task C4).
+func TestBrowserIdentityRBACRulesPinsIdentityAndSecret(t *testing.T) {
+	rules := agentsession.BrowserIdentityRBACRules(
+		[]string{"aa-identity"},
+		[]string{"aa-login-secret"},
+	)
+
+	assert.True(t,
+		hasPinnedRule(rules, "agentprimitives.authzed.com", "agentidentities", "aa-identity", "get"),
+		"missing agentidentities[aa-identity] get rule; rules=%+v", rules)
+	assert.True(t,
+		hasPinnedRule(rules, "", "secrets", "aa-login-secret", "get"),
+		"missing secrets[aa-login-secret] get rule; rules=%+v", rules)
+
+	// Neither grant may be unpinned: a runner must read only its toolbox's own
+	// identity and that identity's own login Secret.
+	idRule := findRuleForResource(rules, "agentprimitives.authzed.com", "agentidentities")
+	require.NotNil(t, idRule)
+	assert.NotEmpty(t, idRule.ResourceNames, "agentidentities grant must be pinned")
+	secRule := findRuleForResource(rules, "", "secrets")
+	require.NotNil(t, secRule)
+	assert.NotEmpty(t, secRule.ResourceNames, "secrets grant must be pinned")
+}
+
+// TestBrowserIdentityRBACRulesEmptyEmitsNothing keeps the grant scoped: a
+// session with no bound browser identity gets no agentidentities/secrets rule
+// from this path.
+func TestBrowserIdentityRBACRulesEmptyEmitsNothing(t *testing.T) {
+	assert.Empty(t, agentsession.BrowserIdentityRBACRules(nil, nil),
+		"no browser identity means no browser-filler RBAC rules")
+	// A secret name with no identity (defensive) still emits only the secrets rule.
+	onlySecrets := agentsession.BrowserIdentityRBACRules(nil, []string{"s"})
+	assert.Nil(t, findRuleForResource(onlySecrets, "agentprimitives.authzed.com", "agentidentities"),
+		"no identity name means no agentidentities rule")
+}

@@ -28,6 +28,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
 	"github.com/authzed/openagentprimitives/pkg/controllers/conditions"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 	"github.com/authzed/openagentprimitives/pkg/tools/toolspec/toolkit"
 	"github.com/authzed/openagentprimitives/toolkits"
 )
@@ -521,7 +522,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	toolkitFrags := guardianschema.ToolkitFragments(r.builtinToolkits())
 
 	// The compile-time baseline RunAll composes against: the channel-kind
-	// fragments plus the built-in toolkit fragments above. Gathered HERE,
+	// fragments plus the built-in toolkit fragments above, plus the browser
+	// toolbox's builtin web_host fragment. Gathered HERE,
 	// before the partition, because the partition must trial-compose every
 	// candidate against exactly the schema RunAll writes — otherwise a tenant
 	// fragment colliding with a channel-kind OR built-in-toolkit definition
@@ -530,7 +532,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// sorted and never itself subject to isolation — it is the trusted floor
 	// the partition trial-composes candidates against — so it carries no
 	// Key/Tier for anything to read. Same set is reused at RunAll below.
+	//
+	// browserschema.Fragment() contributes `definition web_host` EXACTLY ONCE,
+	// cluster-wide and unconditionally (inert until an AgentClass declares a
+	// web_host slot, at which point ComposeSlots injects slot_grant_act onto it).
+	// A builtin rather than a per-BrowserToolbox CR fragment on purpose: two
+	// web_host declarations would be a hard compose conflict that freezes the
+	// cluster schema write. Same rationale as the built-in toolkit fragments —
+	// "a definition nothing uses is inert" — and it is the ONE source the
+	// agentclass controller also reads for web_host's standing and display.
 	schemaBaseline := append(gatherChannelKindFragments(), toolkitFrags...)
+	schemaBaseline = append(schemaBaseline, browserschema.Fragment())
 	sessionLinks := registry.SessionRelationLinks()
 
 	accepted, conflictRejected := guardianschema.PartitionCompatibleFragments(schemaBaseline, candidates)

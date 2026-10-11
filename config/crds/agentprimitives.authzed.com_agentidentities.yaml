@@ -103,15 +103,19 @@ spec:
                             or the host-keyed login Secret (secret).
                           properties:
                             key:
-                              description: Key is the data key within the Secret holding
-                                the value.
+                              description: |-
+                                Key is the data key within the Secret holding the value. Optional:
+                                "token" (or omitted) for source=onepassword; must be omitted for
+                                source=secret, whose login Secret is a multi-key shape with no single
+                                named value key. ValidateSpec enforces the exact rule per source; this
+                                marker only ensures the apiserver never rejects an omitted key before
+                                ValidateSpec gets to run.
                               type: string
                             name:
                               description: Name is the Secret's name, in the referring
                                 object's own namespace.
                               type: string
                           required:
-                          - key
                           - name
                           type: object
                         source:

@@ -153,7 +153,9 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/broker/inproc"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/githubapp"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/imports" // register the static/oauth/federated/githubApp credkind.Kinds the broker dispatches to via registry.Get
+	credkindregistry "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/registry"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credresolve"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/directcred"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/onepassword"  // register the "onepassword" directcred.Source Phase C's browser form filler dispatches to via directcred.Get (Fetch at use time)
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/secretsource" // register the "secret" directcred.Source for the same Phase C Fetch consumer
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/externaltoken"
@@ -1489,6 +1491,14 @@ func run(cfg *config) error {
 	const browserPodIPPollInterval = 2 * time.Second
 
 	browserTools := []tool.Tool{}
+	// browserSections carries each resolved toolbox's one-line prompt fragment
+	// (spec §5.1 — query_logins' catalog size, and the allowed-host count in
+	// allowlist mode). The browser toolbox is hand-wired here rather than
+	// through capability.Capability/SectionOfferer (see
+	// browsertoolboxsynth.PromptSection's doc comment), so this is a second,
+	// independent source of PromptSections alongside assembled.Sections below
+	// — merged at the WithPromptSections call rather than decided there.
+	var browserSections []capability.PromptSection
 	for _, rt := range sess.Status.ResolvedBrowserToolboxes {
 		if rt.BrowserPodIP == "" {
 			slog.Info("browser toolbox IP not yet reflected; polling",
@@ -1560,7 +1570,11 @@ func run(cfg *config) error {
 		// offered to a model that cannot consume it.
 		acceptsImages := provider.NativeInputMIMEs(sess.Status.EffectiveSettings.Model.Name).Has("image/png")
 		gateURL := fmt.Sprintf("http://%s:%d", rt.BrowserPodIP, rt.GatePort)
-		built, serr := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages)
+		// The credential-filler Fetch seam: resolves {{login...}} placeholders at
+		// use time against the bound identity's directcred source. nil when the
+		// toolbox binds no identity (no catalog → no placeholder resolves).
+		fetch := newBrowserCredentialFetcher(c, ns, rt)
+		built, serr := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch)
 		if serr != nil {
 			if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
 				fmt.Sprintf("browser toolbox %q: %v", rt.Name, serr)); werr != nil {
@@ -1569,6 +1583,9 @@ func run(cfg *config) error {
 			return nil
 		}
 		browserTools = append(browserTools, built...)
+		if sec := browsertoolboxsynth.PromptSection(rt); sec != nil {
+			browserSections = append(browserSections, *sec)
+		}
 	}
 
 	// Resolve opted-in skills for this agent class. The ceiling enforcement
@@ -2168,7 +2185,13 @@ func run(cfg *config) error {
 	// Capability-owned prompt sections ride with the tools they describe
 	// (capability.SectionOfferer): the views capability's "Your page" exists
 	// only when update_view does. Nothing here decides whether to include one.
-	composeOpts = append(composeOpts, runner.WithPromptSections(assembled.Sections))
+	//
+	// browserSections is the browser toolbox's analog of the same rule, from
+	// its own hand-wired path (built alongside browserTools above, not through
+	// capability.Capability): PromptSection returns nil exactly when
+	// query_logins is withheld, so appending it here is still "the tool's own
+	// decision rides along", not a decision made in this file.
+	composeOpts = append(composeOpts, runner.WithPromptSections(append(assembled.Sections, browserSections...)))
 	composedSystem := runner.ComposeSystem(systemPrompt, mergedTools, skillMeta, repoInstrs, assetKinds, modalityInstructions, composeOpts...)
 
 	// Record WHAT the agent was asked, alongside the turn log's record of WHICH
@@ -3963,4 +3986,77 @@ func sidecarNoticeSink(loop *runner.Loop, sessKey client.ObjectKey) func(context
 			loop.InteractionRequestPublish(ctx, sessKey.Namespace, sessKey.Name, env),
 			"session", sessKey.String())
 	}
+}
+
+// newBrowserCredentialFetcher builds the credential-filler Fetch seam for one
+// resolved browser toolbox, mirroring the operator's resolveBrowserCatalog
+// recipe (pkg/controllers/agentsession/browserpod.go): it resolves the bound
+// identity's first directCredentials credential and its directcred source, then
+// — lazily, on each Fetch — reads the backing Secret and dispatches to the
+// source's Fetch. Reading the Secret per Fetch (rather than capturing its bytes
+// for the session's lifetime) keeps the raw credential material in memory only
+// for the moment of use plus the browser session's short §5.3 hold.
+//
+// Returns nil when the toolbox binds no identity: with no catalog, no
+// {{login...}} placeholder can resolve (the filler's rule 2 denies first), so
+// there is nothing to Fetch. Every error path returns the error to the filler,
+// which renders it as a fail-closed tool result — never a credential value.
+func newBrowserCredentialFetcher(c client.Client, ns string, rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.CredentialFetcher {
+	if rt.IdentityName == "" {
+		return nil
+	}
+	identityName := rt.IdentityName
+	return func(ctx context.Context, catalogID string) (directcred.Credential, error) {
+		var id spiceboxv1alpha1.AgentIdentity
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: identityName}, &id); err != nil {
+			return directcred.Credential{}, fmt.Errorf("get AgentIdentity %q: %w", identityName, err)
+		}
+		var cred *spiceboxv1alpha1.AgentCredential
+		for i := range id.Spec.Credentials {
+			if id.Spec.Credentials[i].DirectCredentials != nil {
+				cred = &id.Spec.Credentials[i]
+				break
+			}
+		}
+		if cred == nil {
+			return directcred.Credential{}, fmt.Errorf("AgentIdentity %q has no directCredentials credential", identityName)
+		}
+		// Classify through the credkind registry (never a cred.Type switch) to
+		// locate the backing Secret and key, exactly as resolveBrowserCatalog does.
+		k, err := credkindregistry.Get(cred.Type)
+		if err != nil {
+			return directcred.Credential{}, fmt.Errorf("classify credential %q: %w", cred.Name, err)
+		}
+		secRef := k.SecretRef(*cred)
+		if secRef == nil || secRef.Name == "" {
+			return directcred.Credential{}, fmt.Errorf("credential %q has no backing Secret", cred.Name)
+		}
+		var sec corev1.Secret
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: secRef.Name}, &sec); err != nil {
+			return directcred.Credential{}, fmt.Errorf("read credential Secret %q: %w", secRef.Name, err)
+		}
+		src, ok := directcred.Get(cred.DirectCredentials.Source)
+		if !ok {
+			return directcred.Credential{}, fmt.Errorf(
+				"no directcred source registered for %q (the binary may be missing its blank import)", cred.DirectCredentials.Source)
+		}
+		cfg := directcred.Config{
+			SecretData: sec.Data,
+			Vault:      cred.DirectCredentials.Vault,
+			VaultID:    pinnedBrowserVaultID(&id, cred.Name),
+		}
+		return src.Fetch(ctx, cfg, catalogID)
+	}
+}
+
+// pinnedBrowserVaultID returns the vault id the identity's status pinned for
+// credName (onepassword), or "" when none is recorded (the secret source has no
+// vault concept). Mirrors the operator's pinnedVaultID, which is unexported.
+func pinnedBrowserVaultID(id *spiceboxv1alpha1.AgentIdentity, credName string) string {
+	for _, pv := range id.Status.PinnedVaults {
+		if pv.Credential == credName {
+			return pv.VaultID
+		}
+	}
+	return ""
 }

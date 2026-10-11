@@ -286,6 +286,15 @@ type InProcessRunnerFactory struct {
 	// from the per-session Secret agentsession.BrowserTokenSecretName names.
 	BrowserConnect func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) (gateURL, token string)
 
+	// BrowserFiller, when non-nil, supplies the credential-filler Fetch seam for
+	// a resolved browser toolbox — the test analogue of the production runner's
+	// directcred-backed fetcher, so a {{login...}} fill resolves against a FAKE
+	// source and no test ever touches a real vault. nil leaves the filler with no
+	// fetcher, so a {{login...}} placeholder fails closed (rule 2 denies a host
+	// absent from the catalog; a catalogued host with no fetcher errors) — which
+	// is correct for every scenario that does not deliberately fill a credential.
+	BrowserFiller func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.CredentialFetcher
+
 	// ExtraTools, when non-empty, are appended to every spawned runner.Loop's
 	// tool set. Test seam for scenarios that need a tool the CRD-driven
 	// synthesis paths can't produce in-process (e.g. a producer tool that
@@ -1181,6 +1190,15 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 	if err != nil {
 		return nil, err
 	}
+	// browserSections mirrors internal/cmd/runner/main.go's identical boot-time
+	// collection: one PromptSection per resolved toolbox that binds an identity
+	// (browsertoolboxsynth.PromptSection), merged into WithPromptSections below
+	// alongside assembled.Sections. Like browserTools above, this is normally
+	// empty at boot in this harness (the toolbox is stamped mid-session by
+	// h.MarkBrowserReady) — the Global Constraint this mirrors is boot-time
+	// parity with production, not mid-session parity, which neither runner-side
+	// surface has for a toolbox that becomes Ready after ComposeSystem already ran.
+	browserSections := browserPromptSections(sess.Status.ResolvedBrowserToolboxes)
 
 	// nonMetaTools threads sandbox+mcp+sidecar+browser+ExtraTools into Assemble
 	// in the same order internal/cmd/runner/main.go uses (sandbox, mcp, sidecar,
@@ -1767,7 +1785,10 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		composeOpts = append(composeOpts, runner.WithRequirePlan())
 	}
 	// mirrors internal/cmd/runner/main.go — the harness is a second wiring site.
-	composeOpts = append(composeOpts, runner.WithPromptSections(assembled.Sections))
+	// browserSections rides alongside assembled.Sections for the same reason it
+	// does in main.go: the browser toolbox decides per-toolbox (PromptSection
+	// returns nil without an identity), this call site just merges.
+	composeOpts = append(composeOpts, runner.WithPromptSections(append(assembled.Sections, browserSections...)))
 	composedSystem := runner.ComposeSystem(systemPrompt, tools, nil, nil, nil, nil, composeOpts...)
 
 	// User prompt resolution mirrors the system prompt: inline only.
@@ -3234,6 +3255,21 @@ func (f *InProcessRunnerFactory) buildBrowserTools(sess *spiceboxv1alpha1.AgentS
 	return out, nil
 }
 
+// browserPromptSections collects the one-line prompt fragment
+// (browsertoolboxsynth.PromptSection) for each resolved toolbox that returns
+// one, mirroring internal/cmd/runner/main.go's identical boot-time collection
+// alongside buildBrowserTools. Pure (no I/O, unlike buildBrowserTools), so it
+// is a plain loop rather than a method — nothing here needs f.
+func browserPromptSections(resolved []spiceboxv1alpha1.ResolvedBrowserToolbox) []capability.PromptSection {
+	var out []capability.PromptSection
+	for _, rt := range resolved {
+		if sec := browsertoolboxsynth.PromptSection(rt); sec != nil {
+			out = append(out, *sec)
+		}
+	}
+	return out
+}
+
 // synthBrowserToolbox resolves one toolbox's (gateURL, token) and synthesizes
 // its tools. The BrowserConnect seam, when set, supplies the live in-process
 // gate URL + token (the driver's StartGate result); otherwise it takes the
@@ -3260,7 +3296,16 @@ func (f *InProcessRunnerFactory) synthBrowserToolbox(sess *spiceboxv1alpha1.Agen
 		}
 		token = string(tokenSecret.Data["token"])
 	}
-	built, err := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages)
+	// The credential-filler Fetch seam: a FAKE source when the test wires one,
+	// else nil (placeholders fail closed; no vault is ever contacted). The
+	// production runner builds this from the bound identity's directcred source
+	// (internal/cmd/runner's newBrowserCredentialFetcher) — the "wire it in both"
+	// seam, kept fake here so e2e needs no real vault.
+	var fetch browsertoolboxsynth.CredentialFetcher
+	if f.BrowserFiller != nil {
+		fetch = f.BrowserFiller(rt)
+	}
+	built, err := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch)
 	if err != nil {
 		return nil, fmt.Errorf("buildBrowserTools: browser %q: %w", rt.Ref, err)
 	}

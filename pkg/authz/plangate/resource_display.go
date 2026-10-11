@@ -66,6 +66,9 @@ func DeriveLabel(deriver, raw string) string {
 var knownIcons = map[string]bool{
 	"repository": true,
 	"github":     true,
+	// "globe" is the generic web mark the browser toolbox's web_host declares —
+	// host-agnostic, like "repository" for git_repo, never a vendor mark.
+	"globe": true,
 }
 
 // knownIcon returns name unchanged if it is registered, or "" otherwise — an

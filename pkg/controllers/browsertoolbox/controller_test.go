@@ -151,7 +151,7 @@ func directCredsIdentity(t *testing.T, env *testenv.Env, name string, validStatu
 				Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    "secret",
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "dummy", Key: "password"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "dummy", Key: "password"},
 				},
 			}},
 		},

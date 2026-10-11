@@ -48,6 +48,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/restartmarker"
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/identityadvisor"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
+	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
@@ -580,6 +581,16 @@ func (h *Harness) SetSidecarProbeURL(fn func(rt spiceboxv1alpha1.ResolvedSidecar
 // uses the browser toolbox runs its first turn.
 func (h *Harness) SetBrowserConnect(fn func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) (gateURL, token string)) {
 	h.runnerFactory.BrowserConnect = fn
+}
+
+// SetBrowserFiller installs the in-process runner factory's credential-filler
+// Fetch seam. The analogue of SetBrowserConnect for the {{login...}} fill path:
+// the fetcher resolves a toolbox's stored login against a FAKE directcred source
+// (never a real vault), so a scenario can exercise the type tool filling a
+// website credential. When nil (the default), a {{login...}} placeholder fails
+// closed. Call after Start and before the browser session's first turn.
+func (h *Harness) SetBrowserFiller(fn func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.CredentialFetcher) {
+	h.runnerFactory.BrowserFiller = fn
 }
 
 // SetMinter installs a federation.Minter on the in-process runner

@@ -783,6 +783,10 @@ func humanVerb(permission string) string {
 		return "fetch"
 	case "contact_access":
 		return "contact"
+	case "act":
+		// The browser toolbox's acting permission (web_host#act). Reads "act on
+		// <host>" on the card — a click/type/submit that leaves the session.
+		return "act on"
 	default:
 		return permission
 	}

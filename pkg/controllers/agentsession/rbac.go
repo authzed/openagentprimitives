@@ -510,6 +510,42 @@ func BuildRunnerRBAC(
 	return sa, role, rb, sec, crb
 }
 
+// BrowserIdentityRBACRules returns the runner Role rules the credential filler
+// (Phase C Task C4) needs at RUNTIME: `get` on each bound browser toolbox's
+// AgentIdentity, and `get` on each identity's directCredentials backing Secret.
+// The runner-side filler reads both to Fetch a website login into the page at
+// use time (internal/cmd/runner's newBrowserCredentialFetcher), mirroring the
+// operator's resolveBrowserCatalog recipe.
+//
+// Both are pinned by name, like the MCP identity/secret pins above:
+// identityNames and secretNames are resolved controller-side from the
+// AgentClass's browser toolboxes (each toolbox's spec.access.identity, and that
+// identity's directCredentials Secret) and MUST already be deduplicated,
+// non-empty, and free of "". Empty slices emit no rule. Returned as a separate
+// rule set (not folded into BuildRunnerRBAC's signature) so the many existing
+// BuildRunnerRBAC callers are untouched; the reconciler appends these to the
+// Role it applies.
+func BrowserIdentityRBACRules(identityNames, secretNames []string) []rbacv1.PolicyRule {
+	var rules []rbacv1.PolicyRule
+	if len(identityNames) > 0 {
+		rules = append(rules, rbacv1.PolicyRule{
+			APIGroups:     []string{"agentprimitives.authzed.com"},
+			Resources:     []string{"agentidentities"},
+			ResourceNames: identityNames,
+			Verbs:         []string{"get"},
+		})
+	}
+	if len(secretNames) > 0 {
+		rules = append(rules, rbacv1.PolicyRule{
+			APIGroups:     []string{""},
+			Resources:     []string{"secrets"},
+			ResourceNames: secretNames,
+			Verbs:         []string{"get"},
+		})
+	}
+	return rules
+}
+
 // ToolspecReaderCRBName returns the cluster-unique name of the per-session
 // toolspec-reader ClusterRoleBinding. It is derived from the AgentSession UID
 // (not namespace+name) because ClusterRoleBinding names are cluster-scoped and
