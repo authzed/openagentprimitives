@@ -19,6 +19,7 @@ import (
 	"time"
 
 	browsertool "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
 )
 
@@ -56,12 +57,40 @@ func NewHumanStepRequester(host approvalHost, loop *Loop, timeout time.Duration)
 	return &humanStepRequester{binder: staticHost{h: host}, loopFn: func() *Loop { return loop }, timeout: timeout}
 }
 
+// wireScreenshot attaches cap to host's captureScreenshot field, best-effort:
+// if host doesn't happen to be a *runnerHost (a test fake need not implement
+// it) or s.loopFn resolves no live Loop, it silently does nothing and the
+// login_human_step card simply carries no screenshot — never an error, since
+// nothing here can fail the round-trip.
+//
+// This is the SAME capturer wiring executeToolContained does for the
+// web_host#act acting-approval (D-R3: request_human_step is itself a browser
+// tool, so both call sites share captureBrowserScreenshotFn — one Loop
+// method, two *runnerHost values, because hostBinder deliberately binds a
+// FRESH host per round-trip (see its doc) rather than reusing
+// executeToolContained's).
+func (s *humanStepRequester) wireScreenshot(host approvalHost, cap browsertool.BrowserScreenshotCapturer) {
+	if cap == nil {
+		return
+	}
+	rh, ok := host.(*runnerHost)
+	if !ok {
+		return
+	}
+	l := s.loopFn()
+	if l == nil {
+		return
+	}
+	rh.captureScreenshot = l.captureBrowserScreenshotFn(
+		channelevents.SessionRef{Namespace: rh.sess.Namespace, Name: rh.sess.Name}, cap)
+}
+
 // Confirm implements browser.HumanStepRequester: bind the ONE host this
 // round-trip runs against, publish the login_human_step card, then block for the
 // decision ON THAT SAME HOST. It writes nothing — the approved bool alone tells
 // request_human_step whether the person completed the step. A timeout surfaces as
 // TimedOut (fail-closed: never a silent success).
-func (s *humanStepRequester) Confirm(ctx context.Context, prompt string) (browsertool.HumanStepOutcome, error) {
+func (s *humanStepRequester) Confirm(ctx context.Context, prompt string, capturer browsertool.BrowserScreenshotCapturer) (browsertool.HumanStepOutcome, error) {
 	if s.binder == nil {
 		return browsertool.HumanStepOutcome{}, fmt.Errorf("human step unavailable (session not ready)")
 	}
@@ -69,6 +98,7 @@ func (s *humanStepRequester) Confirm(ctx context.Context, prompt string) (browse
 	if err != nil {
 		return browsertool.HumanStepOutcome{}, err
 	}
+	s.wireScreenshot(host, capturer)
 
 	reqID, err := host.PublishApproval(ctx, pipeline.ApprovalAsk{
 		Kind:    "login_human_step",
@@ -114,7 +144,7 @@ type humanStepCodeHost interface {
 // expects a free-text answer back), block for the decision ON THE SAME HOST, then
 // read the human's typed code off that host. Writes nothing; the caller types the
 // code into the page. A timeout is fail-closed (TimedOut, no code).
-func (s *humanStepRequester) RequestCode(ctx context.Context, prompt string) (browsertool.HumanStepCodeOutcome, error) {
+func (s *humanStepRequester) RequestCode(ctx context.Context, prompt string, capturer browsertool.BrowserScreenshotCapturer) (browsertool.HumanStepCodeOutcome, error) {
 	if s.binder == nil {
 		return browsertool.HumanStepCodeOutcome{}, fmt.Errorf("human step unavailable (session not ready)")
 	}
@@ -122,6 +152,7 @@ func (s *humanStepRequester) RequestCode(ctx context.Context, prompt string) (br
 	if err != nil {
 		return browsertool.HumanStepCodeOutcome{}, err
 	}
+	s.wireScreenshot(host, capturer)
 
 	reqID, err := host.PublishApproval(ctx, pipeline.ApprovalAsk{
 		Kind:    "login_human_step",
@@ -167,7 +198,10 @@ func (s *humanStepRequester) RequestCode(ctx context.Context, prompt string) (br
 
 // Captcha implements browser.HumanStepRequester: surface the one-way
 // login_captcha notice on the live Loop. It does not block and writes nothing.
-func (s *humanStepRequester) Captcha(ctx context.Context, prompt string) error {
+// The capturer (the live browser session) is threaded into the notice
+// publisher so the notice carries a redacted screenshot — the surface where a
+// screenshot matters MOST, since a person must see the page to take over.
+func (s *humanStepRequester) Captcha(ctx context.Context, prompt string, capturer browsertool.BrowserScreenshotCapturer) error {
 	if s.loopFn == nil {
 		return fmt.Errorf("human step captcha unavailable (session not ready)")
 	}
@@ -175,5 +209,5 @@ func (s *humanStepRequester) Captcha(ctx context.Context, prompt string) error {
 	if l == nil {
 		return fmt.Errorf("human step captcha unavailable (session not ready)")
 	}
-	return l.publishLoginCaptchaNotice(ctx, prompt)
+	return l.publishLoginCaptchaNotice(ctx, prompt, capturer)
 }

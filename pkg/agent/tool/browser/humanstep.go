@@ -17,7 +17,13 @@ type HumanStepRequester interface {
 	// person presses it, declines, or the approval window lapses — a push approval
 	// the person completes on their phone, say. The outcome tells the tool which
 	// happened; it carries no secret.
-	Confirm(ctx context.Context, prompt string) (HumanStepOutcome, error)
+	//
+	// capturer is the SAME live session's BrowserScreenshotCapturer the caller's
+	// ScreenshotCapturer() returns (nil if none) — request_human_step is itself a
+	// browser tool (D-R3), so its login_human_step card attaches a redacted
+	// screenshot exactly like the web_host#act acting-approval does, best-effort
+	// and never blocking the ask.
+	Confirm(ctx context.Context, prompt string, capturer BrowserScreenshotCapturer) (HumanStepOutcome, error)
 
 	// RequestCode posts a login_human_step card asking the person to type an
 	// emailed/SMS code, and blocks until they answer, decline, or the window lapses.
@@ -27,13 +33,20 @@ type HumanStepRequester interface {
 	// credential. The code is NEVER returned as a tool result or shown to the model.
 	// A timeout is fail-closed: TimedOut is true, Code empty, and the caller reports
 	// a failure rather than silently succeeding.
-	RequestCode(ctx context.Context, prompt string) (HumanStepCodeOutcome, error)
+	//
+	// capturer: see Confirm's doc — same best-effort screenshot attachment.
+	RequestCode(ctx context.Context, prompt string, capturer BrowserScreenshotCapturer) (HumanStepCodeOutcome, error)
 
 	// Captcha surfaces a one-way notice that a person must take over in the browser
 	// (a CAPTCHA the agent cannot solve, or any step with no actionable kind). It
 	// does NOT block — there is no decision leg; the agent has reported it cannot
 	// proceed, and a human steps in out of band.
-	Captcha(ctx context.Context, prompt string) error
+	//
+	// capturer: see Confirm's doc. The screenshot matters MOST here — a person
+	// taking over to solve a CAPTCHA must see the page — so the login_captcha
+	// notice attaches a redacted screenshot exactly like Confirm/RequestCode,
+	// best-effort and never blocking the notice.
+	Captcha(ctx context.Context, prompt string, capturer BrowserScreenshotCapturer) error
 }
 
 // HumanStepCodeOutcome is the result of a RequestCode round-trip. Exactly one of

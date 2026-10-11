@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	browsertool "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/channels/notice"
@@ -30,7 +31,13 @@ const maxCaptchaPromptRunes = 500
 // (kubectl-driven) has no InteractionRequestPublish wired, which is reported as
 // an error here and surfaced by request_human_step to the model rather than
 // swallowed.
-func (l *Loop) publishLoginCaptchaNotice(ctx context.Context, prompt string) error {
+//
+// capturer is the live browser session (nil if none): the notice carries a
+// redacted page screenshot so a person taking over to solve the CAPTCHA can
+// see the page. Best-effort/fail-closed exactly like the acting-approval and
+// login_human_step surfaces — a capture/store failure (or a nil capturer)
+// yields no screenshot and the notice still publishes text-only.
+func (l *Loop) publishLoginCaptchaNotice(ctx context.Context, prompt string, capturer browsertool.BrowserScreenshotCapturer) error {
 	if l.InteractionRequestPublish == nil {
 		return fmt.Errorf("login captcha notice unavailable (interaction publish hook not configured)")
 	}
@@ -50,6 +57,16 @@ func (l *Loop) publishLoginCaptchaNotice(ctx context.Context, prompt string) err
 	pl, err := n.Payload(sess, newRequestID())
 	if err != nil {
 		return fmt.Errorf("build login captcha notice: %w", err)
+	}
+	// Best-effort redacted screenshot, same closure the acting-approval and
+	// login_human_step surfaces use. captureBrowserScreenshotFn needs no host,
+	// so there is no host to thread through for this notice-only surface; a nil
+	// capturer or any capture/store failure resolves to nil and the notice
+	// publishes text-only.
+	if capturer != nil {
+		if ref := l.captureBrowserScreenshotFn(sess, capturer)(ctx); ref != nil {
+			pl.Screenshot = ref
+		}
 	}
 	env, err := channelevents.BuildEnvelope(sessNS, sessName, channelevents.KindInteractionRequest, pl)
 	if err != nil {

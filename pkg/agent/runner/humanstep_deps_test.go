@@ -25,7 +25,7 @@ func TestHumanStepRequester_Confirm_PublishesLoginHumanStepAsk(t *testing.T) {
 	host := &fakeApprovalHost{approved: true, by: "alice-canonical"}
 	req := NewHumanStepRequester(host, nil, time.Second)
 
-	_, err := req.Confirm(context.Background(), "approve the push on your phone")
+	_, err := req.Confirm(context.Background(), "approve the push on your phone", nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, host.publishCall, "Confirm must publish exactly one ask")
@@ -69,7 +69,7 @@ func TestHumanStepRequester_Confirm_OutcomeMapping(t *testing.T) {
 			host := &fakeApprovalHost{approved: tc.approved, by: tc.by, timedOut: tc.timedOut}
 			req := NewHumanStepRequester(host, nil, time.Second)
 
-			got, err := req.Confirm(context.Background(), "approve the push")
+			got, err := req.Confirm(context.Background(), "approve the push", nil)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 		})
@@ -83,7 +83,7 @@ func TestHumanStepRequester_RequestCode_PublishesLoginHumanStepAsk(t *testing.T)
 	host := &fakeApprovalHost{approved: true, by: "alice-canonical", code: "123456"}
 	req := NewHumanStepRequester(host, nil, time.Second)
 
-	_, err := req.RequestCode(context.Background(), "enter the emailed code")
+	_, err := req.RequestCode(context.Background(), "enter the emailed code", nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, host.publishCall, "RequestCode must publish exactly one ask")
@@ -133,7 +133,7 @@ func TestHumanStepRequester_RequestCode_OutcomeMapping(t *testing.T) {
 			host := &fakeApprovalHost{approved: tc.approved, by: tc.by, timedOut: tc.timedOut, code: tc.hostCode}
 			req := NewHumanStepRequester(host, nil, time.Second)
 
-			got, err := req.RequestCode(context.Background(), "enter the code")
+			got, err := req.RequestCode(context.Background(), "enter the code", nil)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 			assert.Equal(t, tc.wantTakeCalls, host.takeCodeCall, "the code must be read off the host only on an approval")
@@ -147,7 +147,7 @@ func TestHumanStepRequester_RequestCode_PublishErrorPropagates(t *testing.T) {
 	host := &fakeApprovalHost{publishErr: errors.New("no resolvable approvers")}
 	req := NewHumanStepRequester(host, nil, time.Second)
 
-	_, err := req.RequestCode(context.Background(), "enter the code")
+	_, err := req.RequestCode(context.Background(), "enter the code", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no resolvable approvers")
 	assert.Equal(t, 0, host.awaitCall, "AwaitDecision must never run after a publish error")
@@ -160,7 +160,7 @@ func TestHumanStepRequester_Confirm_PublishErrorPropagates(t *testing.T) {
 	host := &fakeApprovalHost{publishErr: errors.New("no resolvable approvers")}
 	req := NewHumanStepRequester(host, nil, time.Second)
 
-	_, err := req.Confirm(context.Background(), "approve the push")
+	_, err := req.Confirm(context.Background(), "approve the push", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no resolvable approvers")
 	assert.Equal(t, 0, host.awaitCall, "AwaitDecision must never run after a publish error")
@@ -176,7 +176,7 @@ func TestHumanStepRequester_Confirm_ZeroTimeout_PrefersHostResolvedTimeout(t *te
 	}
 	req := NewHumanStepRequester(host, nil, 0)
 
-	_, err := req.Confirm(context.Background(), "approve the push")
+	_, err := req.Confirm(context.Background(), "approve the push", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 42*time.Second, host.gotTimeout)
 }
@@ -187,7 +187,7 @@ func TestHumanStepRequester_Confirm_ZeroTimeout_FallsBackToDefault(t *testing.T)
 	host := &fakeApprovalHost{approved: true}
 	req := NewHumanStepRequester(host, nil, 0)
 
-	_, err := req.Confirm(context.Background(), "approve the push")
+	_, err := req.Confirm(context.Background(), "approve the push", nil)
 	require.NoError(t, err)
 	assert.Equal(t, defaultHumanStepTimeout, host.gotTimeout)
 }
@@ -198,11 +198,11 @@ func TestHumanStepRequester_Confirm_ZeroTimeout_FallsBackToDefault(t *testing.T)
 func TestNewLateBoundHumanStepRequester_LoopNotReady_FailsClosed(t *testing.T) {
 	req := NewLateBoundHumanStepRequester(func() *Loop { return nil })
 
-	_, err := req.Confirm(context.Background(), "approve the push")
+	_, err := req.Confirm(context.Background(), "approve the push", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not ready")
 
-	cerr := req.Captcha(context.Background(), "there is a captcha")
+	cerr := req.Captcha(context.Background(), "there is a captcha", nil)
 	require.Error(t, cerr)
 	assert.Contains(t, cerr.Error(), "not ready")
 }

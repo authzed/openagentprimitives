@@ -299,6 +299,16 @@ type InteractionRequestPayload struct {
 	// Details is the category's opaque side-band payload (tool_approval puts
 	// ToolApprovalDetails here). Never rendered as copy by a surface.
 	Details json.RawMessage `json:"details,omitempty"`
+	// Screenshot, when set, is an internal artifact reference (an ArtifactRender
+	// CR, resolved by AssetFetcher exactly like an outbound attachment) to a
+	// REDACTED page screenshot the surface renders with the card. Set ONLY for
+	// browser-originated interactions (acting-approval, request_human_step,
+	// captcha); nil for every other interaction, so non-browser payloads are
+	// unchanged on the wire. It is human-facing only and is NEVER delivered to
+	// the model. The image is redacted (credential-filled fields painted over)
+	// in the runner before it is stored — see pkg/agent/runner/browser_screenshot.go.
+	// +optional
+	Screenshot *AttachmentRef `json:"screenshot,omitempty"`
 	// Resources names the source resources whose #owner may decide a
 	// DecideResourceOwners interaction (tool_call → resource#owner, info_leakage
 	// → data#owner). Empty ⇒ the session approve-set decides. Persisted onto the
