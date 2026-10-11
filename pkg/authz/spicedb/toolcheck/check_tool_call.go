@@ -18,10 +18,12 @@ import (
 	"sync"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/scope"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 )
 
 // Client is the SpiceDB CheckPermission surface Checker uses.
@@ -431,7 +433,7 @@ func (c Checker) checkExternalSlotGrant(ctx context.Context, p authz.Permission,
 		}
 	}
 
-	resp, callErr := c.Cli.CheckPermission(ctx, &v1.CheckPermissionRequest{
+	req := &v1.CheckPermissionRequest{
 		Resource: &v1.ObjectReference{ObjectType: p.Check.ResourceType, ObjectId: resourceID},
 		// The slot_grant_<permission> RELATION, never the permission it feeds.
 		Permission: authz.SlotGrantRelationName(p.Check.Permission),
@@ -444,7 +446,38 @@ func (c Checker) checkExternalSlotGrant(ctx context.Context, p authz.Permission,
 		// authorize. Float on the cache when it has a token, and demand the
 		// freshest read when it does not.
 		Consistency: externalGrantConsistency(c.Cache, p.Check.ResourceType, resourceID),
-	})
+	}
+	// web_action's slot_grant_act is the ONLY caveated grant (pagestate_matches —
+	// Phase E's TOCTOU revalidation). Present the live page fingerprint as the
+	// caveat's check-time context so SpiceDB compares it to the one frozen at
+	// approval. Every other resource type's grant is uncaveated and carries no
+	// Context — the web_host sibling included, which is why this is keyed on the
+	// resource TYPE and not the (shared) permission name.
+	//
+	// ALWAYS supply the arg for a web_action check, empty or not. The caveat's own
+	// `presented_fingerprint != ""` guard turns an empty value into a clean,
+	// definitive NO_PERMISSION. OMITTING the arg instead would leave the caveat
+	// partially evaluated and come back PERMISSIONSHIP_CONDITIONAL_PERMISSION —
+	// which the HAS_PERMISSION-only mapping below also denies, but presenting the
+	// arg unconditionally keeps the normal decision a crisp HAS/NO rather than
+	// leaning on that fail-closed fallback.
+	if p.Check.ResourceType == browserschema.WebActionType {
+		fpCtx, ctxErr := structpb.NewStruct(map[string]any{
+			"presented_fingerprint": in.PresentedPageFingerprint,
+		})
+		if ctxErr != nil {
+			// A string value cannot fail structpb serialization, so this is
+			// unreachable — but deny LOUDLY rather than drop the caveat context and
+			// silently widen a revalidated acting check into an uncaveated one.
+			return authz.Result{
+				Outcome: authz.OutcomeDenied,
+				Message: fmt.Sprintf("authz: building pagestate_matches caveat context: %v", ctxErr),
+			}
+		}
+		req.Context = fpCtx
+	}
+
+	resp, callErr := c.Cli.CheckPermission(ctx, req)
 	if callErr != nil {
 		// Deny either way, but never silently: the human still gets a card, and
 		// an operator reading logs gets the reason it cost one. Same shape as
@@ -457,6 +490,19 @@ func (c Checker) checkExternalSlotGrant(ctx context.Context, p authz.Permission,
 	if resp == nil {
 		return authz.Result{Outcome: authz.OutcomeDenied, Message: needsApproval}
 	}
+	// SECURITY INVARIANT — allow ONLY on an unambiguous HAS_PERMISSION. Everything
+	// else denies and routes to a human: NO_PERMISSION, and, critically,
+	// PERMISSIONSHIP_CONDITIONAL_PERMISSION. CONDITIONAL is what a caveated grant
+	// (web_action's pagestate_matches) returns when a required caveat arg was not
+	// supplied — SpiceDB could not finish evaluating the caveat. Treating it as
+	// allow would authorize an irreversible acting call whose page-state
+	// revalidation never actually ran, reopening the exact TOCTOU hole E1 closed.
+	//
+	// Keep this `== HAS_PERMISSION`. A future refactor to `!= NO_PERMISSION` (or
+	// `!= DENIED`) would silently let CONDITIONAL through — a security regression,
+	// not a style change. The web_action path above always supplies the arg so a
+	// CONDITIONAL should not arise in practice, but this mapping is the fail-closed
+	// backstop if it ever does.
 	if resp.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
 		if c.Cache != nil && resp.CheckedAt != nil {
 			c.Cache.Set(p.Check.ResourceType, resourceID, resp.CheckedAt.Token)

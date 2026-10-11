@@ -85,6 +85,42 @@ func IsMemoryAudiencePermission(permission string) bool {
 	return !isSlottableMemoryPermission(permission)
 }
 
+// pagestateMatchesCaveatName is the TOCTOU-revalidation caveat the guardian
+// composer binds web_action's slot grant to (Phase E). It is DEFINED in the base
+// scaffold (pkg/authz/spicedb/schema/schema.zed), referenced here by name only —
+// exactly as checkHashCaveatName is for grant pairs. The scaffold always carries
+// it, and composeAllWithSkipped's ValidateComposedSchema gate (fragmentcompose.go)
+// type-checks the whole composed text before any WriteSchema, so a scaffold that
+// somehow dropped the caveat is caught in-process rather than at the server.
+const pagestateMatchesCaveatName = "pagestate_matches"
+
+// webActionResourceType is the ONE slot resource type whose grant relation is
+// additionally caveated by pagestateMatchesCaveatName. It is a local const
+// rather than an import of browserschema.WebActionType deliberately: the
+// guardian schema composer is a core authz package and must not grow a
+// dependency on the browser TOOLS package for one string. The coupling is pinned
+// instead by the composer test (web_action_slot_test.go, package schema_test),
+// which drives the slot with browserschema.WebActionType and asserts the caveat
+// appears — so a drift of either side fails that test loudly.
+//
+// A known-type SET (rather than a declared field threaded through SlotPair) is
+// the accepted v1 shape: web_action is the only caveated type today. When a
+// second TOCTOU-revalidated slot type appears, promote this to a map
+// resourceType→caveatName here; do NOT caveat by permission (web_host also slots
+// on `act` and must stay uncaveated — the gate is per resource type).
+const webActionResourceType = "web_action"
+
+// slotGrantCaveat returns the extra caveat a slot-grant relation on resourceType
+// must carry BEYOND the mandatory expiration, or "" for the common uncaveated
+// case. web_action is the only caveated type: its grant is revalidated against
+// the live page fingerprint by pagestate_matches.
+func slotGrantCaveat(resourceType string) string {
+	if resourceType == webActionResourceType {
+		return pagestateMatchesCaveatName
+	}
+	return ""
+}
+
 // slotGrantRelationDecl carries `with expiration`, which makes an expiry
 // MANDATORY on every slot-grant tuple SpiceDB will accept.
 //
@@ -94,8 +130,20 @@ func IsMemoryAudiencePermission(permission string) bool {
 // once leaks live authority indefinitely. Requiring the expiry in the SCHEMA
 // means a writer cannot forget it; an "indefinite" tuple stops being
 // expressible rather than merely discouraged.
-func slotGrantRelationDecl(permission string) string {
-	return SlotGrantRelationName(permission) + ": agentsession with expiration"
+//
+// Some resource types ALSO carry a revalidation caveat (slotGrantCaveat) — today
+// only web_action, bound to pagestate_matches for Phase E's TOCTOU gate. The
+// caveat is PER RESOURCE TYPE, not per permission, so caveating web_action#act's
+// grant never touches web_host#act's: both slot on `act` and derive the same
+// slot_grant_act relation name, but only web_action's page-fingerprint-bound
+// grant gets the caveat. Emitted as `with <caveat> and expiration` so both the
+// revalidation caveat and the mandatory expiry bind the same tuple.
+func slotGrantRelationDecl(resourceType, permission string) string {
+	decl := SlotGrantRelationName(permission) + ": agentsession with "
+	if caveat := slotGrantCaveat(resourceType); caveat != "" {
+		decl += caveat + " and "
+	}
+	return decl + "expiration"
 }
 
 // slotPermissionExpr is the expression the composer OWNS for a slot permission.
@@ -221,7 +269,7 @@ func composeOneSlot(src string, s SlotPair) (string, bool, bool, error) {
 	// the correct outcome rather than a destructive one. The guard that skipped
 	// these resources came out with the mechanism it protected.
 
-	wantRel := "    relation " + slotGrantRelationDecl(s.Permission)
+	wantRel := "    relation " + slotGrantRelationDecl(s.ResourceType, s.Permission)
 
 	var kept []string
 	hasRel, hasPerm := false, false

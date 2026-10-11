@@ -533,16 +533,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// the partition trial-composes candidates against — so it carries no
 	// Key/Tier for anything to read. Same set is reused at RunAll below.
 	//
-	// browserschema.Fragment() contributes `definition web_host` EXACTLY ONCE,
-	// cluster-wide and unconditionally (inert until an AgentClass declares a
-	// web_host slot, at which point ComposeSlots injects slot_grant_act onto it).
-	// A builtin rather than a per-BrowserToolbox CR fragment on purpose: two
-	// web_host declarations would be a hard compose conflict that freezes the
-	// cluster schema write. Same rationale as the built-in toolkit fragments —
-	// "a definition nothing uses is inert" — and it is the ONE source the
-	// agentclass controller also reads for web_host's standing and display.
+	// browserschema.Fragment() contributes `definition web_host` and
+	// browserschema.WebActionFragment() `definition web_action` EXACTLY ONCE each,
+	// cluster-wide and unconditionally (inert until an AgentClass declares the
+	// matching slot, at which point ComposeSlots injects slot_grant_act onto it —
+	// uncaveated for web_host, `with pagestate_matches and expiration` for
+	// web_action's Phase-E TOCTOU gate). Builtins rather than per-BrowserToolbox CR
+	// fragments on purpose: two declarations of either would be a hard compose
+	// conflict that freezes the cluster schema write. Same rationale as the
+	// built-in toolkit fragments — "a definition nothing uses is inert" — and they
+	// are the ONE source the agentclass controller also reads for their standing
+	// and display.
 	schemaBaseline := append(gatherChannelKindFragments(), toolkitFrags...)
-	schemaBaseline = append(schemaBaseline, browserschema.Fragment())
+	schemaBaseline = append(schemaBaseline, browserschema.Fragment(), browserschema.WebActionFragment())
 	sessionLinks := registry.SessionRelationLinks()
 
 	accepted, conflictRejected := guardianschema.PartitionCompatibleFragments(schemaBaseline, candidates)

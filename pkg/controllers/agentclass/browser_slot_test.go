@@ -19,18 +19,24 @@ func classWithBrowserToolbox() *spiceboxv1alpha1.AgentClass {
 }
 
 // A class that references a BrowserToolbox gets the builtin browser schema
-// toolkit, so web_host flows into the SAME standing/display resolvers a real
-// toolkit uses. A class with no browser toolbox gets nothing — web_host never
-// pollutes an unrelated class's status.
+// toolkit, so web_host AND web_action flow into the SAME standing/display
+// resolvers a real toolkit uses. A class with no browser toolbox gets nothing —
+// neither resource pollutes an unrelated class's status.
 func TestBrowserSchemaToolkits_GatedOnReference(t *testing.T) {
 	assert.Empty(t, browserSchemaToolkits(&spiceboxv1alpha1.AgentClass{}),
-		"a class with no BrowserToolbox must not carry the web_host schema toolkit")
+		"a class with no BrowserToolbox must not carry the browser schema toolkit")
 
 	got := browserSchemaToolkits(classWithBrowserToolbox())
 	require.Len(t, got, 1, "a browser-referencing class gets exactly the one builtin toolkit")
 	require.NotNil(t, got[0].Spec.SpiceDBSchema)
-	require.Len(t, got[0].Spec.SpiceDBSchema.Resources, 1)
-	assert.Equal(t, "web_host", got[0].Spec.SpiceDBSchema.Resources[0].Name)
+	// ONE toolkit carrying BOTH resources (like git.yaml's git_repo + git_repo_url),
+	// so the single SyntheticToolkitName keys no collision.
+	names := make([]string, 0, len(got[0].Spec.SpiceDBSchema.Resources))
+	for _, r := range got[0].Spec.SpiceDBSchema.Resources {
+		names = append(names, r.Name)
+	}
+	assert.ElementsMatch(t, []string{"web_host", "web_action"}, names,
+		"the browser toolkit carries both the host slot and the revalidation slot")
 }
 
 // web_host resolves session-only standing through resolveResourceStandings when
@@ -57,6 +63,27 @@ func TestResolveResourceStandings_IncludesWebHostForBrowserClass(t *testing.T) {
 	for _, s := range none {
 		assert.NotEqual(t, "web_host", s.ResourceType)
 	}
+}
+
+// web_action resolves session-only standing through the SAME resolver, so a
+// class declaring a web_action slot is not refused with "resource type
+// \"web_action\" declares no standing". This is the per-class RESOLUTION half of
+// the Phase-E substrate; without the toolkit carrying web_action it would fail.
+func TestResolveResourceStandings_IncludesWebActionForBrowserClass(t *testing.T) {
+	tks := browserSchemaToolkits(classWithBrowserToolbox())
+
+	standings, err := resolveResourceStandings(nil, tks, nil, nil)
+	require.NoError(t, err, "web_action declares session-only standing, so resolution must not error")
+
+	var found *spiceboxv1alpha1.ResolvedResourceStanding
+	for i := range standings {
+		if standings[i].ResourceType == browserschema.WebActionType {
+			found = &standings[i]
+		}
+	}
+	require.NotNil(t, found, "web_action standing must be published for a browser class")
+	assert.Equal(t, spiceboxv1alpha1.StandingSessionOnly, found.Standing)
+	assert.Empty(t, found.ApproverPermission, "session-only names no approver permission")
 }
 
 // web_host's declared display reaches status through resolveResourceDisplays, so

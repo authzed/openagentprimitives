@@ -377,6 +377,21 @@ type Inputs struct {
 	// scope.CheckScopeWithRefs, which has no caller, so SessionScope.Resources
 	// is inert here. See the NOT WIRED note on CheckScopeWithRefs.
 	SessionScope scope.Scope
+
+	// PresentedPageFingerprint is the deterministic fingerprint of the browser
+	// page AS IT LOOKS AT CALL TIME, presented as the pagestate_matches caveat's
+	// check-time context for a web_action acting check (Phase E's TOCTOU gate).
+	// The acting grant pins the fingerprint approved at bind time; this is the
+	// one the check presents to revalidate it against the live page.
+	//
+	// Consulted ONLY for a web_action check and ignored for every other resource
+	// type. The web_action check ALWAYS supplies the arg, empty or not: an empty
+	// value is a definitive DENY (the caveat's `presented_fingerprint != ""`
+	// guard refuses it), never a CONDITIONAL — only an ABSENT arg would
+	// partial-evaluate to CONDITIONAL, and the checker never omits it. E8 stamps
+	// this from the browser tool's live page state (NamedArgs); for E2 it is set
+	// directly by the caller/test.
+	PresentedPageFingerprint string
 }
 
 // SessionRef is the canonical (namespace, name) coordinate for an
@@ -412,6 +427,23 @@ type Relation struct {
 	// ExpiresAt stamps the tuple's expiry. Zero writes no expiry, which the
 	// schema accepts only for relations that do not declare `with expiration`.
 	ExpiresAt time.Time
+
+	// CaveatName, when non-empty, binds this tuple to the SpiceDB caveat of that
+	// name, carrying CaveatContext as the tuple's stored (partial) context. Empty
+	// is the common case — every uncaveated write — and renders byte-identically
+	// to a tuple with no caveat (the backend sets OptionalCaveat only when this is
+	// set), so no existing grant changes shape. Used today ONLY by a web_action
+	// acting slot grant, whose grant relation the guardian composer emits `with
+	// pagestate_matches and expiration` (Phase E's TOCTOU gate): the stored
+	// context pins the page fingerprint approved at bind time and the acting check
+	// presents the live one.
+	CaveatName string
+	// CaveatContext is the caveat's stored partial context — a map of CEL arg name
+	// to value (e.g. {"approved_fingerprint": "<fp>"}) serialized to a
+	// structpb.Struct at write time. Ignored when CaveatName is empty. A plain Go
+	// map rather than a *structpb.Struct so the backend-neutral Relation stays
+	// free of protobuf; the spicedb backend converts it in relationshipFor.
+	CaveatContext map[string]any
 }
 
 // ErrNotYetMigrated is returned by Engine methods whose implementation lands

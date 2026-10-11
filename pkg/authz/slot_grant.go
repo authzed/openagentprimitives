@@ -125,6 +125,20 @@ type SlotBinding struct {
 	// gate, recorded through PreconditionsWaived — and for every binding whose
 	// type declares no precondition, where there is nothing to evaluate.
 	Requires []precondition.Rule
+
+	// CaveatName, when non-empty, binds this grant to a SpiceDB caveat so it
+	// resolves only while the caveat's stored context plus the check-time context
+	// satisfy it. Empty — the common case — writes an uncaveated grant exactly as
+	// before. Used today ONLY by a web_action acting slot (pagestate_matches):
+	// the grant pins the page fingerprint approved at bind time and the acting
+	// check presents the live fingerprint. The guardian composer emits
+	// web_action's grant relation `with pagestate_matches and expiration`, so a
+	// web_action grant written WITHOUT this caveat would be refused by SpiceDB.
+	CaveatName string
+	// CaveatContext is the caveat's stored (partial) context — the arg values
+	// frozen at bind time, e.g. {"approved_fingerprint": "<fp>"}. Ignored when
+	// CaveatName is empty.
+	CaveatContext map[string]any
 }
 
 // GrantSlots writes a slot grant per binding.
@@ -153,6 +167,13 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 		}
 		rel := SlotGrantRelation(b.ResourceType, b.ResourceID.String(), b.Permission, scope)
 		rel.ExpiresAt = expiresAt
+		// Carry an optional caveat (web_action's pagestate_matches today). Empty
+		// CaveatName leaves the tuple uncaveated — byte-identical to the pre-caveat
+		// write for every ordinary slot. Revocation (RevokeSlots) needs none of
+		// this: a delete keys on (resource, relation, subject), which a caveat is
+		// not part of, so a caveated grant is deleted by the same bare tuple.
+		rel.CaveatName = b.CaveatName
+		rel.CaveatContext = b.CaveatContext
 		rels = append(rels, rel)
 	}
 	if err := g.WriteRelationships(ctx, rels); err != nil {
