@@ -84,12 +84,15 @@ var operatorOwnedStatusFields = map[string]bool{
 	// own name, get/watch/patch). The runner reads the answer off its own
 	// object. Same shape as every other derived fact here — the party that can
 	// see it writes it, the party that needs it reads it.
-	"closureDenied":                 true,
-	"runnerPodName":                 true,
-	"runnerRestarts":                true,
-	"retryAttempts":                 true,
-	"bundleSessions":                true,
-	"resolvedSidecarToolboxes":      true,
+	"closureDenied":            true,
+	"runnerPodName":            true,
+	"runnerRestarts":           true,
+	"retryAttempts":            true,
+	"bundleSessions":           true,
+	"resolvedSidecarToolboxes": true,
+	// resolvedBrowserToolboxes is the operator's per-session BrowserToolbox
+	// snapshot, written at session start exactly like its sidecar sibling above.
+	"resolvedBrowserToolboxes":      true,
 	"resolvedWorkspaceSource":       true,
 	"resolvedContentGuardDetectors": true,
 	"resolvedSkillBundles":          true,

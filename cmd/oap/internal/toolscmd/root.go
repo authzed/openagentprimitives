@@ -10,6 +10,7 @@ import (
 	// Side-effect imports: each kind's init() registers itself with
 	// pkg/tools/kinds/registry so the verbs below can dispatch.
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/apcmd"
+	_ "github.com/authzed/openagentprimitives/pkg/tools/kinds/browsertoolbox"
 	_ "github.com/authzed/openagentprimitives/pkg/tools/kinds/mcp"
 	_ "github.com/authzed/openagentprimitives/pkg/tools/kinds/sandbox"
 	_ "github.com/authzed/openagentprimitives/pkg/tools/kinds/sidecartoolbox"

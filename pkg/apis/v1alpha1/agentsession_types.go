@@ -185,6 +185,13 @@ type AgentSessionStatus struct {
 	// +optional
 	ResolvedSidecarToolboxes []ResolvedSidecarToolbox `json:"resolvedSidecarToolboxes,omitempty"`
 
+	// ResolvedBrowserToolboxes snapshots each referenced BrowserToolbox at
+	// session start, frozen for the session lifetime exactly like
+	// ResolvedSidecarToolboxes. Empty when AgentClass.spec.browserToolboxes
+	// is empty.
+	// +optional
+	ResolvedBrowserToolboxes []ResolvedBrowserToolbox `json:"resolvedBrowserToolboxes,omitempty"`
+
 	// ResolvedWorkspaceSource snapshots the bound WorkspaceSource for a running
 	// session: the ref, the base PVC the overlay was cut from, and whether the
 	// cut completed. Frozen at session start (like ResolvedSidecarToolboxes).
@@ -770,6 +777,67 @@ type ResolvedSidecarToolbox struct {
 	// far enough to be probed." A crash-looping sidecar never receives a PodIP,
 	// so the prober never runs and reachability would stay silently empty —
 	// exactly the silent degradation this field exists to end.
+	// +optional
+	PodFailure *SidecarPodFailure `json:"podFailure,omitempty"`
+}
+
+// BrowserEffectiveSite is one resolved site entry in a ResolvedBrowserToolbox's
+// EffectiveSites. Source records where the entry came from: Phase A only ever
+// writes "explicit" (a BrowserAccess.Sites entry carried through verbatim);
+// "identity" is a Phase B addition once a bound identity can contribute its
+// own sites to the effective set.
+type BrowserEffectiveSite struct {
+	// Host is the resolved hostname, matched exactly as BrowserSite.Host.
+	Host string `json:"host"`
+	// Exact mirrors BrowserSite.Exact for this entry.
+	// +optional
+	Exact bool `json:"exact,omitempty"`
+	// Source is where this entry came from. "explicit" only in Phase A;
+	// "identity" arrives in Phase B.
+	Source string `json:"source"`
+}
+
+// ResolvedBrowserToolbox snapshots one BrowserToolbox CR for a running
+// AgentSession, mirroring ResolvedSidecarToolbox's shape: the LLM-facing
+// prefix, the frozen spec, and the operator-allocated pod/gate the runner
+// uses to reach the per-session browser.
+type ResolvedBrowserToolbox struct {
+	// Name is the LLM-facing prefix (the `name` field from
+	// AgentClassBrowserToolboxRef).
+	Name string `json:"name"`
+
+	// Ref is the BrowserToolbox CR name (the `ref` field from
+	// AgentClassBrowserToolboxRef).
+	Ref string `json:"ref"`
+
+	// Spec is the BrowserToolbox spec snapshot at session-start time.
+	Spec BrowserToolboxSpec `json:"spec"`
+
+	// EffectiveSites is the resolved site list the running browser's egress
+	// is actually evaluated against -- in Phase A, a straight carry-through
+	// of Spec.Access.Sites with Source "explicit".
+	// +optional
+	EffectiveSites []BrowserEffectiveSite `json:"effectiveSites,omitempty"`
+
+	// BrowserPodName is the per-session browser pod's name.
+	// +optional
+	BrowserPodName string `json:"browserPodName,omitempty"`
+	// BrowserPodIP is the per-session browser pod's IP, reflected once Ready;
+	// the runner reaches its gate at http://<BrowserPodIP>:<GatePort>.
+	// +optional
+	BrowserPodIP string `json:"browserPodIP,omitempty"`
+	// GatePort is the operator-allocated port the runner uses to reach the
+	// browser pod's gate process.
+	// +optional
+	GatePort int32 `json:"gatePort,omitempty"`
+	// TokenHash is a hash of the resolved per-session gate token; a change
+	// triggers pod replacement.
+	// +optional
+	TokenHash string `json:"tokenHash,omitempty"`
+
+	// PodFailure records a TERMINAL container state on the browser pod
+	// (CrashLoopBackOff, ImagePullBackOff) -- reuses SidecarPodFailure's shape
+	// exactly; see that type's doc comment for why it carries no timestamp.
 	// +optional
 	PodFailure *SidecarPodFailure `json:"podFailure,omitempty"`
 }

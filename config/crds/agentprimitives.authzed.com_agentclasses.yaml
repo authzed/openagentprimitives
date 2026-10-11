@@ -1144,6 +1144,27 @@ spec:
                   type: object
                 type: array
                 x-kubernetes-list-type: atomic
+              browserToolboxes:
+                description: |-
+                  BrowserToolboxes references BrowserToolbox CRs in the same namespace
+                  whose per-session browser each session gets. Each ref's Name is the
+                  LLM-facing prefix; pattern [a-z0-9_-]{1,32}.
+                items:
+                  description: AgentClassBrowserToolboxRef references a BrowserToolbox
+                    CR in the same namespace.
+                  properties:
+                    name:
+                      description: Name is the LLM-visible tool prefix; pattern [a-z0-9_-]{1,32}.
+                      pattern: ^[a-z0-9_-]{1,32}$
+                      type: string
+                    ref:
+                      description: Ref names the BrowserToolbox CR in the same namespace.
+                      type: string
+                  required:
+                  - name
+                  - ref
+                  type: object
+                type: array
               budget:
                 description: |-
                   Budget is optional: when omitted, the class inherits the resolved tier
