@@ -111,6 +111,59 @@ func TestSecretSourceList(t *testing.T) {
 	}
 }
 
+// TestSecretSourceListMultiFaultErrorIsDeterministic pins the Phase B
+// final-review hardening fix: parseEntries and entriesByCanonicalHost
+// (source.go) now sort their map keys before iterating, so the FIRST fault
+// reported from data carrying more than one malformed key is always the
+// SAME one across repeated calls -- not whichever key Go's randomized map
+// iteration happened to visit first. Each subtest runs List many times over
+// the SAME ≥2-fault data and asserts every call returns byte-identical error
+// text naming the lexicographically-first offending key.
+func TestSecretSourceListMultiFaultErrorIsDeterministic(t *testing.T) {
+	const repeats = 25
+
+	cases := []struct {
+		name    string
+		data    map[string][]byte
+		wantErr string // exact error message every repeat must match
+	}{
+		{
+			// Both keys fault in parseEntries (unrecognized suffix) -- the map
+			// ranged there is cfg.SecretData itself.
+			name: "two keys with unrecognized suffix: always names the lexicographically-first",
+			data: map[string][]byte{
+				"z.example.com.nickname": []byte("y"),
+				"a.example.com.nickname": []byte("x"),
+			},
+			wantErr: `secretsource: key "a.example.com.nickname" has no recognized suffix`,
+		},
+		{
+			// Both keys parse cleanly in parseEntries; the fault is in
+			// entriesByCanonicalHost's cross-validation -- the map ranged there
+			// is parseEntries' per-host result, keyed by host (no suffix).
+			name: "two orphan hosts: always names the lexicographically-first host",
+			data: map[string][]byte{
+				"orphanz.example.com.password": []byte("y"),
+				"orphana.example.com.username": []byte("x"),
+			},
+			wantErr: `secretsource: key "orphana.example.com.username" has no matching "orphana.example.com.password" key`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := secretsource.New()
+			cfg := directcred.Config{SecretData: tc.data}
+
+			for i := 0; i < repeats; i++ {
+				_, err := src.List(context.Background(), cfg)
+				require.Error(t, err)
+				require.Equal(t, tc.wantErr, err.Error(), "call %d must report the same fault as every other call", i)
+			}
+		})
+	}
+}
+
 func TestSecretSourceVerify(t *testing.T) {
 	t.Run("clean data: zero Pin, no error", func(t *testing.T) {
 		src := secretsource.New()

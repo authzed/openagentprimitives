@@ -2672,18 +2672,80 @@ spec:
                       description: BrowserPodName is the per-session browser pod's
                         name.
                       type: string
+                    catalog:
+                      description: |-
+                        Catalog is the bound identity's directCredentials login references,
+                        listed once per session start and again on wake and carried forward in
+                        between (CatalogFingerprint gates a re-list on a rotated backing token).
+                        Each entry carries only {id, label, hosts} -- never a username, password,
+                        or OTP. Empty when the toolbox binds no identity.
+                      items:
+                        description: |-
+                          BrowserLoginRef is one login the bound identity's directcred source lists,
+                          snapshotted onto status so Phase C's form filler can offer it to a human.
+                          It carries NOTHING from the login item's fields -- only the opaque ID, a
+                          display label, and the hosts it matches (directcred.Ref's own security
+                          contract). No username, password, OTP, or seed ever appears here, which is
+                          what lets the whole status be logged and shown in a UI.
+                        properties:
+                          hosts:
+                            description: Hosts is the set of hostname patterns this
+                              login applies to.
+                            items:
+                              description: |-
+                                BrowserLoginHost is one hostname pattern a BrowserLoginRef is scoped to --
+                                the status-plane projection of a directcred.Host. A deliberately minimal
+                                {Host, Exact} pair: distinct from BrowserSite (whose user-input
+                                Pattern/MaxLength markers do not belong on an operator-derived status field)
+                                and from BrowserEffectiveSite (which additionally carries a Source).
+                              properties:
+                                exact:
+                                  description: |-
+                                    Exact is true when Host must match the page host exactly; false when it
+                                    also matches subdomains.
+                                  type: boolean
+                                host:
+                                  description: Host is the canonical hostname this
+                                    login applies to.
+                                  type: string
+                              required:
+                              - host
+                              type: object
+                            type: array
+                          id:
+                            description: |-
+                              ID is opaque to everyone but the directcred Source that issued it;
+                              callers must not parse or infer structure from it.
+                            type: string
+                          label:
+                            description: Label is the display name shown to a human
+                              picking a login.
+                            type: string
+                        required:
+                        - id
+                        type: object
+                      type: array
+                    catalogFingerprint:
+                      description: |-
+                        CatalogFingerprint is the hex SHA-256 of the credential's token-Secret
+                        value at the time Catalog was listed -- the set-once-per-token key the
+                        carry-forward uses to re-list only when the backing token rotates. A
+                        vault-less secret source has no token key, so this is constant there and
+                        the catalog carries forward until a wake. It is a digest, never the token.
+                      type: string
                     effectiveSites:
                       description: |-
                         EffectiveSites is the resolved site list the running browser's egress
-                        is actually evaluated against -- in Phase A, a straight carry-through
-                        of Spec.Access.Sites with Source "explicit".
+                        is actually evaluated against: Spec.Access.Sites (Source "explicit")
+                        unioned with the bound identity's catalog hosts (Source "identity") when
+                        spec.access.identitySites is set.
                       items:
                         description: |-
                           BrowserEffectiveSite is one resolved site entry in a ResolvedBrowserToolbox's
-                          EffectiveSites. Source records where the entry came from: Phase A only ever
-                          writes "explicit" (a BrowserAccess.Sites entry carried through verbatim);
-                          "identity" is a Phase B addition once a bound identity can contribute its
-                          own sites to the effective set.
+                          EffectiveSites. Source records where the entry came from: "explicit" for a
+                          BrowserAccess.Sites entry carried through verbatim, "identity" for a host
+                          folded in from the bound identity's directCredentials catalog (only when
+                          spec.access.identitySites is set).
                         properties:
                           exact:
                             description: Exact mirrors BrowserSite.Exact for this
@@ -2695,8 +2757,8 @@ spec:
                             type: string
                           source:
                             description: |-
-                              Source is where this entry came from. "explicit" only in Phase A;
-                              "identity" arrives in Phase B.
+                              Source is where this entry came from: "explicit" (spec.access.sites) or
+                              "identity" (a host from the bound identity's login catalog).
                             type: string
                         required:
                         - host
@@ -2709,6 +2771,12 @@ spec:
                         browser pod's gate process.
                       format: int32
                       type: integer
+                    identityName:
+                      description: |-
+                        IdentityName is the AgentIdentity (spec.access.identity) whose
+                        directCredentials credential produced Catalog -- Phase C's form filler
+                        reads it to know whose logins these are. Empty when no identity is bound.
+                      type: string
                     name:
                       description: |-
                         Name is the LLM-facing prefix (the `name` field from
@@ -2757,6 +2825,28 @@ spec:
                             Access is the site allowlist/blocklist the browser's egress is
                             evaluated against.
                           properties:
+                            identity:
+                              description: |-
+                                Identity is the name of an AgentIdentity (in this BrowserToolbox's
+                                namespace) carrying a directCredentials credential this browser binds
+                                to -- a Phase B addition. Allowlist-only: the two XValidation rules on
+                                BrowserToolbox.Spec refuse it under Mode=blocklist, because a
+                                general-access browser has no legitimate use for a credential
+                                reference. Identity name syntax and existence are not checked here --
+                                that is the Task 7 BrowserToolbox reconciler's job (Valid=False when
+                                the reference is missing or has no directCredentials credential).
+                              type: string
+                            identitySites:
+                              default: false
+                              description: |-
+                                IdentitySites, when true, folds every host Identity's directCredentials
+                                catalog lists into this allowlist, alongside any explicit Sites -- a
+                                Phase B addition. Requires Identity to be set (enforced by the second
+                                XValidation rule on BrowserToolbox.Spec). This field only records the
+                                bit; deriving the actual host names from the identity's source happens
+                                in the AgentSession reconciler (DeriveBrowserEffectiveSites, Task 7) and
+                                is recorded onto status, not here.
+                              type: boolean
                             mode:
                               description: |-
                                 Mode is "allowlist" (only Sites are reachable) or "blocklist" (every

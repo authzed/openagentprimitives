@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -268,6 +269,42 @@ func TestVerifyAuthErrorNeverLeaksToken(t *testing.T) {
 		directcred.Config{SecretData: map[string][]byte{"token": []byte(token)}, Vault: "Prod"})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), token, "the service-account token must never appear in an error")
+}
+
+// TestVerifyErrorTextMatchesSetupFlowCoupling pins the two exact substrings
+// pkg/platform/identity/setup/builtins/onepassword_service_account/flow.go's
+// classifyVerifyErr depends on to tell apart WHY Verify failed, since
+// Verify returns a single untyped error for every failure mode:
+//
+//   - vaultCountRe matches "accessible vault, found <N>" to classify a
+//     zero/multi-vault scoping failure as VerifyForbidden.
+//   - sdkClientErrPrefix matches the literal prefix "onepassword: creating
+//     client:" to classify an SDK client-construction failure as
+//     VerifyRejected.
+//
+// These are substring/prefix assertions, not full-message equality, so the
+// pin tracks only the two fragments the setup flow actually parses. If
+// either wording changes here without updating flow.go's constants, THIS
+// test fails loudly on the emission side instead of the setup flow silently
+// degrading every such failure to VerifyIndeterminate.
+func TestVerifyErrorTextMatchesSetupFlowCoupling(t *testing.T) {
+	t.Run("zero/multi-vault scoping failure contains the vaultCountRe substring", func(t *testing.T) {
+		fake := &fakeClient{vaults: []vault{{ID: "v1", Title: "Prod"}, {ID: "v2", Title: "Staging"}}}
+		_, err := sourceWith(fake).Verify(context.Background(),
+			directcred.Config{SecretData: tokenData(), Vault: "Prod"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "accessible vault, found 2",
+			"flow.go's vaultCountRe (`accessible vault, found (\\d+)`) depends on this exact wording")
+	})
+
+	t.Run("SDK client-construction failure has the sdkClientErrPrefix prefix", func(t *testing.T) {
+		s := sourceWithClientErr(errors.New("invalid token format"))
+		_, err := s.Verify(context.Background(),
+			directcred.Config{SecretData: tokenData(), Vault: "Prod"})
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "onepassword: creating client:"),
+			"flow.go's sdkClientErrPrefix does strings.HasPrefix against exactly this text; got %q", err.Error())
+	})
 }
 
 func TestVerifyMissingToken(t *testing.T) {

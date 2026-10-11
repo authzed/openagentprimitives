@@ -11,7 +11,9 @@ package agentsession
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -26,7 +28,10 @@ import (
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
+	credkindregistry "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/registry"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/directcred"
 	"github.com/authzed/openagentprimitives/pkg/platform/podspec"
+	"github.com/authzed/openagentprimitives/pkg/tools/adoptkit"
 	"github.com/authzed/openagentprimitives/pkg/tools/browsergate"
 	"github.com/authzed/openagentprimitives/pkg/tools/browserpolicy"
 )
@@ -100,17 +105,21 @@ func BrowserNetworkPolicyName(sess *spiceboxv1alpha1.AgentSession, ref string) s
 	return BrowserPodName(sess, ref) + "-netpol"
 }
 
-// DeriveBrowserEffectiveSites maps spec.Access.Sites 1:1 into the resolved
-// EffectiveSites list, Source "explicit", in order. Phase A has no other
-// site source (identity-derived sites arrive in Phase B), so this is a
-// straight carry-through -- except for host canonicalization, which is NOT
-// optional: browserpolicy.Match (and Decide) assume every Site.Host they
-// compare against is ALREADY canonical (lowercased, no trailing dot), and
-// this is the one place that guarantee is established before the value
-// reaches the gate's PolicyDoc (BuildBrowserPolicyDoc) or any runner-side
-// pre-check.
+// DeriveBrowserEffectiveSites maps spec.Access.Sites into the resolved
+// EffectiveSites list with Source "explicit", then appends identityHosts with
+// Source "identity" -- the hosts a bound identity's directCredentials catalog
+// contributes, which the caller passes ONLY when spec.access.identitySites is
+// set (nil otherwise: the catalog is still listed onto status, but its hosts
+// do not widen the allowlist). Explicit entries always precede identity ones.
 //
-// Pure and deterministic: same spec in, same slice out, on every call -- no
+// Host canonicalization is NOT optional: browserpolicy.Match (and Decide)
+// assume every Site.Host they compare against is ALREADY canonical (lowercased,
+// no trailing dot), and this is the one place that guarantee is established
+// before the value reaches the gate's PolicyDoc (BuildBrowserPolicyDoc) or any
+// runner-side pre-check. Identity hosts arrive canonical from the directcred
+// source, but are re-canonicalized here so the one guarantee has one owner.
+//
+// Pure and deterministic: same inputs in, same slice out, on every call -- no
 // clock, no randomness, no I/O. That purity is what makes the status write
 // (ResolvedBrowserToolbox.EffectiveSites) idempotent across re-reconciles.
 //
@@ -124,8 +133,8 @@ func BrowserNetworkPolicyName(sess *spiceboxv1alpha1.AgentSession, ref string) s
 // would instead WIDEN reachability for that one host, which is exactly why
 // the CRD pattern exists to keep this branch unreachable in the first place,
 // rather than relying on this fail-closed default alone.
-func DeriveBrowserEffectiveSites(spec spiceboxv1alpha1.BrowserToolboxSpec) []spiceboxv1alpha1.BrowserEffectiveSite {
-	sites := make([]spiceboxv1alpha1.BrowserEffectiveSite, 0, len(spec.Access.Sites))
+func DeriveBrowserEffectiveSites(spec spiceboxv1alpha1.BrowserToolboxSpec, identityHosts []directcred.Host) []spiceboxv1alpha1.BrowserEffectiveSite {
+	sites := make([]spiceboxv1alpha1.BrowserEffectiveSite, 0, len(spec.Access.Sites)+len(identityHosts))
 	for _, s := range spec.Access.Sites {
 		host, err := browserpolicy.CanonicalHost(s.Host)
 		if err != nil {
@@ -137,7 +146,241 @@ func DeriveBrowserEffectiveSites(spec spiceboxv1alpha1.BrowserToolboxSpec) []spi
 			Source: "explicit",
 		})
 	}
+	for _, h := range identityHosts {
+		host, err := browserpolicy.CanonicalHost(h.Name)
+		if err != nil {
+			continue
+		}
+		sites = append(sites, spiceboxv1alpha1.BrowserEffectiveSite{
+			Host:   host,
+			Exact:  h.Exact,
+			Source: "identity",
+		})
+	}
 	return sites
+}
+
+// errBrowserCatalogTerminal marks a resolveBrowserCatalog error as a
+// permanent misconfiguration -- the operator must edit the CR; retrying the
+// reconcile changes nothing. The caller (controller.go's browser block) does
+// errors.Is(err, errBrowserCatalogTerminal) and calls markBootFailed ONLY for
+// these; every other error here -- a non-NotFound Get blip on the identity or
+// its backing Secret, or a List call that hit a rate limit -- is returned
+// UNWRAPPED so the caller instead returns the error and the normal
+// controller-runtime requeue-with-backoff retries the reconcile. This mirrors
+// pkg/controllers/agentidentity/controller.go's reconcileStatus: known
+// permanent-misconfiguration sentinels (ErrSecretKeyMissing, ErrExpired, …)
+// route to setInvalid, while its `default:` branch on an unclassified
+// checkCredentialSecret error is commented "transient (API error) — requeue".
+var errBrowserCatalogTerminal = stderrors.New("browser catalog: permanent misconfiguration")
+
+// resolveBrowserCatalog resolves the bound identity's login catalog and the
+// identity-derived hosts for one BrowserToolbox ref, honoring the
+// once-per-start, again-on-wake listing cadence (spec §1.5). It returns empty
+// results (no error) for a toolbox that binds no identity.
+//
+// Listing cadence: the directcred Source.List is called ONLY when there is no
+// prior status entry for this ref, when the session is waking this reconcile,
+// or when the credential's token-Secret fingerprint has changed since the
+// prior list. Otherwise the prior entry's catalog and identity-derived hosts
+// are carried forward verbatim, so a steady-state reconcile makes no List call
+// and rewrites nothing. Values never leave the Source: List returns only
+// {id, label, hosts}.
+//
+// Fails CLOSED on permanent misconfiguration (a missing AgentIdentity, a
+// directCredentials credential or backing Secret that does not exist, an
+// unregistered credential type or directcred source kind) -- those are
+// wrapped with errBrowserCatalogTerminal and the caller ends the session
+// rather than running the browser with a silently-empty catalog. A TRANSIENT
+// failure -- a non-NotFound Get error on the identity or the Secret, or a
+// source List error (a 1Password rate-limit/network blip, say) -- is
+// returned unwrapped instead, so the caller requeues: a credentialed browser
+// session must not die permanently over a blip at session start or wake.
+func (r *Reconciler) resolveBrowserCatalog(
+	ctx context.Context,
+	sess *spiceboxv1alpha1.AgentSession,
+	ref string,
+	tbSpec spiceboxv1alpha1.BrowserToolboxSpec,
+	waking bool,
+) (catalog []spiceboxv1alpha1.BrowserLoginRef, fingerprint, identityName string, identityHosts []directcred.Host, err error) {
+	identityName = tbSpec.Access.Identity
+	if identityName == "" {
+		// No identity bound: no catalog, no identity-derived sites (Phase A shape).
+		return nil, "", "", nil, nil
+	}
+
+	var id spiceboxv1alpha1.AgentIdentity
+	if gErr := r.Client.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: identityName}, &id); gErr != nil {
+		if errors.IsNotFound(gErr) {
+			// Permanent: the toolbox's identity ref names nothing; the operator
+			// must fix the ref or recreate the identity.
+			return nil, "", identityName, nil, fmt.Errorf("get AgentIdentity %q: %w: %v", identityName, errBrowserCatalogTerminal, gErr)
+		}
+		// Transient: an apiserver Get blip. Returned unwrapped so the caller
+		// requeues instead of ending the session.
+		return nil, "", identityName, nil, fmt.Errorf("get AgentIdentity %q: %w", identityName, gErr)
+	}
+
+	// The FIRST credential carrying a directCredentials block, by declaration
+	// order. Multiple directCredentials credentials on one identity is legal;
+	// the browser binds the first deterministically. Block presence -- not a
+	// `c.Type == "directCredentials"` literal -- is the credkind's own HasBlock
+	// test, the same read the browsertoolbox reconciler's hasDirectCredentials
+	// and the agentidentity reconciler's verifyDirectCredential use.
+	var cred *spiceboxv1alpha1.AgentCredential
+	for i := range id.Spec.Credentials {
+		if id.Spec.Credentials[i].DirectCredentials != nil {
+			cred = &id.Spec.Credentials[i]
+			break
+		}
+	}
+	if cred == nil {
+		// Permanent: a structural problem with the identity's spec -- no amount
+		// of retrying adds a directCredentials credential to it.
+		return nil, "", identityName, nil, fmt.Errorf("AgentIdentity %q has no directCredentials credential: %w", identityName, errBrowserCatalogTerminal)
+	}
+
+	// Classify through the credkind registry (never a cred.Type switch) to
+	// locate the backing Secret and the key -- if any -- holding the source's
+	// token. The vault-less secret backend has no single token key (key ""),
+	// so its fingerprint is over no bytes and is constant.
+	k, kErr := credkindregistry.Get(cred.Type)
+	if kErr != nil {
+		// Permanent: an unregistered/unknown credential type is a structural/config
+		// error on the credential, not something a requeue resolves.
+		return nil, "", identityName, nil, fmt.Errorf("classify credential %q: %w: %v", cred.Name, errBrowserCatalogTerminal, kErr)
+	}
+	secRef := k.SecretRef(*cred)
+	if secRef == nil || secRef.Name == "" {
+		// Permanent: the credential's own shape has no Secret to read.
+		return nil, "", identityName, nil, fmt.Errorf("credential %q has no backing Secret: %w", cred.Name, errBrowserCatalogTerminal)
+	}
+
+	secretData, rErr := r.readDirectCredSecret(ctx, sess, id.Namespace, secRef.Name)
+	if rErr != nil {
+		if errors.IsNotFound(rErr) {
+			// Permanent: the credential's secretRef names a Secret that does not
+			// exist -- a config problem on the CR, not a timing blip.
+			return nil, "", identityName, nil, fmt.Errorf("read credential Secret %q: %w: %v", secRef.Name, errBrowserCatalogTerminal, rErr)
+		}
+		// Transient: an apiserver Get/adopt blip reading an otherwise-present
+		// Secret. Returned unwrapped so the caller requeues.
+		return nil, "", identityName, nil, fmt.Errorf("read credential Secret %q: %w", secRef.Name, rErr)
+	}
+
+	src, ok := directcred.Get(cred.DirectCredentials.Source)
+	if !ok {
+		// Permanent: the registry miss the spec calls out explicitly -- the
+		// binary is missing the source's blank import, or the CR names a kind
+		// that was never registered. Retrying never fixes either.
+		return nil, "", identityName, nil, fmt.Errorf(
+			"no directcred source registered for source kind %q (the binary may be missing its blank import under pkg/platform/identity/directcred/): %w",
+			cred.DirectCredentials.Source, errBrowserCatalogTerminal)
+	}
+
+	cfg := directcred.Config{
+		SecretData: secretData,
+		Vault:      cred.DirectCredentials.Vault,
+		VaultID:    pinnedVaultID(&id, cred.Name),
+	}
+
+	// The set-once-per-token key: the hex SHA-256 of the token-Secret value at
+	// secRef.Key. Empty key (the vault-less secret source) hashes no bytes, so
+	// the fingerprint is constant and the catalog carries forward until a wake.
+	fingerprint = SecretTokenHash(secretData[secRef.Key])
+
+	prior := findResolvedBrowser(sess.Status.ResolvedBrowserToolboxes, ref)
+	if prior != nil && !waking && prior.CatalogFingerprint == fingerprint {
+		// Carry forward: no List call, no status churn. Identity hosts come from
+		// the carried catalog so the derive stays a pure function of it.
+		return prior.Catalog, prior.CatalogFingerprint, identityName, browserLoginHosts(prior.Catalog), nil
+	}
+
+	refs, lErr := src.List(ctx, cfg)
+	if lErr != nil {
+		// Transient: a rate-limit/network blip against the directcred backend
+		// (e.g. 1Password). Returned unwrapped so the caller requeues.
+		return nil, "", identityName, nil, fmt.Errorf("list logins: %w", lErr)
+	}
+	catalog = browserLoginRefs(refs)
+	return catalog, fingerprint, identityName, browserLoginHosts(catalog), nil
+}
+
+// readDirectCredSecret reads a directCredentials backing Secret's data
+// verbatim. When the SecretReader guard is wired it adopts the Secret first
+// (metadata-only SSA, idempotent) and reads through the guard's LIVE reader --
+// the just-adopted label is not yet in the filtered cache -- mirroring
+// materializeSidecarSecret. A missing Secret surfaces as the read error, which
+// the caller fails closed on.
+func (r *Reconciler) readDirectCredSecret(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ns, name string) (map[string][]byte, error) {
+	var reader client.Reader = r.Client
+	if r.SecretReader != nil {
+		credRef := types.NamespacedName{Namespace: ns, Name: name}
+		ownerRef := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}
+		if aErr := adoptkit.AdoptSecret(ctx, r.SecretReader.Reader, r.Client, credRef, ownerRef, "AgentSession"); aErr != nil && !errors.IsNotFound(aErr) {
+			return nil, fmt.Errorf("adopt: %w", aErr)
+		}
+		reader = r.SecretReader.Reader
+	}
+	var sec corev1.Secret
+	if gErr := reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &sec); gErr != nil {
+		return nil, gErr
+	}
+	return sec.Data, nil
+}
+
+// findResolvedBrowser returns the prior resolved entry for ref, or nil. Used by
+// the catalog carry-forward to copy an unchanged catalog rather than re-listing.
+func findResolvedBrowser(list []spiceboxv1alpha1.ResolvedBrowserToolbox, ref string) *spiceboxv1alpha1.ResolvedBrowserToolbox {
+	for i := range list {
+		if list[i].Ref == ref {
+			return &list[i]
+		}
+	}
+	return nil
+}
+
+// pinnedVaultID returns the vault id the identity's status pinned for credName,
+// or "" when none is recorded (a source with no vault concept, or not yet
+// verified). Fed to directcred.Config.VaultID so the list runs against the
+// proven vault.
+func pinnedVaultID(id *spiceboxv1alpha1.AgentIdentity, credName string) string {
+	for _, pv := range id.Status.PinnedVaults {
+		if pv.Credential == credName {
+			return pv.VaultID
+		}
+	}
+	return ""
+}
+
+// browserLoginRefs projects the directcred source's refs onto the status type,
+// sorted by ID so the stamped catalog is deterministic and the status write
+// stays idempotent. Carries only {id, label, hosts} -- never a value.
+func browserLoginRefs(refs []directcred.Ref) []spiceboxv1alpha1.BrowserLoginRef {
+	out := make([]spiceboxv1alpha1.BrowserLoginRef, 0, len(refs))
+	for _, ref := range refs {
+		hosts := make([]spiceboxv1alpha1.BrowserLoginHost, 0, len(ref.Hosts))
+		for _, h := range ref.Hosts {
+			hosts = append(hosts, spiceboxv1alpha1.BrowserLoginHost{Host: h.Name, Exact: h.Exact})
+		}
+		out = append(out, spiceboxv1alpha1.BrowserLoginRef{ID: ref.ID, Label: ref.Label, Hosts: hosts})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// browserLoginHosts flattens a catalog's per-ref hosts into the directcred.Host
+// slice DeriveBrowserEffectiveSites merges. Used both for a freshly-listed
+// catalog and a carried-forward one, so the identity-derived sites are a pure
+// function of whichever catalog is in hand.
+func browserLoginHosts(catalog []spiceboxv1alpha1.BrowserLoginRef) []directcred.Host {
+	var hosts []directcred.Host
+	for _, ref := range catalog {
+		for _, h := range ref.Hosts {
+			hosts = append(hosts, directcred.Host{Name: h.Host, Exact: h.Exact})
+		}
+	}
+	return hosts
 }
 
 // BuildBrowserPolicyDoc converts a ResolvedBrowserToolbox's effective sites
@@ -238,7 +481,7 @@ func BuildBrowserPod(sess *spiceboxv1alpha1.AgentSession, rt spiceboxv1alpha1.Re
 		// HOME points at the profile emptyDir: the image's passwd entry says
 		// /home/chrome, which is read-only at runtime, and chromium writes
 		// $HOME/.config and $HOME/.pki on boot.
-		Env: []corev1.EnvVar{{Name: "HOME", Value: browserProfileMountPath}},
+		Env:             []corev1.EnvVar{{Name: "HOME", Value: browserProfileMountPath}},
 		SecurityContext: chromeSecCtx,
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: browserProfileVolume, MountPath: browserProfileMountPath},

@@ -387,12 +387,14 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return out
 	}
 	// Re-enqueue any AgentClass whose browserToolboxes[].ref names the
-	// changed BrowserToolbox. Phase A's validateBrowserToolboxes is
-	// existence-only (no Valid-condition read), so the race this closes is
-	// narrower than mapSidecarToolboxToClasses' -- a class parked at
-	// Valid=False reason=AgentClassBrowserToolboxMissing must re-reconcile
-	// once the toolbox is created, same install-ordering race as every other
-	// referenced CR. Namespaced, so list in its namespace only.
+	// changed BrowserToolbox. Phase B's validateBrowserToolboxes now also
+	// reads the toolbox's own Valid condition (mirroring
+	// mapSidecarToolboxToClasses' race exactly), so a class parked at
+	// Valid=False reason=AgentClassBrowserToolboxInvalid must re-reconcile
+	// both when the toolbox is first created AND when
+	// pkg/controllers/browsertoolbox.Reconciler later flips its Valid
+	// condition (e.g. once its named AgentIdentity becomes usable). Namespaced,
+	// so list in its namespace only.
 	mapBrowserToolboxToClasses := func(ctx context.Context, o client.Object) []reconcile.Request {
 		var list spiceboxv1alpha1.AgentClassList
 		if err := r.Client.List(ctx, &list, client.InNamespace(o.GetNamespace())); err != nil {
@@ -831,9 +833,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("gather sidecarToolboxes: %w", stbErr)
 	}
 
-	// Validate browserToolboxes (Phase A of the browser toolbox primitive):
-	// existence-only, same shape as sidecarToolboxes above but with no
-	// Valid-condition read -- see validateBrowserToolboxes' doc comment.
+	// Validate browserToolboxes: existence plus the toolbox's own Valid
+	// condition, same shape as sidecarToolboxes above -- see
+	// validateBrowserToolboxes' doc comment.
 	if len(ac.Spec.BrowserToolboxes) > 0 {
 		if reason, msg := validateBrowserToolboxes(ctx, reader, ac.Namespace, ac.Spec.BrowserToolboxes); reason != "" {
 			return r.setInvalid(ctx, &ac, reason, msg)
@@ -1809,12 +1811,13 @@ func validateSidecarToolboxes(
 }
 
 // validateBrowserToolboxes checks that each BrowserToolbox a class
-// references by name exists in the class's namespace. Phase A deliberately
-// stops at existence: there is no BrowserToolbox reconciler yet to stamp a
-// Valid condition (that gate, and the identity cross-references it needs,
-// arrive in Phase B), and the CRD's field-level markers mean the API server
-// already refuses a structurally-invalid BrowserToolbox -- so unlike
-// validateSidecarToolboxes, this never reads the referenced object's status.
+// references by name exists in the class's namespace AND is itself
+// Valid=True -- mirroring validateSidecarToolboxes' condition read exactly.
+// Phase A stopped at existence because there was no BrowserToolbox
+// reconciler yet to stamp a Valid condition; Phase B's
+// pkg/controllers/browsertoolbox.Reconciler now cross-checks
+// spec.access.identity, so a class whose toolbox names a missing or unusable
+// identity must surface that here too, not just a missing CR.
 func validateBrowserToolboxes(
 	ctx context.Context,
 	reader client.Reader,
@@ -1832,6 +1835,17 @@ func validateBrowserToolboxes(
 		if err != nil {
 			return spiceboxv1alpha1.ReasonAgentClassBrowserToolboxInvalid,
 				fmt.Sprintf("browserToolboxes[%q]: %v", ref.Name, err)
+		}
+		cond := meta.FindStatusCondition(btb.Status.Conditions, spiceboxv1alpha1.BrowserToolboxConditionValid)
+		if cond == nil {
+			return spiceboxv1alpha1.ReasonAgentClassBrowserToolboxInvalid,
+				fmt.Sprintf("browserToolboxes[%q]: BrowserToolbox/%s has no Valid condition yet",
+					ref.Name, ref.Ref)
+		}
+		if cond.Status != metav1.ConditionTrue {
+			return spiceboxv1alpha1.ReasonAgentClassBrowserToolboxInvalid,
+				fmt.Sprintf("browserToolboxes[%q]: BrowserToolbox/%s is not Valid (%s)",
+					ref.Name, ref.Ref, cond.Reason)
 		}
 	}
 	return "", ""

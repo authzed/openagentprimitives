@@ -111,9 +111,21 @@ type hostEntry struct {
 // its suffix (everything after). It performs no cross-validation (orphan
 // pairing, host canonicalization) -- see entriesByCanonicalHost -- so this
 // pass alone just explains "which key, if any, has no recognized suffix."
+//
+// Keys are sorted before iterating so that, when data carries more than one
+// malformed key, the FIRST fault returned is always the same one across
+// repeated calls -- map iteration order is randomized per Go's spec, and an
+// unsorted range here reported a different offending key on every call
+// against the same multi-fault Secret.
 func parseEntries(data map[string][]byte) (map[string]*hostEntry, error) {
 	entries := make(map[string]*hostEntry, len(data))
-	for key, value := range data {
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value := data[key]
 		idx := strings.LastIndex(key, ".")
 		if idx <= 0 || idx == len(key)-1 {
 			return nil, fmt.Errorf("secretsource: key %q has no recognized suffix", key)
@@ -149,14 +161,26 @@ func parseEntries(data map[string][]byte) (map[string]*hostEntry, error) {
 // rejected rather than silently lowercased/normalized, because the
 // operator typed it and should fix it, not have it reinterpreted. The
 // returned map is keyed by that canonical host.
+//
+// Hosts are sorted before iterating for the same reason parseEntries sorts
+// its keys: with more than one faulting host, the first-returned error must
+// be deterministic across repeated calls, not whichever host Go's map
+// iteration happened to visit first.
 func entriesByCanonicalHost(data map[string][]byte) (map[string]*hostEntry, error) {
 	raw, err := parseEntries(data)
 	if err != nil {
 		return nil, err
 	}
 
+	hosts := make([]string, 0, len(raw))
+	for host := range raw {
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+
 	out := make(map[string]*hostEntry, len(raw))
-	for host, e := range raw {
+	for _, host := range hosts {
+		e := raw[host]
 		switch {
 		case e.username != nil && e.password == nil:
 			return nil, fmt.Errorf("secretsource: key %q has no matching %q key",

@@ -154,6 +154,8 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/githubapp"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/imports" // register the static/oauth/federated/githubApp credkind.Kinds the broker dispatches to via registry.Get
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credresolve"
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/onepassword"  // register the "onepassword" directcred.Source Phase C's browser form filler dispatches to via directcred.Get (Fetch at use time)
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/secretsource" // register the "secret" directcred.Source for the same Phase C Fetch consumer
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/externaltoken"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/federation/idjag"
 	"github.com/authzed/openagentprimitives/pkg/platform/podspec"

@@ -73,6 +73,7 @@ import (
 	agentclassctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentclass"
 	agentidentityctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentidentity"
 	agentsessionctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
+	browsertoolboxctrl "github.com/authzed/openagentprimitives/pkg/controllers/browsertoolbox"
 	channelctrl "github.com/authzed/openagentprimitives/pkg/controllers/channel"
 	guardianctrl "github.com/authzed/openagentprimitives/pkg/controllers/guardian"
 	mcpserverctrl "github.com/authzed/openagentprimitives/pkg/controllers/mcpserver"
@@ -796,10 +797,12 @@ func (h *Harness) MarkBrowserReady(ns, name, llmName, ref, gateURL, token string
 	base := sess.DeepCopy()
 
 	entry := spiceboxv1alpha1.ResolvedBrowserToolbox{
-		Name:           llmName,
-		Ref:            ref,
-		Spec:           spec,
-		EffectiveSites: agentsessionctrl.DeriveBrowserEffectiveSites(spec),
+		Name: llmName,
+		Ref:  ref,
+		Spec: spec,
+		// nil identity hosts: the harness stamp binds no identity, so the
+		// effective sites are the explicit spec sites only (Phase A shape).
+		EffectiveSites: agentsessionctrl.DeriveBrowserEffectiveSites(spec, nil),
 		BrowserPodName: agentsessionctrl.BrowserPodName(&sess, ref),
 		BrowserPodIP:   host,
 		GatePort:       port,
@@ -1145,6 +1148,24 @@ func (h *Harness) startManager(t *testing.T, env *testenv.Env, spdbCli *spicedb.
 		SkipProbe:       true,
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("e2e: register SidecarToolbox controller: %v", err)
+	}
+
+	// BrowserToolbox — sets Valid on any BrowserToolbox a fixture ships, the
+	// same role SidecarToolbox plays above. The AgentClass reconciler parks
+	// at Valid=False until every spec.browserToolboxes[].ref resolves to a
+	// BrowserToolbox that is itself Valid=True (Task 7 upgraded
+	// validateBrowserToolboxes to read this condition, mirroring
+	// validateSidecarToolboxes), so without this a fixture carrying a browser
+	// toolbox can never boot. The REAL controller: it has no probe pod to
+	// skip (unlike SidecarToolbox, a BrowserToolbox has no image to reach),
+	// so it needs no envtest-specific flag. A no-op for every bundle that
+	// ships no BrowserToolbox; every Phase A browser bundle ships an
+	// identity-less toolbox, which this controller stamps Valid=True by
+	// construction.
+	if err := (&browsertoolboxctrl.Reconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		t.Fatalf("e2e: register BrowserToolbox controller: %v", err)
 	}
 
 	// Guardian — composes MCPServer.spec.spiceDBSchema fragments and

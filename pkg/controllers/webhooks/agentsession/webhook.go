@@ -438,6 +438,18 @@ var pinnedStatusFields = []pinnedStatusField{
 			"carries the effectiveNetworkMode/effectiveAllowedHosts snapshot a DNS-aware CNI is meant to consume",
 	},
 	{
+		name: "resolvedBrowserToolboxes",
+		get:  func(s *spiceboxv1alpha1.AgentSessionStatus) any { return s.ResolvedBrowserToolboxes },
+		why: "the operator's catalog carry-forward reads the PRIOR entry back on every steady-state reconcile " +
+			"(resolveBrowserCatalog copies catalog + catalogFingerprint forward instead of re-listing the identity's vault, " +
+			"and derives the identity half of effectiveSites from the persisted catalog's hosts), and " +
+			"BuildBrowserPolicyDoc turns effectiveSites into the gate's policy ConfigMap — so a forged catalog host " +
+			"persists until the next wake and WIDENS the browser's egress allowlist, and a forged catalogFingerprint " +
+			"suppresses the re-list that would correct it. That is a write path into the per-session policy ConfigMap, " +
+			"which the runner Role deliberately withholds (no configmaps write verb); the browser gate exists to bound " +
+			"where a prompt-injected agent can drive its browser, so the party being bounded must not hold the pen",
+	},
+	{
 		name: "supersededBy",
 		get:  func(s *spiceboxv1alpha1.AgentSessionStatus) any { return s.SupersededBy },
 		why: "it is the operator's record that this session's fork completed (SupersedeParent, restart.go), and ReconcileRestart " +
@@ -586,15 +598,6 @@ var runnerWritableStatusFields = map[string]string{
 		"the detector step, and builds the pod from that fresh local slice, never from what is persisted. The pod's name, " +
 		"namespace and ownerRef are derived from the session (cosidecar.BuildPod), so a forged ref cannot name someone " +
 		"else's. This waiver depends on effectiveSettings being pinned above",
-	"resolvedBrowserToolboxes": "the operator rebuilds the whole slice every reconcile from the AgentClass's " +
-		"browserToolboxes refs + each BrowserToolbox CR, and builds the pod/NetworkPolicy/policy-ConfigMap from that " +
-		"fresh local entry, never from what is persisted — unlike resolvedSidecarToolboxes, nothing reads the PRIOR " +
-		"tokenHash back (there is no browser token rotation: mintBrowserToken reads the per-session gate-token Secret " +
-		"itself, so tokenHash is recomputed from the Secret in hand, not trusted from status). Every object it names " +
-		"(pod, token Secret, ConfigMap, NetworkPolicy) is derived deterministically from the session + ref, so a forged " +
-		"ref cannot name another session's; the runner reading its OWN entry to reach its browser pod would only mislead " +
-		"the forging session. effectiveSites, like effectiveAllowedHosts, is a DNS-aware-CNI advisory recomputed from the " +
-		"CR each reconcile — a forged value is overwritten and, at worst, self-scoped",
 	"interactorTuplesWritten": "the controller's dedup cache of subjects for whom the idempotent " +
 		"agentclass#interactor SpiceDB touch has already landed (writeInteractorTuples); the runner never writes it. " +
 		"can_personalize is derived from the LIVE relationship, not from this cache, so a forged entry grants nothing — " +

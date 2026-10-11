@@ -782,19 +782,51 @@ type ResolvedSidecarToolbox struct {
 }
 
 // BrowserEffectiveSite is one resolved site entry in a ResolvedBrowserToolbox's
-// EffectiveSites. Source records where the entry came from: Phase A only ever
-// writes "explicit" (a BrowserAccess.Sites entry carried through verbatim);
-// "identity" is a Phase B addition once a bound identity can contribute its
-// own sites to the effective set.
+// EffectiveSites. Source records where the entry came from: "explicit" for a
+// BrowserAccess.Sites entry carried through verbatim, "identity" for a host
+// folded in from the bound identity's directCredentials catalog (only when
+// spec.access.identitySites is set).
 type BrowserEffectiveSite struct {
 	// Host is the resolved hostname, matched exactly as BrowserSite.Host.
 	Host string `json:"host"`
 	// Exact mirrors BrowserSite.Exact for this entry.
 	// +optional
 	Exact bool `json:"exact,omitempty"`
-	// Source is where this entry came from. "explicit" only in Phase A;
-	// "identity" arrives in Phase B.
+	// Source is where this entry came from: "explicit" (spec.access.sites) or
+	// "identity" (a host from the bound identity's login catalog).
 	Source string `json:"source"`
+}
+
+// BrowserLoginHost is one hostname pattern a BrowserLoginRef is scoped to --
+// the status-plane projection of a directcred.Host. A deliberately minimal
+// {Host, Exact} pair: distinct from BrowserSite (whose user-input
+// Pattern/MaxLength markers do not belong on an operator-derived status field)
+// and from BrowserEffectiveSite (which additionally carries a Source).
+type BrowserLoginHost struct {
+	// Host is the canonical hostname this login applies to.
+	Host string `json:"host"`
+	// Exact is true when Host must match the page host exactly; false when it
+	// also matches subdomains.
+	// +optional
+	Exact bool `json:"exact,omitempty"`
+}
+
+// BrowserLoginRef is one login the bound identity's directcred source lists,
+// snapshotted onto status so Phase C's form filler can offer it to a human.
+// It carries NOTHING from the login item's fields -- only the opaque ID, a
+// display label, and the hosts it matches (directcred.Ref's own security
+// contract). No username, password, OTP, or seed ever appears here, which is
+// what lets the whole status be logged and shown in a UI.
+type BrowserLoginRef struct {
+	// ID is opaque to everyone but the directcred Source that issued it;
+	// callers must not parse or infer structure from it.
+	ID string `json:"id"`
+	// Label is the display name shown to a human picking a login.
+	// +optional
+	Label string `json:"label,omitempty"`
+	// Hosts is the set of hostname patterns this login applies to.
+	// +optional
+	Hosts []BrowserLoginHost `json:"hosts,omitempty"`
 }
 
 // ResolvedBrowserToolbox snapshots one BrowserToolbox CR for a running
@@ -814,10 +846,33 @@ type ResolvedBrowserToolbox struct {
 	Spec BrowserToolboxSpec `json:"spec"`
 
 	// EffectiveSites is the resolved site list the running browser's egress
-	// is actually evaluated against -- in Phase A, a straight carry-through
-	// of Spec.Access.Sites with Source "explicit".
+	// is actually evaluated against: Spec.Access.Sites (Source "explicit")
+	// unioned with the bound identity's catalog hosts (Source "identity") when
+	// spec.access.identitySites is set.
 	// +optional
 	EffectiveSites []BrowserEffectiveSite `json:"effectiveSites,omitempty"`
+
+	// Catalog is the bound identity's directCredentials login references,
+	// listed once per session start and again on wake and carried forward in
+	// between (CatalogFingerprint gates a re-list on a rotated backing token).
+	// Each entry carries only {id, label, hosts} -- never a username, password,
+	// or OTP. Empty when the toolbox binds no identity.
+	// +optional
+	Catalog []BrowserLoginRef `json:"catalog,omitempty"`
+
+	// IdentityName is the AgentIdentity (spec.access.identity) whose
+	// directCredentials credential produced Catalog -- Phase C's form filler
+	// reads it to know whose logins these are. Empty when no identity is bound.
+	// +optional
+	IdentityName string `json:"identityName,omitempty"`
+
+	// CatalogFingerprint is the hex SHA-256 of the credential's token-Secret
+	// value at the time Catalog was listed -- the set-once-per-token key the
+	// carry-forward uses to re-list only when the backing token rotates. A
+	// vault-less secret source has no token key, so this is constant there and
+	// the catalog carries forward until a wake. It is a digest, never the token.
+	// +optional
+	CatalogFingerprint string `json:"catalogFingerprint,omitempty"`
 
 	// BrowserPodName is the per-session browser pod's name.
 	// +optional

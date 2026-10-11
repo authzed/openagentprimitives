@@ -370,13 +370,18 @@ func operatorComponent() component {
 		"channels":         {"get", "list", "watch", "update", "patch", "create", "delete"},
 		"mcpservers":       {"get", "list", "watch", "update", "patch", "create"},
 		"sidecartoolboxes": {"get", "list", "watch", "update", "patch", "create"},
-		// BrowserToolbox is read-only for the operator: the AgentSession
-		// reconciler Gets each class-referenced CR at session start to snapshot
-		// its spec into status.resolvedBrowserToolboxes, and the AgentClass
-		// reconciler Gets them to validate refs and Watches the kind to
-		// re-validate (markers in pkg/controllers/agentsession/controller.go and
-		// pkg/controllers/agentclass/controller.go). Nothing writes one — there
-		// is no dedicated BrowserToolbox reconciler in Phase A.
+		// BrowserToolbox's MAIN resource is read-only for the operator: the
+		// AgentSession reconciler Gets each class-referenced CR at session
+		// start to snapshot its spec into status.resolvedBrowserToolboxes, the
+		// AgentClass reconciler Gets them to validate refs (existence + the
+		// toolbox's own Valid condition) and Watches the kind to re-validate,
+		// and the BrowserToolbox reconciler itself
+		// (pkg/controllers/browsertoolbox/controller.go) validates the
+		// identity cross-reference — but it writes ONLY the status
+		// subresource (browsertoolboxes/status, filtered from minimality
+		// below like every other status subresource): no finalizer is ever
+		// added and no spec/metadata write exists, so update/patch on the
+		// main resource would be over-broad.
 		"browsertoolboxes": {"get", "list", "watch"},
 		// The WorkspaceSource reconciler materializes/refreshes a shared base
 		// checkout: get;list;watch to reconcile, update;patch for spec/status.

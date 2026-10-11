@@ -103,6 +103,7 @@ import (
 	agentsessionctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentui"
 	"github.com/authzed/openagentprimitives/pkg/controllers/artifactrender"
+	"github.com/authzed/openagentprimitives/pkg/controllers/browsertoolbox"
 	channelctrl "github.com/authzed/openagentprimitives/pkg/controllers/channel"
 	clusteridpctrl "github.com/authzed/openagentprimitives/pkg/controllers/clusteridentityprovider"
 	clusterskillctrl "github.com/authzed/openagentprimitives/pkg/controllers/clusterskill"
@@ -1530,6 +1531,14 @@ func run(cfg *config) {
 		os.Exit(1)
 	}
 	log.Info("registered controller", "name", "SidecarToolbox")
+
+	if err := (&browsertoolbox.Reconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to create controller", "controller", "BrowserToolbox")
+		os.Exit(1)
+	}
+	log.Info("registered controller", "name", "BrowserToolbox")
 
 	if err := (&workspacesource.Reconciler{
 		Client:                    mgr.GetClient(),

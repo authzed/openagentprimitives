@@ -16,7 +16,8 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/authz/spicedb/relsource/imports" // completes the relsource claim table before `oap memory share` / `oap session capture`'s guarded writers are checked
 	"github.com/authzed/openagentprimitives/pkg/platform/deplogs"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/authkind/loader"
-	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/imports" // register the static/oauth/federated credkind.Kinds the broker dispatches to via registry.Get
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/imports"       // register the static/oauth/federated credkind.Kinds the broker dispatches to via registry.Get
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/onepassword" // register the "onepassword" directcred.Source the onepassword-service-account setup flow's Verify dispatches to via directcred.Get
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/setup/builtins/loader"
 )
 

@@ -2,6 +2,7 @@ package onepassword
 
 import (
 	"context"
+	"fmt"
 
 	opsdk "github.com/1password/onepassword-sdk-go"
 
@@ -11,6 +12,41 @@ import (
 // integrationName is the name reported to 1Password via WithIntegrationInfo.
 // Paired with apimage.Version so a vault's access log identifies this project.
 const integrationName = "agentprimitives"
+
+// init asserts, at process start, that source.go's plain-string bridge
+// constants (fieldTypeTOTP, autofillAnywhere, autofillExactDomain) still
+// match the SDK's own enum values they mirror. source.go deliberately
+// duplicates these as plain strings so that file needs no SDK import (see its
+// "layout follows a strict seam" doc comment) -- but that duplication is
+// exactly the kind of coupling that rots silently: a future SDK rename or
+// re-valued constant would otherwise desync source.go's classification (TOTP
+// field detection, autofill-behavior matching) with NO error and NO panic --
+// items would just silently stop being treated as fillable or OTP-bearing.
+// This panics instead, turning that into an immediate, loud failure on
+// process start (and so on every test run and every build-time smoke check),
+// not a feature that quietly degrades. sdk.go is the only file importing the
+// SDK (package doc comment on source.go), so this is also the only file that
+// CAN make this comparison.
+//
+// Paired with source.go's own comment at the fieldTypeTOTP/autofillAnywhere/
+// autofillExactDomain declarations, and with the analogous textual-coupling
+// pin in pkg/platform/identity/setup/builtins/onepassword_service_account/flow.go
+// (that one pins Verify's error-message substrings instead of an SDK enum).
+func init() {
+	assertSDKBridge("fieldTypeTOTP", fieldTypeTOTP, string(opsdk.ItemFieldTypeTOTP))
+	assertSDKBridge("autofillAnywhere", autofillAnywhere, string(opsdk.AutofillBehaviorAnywhereOnWebsite))
+	assertSDKBridge("autofillExactDomain", autofillExactDomain, string(opsdk.AutofillBehaviorExactDomain))
+}
+
+// assertSDKBridge panics when a source.go plain-string bridge constant has
+// drifted from the SDK enum value it mirrors -- see the init() comment above.
+func assertSDKBridge(name, local, sdk string) {
+	if local != sdk {
+		panic(fmt.Sprintf(
+			"onepassword: bridge constant %s = %q no longer matches the SDK's %q -- update source.go's plain-string constant to match the 1Password SDK enum rename",
+			name, local, sdk))
+	}
+}
 
 // sdkClient is the real client seam implementation: the one place the
 // 1Password SDK is imported. Every method is an unconditionally boring

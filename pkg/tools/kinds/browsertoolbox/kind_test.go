@@ -247,6 +247,76 @@ interaction: write
 				assert.Contains(t, d.Message, "write")
 			},
 		},
+		{
+			// Mirrors the first CEL rule on BrowserToolbox.Spec: a blocklist
+			// (general-access) browser cannot carry an identity.
+			name: "blocklist + identity: errors",
+			body: `
+access:
+  mode: blocklist
+  sites:
+    - host: example.com
+  identity: joey-airlines
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				d, ok := findDiag(diags, "access.identity")
+				require.True(t, ok, "expected a diagnostic at path access.identity, got %+v", diags)
+				assert.Equal(t, "error", d.Severity)
+				assert.Contains(t, d.Message, "blocklist")
+			},
+		},
+		{
+			// Mirrors the first CEL rule on BrowserToolbox.Spec: a blocklist
+			// (general-access) browser cannot carry identitySites either.
+			name: "blocklist + identitySites: errors",
+			body: `
+access:
+  mode: blocklist
+  sites:
+    - host: example.com
+  identitySites: true
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				d, ok := findDiag(diags, "access.identitySites")
+				require.True(t, ok, "expected a diagnostic at path access.identitySites, got %+v", diags)
+				assert.Equal(t, "error", d.Severity)
+				assert.Contains(t, d.Message, "blocklist")
+			},
+		},
+		{
+			// Mirrors the second CEL rule on BrowserToolbox.Spec: identitySites
+			// requires identity.
+			name: "identitySites without identity: errors",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: example.com
+  identitySites: true
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				d, ok := findDiag(diags, "access.identitySites")
+				require.True(t, ok, "expected a diagnostic at path access.identitySites, got %+v", diags)
+				assert.Equal(t, "error", d.Severity)
+				assert.Contains(t, d.Message, "identity")
+			},
+		},
+		{
+			name: "allowlist + identity + identitySites: clean",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: example.com
+  identity: joey-airlines
+  identitySites: true
+interaction: act
+state: ephemeral
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				assert.Empty(t, diags)
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -277,6 +347,34 @@ func TestKind_Row(t *testing.T) {
 	assert.Equal(t, "ns1", row.Namespace)
 	assert.Equal(t, "Mode=allowlist Interaction=readonly", row.Status)
 	assert.Contains(t, row.Summary, "2")
+}
+
+func TestKind_Detail_ShowsIdentityWhenSet(t *testing.T) {
+	cr := sampleCR()
+	cr.Spec.Access.Mode = "allowlist"
+	cr.Spec.Access.Identity = "joey-airlines"
+	cr.Spec.Access.IdentitySites = true
+
+	d := New().Detail(cr)
+	var access string
+	for _, s := range d.Sections {
+		if s.Title == "Access" {
+			access = s.Body
+		}
+	}
+	assert.Contains(t, access, "joey-airlines")
+	assert.Contains(t, access, "identitySites")
+}
+
+func TestKind_Detail_OmitsIdentityWhenUnset(t *testing.T) {
+	d := New().Detail(sampleCR())
+	var access string
+	for _, s := range d.Sections {
+		if s.Title == "Access" {
+			access = s.Body
+		}
+	}
+	assert.NotContains(t, access, "identity")
 }
 
 func TestKind_Detail_HasAllSections(t *testing.T) {

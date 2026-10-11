@@ -54,6 +54,14 @@ const (
 	// and is dropped.
 	autofillAnywhere    = "AnywhereOnWebsite"
 	autofillExactDomain = "ExactDomain"
+
+	// Bridge note: fieldTypeTOTP/autofillAnywhere/autofillExactDomain above
+	// are plain-string DUPLICATES of opsdk.ItemFieldTypeTOTP,
+	// opsdk.AutofillBehaviorAnywhereOnWebsite, and
+	// opsdk.AutofillBehaviorExactDomain. sdk.go's init() asserts each pair is
+	// still equal at process start -- a future SDK rename breaks that
+	// assertion loudly instead of silently desyncing this file's
+	// classification logic. Keep both sides in sync when touching either.
 )
 
 // client is the package-internal seam between the mapping/Verify/List/Fetch
@@ -153,6 +161,11 @@ func (s *Source) Verify(ctx context.Context, cfg directcred.Config) (directcred.
 		return directcred.Pin{}, scrubToken(wrapErr("listing vaults", err), token)
 	}
 	if len(vaults) != 1 {
+		// Coupling note: pkg/platform/identity/setup/builtins/onepassword_service_account/flow.go's
+		// vaultCountRe pattern-matches the "accessible vault, found <N>" wording
+		// below to classify this failure as VerifyForbidden (vs. a network/SDK
+		// error). source_test.go's TestVerifyErrorTextMatchesSetupFlowCoupling
+		// pins this substring on the emission side -- keep both in sync.
 		return directcred.Pin{}, fmt.Errorf(
 			"onepassword: expected exactly one accessible vault, found %d: %v",
 			len(vaults), vaultTitles(vaults))
@@ -244,6 +257,14 @@ func (s *Source) clientFor(ctx context.Context, cfg directcred.Config) (client, 
 	}
 	c, err := s.newClient(ctx, token)
 	if err != nil {
+		// Coupling note: wrapErr("creating client", err) below produces the
+		// literal prefix "onepassword: creating client:" (see wrapErr's format
+		// string). pkg/platform/identity/setup/builtins/onepassword_service_account/flow.go's
+		// sdkClientErrPrefix constant does strings.HasPrefix against exactly
+		// that text to classify this failure as VerifyRejected (vs. an
+		// ambiguous network error). source_test.go's
+		// TestVerifyErrorTextMatchesSetupFlowCoupling pins this prefix on the
+		// emission side -- keep both in sync.
 		return nil, token, scrubToken(wrapErr("creating client", err), token)
 	}
 	return c, token, nil

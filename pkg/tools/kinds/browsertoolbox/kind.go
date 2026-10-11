@@ -156,6 +156,32 @@ func (k Kind) ValidateFile(path string) ([]contract.Diagnostic, error) {
 		seen[canon] = i
 	}
 
+	// Mirror the two field-level XValidation rules on BrowserToolbox.Spec
+	// (pkg/apis/v1alpha1/browsertoolbox_types.go) at authoring time, so an
+	// author sees the same rejection `oap tools validate` would from the
+	// apiserver, without a round trip through admission.
+	if sp.Access.Mode == browserpolicy.ModeBlocklist && sp.Access.Identity != "" {
+		diags = append(diags, contract.Diagnostic{
+			Severity: "error",
+			Path:     "access.identity",
+			Message:  "a blocklist (general-access) browser cannot carry an identity or identitySites",
+		})
+	}
+	if sp.Access.Mode == browserpolicy.ModeBlocklist && sp.Access.IdentitySites {
+		diags = append(diags, contract.Diagnostic{
+			Severity: "error",
+			Path:     "access.identitySites",
+			Message:  "a blocklist (general-access) browser cannot carry an identity or identitySites",
+		})
+	}
+	if sp.Access.IdentitySites && sp.Access.Identity == "" {
+		diags = append(diags, contract.Diagnostic{
+			Severity: "error",
+			Path:     "access.identitySites",
+			Message:  "identitySites requires identity",
+		})
+	}
+
 	// An allowlist with no sites denies every host — not a structural error,
 	// but almost certainly not what the author intended, so it's a warning
 	// rather than an error.
@@ -186,6 +212,12 @@ func (k Kind) LintFile(path string) ([]contract.Diagnostic, error) { return k.Va
 func renderAccess(a spiceboxv1alpha1.BrowserAccess) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "mode: %s\n", a.Mode)
+	if a.Identity != "" {
+		fmt.Fprintf(&b, "identity: %s\n", a.Identity)
+	}
+	if a.IdentitySites {
+		b.WriteString("identitySites: true\n")
+	}
 	if len(a.Sites) == 0 {
 		b.WriteString("sites: (none)")
 		return b.String()
