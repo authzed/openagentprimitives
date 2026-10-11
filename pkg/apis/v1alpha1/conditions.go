@@ -179,6 +179,15 @@ const (
 	// both the expected shape and the one the value actually has.
 	ReasonCredentialShapeMismatch = "CredentialShapeMismatch"
 
+	// ReasonAgentIdentityDirectCredentialInvalid: a type=directCredentials
+	// credential's backing token could not be proven to resolve to its declared
+	// vault — the directcred source's Verify returned an error (zero or many
+	// accessible vaults, a vault-name mismatch, or an auth failure). Valid=False
+	// rather than a warning because the browser toolbox would otherwise fill
+	// logins from whatever vault the token now sees; the condition message
+	// carries the verify error (which names vaults/counts, never the token).
+	ReasonAgentIdentityDirectCredentialInvalid = "DirectCredentialInvalid"
+
 	// PlatformLinked reasons. ReasonPlatformLinkFailed is TRANSIENT (SpiceDB
 	// unreachable, schema not composed yet) and keeps being retried. The two
 	// Unrepresentable* reasons are PERMANENT: a Kubernetes name may contain

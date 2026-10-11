@@ -4098,6 +4098,49 @@ spec:
                       items:
                         type: string
                       type: array
+                    directCredentials:
+                      description: |-
+                        DirectCredentials is populated when type=directCredentials: a website
+                        login the browser toolbox fills at use time. It never flows through the
+                        broker — Resolve errors unconditionally — so it never projects into an
+                        env var or header the way every other block here does. Valid ONLY on
+                        AgentIdentity: the credential is authored on the bot's own identity,
+                        not passed through from a human.
+                      properties:
+                        secretRef:
+                          description: |-
+                            SecretRef names the source's token Secret (key "token", onepassword)
+                            or the host-keyed login Secret (secret).
+                          properties:
+                            key:
+                              description: Key is the data key within the Secret holding
+                                the value.
+                              type: string
+                            name:
+                              description: Name is the Secret's name, in the referring
+                                object's own namespace.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        source:
+                          description: |-
+                            Source names the login backend: onepassword resolves through a
+                            1Password Connect token; secret reads a host-keyed login Secret
+                            written directly.
+                          enum:
+                          - onepassword
+                          - secret
+                          type: string
+                        vault:
+                          description: Vault is the 1Password vault NAME; required
+                            iff source is onepassword.
+                          type: string
+                      required:
+                      - secretRef
+                      - source
+                      type: object
                     federated:
                       description: |-
                         Federated is populated when type=federated. The credential is MINTED
@@ -4219,6 +4262,7 @@ spec:
                       - oauth
                       - federated
                       - githubApp
+                      - directCredentials
                       type: string
                   required:
                   - name
@@ -4362,6 +4406,57 @@ spec:
                   reflects.
                 format: int64
                 type: integer
+              pinnedVaults:
+                description: |-
+                  PinnedVaults records, for each type=directCredentials credential whose
+                  source has a vault concept (onepassword), the vault its backing token was
+                  PROVEN to resolve to. The validity reconciler calls the directcred source's
+                  Verify on first sight and records the vault id + name here; it re-verifies
+                  only when the token changes (TokenFingerprint differs), so a rotated token
+                  that now resolves to a DIFFERENT vault surfaces loudly as
+                  Valid=False/DirectCredentialInvalid instead of silently listing another
+                  vault's logins at the browser toolbox. A source with no vault concept
+                  (secret) is never recorded here.
+
+                  Operator-owned and derived: sorted by credential name and set once per
+                  (credential, token) pair, so an unchanged token re-writes nothing and the
+                  MergeFrom patch is a no-op. TokenFingerprint is a sha256 digest of the
+                  token value, never the value itself.
+                items:
+                  description: |-
+                    PinnedVault is one entry of an identity's status.pinnedVaults — the vault a
+                    type=directCredentials credential's token was proven to resolve to, pinned
+                    once per token so a later rotation that redirects to a different vault is
+                    caught rather than silently followed. Never carries the token value, only a
+                    digest of it.
+                  properties:
+                    credential:
+                      description: Credential is the credential name from spec.credentials[].name.
+                      type: string
+                    tokenFingerprint:
+                      description: |-
+                        TokenFingerprint is a hex sha256 digest of the backing token value at the
+                        time the pin was written. It is the set-once key: a reconcile whose token
+                        still hashes to this value carries the pin forward without re-verifying,
+                        and a changed token forces a fresh Verify. It is a digest, never the token.
+                      type: string
+                    vaultID:
+                      description: |-
+                        VaultID is the backend's stable identifier for the pinned vault, as
+                        returned by the source's Verify.
+                      type: string
+                    vaultName:
+                      description: |-
+                        VaultName is the human-readable vault name the backend confirmed. May
+                        differ in case/whitespace from the credential's declared vault.
+                      type: string
+                  required:
+                  - credential
+                  - tokenFingerprint
+                  - vaultID
+                  - vaultName
+                  type: object
+                type: array
               resolvedCredentials:
                 description: ResolvedCredentials lists credential names whose Secret
                   + key resolved.
@@ -16557,6 +16652,49 @@ spec:
                       items:
                         type: string
                       type: array
+                    directCredentials:
+                      description: |-
+                        DirectCredentials is populated when type=directCredentials: a website
+                        login the browser toolbox fills at use time. It never flows through the
+                        broker — Resolve errors unconditionally — so it never projects into an
+                        env var or header the way every other block here does. Valid ONLY on
+                        AgentIdentity: the credential is authored on the bot's own identity,
+                        not passed through from a human.
+                      properties:
+                        secretRef:
+                          description: |-
+                            SecretRef names the source's token Secret (key "token", onepassword)
+                            or the host-keyed login Secret (secret).
+                          properties:
+                            key:
+                              description: Key is the data key within the Secret holding
+                                the value.
+                              type: string
+                            name:
+                              description: Name is the Secret's name, in the referring
+                                object's own namespace.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        source:
+                          description: |-
+                            Source names the login backend: onepassword resolves through a
+                            1Password Connect token; secret reads a host-keyed login Secret
+                            written directly.
+                          enum:
+                          - onepassword
+                          - secret
+                          type: string
+                        vault:
+                          description: Vault is the 1Password vault NAME; required
+                            iff source is onepassword.
+                          type: string
+                      required:
+                      - secretRef
+                      - source
+                      type: object
                     federated:
                       description: |-
                         Federated is populated when type=federated. The credential is MINTED
@@ -16678,6 +16816,7 @@ spec:
                       - oauth
                       - federated
                       - githubApp
+                      - directCredentials
                       type: string
                   required:
                   - name
@@ -23738,6 +23877,7 @@ spec:
                           - oauth
                           - federated
                           - githubApp
+                          - directCredentials
                           type: string
                       required:
                       - name
@@ -24185,6 +24325,49 @@ spec:
                       items:
                         type: string
                       type: array
+                    directCredentials:
+                      description: |-
+                        DirectCredentials is populated when type=directCredentials: a website
+                        login the browser toolbox fills at use time. It never flows through the
+                        broker — Resolve errors unconditionally — so it never projects into an
+                        env var or header the way every other block here does. Valid ONLY on
+                        AgentIdentity: the credential is authored on the bot's own identity,
+                        not passed through from a human.
+                      properties:
+                        secretRef:
+                          description: |-
+                            SecretRef names the source's token Secret (key "token", onepassword)
+                            or the host-keyed login Secret (secret).
+                          properties:
+                            key:
+                              description: Key is the data key within the Secret holding
+                                the value.
+                              type: string
+                            name:
+                              description: Name is the Secret's name, in the referring
+                                object's own namespace.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        source:
+                          description: |-
+                            Source names the login backend: onepassword resolves through a
+                            1Password Connect token; secret reads a host-keyed login Secret
+                            written directly.
+                          enum:
+                          - onepassword
+                          - secret
+                          type: string
+                        vault:
+                          description: Vault is the 1Password vault NAME; required
+                            iff source is onepassword.
+                          type: string
+                      required:
+                      - secretRef
+                      - source
+                      type: object
                     federated:
                       description: |-
                         Federated is populated when type=federated. The credential is MINTED
@@ -24306,6 +24489,7 @@ spec:
                       - oauth
                       - federated
                       - githubApp
+                      - directCredentials
                       type: string
                   required:
                   - name

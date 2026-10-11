@@ -167,7 +167,9 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/authkind/loader"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/broker/inproc"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/githubapp"
-	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/imports" // register the static/oauth/federated/githubApp credkind.Kinds the broker dispatches to via registry.Get
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/imports"        // register the static/oauth/federated/githubApp credkind.Kinds the broker dispatches to via registry.Get
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/onepassword"  // register the "onepassword" directcred.Source the AgentIdentity controller's vault-pin Verify dispatches to
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/secretsource" // register the "secret" directcred.Source (zero-vault; shape-only Verify)
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/federation/idjag"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/idp/googlekind"   // register "google" idp.Kind: ClusterIdentityProvider validity controller dispatches via registry.Get
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/idp/oidckind"     // register "oidc" idp.Kind

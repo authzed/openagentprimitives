@@ -17,7 +17,7 @@ type CredentialDescriptor struct {
 // fixed multi-key OAuth shape and gates on expires_at.
 type CredentialSource struct {
 	// Type drives the read and expiry rules; see the type doc.
-	// +kubebuilder:validation:Enum=static;oauth;federated;githubApp
+	// +kubebuilder:validation:Enum=static;oauth;federated;githubApp;directCredentials
 	Type string `json:"type"`
 	// Namespace is the Secret's namespace; must equal the ToolCall's own, which
 	// ToolCall.ValidateCredentialSourceNamespaces enforces.

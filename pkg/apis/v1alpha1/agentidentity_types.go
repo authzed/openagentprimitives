@@ -61,7 +61,7 @@ type AgentCredential struct {
 	Name string `json:"name"`
 
 	// Type discriminates which of the blocks below is populated.
-	// +kubebuilder:validation:Enum=static;oauth;federated;githubApp
+	// +kubebuilder:validation:Enum=static;oauth;federated;githubApp;directCredentials
 	Type string `json:"type"`
 
 	// Static is populated when type=static.
@@ -85,6 +85,15 @@ type AgentCredential struct {
 	// GitHubApp is populated when type=githubApp.
 	// +optional
 	GitHubApp *GitHubAppCredentialSource `json:"githubApp,omitempty"`
+
+	// DirectCredentials is populated when type=directCredentials: a website
+	// login the browser toolbox fills at use time. It never flows through the
+	// broker — Resolve errors unconditionally — so it never projects into an
+	// env var or header the way every other block here does. Valid ONLY on
+	// AgentIdentity: the credential is authored on the bot's own identity,
+	// not passed through from a human.
+	// +optional
+	DirectCredentials *DirectCredentialsSource `json:"directCredentials,omitempty"`
 
 	// AllowedHosts scopes where this credential may be sent, as host patterns
 	// ("github.com", "*.internal.example"). Matching is on the URL authority
@@ -205,6 +214,23 @@ type AgentIdentityStatus struct {
 	// +optional
 	ObservedCredentials []ObservedCredential `json:"observedCredentials,omitempty"`
 
+	// PinnedVaults records, for each type=directCredentials credential whose
+	// source has a vault concept (onepassword), the vault its backing token was
+	// PROVEN to resolve to. The validity reconciler calls the directcred source's
+	// Verify on first sight and records the vault id + name here; it re-verifies
+	// only when the token changes (TokenFingerprint differs), so a rotated token
+	// that now resolves to a DIFFERENT vault surfaces loudly as
+	// Valid=False/DirectCredentialInvalid instead of silently listing another
+	// vault's logins at the browser toolbox. A source with no vault concept
+	// (secret) is never recorded here.
+	//
+	// Operator-owned and derived: sorted by credential name and set once per
+	// (credential, token) pair, so an unchanged token re-writes nothing and the
+	// MergeFrom patch is a no-op. TokenFingerprint is a sha256 digest of the
+	// token value, never the value itself.
+	// +optional
+	PinnedVaults []PinnedVault `json:"pinnedVaults,omitempty"`
+
 	// Conditions carries Valid, Refresh and PlatformLinked.
 	// +patchStrategy=merge
 	// +patchMergeKey=type
@@ -232,6 +258,30 @@ type ObservedCredential struct {
 	// (identity name, credential name) rather than referenced by the spec.
 	// +optional
 	SecretNames []string `json:"secretNames,omitempty"`
+}
+
+// PinnedVault is one entry of an identity's status.pinnedVaults — the vault a
+// type=directCredentials credential's token was proven to resolve to, pinned
+// once per token so a later rotation that redirects to a different vault is
+// caught rather than silently followed. Never carries the token value, only a
+// digest of it.
+type PinnedVault struct {
+	// Credential is the credential name from spec.credentials[].name.
+	Credential string `json:"credential"`
+
+	// VaultID is the backend's stable identifier for the pinned vault, as
+	// returned by the source's Verify.
+	VaultID string `json:"vaultID"`
+
+	// VaultName is the human-readable vault name the backend confirmed. May
+	// differ in case/whitespace from the credential's declared vault.
+	VaultName string `json:"vaultName"`
+
+	// TokenFingerprint is a hex sha256 digest of the backing token value at the
+	// time the pin was written. It is the set-once key: a reconcile whose token
+	// still hashes to this value carries the pin forward without re-verifying,
+	// and a changed token forces a fresh Verify. It is a digest, never the token.
+	TokenFingerprint string `json:"tokenFingerprint"`
 }
 
 const (

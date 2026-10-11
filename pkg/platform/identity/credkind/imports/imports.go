@@ -4,6 +4,7 @@
 package imports
 
 import (
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/directcredentials"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/federated"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/githubapp"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/oauth"
