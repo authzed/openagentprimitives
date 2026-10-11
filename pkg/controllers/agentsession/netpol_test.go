@@ -117,21 +117,29 @@ func TestBuildRunnerNetworkPolicy(t *testing.T) {
 	assert.Equal(t, "AgentSession", np.OwnerReferences[0].Kind)
 	assert.Equal(t, "s1", np.OwnerReferences[0].Name)
 
-	// Selects exactly this session's runner pod (not sidecar pods, which
-	// carry the same agentsession label plus sidecartoolbox).
+	// Selects exactly this session's runner pod: NOT sidecar pods and NOT browser
+	// pods, both of which carry the same agentsession label plus their own
+	// per-toolbox label.
 	assert.Equal(t, map[string]string{"agentprimitives.authzed.com/agentsession": "s1"},
 		np.Spec.PodSelector.MatchLabels)
-	require.Len(t, np.Spec.PodSelector.MatchExpressions, 1)
-	assert.Equal(t, "agentprimitives.authzed.com/sidecartoolbox", np.Spec.PodSelector.MatchExpressions[0].Key)
-	assert.Equal(t, metav1.LabelSelectorOpDoesNotExist, np.Spec.PodSelector.MatchExpressions[0].Operator)
+	require.Len(t, np.Spec.PodSelector.MatchExpressions, 2, "excludes BOTH sidecartoolbox and browsertoolbox pods")
+	var runnerExcluded []string
+	for _, me := range np.Spec.PodSelector.MatchExpressions {
+		assert.Equal(t, metav1.LabelSelectorOpDoesNotExist, me.Operator)
+		runnerExcluded = append(runnerExcluded, me.Key)
+	}
+	assert.ElementsMatch(t, []string{
+		"agentprimitives.authzed.com/sidecartoolbox",
+		"agentprimitives.authzed.com/browsertoolbox",
+	}, runnerExcluded, "runner netpol must exclude both sidecar and browser pods")
 	// Both directions isolated; no ingress rules → all ingress denied.
 	assert.ElementsMatch(t,
 		[]networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
 		np.Spec.PolicyTypes)
 	assert.Empty(t, np.Spec.Ingress)
 
-	// DNS, NATS, operator, SpiceDB (in-cluster), sidecars, external.
-	require.Len(t, np.Spec.Egress, 6)
+	// DNS, NATS, operator, SpiceDB (in-cluster), sidecars, browser, external.
+	require.Len(t, np.Spec.Egress, 7)
 	assert.ElementsMatch(t, []string{"UDP/53", "TCP/53"}, egressPorts(np.Spec.Egress[0]), "DNS rule")
 	assert.ElementsMatch(t, []string{"TCP/4222"}, egressPorts(np.Spec.Egress[1]), "NATS rule")
 	assert.Equal(t, map[string]string{"app.kubernetes.io/name": "spicebox-nats"},
@@ -150,17 +158,41 @@ func TestBuildRunnerNetworkPolicy(t *testing.T) {
 	assert.Equal(t, metav1.LabelSelectorOpExists, sidecarPeer.PodSelector.MatchExpressions[0].Operator)
 	assert.Empty(t, np.Spec.Egress[4].Ports, "sidecar ports are dynamic — all ports allowed to those pods")
 
-	assert.ElementsMatch(t, []string{"TCP/443", "TCP/6443"}, egressPorts(np.Spec.Egress[5]), "external rule")
-	require.NotNil(t, np.Spec.Egress[5].To[0].IPBlock)
-	assert.Equal(t, "0.0.0.0/0", np.Spec.Egress[5].To[0].IPBlock.CIDR)
+	// Browser rule: this session's per-session browser pod(s), exactly
+	// browserGatePort (9223) -- mirrors the sidecar rule's shape but, unlike
+	// it, the port IS statically known, so the rule names it.
+	browserPeer := np.Spec.Egress[5].To[0]
+	assert.Nil(t, browserPeer.NamespaceSelector, "browser peer is same-namespace")
+	assert.Equal(t, map[string]string{"agentprimitives.authzed.com/agentsession": "s1"},
+		browserPeer.PodSelector.MatchLabels)
+	require.Len(t, browserPeer.PodSelector.MatchExpressions, 1)
+	assert.Equal(t, "agentprimitives.authzed.com/browsertoolbox", browserPeer.PodSelector.MatchExpressions[0].Key)
+	assert.Equal(t, metav1.LabelSelectorOpExists, browserPeer.PodSelector.MatchExpressions[0].Operator)
+	assert.Equal(t, []string{"TCP/9223"}, egressPorts(np.Spec.Egress[5]), "runner egress to browser pods is restricted to exactly port 9223")
+
+	assert.ElementsMatch(t, []string{"TCP/443", "TCP/6443"}, egressPorts(np.Spec.Egress[6]), "external rule")
+	require.NotNil(t, np.Spec.Egress[6].To[0].IPBlock)
+	assert.Equal(t, "0.0.0.0/0", np.Spec.Egress[6].To[0].IPBlock.CIDR)
+
+	// Pairing: the runner's egress port to browser pods and the browser pod's
+	// own ingress port (asserted from the runner peer in
+	// TestBuildBrowserNetworkPolicy) must be the same constant, so the two
+	// halves of this policy pair cannot silently re-diverge.
+	rt := spiceboxv1alpha1.ResolvedBrowserToolbox{Ref: "web", GatePort: 9223}
+	browserNP := agentsession.BuildBrowserNetworkPolicy(sess, rt, testNetpolConfig())
+	require.NotNil(t, browserNP)
+	require.Len(t, browserNP.Spec.Ingress, 1)
+	require.Len(t, browserNP.Spec.Ingress[0].Ports, 1)
+	assert.Equal(t, egressPorts(np.Spec.Egress[5]), policyPorts(browserNP.Spec.Ingress[0].Ports),
+		"runner egress port to browser pods must match the browser pod's own ingress port")
 }
 
 func TestBuildRunnerNetworkPolicy_ExternalSpiceDB_NoPeerRule(t *testing.T) {
 	cfg := testNetpolConfig()
 	cfg.SpiceDBInCluster = false
 	np := agentsession.BuildRunnerNetworkPolicy(netpolSession("s1"), cfg)
-	// DNS, NATS, operator, sidecars, external — no SpiceDB peer rule.
-	require.Len(t, np.Spec.Egress, 5)
+	// DNS, NATS, operator, sidecars, browser, external — no SpiceDB peer rule.
+	require.Len(t, np.Spec.Egress, 6)
 	for i, rule := range np.Spec.Egress {
 		assert.NotContains(t, egressPorts(rule), "TCP/50051", "egress rule %d", i)
 	}
@@ -257,7 +289,9 @@ func TestBuildSidecarNetworkPolicy(t *testing.T) {
 
 			// Ingress: ONLY this session's runner pod, on exactly the
 			// sidecar's MCP port. The runner is the same-namespace pod with
-			// the agentsession label and NO sidecartoolbox label.
+			// the agentsession label and NEITHER a sidecartoolbox NOR a
+			// browsertoolbox label — excluding both keeps a browser pod out of
+			// this sidecar's ingress.
 			require.Len(t, np.Spec.Ingress, 1)
 			require.Len(t, np.Spec.Ingress[0].From, 1)
 			runnerPeer := np.Spec.Ingress[0].From[0]
@@ -265,11 +299,16 @@ func TestBuildSidecarNetworkPolicy(t *testing.T) {
 			require.NotNil(t, runnerPeer.PodSelector)
 			assert.Equal(t, map[string]string{"agentprimitives.authzed.com/agentsession": "s1"},
 				runnerPeer.PodSelector.MatchLabels)
-			require.Len(t, runnerPeer.PodSelector.MatchExpressions, 1)
-			assert.Equal(t, "agentprimitives.authzed.com/sidecartoolbox",
-				runnerPeer.PodSelector.MatchExpressions[0].Key)
-			assert.Equal(t, metav1.LabelSelectorOpDoesNotExist,
-				runnerPeer.PodSelector.MatchExpressions[0].Operator)
+			require.Len(t, runnerPeer.PodSelector.MatchExpressions, 2, "excludes BOTH sidecartoolbox and browsertoolbox pods")
+			var peerExcluded []string
+			for _, me := range runnerPeer.PodSelector.MatchExpressions {
+				assert.Equal(t, metav1.LabelSelectorOpDoesNotExist, me.Operator)
+				peerExcluded = append(peerExcluded, me.Key)
+			}
+			assert.ElementsMatch(t, []string{
+				"agentprimitives.authzed.com/sidecartoolbox",
+				"agentprimitives.authzed.com/browsertoolbox",
+			}, peerExcluded, "sidecar ingress peer must exclude both sidecar and browser pods")
 			require.Len(t, np.Spec.Ingress[0].Ports, 1)
 			assert.ElementsMatch(t, []string{"TCP/18080"}, policyPorts(np.Spec.Ingress[0].Ports))
 
@@ -343,6 +382,71 @@ func TestBuildSidecarNetworkPolicy_WorkshopGatesOperatorAndAPIServerEgress(t *te
 			assert.NotContains(t, ports, "TCP/6443", "egress rule %d must not grant apiserver 6443", i)
 		}
 	})
+}
+
+func TestBuildBrowserNetworkPolicy(t *testing.T) {
+	sess := netpolSession("s1")
+	rt := spiceboxv1alpha1.ResolvedBrowserToolbox{Ref: "web", GatePort: 9223}
+
+	np := agentsession.BuildBrowserNetworkPolicy(sess, rt, testNetpolConfig())
+	require.NotNil(t, np)
+
+	assert.Equal(t, "s1-browser-web-netpol", np.Name)
+	assert.Equal(t, "default", np.Namespace)
+	require.Len(t, np.OwnerReferences, 1)
+	assert.Equal(t, "AgentSession", np.OwnerReferences[0].Kind)
+	assert.Equal(t, "s1", np.OwnerReferences[0].Name)
+
+	assert.Equal(t, map[string]string{
+		"agentprimitives.authzed.com/agentsession":   "s1",
+		"agentprimitives.authzed.com/browsertoolbox": "web",
+	}, np.Spec.PodSelector.MatchLabels)
+	assert.ElementsMatch(t,
+		[]networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+		np.Spec.PolicyTypes)
+
+	// Ingress: ONLY this session's runner pod (agentsession present, neither
+	// sidecartoolbox nor browsertoolbox present -- excluding BOTH labels is
+	// what distinguishes the runner from every sibling toolbox pod, this
+	// browser pod's own siblings included), on exactly the gate's fixed port.
+	require.Len(t, np.Spec.Ingress, 1)
+	require.Len(t, np.Spec.Ingress[0].From, 1)
+	runnerPeer := np.Spec.Ingress[0].From[0]
+	assert.Nil(t, runnerPeer.NamespaceSelector, "runner peer is same-namespace")
+	require.NotNil(t, runnerPeer.PodSelector)
+	assert.Equal(t, map[string]string{"agentprimitives.authzed.com/agentsession": "s1"},
+		runnerPeer.PodSelector.MatchLabels)
+	require.Len(t, runnerPeer.PodSelector.MatchExpressions, 2, "excludes BOTH sidecartoolbox and browsertoolbox pods")
+	var excludedKeys []string
+	for _, me := range runnerPeer.PodSelector.MatchExpressions {
+		assert.Equal(t, metav1.LabelSelectorOpDoesNotExist, me.Operator)
+		excludedKeys = append(excludedKeys, me.Key)
+	}
+	assert.ElementsMatch(t, []string{
+		"agentprimitives.authzed.com/sidecartoolbox",
+		"agentprimitives.authzed.com/browsertoolbox",
+	}, excludedKeys)
+	require.Len(t, np.Spec.Ingress[0].Ports, 1)
+	assert.ElementsMatch(t, []string{"TCP/9223"}, policyPorts(np.Spec.Ingress[0].Ports))
+
+	// Egress: DNS, then TCP 80+443 to 0.0.0.0/0 except the five CIDRs.
+	require.Len(t, np.Spec.Egress, 2)
+	assert.ElementsMatch(t, []string{"UDP/53", "TCP/53"}, egressPorts(np.Spec.Egress[0]), "DNS rule")
+	assert.ElementsMatch(t, []string{"TCP/80", "TCP/443"}, egressPorts(np.Spec.Egress[1]), "external rule")
+	require.Len(t, np.Spec.Egress[1].To, 1)
+	require.NotNil(t, np.Spec.Egress[1].To[0].IPBlock)
+	assert.Equal(t, "0.0.0.0/0", np.Spec.Egress[1].To[0].IPBlock.CIDR)
+	assert.ElementsMatch(t, []string{
+		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10",
+	}, np.Spec.Egress[1].To[0].IPBlock.Except)
+}
+
+func TestBuildBrowserNetworkPolicy_DisabledReturnsNil(t *testing.T) {
+	cfg := testNetpolConfig()
+	cfg.Enabled = false
+	np := agentsession.BuildBrowserNetworkPolicy(netpolSession("s1"),
+		spiceboxv1alpha1.ResolvedBrowserToolbox{Ref: "web"}, cfg)
+	assert.Nil(t, np, "disabled must match the existing builders' disabled behavior")
 }
 
 // TestEnsureDetectorPod_PolicyIsStampedBeforeThePod pins the ordering rule the

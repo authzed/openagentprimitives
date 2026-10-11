@@ -63,7 +63,7 @@ func TestReconcileStampsRunnerNetworkPolicy(t *testing.T) {
 		np.Spec.PodSelector.MatchLabels)
 	require.Len(t, np.OwnerReferences, 1)
 	assert.Equal(t, "AgentSession", np.OwnerReferences[0].Kind)
-	assert.Len(t, np.Spec.Egress, 6, "DNS, NATS, operator, SpiceDB, sidecars, external")
+	assert.Len(t, np.Spec.Egress, 7, "DNS, NATS, operator, SpiceDB, sidecars, browser, external")
 	assert.Empty(t, np.Spec.Ingress, "all ingress denied")
 }
 

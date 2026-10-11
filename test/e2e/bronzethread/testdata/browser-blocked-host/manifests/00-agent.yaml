@@ -1,0 +1,54 @@
+# Fixture agent for the browser-blocked-host bronze bundle.
+#
+# No sidecar, no MCPServer, no agentIdentity — the only thing this fixture
+# needs is a test-provider AgentClass and a fake Channel to drive it. The
+# BrowserToolbox CR lives in its own file (01-browser-toolbox.yaml) rather
+# than here: that file is ALSO named in the bundle's extraManifests, which is
+# how the threadrun driver's browserToolboxSpecs finds and parses it (see that
+# file's header comment for why).
+#
+# Deliberately NOT referenced from spec.browserToolboxes: per Task 11's
+# ruling, a referenced browser toolbox makes the AgentSession reconciler try
+# to create a pod envtest can never make Ready, re-deriving (and clobbering)
+# status every reconcile. The driver stamps status.resolvedBrowserToolboxes
+# directly (MarkBrowserReady) instead, exactly like the secret-gated sidecar
+# pattern.
+apiVersion: v1
+kind: Secret
+metadata: {name: browser-blocked-host-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: browser-blocked-host-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: browser-blocked-host, namespace: default}
+spec:
+  displayName: BrowserBlockedHostBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: browser-blocked-host-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You have a browser toolbox named `web` for browsing the open web within
+      its allowed sites.
+  budget: {maxTurns: 20, maxTokens: 50000, maxDuration: 5m}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: browser-blocked-host-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: browser-blocked-host
+  credentialsRef: {secretName: browser-blocked-host-fake-creds}
+  fake: {echo: false}

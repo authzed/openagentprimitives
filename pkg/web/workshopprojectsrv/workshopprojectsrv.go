@@ -71,7 +71,7 @@
 //     all.
 //
 // and copying NONE of: AgentIdentity, MCPServers, ToolBundles,
-// CredentialExplanations, SidecarToolboxes, WorkspaceSource, Budget,
+// CredentialExplanations, SidecarToolboxes, BrowserToolboxes, WorkspaceSource, Budget,
 // BoundEntities, Channels, Authz, Capabilities, CompletionRequirements,
 // AgentUI, Model, Harness, IdentityMode and its two timeouts,
 // IdentityRecommendation, ToolSessionLog, ToolGuard. See projectStandin's
@@ -534,8 +534,8 @@ func reachable(agents []workshopthreadsrv.AgentInThread, ns, class string) bool 
 // NEVER PROJECTED (left at zero value; the security boundary):
 //   - AgentIdentity, IdentityMode, CredentialLinkTimeout,
 //     IdentityRecommendation, IdentityChoiceTimeout — no credential, ever.
-//   - ToolBundles, MCPServers, SidecarToolboxes, WorkspaceSource,
-//     CredentialExplanations, ToolGuard — no tool access, ever.
+//   - ToolBundles, MCPServers, SidecarToolboxes, BrowserToolboxes,
+//     WorkspaceSource, CredentialExplanations, ToolGuard — no tool access, ever.
 //   - Capabilities — no meta-tool capability grant.
 //   - Authz — no slots, no start gate, no interact grant, no plan gate: a
 //     stand-in carries no authorization policy of its own.

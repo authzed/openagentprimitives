@@ -85,6 +85,15 @@ MCP servers, validated against a toolspec.
 - **Execution & MCP plumbing:** `pkg/tools/exec/` (sandboxed CLI execution, with
   `remote/` and `fake/`), `pkg/tools/mcp/` (`spec/`, `oauth/`, `probe/`,
   `render/`, `trust/`, `validator/`)
+- **Browser toolbox:** `pkg/apis/v1alpha1/browsertoolbox_types.go` (a
+  per-session browser: site allowlist/blocklist, act/readonly interaction,
+  ephemeral state); `pkg/agent/tool/browser/` synthesizes the observation tools
+  (navigate/read/find/follow/scroll/back/wait_for, +screenshot) over one
+  chromedp session; `pkg/tools/browsergate/` is the per-session gate process
+  (authenticated DevTools + policy-enforced egress) the sandbox pod runs;
+  `pkg/tools/browserpolicy/` is the shared site-matching decision both the gate
+  and the tool's own pre-check consult. No dedicated controller yet (Phase A) —
+  identity-scoped sites and acting tools (click/type) arrive in later phases.
 - **Binaries:** `internal/cmd/streamclient/` (claims a streaming ToolCall via
   the gateway); tool execution is otherwise driven from `internal/cmd/runner/`
 

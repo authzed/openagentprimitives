@@ -33,6 +33,7 @@ spec:
           args:
             - --runner-image=agentprimitives-runner:dev
             - --sandbox-image=spicebox-sandbox:dev
+            - --browser-image=ap-browser:dev
             - --leader-elect=true
             - --metrics-bind-address=127.0.0.1:8080
             - --health-probe-bind-address=:8081

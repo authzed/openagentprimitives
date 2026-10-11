@@ -55,8 +55,8 @@ func TestRefs(t *testing.T) {
 	assert.Equal(t, "myreg.io/ap/pi-detector:dev", Detector.RegistryRef("myreg.io/ap/"))
 }
 
-func TestAllEleven(t *testing.T) {
-	assert.Len(t, All, 11)
+func TestAllTwelve(t *testing.T) {
+	assert.Len(t, All, 12)
 	names := map[string]bool{}
 	for _, im := range All {
 		assert.NotEmpty(t, im.Name)
@@ -68,7 +68,7 @@ func TestAllEleven(t *testing.T) {
 		"spicebox-operator", "agentprimitives-runner", "agentprimitives-webd",
 		"agentprimitives-authzd", "agentprimitives-channelsd", "spicebox-sandbox",
 		"agentprimitives-extractord", "pi-detector", "ap-workshop", "ap-api-adapter",
-		"ap-websearchd",
+		"ap-websearchd", "ap-browser",
 	} {
 		assert.Truef(t, names[want], "All must include %q", want)
 	}
@@ -88,10 +88,10 @@ func TestAlwaysOnImages(t *testing.T) {
 		assert.Truef(t, names[want.Name], "AlwaysOnImages must include %q (needed by every session)", want.Name)
 	}
 	// The prompt-injection detector, the agent-builder workshop sidecar, the
-	// declarative HTTP→MCP api-adapter sidecar, and the websearch search+fetch
-	// sidecar are all opt-in — pulled only when enabled/sanctioned/named by a
-	// SidecarToolbox.
-	optIn := map[string]bool{Detector.Name: true, Workshop.Name: true, APIAdapter.Name: true, Websearchd.Name: true}
+	// declarative HTTP→MCP api-adapter sidecar, the websearch search+fetch
+	// sidecar, and the browser toolbox image are all opt-in — pulled only when
+	// enabled/sanctioned/named by a SidecarToolbox (or equivalent).
+	optIn := map[string]bool{Detector.Name: true, Workshop.Name: true, APIAdapter.Name: true, Websearchd.Name: true, Browser.Name: true}
 	for name := range optIn {
 		assert.Falsef(t, names[name], "AlwaysOnImages must exclude the opt-in %q", name)
 	}
@@ -172,7 +172,7 @@ func TestVersion_DrivesRefs(t *testing.T) {
 }
 
 func TestCatalogIncludesToolchains(t *testing.T) {
-	assert.Len(t, All, 11, "All stays the platform images only")
+	assert.Len(t, All, 12, "All stays the platform images only")
 	assert.Len(t, Catalog(), len(All)+len(Toolchains))
 
 	names := map[string]bool{}
