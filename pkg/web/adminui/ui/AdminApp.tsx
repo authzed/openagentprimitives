@@ -25,6 +25,7 @@ import { ChannelsView } from "./config/ChannelsView";
 import { IdentityView } from "./config/IdentityView";
 import { UsersView } from "./config/UsersView";
 import { AccessView } from "./config/AccessView";
+import { TokensPanel } from "./tokens/TokensPanel";
 import { SettingsView } from "./config/SettingsView";
 import { AgentPage } from "./config/detail/AgentPage";
 import { ToolPage } from "./config/detail/ToolPage";
@@ -117,6 +118,8 @@ export function AdminApp({ apiBase, currentUser }: AdminAppProps) {
         return <UsersView apiBase={apiBase} />;
       case "access":
         return <AccessView apiBase={apiBase} />;
+      case "tokens":
+        return <TokensPanel apiBase={apiBase} />;
       case "settings":
         return <SettingsView apiBase={apiBase} />;
       default:

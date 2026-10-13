@@ -1,0 +1,21 @@
+export const meta = {
+  title: 'oap setup-mcp',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2970,
+  description: 'Emit MCP client config pointing a local tool at this cluster\'s MCP server',
+}
+
+# oap setup-mcp
+
+Resolve this cluster's MCP server URL -- from --server, or by discovering the
+webd external-URL ConfigMap via the current kube context -- and print a config
+snippet for a local MCP-capable tool (claude-code, cursor, or generic).
+
+By default (no --mint), no credential is embedded: OAuth-native MCP clients
+run their own discovery/consent flow against the server directly, and consent
+there defaults to read-only. Pass --mint to run that flow here instead --
+dogfooding this cluster's own OAuth authorization server -- and embed the
+resulting bearer token in the emitted config, for tools that do not speak MCP
+OAuth themselves.
+

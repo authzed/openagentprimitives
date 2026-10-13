@@ -22,6 +22,7 @@ import (
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/sandboxcmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/sessioncmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/settingscmd"
+	"github.com/authzed/openagentprimitives/cmd/oap/internal/setupmcpcmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/skillcmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/toolscmd"
 )
@@ -84,5 +85,6 @@ func NewRootCmdWithGlobals(g *Globals) *cobra.Command {
 	root.AddCommand(identitycmd.NewIdpCmd(g))
 	root.AddCommand(desktopcmd.NewCmd(g))
 	root.AddCommand(desktopcmd.NewWindowCmd(g))
+	root.AddCommand(setupmcpcmd.NewCmd(g))
 	return root
 }
