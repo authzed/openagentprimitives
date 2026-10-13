@@ -106,6 +106,13 @@ type SessionEndInfo struct {
 	// Model above. Empty means "no per-model breakdown available" — reporters
 	// must NOT read that as zero usage.
 	ByModel []ModelUsage
+
+	// ByTool is the per-interactive-toolkit provider-reported cost accumulated
+	// across this session (e.g. an inner `claude` Claude Code sub-run's own
+	// billed cost), keyed by outer tool name in first-encountered order. Empty
+	// means no interactive toolkit reported a terminal cost — reporters must
+	// NOT read that as zero spend elsewhere.
+	ByTool []ToolUsage
 }
 
 // ModelUsage is one served model's cumulative usage for a session, keyed by its
@@ -132,6 +139,27 @@ type ModelUsage struct {
 	// CostReported is true when at least one turn served by this model
 	// carried a provider-reported cost (e.g. OpenRouter's Usage.CostUSD).
 	CostReported bool
+}
+
+// ToolUsage is one interactive toolkit's cumulative provider-reported cost for
+// a session, keyed by the outer tool name. Distinct from ModelUsage: a toolkit
+// reports a single billed dollar figure (not token counts we re-price), so this
+// carries only the summed cost and whether any invocation reported one.
+type ToolUsage struct {
+	// Tool is the outer tool name (e.g. "claude-oauth").
+	Tool string
+	// CostMicroUSD is the provider-reported cost summed across this tool's
+	// invocations, in micro-USD (1e-6 USD).
+	CostMicroUSD int64
+	// CostReported is true when at least one invocation reported a cost.
+	CostReported bool
+	// Anomalous is true when a negative provider cost was observed for this
+	// tool; the value is excluded from CostMicroUSD and the bucket is flagged.
+	Anomalous bool
+	// SubscriptionEquivalent marks this tool's cost as a flat-rate subscription
+	// estimate (toolkit CostTreatment=subscription-equivalent): recorded and
+	// shown, but excluded from session spend.
+	SubscriptionEquivalent bool
 }
 
 // MetaagentInfo is the payload for the four metaagent control-plane points

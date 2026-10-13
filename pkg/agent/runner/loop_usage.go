@@ -120,11 +120,89 @@ func (l *Loop) usageByModelSnapshot() []pipeline.ModelUsage {
 	return out
 }
 
-// StampEstimatedCost persists the cost estimate via the StatusPatcher. nil-safe:
-// a Loop without a Status (tests/kubectl-driven) silently no-ops.
-func (l *Loop) StampEstimatedCost(ctx context.Context, c spiceboxv1alpha1.EstimatedSessionCost) error {
-	if l.Status == nil {
+// toolUsageBucket is one interactive toolkit's running cost accumulation across
+// its invocations this session, keyed by outer tool name.
+type toolUsageBucket struct {
+	tool                   string
+	costMicroUSD           int64
+	costReported           bool
+	anomalous              bool
+	subscriptionEquivalent bool
+}
+
+// AddToolCost folds one interactive toolkit result event's provider-reported
+// cost into the bucket for outerTool. Shares usageMu with addUsage/addModelUsage
+// (see usageMu's doc). costReported is the presence bit from the toolkit's
+// terminal event (toolkitstream.Event.CostReported): a run whose stream carried
+// a total_cost_usd tally — even an explicit 0 — marks the bucket priced, while a
+// run that reported no tally leaves it unpriced, so an absent cost is never
+// asserted as a known $0. costUSD accumulates regardless of the inner run's
+// success: a run the provider billed cost money whether or not it succeeded. A
+// negative (nonsensical) cost is treated as anomalous: the bucket is kept and
+// flagged, but the value is excluded from the total. subscriptionEquivalent (the
+// toolkit's CostTreatment) marks the cost a flat-rate estimate rather than
+// metered money — recorded on the bucket but excluded from session spend by the
+// cost reporter; it is a property of the tool, so it is recorded even for a
+// report that is otherwise ignored (negative).
+//
+// Exported (unlike addModelUsage) because it is wired from internal/cmd/runner's
+// interactive-tool result callback, which lives in a different package; the
+// runner's turn loop feeds addModelUsage internally, so that one stays private.
+func (l *Loop) AddToolCost(outerTool string, costUSD float64, costReported, subscriptionEquivalent bool) {
+	l.usageMu.Lock()
+	defer l.usageMu.Unlock()
+	if l.usageByToolIdx == nil {
+		l.usageByToolIdx = make(map[string]int)
+	}
+	i, seen := l.usageByToolIdx[outerTool]
+	if !seen {
+		i = len(l.usageByTool)
+		l.usageByToolIdx[outerTool] = i
+		l.usageByTool = append(l.usageByTool, toolUsageBucket{tool: outerTool})
+	}
+	b := &l.usageByTool[i]
+	// A property of the tool, not of this call — record it before the negative
+	// guard so it survives a report that is otherwise dropped.
+	b.subscriptionEquivalent = b.subscriptionEquivalent || subscriptionEquivalent
+	if costUSD < 0 {
+		// A negative provider-reported tool cost is nonsensical — it would reduce
+		// the session total. Keep the bucket (the tool DID run) but flag it
+		// anomalous and exclude the value, rather than netting it against real
+		// charges or silently dropping the report.
+		slog.Default().Info("negative reported tool cost; flagging anomalous, excluding from total",
+			"tool", outerTool, "costUSD", costUSD)
+		b.anomalous = true
+		return
+	}
+	// Round once at the USD->micro-USD boundary so accumulation is pure int64.
+	b.costMicroUSD += int64(math.Round(costUSD * 1e6))
+	if costReported {
+		b.costReported = true
+	}
+}
+
+// usageByToolSnapshot returns the Loop's per-tool cost as pipeline.ToolUsage in
+// first-encountered order (nil when unused). Safe for concurrent use.
+func (l *Loop) usageByToolSnapshot() []pipeline.ToolUsage {
+	l.usageMu.Lock()
+	defer l.usageMu.Unlock()
+	if len(l.usageByTool) == 0 {
 		return nil
+	}
+	out := make([]pipeline.ToolUsage, len(l.usageByTool))
+	for i, b := range l.usageByTool {
+		out[i] = pipeline.ToolUsage{Tool: b.tool, CostMicroUSD: b.costMicroUSD, CostReported: b.costReported, Anomalous: b.anomalous, SubscriptionEquivalent: b.subscriptionEquivalent}
+	}
+	return out
+}
+
+// StampEstimatedCost folds this pod's cost estimate into the session total via
+// the StatusPatcher and returns the resulting session aggregate (which
+// accumulates across pods). nil-safe: a Loop without a Status
+// (tests/kubectl-driven) returns c unchanged.
+func (l *Loop) StampEstimatedCost(ctx context.Context, c spiceboxv1alpha1.EstimatedSessionCost) (spiceboxv1alpha1.EstimatedSessionCost, error) {
+	if l.Status == nil {
+		return c, nil
 	}
 	return l.Status.PatchEstimatedCost(ctx, c)
 }

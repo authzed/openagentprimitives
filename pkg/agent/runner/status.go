@@ -49,6 +49,11 @@ type StatusPatcher struct {
 	// WithDirectReader when c reads through an informer cache.
 	reader client.Reader
 
+	// pod is this serving pod's name (its HOSTNAME), the upsert key for
+	// PatchEstimatedCost's per-pod cost accumulation. Empty for in-process /
+	// test patchers, which collapse to a single "" entry.
+	pod string
+
 	// local, when true, makes mutate and Get short-circuit to nil. Used by
 	// in-process callers (the gen-agent loop) that have no AgentSession CR
 	// to patch. localResult captures the AgentResult passed to
@@ -136,6 +141,14 @@ func (s *StatusPatcher) WithDirectReader(r client.Reader) *StatusPatcher {
 	return s
 }
 
+// WithPod sets this patcher's pod name, the upsert key PatchEstimatedCost uses
+// to accumulate session cost across pods. Left empty, per-pod entries collapse
+// to a single "" key (correct for a single-process in-process run).
+func (s *StatusPatcher) WithPod(pod string) *StatusPatcher {
+	s.pod = pod
+	return s
+}
+
 const maxRetries = 5
 
 // PatchProgress updates the live counters. Optimistic-lock retried.
@@ -178,28 +191,131 @@ func (s *StatusPatcher) PatchToolGuard(ctx context.Context, tg *spiceboxv1alpha1
 	})
 }
 
-// PatchEstimatedCost stamps the end-of-session cost estimate. Optimistic-lock
-// retried, same mutate path as PatchProgress.
+// PatchEstimatedCost folds THIS pod's cost estimate into the session total and
+// returns the resulting SESSION aggregate. Optimistic-lock retried, same mutate
+// path as PatchProgress.
 //
-// MONOTONIC: a lower amount never replaces a higher one. The cost hook stamps on
-// every terminal path (including idle) from the loop's per-POD token counters,
-// which restart at zero after an idle→reap→wake cycle; without the guard a woken
-// pod that made no LLM calls of its own overwrites a real session cost with
-// AmountMicroUSD: 0 and a nil breakdown. The whole prior record is kept (rather
-// than max-ing the amount alone) so ByModel stays consistent with the amount it
-// explains.
+// ACCUMULATES across pods. status.estimatedCost.perPod is the per-pod source of
+// truth; this pod upserts only its OWN entry (keyed by s.pod), then the
+// aggregate (amount, byModel, byTool, pricingKnown) is recomputed as the sum /
+// merge-by-key / AND over every entry. The cost hook stamps on every terminal
+// path (including idle) from the loop's per-POD counters, which restart at zero
+// after an idle→reap→wake cycle — but a woken pod now writes a $0 entry for
+// ITSELF and leaves earlier pods' entries untouched, so the session total is
+// preserved and grows rather than being clobbered. That is why this needs no
+// "keep the higher total" guard: summation over immutable per-pod truth is
+// inherently monotonic and double-count-free (a re-stamp overwrites the same
+// pod's entry).
 //
-// This bounds the damage without making the figure cumulative across pods: a
-// woken pod that DOES spend still reports only its own spend. Full accumulation
-// needs the loop to seed its usage counters from durable state at boot.
-func (s *StatusPatcher) PatchEstimatedCost(ctx context.Context, c spiceboxv1alpha1.EstimatedSessionCost) error {
-	return s.mutate(ctx, func(sess *spiceboxv1alpha1.AgentSession) {
-		if prev := sess.Status.EstimatedCost; prev != nil && prev.AmountMicroUSD > c.AmountMicroUSD {
-			return
+// Returns the recomputed aggregate so the cost reporter can show the SESSION
+// total in the end-of-session notice (notice and status then agree). In local
+// mode (no CR) the pod cost is returned unchanged — a single in-process run is
+// its own and only pod.
+func (s *StatusPatcher) PatchEstimatedCost(ctx context.Context, podCost spiceboxv1alpha1.EstimatedSessionCost) (spiceboxv1alpha1.EstimatedSessionCost, error) {
+	if s.local {
+		return podCost, nil
+	}
+	var agg spiceboxv1alpha1.EstimatedSessionCost
+	err := s.mutate(ctx, func(sess *spiceboxv1alpha1.AgentSession) {
+		ec := spiceboxv1alpha1.EstimatedSessionCost{}
+		if prev := sess.Status.EstimatedCost; prev != nil {
+			ec = *prev
 		}
-		cc := c
-		sess.Status.EstimatedCost = &cc
+		ec.Model = podCost.Model
+		ec.PerPod = upsertPerPod(ec.PerPod, perPodFrom(s.pod, podCost))
+		recomputeCostAggregate(&ec)
+		sess.Status.EstimatedCost = &ec
+		agg = ec
 	})
+	if err != nil {
+		return spiceboxv1alpha1.EstimatedSessionCost{}, err
+	}
+	return agg, nil
+}
+
+// perPodFrom projects one pod's EstimatedSessionCost into its PerPodCost entry.
+func perPodFrom(pod string, c spiceboxv1alpha1.EstimatedSessionCost) spiceboxv1alpha1.PerPodCost {
+	return spiceboxv1alpha1.PerPodCost{
+		Pod:            pod,
+		AmountMicroUSD: c.AmountMicroUSD,
+		Currency:       c.Currency,
+		PricingKnown:   c.PricingKnown,
+		AsOf:           c.AsOf,
+		ByModel:        c.ByModel,
+		ByTool:         c.ByTool,
+	}
+}
+
+// upsertPerPod returns a fresh slice with e replacing any same-Pod entry
+// (preserving order) or appended when new — so a re-stamp by the same pod is
+// idempotent and the caller never mutates the prior status slice in place.
+func upsertPerPod(entries []spiceboxv1alpha1.PerPodCost, e spiceboxv1alpha1.PerPodCost) []spiceboxv1alpha1.PerPodCost {
+	out := make([]spiceboxv1alpha1.PerPodCost, 0, len(entries)+1)
+	replaced := false
+	for _, p := range entries {
+		if p.Pod == e.Pod {
+			out = append(out, e)
+			replaced = true
+			continue
+		}
+		out = append(out, p)
+	}
+	if !replaced {
+		out = append(out, e)
+	}
+	return out
+}
+
+// recomputeCostAggregate derives c's top-level fields from its PerPod entries:
+// amount = Σ, byModel/byTool merged by key, pricingKnown = AND, currency = first
+// non-empty, asOf = latest. ByModel/ByTool are rebuilt into fresh slices so no
+// per-pod entry's buckets are aliased or mutated.
+func recomputeCostAggregate(c *spiceboxv1alpha1.EstimatedSessionCost) {
+	var total int64
+	pricingKnown := len(c.PerPod) > 0
+	var currency string
+	var asOf metav1.Time
+	modelIdx := map[string]int{}
+	toolIdx := map[string]int{}
+	var byModel []spiceboxv1alpha1.ModelCostBucket
+	var byTool []spiceboxv1alpha1.ToolCostBucket
+	for _, p := range c.PerPod {
+		total += p.AmountMicroUSD
+		pricingKnown = pricingKnown && p.PricingKnown
+		if currency == "" {
+			currency = p.Currency
+		}
+		if asOf.IsZero() || p.AsOf.Time.After(asOf.Time) {
+			asOf = p.AsOf
+		}
+		for _, b := range p.ByModel {
+			if i, ok := modelIdx[b.Model]; ok {
+				byModel[i].InputTokens += b.InputTokens
+				byModel[i].OutputTokens += b.OutputTokens
+				byModel[i].AmountMicroUSD += b.AmountMicroUSD
+				byModel[i].PricingKnown = byModel[i].PricingKnown && b.PricingKnown
+			} else {
+				modelIdx[b.Model] = len(byModel)
+				byModel = append(byModel, b)
+			}
+		}
+		for _, b := range p.ByTool {
+			if i, ok := toolIdx[b.Tool]; ok {
+				byTool[i].AmountMicroUSD += b.AmountMicroUSD
+				byTool[i].PricingKnown = byTool[i].PricingKnown && b.PricingKnown
+				byTool[i].Anomalous = byTool[i].Anomalous || b.Anomalous
+			} else {
+				toolIdx[b.Tool] = len(byTool)
+				byTool = append(byTool, b)
+			}
+		}
+	}
+	c.AmountMicroUSD = total
+	c.PricingKnown = pricingKnown
+	c.Currency = currency
+	c.AsOf = asOf
+	c.ByModel = byModel
+	c.ByTool = byTool
 }
 
 // WriteSucceeded writes the terminal success state.

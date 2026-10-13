@@ -131,10 +131,11 @@ func (p *parser) decodeLine(line []byte) []toolkitstream.Event {
 			Unbilled: ev.TotalCostUSD != nil && *ev.TotalCostUSD == 0,
 		}
 		return []toolkitstream.Event{{
-			Type:       toolkitstream.EventResult,
-			OK:         ev.Subtype == "success",
-			DurationMs: ev.DurationMs,
-			CostUSD:    ev.cost(),
+			Type:         toolkitstream.EventResult,
+			OK:           ev.Subtype == "success",
+			DurationMs:   ev.DurationMs,
+			CostUSD:      ev.cost(),
+			CostReported: ev.TotalCostUSD != nil,
 		}}
 	case "system":
 		return nil

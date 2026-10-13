@@ -227,6 +227,13 @@ func (s *SandboxTool) Name() string        { return s.opts.BundleName + "_" + s.
 func (s *SandboxTool) Kind() tool.Kind     { return tool.KindSandbox }
 func (s *SandboxTool) Description() string { return s.opts.Description }
 
+// costSubscriptionEquivalent reports whether this tool's toolkit declares its
+// cost as a flat-rate subscription estimate (CostTreatment=subscription-
+// equivalent), so the runner records but excludes it from session spend.
+func (s *SandboxTool) costSubscriptionEquivalent() bool {
+	return s.opts.Toolkit != nil && s.opts.Toolkit.CostTreatment == toolkit.CostTreatmentSubscriptionEquivalent
+}
+
 // Origin implements tool.OriginTool. It returns "toolkit/<name>" where
 // <name> is the SpiceboxToolkit this tool belongs to — the revocation unit
 // used by toolguard for origin-level circuit breakers. Returns "" when the

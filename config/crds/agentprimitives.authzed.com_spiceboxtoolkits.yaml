@@ -58,6 +58,18 @@ spec:
               Conversion uses a JSON round-trip (ToToolkit), so this field set must stay
               byte-compatible with toolkit.Toolkit's JSON shape.
             properties:
+              costTreatment:
+                description: |-
+                  CostTreatment declares how this toolkit's provider-reported cost counts
+                  toward session spend. "metered" (default) is real billed money and counts;
+                  "subscription-equivalent" is a flat-rate estimate (e.g. a Claude Max OAuth
+                  run) that is recorded and shown but EXCLUDED from the session total, so it
+                  cannot inflate spend or trip cost alerts. Mirrors
+                  pkg/tools/toolspec/toolkit.Toolkit.CostTreatment.
+                enum:
+                - metered
+                - subscription-equivalent
+                type: string
               docs:
                 description: Docs is prose about the CLI, surfaced to authors.
                 type: string

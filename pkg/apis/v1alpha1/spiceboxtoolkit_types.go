@@ -99,6 +99,16 @@ type SpiceboxToolkitSpec struct {
 	// +optional
 	StreamFormat string `json:"streamFormat,omitempty"`
 
+	// CostTreatment declares how this toolkit's provider-reported cost counts
+	// toward session spend. "metered" (default) is real billed money and counts;
+	// "subscription-equivalent" is a flat-rate estimate (e.g. a Claude Max OAuth
+	// run) that is recorded and shown but EXCLUDED from the session total, so it
+	// cannot inflate spend or trip cost alerts. Mirrors
+	// pkg/tools/toolspec/toolkit.Toolkit.CostTreatment.
+	// +kubebuilder:validation:Enum=metered;subscription-equivalent
+	// +optional
+	CostTreatment string `json:"costTreatment,omitempty"`
+
 	// SiteURL is the toolkit-backed service's user-facing homepage.
 	// identityd discovers a favicon from this URL for the credential
 	// rows backed by this toolkit's sensitive env vars (e.g., a

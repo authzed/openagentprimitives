@@ -38,7 +38,7 @@ func TestBuildToolSessionEventPublisher_PublishesKindToolSessionEvent(t *testing
 	mem := memory.NewLocal(inmem.NewBackend())
 	scope := memory.Scope{Kind: "session", ID: "default/agent-1"}
 	onEvent := buildToolSessionEventPublisher(
-		context.Background(), pub, mem, scope, "off", "default", "agent-1", nil)
+		context.Background(), pub, mem, scope, "off", "default", "agent-1", nil, nil)
 	onEvent("tc-abc", "", "", toolkitstream.Event{Type: toolkitstream.EventTextDelta, Text: "hi"})
 
 	mu.Lock()
@@ -60,7 +60,7 @@ func TestBuildToolSessionEventPublisher_CarriesReasonAndOuterTool(t *testing.T) 
 		return nil
 	}
 	emit := buildToolSessionEventPublisher(context.Background(), pub,
-		nil /*mem*/, memory.Scope{} /*scope*/, spiceboxv1alpha1.ToolSessionLogOff /*no persist*/, "ns", "sess", nil)
+		nil /*mem*/, memory.Scope{} /*scope*/, spiceboxv1alpha1.ToolSessionLogOff /*no persist*/, "ns", "sess", nil, nil)
 
 	emit("tc-1", "Have claude write the README", "claude",
 		toolkitstream.Event{Type: toolkitstream.EventTextDelta, Text: "hi"})
@@ -91,7 +91,7 @@ func TestBuildToolSessionEventPublisher_AllFieldsRoundTrip(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	scope := memory.Scope{Kind: "session", ID: "default/agent-1"}
 	onEvent := buildToolSessionEventPublisher(
-		context.Background(), pub, mem, scope, "off", "default", "agent-1", nil)
+		context.Background(), pub, mem, scope, "off", "default", "agent-1", nil, nil)
 
 	onEvent("tc-1", "", "", toolkitstream.Event{
 		Type:    toolkitstream.EventToolUseStop,
@@ -109,4 +109,42 @@ func TestBuildToolSessionEventPublisher_AllFieldsRoundTrip(t *testing.T) {
 	assert.Equal(t, "tu_1", pl.ToolID)
 	assert.False(t, pl.OK)
 	assert.Equal(t, "exit code 1", pl.Summary)
+}
+
+func TestBuildToolSessionEventPublisher_InvokesOnResultForResultEvent(t *testing.T) {
+	type call struct {
+		tool         string
+		cost         float64
+		costReported bool
+		subscription bool
+	}
+	var got []call
+	onResult := func(tool string, cost float64, costReported, subscription bool) {
+		got = append(got, call{tool, cost, costReported, subscription})
+	}
+	pub := func(_ context.Context, _ string, _ []byte) error { return nil }
+
+	emit := buildToolSessionEventPublisher(context.Background(), pub,
+		nil, memory.Scope{}, spiceboxv1alpha1.ToolSessionLogOff, "ns", "sess", nil, onResult)
+
+	// A non-result event must NOT trigger onResult.
+	emit("tc-1", "reason", "claude-oauth",
+		toolkitstream.Event{Type: toolkitstream.EventTextDelta, Text: "hi"})
+	// A result event that reported a cost tally MUST trigger onResult once,
+	// carrying tool/cost, costReported=true, and the subscription flag.
+	emit("tc-1", "reason", "claude-oauth",
+		toolkitstream.Event{Type: toolkitstream.EventResult, OK: true, CostUSD: 5.43, CostReported: true, SubscriptionEquivalent: true})
+	// A result event that reported NO tally still fires, with costReported=false
+	// so the bucket is never asserted as a known $0.
+	emit("tc-2", "reason", "claude-oauth",
+		toolkitstream.Event{Type: toolkitstream.EventResult, OK: true, CostUSD: 0})
+
+	require.Len(t, got, 2, "onResult fires once per EventResult")
+	assert.Equal(t, "claude-oauth", got[0].tool)
+	assert.Equal(t, 5.43, got[0].cost)
+	assert.True(t, got[0].costReported, "a reported tally marks cost reported")
+	assert.True(t, got[0].subscription, "the event's subscription flag is passed through")
+	assert.Equal(t, float64(0), got[1].cost)
+	assert.False(t, got[1].costReported, "an absent tally is not reported")
+	assert.False(t, got[1].subscription)
 }

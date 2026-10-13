@@ -249,6 +249,11 @@ func (s *SandboxTool) executeStreaming(ctx context.Context, raw json.RawMessage,
 		// a future internal/cmd/runner log call can warn about the missing factory.
 	}
 
+	// subEquiv stamps each result event with whether this toolkit's cost is a
+	// flat-rate subscription estimate (CostTreatment), so the runner can record
+	// but exclude it from session spend. A toolkit property, constant per run.
+	subEquiv := s.costSubscriptionEquivalent()
+
 	// The bridge's idle timer differs by mode. Interactive uses the resolved
 	// idle window — a parked-but-live session is normal there. Stream is a
 	// one-shot run to completion: it has no legitimate idle state, so the only
@@ -308,6 +313,9 @@ func (s *SandboxTool) executeStreaming(ctx context.Context, raw json.RawMessage,
 				return
 			}
 			for _, ev := range events {
+				if ev.Type == toolkitstream.EventResult {
+					ev.SubscriptionEquivalent = subEquiv
+				}
 				hooks.OnEvent(tcName, a.Reason, s.opts.Suffix, ev)
 			}
 		},

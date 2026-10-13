@@ -181,7 +181,7 @@ func TestBuildToolSessionEventPublisher_Persist(t *testing.T) {
 			noopPub := func(context.Context, string, []byte) error { return nil }
 
 			onEvent := buildToolSessionEventPublisher(
-				ctx, noopPub, mem, scope, tc.mode, "default", "sess1", nil)
+				ctx, noopPub, mem, scope, tc.mode, "default", "sess1", nil, nil)
 			onEvent("ref-1", "", "", toolkitstream.Event{
 				Type: toolkitstream.EventToolUseStart, ToolName: "Edit", ToolID: "t1",
 			})

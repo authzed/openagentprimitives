@@ -56,7 +56,10 @@ func newWithCapturePricer(pricer func(string) (llm.ModelPricing, bool)) (*Report
 	var stamped v1.EstimatedSessionCost
 	r := New(Deps{
 		Pricing: pricer,
-		Stamp:   func(_ context.Context, c v1.EstimatedSessionCost) error { stamped = c; return nil },
+		Stamp: func(_ context.Context, c v1.EstimatedSessionCost) (v1.EstimatedSessionCost, error) {
+			stamped = c
+			return c, nil
+		},
 		Now:     func() metav1.Time { return metav1.Time{} },
 	})
 	return r, &stamped
@@ -74,7 +77,9 @@ func TestEval_StampError_StillMessages(t *testing.T) {
 	// completion/failure message (the message doesn't depend on the stamp).
 	r := New(Deps{
 		Pricing: opusPricer,
-		Stamp:   func(_ context.Context, _ v1.EstimatedSessionCost) error { return errors.New("boom") },
+		Stamp: func(_ context.Context, _ v1.EstimatedSessionCost) (v1.EstimatedSessionCost, error) {
+			return v1.EstimatedSessionCost{}, errors.New("boom")
+		},
 		Now:     func() metav1.Time { return metav1.Time{} },
 	})
 	dec := r.Eval(context.Background(), endInput("completed", 1_000_000, 0, 0, 0))
@@ -163,6 +168,83 @@ func TestEval_ByModel_ReportedPreferredOverEstimated(t *testing.T) {
 	assert.True(t, stamped.PricingKnown, "every bucket priced -> session PricingKnown")
 }
 
+func TestEval_ByTool_AddsToGrandTotalAndItemizes(t *testing.T) {
+	r, stamped := newWithCapturePricer(multiModelPricer)
+	in := endInput("completed", 0, 0, 0, 0)
+	in.End.ByModel = []pipeline.ModelUsage{
+		{Display: "anthropic/claude-3.5-sonnet", Model: "anthropic/claude-3.5-sonnet",
+			InputTokens: 1_000_000, OutputTokens: 0}, // 1M in × $3 = $3.00 -> 3_000_000 micro
+	}
+	in.End.ByTool = []pipeline.ToolUsage{{Tool: "claude-oauth", CostMicroUSD: 19_020_000, CostReported: true}}
+	r.Eval(context.Background(), in)
+
+	require.Len(t, stamped.ByTool, 1)
+	assert.Equal(t, "claude-oauth", stamped.ByTool[0].Tool)
+	assert.Equal(t, int64(19_020_000), stamped.ByTool[0].AmountMicroUSD)
+	assert.True(t, stamped.ByTool[0].PricingKnown)
+	assert.Equal(t, int64(3_000_000+19_020_000), stamped.AmountMicroUSD, "grand total = model + tool")
+	assert.True(t, stamped.PricingKnown, "model priced + tool always priced")
+}
+
+func TestEval_NoTool_IdenticalToToday(t *testing.T) {
+	r, stamped := newWithCapturePricer(multiModelPricer)
+	in := endInput("completed", 0, 0, 0, 0)
+	in.End.ByModel = []pipeline.ModelUsage{
+		{Display: "anthropic/claude-3.5-sonnet", Model: "anthropic/claude-3.5-sonnet", InputTokens: 1_000_000},
+	}
+	r.Eval(context.Background(), in)
+
+	assert.Nil(t, stamped.ByTool, "no tool -> no byTool")
+	assert.Equal(t, int64(3_000_000), stamped.AmountMicroUSD, "unchanged from today")
+}
+
+func TestEval_ByTool_SubscriptionEquivalentExcludedFromTotal(t *testing.T) {
+	r, stamped := newWithCapturePricer(opusPricer)
+	in := endInput("completed", 1_000_000, 0, 0, 0) // 1M in x $15 = $15 model
+	in.End.ByTool = []pipeline.ToolUsage{
+		{Tool: "claude-oauth", CostMicroUSD: 5_000_000, CostReported: true, SubscriptionEquivalent: true},
+		{Tool: "aider", CostMicroUSD: 2_000_000, CostReported: true},
+	}
+	dec := r.Eval(context.Background(), in)
+
+	require.Len(t, stamped.ByTool, 2, "both tools recorded, subscription included")
+	assert.Equal(t, int64(17_000_000), stamped.AmountMicroUSD,
+		"$15 model + $2 metered tool; the $5 subscription-equivalent tool is excluded")
+
+	var sub *v1.ToolCostBucket
+	for i := range stamped.ByTool {
+		if stamped.ByTool[i].Tool == "claude-oauth" {
+			sub = &stamped.ByTool[i]
+		}
+	}
+	require.NotNil(t, sub, "subscription bucket still recorded")
+	assert.True(t, sub.SubscriptionEquivalent, "flagged")
+	assert.Equal(t, int64(5_000_000), sub.AmountMicroUSD, "amount kept on the bucket")
+
+	require.Len(t, dec.Notices, 1)
+	assert.Contains(t, dec.Notices[0].Notice.Args().Lead, "$17.00", "headline excludes subscription cost")
+}
+
+func TestEval_UnknownModel_KnownTool_LowerBound(t *testing.T) {
+	r, stamped := newWithCapturePricer(multiModelPricer) // "mystery-model" unpriced
+	in := endInput("completed", 0, 0, 0, 0)
+	in.End.ByModel = []pipeline.ModelUsage{
+		{Display: "openrouter/mystery/model", Model: "mystery-model", InputTokens: 1_000_000},
+	}
+	in.End.ByTool = []pipeline.ToolUsage{{Tool: "claude-oauth", CostMicroUSD: 19_020_000, CostReported: true}}
+	dec := r.Eval(context.Background(), in)
+
+	assert.False(t, stamped.PricingKnown, "an unpriced model makes the total a lower bound")
+	assert.Equal(t, int64(19_020_000), stamped.AmountMicroUSD, "nonzero: the priced (tool) component")
+
+	// The notice must surface the stamped tool spend as a lower bound, not claim
+	// the cost is unavailable while $19.02 is on record.
+	require.Len(t, dec.Notices, 1)
+	lead := dec.Notices[0].Notice.Args().Lead
+	assert.NotContains(t, lead, "unavailable", "tool spend is on record; notice must not say unavailable")
+	assert.Contains(t, lead, "$19.02", "notice surfaces the priced (tool) lower bound")
+}
+
 func TestEval_ByModel_UnknownPriceBucket_ZeroAndUnknown(t *testing.T) {
 	r, stamped := newWithCapturePricer(multiModelPricer)
 	in := endInput("completed", 0, 0, 0, 0)
@@ -203,7 +285,7 @@ func TestEval_ByModel_OpenRouterAutoBucket_UnknownNotZero(t *testing.T) {
 }
 
 func TestEval_ByModel_NilPricingDep_NoPanic(t *testing.T) {
-	r := New(Deps{Stamp: func(_ context.Context, _ v1.EstimatedSessionCost) error { return nil }})
+	r := New(Deps{Stamp: func(_ context.Context, c v1.EstimatedSessionCost) (v1.EstimatedSessionCost, error) { return c, nil }})
 	in := endInput("completed", 0, 0, 0, 0)
 	in.End.ByModel = []pipeline.ModelUsage{{Display: "x/y", Model: "y", InputTokens: 1}}
 	assert.NotPanics(t, func() { r.Eval(context.Background(), in) })

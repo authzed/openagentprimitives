@@ -54,6 +54,10 @@ type SessionState struct {
 	// yet, in which case the Overview/Budget aggregators attribute this
 	// session's InputTokens/OutputTokens/Model as a single blended row.
 	ByModel []spiceboxv1alpha1.ModelCostBucket `json:"byModel,omitempty"`
+	// ByTool is the session's per-interactive-toolkit cost breakdown
+	// (status.estimatedCost.byTool). Added to the token-repriced estimate in the
+	// budget/overview panels so admind totals include inner sub-agent spend.
+	ByTool []spiceboxv1alpha1.ToolCostBucket `json:"byTool,omitempty"`
 	// BundleSessions mirrors AgentSession.status.bundleSessions — one entry per
 	// tool bundle this session resolved to a SpiceboxSession, carried straight
 	// through from the watched CRD (no new fetch). A bundle's sandbox backend
@@ -362,8 +366,10 @@ func (a *Aggregator) UpsertSession(s *spiceboxv1alpha1.AgentSession) {
 		// later Snapshot()/sortedModels-style sort-in-place elsewhere on the
 		// SAME backing array would race the informer's own reads of it.
 		st.ByModel = append([]spiceboxv1alpha1.ModelCostBucket(nil), ec.ByModel...)
+		st.ByTool = append([]spiceboxv1alpha1.ToolCostBucket(nil), ec.ByTool...)
 	} else {
 		st.ByModel = nil
+		st.ByTool = nil
 	}
 	// Defensive copy for the same reason as ByModel above: s.Status.BundleSessions
 	// backs onto the informer cache's object.
