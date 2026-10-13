@@ -275,6 +275,13 @@ func validateTable(loc string, t *slackapi.TableBlock) error {
 // segments, bar/area/line need series plus axis_config.categories. Enforcing it
 // here turns a would-be post-time invalid_blocks (which degrades the whole reply
 // to plain text) into a precise error the agent can correct.
+//
+// It also runs the no-mass-notification guard over EVERY free-form chart string
+// — the title plus segment labels, series names, data-point labels, axis
+// categories, and axis labels — not just the title. Those strings render in
+// Slack (a <!subteam^…> or <!channel> fits a 20-char label), so checking only
+// the title would leave a mass-ping path open. The set mirrors flattenDataViz,
+// so validation and the leakage-gate projection stay in sync.
 func validateDataViz(loc string, dv *slackapi.DataVisualizationBlock) error {
 	if strings.TrimSpace(dv.Title) == "" {
 		return blockErrf(loc, "data_visualization", "requires a non-empty \"title\" (≤%d chars)", maxDataVizTitleLen)
@@ -289,6 +296,11 @@ func validateDataViz(loc string, dv *slackapi.DataVisualizationBlock) error {
 	case *slackapi.DataVisualizationPieChart:
 		if len(c.Segments) == 0 {
 			return blockErrf(loc, "data_visualization", "pie chart requires a non-empty \"segments\" array of {label,value}")
+		}
+		for _, seg := range c.Segments {
+			if err := checkBroadcast(loc, "data_visualization", seg.Label); err != nil {
+				return err
+			}
 		}
 	case *slackapi.DataVisualizationBarChart:
 		return validateVizSeries(loc, "bar", c.Series, c.AxisConfig)
@@ -309,7 +321,25 @@ func validateVizSeries(loc, kind string, series []slackapi.DataVisualizationData
 	if len(axis.Categories) == 0 {
 		return blockErrf(loc, "data_visualization", "%s chart requires \"axis_config\":{\"categories\":[…]} naming the x-axis categories", kind)
 	}
-	return nil
+	for _, s := range series {
+		if err := checkBroadcast(loc, "data_visualization", s.Name); err != nil {
+			return err
+		}
+		for _, p := range s.Data {
+			if err := checkBroadcast(loc, "data_visualization", p.Label); err != nil {
+				return err
+			}
+		}
+	}
+	for _, cat := range axis.Categories {
+		if err := checkBroadcast(loc, "data_visualization", cat); err != nil {
+			return err
+		}
+	}
+	if err := checkBroadcast(loc, "data_visualization", axis.XLabel); err != nil {
+		return err
+	}
+	return checkBroadcast(loc, "data_visualization", axis.YLabel)
 }
 
 func validateContainer(loc string, c *slackapi.ContainerBlock) error {

@@ -141,6 +141,9 @@ func TestValidateComponents(t *testing.T) {
 		{name: "table raw_text cell <!here>: rejected broadcast", json: `[{"type":"table","rows":[[{"type":"raw_text","text":"<!here> look"}]]}]`, wantErr: "broadcast"},
 		{name: "section <!subteam^>: rejected usergroup ping", json: `[{"type":"section","text":{"type":"mrkdwn","text":"hey <!subteam^S12345> look"}}]`, wantErr: "usergroup"},
 		{name: "rich_text usergroup element: rejected usergroup ping", json: `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"usergroup","usergroup_id":"S12345"}]}]}]`, wantErr: "usergroup"},
+		{name: "data_viz pie segment label <!channel>: rejected broadcast", json: `[{"type":"data_visualization","title":"Share","chart":{"type":"pie","segments":[{"label":"<!channel>","value":60}]}}]`, wantErr: "broadcast"},
+		{name: "data_viz bar series name <!subteam^>: rejected usergroup ping", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"bar","series":[{"name":"<!subteam^S1>","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "usergroup"},
+		{name: "data_viz axis category <!here>: rejected broadcast", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"line","series":[{"name":"S","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["<!here>"]}}}]`, wantErr: "broadcast"},
 	}
 
 	for _, tc := range cases {
