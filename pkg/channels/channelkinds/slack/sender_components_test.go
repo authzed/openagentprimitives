@@ -96,3 +96,49 @@ func TestSenderUserMessage_ComponentsOnWire(t *testing.T) {
 	assert.Len(t, opts, 2, "a components reply posts Text + Blocks (no thread_ts), not a degraded plain-text post")
 	assert.Equal(t, "summary fallback", renderTextFromOpts(t, opts), "text is the notification fallback")
 }
+
+func mentionOnlySession() channelkinds.SessionInfo {
+	return channelkinds.SessionInfo{
+		Namespace: "default", Name: "foo",
+		Channel: &spiceboxv1alpha1.ChannelBinding{
+			Name: "slack-eng", Kind: "slack", RoutingMode: "mention_only",
+			External: map[string]string{"channel_id": "C01ABCDEF", "thread_ts": "1614191050.000000"},
+		},
+	}
+}
+
+var reportComponents = json.RawMessage(`[{"type":"header","text":{"type":"plain_text","text":"Quarterly Results"}}]`)
+
+// The streaming bubble is the common path in a thread. When components are its
+// body, the mention_only hint must render there too — text, which carries it for
+// text replies, is only the notification fallback.
+func TestSender_StreamingBubble_ComponentsCarryMentionFooter(t *testing.T) {
+	c := &fakeSlackClient{}
+	s := newSender(c)
+	s.streamSink = &stubStreamSink{ts: "1700000000.000111"}
+
+	_, err := s.Send(context.Background(), mentionOnlySession(),
+		userMessageEnvelopeWithComponents(t, "summary", reportComponents))
+	require.NoError(t, err)
+	require.Len(t, c.updateCalls, 1, "the bubble is updated in place")
+
+	blocks := msgOptionBlocksJSON(t, c.updateCalls[0].opts)
+	assert.Contains(t, blocks, "Quarterly Results", "the components are the body")
+	assert.Contains(t, blocks, "@-mention me to reply", "the mention_only hint renders in the bubble")
+}
+
+// In a degraded plain-text retry, the mention_only hint closes the message
+// rather than sitting between the summary and the projected components.
+func TestSenderUserMessage_DegradedRetry_MentionFooterIsLast(t *testing.T) {
+	c := &fakeSlackClient{postMessageErrs: []error{slackapi.SlackErrorResponse{Err: "invalid_blocks"}}}
+	s := newSender(c)
+
+	_, err := s.Send(context.Background(), mentionOnlySession(),
+		userMessageEnvelopeWithComponents(t, "summary", reportComponents))
+	require.NoError(t, err)
+	require.Len(t, c.postMessageCalls, 2, "block post, then plain-text retry")
+
+	text := renderTextFromOpts(t, c.postMessageCalls[1].options)
+	assert.Equal(t, "summary\n\nQuarterly Results\n\n_@-mention me to reply._", text,
+		"summary, then the projected components, then the hint")
+}

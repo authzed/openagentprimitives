@@ -141,10 +141,16 @@ func flattenBlocks(blocks []slackapi.Block) string {
 		case *slackapi.MarkdownBlock:
 			add(blk.Text)
 		case *slackapi.TableBlock:
+			// One line per row, cells " | "-separated, so a table read back
+			// (or degraded to plain text) keeps its row structure.
 			for _, row := range blk.Rows {
+				var cells []string
 				for _, cell := range row {
-					add(flattenTableCell(cell))
+					if c := strings.TrimSpace(flattenTableCell(cell)); c != "" {
+						cells = append(cells, c)
+					}
 				}
+				add(strings.Join(cells, " | "))
 			}
 		case *slackapi.DataVisualizationBlock:
 			add(flattenDataViz(blk))
@@ -247,9 +253,11 @@ func flattenTaskCard(tc *slackapi.TaskCardBlock) string {
 	if tc.Output != nil {
 		parts = append(parts, flattenRichText(tc.Output.Elements))
 	}
+	// A source's URL renders as a clickable link, so it is content the egress
+	// gate must measure, not just its label.
 	for _, s := range tc.Sources {
-		if s.Text != "" {
-			parts = append(parts, s.Text)
+		if src := linkText(s.URL, s.Text); src != "" {
+			parts = append(parts, src)
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -276,6 +284,21 @@ func flattenRichText(elements []slackapi.RichTextElement) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// linkText renders a link in Slack's own mrkdwn form, <url|label> — the same
+// text a section carrying that link holds. The URL is always kept: it is what
+// the reader clicks, so projecting only the label would let a URL (and anything
+// smuggled into its query string) slip past the egress gate unmeasured.
+func linkText(url, label string) string {
+	switch {
+	case url == "":
+		return label
+	case label == "" || label == url:
+		return "<" + url + ">"
+	default:
+		return "<" + url + "|" + label + ">"
+	}
+}
+
 // flattenRichTextSection concatenates the leaf elements of one rich-text
 // section. User/channel mentions keep their "<@Uxxx>" form so the transcript
 // matches how the same text appears everywhere else in the pipeline.
@@ -286,11 +309,7 @@ func flattenRichTextSection(elements []slackapi.RichTextSectionElement) string {
 		case *slackapi.RichTextSectionTextElement:
 			b.WriteString(e.Text)
 		case *slackapi.RichTextSectionLinkElement:
-			if e.Text != "" {
-				b.WriteString(e.Text)
-			} else {
-				b.WriteString(e.URL)
-			}
+			b.WriteString(linkText(e.URL, e.Text))
 		case *slackapi.RichTextSectionUserElement:
 			b.WriteString("<@" + e.UserID + ">")
 		case *slackapi.RichTextSectionChannelElement:

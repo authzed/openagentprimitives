@@ -15,6 +15,7 @@ import (
 	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/sandbox"
+	"github.com/authzed/openagentprimitives/pkg/agent/toolenvelope"
 	"github.com/authzed/openagentprimitives/pkg/authz/toolguard"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credupdate"
@@ -441,7 +442,7 @@ func (l *Loop) executeToolContained(
 	// The tool must not see pt markup: strip any pt-untrusted envelope from the
 	// args before the tool runs. Inert (args unchanged) when the args carry no
 	// envelope.
-	args = stripArgTags(args)
+	args, _ = toolenvelope.StripPtJSON(args)
 
 	// Re-check revocation IMMEDIATELY before the call runs.
 	//

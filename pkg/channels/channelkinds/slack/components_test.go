@@ -24,6 +24,29 @@ func headerWithText(n int) string {
 	return `[{"type":"header","text":{"type":"plain_text","text":"` + strings.Repeat("a", n) + `"}}]`
 }
 
+func headerWith(char string, n int) string {
+	return `[{"type":"header","text":{"type":"plain_text","text":"` + strings.Repeat(char, n) + `"}}]`
+}
+
+func sectionWith(char string, n int) string {
+	return `[{"type":"section","text":{"type":"mrkdwn","text":"` + strings.Repeat(char, n) + `"}}]`
+}
+
+const pieChart = `{"type":"data_visualization","title":"Share","chart":{"type":"pie","segments":[{"label":"A","value":1}]}}`
+
+func rawTextTable(rows, cols int) string {
+	cells := make([]string, cols)
+	for i := range cells {
+		cells[i] = `{"type":"raw_text","text":"x"}`
+	}
+	row := "[" + strings.Join(cells, ",") + "]"
+	rs := make([]string, rows)
+	for i := range rs {
+		rs[i] = row
+	}
+	return `{"type":"table","rows":[` + strings.Join(rs, ",") + `]}`
+}
+
 func sectionWithFields(n int) string {
 	fs := make([]string, n)
 	for i := range fs {
@@ -144,6 +167,33 @@ func TestValidateComponents(t *testing.T) {
 		{name: "data_viz pie segment label <!channel>: rejected broadcast", json: `[{"type":"data_visualization","title":"Share","chart":{"type":"pie","segments":[{"label":"<!channel>","value":60}]}}]`, wantErr: "broadcast"},
 		{name: "data_viz bar series name <!subteam^>: rejected usergroup ping", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"bar","series":[{"name":"<!subteam^S1>","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "usergroup"},
 		{name: "data_viz axis category <!here>: rejected broadcast", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"line","series":[{"name":"S","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["<!here>"]}}}]`, wantErr: "broadcast"},
+
+		// --- one block slot is reserved for the sender's mention_only footer ---
+		{name: "49 blocks: accepted at the agent cap", json: repeatBlock(`{"type":"divider"}`, 49), wantErr: ""},
+		{name: "50 blocks: rejected (one slot reserved for the footer)", json: repeatBlock(`{"type":"divider"}`, 50), wantErr: "too many blocks"},
+
+		// --- limits count characters, not bytes ---
+		{name: "header of 150 CJK chars (450 bytes): accepted", json: headerWith("日", 150), wantErr: ""},
+		{name: "header of 151 CJK chars: rejected, counted in characters", json: headerWith("日", 151), wantErr: "text is 151 characters"},
+		{name: "section of 3000 CJK chars (9000 bytes): accepted", json: sectionWith("日", 3000), wantErr: ""},
+		{name: "markdown of 12000 CJK chars: accepted", json: `[{"type":"markdown","text":"` + strings.Repeat("日", 12000) + `"}]`, wantErr: ""},
+
+		// --- per-message chart and table counts, containers included ---
+		{name: "2 charts: accepted", json: repeatBlock(pieChart, 2), wantErr: ""},
+		{name: "3 charts: rejected", json: repeatBlock(pieChart, 3), wantErr: "too many data_visualization"},
+		{name: "third chart inside a container: rejected", json: `[` + pieChart + `,` + pieChart + `,{"type":"container","title":{"type":"plain_text","text":"G"},"child_blocks":[` + pieChart + `]}]`, wantErr: "too many data_visualization"},
+		{name: "2 tables: rejected", json: repeatBlock(rawTextTable(1, 1), 2), wantErr: "too many table"},
+		{name: "table of 100 rows x 20 columns: accepted", json: `[` + rawTextTable(100, 20) + `]`, wantErr: ""},
+		{name: "table of 101 rows: rejected", json: `[` + rawTextTable(101, 1) + `]`, wantErr: "101 rows"},
+		{name: "table row of 21 cells: rejected", json: `[` + rawTextTable(1, 21) + `]`, wantErr: "21 cells"},
+
+		// --- structurally empty blocks Slack rejects ---
+		{name: "header without text: rejected", json: `[{"type":"header"}]`, wantErr: "header"},
+		{name: "header with blank text: rejected", json: `[{"type":"header","text":{"type":"plain_text","text":"  "}}]`, wantErr: "non-empty"},
+		{name: "section with neither text nor fields: rejected", json: `[{"type":"section"}]`, wantErr: "fields"},
+		{name: "context with no elements: rejected", json: `[{"type":"context","elements":[]}]`, wantErr: "at least one"},
+		{name: "markdown with empty text: rejected", json: `[{"type":"markdown","text":""}]`, wantErr: "non-empty"},
+		{name: "table with no rows: rejected", json: `[{"type":"table","rows":[]}]`, wantErr: "at least one row"},
 	}
 
 	for _, tc := range cases {

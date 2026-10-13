@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
+	"github.com/authzed/openagentprimitives/pkg/agent/toolenvelope"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	// Registers the slack kind so ChannelKind "slack" resolves its real
 	// ComponentFormatter/ComponentValidator — the same wiring the runner uses.
@@ -122,4 +123,30 @@ func TestRespondComponentsLeakageGateSeesBlockText(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, sawGateText, "SECRET", "the gate must measure block text, not just the reply text")
 	assert.True(t, res.IsError, "the gate blocked on content carried only in blocks")
+}
+
+// pt stripping can REJOIN a token the markers split, so the validator must
+// judge the stripped blocks a human will see, not the tagged ones the model
+// sent: "<!chan" + a pt region holding "nel>" publishes as "<!channel>".
+func TestRespondComponents_PtSplitBroadcastIsRejectedAfterStrip(t *testing.T) {
+	calls := 0
+	tt := newRespondTool(RespondConfig{
+		Capabilities:      []string{"text", "components"},
+		ChannelKind:       "slack",
+		NATSPublish:       func(context.Context, string, []byte) error { calls++; return nil },
+		NATSSubjectPrefix: "ap.session.default.foo",
+	})
+	split := "hey <!chan" + toolenvelope.WrapPt("nel>", "n1", "pt_1") + " look"
+	blocks, err := json.Marshal([]map[string]any{{
+		"type": "section", "text": map[string]string{"type": "mrkdwn", "text": split},
+	}})
+	require.NoError(t, err)
+	args, err := json.Marshal(map[string]any{"text": "hi", "blocks": json.RawMessage(blocks)})
+	require.NoError(t, err)
+
+	res, err := tt.Execute(respondCtx(), args, &tool.SessionContext{Namespace: "default", Name: "foo"})
+	require.NoError(t, err)
+	assert.True(t, res.IsError, "a broadcast reassembled by the strip must be refused")
+	assert.Contains(t, res.Content, "broadcast")
+	assert.Equal(t, 0, calls, "nothing may be published")
 }

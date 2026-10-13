@@ -232,6 +232,15 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	// no envelope on the wire, exactly like the attachment-resolution guard
 	// below. Only the kind knows its component format, so the kind's validator
 	// (resolved from the outbound binding at construction) is the authority.
+	//
+	// pt markup is model-facing only, so the blocks a human sees are the
+	// STRIPPED copy — and that copy, not the tagged one, is what the validator
+	// must judge. Stripping can rejoin a guarded token the markers had split
+	// ("<!chan" + a pt region holding "nel>" publishes as "<!channel>"), so
+	// validating the tagged bytes would pass a payload whose published form a
+	// check exists to refuse. The tagged in.Blocks still feeds the leakage gate
+	// below, which needs the tags to decide, exactly as it does for in.Text.
+	outBlocks, _ := toolenvelope.StripPtJSON(in.Blocks)
 	if len(in.Blocks) > 0 {
 		if !t.hasComponents {
 			return tool.Result{Content: "respond_to_user: `blocks` (structured components) are not supported on this channel. Put your reply in `text` instead.", IsError: true, Trusted: true}, nil
@@ -248,7 +257,7 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 			// model's fault. Fail closed rather than publish unvalidated blocks.
 			return tool.Result{Trusted: true}, fmt.Errorf("respond_to_user: channel kind %q advertises components but supplies no validator", t.cfg.ChannelKind)
 		}
-		if err := t.components.ValidateComponents(in.Blocks); err != nil {
+		if err := t.components.ValidateComponents(outBlocks); err != nil {
 			return tool.Result{Content: err.Error(), IsError: true, Trusted: true}, nil
 		}
 	}
@@ -292,8 +301,8 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 		// content into a block it stays tagged in the projection and gets the
 		// same tag-aware treatment as tagged in.Text, otherwise it falls to the
 		// gate's coarse check like an attachment. pt markup is stripped from the
-		// published blocks AFTER the gate (see stripPtFromBlocks), mirroring
-		// outText, so a human never sees the markup either way.
+		// published blocks (outBlocks, validated above in its stripped form),
+		// mirroring outText, so a human never sees the markup either way.
 		gateText := in.Text
 		if len(in.Blocks) > 0 && t.components != nil {
 			if projected := t.components.ComponentsPlainText(in.Blocks); projected != "" {
@@ -365,15 +374,12 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	// pt markup is model-facing only: strip any pt-untrusted envelope before the
 	// human sees the reply. The LeakageGate above ran on the TAGGED in.Text and
 	// the TAGGED block projection (it needs the tags to decide), so the strip is
-	// on the outbound copies only — BOTH text and blocks, so neither surface
-	// renders provenance markup to a human.
+	// on the outbound copies only — BOTH text and blocks (outBlocks, stripped
+	// and validated before the gate), so neither surface renders provenance
+	// markup to a human.
 	outText := in.Text
 	if stripped, had := toolenvelope.StripPt(in.Text); had {
 		outText = stripped
-	}
-	outBlocks := in.Blocks
-	if len(in.Blocks) > 0 {
-		outBlocks = stripPtFromBlocks(in.Blocks)
 	}
 
 	logger := log.FromContext(ctx)
@@ -609,54 +615,6 @@ func normalizeOptionalBlocks(raw json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return raw
-}
-
-// stripPtFromBlocks removes pt-untrusted markup from every string value in the
-// agent-authored block JSON, the same way outText is stripped from the reply
-// text (strip the markers, keep the content). pt markers live inside JSON string
-// values — quote-escaped there — so running StripPt on the raw bytes would not
-// match; we decode to any, walk every string leaf, StripPt it, and re-marshal
-// ONLY when something was stripped (the common case returns the bytes untouched).
-// On a decode/encode error it returns the original bytes: ValidateComponents
-// already proved the JSON parses, and failing the whole reply over a strip is
-// worse than the rare passthrough it guards.
-func stripPtFromBlocks(raw json.RawMessage) json.RawMessage {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return raw
-	}
-	stripped := false
-	var walk func(any) any
-	walk = func(n any) any {
-		switch x := n.(type) {
-		case string:
-			if s, had := toolenvelope.StripPt(x); had {
-				stripped = true
-				return s
-			}
-			return x
-		case []any:
-			for i := range x {
-				x[i] = walk(x[i])
-			}
-			return x
-		case map[string]any:
-			for k := range x {
-				x[k] = walk(x[k])
-			}
-			return x
-		}
-		return n
-	}
-	v = walk(v)
-	if !stripped {
-		return raw
-	}
-	out, err := json.Marshal(v)
-	if err != nil {
-		return raw
-	}
-	return out
 }
 
 func publishWithRetry(ctx context.Context, publish func(ctx context.Context, subject string, payload []byte) error, subject string, payload []byte) error {

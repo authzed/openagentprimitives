@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	slackapi "github.com/slack-go/slack"
 )
@@ -14,10 +15,17 @@ import (
 // channel accepts from an agent. Enforcing them in the runner — before the
 // envelope is published — turns a would-be post-time rejection (which degrades
 // to plain text) into a precise, correctable error the model sees on the
-// respond_to_user call.
+// respond_to_user call. Every text limit is in characters (runes), as Slack
+// counts them — a byte count would reject non-Latin text well under the limit.
+// The per-message block and section caps are the sender's own constants
+// (sender_chunk.go), so validation and rendering share one source of truth.
 const (
-	maxBlocksPerMessage  = 50
-	maxSectionTextLen    = 3000
+	// maxAgentBlocks reserves one of Slack's 50 block slots for the
+	// sender-appended mention_only "@-mention me to reply" footer, which a
+	// mention_only thread cannot do without (a bare reply there never routes).
+	// The validator has no routing-mode input, so it reserves the slot always.
+	maxAgentBlocks       = slackMaxBlocksPerMessage - 1
+	maxSectionTextLen    = slackSectionTextLimit
 	maxHeaderTextLen     = 150
 	maxContextElements   = 10
 	maxSectionFields     = 10
@@ -25,6 +33,10 @@ const (
 	maxMarkdownTextLen   = 12000
 	maxDataVizTitleLen   = 50
 	maxContainerChildren = 10
+	maxChartsPerMessage  = 2
+	maxTablesPerMessage  = 1
+	maxTableRows         = 100
+	maxTableColumns      = 20
 )
 
 // componentFormattingInstructions is the model-facing authoring guide for the
@@ -41,7 +53,7 @@ const componentFormattingInstructions = `This channel can render structured Bloc
 	`"context" (text/mrkdwn elements, ≤10); ` +
 	`"rich_text" (sections, bullet/ordered lists, quotes, preformatted/code); ` +
 	`"markdown" (a standard-markdown block, ≤12000 chars); ` +
-	`"table" (rows of rich_text cells); ` +
+	`"table" (rows of rich_text cells; one table per message, ≤100 rows, ≤20 columns); ` +
 	`"data_visualization" (a chart; REQUIRES a "title" ≤50 chars and a "chart" object. ` +
 	`pie: {"type":"pie","segments":[{"label":"Organic","value":60}]}. ` +
 	`bar/area/line: {"type":"bar","series":[{"name":"Signups","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon","Tue"]}} — note each series uses "data" (not "data_points") and axis_config.categories is required; ≤2 charts per message); ` +
@@ -49,7 +61,8 @@ const componentFormattingInstructions = `This channel can render structured Bloc
 	`"card" (title/subtitle/body/subtext — NO action buttons, NO images yet); ` +
 	`"container" (groups 1–10 read-only child blocks in "child_blocks"; REQUIRES a "title" or "rich_text_title"). ` +
 	`Section/context text uses the same Slack mrkdwn dialect as the text field (*bold*, _italic_, ` + "`code`" + `, <url|label>) — not CommonMark; the "markdown" block is the exception and takes standard markdown. ` +
-	`Limits: at most 50 blocks; section text ≤3000 characters; split longer content across multiple blocks. ` +
+	`Limits: at most 49 blocks; section text ≤3000 characters; split longer content across multiple blocks. ` +
+	`Every block needs content: no empty header, section, context, markdown, or table. ` +
 	`Not supported: interactive elements (buttons, select menus, date pickers, inputs, action/input/context_actions blocks, data_table, carousel) — this surface is presentation-only; ` +
 	`images and icons (coming soon); and @channel/@here/@everyone broadcast mentions plus <!subteam^…> usergroup pings. ` +
 	`Always also fill the text field with a concise plain summary: it is the notification preview and the fallback shown if the blocks cannot be rendered.`
@@ -100,8 +113,8 @@ func validateComponents(raw json.RawMessage) error {
 	if len(set) == 0 {
 		return errors.New("respond_to_user: `blocks` must contain at least one block")
 	}
-	if len(set) > maxBlocksPerMessage {
-		return fmt.Errorf("respond_to_user: too many blocks (%d); Slack renders at most %d blocks per message", len(set), maxBlocksPerMessage)
+	if len(set) > maxAgentBlocks {
+		return fmt.Errorf("respond_to_user: too many blocks (%d); at most %d blocks per message (Slack's %d, less one reserved for a system footer)", len(set), maxAgentBlocks, slackMaxBlocksPerMessage)
 	}
 
 	for i, b := range set {
@@ -109,8 +122,37 @@ func validateComponents(raw json.RawMessage) error {
 			return err
 		}
 	}
+
+	// Per-message counts Slack enforces across the whole message, containers
+	// included: checking only top-level blocks would let a container smuggle a
+	// third chart into a post Slack then rejects whole.
+	var charts, tables int
+	countBlocks(set, &charts, &tables)
+	if charts > maxChartsPerMessage {
+		return fmt.Errorf("respond_to_user: too many data_visualization blocks (%d); Slack renders at most %d charts per message — send the rest in another reply", charts, maxChartsPerMessage)
+	}
+	if tables > maxTablesPerMessage {
+		return fmt.Errorf("respond_to_user: too many table blocks (%d); Slack allows %d table per message — send the rest in another reply", tables, maxTablesPerMessage)
+	}
 	return nil
 }
+
+// countBlocks tallies chart and table blocks, descending into containers.
+func countBlocks(set []slackapi.Block, charts, tables *int) {
+	for _, b := range set {
+		switch blk := b.(type) {
+		case *slackapi.DataVisualizationBlock:
+			*charts++
+		case *slackapi.TableBlock:
+			*tables++
+		case *slackapi.ContainerBlock:
+			countBlocks(blk.ChildBlocks.BlockSet, charts, tables)
+		}
+	}
+}
+
+// runeLen counts characters the way Slack's limits do.
+func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
 func blockErrf(loc, typ, format string, args ...any) error {
 	return fmt.Errorf("respond_to_user: %s (%s): "+format, append([]any{loc, typ}, args...)...)
@@ -122,15 +164,13 @@ func blockErrf(loc, typ, format string, args ...any) error {
 func validateBlock(loc string, b slackapi.Block) error {
 	switch blk := b.(type) {
 	case *slackapi.HeaderBlock:
-		if blk.Text != nil {
-			if n := len(blk.Text.Text); n > maxHeaderTextLen {
-				return blockErrf(loc, "header", "text is %d characters; Slack limits header text to %d", n, maxHeaderTextLen)
-			}
-			if err := checkBroadcast(loc, "header", blk.Text.Text); err != nil {
-				return err
-			}
+		if blk.Text == nil || strings.TrimSpace(blk.Text.Text) == "" {
+			return blockErrf(loc, "header", "requires non-empty \"text\" ({\"type\":\"plain_text\",\"text\":…})")
 		}
-		return nil
+		if n := runeLen(blk.Text.Text); n > maxHeaderTextLen {
+			return blockErrf(loc, "header", "text is %d characters; Slack limits header text to %d", n, maxHeaderTextLen)
+		}
+		return checkBroadcast(loc, "header", blk.Text.Text)
 	case *slackapi.SectionBlock:
 		return validateSection(loc, blk)
 	case *slackapi.DividerBlock:
@@ -140,7 +180,10 @@ func validateBlock(loc string, b slackapi.Block) error {
 	case *slackapi.RichTextBlock:
 		return validateRichText(loc, blk)
 	case *slackapi.MarkdownBlock:
-		if n := len(blk.Text); n > maxMarkdownTextLen {
+		if strings.TrimSpace(blk.Text) == "" {
+			return blockErrf(loc, "markdown", "requires non-empty \"text\"")
+		}
+		if n := runeLen(blk.Text); n > maxMarkdownTextLen {
 			return blockErrf(loc, "markdown", "text is %d characters; Slack limits a markdown block to %d", n, maxMarkdownTextLen)
 		}
 		return checkBroadcast(loc, "markdown", blk.Text)
@@ -185,8 +228,12 @@ func validateSection(loc string, s *slackapi.SectionBlock) error {
 	if s.Accessory != nil {
 		return blockErrf(loc, "section", "accessories are not supported on this channel; use plain section text and fields")
 	}
+	hasText := s.Text != nil && strings.TrimSpace(s.Text.Text) != ""
+	if !hasText && len(s.Fields) == 0 {
+		return blockErrf(loc, "section", "requires a non-empty \"text\" object or at least one entry in \"fields\"")
+	}
 	if s.Text != nil {
-		if n := len(s.Text.Text); n > maxSectionTextLen {
+		if n := runeLen(s.Text.Text); n > maxSectionTextLen {
 			return blockErrf(loc, "section", "text is %d characters; Slack limits section text to %d — split it across multiple section blocks", n, maxSectionTextLen)
 		}
 		if err := checkBroadcast(loc, "section", s.Text.Text); err != nil {
@@ -200,7 +247,7 @@ func validateSection(loc string, s *slackapi.SectionBlock) error {
 		if f == nil {
 			continue
 		}
-		if n := len(f.Text); n > maxFieldTextLen {
+		if n := runeLen(f.Text); n > maxFieldTextLen {
 			return blockErrf(loc, "section", "a field is %d characters; Slack limits each field to %d", n, maxFieldTextLen)
 		}
 		if err := checkBroadcast(loc, "section", f.Text); err != nil {
@@ -212,6 +259,9 @@ func validateSection(loc string, s *slackapi.SectionBlock) error {
 
 func validateContext(loc string, c *slackapi.ContextBlock) error {
 	els := c.ContextElements.Elements
+	if len(els) == 0 {
+		return blockErrf(loc, "context", "requires at least one text element in \"elements\"")
+	}
 	if len(els) > maxContextElements {
 		return blockErrf(loc, "context", "has %d elements; Slack limits a context block to %d elements", len(els), maxContextElements)
 	}
@@ -245,7 +295,16 @@ func richTextElementsHaveBroadcast(els []slackapi.RichTextElement) bool {
 }
 
 func validateTable(loc string, t *slackapi.TableBlock) error {
+	if len(t.Rows) == 0 {
+		return blockErrf(loc, "table", "requires at least one row in \"rows\"")
+	}
+	if len(t.Rows) > maxTableRows {
+		return blockErrf(loc, "table", "has %d rows; Slack limits a table to %d rows — split it or summarize", len(t.Rows), maxTableRows)
+	}
 	for r, row := range t.Rows {
+		if len(row) > maxTableColumns {
+			return blockErrf(loc, "table", "row %d has %d cells; Slack limits a table to %d columns", r, len(row), maxTableColumns)
+		}
 		for c, cell := range row {
 			cloc := fmt.Sprintf("%s table r%dc%d", loc, r, c)
 			switch cc := cell.(type) {
@@ -286,7 +345,7 @@ func validateDataViz(loc string, dv *slackapi.DataVisualizationBlock) error {
 	if strings.TrimSpace(dv.Title) == "" {
 		return blockErrf(loc, "data_visualization", "requires a non-empty \"title\" (≤%d chars)", maxDataVizTitleLen)
 	}
-	if n := len([]rune(dv.Title)); n > maxDataVizTitleLen {
+	if n := runeLen(dv.Title); n > maxDataVizTitleLen {
 		return blockErrf(loc, "data_visualization", "title is %d characters; Slack limits it to %d", n, maxDataVizTitleLen)
 	}
 	if err := checkBroadcast(loc, "data_visualization", dv.Title); err != nil {

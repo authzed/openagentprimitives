@@ -47,3 +47,37 @@ func TestComponentsPlainText(t *testing.T) {
 	assert.Contains(t, got, "all good")
 	assert.Equal(t, "", k.ComponentsPlainText(json.RawMessage(`not json`)), "unparseable input yields empty projection")
 }
+
+// Everything that renders reaches the egress gate's projection: a link's URL
+// (not only its label), a task card source's URL, and a table keeps its rows.
+func TestComponentsPlainText_ProjectsURLsAndTableRows(t *testing.T) {
+	k := &Kind{}
+	cases := []struct {
+		name, json string
+		want       []string
+	}{
+		{
+			name: "rich_text link with a label: URL projected",
+			json: `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"link","text":"docs","url":"https://x.example/?k=SECRET"}]}]}]`,
+			want: []string{"<https://x.example/?k=SECRET|docs>"},
+		},
+		{
+			name: "task_card source: URL projected",
+			json: `[{"type":"task_card","task_id":"t1","title":"Check","sources":[{"type":"url","url":"https://x.example/?k=SECRET","text":"ref"}]}]`,
+			want: []string{"<https://x.example/?k=SECRET|ref>"},
+		},
+		{
+			name: "table: one line per row, cells separated",
+			json: `[{"type":"table","rows":[[{"type":"raw_text","text":"Name"},{"type":"raw_text","text":"Count"}],[{"type":"raw_text","text":"a"},{"type":"raw_text","text":"1"}]]}]`,
+			want: []string{"Name | Count\na | 1"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := k.ComponentsPlainText(json.RawMessage(tc.json))
+			for _, w := range tc.want {
+				assert.Contains(t, got, w)
+			}
+		})
+	}
+}

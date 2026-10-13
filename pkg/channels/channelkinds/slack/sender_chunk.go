@@ -11,10 +11,14 @@ package slack
 // dropped the agent's reply and left the user with a generic "couldn't deliver"
 // notice. See chunkForSlackSection and buildUserMessageBlocks.
 const (
+	// slackSectionTextLimit is Slack's limit on a section block's text, in
+	// characters. The agent-components validator enforces it as-is.
+	slackSectionTextLimit = 3000
+
 	// slackSectionMaxRunes caps each section block's mrkdwn payload below
-	// Slack's 3000-char limit, leaving headroom (mrkdwn escaping can expand a
-	// string, e.g. `<`→`&lt;`).
-	slackSectionMaxRunes = 2900
+	// slackSectionTextLimit when the sender chunks its OWN text, leaving
+	// headroom (mrkdwn escaping can expand a string, e.g. `<`→`&lt;`).
+	slackSectionMaxRunes = slackSectionTextLimit - 100
 
 	// slackMaxBlocksPerMessage is Slack's hard limit on blocks per message.
 	slackMaxBlocksPerMessage = 50
