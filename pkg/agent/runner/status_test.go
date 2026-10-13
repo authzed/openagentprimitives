@@ -339,33 +339,93 @@ func TestTerminalWriteIsIdempotent(t *testing.T) {
 		"FinishedAt was overwritten: was %v, now %v", firstFinished, out.Status.FinishedAt)
 }
 
-// TestPatchEstimatedCost_NeverRegresses asserts the session cost estimate is
-// monotonic. The SessionEnd cost hook stamps on EVERY terminal path — including
-// idle — from per-pod token counters that reset on every wake, so a woken pod
-// that reaches a terminal path having made no LLM calls used to overwrite a
-// real number with zero.
-func TestPatchEstimatedCost_NeverRegresses(t *testing.T) {
+// TestPatchEstimatedCost_AccumulatesAcrossPods asserts the session cost is the
+// SUM across pods, not the highest single-pod total: each pod upserts its own
+// perPod entry and the aggregate is recomputed. The returned value is that
+// aggregate.
+func TestPatchEstimatedCost_AccumulatesAcrossPods(t *testing.T) {
 	c, sess := newFakeClientWithSession(t)
-	sp := runner.NewStatusPatcher(c, client.ObjectKeyFromObject(sess))
+	key := client.ObjectKeyFromObject(sess)
 	ctx := context.Background()
 
-	require.NoError(t, sp.PatchEstimatedCost(ctx, spiceboxv1alpha1.EstimatedSessionCost{
-		AmountMicroUSD: 4_200_000, Currency: "USD", Model: "m1", PricingKnown: true,
-		ByModel: []spiceboxv1alpha1.ModelCostBucket{{Model: "m1", AmountMicroUSD: 4_200_000}},
-	}), "first stamp")
+	podA := runner.NewStatusPatcher(c, key).WithPod("pod-a")
+	podB := runner.NewStatusPatcher(c, key).WithPod("pod-b")
 
-	// A woken pod with no LLM calls of its own.
-	require.NoError(t, sp.PatchEstimatedCost(ctx, spiceboxv1alpha1.EstimatedSessionCost{
-		Currency: "USD", PricingKnown: false,
-	}), "second stamp from a woken pod")
+	aggA, err := podA.PatchEstimatedCost(ctx, spiceboxv1alpha1.EstimatedSessionCost{
+		AmountMicroUSD: 5_000_000, Currency: "USD", Model: "m1", PricingKnown: true,
+		ByModel: []spiceboxv1alpha1.ModelCostBucket{{Model: "m1", AmountMicroUSD: 5_000_000, PricingKnown: true}},
+	})
+	require.NoError(t, err, "pod-a stamp")
+	assert.Equal(t, int64(5_000_000), aggA.AmountMicroUSD, "first pod: aggregate = its own spend")
+
+	aggB, err := podB.PatchEstimatedCost(ctx, spiceboxv1alpha1.EstimatedSessionCost{
+		AmountMicroUSD: 3_000_000, Currency: "USD", Model: "m1", PricingKnown: true,
+		ByModel: []spiceboxv1alpha1.ModelCostBucket{{Model: "m1", AmountMicroUSD: 3_000_000, PricingKnown: true}},
+	})
+	require.NoError(t, err, "pod-b stamp")
+	assert.Equal(t, int64(8_000_000), aggB.AmountMicroUSD, "second pod: aggregate accumulates ($5 + $3)")
 
 	var out spiceboxv1alpha1.AgentSession
-	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &out), "Get after stamps")
-	require.NotNil(t, out.Status.EstimatedCost, "EstimatedCost must survive the second stamp")
-	assert.Equal(t, int64(4_200_000), out.Status.EstimatedCost.AmountMicroUSD,
-		"a pod that spent nothing must not wipe the session's recorded spend")
-	assert.Len(t, out.Status.EstimatedCost.ByModel, 1,
-		"the per-model breakdown must stay consistent with the amount it explains")
+	require.NoError(t, c.Get(ctx, key, &out), "Get after stamps")
+	ec := out.Status.EstimatedCost
+	require.NotNil(t, ec)
+	assert.Equal(t, int64(8_000_000), ec.AmountMicroUSD, "session total = sum across pods")
+	assert.Len(t, ec.PerPod, 2, "one perPod entry per pod")
+	require.Len(t, ec.ByModel, 1, "same model merged into one aggregate bucket")
+	assert.Equal(t, int64(8_000_000), ec.ByModel[0].AmountMicroUSD, "merged model bucket = $5 + $3")
+}
+
+// TestPatchEstimatedCost_WokenZeroPodPreservesTotal asserts a woken pod that
+// made no LLM calls of its own writes a $0 entry for ITSELF and leaves earlier
+// pods' spend intact — the clobber the old monotonic guard existed to prevent,
+// now handled structurally by per-pod accumulation.
+func TestPatchEstimatedCost_WokenZeroPodPreservesTotal(t *testing.T) {
+	c, sess := newFakeClientWithSession(t)
+	key := client.ObjectKeyFromObject(sess)
+	ctx := context.Background()
+
+	_, err := runner.NewStatusPatcher(c, key).WithPod("pod-a").PatchEstimatedCost(ctx,
+		spiceboxv1alpha1.EstimatedSessionCost{
+			AmountMicroUSD: 4_200_000, Currency: "USD", Model: "m1", PricingKnown: true,
+			ByModel: []spiceboxv1alpha1.ModelCostBucket{{Model: "m1", AmountMicroUSD: 4_200_000, PricingKnown: true}},
+		})
+	require.NoError(t, err, "pod-a stamp")
+
+	agg, err := runner.NewStatusPatcher(c, key).WithPod("pod-b").PatchEstimatedCost(ctx,
+		spiceboxv1alpha1.EstimatedSessionCost{Currency: "USD", PricingKnown: false})
+	require.NoError(t, err, "woken pod-b stamp")
+	assert.Equal(t, int64(4_200_000), agg.AmountMicroUSD, "a pod that spent nothing must not wipe recorded spend")
+
+	var out spiceboxv1alpha1.AgentSession
+	require.NoError(t, c.Get(ctx, key, &out), "Get after stamps")
+	assert.Equal(t, int64(4_200_000), out.Status.EstimatedCost.AmountMicroUSD)
+	assert.Len(t, out.Status.EstimatedCost.PerPod, 2, "both pods recorded, even the zero one")
+	assert.Len(t, out.Status.EstimatedCost.ByModel, 1, "breakdown stays consistent with the amount")
+}
+
+// TestPatchEstimatedCost_SamePodRestampIsIdempotent asserts a pod re-stamping
+// (idle then completed) overwrites its OWN entry rather than adding twice.
+func TestPatchEstimatedCost_SamePodRestampIsIdempotent(t *testing.T) {
+	c, sess := newFakeClientWithSession(t)
+	key := client.ObjectKeyFromObject(sess)
+	ctx := context.Background()
+	sp := runner.NewStatusPatcher(c, key).WithPod("pod-a")
+
+	_, err := sp.PatchEstimatedCost(ctx, spiceboxv1alpha1.EstimatedSessionCost{
+		AmountMicroUSD: 2_000_000, Currency: "USD", Model: "m1", PricingKnown: true,
+	})
+	require.NoError(t, err, "first (idle) stamp")
+
+	agg, err := sp.PatchEstimatedCost(ctx, spiceboxv1alpha1.EstimatedSessionCost{
+		AmountMicroUSD: 5_000_000, Currency: "USD", Model: "m1", PricingKnown: true,
+	})
+	require.NoError(t, err, "second (completed) stamp from the same pod")
+	assert.Equal(t, int64(5_000_000), agg.AmountMicroUSD, "same pod overwrites its entry, not added twice")
+
+	var out spiceboxv1alpha1.AgentSession
+	require.NoError(t, c.Get(ctx, key, &out), "Get after stamps")
+	assert.Equal(t, int64(5_000_000), out.Status.EstimatedCost.AmountMicroUSD)
+	assert.Len(t, out.Status.EstimatedCost.PerPod, 1, "one pod -> one entry, re-stamp overwrites")
 }
 
 // TestAppendRunnerNote_CapsOldestFirst asserts runnerNotes is bounded. Nothing

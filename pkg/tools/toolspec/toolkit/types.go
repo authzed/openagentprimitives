@@ -10,6 +10,19 @@ const (
 	SubcommandModeInteractive = "interactive"
 )
 
+// Toolkit.CostTreatment values. "" is treated as metered.
+const (
+	// CostTreatmentMetered: the toolkit's reported total_cost_usd is money
+	// actually billed (an API key); it counts toward session spend.
+	CostTreatmentMetered = "metered"
+	// CostTreatmentSubscriptionEquivalent: the toolkit runs under a flat-rate
+	// subscription (e.g. a Claude Max/Pro OAuth token), so its reported cost is
+	// an API-EQUIVALENT estimate, not money charged. It is recorded and shown
+	// but excluded from session spend so it cannot inflate the figure or trip
+	// cost alerts.
+	CostTreatmentSubscriptionEquivalent = "subscription-equivalent"
+)
+
 // Toolkit is the closed-world description of one CLI tool.
 type Toolkit struct {
 	// Name is the catalog key a spec names to reach this toolkit.
@@ -57,6 +70,12 @@ type Toolkit struct {
 	// publishing KindToolSessionEvent envelopes. Empty publishes raw
 	// KindToolSessionDelta instead. Example value: "claude-stream-json".
 	StreamFormat string `json:"streamFormat,omitempty"`
+	// CostTreatment declares how this toolkit's provider-reported cost counts
+	// toward session spend: "metered" (default, empty) is real billed money;
+	// "subscription-equivalent" is a flat-rate estimate (e.g. a Claude Max OAuth
+	// run) that is recorded and shown but kept OUT of the session total. See the
+	// CostTreatment* constants.
+	CostTreatment string `json:"costTreatment,omitempty"`
 	// SiteURL mirrors SpiceboxToolkit.Spec.SiteURL for embedded
 	// catalog entries. Set in toolkits/<name>.yaml for built-in
 	// toolkits whose homepage is known at compile time. identityd

@@ -453,4 +453,61 @@ func TestAdmindBudget_ByToolAddsToEstimate(t *testing.T) {
 	require.Contains(t, sess, "default/s-codebot")
 	assert.InDelta(t, 19.02, float64(sess["default/s-codebot"].EstimatedCostUSD), 1e-9,
 		"$0 model (0 tokens) + $19.02 tool cost")
+
+	// byModel: tool spend gets its own row and the grand total matches the other
+	// axes — the fix for tool cost being hidden inside the model row (no-bucket
+	// path).
+	model := rowsByKey(bd.ByModel)
+	require.Contains(t, model, "claude-oauth", "tool spend gets its own byModel row")
+	assert.InDelta(t, 19.02, float64(model["claude-oauth"].EstimatedCostUSD), 1e-9)
+	var byModelTotal float64
+	for _, r := range bd.ByModel {
+		byModelTotal += float64(r.EstimatedCostUSD)
+	}
+	assert.InDelta(t, 19.02, byModelTotal, 1e-9, "byModel total equals bySession")
+}
+
+// TestAdmindBudget_ByModelWithBucketsAndTool proves tool spend keeps its own
+// byModel row even when per-model buckets are present — the sub-case where the
+// bucket path previously dropped tool cost entirely from byModel.
+func TestAdmindBudget_ByModelWithBucketsAndTool(t *testing.T) {
+	s := &spiceboxv1alpha1.AgentSession{}
+	s.Namespace, s.Name = "default", "s-routed"
+	s.Spec.Class = "router-bot"
+	s.Status.Phase = "Completed"
+	s.Status.StartedAt = &metav1.Time{Time: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	s.Status.EffectiveSettings = &spiceboxv1alpha1.EffectiveSettings{
+		Model: spiceboxv1alpha1.ModelConfig{Provider: "openrouter", Name: "auto"},
+	}
+	s.Status.EstimatedCost = &spiceboxv1alpha1.EstimatedSessionCost{
+		ByModel: []spiceboxv1alpha1.ModelCostBucket{
+			{Model: "openrouter/anthropic/claude-3.5-sonnet", AmountMicroUSD: 1_000_000, PricingKnown: true},
+		},
+		ByTool: []spiceboxv1alpha1.ToolCostBucket{
+			{Tool: "claude-oauth", AmountMicroUSD: 5_000_000, PricingKnown: true},
+		},
+	}
+
+	k8s := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(s).Build()
+	a := newTestAdmind(t, k8s)
+	a.Aggregator().UpsertSession(s)
+
+	w := do(t, a.Handler(), http.MethodGet, "/admin/v1/budget", "test-token", "user:YWRtaW4", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	var bd admind.BudgetBreakdown
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &bd))
+
+	model := rowsByKey(bd.ByModel)
+	require.Contains(t, model, "openrouter/anthropic/claude-3.5-sonnet")
+	assert.InDelta(t, 1.0, float64(model["openrouter/anthropic/claude-3.5-sonnet"].EstimatedCostUSD), 1e-9)
+	require.Contains(t, model, "claude-oauth", "tool spend is NOT dropped when buckets are present")
+	assert.InDelta(t, 5.0, float64(model["claude-oauth"].EstimatedCostUSD), 1e-9)
+
+	// byModel total is the $1 model bucket + $5 tool row, computed from the
+	// byModel rows alone — the tool cost is attributed, not dropped.
+	var byModelTotal float64
+	for _, r := range bd.ByModel {
+		byModelTotal += float64(r.EstimatedCostUSD)
+	}
+	assert.InDelta(t, 6.0, byModelTotal, 1e-9)
 }

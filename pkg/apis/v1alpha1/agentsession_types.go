@@ -969,11 +969,12 @@ type AgentSessionProgress struct {
 // PricingKnown=false means a served model had no price, so AmountMicroUSD is a
 // lower bound (the priced components only), not the full cost.
 type EstimatedSessionCost struct {
-	// AmountMicroUSD is the session total in micro-USD (1e-6 USD): the sum of
-	// every priced component (ByModel + ByTool). When PricingKnown is false, at
-	// least one served MODEL had no rate, so this is a LOWER BOUND on spend (the
-	// components that could be priced), not the full session cost — it is no
-	// longer necessarily 0, because provider-reported tool cost is always priced.
+	// AmountMicroUSD is the SESSION total in micro-USD (1e-6 USD), accumulated
+	// across every pod that served the session: the sum of PerPod amounts. When
+	// PricingKnown is false, at least one served MODEL (in some pod) had no rate,
+	// so this is a LOWER BOUND on spend (the components that could be priced),
+	// not the full session cost — it is no longer necessarily 0, because
+	// provider-reported tool cost is always priced.
 	// +optional
 	AmountMicroUSD int64 `json:"amountMicroUSD,omitempty"`
 	// Currency is the ISO code the amount is denominated in ("USD").
@@ -982,30 +983,72 @@ type EstimatedSessionCost struct {
 	// Model is the configured model the session ran under.
 	// +optional
 	Model string `json:"model,omitempty"`
-	// PricingKnown is false when a served model had no price. The amount is then
-	// a lower bound (priced components only), not the full cost. Tool buckets are
-	// always priced, so this tracks model-pricing coverage specifically.
+	// PricingKnown is false when a served model had no price in ANY contributing
+	// pod (the AND across PerPod). The amount is then a lower bound (priced
+	// components only), not the full cost. Tool buckets are always priced, so
+	// this tracks model-pricing coverage specifically.
 	// +optional
 	PricingKnown bool `json:"pricingKnown,omitempty"`
 	// AsOf is when the estimate was computed.
 	// +optional
 	AsOf metav1.Time `json:"asOf,omitempty"`
 
-	// ByModel breaks the total down per actually-served model, so a session
-	// that fell back or auto-routed across models shows where the spend went
-	// instead of one blended total under the configured model. Empty when the
-	// runner reported no per-model usage; AmountMicroUSD and PricingKnown are
+	// ByModel breaks the total down per actually-served model, MERGED across
+	// every pod (summed per model display id), so a session that fell back or
+	// auto-routed across models — or ran across a reap/wake — shows where the
+	// spend went instead of one blended total under the configured model. Empty
+	// when no pod reported per-model usage; AmountMicroUSD and PricingKnown are
 	// then the sole source of truth.
 	// +optional
 	// +listType=atomic
 	ByModel []ModelCostBucket `json:"byModel,omitempty"`
 
 	// ByTool breaks out the cost of inner interactive toolkits (e.g. a `claude`
-	// Claude Code sub-run's own provider-reported spend) a session drove. These
-	// are ADDED to AmountMicroUSD alongside ByModel — a session's total is model
-	// spend plus tool spend. Empty when no interactive toolkit reported a cost.
-	// Tool cost is always provider-reported, never table-priced, so a bucket's
-	// PricingKnown is always true.
+	// Claude Code sub-run's own provider-reported spend) a session drove, MERGED
+	// across every pod (summed per tool). These are ADDED to AmountMicroUSD
+	// alongside ByModel — a session's total is model spend plus tool spend. Empty
+	// when no interactive toolkit reported a cost.
+	// +optional
+	// +listType=atomic
+	ByTool []ToolCostBucket `json:"byTool,omitempty"`
+
+	// PerPod is the per-pod cost SOURCE OF TRUTH: one entry per pod that served
+	// the session (keyed by pod name), each carrying that pod's own total and
+	// breakdown. The aggregate fields above are DERIVED from this list — the
+	// total is the sum of PerPod amounts, ByModel/ByTool are merged by key, and
+	// PricingKnown is the AND. Each pod upserts only its own entry, so cost
+	// ACCUMULATES across a reap/wake instead of a later pod's single-pod total
+	// replacing an earlier one. Empty only for a session no pod has costed yet.
+	// +optional
+	// +listType=atomic
+	PerPod []PerPodCost `json:"perPod,omitempty"`
+}
+
+// PerPodCost is one serving pod's slice of a session's cost — the per-pod
+// source of truth the EstimatedSessionCost aggregate is derived from. A pod
+// rewrites only its OWN entry (keyed by Pod), so the session total accumulates
+// across pods rather than a later pod clobbering an earlier one.
+type PerPodCost struct {
+	// Pod is the serving pod's name (its HOSTNAME); the upsert key.
+	Pod string `json:"pod"`
+	// AmountMicroUSD is this pod's own total in micro-USD (model + tool).
+	// +optional
+	AmountMicroUSD int64 `json:"amountMicroUSD,omitempty"`
+	// Currency is the ISO code this pod's amount is denominated in ("USD").
+	// +optional
+	Currency string `json:"currency,omitempty"`
+	// PricingKnown is false when a model this pod served had no rate (this pod's
+	// amount is then a lower bound).
+	// +optional
+	PricingKnown bool `json:"pricingKnown,omitempty"`
+	// AsOf is when this pod last computed its estimate.
+	// +optional
+	AsOf metav1.Time `json:"asOf,omitempty"`
+	// ByModel is this pod's per-served-model breakdown.
+	// +optional
+	// +listType=atomic
+	ByModel []ModelCostBucket `json:"byModel,omitempty"`
+	// ByTool is this pod's per-interactive-toolkit breakdown.
 	// +optional
 	// +listType=atomic
 	ByTool []ToolCostBucket `json:"byTool,omitempty"`
@@ -1040,13 +1083,29 @@ type ToolCostBucket struct {
 	// Tool is the outer tool name (e.g. "claude-oauth").
 	Tool string `json:"tool"`
 	// AmountMicroUSD is this tool's provider-reported cost, summed across its
-	// invocations, in micro-USD (1e-6 USD).
+	// invocations, in micro-USD (1e-6 USD). Negative reports are excluded from
+	// the sum (see Anomalous).
 	// +optional
 	AmountMicroUSD int64 `json:"amountMicroUSD,omitempty"`
-	// PricingKnown is true when AmountMicroUSD is a real cost. Tool cost is
-	// always provider-reported, so this is true whenever a cost was reported.
+	// PricingKnown is true when AmountMicroUSD is a real cost — i.e. at least one
+	// non-negative cost tally was reported. False when none was reported (the
+	// amount is 0 and must not be shown as real spend) or every report was
+	// anomalous.
 	// +optional
 	PricingKnown bool `json:"pricingKnown,omitempty"`
+	// Anomalous is true when a negative (nonsensical) provider cost was reported
+	// for this tool. The tool is still recorded as seen, but the negative value
+	// is excluded from AmountMicroUSD and the session total — it signals "a cost
+	// report here does not make sense" rather than silently dropping it.
+	// +optional
+	Anomalous bool `json:"anomalous,omitempty"`
+	// SubscriptionEquivalent is true when this tool ran under a flat-rate
+	// subscription (toolkit CostTreatment=subscription-equivalent), so its
+	// AmountMicroUSD is an API-equivalent estimate, not money charged. The
+	// bucket is recorded and shown, but its amount is EXCLUDED from the session
+	// total / admind spend so it cannot inflate the figure or trip cost alerts.
+	// +optional
+	SubscriptionEquivalent bool `json:"subscriptionEquivalent,omitempty"`
 }
 
 // ParentExchange is a delegated child's record of asking the agent that

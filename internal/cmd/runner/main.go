@@ -483,7 +483,7 @@ func run(cfg *config) error {
 		cancel()
 	}()
 
-	statusPatcher := runner.NewStatusPatcher(c, sessKey)
+	statusPatcher := runner.NewStatusPatcher(c, sessKey).WithPod(hostname)
 
 	// failSession is this file's ONE terminal-failure path. Every boot-time
 	// failure below goes through it rather than calling WriteFailed directly,
@@ -3242,7 +3242,7 @@ func buildToolSessionEventPublisher(
 	logMode string,
 	ns, name string,
 	signer *channelevents.EnvelopeSigner,
-	onResult func(outerTool string, costUSD float64, ok bool),
+	onResult func(outerTool string, costUSD float64, costReported, subscriptionEquivalent bool),
 ) func(toolCallRef, reason, outerTool string, ev toolkitstream.Event) {
 	return func(toolCallRef, reason, outerTool string, ev toolkitstream.Event) {
 		// NATS -> channelsd -> Slack — unchanged, always runs.
@@ -3295,7 +3295,7 @@ func buildToolSessionEventPublisher(
 		// of the ToolSessionLog persist gate above — accumulation must not depend
 		// on logging being on.
 		if ev.Type == toolkitstream.EventResult && onResult != nil {
-			onResult(outerTool, ev.CostUSD, ev.OK)
+			onResult(outerTool, ev.CostUSD, ev.CostReported, ev.SubscriptionEquivalent)
 		}
 	}
 }

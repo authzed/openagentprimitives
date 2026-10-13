@@ -405,6 +405,7 @@ func liveSessionSnapshot(agg *Aggregator) func() []overview.LiveSession {
 				OutputTokens:     s.OutputTokens,
 				PendingApprovals: s.PendingToolGrants + s.PendingLeakageApprovals + s.PendingContentInspectionApprovals,
 				ByModel:          buckets,
+				ToolCostMicroUSD: toolCostMicro(s.ByTool),
 			})
 		}
 		return out

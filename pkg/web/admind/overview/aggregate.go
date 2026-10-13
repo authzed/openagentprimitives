@@ -61,6 +61,12 @@ type LiveSession struct {
 	// under the single Model field above — EITHER the buckets OR the session
 	// totals, never both, so nothing is double-counted.
 	ByModel []ModelBucket
+	// ToolCostMicroUSD is the session's summed provider-reported interactive-
+	// toolkit cost (micro-USD). Carried here so the engine folds it from the
+	// SAME snapshot it builds ByModel from — keeping model and tool cost at one
+	// point in time rather than letting the handler read it live against a
+	// cached ByModel.
+	ToolCostMicroUSD int64
 }
 
 // ModelBucket mirrors v1alpha1.ModelCostBucket's token counts without pulling
@@ -120,6 +126,11 @@ type Overview struct {
 	ByModel []ModelTokens `json:"byModel"`
 	// ByAgentClass is the per-class rollup, ordered for display.
 	ByAgentClass []ClassTokens `json:"byAgentClass"`
+	// ToolCostMicroUSD is the summed interactive-toolkit cost (micro-USD) across
+	// the live snapshot, computed here so it shares a point in time with ByModel.
+	// Not token-based, so it never appears in ByModel; the budget handler prices
+	// ByModel and adds this.
+	ToolCostMicroUSD int64 `json:"toolCostMicroUSD"`
 	// Series24h is a FIXED 24-hour window, oldest first; empty hours are zeroed
 	// buckets rather than gaps.
 	Series24h [buckets]HourBucket `json:"series24h"`
@@ -202,6 +213,7 @@ func (e *Engine) compute(ctx context.Context) (Overview, error) {
 				active++
 			}
 			ov.KPIs.ApprovalsPending += s.PendingApprovals
+			ov.ToolCostMicroUSD += s.ToolCostMicroUSD
 
 			// A session WITH per-served-model buckets attributes its tokens to
 			// EACH bucket's own Model, not the session's blended one, so a

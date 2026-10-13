@@ -96,7 +96,7 @@ func TestFireSessionEnd_PopulatesByTool(t *testing.T) {
 	l.pipelineExec = cr
 	l.pipelineOnce.Do(func() {})
 
-	l.AddToolCost("claude-oauth", 5.43, true)
+	l.AddToolCost("claude-oauth", 5.43, true, false)
 	l.fireSessionEnd(context.Background(), "completed")
 
 	require.NotNil(t, cr.in.End)

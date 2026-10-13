@@ -113,13 +113,14 @@ func TestBuildToolSessionEventPublisher_AllFieldsRoundTrip(t *testing.T) {
 
 func TestBuildToolSessionEventPublisher_InvokesOnResultForResultEvent(t *testing.T) {
 	type call struct {
-		tool string
-		cost float64
-		ok   bool
+		tool         string
+		cost         float64
+		costReported bool
+		subscription bool
 	}
 	var got []call
-	onResult := func(tool string, cost float64, ok bool) {
-		got = append(got, call{tool, cost, ok})
+	onResult := func(tool string, cost float64, costReported, subscription bool) {
+		got = append(got, call{tool, cost, costReported, subscription})
 	}
 	pub := func(_ context.Context, _ string, _ []byte) error { return nil }
 
@@ -129,12 +130,21 @@ func TestBuildToolSessionEventPublisher_InvokesOnResultForResultEvent(t *testing
 	// A non-result event must NOT trigger onResult.
 	emit("tc-1", "reason", "claude-oauth",
 		toolkitstream.Event{Type: toolkitstream.EventTextDelta, Text: "hi"})
-	// A result event MUST trigger it once, carrying tool/cost/ok.
+	// A result event that reported a cost tally MUST trigger onResult once,
+	// carrying tool/cost, costReported=true, and the subscription flag.
 	emit("tc-1", "reason", "claude-oauth",
-		toolkitstream.Event{Type: toolkitstream.EventResult, OK: true, CostUSD: 5.43})
+		toolkitstream.Event{Type: toolkitstream.EventResult, OK: true, CostUSD: 5.43, CostReported: true, SubscriptionEquivalent: true})
+	// A result event that reported NO tally still fires, with costReported=false
+	// so the bucket is never asserted as a known $0.
+	emit("tc-2", "reason", "claude-oauth",
+		toolkitstream.Event{Type: toolkitstream.EventResult, OK: true, CostUSD: 0})
 
-	require.Len(t, got, 1, "onResult fires only on EventResult")
+	require.Len(t, got, 2, "onResult fires once per EventResult")
 	assert.Equal(t, "claude-oauth", got[0].tool)
 	assert.Equal(t, 5.43, got[0].cost)
-	assert.True(t, got[0].ok)
+	assert.True(t, got[0].costReported, "a reported tally marks cost reported")
+	assert.True(t, got[0].subscription, "the event's subscription flag is passed through")
+	assert.Equal(t, float64(0), got[1].cost)
+	assert.False(t, got[1].costReported, "an absent tally is not reported")
+	assert.False(t, got[1].subscription)
 }

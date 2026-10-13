@@ -153,6 +153,13 @@ type ToolUsage struct {
 	CostMicroUSD int64
 	// CostReported is true when at least one invocation reported a cost.
 	CostReported bool
+	// Anomalous is true when a negative provider cost was observed for this
+	// tool; the value is excluded from CostMicroUSD and the bucket is flagged.
+	Anomalous bool
+	// SubscriptionEquivalent marks this tool's cost as a flat-rate subscription
+	// estimate (toolkit CostTreatment=subscription-equivalent): recorded and
+	// shown, but excluded from session spend.
+	SubscriptionEquivalent bool
 }
 
 // MetaagentInfo is the payload for the four metaagent control-plane points

@@ -54,10 +54,14 @@ const budgetUnknownKey = "(unknown)"
 type budgetSession struct {
 	// State is the aggregator's live snapshot of the session.
 	State SessionState
-	// Est is the whole-session cost estimate, computed once per session
-	// against its own model — see handleBudget for why pricing happens before
-	// grouping, not after.
+	// Est is the whole-session cost estimate (model + interactive-toolkit),
+	// computed once per session against its own model — see handleBudget for why
+	// pricing happens before grouping, not after.
 	Est cost.USD
+	// ModelEst is the model-only portion of Est (no tool cost). byModel uses it
+	// for the no-buckets fallback row so tool spend lands on its own row rather
+	// than inflating the outer-model row.
+	ModelEst cost.USD
 	// Starters maps "ns/name" to the session's started-by canonical subject.
 	// nil means the lookup FAILED (not "no starters"), which is why the byUser
 	// axis contributes nothing rather than a fabricated "(unknown)" row.
@@ -93,17 +97,32 @@ var budgetDimensions = []budgetDimension{
 		// its spend to EACH bucket's own Model using that bucket's own
 		// already-priced amount, so an OpenRouter session that routed or fell
 		// back across models shows where the spend actually went instead of one
-		// blended total. Exactly one of the two branches runs per session, so
-		// tokens and spend are never double-counted.
+		// blended total; a session with no buckets contributes one row for its
+		// configured model. Either way the per-row cost is MODEL-ONLY (the
+		// bucket amount, or ModelEst) and interactive-toolkit spend — which is
+		// not token-based and belongs to no model — is emitted as its own row(s)
+		// keyed by tool. That keeps byModel's grand total equal to the other
+		// axes (which fold tool cost into Est) while showing where it went,
+		// instead of dropping it (bucket path) or hiding it inside the model row
+		// (no-bucket path).
 		Name: "byModel",
 		Contribute: func(s budgetSession, emit func(string, int64, int64, cost.USD)) {
 			if len(s.State.ByModel) > 0 {
 				for _, b := range s.State.ByModel {
 					emit(budgetKeyOrUnknown(b.Model), b.InputTokens, b.OutputTokens, bucketCostUSD(b))
 				}
-				return
+			} else {
+				emit(budgetKeyOrUnknown(s.State.Model), s.State.InputTokens, s.State.OutputTokens, s.ModelEst)
 			}
-			emit(budgetKeyOrUnknown(s.State.Model), s.State.InputTokens, s.State.OutputTokens, s.Est)
+			for _, tb := range s.State.ByTool {
+				// Subscription-equivalent tool cost is excluded from spend, so it
+				// gets no spend row here — keeping byModel's grand total equal to
+				// the other axes (whose Est already excludes it).
+				if tb.SubscriptionEquivalent {
+					continue
+				}
+				emit(budgetKeyOrUnknown(tb.Tool), 0, 0, toolBucketCostUSD(tb))
+			}
 		},
 		Assign: func(b *BudgetBreakdown, rows []BudgetRow) { b.ByModel = rows },
 	},
@@ -213,9 +232,11 @@ func (a *Admind) handleBudget(w http.ResponseWriter, r *http.Request) {
 		// PriceMap.Estimate does an exact map-key lookup against BARE model ids
 		// (the built-in tables and the catalog overrides are both keyed bare),
 		// so it must be stripped of its provider prefix before pricing.
+		modelEst := prices.Estimate(bareModel(s.Model), s.InputTokens, s.OutputTokens)
 		bs := budgetSession{
 			State:    s,
-			Est:      prices.Estimate(bareModel(s.Model), s.InputTokens, s.OutputTokens) + toolCostUSD(s.ByTool),
+			Est:      modelEst + toolCostUSD(s.ByTool),
+			ModelEst: modelEst,
 			Starters: starters,
 		}
 		for _, d := range budgetDimensions {
@@ -259,14 +280,33 @@ func bucketCostUSD(b spiceboxv1alpha1.ModelCostBucket) cost.USD {
 	return cost.USD(float64(b.AmountMicroUSD) / 1e6)
 }
 
-// toolCostUSD sums a session's provider-reported interactive-toolkit spend.
-// Nil/empty -> 0. Tool cost is always priced, so this never yields NaN.
-func toolCostUSD(buckets []spiceboxv1alpha1.ToolCostBucket) cost.USD {
+// toolCostMicro sums a session's BILLED (metered) interactive-toolkit spend in
+// micro-USD. Nil/empty -> 0. Subscription-equivalent buckets are flat-rate
+// estimates excluded from spend, so they are skipped — the single place that
+// exclusion lands for every admind spend view (budget axes, per-session rows,
+// and the Overview headline via liveSessionSnapshot).
+func toolCostMicro(buckets []spiceboxv1alpha1.ToolCostBucket) int64 {
 	var micro int64
 	for _, b := range buckets {
+		if b.SubscriptionEquivalent {
+			continue
+		}
 		micro += b.AmountMicroUSD
 	}
-	return cost.USD(float64(micro) / 1e6)
+	return micro
+}
+
+// toolCostUSD is toolCostMicro in the admin-dashboard USD type. Tool cost is
+// always priced, so this never yields NaN.
+func toolCostUSD(buckets []spiceboxv1alpha1.ToolCostBucket) cost.USD {
+	return cost.USD(float64(toolCostMicro(buckets)) / 1e6)
+}
+
+// toolBucketCostUSD converts one ToolCostBucket's micro-USD amount to the
+// admin-dashboard USD type. Tool cost is always priced (an anomalous/negative
+// report contributes 0), so unlike bucketCostUSD this never yields NaN.
+func toolBucketCostUSD(b spiceboxv1alpha1.ToolCostBucket) cost.USD {
+	return cost.USD(float64(b.AmountMicroUSD) / 1e6)
 }
 
 // sortedBudgetRows flattens the accumulator into a non-nil slice ordered by

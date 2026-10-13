@@ -538,14 +538,13 @@ func (a *Admind) handleOverview(w http.ResponseWriter, r *http.Request) {
 		tokensSpent += m.InputTokens + m.OutputTokens
 	}
 	// Inner interactive-toolkit spend (e.g. a passthrough `claude` sub-run) is
-	// not token-based, so it never appears in ov.ByModel. Add it over the SAME
-	// session scope that produced ov.ByModel — the overview engine's own live
-	// input is liveSessionSnapshot(a.agg), so a.agg.Snapshot() is exactly that
-	// set (no double-count). Without this the headline spend understates a
-	// sub-agent session by the full tool cost (see the codebot case).
-	for _, s := range a.agg.Snapshot() {
-		estCost += toolCostUSD(s.ByTool)
-	}
+	// not token-based, so it never appears in ov.ByModel. The overview engine
+	// sums it into ov.ToolCostMicroUSD over the SAME cached snapshot that
+	// produced ov.ByModel, so model and tool cost share one point in time —
+	// reading a.agg.Snapshot() live here would instead mix the ≤TTL-stale
+	// ov.ByModel with a newer tool total. Without this the headline spend
+	// understates a sub-agent session by the full tool cost (see the codebot case).
+	estCost += cost.USD(float64(ov.ToolCostMicroUSD) / 1e6)
 	writeJSON(w, http.StatusOK, overviewResponse{
 		Overview: ov,
 		Budget:   budgetInfo{TokensSpent: tokensSpent, EstimatedCostUSD: estCost, Estimated: true},

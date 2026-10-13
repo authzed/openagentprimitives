@@ -41,6 +41,18 @@ type Event struct {
 	// EventResult only.
 	DurationMs int64
 	CostUSD    float64
+	// CostReported is the presence bit for CostUSD on an EventResult: true when
+	// the toolkit's terminal event actually carried a cost tally (even an
+	// explicit 0), false when it reported none. CostUSD collapses absent to 0,
+	// so this is the only per-event signal that tells "metered $0" from "said
+	// nothing about cost" — see Outcome.Unbilled for why that matters.
+	CostReported bool
+	// SubscriptionEquivalent marks this result's cost as a flat-rate
+	// subscription estimate (e.g. a Claude Max OAuth run) rather than metered
+	// money. Stamped by the interactive tool from its toolkit's CostTreatment,
+	// not by the parser. Carried so the cost reporter can record it but keep it
+	// out of session spend. EventResult only.
+	SubscriptionEquivalent bool
 }
 
 // Outcome is the caller-facing result a Parser distills for the orchestrator

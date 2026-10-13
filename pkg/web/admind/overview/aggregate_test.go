@@ -125,9 +125,9 @@ func TestOverviewAggregates(t *testing.T) {
 
 	snapshot := func() []LiveSession {
 		return []LiveSession{
-			{Model: "claude-opus-4-8", Class: "researcher", Active: true, InputTokens: 100, OutputTokens: 50, PendingApprovals: 2},
+			{Model: "claude-opus-4-8", Class: "researcher", Active: true, InputTokens: 100, OutputTokens: 50, PendingApprovals: 2, ToolCostMicroUSD: 5_000_000},
 			{Model: "claude-sonnet-4-6", Class: "writer", Active: false, InputTokens: 200, OutputTokens: 80, PendingApprovals: 1},
-			{Model: "claude-opus-4-8", Class: "researcher", Active: true, InputTokens: 30, OutputTokens: 10},
+			{Model: "claude-opus-4-8", Class: "researcher", Active: true, InputTokens: 30, OutputTokens: 10, ToolCostMicroUSD: 1_250_000},
 		}
 	}
 
@@ -185,6 +185,7 @@ func TestOverviewAggregates(t *testing.T) {
 	assert.Equal(t, 3, ov.KPIs.ToolCalls24h, "1+2 tool_use blocks in window")
 	assert.Equal(t, 1, ov.KPIs.Denials24h, "one denied authz_decision in window")
 	assert.Equal(t, 3, ov.KPIs.ApprovalsPending, "2+1 pending approvals summed across live sessions")
+	assert.Equal(t, int64(6_250_000), ov.ToolCostMicroUSD, "tool cost summed across live sessions from the same snapshot")
 }
 
 // TestOverviewAggregates_ByModelBuckets proves the byModel rollup attributes
