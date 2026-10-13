@@ -292,8 +292,34 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 		ts = ""
 	}
 	if ts != "" {
-		_, _, _, err := s.client.UpdateMessageContext(ctx, channelID, ts,
-			slackapi.MsgOptionText(responseReadyEmoji+" "+pl.Text, false))
+		// Render agent-authored components into the streaming bubble too.
+		// Without this, the chat.update path (the normal streamed-thread case)
+		// would update the bubble with the text summary alone and silently drop
+		// the agent's table/chart/card — text is only the notification/degrade
+		// fallback once components are the body.
+		updateOpts := []slackapi.MsgOption{
+			slackapi.MsgOptionText(responseReadyEmoji+" "+pl.Text, false),
+		}
+		var componentBlocks []slackapi.Block
+		if len(pl.Components) > 0 {
+			if componentBlocks = parseComponentBlocks(pl.Components); len(componentBlocks) > 0 {
+				updateOpts = append(updateOpts, slackapi.MsgOptionBlocks(componentBlocks...))
+			} else {
+				logger.Info("slack: user_message components did not parse into blocks; updating streaming bubble with text only",
+					"session", sess.Name)
+			}
+		}
+		_, _, _, err := s.client.UpdateMessageContext(ctx, channelID, ts, updateOpts...)
+		if err != nil && len(componentBlocks) > 0 && isUnsupportedBlocksErr(err) {
+			// Slack rejected the block rendering (same failure the
+			// chat.postMessage degrade path below handles). Don't drop the
+			// reply: retry the bubble update as plain text so the user still
+			// sees the answer — degraded, logged.
+			logger.Info("slack: streaming-bubble blocks rejected; retrying chat.update as plain text (degraded)",
+				"session", sess.Name, "channelID", channelID, "bubbleTS", ts, "err", err.Error())
+			_, _, _, err = s.client.UpdateMessageContext(ctx, channelID, ts,
+				slackapi.MsgOptionText(responseReadyEmoji+" "+degradedPlainText(pl), false))
+		}
 		if err == nil {
 			// chat.update doesn't auto-clear assistant.threads.setStatus the
 			// way chat.postMessage does. Explicitly clear so the "is
@@ -347,7 +373,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 	//      thereafter via the App Home "Agent settings" button.
 	sessRef := sess.Namespace + "/" + sess.Name
 	includeSettings := s.settingsSeen == nil || !s.settingsSeen.saw(sessRef)
-	blocks := s.buildUserMessageBlocks(ctx, sess, pl.Text, pl.Components, sessRef, includeSettings, logger)
+	blocks, settingsAppended := s.buildUserMessageBlocks(ctx, sess, pl.Text, pl.Components, sessRef, includeSettings, logger)
 	opts := []slackapi.MsgOption{
 		slackapi.MsgOptionText(pl.Text, false), // plain-text fallback for push notifications
 		slackapi.MsgOptionBlocks(blocks...),
@@ -369,7 +395,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 		logger.Info("slack: user_message blocks rejected; retrying as plain text (degraded, no Show-settings button)",
 			"session", sess.Name, "channelID", channelID, "err", err.Error())
 		usedBlocks = false
-		plainOpts := []slackapi.MsgOption{slackapi.MsgOptionText(pl.Text, false)}
+		plainOpts := []slackapi.MsgOption{slackapi.MsgOptionText(degradedPlainText(pl), false)}
 		if threadTS != "" {
 			plainOpts = append(plainOpts, slackapi.MsgOptionTS(threadTS))
 		}
@@ -378,10 +404,11 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 	if err != nil {
 		return channelkinds.SubChannelSendResult{}, fmt.Errorf("slack postMessage: %w", err)
 	}
-	// Mark the once-guard only after a successful block post: the
-	// plain-text degraded retry above never carried the button, and a
-	// failed post must not consume the session's one shot at it.
-	if includeSettings && usedBlocks && s.settingsSeen != nil {
+	// Mark the once-guard only when the button was actually appended AND the
+	// block post succeeded: the plain-text degraded retry never carried the
+	// button, a failed post never delivered it, and a 50-block body can leave
+	// no headroom for it — none of those may consume the session's one shot.
+	if settingsAppended && usedBlocks && s.settingsSeen != nil {
 		s.settingsSeen.mark(sessRef)
 	}
 	logger.Info("slack: user_message via chat.postMessage",
@@ -435,7 +462,7 @@ func (s *slackSender) buildUserMessageBlocks(
 	sessRef string,
 	includeSettings bool,
 	logger interface{ Info(string, ...any) },
-) []slackapi.Block {
+) ([]slackapi.Block, bool) {
 	// Base body: agent-authored components when present (validated by the slack
 	// kind's ComponentValidator in the runner before publish), otherwise the
 	// reply text split into section blocks. When components ARE the body, text
@@ -443,14 +470,32 @@ func (s *slackSender) buildUserMessageBlocks(
 	// components somehow fail to parse here (they were validated upstream), fall
 	// back to text sections rather than drop the reply.
 	var blocks []slackapi.Block
+	componentsAreBody := false
 	if len(components) == 0 {
 		blocks = append(blocks, textSectionBlocks(text)...)
 	} else if agent := parseComponentBlocks(components); len(agent) > 0 {
 		blocks = append(blocks, agent...)
+		componentsAreBody = true
 	} else {
 		logger.Info("slack: user_message components did not parse into blocks; falling back to text sections",
 			"session", sess.Name)
 		blocks = append(blocks, textSectionBlocks(text)...)
+	}
+
+	// mention_only footer: when components are the body, text (which carries the
+	// @-mention hint via maybeAppendMentionFooter) is only the notification
+	// fallback, so the hint never renders in-thread — an adopted-thread user
+	// replying bare would not route. Re-add it as a context block. Only when the
+	// components actually rendered as the body: the text-section path (including
+	// the parse-failure fallback above) already carries the hint in its rendered
+	// text, so adding it here too would double it. Appended ahead of the clamp
+	// line and settings button so it wins the last block slot when headroom is
+	// tight — its absence is the only one that makes the thread unreplyable.
+	if componentsAreBody && sess.Channel != nil && sess.Channel.RoutingMode == "mention_only" &&
+		len(blocks) < slackMaxBlocksPerMessage {
+		blocks = append(blocks, slackapi.NewContextBlock("",
+			slackapi.NewTextBlockObject("mrkdwn", "_@-mention me to reply._", false, false),
+		))
 	}
 
 	// Muted clamp-warning context line — best-effort; never blocks the send.
@@ -476,14 +521,25 @@ func (s *slackSender) buildUserMessageBlocks(
 
 	// Show settings button — first agent message of the session only;
 	// settings stay reachable anytime via the App Home "Agent settings"
-	// button. Headroom-guarded, as with the clamp line above.
-	if includeSettings && len(blocks) < slackMaxBlocksPerMessage {
-		blocks = append(blocks, slackapi.NewActionBlock("show_settings_actions",
-			settingsButton(sessRef),
-		))
+	// button. Headroom-guarded, as with the clamp line above. The returned
+	// bool reports whether the button was actually appended: the caller
+	// consumes the session's one-shot only then (and only on a successful block
+	// post), so a 50-block body that leaves no room does not burn the one shot
+	// — the button then appears on the first later reply that has room.
+	settingsAppended := false
+	if includeSettings {
+		if len(blocks) < slackMaxBlocksPerMessage {
+			blocks = append(blocks, slackapi.NewActionBlock("show_settings_actions",
+				settingsButton(sessRef),
+			))
+			settingsAppended = true
+		} else {
+			logger.Info("slack: no block headroom for the first-message Show settings button; leaving the session one-shot unconsumed so it appears on a later reply",
+				"session", sess.Name)
+		}
 	}
 
-	return blocks
+	return blocks, settingsAppended
 }
 
 // textSectionBlocks splits text into mrkdwn section blocks, each under Slack's
@@ -499,6 +555,26 @@ func textSectionBlocks(text string) []slackapi.Block {
 		))
 	}
 	return out
+}
+
+// degradedPlainText builds the plain-text body used when Slack rejects the Block
+// Kit rendering. When the agent authored components as the body, pl.Text is only
+// a concise summary, so posting it alone would drop most of the reply — append
+// the components' readable projection (the same flattenBlocks the inbound and
+// egress paths use) so the content survives the degrade. Plain text is not
+// subject to block validation, so this always posts.
+func degradedPlainText(pl channelevents.OutboundUserMessagePayload) string {
+	text := pl.Text
+	if len(pl.Components) > 0 {
+		if flat := flattenBlocks(parseComponentBlocks(pl.Components)); flat != "" {
+			if text == "" {
+				text = flat
+			} else {
+				text += "\n\n" + flat
+			}
+		}
+	}
+	return text
 }
 
 // parseComponentBlocks unmarshals agent-authored Block Kit JSON into slack-go

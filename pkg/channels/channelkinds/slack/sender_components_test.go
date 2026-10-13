@@ -33,7 +33,7 @@ func TestBuildUserMessageBlocks_ComponentsAreTheBody(t *testing.T) {
 	sess := channelkinds.SessionInfo{Namespace: "default", Name: "foo"}
 	components := json.RawMessage(`[{"type":"header","text":{"type":"plain_text","text":"Results"}},{"type":"section","text":{"type":"mrkdwn","text":"*all good*"}}]`)
 
-	blocks := s.buildUserMessageBlocks(context.Background(), sess, "plain summary", components, "default/foo", false, noopInfoLogger{})
+	blocks, _ := s.buildUserMessageBlocks(context.Background(), sess, "plain summary", components, "default/foo", false, noopInfoLogger{})
 
 	var headers, sections int
 	for _, b := range blocks {
@@ -58,7 +58,7 @@ func TestBuildUserMessageBlocks_UnparseableComponentsFallBackToText(t *testing.T
 	s := newSender(&fakeSlackClient{})
 	sess := channelkinds.SessionInfo{Namespace: "default", Name: "foo"}
 
-	blocks := s.buildUserMessageBlocks(context.Background(), sess, "the summary text", json.RawMessage(`not valid json`), "default/foo", false, noopInfoLogger{})
+	blocks, _ := s.buildUserMessageBlocks(context.Background(), sess, "the summary text", json.RawMessage(`not valid json`), "default/foo", false, noopInfoLogger{})
 	assert.Contains(t, concatBlockText(blocks), "the summary text",
 		"unparseable components must fall back to the text section so nothing is lost")
 }
@@ -68,7 +68,7 @@ func TestBuildUserMessageBlocks_NoComponentsUsesText(t *testing.T) {
 	s := newSender(&fakeSlackClient{})
 	sess := channelkinds.SessionInfo{Namespace: "default", Name: "foo"}
 
-	blocks := s.buildUserMessageBlocks(context.Background(), sess, "hello there", nil, "default/foo", false, noopInfoLogger{})
+	blocks, _ := s.buildUserMessageBlocks(context.Background(), sess, "hello there", nil, "default/foo", false, noopInfoLogger{})
 	assert.Contains(t, concatBlockText(blocks), "hello there", "text renders as a section when no components are present")
 }
 

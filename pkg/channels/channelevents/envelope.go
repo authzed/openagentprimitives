@@ -246,6 +246,16 @@ type OutboundUserMessagePayload struct {
 	// fallback; a kind that does not support components ignores it. Empty means
 	// a text-only (or text+attachments) reply. Opaque to channelsd — format is
 	// a kind concern, never an envelope one.
+	//
+	// Version skew: this field arrived with the runner advertising a `blocks`
+	// capability. A channelsd predating it unmarshals this struct without a
+	// Components field, silently drops the value, and posts Text alone. There is
+	// no runner<->channelsd capability handshake, so the two should be upgraded
+	// together. The degradation is graceful, not silent loss: the model is
+	// required to fill Text with a self-contained concise summary (the same
+	// render fallback used when blocks can't render), so a skewed old channelsd
+	// posts that summary rather than a blank reply. A runtime capability
+	// negotiation is deferred.
 	Components json.RawMessage `json:"components,omitempty"`
 }
 

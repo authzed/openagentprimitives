@@ -139,6 +139,8 @@ func TestValidateComponents(t *testing.T) {
 		{name: "rich_text broadcast element: rejected", json: `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"broadcast","range":"channel"}]}]}]`, wantErr: "broadcast"},
 		{name: "markdown <!channel>: rejected broadcast", json: `[{"type":"markdown","text":"ping <!channel> now"}]`, wantErr: "broadcast"},
 		{name: "table raw_text cell <!here>: rejected broadcast", json: `[{"type":"table","rows":[[{"type":"raw_text","text":"<!here> look"}]]}]`, wantErr: "broadcast"},
+		{name: "section <!subteam^>: rejected usergroup ping", json: `[{"type":"section","text":{"type":"mrkdwn","text":"hey <!subteam^S12345> look"}}]`, wantErr: "usergroup"},
+		{name: "rich_text usergroup element: rejected usergroup ping", json: `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"usergroup","usergroup_id":"S12345"}]}]}]`, wantErr: "usergroup"},
 	}
 
 	for _, tc := range cases {

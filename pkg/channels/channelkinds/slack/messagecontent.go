@@ -147,7 +147,7 @@ func flattenBlocks(blocks []slackapi.Block) string {
 				}
 			}
 		case *slackapi.DataVisualizationBlock:
-			add(blk.Title)
+			add(flattenDataViz(blk))
 		case *slackapi.CardBlock:
 			for _, t := range []*slackapi.TextBlockObject{blk.Title, blk.Subtitle, blk.Body, blk.Subtext} {
 				if t != nil {
@@ -173,6 +173,48 @@ func flattenBlocks(blocks []slackapi.Block) string {
 		case *slackapi.TaskCardBlock:
 			add(flattenTaskCard(blk))
 		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// flattenDataViz projects a chart's free-form agent-authored strings — the
+// title plus every segment/data-point label, series name, and axis category/
+// label. Projecting only the title (as this case once did) let an agent, or an
+// injected prompt, route blockable content into chart labels and slip it past
+// the egress leakage gate, which measures ComponentsPlainText -> flattenBlocks.
+// Numeric values carry no text and are skipped.
+func flattenDataViz(dv *slackapi.DataVisualizationBlock) string {
+	var parts []string
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	addSeries := func(series []slackapi.DataVisualizationDataSeries, axis slackapi.DataVisualizationAxisConfig) {
+		for _, s := range series {
+			add(s.Name)
+			for _, p := range s.Data {
+				add(p.Label)
+			}
+		}
+		for _, cat := range axis.Categories {
+			add(cat)
+		}
+		add(axis.XLabel)
+		add(axis.YLabel)
+	}
+	add(dv.Title)
+	switch c := dv.Chart.(type) {
+	case *slackapi.DataVisualizationPieChart:
+		for _, seg := range c.Segments {
+			add(seg.Label)
+		}
+	case *slackapi.DataVisualizationBarChart:
+		addSeries(c.Series, c.AxisConfig)
+	case *slackapi.DataVisualizationAreaChart:
+		addSeries(c.Series, c.AxisConfig)
+	case *slackapi.DataVisualizationLineChart:
+		addSeries(c.Series, c.AxisConfig)
 	}
 	return strings.Join(parts, "\n")
 }

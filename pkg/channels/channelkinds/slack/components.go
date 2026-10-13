@@ -51,7 +51,7 @@ const componentFormattingInstructions = `This channel can render structured Bloc
 	`Section/context text uses the same Slack mrkdwn dialect as the text field (*bold*, _italic_, ` + "`code`" + `, <url|label>) — not CommonMark; the "markdown" block is the exception and takes standard markdown. ` +
 	`Limits: at most 50 blocks; section text ≤3000 characters; split longer content across multiple blocks. ` +
 	`Not supported: interactive elements (buttons, select menus, date pickers, inputs, action/input/context_actions blocks, data_table, carousel) — this surface is presentation-only; ` +
-	`images and icons (coming soon); and @channel/@here/@everyone broadcast mentions. ` +
+	`images and icons (coming soon); and @channel/@here/@everyone broadcast mentions plus <!subteam^…> usergroup pings. ` +
 	`Always also fill the text field with a concise plain summary: it is the notification preview and the fallback shown if the blocks cannot be rendered.`
 
 // ComponentFormattingInstructions implements channelkinds.ComponentFormatter.
@@ -230,7 +230,7 @@ func validateContext(loc string, c *slackapi.ContextBlock) error {
 
 func validateRichText(loc string, rt *slackapi.RichTextBlock) error {
 	if richTextElementsHaveBroadcast(rt.Elements) {
-		return blockErrf(loc, "rich_text", "broadcast mentions (@channel/@here/@everyone) are not allowed in agent-authored components")
+		return blockErrf(loc, "rich_text", "broadcast or usergroup mentions (@channel, @here, @everyone, <!subteam^…>) are not allowed in agent-authored components")
 	}
 	return nil
 }
@@ -253,7 +253,7 @@ func validateTable(loc string, t *slackapi.TableBlock) error {
 				// empty cell (Slack sends null) — nothing to validate.
 			case *slackapi.TableRichTextCell:
 				if richTextElementsHaveBroadcast(cc.Elements) {
-					return blockErrf(cloc, "table", "broadcast mentions (@channel/@here/@everyone) are not allowed in agent-authored components")
+					return blockErrf(cloc, "table", "broadcast or usergroup mentions (@channel, @here, @everyone, <!subteam^…>) are not allowed in agent-authored components")
 				}
 			case *slackapi.TableRawTextCell:
 				if err := checkBroadcast(cloc, "table", cc.Text); err != nil {
@@ -413,7 +413,10 @@ func richTextHasBroadcast(el slackapi.RichTextElement) bool {
 
 func sectionElemsHaveBroadcast(els []slackapi.RichTextSectionElement) bool {
 	for _, el := range els {
-		if _, ok := el.(*slackapi.RichTextSectionBroadcastElement); ok {
+		switch el.(type) {
+		case *slackapi.RichTextSectionBroadcastElement, *slackapi.RichTextSectionUserGroupElement:
+			// broadcast = @channel/@here/@everyone; usergroup = <!subteam^S…>,
+			// which notifies every member — both are mass-notification pings.
 			return true
 		}
 	}
@@ -422,16 +425,18 @@ func sectionElemsHaveBroadcast(els []slackapi.RichTextSectionElement) bool {
 
 func checkBroadcast(loc, typ, text string) error {
 	if containsBroadcastMention(text) {
-		return blockErrf(loc, typ, "broadcast mentions (@channel/@here/@everyone) are not allowed in agent-authored components")
+		return blockErrf(loc, typ, "broadcast or usergroup mentions (@channel, @here, @everyone, <!subteam^…>) are not allowed in agent-authored components")
 	}
 	return nil
 }
 
-// containsBroadcastMention reports whether text carries a Slack broadcast span.
-// Slack writes these as <!channel>, <!here>, or <!everyone> (optionally with a
-// |label), so matching the opening token catches every form.
+// containsBroadcastMention reports whether text carries a Slack
+// mass-notification span. Slack writes broadcasts as <!channel>, <!here>, or
+// <!everyone>, and a usergroup ping (which notifies every member) as
+// <!subteam^S…>, all optionally with a |label — so matching the opening token
+// catches every form.
 func containsBroadcastMention(text string) bool {
-	for _, tok := range []string{"<!channel", "<!here", "<!everyone"} {
+	for _, tok := range []string{"<!channel", "<!here", "<!everyone", "<!subteam^"} {
 		if strings.Contains(text, tok) {
 			return true
 		}

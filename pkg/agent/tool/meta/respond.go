@@ -217,6 +217,12 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	if res, ok := tool.ParseArgs(args, &in, t.Name(), `{"text": "the message body"}`); !ok {
 		return res, nil
 	}
+	// Models routinely send an empty optional array ("blocks": [] or null); the
+	// raw bytes "[]"/"null" are non-empty, so a later len(in.Blocks) > 0 would
+	// treat them as a present-but-invalid payload and error an otherwise-fine
+	// plain-text reply (or reject on a non-components channel). Normalize "none"
+	// to absent so every downstream len()>0 check agrees it isn't there.
+	in.Blocks = normalizeOptionalBlocks(in.Blocks)
 	if strings.TrimSpace(in.Text) == "" {
 		return tool.Result{Content: "respond_to_user: `text` is required and must be non-empty. Pass the full message body you want the user to see, e.g. {\"text\": \"Here are the results: …\"}. If your previous reply was truncated, you may need to shorten it before retrying.", IsError: true, Trusted: true}, nil
 	}
@@ -229,6 +235,13 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	if len(in.Blocks) > 0 {
 		if !t.hasComponents {
 			return tool.Result{Content: "respond_to_user: `blocks` (structured components) are not supported on this channel. Put your reply in `text` instead.", IsError: true, Trusted: true}, nil
+		}
+		if len(in.Attached) > 0 {
+			// blocks + attached in one reply is not supported yet: the
+			// attachment delivery path posts only Text, so the blocks would be
+			// silently dropped. Reject with a correctable error rather than lose
+			// them. Full blocks+files-in-one-reply support is deferred.
+			return tool.Result{Content: "respond_to_user: `blocks` and `attached` can't be combined in one reply on this channel yet. Send the structured layout in one respond_to_user call and the attachment(s) in another.", IsError: true, Trusted: true}, nil
 		}
 		if t.components == nil {
 			// Advertised "components" but no validator: a wiring bug, not the
@@ -275,8 +288,12 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 		// gate the block content too (projected to plain text by the kind) —
 		// otherwise an agent could route blockable content through `blocks` and
 		// bypass the gate, a fail-open egress path. Appended to the TAGGED
-		// in.Text the gate already runs on; the block text is untagged and so
-		// falls to the gate's coarse check, same as an attachment does.
+		// in.Text the gate already runs on; if the agent copied pt-tagged
+		// content into a block it stays tagged in the projection and gets the
+		// same tag-aware treatment as tagged in.Text, otherwise it falls to the
+		// gate's coarse check like an attachment. pt markup is stripped from the
+		// published blocks AFTER the gate (see stripPtFromBlocks), mirroring
+		// outText, so a human never sees the markup either way.
 		gateText := in.Text
 		if len(in.Blocks) > 0 && t.components != nil {
 			if projected := t.components.ComponentsPlainText(in.Blocks); projected != "" {
@@ -346,11 +363,17 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	}
 
 	// pt markup is model-facing only: strip any pt-untrusted envelope before the
-	// human sees the reply. The LeakageGate above ran on the TAGGED in.Text (it
-	// needs the tags to decide), so the strip is on the outbound copy only.
+	// human sees the reply. The LeakageGate above ran on the TAGGED in.Text and
+	// the TAGGED block projection (it needs the tags to decide), so the strip is
+	// on the outbound copies only — BOTH text and blocks, so neither surface
+	// renders provenance markup to a human.
 	outText := in.Text
 	if stripped, had := toolenvelope.StripPt(in.Text); had {
 		outText = stripped
+	}
+	outBlocks := in.Blocks
+	if len(in.Blocks) > 0 {
+		outBlocks = stripPtFromBlocks(in.Blocks)
 	}
 
 	logger := log.FromContext(ctx)
@@ -365,7 +388,7 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	}
 	if err := t.cfg.EnvelopeSigner.PublishOut(publish, sess.Namespace, sess.Name,
 		channelevents.KindUserMessage,
-		channelevents.OutboundUserMessagePayload{Text: outText, Attachments: attachments, Components: in.Blocks},
+		channelevents.OutboundUserMessagePayload{Text: outText, Attachments: attachments, Components: outBlocks},
 	); err != nil {
 		return tool.Result{Content: fmt.Sprintf("publish failed: %v", err), IsError: true, Trusted: true}, nil
 	}
@@ -574,6 +597,66 @@ func ownedBySessionNamed(refs []metav1.OwnerReference, name string) bool {
 		}
 	}
 	return false
+}
+
+// normalizeOptionalBlocks returns nil for a blocks value the model meant as
+// "none" — absent, whitespace, JSON null, or an empty array — so downstream
+// len()>0 checks treat it as absent rather than as a present-but-empty payload
+// that would error the call. A non-empty array is returned unchanged.
+func normalizeOptionalBlocks(raw json.RawMessage) json.RawMessage {
+	switch strings.TrimSpace(string(raw)) {
+	case "", "null", "[]":
+		return nil
+	}
+	return raw
+}
+
+// stripPtFromBlocks removes pt-untrusted markup from every string value in the
+// agent-authored block JSON, the same way outText is stripped from the reply
+// text (strip the markers, keep the content). pt markers live inside JSON string
+// values — quote-escaped there — so running StripPt on the raw bytes would not
+// match; we decode to any, walk every string leaf, StripPt it, and re-marshal
+// ONLY when something was stripped (the common case returns the bytes untouched).
+// On a decode/encode error it returns the original bytes: ValidateComponents
+// already proved the JSON parses, and failing the whole reply over a strip is
+// worse than the rare passthrough it guards.
+func stripPtFromBlocks(raw json.RawMessage) json.RawMessage {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	stripped := false
+	var walk func(any) any
+	walk = func(n any) any {
+		switch x := n.(type) {
+		case string:
+			if s, had := toolenvelope.StripPt(x); had {
+				stripped = true
+				return s
+			}
+			return x
+		case []any:
+			for i := range x {
+				x[i] = walk(x[i])
+			}
+			return x
+		case map[string]any:
+			for k := range x {
+				x[k] = walk(x[k])
+			}
+			return x
+		}
+		return n
+	}
+	v = walk(v)
+	if !stripped {
+		return raw
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 func publishWithRetry(ctx context.Context, publish func(ctx context.Context, subject string, payload []byte) error, subject string, payload []byte) error {
