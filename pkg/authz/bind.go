@@ -684,7 +684,15 @@ func moveApprovedPins(ctx context.Context, w RelWriter, sess SessionRef, bound [
 		mv := moves[rt]
 		revoke, err := pinner.ListGrantsFor(ctx, rt, mv.fromID, sess)
 		if err != nil {
-			return moved, fmt.Errorf("authz: list prior grants for %s:%s to revoke on move: %w", rt, mv.fromID, err)
+			err = fmt.Errorf("authz: list prior grants for %s:%s to revoke on move: %w", rt, mv.fromID, err)
+			if moved {
+				// An earlier type in this approval already moved and revoked its
+				// prior instance. A failure here must say so — exactly as the
+				// MovePin error path below does — or the approver is told nothing
+				// was granted while access was in fact removed.
+				return true, fmt.Errorf("%w: %w", ErrSlotMoveCommitted, err)
+			}
+			return false, err
 		}
 		logger.Info("approved slot-pin move: repointing a filled single-occupancy slot and revoking the prior instance's grants",
 			"session", sess.String(), "slotType", rt, "from", mv.fromID, "to", mv.toID.String(), "revokeGrants", len(revoke))
