@@ -25,8 +25,12 @@ describe("FIGS", () => {
 
 describe("GeoFigure", () => {
   it("renders the figure as a labelled image carrying its hue", () => {
-    render(<GeoFigure name="gate" label="Each tool call passes a gate" hue={1} />);
-    const el = screen.getByRole("img", { name: "Each tool call passes a gate" });
+    render(
+      <GeoFigure name="gate" label="Each tool call passes a gate" hue={1} />,
+    );
+    const el = screen.getByRole("img", {
+      name: "Each tool call passes a gate",
+    });
     expect(el.dataset.geo).toBe("gate");
     expect(el.dataset.hue).toBe("1");
     expect(el.className).toBe("geo");

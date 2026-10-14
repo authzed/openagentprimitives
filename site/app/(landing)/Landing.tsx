@@ -1335,7 +1335,9 @@ export function Landing() {
           <Head
             kicker="Everything else"
             title="The rest of the platform, included."
-            lede={<>The capabilities you&rsquo;d expect from any agent platform.</>}
+            lede={
+              <>The capabilities you&rsquo;d expect from any agent platform.</>
+            }
           />
           <div className="lp-list3">
             {EVERYTHING.map((e) => (
