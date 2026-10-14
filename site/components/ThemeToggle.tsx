@@ -3,12 +3,16 @@ import { useEffect, useState, type JSX } from "react";
 import { useTheme } from "next-themes";
 import "./theme-toggle.css";
 
-type Mode = "light" | "dark" | "system";
+export type ThemeMode = "light" | "dark" | "system";
 
 // Native radios rather than buttons with aria-checked: a radio group gives
 // arrow-key navigation, roving focus and the correct grouping semantics for
 // free, and the three options are genuinely mutually exclusive.
-const MODES: { id: Mode; label: string; icon: JSX.Element }[] = [
+export const THEME_MODES: {
+  id: ThemeMode;
+  label: string;
+  icon: JSX.Element;
+}[] = [
   {
     id: "light",
     label: "Light",
@@ -50,7 +54,7 @@ export function ThemeToggle({ className }: { className?: string }) {
   return (
     <fieldset className={`theme-toggle${className ? ` ${className}` : ""}`}>
       <legend className="tt-sr">Color theme</legend>
-      {MODES.map((mode) => (
+      {THEME_MODES.map((mode) => (
         <label key={mode.id} className="tt-opt" title={`${mode.label} theme`}>
           <input
             type="radio"
