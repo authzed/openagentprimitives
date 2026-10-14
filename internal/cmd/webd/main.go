@@ -786,26 +786,26 @@ var _ sessions.Deps = (*artifactViewDeps)(nil)
 // ArtifactID; the returned artifactID is always "" for this purpose. Any
 // other purpose (including empty) is rejected — the bearer capability is
 // fail-closed: a link that doesn't match a known purpose grants nothing.
-func (d *artifactViewDeps) VerifyLink(raw string) (string, string, string, error) {
+func (d *artifactViewDeps) VerifyLink(raw string) (string, string, error) {
 	p, err := d.cookieSigner.Verify(raw,
 		passthroughlink.WithExpectedIssuer(passthroughlink.IssuerChannelsd),
 		passthroughlink.WithExpectedAudience(passthroughlink.AudienceWebd))
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	switch p.Purpose {
 	case passthroughlink.PurposeArtifactView:
 		if p.ArtifactID == "" || p.SessionRef == "" {
-			return "", "", "", fmt.Errorf("link missing artifactId/sessionRef")
+			return "", "", fmt.Errorf("link missing artifactId/sessionRef")
 		}
-		return p.ArtifactID, p.SessionRef, p.BackLink, nil
+		return p.ArtifactID, p.SessionRef, nil
 	case passthroughlink.PurposeSessionView:
 		if p.SessionRef == "" {
-			return "", "", "", fmt.Errorf("link missing sessionRef")
+			return "", "", fmt.Errorf("link missing sessionRef")
 		}
-		return "", p.SessionRef, p.BackLink, nil
+		return "", p.SessionRef, nil
 	default:
-		return "", "", "", fmt.Errorf("link purpose %q is not supported", p.Purpose)
+		return "", "", fmt.Errorf("link purpose %q is not supported", p.Purpose)
 	}
 }
 

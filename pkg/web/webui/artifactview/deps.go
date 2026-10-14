@@ -9,7 +9,7 @@ import (
 // Deps is the artifact viewer's dependency interface. internal/cmd/webd's concrete deps
 // value implements it; the WebUI casts webui.Deps to this.
 type Deps interface {
-	VerifyLink(raw string) (artifactID, sessionRef, backLink string, err error)
+	VerifyLink(raw string) (artifactID, sessionRef string, err error)
 	CheckView(ctx context.Context, artifactID, subject string) (bool, error)
 	// CheckInteract is agentsession#interact — session MEMBERSHIP, which
 	// CheckView is a strict superset of (`view = parent->interact +

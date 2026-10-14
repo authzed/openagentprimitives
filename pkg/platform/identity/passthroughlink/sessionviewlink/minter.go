@@ -31,11 +31,9 @@ type Minter struct {
 }
 
 // Mint returns the raw signed "<b64>.<sig>" token authorizing sessionRef for
-// subject, with backLink carried through (tamper-proof, not confidential) for
-// the consuming page's "back to origin" affordance. Callers compose the final
-// deep-link URL around this token, using the same "?d=<b64>&sig=<hex>" split
-// viewlink's minters use.
-func (m *Minter) Mint(sessionRef string, subject identity.Principal, backLink string) (string, error) {
+// subject. Callers compose the final deep-link URL around this token, using the
+// same "?d=<b64>&sig=<hex>" split viewlink's minters use.
+func (m *Minter) Mint(sessionRef string, subject identity.Principal) (string, error) {
 	if m == nil || m.Signer == nil {
 		return "", fmt.Errorf("session view minter not configured")
 	}
@@ -52,7 +50,6 @@ func (m *Minter) Mint(sessionRef string, subject identity.Principal, backLink st
 		SessionRef:      sessionRef,
 		Subject:         subj,
 		SubjectVerified: subject.EmailVerified(),
-		BackLink:        backLink,
 		ExpiresAt:       time.Now().Add(SessionViewLinkTTL).Unix(),
 	})
 	if err != nil {

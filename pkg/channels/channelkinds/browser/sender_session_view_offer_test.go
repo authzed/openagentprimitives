@@ -19,7 +19,7 @@ type fakeSessionViewMinter struct {
 	err error
 }
 
-func (f *fakeSessionViewMinter) MintSessionViewLink(sessionRef string, subject identity.Principal, backLink string) (string, error) {
+func (f *fakeSessionViewMinter) MintSessionViewLink(sessionRef string, subject identity.Principal) (string, error) {
 	return f.url, f.err
 }
 

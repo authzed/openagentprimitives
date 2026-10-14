@@ -39,7 +39,7 @@ type stubArtifactViewMinter struct {
 	err error
 }
 
-func (m *stubArtifactViewMinter) MintArtifactViewLink(_, _ string, _ identity.Principal, _ string) (string, error) {
+func (m *stubArtifactViewMinter) MintArtifactViewLink(_, _ string, _ identity.Principal) (string, error) {
 	return m.url, m.err
 }
 

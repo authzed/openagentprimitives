@@ -652,10 +652,10 @@ type PortalLinkMinter interface {
 type ArtifactViewMinter interface {
 	// MintArtifactViewLink mints a webd artifact-view deep-link. The minter
 	// derives Subject and SubjectVerified from subject, so the verified flag
-	// can only originate from the identity authority. backLink is optional and
-	// opaque — the web UI renders it as a "back to origin" link; pass "" when
-	// the kind has no permalink concept.
-	MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal, backLink string) (string, error)
+	// can only originate from the identity authority. The artifact-view page's
+	// "back to origin" links are derived from the session at view time, not
+	// carried in this link.
+	MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal) (string, error)
 }
 
 // SessionViewMinter composes "<webd-base>/session-view/<ns>/<name>" durable
@@ -664,10 +664,9 @@ type ArtifactViewMinter interface {
 // authorization happens at open time via the page's own CheckInteract.
 type SessionViewMinter interface {
 	// MintSessionViewLink returns the session-view page URL for sessionRef
-	// ("<ns>/<name>"). subject and backLink are accepted for parity with
-	// ArtifactViewMinter but are NOT embedded in the URL — they have no
-	// bearing on who may open it.
-	MintSessionViewLink(sessionRef string, subject identity.Principal, backLink string) (string, error)
+	// ("<ns>/<name>"). subject is accepted for parity with ArtifactViewMinter
+	// but is NOT embedded in the URL — it has no bearing on who may open it.
+	MintSessionViewLink(sessionRef string, subject identity.Principal) (string, error)
 }
 
 // AuthzReader exposes the read-only SpiceDB operations a channel-kind

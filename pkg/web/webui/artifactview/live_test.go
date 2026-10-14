@@ -24,7 +24,7 @@ import (
 // handler tests. Only the fields the live handler exercises need defaults; the
 // rest stay nil and would panic if called (none are on the live path).
 type liveFakeDeps struct {
-	verifyLink       func(raw string) (string, string, string, error)
+	verifyLink       func(raw string) (string, string, error)
 	checkView        func(ctx context.Context, artifactID, subject string) (bool, error)
 	signContentToken func(ns, sess, renderName, artifactID string) (string, error)
 	sandboxBaseURL   func() string
@@ -37,7 +37,7 @@ type liveFakeDeps struct {
 	logger           logr.Logger
 }
 
-func (f *liveFakeDeps) VerifyLink(raw string) (string, string, string, error) {
+func (f *liveFakeDeps) VerifyLink(raw string) (string, string, error) {
 	return f.verifyLink(raw)
 }
 func (f *liveFakeDeps) CheckView(ctx context.Context, artifactID, subject string) (bool, error) {
@@ -150,8 +150,8 @@ func (f *liveFakeDeps) Logger() logr.Logger    { return f.logger }
 // overrides only the fields it exercises.
 func liveTestAV(trustedOrigin *string) *liveFakeDeps {
 	return &liveFakeDeps{
-		verifyLink: func(raw string) (string, string, string, error) {
-			return "artifact-x", "default/s1", "", nil
+		verifyLink: func(raw string) (string, string, error) {
+			return "artifact-x", "default/s1", nil
 		},
 		checkView: func(ctx context.Context, artifactID, subject string) (bool, error) {
 			return true, nil
@@ -390,9 +390,9 @@ func TestLive_UnsignedParams_AdminPath(t *testing.T) {
 	var trusted string
 	av := liveTestAV(&trusted)
 	var verifyLinkCalled bool
-	av.verifyLink = func(raw string) (string, string, string, error) {
+	av.verifyLink = func(raw string) (string, string, error) {
 		verifyLinkCalled = true
-		return "", "", "", assert.AnError
+		return "", "", assert.AnError
 	}
 	var gotArtifactID string
 	av.checkView = func(ctx context.Context, artifactID, subject string) (bool, error) {

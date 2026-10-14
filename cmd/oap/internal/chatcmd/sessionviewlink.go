@@ -38,7 +38,7 @@ type tuiSessionViewMinter struct {
 	webdBaseURL string
 }
 
-func (m *tuiSessionViewMinter) MintSessionViewLink(sessionRef string, _ identity.Principal, _ string) (string, error) {
+func (m *tuiSessionViewMinter) MintSessionViewLink(sessionRef string, _ identity.Principal) (string, error) {
 	return channelkinds.ComposeSessionViewURL(m.webdBaseURL, sessionRef)
 }
 

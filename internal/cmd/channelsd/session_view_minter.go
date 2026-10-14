@@ -36,14 +36,14 @@ func newSessionViewMinter(webdBaseURL func() string) *sessionViewMinter {
 }
 
 // MintSessionViewLink returns "<trusted-base>/session-view/<ns>/<name>" for
-// the given sessionRef ("ns/name"). subject and backLink are accepted for
-// interface parity with channelkinds.SessionViewMinter (and
-// ArtifactViewMinter) but are deliberately NOT embedded in the URL — the
+// the given sessionRef ("ns/name"). subject is accepted for interface parity
+// with channelkinds.SessionViewMinter (and ArtifactViewMinter) but is
+// deliberately NOT embedded in the URL — the
 // session-view page is a durable plain-path link, not a signed capability;
 // CheckInteract at open time is the sole authorization boundary. Returns
 // ("", nil) when the webd base URL is empty (webd not yet installed or the
 // ConfigMap not yet populated) — callers treat an empty URL as a clean skip.
-func (m *sessionViewMinter) MintSessionViewLink(sessionRef string, _ identity.Principal, _ string) (string, error) {
+func (m *sessionViewMinter) MintSessionViewLink(sessionRef string, _ identity.Principal) (string, error) {
 	if m == nil || m.WebdBaseURL == nil {
 		return "", fmt.Errorf("session view minter not configured")
 	}

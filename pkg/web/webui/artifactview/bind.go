@@ -17,7 +17,6 @@ import (
 type viewBinding struct {
 	artifactID string
 	ns, sess   string
-	backLink   string
 	// revisions is the binding probe's own result, carried so the first
 	// consumer (the snapshot / the revision list) does not re-query for what
 	// the probe already read.
@@ -99,7 +98,7 @@ func denyAuthzError() *viewDenial {
 // refusal is logged with the full triple so an operator can tell the two apart.
 func bindView(ctx context.Context, av Deps, q url.Values) (viewBinding, *viewDenial) {
 	subject := webui.SubjectFromContext(ctx)
-	artifactID, sessionRef, backLink, err := resolveViewParams(av, q)
+	artifactID, sessionRef, err := resolveViewParams(av, q)
 	if err != nil {
 		av.Logger().Info("artifactview: no verifiable artifact-view params; refusing",
 			"subject", subject, "err", err.Error())
@@ -135,7 +134,7 @@ func bindView(ctx context.Context, av Deps, q url.Values) (viewBinding, *viewDen
 			"artifactID", artifactID, "sessionRef", sessionRef, "subject", subject)
 		return viewBinding{}, denyNoAccess()
 	}
-	return viewBinding{artifactID: artifactID, ns: ns, sess: sess, backLink: backLink, revisions: revisions}, nil
+	return viewBinding{artifactID: artifactID, ns: ns, sess: sess, revisions: revisions}, nil
 }
 
 // mirrorsAllowed reports whether this subject may receive the SESSION-scoped

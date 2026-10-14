@@ -73,9 +73,9 @@ func TestRevision_HappyPath_Returns200WithContentURL(t *testing.T) {
 func TestRevision_UnsignedParams_AdminPath(t *testing.T) {
 	av := fakeAVWithRevisions()
 	var verifyLinkCalled bool
-	av.verifyLink = func(raw string) (string, string, string, error) {
+	av.verifyLink = func(raw string) (string, string, error) {
 		verifyLinkCalled = true
-		return "", "", "", assert.AnError
+		return "", "", assert.AnError
 	}
 	var gotArtifactID, gotSubject string
 	av.checkView = func(ctx context.Context, artifactID, subject string) (bool, error) {
@@ -123,8 +123,8 @@ func TestRevision_CheckViewFalse_Forbidden(t *testing.T) {
 
 func TestRevision_BadLink_Forbidden(t *testing.T) {
 	av := fakeAVWithRevisions()
-	av.verifyLink = func(raw string) (string, string, string, error) {
-		return "", "", "", assert.AnError
+	av.verifyLink = func(raw string) (string, string, error) {
+		return "", "", assert.AnError
 	}
 	s := newServer(t, "user:abc", av)
 

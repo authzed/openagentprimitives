@@ -30,7 +30,7 @@ import (
 type stubArtifactViewMinter struct{ id string }
 
 func (s *stubArtifactViewMinter) MintArtifactViewLink(
-	_, _ string, _ identity.Principal, _ string,
+	_, _ string, _ identity.Principal,
 ) (string, error) {
 	return "https://webd.example/artifact-view?stub=" + s.id, nil
 }

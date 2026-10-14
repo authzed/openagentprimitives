@@ -11,10 +11,9 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/passthroughlink"
 )
 
-// TestMinter_HappyPath verifies mint→verify round-trips the sessionRef,
-// subject, and backLink, sets Purpose=PurposeSessionView, carries NO
-// ArtifactID, and stamps a long (~7 day) TTL — distinct from the 30-minute
-// artifact-view link.
+// TestMinter_HappyPath verifies mint→verify round-trips the sessionRef and
+// subject, sets Purpose=PurposeSessionView, carries NO ArtifactID, and stamps a
+// long (~7 day) TTL — distinct from the 30-minute artifact-view link.
 func TestMinter_HappyPath(t *testing.T) {
 	signer := passthroughlink.New(make([]byte, 32),
 		passthroughlink.WithIssuer(passthroughlink.IssuerChannelsd),
@@ -24,8 +23,7 @@ func TestMinter_HappyPath(t *testing.T) {
 
 	before := time.Now()
 	subject := identity.RawSubject("user:alice")
-	backLink := "https://example.slack.com/archives/C1/p170?thread_ts=170&cid=C1"
-	raw, err := m.Mint("default/sess-1", subject, backLink)
+	raw, err := m.Mint("default/sess-1", subject)
 	require.NoError(t, err, "Mint should succeed")
 	require.NotEmpty(t, raw)
 
@@ -41,7 +39,6 @@ func TestMinter_HappyPath(t *testing.T) {
 	subjectStr, err := subject.Subject()
 	require.NoError(t, err)
 	assert.Equal(t, subjectStr, p.Subject, "Subject round-trips")
-	assert.Equal(t, backLink, p.BackLink, "BackLink round-trips")
 
 	wantExpiry := before.Add(SessionViewLinkTTL)
 	gotExpiry := time.Unix(p.ExpiresAt, 0)
@@ -55,7 +52,7 @@ func TestMinter_SubjectVerified_VerifiedEmail(t *testing.T) {
 	m := &Minter{Signer: signer}
 
 	principal := identity.VerifiedEmail("alice@example.com", "")
-	raw, err := m.Mint("ns/sess-1", principal, "")
+	raw, err := m.Mint("ns/sess-1", principal)
 	require.NoError(t, err)
 
 	p, err := signer.Verify(raw)
@@ -70,7 +67,7 @@ func TestMinter_SubjectVerified_Unverified(t *testing.T) {
 	m := &Minter{Signer: signer}
 
 	principal := identity.FromExternal("local", "", "alice", "").AllowSynthetic()
-	raw, err := m.Mint("ns/sess-1", principal, "")
+	raw, err := m.Mint("ns/sess-1", principal)
 	require.NoError(t, err)
 
 	p, err := signer.Verify(raw)
@@ -82,7 +79,7 @@ func TestMinter_SubjectVerified_Unverified(t *testing.T) {
 // mint time — a session-view link with no session to point at is meaningless.
 func TestMinter_EmptySessionRef_Errors(t *testing.T) {
 	m := &Minter{Signer: passthroughlink.New(make([]byte, 32))}
-	_, err := m.Mint("", identity.RawSubject("user:alice"), "")
+	_, err := m.Mint("", identity.RawSubject("user:alice"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sessionRef")
 }
@@ -91,7 +88,7 @@ func TestMinter_EmptySessionRef_Errors(t *testing.T) {
 // fails closed rather than panicking.
 func TestMinter_NilSigner_Errors(t *testing.T) {
 	m := &Minter{}
-	_, err := m.Mint("ns/sess", identity.RawSubject("user:alice"), "")
+	_, err := m.Mint("ns/sess", identity.RawSubject("user:alice"))
 	require.Error(t, err)
 }
 
@@ -104,7 +101,7 @@ func TestVerify_RejectsWrongPurpose(t *testing.T) {
 	signer := passthroughlink.New(make([]byte, 32))
 	m := &Minter{Signer: signer}
 
-	sessionRaw, err := m.Mint("default/sess-1", identity.RawSubject("user:alice"), "")
+	sessionRaw, err := m.Mint("default/sess-1", identity.RawSubject("user:alice"))
 	require.NoError(t, err)
 	sp, err := signer.Verify(sessionRaw)
 	require.NoError(t, err)
@@ -146,7 +143,7 @@ func TestVerify_RejectsExpired(t *testing.T) {
 func TestVerify_RejectsTamperedSignature(t *testing.T) {
 	signer := passthroughlink.New(make([]byte, 32))
 	m := &Minter{Signer: signer}
-	raw, err := m.Mint("default/sess-1", identity.RawSubject("user:alice"), "")
+	raw, err := m.Mint("default/sess-1", identity.RawSubject("user:alice"))
 	require.NoError(t, err)
 
 	tampered := []byte(raw)

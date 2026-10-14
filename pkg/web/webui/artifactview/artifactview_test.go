@@ -32,7 +32,7 @@ const bakedCSP = `default-src 'none'; img-src 'self' data:; style-src 'unsafe-in
 // interface; an unset func field would panic, but fakeAV() populates the
 // happy-path defaults so the shell + content flows succeed end to end.
 type fakeDeps struct {
-	verifyLink          func(raw string) (string, string, string, error)
+	verifyLink          func(raw string) (string, string, error)
 	checkView           func(ctx context.Context, artifactID, subject string) (bool, error)
 	checkInteract       func(ctx context.Context, ns, sess, subject string) (bool, error)
 	artifactMeta        func(ctx context.Context, ns, sess, artifactID string) (string, string, error)
@@ -56,7 +56,7 @@ type fakeDeps struct {
 	logger              logr.Logger
 }
 
-func (f *fakeDeps) VerifyLink(raw string) (string, string, string, error) { return f.verifyLink(raw) }
+func (f *fakeDeps) VerifyLink(raw string) (string, string, error) { return f.verifyLink(raw) }
 func (f *fakeDeps) CheckView(ctx context.Context, artifactID, subject string) (bool, error) {
 	return f.checkView(ctx, artifactID, subject)
 }
@@ -220,8 +220,8 @@ func (f *fakeDeps) Logger() logr.Logger    { return f.logger }
 // two fields it exercises.
 func fakeAV() *fakeDeps {
 	return &fakeDeps{
-		verifyLink: func(raw string) (string, string, string, error) {
-			return "artifact-x", "default/s1", "", nil
+		verifyLink: func(raw string) (string, string, error) {
+			return "artifact-x", "default/s1", nil
 		},
 		checkView: func(ctx context.Context, artifactID, subject string) (bool, error) {
 			return true, nil
@@ -311,7 +311,7 @@ func TestDownload_HappyPath_ServesBytesAsAttachment(t *testing.T) {
 // the artifact id + a MIME-based extension, sanitized.
 func TestDownload_FilenameFallbackFromMIME(t *testing.T) {
 	av := fakeAV()
-	av.verifyLink = func(raw string) (string, string, string, error) { return "art-xyz", "default/s1", "", nil }
+	av.verifyLink = func(raw string) (string, string, error) { return "art-xyz", "default/s1", nil }
 	av.fetchRender = func(ctx context.Context, ns, sess, renderName string) ([]byte, string, error) {
 		return []byte("data"), "text/html", nil
 	}
@@ -633,8 +633,8 @@ func TestShell_Forbidden_DoesNotLeakContentURL(t *testing.T) {
 
 func TestShell_BadLink_Forbidden(t *testing.T) {
 	av := fakeAV()
-	av.verifyLink = func(raw string) (string, string, string, error) {
-		return "", "", "", assert.AnError
+	av.verifyLink = func(raw string) (string, string, error) {
+		return "", "", assert.AnError
 	}
 	s := newServer(t, "user:abc", av)
 
@@ -652,9 +652,9 @@ func TestShell_BadLink_Forbidden(t *testing.T) {
 func TestShell_UnsignedParams_AdminPath(t *testing.T) {
 	av := fakeAV()
 	var verifyLinkCalled bool
-	av.verifyLink = func(raw string) (string, string, string, error) {
+	av.verifyLink = func(raw string) (string, string, error) {
 		verifyLinkCalled = true
-		return "", "", "", assert.AnError
+		return "", "", assert.AnError
 	}
 	var gotArtifactID, gotSubject string
 	av.checkView = func(ctx context.Context, artifactID, subject string) (bool, error) {
@@ -729,9 +729,9 @@ func TestShell_NoLinkNoParams_Forbidden(t *testing.T) {
 func TestShell_SignedPath_TakesPrecedence(t *testing.T) {
 	av := fakeAV()
 	var verifiedRaw string
-	av.verifyLink = func(raw string) (string, string, string, error) {
+	av.verifyLink = func(raw string) (string, string, error) {
 		verifiedRaw = raw
-		return "signed-artifact", "default/s1", "", nil
+		return "signed-artifact", "default/s1", nil
 	}
 	var gotArtifactID string
 	av.checkView = func(ctx context.Context, artifactID, subject string) (bool, error) {

@@ -33,8 +33,8 @@ type Minter struct {
 // the given artifact, session, and subject. Returns ("", nil) when the webd
 // base URL is empty (webd not yet installed or ConfigMap not yet populated) —
 // callers treat an empty URL as a clean skip (no post, no error log).
-func (m *Minter) MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal, backLink string) (string, error) {
-	return m.mint("/artifact-view", artifactID, sessionRef, subject, backLink)
+func (m *Minter) MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal) (string, error) {
+	return m.mint("/artifact-view", artifactID, sessionRef, subject)
 }
 
 // MintArtifactDownloadLink returns "<base>/artifact-download?d=<b64>&sig=<hex>":
@@ -44,14 +44,14 @@ func (m *Minter) MintArtifactViewLink(artifactID, sessionRef string, subject ide
 // view grant, so it reuses PurposeArtifactView and the same CheckView gate —
 // no separate authorization. Returns ("", nil) on an empty base URL, same clean
 // skip as the view link (the desktop case with no external origin wired).
-func (m *Minter) MintArtifactDownloadLink(artifactID, sessionRef string, subject identity.Principal, backLink string) (string, error) {
-	return m.mint("/artifact-download", artifactID, sessionRef, subject, backLink)
+func (m *Minter) MintArtifactDownloadLink(artifactID, sessionRef string, subject identity.Principal) (string, error) {
+	return m.mint("/artifact-download", artifactID, sessionRef, subject)
 }
 
 // mint builds a signed webd deep-link at the given path. The payload is
 // identical across link kinds (view/download); only the path differs, so the
 // same signature authorizes both under the one CheckView gate.
-func (m *Minter) mint(path, artifactID, sessionRef string, subject identity.Principal, backLink string) (string, error) {
+func (m *Minter) mint(path, artifactID, sessionRef string, subject identity.Principal) (string, error) {
 	if m == nil || m.Signer == nil {
 		return "", fmt.Errorf("artifact view minter not configured")
 	}
@@ -74,7 +74,6 @@ func (m *Minter) mint(path, artifactID, sessionRef string, subject identity.Prin
 		SessionRef:      sessionRef,
 		Subject:         subj,
 		SubjectVerified: subject.EmailVerified(),
-		BackLink:        backLink,
 		ExpiresAt:       time.Now().Add(ArtifactViewLinkTTL).Unix(),
 	})
 	if err != nil {
