@@ -210,7 +210,9 @@ func TestNarrowToApproved_plainPinnedRefusalSaysCommittedElsewhere(t *testing.T)
 	var told bool
 	for _, env := range published {
 		pl := decodeInteractionRequest(t, env)
-		if pl.Category == categories.InternalError {
+		assert.NotEqual(t, categories.InternalError, pl.Category,
+			"a plain pinned refusal is an answer, not a fault — it must not carry the internal-error (we-broke, retry) category")
+		if pl.Category == categories.SlotBindRefused {
 			told = true
 			assert.Contains(t, pl.Lead, "already committed to a different target",
 				"a plain pinned refusal names the commitment, not a fault")
@@ -221,7 +223,7 @@ func TestNarrowToApproved_plainPinnedRefusalSaysCommittedElsewhere(t *testing.T)
 				"a refusal is not a fault")
 		}
 	}
-	assert.True(t, told, "a plain pinned refusal must still tell the approver why their approval did not bind this instance")
+	assert.True(t, told, "a plain pinned refusal must tell the approver (under the slot-bind-refused category) why their approval did not bind this instance")
 }
 
 // The control: the SAME binding WITHOUT a recorded move (a first-fill) does not

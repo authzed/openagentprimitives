@@ -86,6 +86,12 @@ func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause er
 		"has not started. This is a fault on our side, not a refusal."
 	nextStep := "Try approving once more. If it fails again, report it — nothing " +
 		"has been granted either way."
+	// InternalError is the "we broke, retrying is a remedy" category, right for
+	// the fault and committed-move cases. A plain pinned refusal is NOT a fault —
+	// re-approving cannot change it — so it carries the refusal-flavored
+	// SlotBindRefused instead (same ToneDegraded weight; the category is what a
+	// surface reads to tell "we erred, try again" from "this is the answer").
+	category := categories.InternalError
 	switch kind {
 	case approvalMoveCommitted:
 		lead = "Your approval moved this session to the new target and removed its access " +
@@ -96,6 +102,7 @@ func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause er
 		// A plain pinned refusal: the slot is committed elsewhere and this is an
 		// answer, not a fault. Honest that other instances may have bound and that
 		// re-approving the SAME card changes nothing.
+		category = categories.SlotBindRefused
 		lead = "This session is already committed to a different target for one of its " +
 			"slots, so the instance your approval named was not granted. Other instances " +
 			"the plan named may have been granted; this one was not."
@@ -107,7 +114,7 @@ func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause er
 
 	pl := channelevents.InteractionRequestPayload{
 		AgentSessionRef: channelevents.SessionRef{Namespace: sessNS, Name: sessName},
-		Category:        categories.InternalError,
+		Category:        category,
 		RequestRef:      newRequestID(),
 		Lead:            lead,
 		// Required of every degraded-tone notice, and the reason the rule exists:
