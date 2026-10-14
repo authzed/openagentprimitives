@@ -247,6 +247,30 @@ func (receiver) TriggerOwnerSubject(ch *spiceboxv1alpha1.Channel, event string, 
 
 var _ channelkinds.TriggerOwnerProvider = receiver{}
 
+// TriggerOriginURL returns the pull request's own html_url from a verified
+// pull_request delivery, satisfying channelkinds.TriggerOriginURLProvider. The
+// URL is host-correct — it is whatever host the delivery came from, so a GitHub
+// Enterprise Server install yields its own host rather than github.com. ok=false
+// (not an error) for a non-pull_request event or a payload that carries no
+// html_url; the channelsd inbound handler then starts the session without the
+// origin link. Re-decodes the same narrow prEvent, preserving its "a payload
+// change upstream cannot alter behavior without a code change" property.
+func (receiver) TriggerOriginURL(_ *spiceboxv1alpha1.Channel, event string, body []byte) (string, bool, error) {
+	if event != "pull_request" {
+		return "", false, nil
+	}
+	var ev prEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		return "", false, fmt.Errorf("github: decode pull_request payload for origin url: %w", err)
+	}
+	if ev.PullRequest.HTMLURL == "" {
+		return "", false, nil
+	}
+	return ev.PullRequest.HTMLURL, true, nil
+}
+
+var _ channelkinds.TriggerOriginURLProvider = receiver{}
+
 // TriggerSlotInstances names this pull request as the one instance a class's
 // slots may bind at session mint.
 //

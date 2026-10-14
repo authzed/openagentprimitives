@@ -77,8 +77,14 @@ func webhookInboundHandler(ctx context.Context, cli client.Client, pl channelkin
 	// the owner grant is an addition to the session, never a gate on it, so a
 	// derivation failure logs and the delivery dispatches without one.
 	var preTurn map[string]string
+	// external carries kind-specific routing/origin metadata onto the session's
+	// input binding (spec.inputChannel.external — the pipeline copies it). Today
+	// github's TriggerOriginURLProvider populates origin_url (the PR html_url) so
+	// webd's artifact-view page can link back to the pull request.
+	var external map[string]string
 	if k, ok := chregistry.Get(ch.Spec.Kind); ok {
-		if op, ok := k.WebhookReceiver(channelkinds.Deps{}).(channelkinds.TriggerOwnerProvider); ok {
+		recv := k.WebhookReceiver(channelkinds.Deps{})
+		if op, ok := recv.(channelkinds.TriggerOwnerProvider); ok {
 			subject, has, oerr := op.TriggerOwnerSubject(&ch, p.DeliveryEvent, p.RawDelivery)
 			switch {
 			case oerr != nil:
@@ -86,6 +92,16 @@ func webhookInboundHandler(ctx context.Context, cli client.Client, pl channelkin
 					"ns", p.ChannelNamespace, "name", p.ChannelName, "key", p.ChannelKey, "err", oerr.Error())
 			case has:
 				preTurn = map[string]string{spiceboxv1alpha1.AnnotationTriggerOwnerSubject: subject}
+			}
+		}
+		if op, ok := recv.(channelkinds.TriggerOriginURLProvider); ok {
+			u, has, oerr := op.TriggerOriginURL(&ch, p.DeliveryEvent, p.RawDelivery)
+			switch {
+			case oerr != nil:
+				logger.Info("webhook inbound: origin url derivation failed; session input binding will have no origin link",
+					"ns", p.ChannelNamespace, "name", p.ChannelName, "key", p.ChannelKey, "err", oerr.Error())
+			case has:
+				external = map[string]string{"origin_url": u}
 			}
 		}
 	}
@@ -97,6 +113,7 @@ func webhookInboundHandler(ctx context.Context, cli client.Client, pl channelkin
 		RawDelivery:        p.RawDelivery,
 		DeliveryEvent:      p.DeliveryEvent,
 		PreTurnAnnotations: preTurn,
+		External:           external,
 	})
 	if err != nil {
 		logger.Info("webhook inbound: pipeline.Deliver errored",
