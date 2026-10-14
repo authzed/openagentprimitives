@@ -1238,21 +1238,6 @@ func (d *artifactViewDeps) ArtifactMeta(ctx context.Context, ns, sess, artifactI
 	return head.Name, head.Description, nil
 }
 
-// ChannelKind returns the AgentSession's input-channel kind (e.g. "slack") so the
-// live-view toolbar can pick the right thread-link icon. Returns "" (with nil
-// error) when the session has no input channel (kubectl-driven sessions). On a
-// Get error it returns ("", err) so the page can log and fall back.
-func (d *artifactViewDeps) ChannelKind(ctx context.Context, ns, sess string) (string, error) {
-	var cur spiceboxv1alpha1.AgentSession
-	if err := d.K8s().Get(ctx, client.ObjectKey{Namespace: ns, Name: sess}, &cur); err != nil {
-		return "", err
-	}
-	if cur.Spec.InputChannel == nil {
-		return "", nil
-	}
-	return cur.Spec.InputChannel.Kind, nil
-}
-
 // SessionViews implements artifactview.Deps: returns the granted
 // session_views.interactions for the session's AgentClass, resolved by
 // agentcaps.ResolveSessionViews from spec — NEVER status, so a capability

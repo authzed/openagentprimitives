@@ -86,9 +86,6 @@ func (f *liveFakeDeps) PreviewChildRender(ctx context.Context, ns, sess, revID s
 func (f *liveFakeDeps) ArtifactMeta(ctx context.Context, ns, sess, artifactID string) (string, string, error) {
 	return "", "", nil
 }
-func (f *liveFakeDeps) ChannelKind(ctx context.Context, ns, sess string) (string, error) {
-	return "", nil
-}
 func (f *liveFakeDeps) OriginLinks(ctx context.Context, ns, sess string) []OriginLink {
 	return nil // the live-socket tests don't exercise origin links
 }

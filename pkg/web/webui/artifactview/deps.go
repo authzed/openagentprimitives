@@ -25,10 +25,6 @@ type Deps interface {
 	// agent-supplied title/summary). Both empty (with nil error) when the head
 	// has no name/description — the shell falls back to the artifact id.
 	ArtifactMeta(ctx context.Context, ns, sess, artifactID string) (name, description string, err error)
-	// ChannelKind returns the AgentSession's input-channel kind (e.g. "slack"),
-	// used to pick the thread-link icon in the live-view toolbar. Returns ""
-	// (with nil error) when the kind is unknown.
-	ChannelKind(ctx context.Context, ns, sess string) (string, error)
 	// OriginLinks returns the de-duplicated, input-first set of "back to origin"
 	// links for the session — a GitHub pull request, a Slack thread — each
 	// derived from a channel binding by that kind's OriginLinkProvider. Empty for
