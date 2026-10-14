@@ -67,6 +67,12 @@ func TestOriginLinksFrom(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "input kind without an OriginLinkProvider (browser): contributes nothing",
+			in:   &spiceboxv1alpha1.ChannelBinding{Name: "b", Kind: "browser"},
+			out:  nil,
+			want: nil,
+		},
+		{
 			name: "github reconstructs from key when origin_url absent",
 			in:   ghBinding(""),
 			out:  nil,

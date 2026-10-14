@@ -427,16 +427,23 @@ func (*Kind) RenderMention(externalID string) string {
 
 var _ channelkinds.OriginLinkProvider = (*Kind)(nil)
 
-// OriginLink returns the canonical Slack thread permalink persisted onto the
-// binding at first thread-root (External["permalink"], resolved by the sender
-// via chat.getPermalink), satisfying channelkinds.OriginLinkProvider. ok=false
-// when it is absent — the thread is not rooted yet, or permalink resolution
-// failed — and the caller drops the link.
+// OriginLink returns a URL back to the Slack thread this binding addresses,
+// satisfying channelkinds.OriginLinkProvider. It prefers the canonical permalink
+// persisted onto the binding at first thread-root (External["permalink"],
+// resolved by the sender via chat.getPermalink on a bot-rooted thread such as
+// reviewbot's). When that is absent — the interactive case, where a human rooted
+// the thread before the agent so no first-send permalink was captured — it falls
+// back to reconstructing a thread deep-link from the team_id/channel_id/thread_ts
+// the listener stamps at session creation. ok=false only when neither is
+// available (no thread rooted yet).
 func (*Kind) OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (string, bool) {
 	if binding == nil {
 		return "", false
 	}
 	if u := binding.External["permalink"]; u != "" {
+		return u, true
+	}
+	if u := BuildSlackThreadURL(binding.External["team_id"], binding.External["channel_id"], binding.External["thread_ts"]); u != "" {
 		return u, true
 	}
 	return "", false
