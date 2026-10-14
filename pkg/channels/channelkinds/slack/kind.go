@@ -425,6 +425,23 @@ func (*Kind) RenderMention(externalID string) string {
 	return "<@" + externalID + ">"
 }
 
+var _ channelkinds.OriginLinkProvider = (*Kind)(nil)
+
+// OriginLink returns the canonical Slack thread permalink persisted onto the
+// binding at first thread-root (External["permalink"], resolved by the sender
+// via chat.getPermalink), satisfying channelkinds.OriginLinkProvider. ok=false
+// when it is absent — the thread is not rooted yet, or permalink resolution
+// failed — and the caller drops the link.
+func (*Kind) OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (string, bool) {
+	if binding == nil {
+		return "", false
+	}
+	if u := binding.External["permalink"]; u != "" {
+		return u, true
+	}
+	return "", false
+}
+
 // SupportedMentionLookups returns the set of identifier shapes this
 // Slack kind can resolve. v1 supports all three (email, name, any).
 // The implementations are in pkg/channels/channelkinds/slack/lookup.go.
