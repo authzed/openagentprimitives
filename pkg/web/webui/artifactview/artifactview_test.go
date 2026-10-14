@@ -37,6 +37,7 @@ type fakeDeps struct {
 	checkInteract       func(ctx context.Context, ns, sess, subject string) (bool, error)
 	artifactMeta        func(ctx context.Context, ns, sess, artifactID string) (string, string, error)
 	channelKind         func(ctx context.Context, ns, sess string) (string, error)
+	originLinks         func(ctx context.Context, ns, sess string) []artifactview.OriginLink
 	sessionViews        func(ctx context.Context, ns, sess string) []string
 	resolveRender       func(ctx context.Context, ns, sess, artifactID string) (string, error)
 	contentRender       func(ctx context.Context, ns, sess, artifactID string) (string, bool, error)
@@ -81,6 +82,12 @@ func (f *fakeDeps) ChannelKind(ctx context.Context, ns, sess string) (string, er
 		return "", nil
 	}
 	return f.channelKind(ctx, ns, sess)
+}
+func (f *fakeDeps) OriginLinks(ctx context.Context, ns, sess string) []artifactview.OriginLink {
+	if f.originLinks == nil {
+		return nil
+	}
+	return f.originLinks(ctx, ns, sess)
 }
 func (f *fakeDeps) ResolveRender(ctx context.Context, ns, sess, artifactID string) (string, error) {
 	return f.resolveRender(ctx, ns, sess, artifactID)

@@ -29,6 +29,14 @@ type Deps interface {
 	// used to pick the thread-link icon in the live-view toolbar. Returns ""
 	// (with nil error) when the kind is unknown.
 	ChannelKind(ctx context.Context, ns, sess string) (string, error)
+	// OriginLinks returns the de-duplicated, input-first set of "back to origin"
+	// links for the session — a GitHub pull request, a Slack thread — each
+	// derived from a channel binding by that kind's OriginLinkProvider. Empty for
+	// a kubectl-driven session, or one whose bound kinds expose no origin link.
+	// Never errors: a lookup failure degrades to fewer links and is logged by the
+	// implementation. Read at page build so it reflects whatever the session's
+	// bindings currently carry, rather than anything baked into a link.
+	OriginLinks(ctx context.Context, ns, sess string) []OriginLink
 	// SessionViews returns the granted session_views.interactions for the
 	// session's AgentClass — the interaction kinds a browser view of this session
 	// may submit (e.g. "user_message"). Nil when the capability is absent,
@@ -115,6 +123,15 @@ type Deps interface {
 	TrustedOrigin() string
 	SandboxBaseURL() string
 	Logger() logr.Logger
+}
+
+// OriginLink is one "back to where this came from" link shown in the
+// artifact-view toolbar: the Href to open and the ChannelKind that selects its
+// icon and tooltip. Built by Deps.OriginLinks from the session's channel
+// bindings; the artifactview package never resolves kinds itself.
+type OriginLink struct {
+	Href        string `json:"href"`
+	ChannelKind string `json:"channelKind"`
 }
 
 // StatusSnapshot mirrors the session's presentation status for the live-view.
