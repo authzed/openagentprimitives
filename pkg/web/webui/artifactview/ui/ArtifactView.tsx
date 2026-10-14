@@ -277,7 +277,9 @@ export function ArtifactView(props: ArtifactViewProps) {
             >
               <Download className="h-4 w-4" aria-hidden="true" />
             </a>
-            <ThreadLink href={props.backLink} channelKind={props.channelKind} />
+            {props.originLinks.map((l) => (
+              <ThreadLink key={l.href} href={l.href} channelKind={l.channelKind} />
+            ))}
             {pinned && (
               <Button variant="secondary" size="sm" className="h-7 gap-1.5 px-2.5" title="Follow latest" onClick={goLive}>
                 <span className="inline-block h-[7px] w-[7px] rounded-full bg-success" />

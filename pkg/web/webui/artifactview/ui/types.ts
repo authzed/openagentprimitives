@@ -1,13 +1,23 @@
 // Mirrors the Go JSON shapes from pkg/web/webui/artifactview (live.go liveMessage,
 // deps.go StatusSnapshot/PlanStatusItem) and the Page.Build props (page.go).
+
+// OriginLink mirrors the Go artifactview.OriginLink (deps.go): one "back to
+// origin" link — the href to open and the channelKind that selects its icon.
+export interface OriginLink {
+  href: string;
+  channelKind: string;
+}
+
 export interface ArtifactViewProps {
   artifactName: string;
   artifactDescription: string;
   hostUrl: string;
   contentUrl: string;
   sandboxOrigin: string;
-  backLink: string;
-  channelKind: string;
+  // originLinks are the "back to origin" links derived from the session's
+  // channel bindings (a GitHub PR, a Slack thread) — one per distinct origin,
+  // input first. Always an array (the server coerces nil to []).
+  originLinks: OriginLink[];
   // ns/name identify the session (for the /session/{ns}/{name}/interact POST);
   // artifactId is the shell-held, server-re-checked id stamped onto outgoing
   // interaction requests (see annotationSend.ts) — the sandbox never needs it.

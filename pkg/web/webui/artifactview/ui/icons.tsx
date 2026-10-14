@@ -1,4 +1,4 @@
-import { MessageSquare } from "lucide-react";
+import { Github, MessageSquare } from "lucide-react";
 
 // SlackIcon is the multicolor Slack glyph, copied verbatim from the approved
 // live-view mockup (the four-color hashtag). It carries no currentColor — the
@@ -18,9 +18,11 @@ export function SlackIcon({ className }: { className?: string }) {
   );
 }
 
-// ChannelIcon picks the originating-channel glyph for the thread link: the Slack
-// logo for "slack", a generic message bubble otherwise.
+// ChannelIcon picks the originating-channel glyph for an origin link: the Slack
+// logo for "slack", the GitHub mark for "github", a generic message bubble
+// otherwise.
 export function ChannelIcon({ kind, className }: { kind: string; className?: string }) {
   if (kind === "slack") return <SlackIcon className={className} />;
+  if (kind === "github") return <Github className={className} aria-hidden="true" />;
   return <MessageSquare className={className} aria-hidden="true" />;
 }

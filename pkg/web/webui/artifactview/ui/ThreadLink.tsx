@@ -2,12 +2,17 @@ import { ArrowUpRight } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@ap/design";
 import { ChannelIcon } from "./icons";
 
-// ThreadLink is the compact, icon-only affordance that opens the originating
-// thread in a new tab: the channel glyph plus a small ↗, with a tooltip. It
-// renders nothing when there's no thread to open (href empty).
+// ThreadLink is the compact, icon-only affordance that opens an originating
+// surface in a new tab: the channel glyph plus a small ↗, with a tooltip. It
+// renders nothing when there's no link to open (href empty).
 export function ThreadLink({ href, channelKind }: { href: string; channelKind: string }) {
   if (!href) return null;
-  const tip = channelKind === "slack" ? "Open the Slack thread" : "Open the thread";
+  const tip =
+    channelKind === "slack"
+      ? "Open the Slack thread"
+      : channelKind === "github"
+        ? "View the pull request"
+        : "Open the thread";
   return (
     <Tooltip>
       <TooltipTrigger asChild>

@@ -32,8 +32,7 @@ const baseProps = {
   hostUrl: "",
   contentUrl: "",
   sandboxOrigin: "https://example.com",
-  backLink: "/thread/1",
-  channelKind: "slack",
+  originLinks: [] as { href: string; channelKind: string }[],
   ns: "default",
   name: "sess-1",
   artifactId: "art-1",
@@ -215,5 +214,31 @@ describe("ArtifactView – chat panel gating", () => {
     expect((screen.getByPlaceholderText("Message the agent…") as HTMLInputElement).value).toBe("");
 
     vi.unstubAllGlobals();
+  });
+});
+
+describe("ArtifactView – origin links toolbar", () => {
+  it("renders one external link per origin, with the right hrefs", () => {
+    const { container } = render(
+      <ArtifactView
+        {...baseProps}
+        originLinks={[
+          { href: "https://github.com/demo-org/platform/pull/42", channelKind: "github" },
+          { href: "https://example.slack.com/archives/C1/p170", channelKind: "slack" },
+        ]}
+      />,
+    );
+    // ThreadLink is the only toolbar anchor opened in a new tab (Download uses
+    // the download attribute, not target=_blank).
+    const links = Array.from(container.querySelectorAll('a[target="_blank"]')) as HTMLAnchorElement[];
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "https://github.com/demo-org/platform/pull/42",
+      "https://example.slack.com/archives/C1/p170",
+    ]);
+  });
+
+  it("renders no origin link when there are none", () => {
+    const { container } = render(<ArtifactView {...baseProps} originLinks={[]} />);
+    expect(container.querySelectorAll('a[target="_blank"]').length).toBe(0);
   });
 });
