@@ -159,6 +159,29 @@ func (Kind) FeatureSupport() map[channelfeatures.Feature]channelkinds.FeatureReq
 // output, composed by the tool that posts it, not by this kind).
 func (Kind) RenderMention(externalID string) string { return externalID }
 
+var _ channelkinds.OriginLinkProvider = Kind{}
+
+// OriginLink returns a human-facing URL to the pull request this binding
+// correlates to, satisfying channelkinds.OriginLinkProvider. It prefers the
+// host-correct html_url persisted at session creation
+// (External["origin_url"] — correct on a GitHub Enterprise Server host), and
+// falls back to reconstructing a github.com URL from the "pr:<owner>/<repo>#<n>"
+// Key for sessions created before that value was persisted. ok=false when
+// neither is available.
+func (Kind) OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (string, bool) {
+	if binding == nil {
+		return "", false
+	}
+	if u := binding.External["origin_url"]; u != "" {
+		return u, true
+	}
+	owner, repo, number, err := parseChannelKey(binding.Key)
+	if err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, number), true
+}
+
 // SupportedMentionLookups returns nil — a pull request's participants have no
 // AP directory to look up against.
 func (Kind) SupportedMentionLookups() []channelkinds.MentionLookupKind { return nil }
