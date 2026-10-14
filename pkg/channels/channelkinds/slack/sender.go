@@ -371,7 +371,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 				}
 				if rootTS != "" {
 					return channelkinds.SubChannelSendResult{
-						External: map[string]string{"thread_ts": rootTS, "channel_id": channelID},
+						External: s.threadOriginExternal(ctx, logger, channelID, rootTS),
 					}, nil
 				}
 			}
@@ -460,13 +460,28 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 			rootTS = postedTS // plain cron first-send: the reply itself is the root
 		}
 		return channelkinds.SubChannelSendResult{
-			External: map[string]string{
-				"thread_ts":  rootTS,
-				"channel_id": ch,
-			},
+			External: s.threadOriginExternal(ctx, logger, ch, rootTS),
 		}, nil
 	}
 	return channelkinds.SubChannelSendResult{}, nil
+}
+
+// threadOriginExternal builds the SubChannelSendResult.External a first-send
+// thread-root hands back to channelsd's outbound relay: the thread_ts/channel_id
+// the relay keys the binding on, plus a best-effort canonical permalink
+// (chat.getPermalink) that webd's artifact-view page renders as a "back to
+// origin" link. The permalink is resolved here because only the sender holds a
+// Slack client. A getPermalink failure is logged and the permalink omitted — it
+// must never block the send, exactly as the former click-time lookup did.
+func (s *slackSender) threadOriginExternal(ctx context.Context, logger interface{ Info(string, ...any) }, channelID, rootTS string) map[string]string {
+	ext := map[string]string{"thread_ts": rootTS, "channel_id": channelID}
+	if pl, err := s.client.GetPermalinkContext(ctx, &slackapi.PermalinkParameters{Channel: channelID, Ts: rootTS}); err != nil {
+		logger.Info("slack first-send: getPermalink failed; thread origin link omitted",
+			"channel", channelID, "thread", rootTS, "err", err.Error())
+	} else if pl != "" {
+		ext["permalink"] = pl
+	}
+	return ext
 }
 
 // buildUserMessageBlocks composes the Block Kit block set for the agent's
