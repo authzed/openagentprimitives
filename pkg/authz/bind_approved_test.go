@@ -45,6 +45,7 @@ type approvedRecordingWriter struct {
 	moveErr   error                 // injected into MovePin
 	pinErr    map[string]error      // per resource type, injected into EnsurePin
 	grantErr  error                 // injected into WriteGrantsPinned
+	listErr   map[string]error      // per (type\x00id), injected into ListGrantsFor
 }
 
 type moveCall struct {
@@ -107,6 +108,9 @@ func (w *approvedRecordingWriter) ReadPin(_ context.Context, resourceType string
 }
 
 func (w *approvedRecordingWriter) ListGrantsFor(_ context.Context, resourceType, resourceID string, _ SessionRef) ([]Relation, error) {
+	if err := w.listErr[grantStoreKey(resourceType, resourceID)]; err != nil {
+		return nil, err
+	}
 	return w.grantsFor[grantStoreKey(resourceType, resourceID)], nil
 }
 
@@ -399,6 +403,42 @@ func TestBindApproved_grantFailureAfterMoveReportsCommittedMove(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSlotMoveCommitted)
 	assert.Len(t, w.moves, 1, "the move itself landed")
 	assert.Equal(t, "repoB", w.pins[sess.String()+"\x00git_repo"])
+}
+
+// A read failure (ListGrantsFor) on a LATER moving type, AFTER an earlier type's
+// move already committed, must report the committed move — the same as a grant
+// failure does. The earlier type's prior instance is already revoked, so a bare
+// error (which the approval path classifies as "nothing happened, retry") would
+// tell the approver nothing was granted while access was removed — the exact gap
+// ErrSlotMoveCommitted exists to close. The sibling MovePin failure path wraps
+// it; this one must too.
+func TestBindApproved_listGrantsFailureAfterMoveReportsCommittedMove(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	mem := memory.NewLocal(inmem.NewBackend())
+	sess := SessionRef{Namespace: "ns", Name: "s"}
+	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+	w := &approvedRecordingWriter{
+		pins: map[string]string{
+			sess.String() + "\x00git_repo":    "repoA",
+			sess.String() + "\x00crm_company": "coX",
+		},
+		// git_repo moves first and commits; crm_company's revoke-set read then
+		// fails, after the git_repo move is already irreversible in this call.
+		listErr: map[string]error{grantStoreKey("crm_company", "coX"): errors.New("spicedb read unavailable")},
+	}
+
+	err := BindApproved(ctx, mem, memory.Scope{Kind: "session", ID: "ns/s"}, sess, w,
+		[]SlotBinding{
+			{ResourceType: "git_repo", ResourceID: TrustedObjectID("repoB"), Permission: "push", PriorID: TrustedObjectID("repoA")},
+			{ResourceType: "crm_company", ResourceID: TrustedObjectID("coY"), Permission: "contact_access", PriorID: TrustedObjectID("coX")},
+		},
+		EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSlotMoveCommitted,
+		"an earlier type already moved, so a later read failure must report a committed move, not a bare error")
+	assert.Len(t, w.moves, 1, "exactly the first type's move landed before the read failed")
+	assert.Equal(t, "repoB", w.pins[sess.String()+"\x00git_repo"], "the committed move's pin stays repointed")
 }
 
 // Two DISTINCT move targets for ONE single-occupancy type in one approval
