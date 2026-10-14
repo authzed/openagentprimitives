@@ -27,7 +27,7 @@ type moveTrackingBinder struct {
 	moveCalls int
 }
 
-func (*moveTrackingBinder) WriteRelationships(context.Context, []authz.Relation) error { return nil }
+func (*moveTrackingBinder) WriteRelationships(context.Context, []authz.Relation) error  { return nil }
 func (*moveTrackingBinder) DeleteRelationships(context.Context, []authz.Relation) error { return nil }
 func (b *moveTrackingBinder) EnsurePin(_ context.Context, _, resourceID string, _ authz.SessionRef) (bool, string, error) {
 	if b.pinnedTo == "" {
@@ -51,6 +51,65 @@ func (*moveTrackingBinder) ListGrantsFor(context.Context, string, string, authz.
 }
 
 var _ authz.SlotPinner = (*moveTrackingBinder)(nil)
+
+// movingBinder is a STATEFUL SlotPinner for the multi-phase approved-move path.
+// The pin starts at pinned[type]; a MovePin whose fromID matches the live pin
+// SUCCEEDS and repoints it, while one whose fromID no longer matches fails as a
+// drift (ErrSlotPinned) — exactly as SpiceDB's MUST_MATCH precondition would. It
+// records every grant written (WriteGrantsPinned) so a test can assert which
+// (type, id, permission) grants actually landed.
+type movingBinder struct {
+	pinned    map[string]string // resourceType -> currently pinned instance
+	moveCalls int
+	wrote     []authz.Relation
+}
+
+func (*movingBinder) WriteRelationships(context.Context, []authz.Relation) error  { return nil }
+func (*movingBinder) DeleteRelationships(context.Context, []authz.Relation) error { return nil }
+
+func (b *movingBinder) EnsurePin(_ context.Context, resourceType, resourceID string, _ authz.SessionRef) (bool, string, error) {
+	if cur := b.pinned[resourceType]; cur != "" {
+		return true, cur, nil
+	}
+	b.pinned[resourceType] = resourceID
+	return false, resourceID, nil
+}
+
+func (b *movingBinder) WriteGrantsPinned(_ context.Context, rels []authz.Relation, _, _ string, _ authz.SessionRef) error {
+	b.wrote = append(b.wrote, rels...)
+	return nil
+}
+
+func (b *movingBinder) MovePin(_ context.Context, resourceType, fromID, toID string, _ []authz.Relation, _ authz.SessionRef) error {
+	b.moveCalls++
+	if b.pinned[resourceType] != fromID {
+		// The pin drifted — an earlier phase in this approval already moved it —
+		// so the MUST_MATCH on fromID fails.
+		return fmt.Errorf("move pin %s:%s -> %s:%s: %w", resourceType, fromID, resourceType, toID, authz.ErrSlotPinned)
+	}
+	b.pinned[resourceType] = toID
+	return nil
+}
+
+func (b *movingBinder) ReadPin(_ context.Context, resourceType string, _ authz.SessionRef) (string, error) {
+	return b.pinned[resourceType], nil
+}
+
+func (*movingBinder) ListGrantsFor(context.Context, string, string, authz.SessionRef) ([]authz.Relation, error) {
+	return nil, nil
+}
+
+func (b *movingBinder) wroteGrant(resourceType, resourceID, permission string) bool {
+	want := authz.SlotGrantRelationName(permission)
+	for _, r := range b.wrote {
+		if r.ResourceType == resourceType && r.ResourceID == resourceID && r.Relation == want {
+			return true
+		}
+	}
+	return false
+}
+
+var _ authz.SlotPinner = (*movingBinder)(nil)
 
 // A move the human approved that cannot execute — the pin drifted since the
 // card — is a BROKEN PROMISE, not an operator-log footnote. narrowToApproved
@@ -206,5 +265,66 @@ func TestNarrowToApproved_firstFillDoesNotRaiseAMoveFailure(t *testing.T) {
 	for _, env := range published {
 		assert.NotEqual(t, categories.InternalError, decodeInteractionRequest(t, env).Category,
 			"a first-fill names no prior pin, so it never attempts a move and never fails one")
+	}
+}
+
+// A plan-scoped approval that covers TWO phases both naming the moved-to
+// instance of ONE single-occupancy slot must move the pin exactly ONCE and bind
+// BOTH phases' permissions. stampMovedFrom stamps the same repoA->repoB move
+// onto every covered record, and the approval is resolved one BindApproved call
+// PER covered record — so without deduping the move, the first phase repoints
+// repoA->repoB and the second re-attempts the identical move with a now-stale
+// PriorID=repoA, whose MUST_MATCH fails as a drift. That silently drops the
+// second phase's grant (here: push) while still recording the phase approved,
+// wedging the agent (the gate says approved, SpiceDB has no grant) and making
+// re-approval drift-fail both. The pin moves at most once per approval; the
+// later phase binds same-instance.
+func TestRecordPlanGateDecision_multiPhaseMoveBindsEveryCoveredPhase(t *testing.T) {
+	mem := memory.NewLocal(inmem.NewBackend())
+	var published []channelevents.Envelope
+	h := planGateHost(t, &channelevents.Envelope{})
+	h.l.Mem = mem
+	binder := &movingBinder{pinned: map[string]string{"git_repo": "repoA"}}
+	h.l.SlotBinder = binder
+	h.l.PlanGateSlotPermissionSets = map[string][]string{"git_repo": {"read", "push"}}
+	h.l.InteractionRequestPublish = func(_ context.Context, _, _ string, env channelevents.Envelope) error {
+		published = append(published, env)
+		return nil
+	}
+
+	readHandle, err := permsurface.NewPermHandle("read", "git_repo")
+	require.NoError(t, err)
+	pushHandle, err := permsurface.NewPermHandle("push", "git_repo")
+	require.NoError(t, err)
+	idx0, idx2 := int32(0), int32(2)
+	ask := planPhaseAsk()
+	ask.Payload["phaseKey"] = "p0"
+	ask.Payload["ceiling"] = []string{readHandle.String()}
+	// Session pinned to repoA; both covered phases name repoB. The read phase
+	// (0) and the push phase (2) each carry the same stamped repoA->repoB move.
+	ask.Payload["covered"] = []plangateaudit.Content{
+		{
+			Event: plangateaudit.EventPhaseApproved, PhaseKey: "p0", PhaseIndex: &idx0,
+			Ceiling: []string{readHandle.String()}, Slots: []string{"git_repo"},
+			SlotRefs: []plangateaudit.SlotRef{{Type: "git_repo", ID: "repoB", MovedFrom: "repoA"}},
+		},
+		{
+			Event: plangateaudit.EventPhaseApproved, PhaseKey: "p2", PhaseIndex: &idx2,
+			Ceiling: []string{pushHandle.String()}, Slots: []string{"git_repo"},
+			SlotRefs: []plangateaudit.SlotRef{{Type: "git_repo", ID: "repoB", MovedFrom: "repoA"}},
+		},
+	}
+
+	driveDecision(t, h, mem, ask, true)
+
+	assert.Equal(t, 1, binder.moveCalls,
+		"a single-occupancy pin moves at most once per approval; the later phase must bind same-instance, not re-move")
+	assert.True(t, binder.wroteGrant("git_repo", "repoB", "read"), "the moving phase's read grant landed")
+	assert.True(t, binder.wroteGrant("git_repo", "repoB", "push"),
+		"the later phase's push grant must NOT be dropped by a spurious second move")
+	assert.Equal(t, "repoB", binder.pinned["git_repo"], "the pin ends on the approved instance")
+	for _, env := range published {
+		assert.NotEqual(t, categories.InternalError, decodeInteractionRequest(t, env).Category,
+			"a successful multi-phase move must not report an approval failure to the approver")
 	}
 }
