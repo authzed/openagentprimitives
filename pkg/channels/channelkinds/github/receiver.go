@@ -256,7 +256,7 @@ var _ channelkinds.TriggerOwnerProvider = receiver{}
 // origin link. Re-decodes the same narrow prEvent, preserving its "a payload
 // change upstream cannot alter behavior without a code change" property.
 func (receiver) TriggerOriginURL(_ *spiceboxv1alpha1.Channel, event string, body []byte) (string, bool, error) {
-	if event != "pull_request" {
+	if event != "pull_request" || len(body) == 0 {
 		return "", false, nil
 	}
 	var ev prEvent

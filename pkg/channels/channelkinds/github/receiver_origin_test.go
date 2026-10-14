@@ -25,6 +25,7 @@ func TestTriggerOriginURL_NonPROrMissing(t *testing.T) {
 		body  string
 	}{
 		{name: "non-pull_request event: ok=false", event: "ping", body: `{"zen":"x"}`},
+		{name: "empty body: ok=false, no decode error", event: "pull_request", body: ``},
 		{name: "pull_request without html_url: ok=false", event: "pull_request",
 			body: `{"action":"opened","number":7,"pull_request":{},"repository":{"full_name":"demo-org/platform"}}`},
 	}

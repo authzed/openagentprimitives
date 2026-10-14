@@ -1069,7 +1069,10 @@ func (r *Relay) patchOutputChannel(ctx context.Context, sess *spiceboxv1alpha1.A
 	// resolved one on this first-root send, rides the same patch as the
 	// thread_ts it is derived from — webd reads it off the binding for the
 	// artifact-view "back to origin" link. Omitted (never written empty) when
-	// resolution failed, so a later root can still supply it.
+	// resolution failed: this patch runs once per thread root (the thread_ts
+	// guard above blocks re-patching the same thread), so a failed permalink is
+	// not backfilled for this thread — the artifact view falls back to a thread
+	// link reconstructed from channel_id/thread_ts instead.
 	extPatch := map[string]string{"channel_id": channelID, "thread_ts": threadTS}
 	if pl := captured["permalink"]; pl != "" {
 		extPatch["permalink"] = pl
