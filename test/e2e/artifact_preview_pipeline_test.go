@@ -563,8 +563,8 @@ func (d *previewPipelineDeps) mintTestContentURL(ns, sess, renderName, artifactI
 // --- stubbed (authz/link/meta) methods: not exercised by the framing
 //     invariant; the authz chain has its own e2e. ---
 
-func (d *previewPipelineDeps) VerifyLink(string) (string, string, string, error) {
-	return "", "", "", nil
+func (d *previewPipelineDeps) VerifyLink(string) (string, string, error) {
+	return "", "", nil
 }
 func (d *previewPipelineDeps) CheckView(context.Context, string, string) (bool, error) {
 	return true, nil
@@ -578,8 +578,8 @@ func (d *previewPipelineDeps) CheckInteract(context.Context, string, string, str
 func (d *previewPipelineDeps) ArtifactMeta(context.Context, string, string, string) (string, string, error) {
 	return "", "", nil
 }
-func (d *previewPipelineDeps) ChannelKind(context.Context, string, string) (string, error) {
-	return "", nil
+func (d *previewPipelineDeps) OriginLinks(context.Context, string, string) []artifactview.OriginLink {
+	return nil
 }
 func (d *previewPipelineDeps) SessionViews(context.Context, string, string) []string {
 	return nil // this e2e suite exercises the preview pipeline, not session_views
