@@ -729,6 +729,18 @@ type SessionOwnerProvider interface {
 	SessionOwner(ev InboundEvent) (subject string, provides bool)
 }
 
+// OriginLinkProvider is an OPTIONAL Kind capability — discovered by
+// type-assertion, never a method on Kind — that turns one of a session's
+// channel bindings into a human-facing URL back to where the conversation
+// lives: a Slack thread, a GitHub pull request. A kind with no such surface
+// does not implement it and contributes no link. ok=false means "this binding
+// has no resolvable origin yet" (a Slack thread not rooted, a permalink that
+// failed to resolve) and the caller drops it silently. Consumed by webd's
+// artifact-view page to offer a "back to origin" link per distinct origin.
+type OriginLinkProvider interface {
+	OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (url string, ok bool)
+}
+
 // OwnerGroupProvider is an optional Kind capability: return the channel's live
 // membership subject-set ref (e.g. "slack_channel:<id>#member") for use as an
 // owner source when this kind is the output channel, and whether one exists.
