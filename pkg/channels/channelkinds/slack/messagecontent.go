@@ -138,6 +138,126 @@ func flattenBlocks(blocks []slackapi.Block) string {
 			}
 		case *slackapi.RichTextBlock:
 			add(flattenRichText(blk.Elements))
+		case *slackapi.MarkdownBlock:
+			add(blk.Text)
+		case *slackapi.TableBlock:
+			// One line per row, cells " | "-separated, so a table read back
+			// (or degraded to plain text) keeps its row structure.
+			for _, row := range blk.Rows {
+				var cells []string
+				for _, cell := range row {
+					if c := strings.TrimSpace(flattenTableCell(cell)); c != "" {
+						cells = append(cells, c)
+					}
+				}
+				add(strings.Join(cells, " | "))
+			}
+		case *slackapi.DataVisualizationBlock:
+			add(flattenDataViz(blk))
+		case *slackapi.CardBlock:
+			for _, t := range []*slackapi.TextBlockObject{blk.Title, blk.Subtitle, blk.Body, blk.Subtext} {
+				if t != nil {
+					add(t.Text)
+				}
+			}
+		case *slackapi.ContainerBlock:
+			if blk.Title != nil {
+				add(blk.Title.Text)
+			}
+			if blk.Subtitle != nil {
+				add(blk.Subtitle.Text)
+			}
+			if blk.RichTextTitle != nil {
+				add(flattenRichText(blk.RichTextTitle.Elements))
+			}
+			add(flattenBlocks(blk.ChildBlocks.BlockSet))
+		case *slackapi.PlanBlock:
+			add(blk.Title)
+			for i := range blk.Tasks {
+				add(flattenTaskCard(&blk.Tasks[i]))
+			}
+		case *slackapi.TaskCardBlock:
+			add(flattenTaskCard(blk))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// flattenDataViz projects a chart's free-form agent-authored strings — the
+// title plus every segment/data-point label, series name, and axis category/
+// label. Projecting only the title (as this case once did) let an agent, or an
+// injected prompt, route blockable content into chart labels and slip it past
+// the egress leakage gate, which measures ComponentsPlainText -> flattenBlocks.
+// Numeric values carry no text and are skipped.
+func flattenDataViz(dv *slackapi.DataVisualizationBlock) string {
+	var parts []string
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	addSeries := func(series []slackapi.DataVisualizationDataSeries, axis slackapi.DataVisualizationAxisConfig) {
+		for _, s := range series {
+			add(s.Name)
+			for _, p := range s.Data {
+				add(p.Label)
+			}
+		}
+		for _, cat := range axis.Categories {
+			add(cat)
+		}
+		add(axis.XLabel)
+		add(axis.YLabel)
+	}
+	add(dv.Title)
+	switch c := dv.Chart.(type) {
+	case *slackapi.DataVisualizationPieChart:
+		for _, seg := range c.Segments {
+			add(seg.Label)
+		}
+	case *slackapi.DataVisualizationBarChart:
+		addSeries(c.Series, c.AxisConfig)
+	case *slackapi.DataVisualizationAreaChart:
+		addSeries(c.Series, c.AxisConfig)
+	case *slackapi.DataVisualizationLineChart:
+		addSeries(c.Series, c.AxisConfig)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// flattenTableCell renders a table cell's readable text. raw_number cells carry
+// no text unless a display override is set; rich_text and raw_text cells carry
+// their content.
+func flattenTableCell(cell slackapi.TableCell) string {
+	switch c := cell.(type) {
+	case *slackapi.TableRichTextCell:
+		return flattenRichText(c.Elements)
+	case *slackapi.TableRawTextCell:
+		return c.Text
+	case *slackapi.TableRawNumberCell:
+		return c.Text
+	}
+	return ""
+}
+
+// flattenTaskCard renders a task card's readable text (title, details, output,
+// and source labels) for transcript/egress projection.
+func flattenTaskCard(tc *slackapi.TaskCardBlock) string {
+	var parts []string
+	if tc.Title != "" {
+		parts = append(parts, tc.Title)
+	}
+	if tc.Details != nil {
+		parts = append(parts, flattenRichText(tc.Details.Elements))
+	}
+	if tc.Output != nil {
+		parts = append(parts, flattenRichText(tc.Output.Elements))
+	}
+	// A source's URL renders as a clickable link, so it is content the egress
+	// gate must measure, not just its label.
+	for _, s := range tc.Sources {
+		if src := linkText(s.URL, s.Text); src != "" {
+			parts = append(parts, src)
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -164,6 +284,21 @@ func flattenRichText(elements []slackapi.RichTextElement) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// linkText renders a link in Slack's own mrkdwn form, <url|label> — the same
+// text a section carrying that link holds. The URL is always kept: it is what
+// the reader clicks, so projecting only the label would let a URL (and anything
+// smuggled into its query string) slip past the egress gate unmeasured.
+func linkText(url, label string) string {
+	switch {
+	case url == "":
+		return label
+	case label == "" || label == url:
+		return "<" + url + ">"
+	default:
+		return "<" + url + "|" + label + ">"
+	}
+}
+
 // flattenRichTextSection concatenates the leaf elements of one rich-text
 // section. User/channel mentions keep their "<@Uxxx>" form so the transcript
 // matches how the same text appears everywhere else in the pipeline.
@@ -174,11 +309,7 @@ func flattenRichTextSection(elements []slackapi.RichTextSectionElement) string {
 		case *slackapi.RichTextSectionTextElement:
 			b.WriteString(e.Text)
 		case *slackapi.RichTextSectionLinkElement:
-			if e.Text != "" {
-				b.WriteString(e.Text)
-			} else {
-				b.WriteString(e.URL)
-			}
+			b.WriteString(linkText(e.URL, e.Text))
 		case *slackapi.RichTextSectionUserElement:
 			b.WriteString("<@" + e.UserID + ">")
 		case *slackapi.RichTextSectionChannelElement:

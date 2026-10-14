@@ -50,9 +50,9 @@ require (
 	github.com/ory/dockertest/v3 v3.12.0
 	github.com/rs/zerolog v1.34.0
 	github.com/sigstore/sigstore v1.10.8
-	github.com/slack-go/slack v0.23.1
+	github.com/slack-go/slack v0.30.1
 	github.com/spf13/cobra v1.10.2
-	github.com/stretchr/testify v1.12.0
+	github.com/stretchr/testify v1.12.1
 	github.com/tdewolff/parse/v2 v2.8.13
 	github.com/tsawler/tabula v1.6.14
 	github.com/warpstreamlabs/bento v1.17.0

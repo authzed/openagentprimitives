@@ -309,6 +309,6 @@ func TestToolSessionSender_OrdinarySession_ReportsTheBubbleAsRoot(t *testing.T) 
 	s.refs.get("tc-plain").stop() // stop the test goroutine's timer
 }
 
-func (c *recordingClient) GetUserInfoContext(context.Context, string) (*slackapi.User, error) {
+func (c *recordingClient) GetUserInfoContext(context.Context, string, ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	return nil, nil
 }

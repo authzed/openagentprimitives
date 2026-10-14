@@ -261,11 +261,36 @@ func TestBuildUserMessageBlocks_SettingsButton_FirstMessageOnly(t *testing.T) {
 	} // no K8sClient: clamp line skipped
 	sess := sessionInfoForTest("default", "my-session")
 
-	first := blocksJSON(t, s.buildUserMessageBlocks(noopCtx(t), sess, "hello", "default/my-session", true, noopLogger{}))
+	firstBlocks, firstAppended := s.buildUserMessageBlocks(noopCtx(t), sess, "hello", nil, "default/my-session", true, noopLogger{})
+	first := blocksJSON(t, firstBlocks)
 	assert.Contains(t, first, showSettingsActionID, "first message carries the button")
+	assert.True(t, firstAppended, "button reported as appended on the first message")
 
-	later := blocksJSON(t, s.buildUserMessageBlocks(noopCtx(t), sess, "again", "default/my-session", false, noopLogger{}))
+	laterBlocks, laterAppended := s.buildUserMessageBlocks(noopCtx(t), sess, "again", nil, "default/my-session", false, noopLogger{})
+	later := blocksJSON(t, laterBlocks)
 	assert.NotContains(t, later, showSettingsActionID, "subsequent messages must not carry the button")
+	assert.False(t, laterAppended, "button reported as not appended when includeSettings is false")
+}
+
+// TestBuildUserMessageBlocks_SettingsButton_SuppressedWhenNoHeadroom: a 50-block
+// agent body leaves no room for the first-message settings button. The function
+// must report it was NOT appended (so Send does not consume the one-shot and the
+// button appears on a later reply with room) and the button must be absent.
+func TestBuildUserMessageBlocks_SettingsButton_SuppressedWhenNoHeadroom(t *testing.T) {
+	s := &slackSender{statusCache: make(map[string]cachedStatus)} // no K8sClient: clamp line skipped
+	sess := sessionInfoForTest("default", "my-session")
+
+	dividers := make([]map[string]string, slackMaxBlocksPerMessage)
+	for i := range dividers {
+		dividers[i] = map[string]string{"type": "divider"}
+	}
+	components, err := json.Marshal(dividers)
+	require.NoError(t, err, "marshal 50 divider blocks")
+
+	blocks, settingsAppended := s.buildUserMessageBlocks(noopCtx(t), sess, "summary", components, "default/my-session", true, noopLogger{})
+	assert.False(t, settingsAppended, "button not appended when the 50-block body leaves no headroom")
+	assert.Len(t, blocks, slackMaxBlocksPerMessage, "body fills the per-message block cap")
+	assert.False(t, hasActionBlockWithID(blocks, showSettingsActionID), "no settings button in a full body")
 }
 
 // TestSettingsButtonSeen_OncePerSession: the shared seen-set hands out
@@ -287,20 +312,23 @@ func TestSettingsButtonSeen_OncePerSession(t *testing.T) {
 //
 // Observation strategy: the Slack SDK's MsgOptionBlocks content is not
 // recoverable from a captured MsgOption, so the button cannot be read back off
-// the posted message. But Send() gates BOTH the button and the seen-set
-// mark() on the SAME includeSettings value:
+// the posted message. But Send() gates the seen-set mark() on whether
+// buildUserMessageBlocks actually APPENDED the button AND the block post
+// succeeded:
 //
 //	includeSettings := s.settingsSeen == nil || !s.settingsSeen.saw(sessRef)
-//	blocks := s.buildUserMessageBlocks(..., includeSettings, ...)
+//	blocks, settingsAppended := s.buildUserMessageBlocks(..., includeSettings, ...)
 //	...post...
-//	if includeSettings && usedBlocks && s.settingsSeen != nil { s.settingsSeen.mark(sessRef) }
+//	if settingsAppended && usedBlocks && s.settingsSeen != nil { s.settingsSeen.mark(sessRef) }
 //
 // So `seen.saw(sessRef)` flipping to true after a Send is equivalent to
-// "includeSettings was true (button built into the blocks) AND the block
-// post succeeded" — making the seen-set a faithful proxy for "the button
-// was delivered on this send." That closes the loop with
-// TestBuildUserMessageBlocks_SettingsButton_FirstMessageOnly, which
-// proves includeSettings true⇒button / false⇒no-button.
+// "the button was appended into the blocks AND the block post succeeded" —
+// making the seen-set a faithful proxy for "the button was delivered on this
+// send." That closes the loop with
+// TestBuildUserMessageBlocks_SettingsButton_FirstMessageOnly (includeSettings
+// true⇒button / false⇒no-button) and
+// TestBuildUserMessageBlocks_SettingsButton_SuppressedWhenNoHeadroom (a full
+// body appends no button, so the one-shot stays unconsumed).
 
 // TestSend_SettingsButton_MarksOnlyAfterSuccessfulBlockPost verifies the
 // once-guard is consumed only when the button was actually delivered:
@@ -399,7 +427,7 @@ func TestBuildUserMessageBlocks_ClampContextBlock_Present(t *testing.T) {
 		statusCache:  make(map[string]cachedStatus),
 	}
 	sess := sessionInfoForTest("default", "my-session")
-	blocks := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", "default/my-session", true, noopLogger{})
+	blocks, _ := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", nil, "default/my-session", true, noopLogger{})
 
 	txt := blocksText(blocks)
 	assert.Contains(t, txt, "Budget capped by policy",
@@ -423,7 +451,7 @@ func TestBuildUserMessageBlocks_ClampContextBlock_Absent(t *testing.T) {
 		statusCache:  make(map[string]cachedStatus),
 	}
 	sess := sessionInfoForTest("default", "my-session")
-	blocks := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", "default/my-session", true, noopLogger{})
+	blocks, _ := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", nil, "default/my-session", true, noopLogger{})
 
 	txt := blocksText(blocks)
 	assert.NotContains(t, txt, "Budget capped by policy",
@@ -441,7 +469,7 @@ func TestBuildUserMessageBlocks_ClampLine_BestEffort_OnGetError(t *testing.T) {
 	}
 	sess := sessionInfoForTest("default", "nonexistent-session")
 	// Must not panic or return an error.
-	blocks := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", "default/nonexistent-session", true, noopLogger{})
+	blocks, _ := s.buildUserMessageBlocks(noopCtx(t), sess, "Hello!", nil, "default/nonexistent-session", true, noopLogger{})
 
 	// Button still present; no clamp line.
 	assert.True(t, hasActionBlockWithID(blocks, showSettingsActionID))

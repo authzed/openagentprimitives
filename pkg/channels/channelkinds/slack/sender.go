@@ -59,7 +59,7 @@ type slackClient interface {
 	// GetUserInfoContext resolves a user id to a profile. The sender needs the
 	// direction the other two lookups do not: quoted message text carries ids,
 	// not emails, and an id is what a reader cannot read (see userNamer).
-	GetUserInfoContext(ctx context.Context, user string) (*slackapi.User, error)
+	GetUserInfoContext(ctx context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error)
 	// OpenViewContext opens a Slack modal via views.open. Used by the
 	// approval-flow's Show Details button to surface the full args /
 	// MCP description / op-session refs out-of-thread.
@@ -175,7 +175,28 @@ func maybeAppendMentionFooter(text, routingMode string) string {
 	if routingMode != "mention_only" {
 		return text
 	}
-	return text + "\n\n_@-mention me to reply._"
+	return text + "\n\n" + mentionFooterText
+}
+
+// mentionFooterText is the mention_only hint, appended to text replies by
+// maybeAppendMentionFooter and to component bodies by componentBodyBlocks.
+const mentionFooterText = "_@-mention me to reply._"
+
+// componentBodyBlocks is the rendered body when agent-authored components ARE
+// the message: the components, plus — in a mention_only thread — the @-mention
+// hint as a context block. Text (which carries the hint for text replies) is only
+// the notification fallback once components are the body, so without this the
+// hint never renders in-thread and a user's bare reply never routes. Shared by
+// every path that renders components (chat.postMessage and the streaming
+// bubble's chat.update), so no path can drop it. The validator caps agent
+// blocks one below Slack's limit precisely so this slot is always free.
+func componentBodyBlocks(agent []slackapi.Block, routingMode string) []slackapi.Block {
+	if routingMode != "mention_only" {
+		return agent
+	}
+	return append(agent, slackapi.NewContextBlock("",
+		slackapi.NewTextBlockObject("mrkdwn", mentionFooterText, false, false),
+	))
 }
 
 func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, env channelevents.Envelope) (channelkinds.SubChannelSendResult, error) {
@@ -239,6 +260,10 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 	// LLMs occasionally emit HTML-escaped sequences (e.g. "&amp;") that
 	// Slack would render literally; unescape so users see real "&".
 	pl.Text = slackifyText(pl.Text)
+	// The reply text before the mention footer: the degraded plain-text
+	// retries rebuild the footer AFTER the component projection, so the hint
+	// stays at the end of the message instead of buried mid-body.
+	replyText := pl.Text
 
 	// Adopted (mention_only) thread: a bare reply does not route to the
 	// agent, so append an @-mention hint. No-op for default-routing
@@ -292,8 +317,35 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 		ts = ""
 	}
 	if ts != "" {
-		_, _, _, err := s.client.UpdateMessageContext(ctx, channelID, ts,
-			slackapi.MsgOptionText(responseReadyEmoji+" "+pl.Text, false))
+		// Render agent-authored components into the streaming bubble too.
+		// Without this, the chat.update path (the normal streamed-thread case)
+		// would update the bubble with the text summary alone and silently drop
+		// the agent's table/chart/card — text is only the notification/degrade
+		// fallback once components are the body.
+		updateOpts := []slackapi.MsgOption{
+			slackapi.MsgOptionText(responseReadyEmoji+" "+pl.Text, false),
+		}
+		var componentBlocks []slackapi.Block
+		if len(pl.Components) > 0 {
+			if componentBlocks = parseComponentBlocks(pl.Components); len(componentBlocks) > 0 {
+				componentBlocks = componentBodyBlocks(componentBlocks, sess.Channel.RoutingMode)
+				updateOpts = append(updateOpts, slackapi.MsgOptionBlocks(componentBlocks...))
+			} else {
+				logger.Info("slack: user_message components did not parse into blocks; updating streaming bubble with text only",
+					"session", sess.Name)
+			}
+		}
+		_, _, _, err := s.client.UpdateMessageContext(ctx, channelID, ts, updateOpts...)
+		if err != nil && len(componentBlocks) > 0 && isUnsupportedBlocksErr(err) {
+			// Slack rejected the block rendering (same failure the
+			// chat.postMessage degrade path below handles). Don't drop the
+			// reply: retry the bubble update as plain text so the user still
+			// sees the answer — degraded, logged.
+			logger.Info("slack: streaming-bubble blocks rejected; retrying chat.update as plain text (degraded)",
+				"session", sess.Name, "channelID", channelID, "bubbleTS", ts, "err", err.Error())
+			_, _, _, err = s.client.UpdateMessageContext(ctx, channelID, ts,
+				slackapi.MsgOptionText(responseReadyEmoji+" "+degradedPlainText(replyText, pl.Components, sess.Channel.RoutingMode), false))
+		}
 		if err == nil {
 			// chat.update doesn't auto-clear assistant.threads.setStatus the
 			// way chat.postMessage does. Explicitly clear so the "is
@@ -347,7 +399,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 	//      thereafter via the App Home "Agent settings" button.
 	sessRef := sess.Namespace + "/" + sess.Name
 	includeSettings := s.settingsSeen == nil || !s.settingsSeen.saw(sessRef)
-	blocks := s.buildUserMessageBlocks(ctx, sess, pl.Text, sessRef, includeSettings, logger)
+	blocks, settingsAppended := s.buildUserMessageBlocks(ctx, sess, pl.Text, pl.Components, sessRef, includeSettings, logger)
 	opts := []slackapi.MsgOption{
 		slackapi.MsgOptionText(pl.Text, false), // plain-text fallback for push notifications
 		slackapi.MsgOptionBlocks(blocks...),
@@ -369,7 +421,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 		logger.Info("slack: user_message blocks rejected; retrying as plain text (degraded, no Show-settings button)",
 			"session", sess.Name, "channelID", channelID, "err", err.Error())
 		usedBlocks = false
-		plainOpts := []slackapi.MsgOption{slackapi.MsgOptionText(pl.Text, false)}
+		plainOpts := []slackapi.MsgOption{slackapi.MsgOptionText(degradedPlainText(replyText, pl.Components, sess.Channel.RoutingMode), false)}
 		if threadTS != "" {
 			plainOpts = append(plainOpts, slackapi.MsgOptionTS(threadTS))
 		}
@@ -378,10 +430,11 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 	if err != nil {
 		return channelkinds.SubChannelSendResult{}, fmt.Errorf("slack postMessage: %w", err)
 	}
-	// Mark the once-guard only after a successful block post: the
-	// plain-text degraded retry above never carried the button, and a
-	// failed post must not consume the session's one shot at it.
-	if includeSettings && usedBlocks && s.settingsSeen != nil {
+	// Mark the once-guard only when the button was actually appended AND the
+	// block post succeeded: the plain-text degraded retry never carried the
+	// button, a failed post never delivered it, and a 50-block body can leave
+	// no headroom for it — none of those may consume the session's one shot.
+	if settingsAppended && usedBlocks && s.settingsSeen != nil {
 		s.settingsSeen.mark(sessRef)
 	}
 	logger.Info("slack: user_message via chat.postMessage",
@@ -430,24 +483,41 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 func (s *slackSender) buildUserMessageBlocks(
 	ctx context.Context,
 	sess channelkinds.SessionInfo,
-	text, sessRef string,
+	text string,
+	components json.RawMessage,
+	sessRef string,
 	includeSettings bool,
 	logger interface{ Info(string, ...any) },
-) []slackapi.Block {
-	// A section block's mrkdwn is capped at 3000 chars; a single unbounded
-	// block makes chat.postMessage reject the whole reply with invalid_blocks.
-	// Split the reply across as many section blocks as it needs, each under the
-	// limit, preserving all content.
+) ([]slackapi.Block, bool) {
+	// Base body: agent-authored components when present (validated by the slack
+	// kind's ComponentValidator in the runner before publish), otherwise the
+	// reply text split into section blocks. When components ARE the body, text
+	// is only the notification/degrade fallback — not a duplicated section. If
+	// components somehow fail to parse here (they were validated upstream), fall
+	// back to text sections rather than drop the reply.
+	//
+	// When components are the body, componentBodyBlocks also appends the
+	// mention_only hint; the text-section path (including the parse-failure
+	// fallback) already carries it in its rendered text, so it is not doubled.
+	routingMode := ""
+	if sess.Channel != nil {
+		routingMode = sess.Channel.RoutingMode
+	}
 	var blocks []slackapi.Block
-	for _, chunk := range chunkForSlackSection(text, slackSectionMaxRunes) {
-		blocks = append(blocks, slackapi.NewSectionBlock(
-			slackapi.NewTextBlockObject("mrkdwn", chunk, false, false),
-			nil, nil,
-		))
+	if len(components) == 0 {
+		blocks = append(blocks, textSectionBlocks(text)...)
+	} else if agent := parseComponentBlocks(components); len(agent) > 0 {
+		blocks = append(blocks, componentBodyBlocks(agent, routingMode)...)
+	} else {
+		logger.Info("slack: user_message components did not parse into blocks; falling back to text sections",
+			"session", sess.Name)
+		blocks = append(blocks, textSectionBlocks(text)...)
 	}
 
 	// Muted clamp-warning context line — best-effort; never blocks the send.
-	if s.deps.K8sClient != nil {
+	// Guarded by block headroom so a full (≤50-block) agent-authored body is
+	// not pushed over Slack's per-message cap by a system-appended extra.
+	if s.deps.K8sClient != nil && len(blocks) < slackMaxBlocksPerMessage {
 		var as spiceboxv1alpha1.AgentSession
 		if err := s.deps.K8sClient.Get(ctx, types.NamespacedName{
 			Namespace: sess.Namespace, Name: sess.Name,
@@ -467,14 +537,75 @@ func (s *slackSender) buildUserMessageBlocks(
 
 	// Show settings button — first agent message of the session only;
 	// settings stay reachable anytime via the App Home "Agent settings"
-	// button.
+	// button. Headroom-guarded, as with the clamp line above. The returned
+	// bool reports whether the button was actually appended: the caller
+	// consumes the session's one-shot only then (and only on a successful block
+	// post), so a 50-block body that leaves no room does not burn the one shot
+	// — the button then appears on the first later reply that has room.
+	settingsAppended := false
 	if includeSettings {
-		blocks = append(blocks, slackapi.NewActionBlock("show_settings_actions",
-			settingsButton(sessRef),
-		))
+		if len(blocks) < slackMaxBlocksPerMessage {
+			blocks = append(blocks, slackapi.NewActionBlock("show_settings_actions",
+				settingsButton(sessRef),
+			))
+			settingsAppended = true
+		} else {
+			logger.Info("slack: no block headroom for the first-message Show settings button; leaving the session one-shot unconsumed so it appears on a later reply",
+				"session", sess.Name)
+		}
 	}
 
-	return blocks
+	return blocks, settingsAppended
+}
+
+// textSectionBlocks splits text into mrkdwn section blocks, each under Slack's
+// 3000-char section cap so chat.postMessage never rejects the reply with
+// invalid_blocks. It is the body when no components are present, and the
+// fallback when components fail to parse.
+func textSectionBlocks(text string) []slackapi.Block {
+	var out []slackapi.Block
+	for _, chunk := range chunkForSlackSection(text, slackSectionMaxRunes) {
+		out = append(out, slackapi.NewSectionBlock(
+			slackapi.NewTextBlockObject("mrkdwn", chunk, false, false),
+			nil, nil,
+		))
+	}
+	return out
+}
+
+// degradedPlainText builds the plain-text body used when Slack rejects the Block
+// Kit rendering. When the agent authored components as the body, pl.Text is only
+// a concise summary, so posting it alone would drop most of the reply — append
+// the components' readable projection (the same flattenBlocks the inbound and
+// egress paths use) so the content survives the degrade. Plain text is not
+// subject to block validation, so this always posts.
+//
+// text is the reply BEFORE the mention_only footer; the footer is appended last
+// so the hint closes the message rather than sitting between the summary and
+// the projected body.
+func degradedPlainText(text string, components json.RawMessage, routingMode string) string {
+	if len(components) > 0 {
+		if flat := flattenBlocks(parseComponentBlocks(components)); flat != "" {
+			if text == "" {
+				text = flat
+			} else {
+				text += "\n\n" + flat
+			}
+		}
+	}
+	return maybeAppendMentionFooter(text, routingMode)
+}
+
+// parseComponentBlocks unmarshals agent-authored Block Kit JSON into slack-go
+// blocks. Returns nil on any failure — the caller falls back to text so a reply
+// is never dropped. The payload was already validated by the slack kind's
+// ComponentValidator in the runner; this is the render-time counterpart.
+func parseComponentBlocks(components json.RawMessage) []slackapi.Block {
+	var parsed slackapi.Blocks
+	if err := json.Unmarshal(components, &parsed); err != nil {
+		return nil
+	}
+	return parsed.BlockSet
 }
 
 // forgetWatchdog drops the watchdog's tracking for this session — used after

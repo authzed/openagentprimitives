@@ -239,6 +239,24 @@ type OutboundUserMessagePayload struct {
 	// time via the operator's HTTP /artifact/... endpoint and never travel
 	// via NATS. Empty means a text-only reply.
 	Attachments []AttachmentRef `json:"attachments,omitempty"`
+	// Components is agent-authored structured UI in the OUTBOUND kind's native
+	// format (Slack Block Kit today), already validated by that kind's
+	// ComponentValidator before this payload was published. The kind's Sender
+	// renders it as the message body with Text as the notification/degrade
+	// fallback; a kind that does not support components ignores it. Empty means
+	// a text-only (or text+attachments) reply. Opaque to channelsd — format is
+	// a kind concern, never an envelope one.
+	//
+	// Version skew: this field arrived with the runner advertising a `blocks`
+	// capability. A channelsd predating it unmarshals this struct without a
+	// Components field, silently drops the value, and posts Text alone. There is
+	// no runner<->channelsd capability handshake, so the two should be upgraded
+	// together. The degradation is graceful, not silent loss: the model is
+	// required to fill Text with a self-contained concise summary (the same
+	// render fallback used when blocks can't render), so a skewed old channelsd
+	// posts that summary rather than a blank reply. A runtime capability
+	// negotiation is deferred.
+	Components json.RawMessage `json:"components,omitempty"`
 }
 
 // AttachmentRef references an ArtifactRender CR whose status.outputRef

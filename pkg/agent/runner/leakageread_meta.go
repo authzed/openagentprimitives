@@ -215,7 +215,7 @@ func (l *Loop) readSidePostForMetaTool(
 		Tool: &pipeline.ToolCallInfo{
 			Name: name,
 			// The bytes the tool was actually called with. The gated path passes
-			// its stripArgTags'd copy because it strips before executing; this
+			// its toolenvelope.StripPtJSON'd copy because it strips before executing; this
 			// path does not strip at all, so the same copy the tool saw is the
 			// honest answer. No plural declaration reads Args anyway — a
 			// resource named by an ARG is knowable before the call and takes the

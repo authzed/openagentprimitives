@@ -21,7 +21,7 @@ type fakeHistClient struct {
 func (f *fakeHistClient) GetConversationRepliesContext(context.Context, *slackapi.GetConversationRepliesParameters) ([]slackapi.Message, bool, string, error) {
 	return nil, false, "", nil
 }
-func (f *fakeHistClient) GetUserInfoContext(_ context.Context, id string) (*slackapi.User, error) {
+func (f *fakeHistClient) GetUserInfoContext(_ context.Context, id string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	return &slackapi.User{Name: "u" + id, RealName: "User " + id, Profile: slackapi.UserProfile{Email: id + "@x.com"}}, nil
 }
 func (f *fakeHistClient) GetConversationHistoryContext(_ context.Context, p *slackapi.GetConversationHistoryParameters) (*slackapi.GetConversationHistoryResponse, error) {

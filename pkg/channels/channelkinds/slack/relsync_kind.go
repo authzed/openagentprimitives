@@ -115,7 +115,7 @@ type slackDirectoryClient interface {
 	GetConversationsContext(ctx context.Context, params *slackapi.GetConversationsParameters) (channels []slackapi.Channel, nextCursor string, err error)
 	GetConversationInfoContext(ctx context.Context, input *slackapi.GetConversationInfoInput) (*slackapi.Channel, error)
 	GetUsersInConversationContext(ctx context.Context, params *slackapi.GetUsersInConversationParameters) ([]string, string, error)
-	GetUserInfoContext(ctx context.Context, user string) (*slackapi.User, error)
+	GetUserInfoContext(ctx context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error)
 	AuthTestContext(ctx context.Context) (*slackapi.AuthTestResponse, error)
 }
 

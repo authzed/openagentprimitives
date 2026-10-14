@@ -173,7 +173,7 @@ func (c *Client) SeedUser(u *slackapi.User) {
 		c.usersEmail[u.Profile.Email] = u
 	}
 }
-func (c *Client) GetUserInfoContext(_ context.Context, id string) (*slackapi.User, error) {
+func (c *Client) GetUserInfoContext(_ context.Context, id string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if u, ok := c.users[id]; ok {

@@ -32,7 +32,7 @@ type listenerAPIClient interface {
 	PostEphemeralContext(ctx context.Context, channelID, userID string, options ...slackapi.MsgOption) (string, error)
 	// GetUserInfoContext resolves a Slack user's profile (email, team, name)
 	// for identity resolution and the App Home tab.
-	GetUserInfoContext(ctx context.Context, user string) (*slackapi.User, error)
+	GetUserInfoContext(ctx context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error)
 	// OpenViewContext opens a modal (Show Details, Show settings, etc.).
 	OpenViewContext(ctx context.Context, triggerID string, view slackapi.ModalViewRequest) (*slackapi.ViewResponse, error)
 	// OpenView is the non-context views.open, used by the "Restart from

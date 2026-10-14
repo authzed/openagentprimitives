@@ -2035,7 +2035,7 @@ func (a *concreteClientAdapter) GetUserByEmailContext(ctx context.Context, email
 	return a.c.GetUserByEmailContext(ctx, email)
 }
 
-func (a *concreteClientAdapter) GetUserInfoContext(ctx context.Context, user string) (*slackapi.User, error) {
+func (a *concreteClientAdapter) GetUserInfoContext(ctx context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	return a.c.GetUserInfoContext(ctx, user)
 }
 
