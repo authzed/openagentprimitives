@@ -1,7 +1,6 @@
 package installcmd
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -9,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -20,7 +18,6 @@ import (
 
 	"github.com/spf13/cobra"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -49,10 +46,9 @@ import (
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/wait"
 	"github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz/spicedb"
-	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/platform/apimage"
+	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
-	"github.com/authzed/openagentprimitives/pkg/platform/identity/passthroughlink"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
 	apnats "github.com/authzed/openagentprimitives/pkg/platform/nats"
 )
@@ -2716,80 +2712,11 @@ func ensureSpiceDBToken(ctx context.Context, restCfg *rest.Config) error {
 	return ensureSpiceDBTokenWithClient(ctx, cli)
 }
 
-// mintSpiceDBToken returns a fresh pre-shared key: 32 random bytes, hex-encoded.
-func mintSpiceDBToken() ([]byte, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return nil, fmt.Errorf("generate token: %w", err)
-	}
-	return []byte(hex.EncodeToString(buf)), nil
-}
-
-// ensureSpiceDBTokenWithClient creates spicebox-spicedb-token (32 random
-// bytes, hex-encoded) if it does not already exist, and guarantees
-// preshared_key == token. Neither existing value is ever rotated:
-//
-//   - `token` only: the shape oap itself provisions (and older installs). It is
-//     authoritative, and `preshared_key` is mirrored from it.
-//   - `preshared_key` only: the shape the spicedb-operator documents, and what
-//     an External Secrets Operator / GitOps pre-provision produces. It is
-//     ADOPTED — SpiceDB reads only this key, so overwriting it boots SpiceDB
-//     with an empty pre-shared key and wedges the install — and `token` is
-//     backfilled from it for oap's own components.
-//   - both, disagreeing: `token` wins, because that is the key every oap
-//     component reads.
-//
-// Idempotent in every one of those shapes: a converged secret is not written
-// again, so repeated installs neither rotate nor churn resourceVersion.
+// ensureSpiceDBTokenWithClient delegates to the shared bootstrap minter (the
+// pre-start Job uses the same logic): create spicebox-spicedb-token if absent,
+// reconcile the token/preshared_key dual-key shape, never rotate.
 func ensureSpiceDBTokenWithClient(ctx context.Context, cli client.Client) error {
-	var existing corev1.Secret
-	err := cli.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      "spicebox-spicedb-token",
-	}, &existing)
-	if err == nil {
-		tok := existing.Data["token"]
-		pre := existing.Data["preshared_key"]
-		if len(tok) > 0 && bytes.Equal(tok, pre) {
-			return nil
-		}
-		if existing.Data == nil {
-			existing.Data = map[string][]byte{}
-		}
-		switch {
-		case len(tok) > 0:
-			existing.Data["preshared_key"] = tok
-		case len(pre) > 0:
-			existing.Data["token"] = pre
-		default:
-			minted, mintErr := mintSpiceDBToken()
-			if mintErr != nil {
-				return mintErr
-			}
-			existing.Data["token"] = minted
-			existing.Data["preshared_key"] = minted
-		}
-		if err := cli.Update(ctx, &existing); err != nil {
-			return fmt.Errorf("update spicedb token secret: %w", err)
-		}
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get spicedb token secret: %w", err)
-	}
-	tok, err := mintSpiceDBToken()
-	if err != nil {
-		return err
-	}
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "spicebox-spicedb-token",
-			Namespace: "agentprimitives-system",
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{"token": tok, "preshared_key": tok},
-	}
-	return cli.Create(ctx, sec)
+	return bootstrap.EnsureSpiceDBToken(ctx, cli, cli)
 }
 
 // ensureSpiceDBDatastoreURI creates a client from restCfg and delegates to
@@ -2810,40 +2737,7 @@ func ensureSpiceDBDatastoreURI(ctx context.Context, restCfg *rest.Config) error 
 // value. Requires spicebox-spicedb-token to already exist (ensureSpiceDBToken
 // must run first); it hard-errors via Get otherwise.
 func ensureSpiceDBDatastoreURIWithClient(ctx context.Context, cli client.Client) error {
-	var pg corev1.Secret
-	if err := cli.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      "spicebox-postgres-token",
-	}, &pg); err != nil {
-		return fmt.Errorf("get postgres token secret: %w", err)
-	}
-	pw := string(pg.Data["password"])
-	if pw == "" {
-		return fmt.Errorf("postgres token secret has no password")
-	}
-	uri := (&url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword("postgres", pw),
-		Host:     "spicebox-postgres.agentprimitives-system.svc:5432",
-		Path:     "/spicedb",
-		RawQuery: "sslmode=disable",
-	}).String()
-
-	var sp corev1.Secret
-	if err := cli.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      "spicebox-spicedb-token",
-	}, &sp); err != nil {
-		return fmt.Errorf("get spicedb token secret: %w", err)
-	}
-	if string(sp.Data["datastore_uri"]) == uri {
-		return nil
-	}
-	if sp.Data == nil {
-		sp.Data = map[string][]byte{}
-	}
-	sp.Data["datastore_uri"] = []byte(uri)
-	return cli.Update(ctx, &sp)
+	return bootstrap.EnsureSpiceDBDatastoreURI(ctx, cli, cli)
 }
 
 // ensureSpiceDBBootstrap creates/updates the spicebox-spicedb-bootstrap
@@ -3015,53 +2909,7 @@ func ensureNATSIdentity(ctx context.Context, restCfg *rest.Config) error {
 	if err != nil {
 		return err
 	}
-	return ensureNATSIdentityWithClient(ctx, cli)
-}
-
-func ensureNATSIdentityWithClient(ctx context.Context, c client.Client) error {
-	var existing corev1.Secret
-	err := c.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      "spicebox-nats-identity",
-	}, &existing)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get nats identity secret: %w", err)
-	}
-
-	id, err := apnats.GenerateIdentity()
-	if err != nil {
-		return fmt.Errorf("generate nats identity: %w", err)
-	}
-
-	// The interpolated values (OperatorJWT, AccountPublicKey, AccountJWT) are
-	// base32/base64url-encoded and contain no whitespace, quotes, or braces, so
-	// they are safe to inline into the NATS config format without escaping.
-	authConf := fmt.Sprintf(`operator: %s
-resolver: MEMORY
-resolver_preload: {
-  %s: %s
-}
-`, id.OperatorJWT, id.AccountPublicKey, id.AccountJWT)
-
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "spicebox-nats-identity",
-			Namespace: "agentprimitives-system",
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"operator-jwt":               []byte(id.OperatorJWT),
-			"account-jwt":                []byte(id.AccountJWT),
-			"account-public-key":         []byte(id.AccountPublicKey),
-			"account-signing-seed":       id.AccountSigningSeed,
-			"account-signing-public-key": []byte(id.AccountSigningPublicKey),
-			"auth.conf":                  []byte(authConf),
-		},
-	}
-	return c.Create(ctx, sec)
+	return bootstrap.EnsureNATSIdentity(ctx, cli)
 }
 
 // ensureNATSTLS creates the spicebox-nats-tls Secret if it does not already
@@ -3073,45 +2921,7 @@ func ensureNATSTLS(ctx context.Context, restCfg *rest.Config) error {
 	if err != nil {
 		return err
 	}
-	return ensureNATSTLSWithClient(ctx, cli)
-}
-
-func ensureNATSTLSWithClient(ctx context.Context, c client.Client) error {
-	var existing corev1.Secret
-	err := c.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      "spicebox-nats-tls",
-	}, &existing)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get nats tls secret: %w", err)
-	}
-
-	m, err := apnats.GenerateTLS([]string{
-		"spicebox-nats",
-		"spicebox-nats.agentprimitives-system",
-		"spicebox-nats.agentprimitives-system.svc",
-		"spicebox-nats.agentprimitives-system.svc.cluster.local",
-	})
-	if err != nil {
-		return fmt.Errorf("generate nats tls: %w", err)
-	}
-
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "spicebox-nats-tls",
-			Namespace: "agentprimitives-system",
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"ca.crt":  m.CACertPEM,
-			"tls.crt": m.ServerCertPEM,
-			"tls.key": m.ServerKeyPEM,
-		},
-	}
-	return c.Create(ctx, sec)
+	return bootstrap.EnsureNATSTLS(ctx, cli)
 }
 
 func ensureWebhookTLSWithClient(ctx context.Context, c client.Client) ([]byte, error) {
@@ -3189,177 +2999,12 @@ func patchWebhookVWCBundle(ctx context.Context, c client.Client, caPEM []byte) e
 // subjects), storing each as a Secret alongside the CA cert. It runs after
 // ensureNATSIdentity and ensureNATSTLS: both prerequisite Secrets must exist.
 // Each output Secret is created idempotently — a re-install does not re-mint.
-// The principal name minted into each creds file. Named once because the name
-// is also the input to apnats.InboxSubjectFor, and the client rederives the
-// matching prefix from the same name in the JWT — writing it twice invites the
-// two to drift, which breaks request/reply rather than merely widening a grant.
-const (
-	channelsdNATSUser = "channelsd"
-	cliNATSUser       = "cli"
-	webdNATSUser      = "webd"
-)
-
-// webdNATSGrant is webd's minted NATS user grant. webd SUBSCRIBES to session
-// out-subjects (chat + live-view mirror) AND does NATS request-reply: the
-// builtin web-chat listener and the live-view submit view_message via
-// RequestIn, so webd both PUBLISHES the request and must SUBSCRIBE to its
-// reply inbox. The original "never publishes, subscribe-only" assumption
-// predated those surfaces and was the bug — a missing inbox entry made every
-// view-originated send time out even though the message was delivered.
-//
-// PubAllow is enumerated because an OMITTED one is publish-ANYWHERE, not
-// deny-all (see apnats.UserGrant). This grant used to omit it, which left the
-// browser-facing process holding publish rights on the entire control bus:
-// ap.revocation, every session's out-subjects (forging the agent's own voice),
-// and every inbound kind — including in.user_message, whose channelsd handler
-// is the audit-signing inbound writer webd is deliberately kept away from
-// (pkg/channels/channelkinds/clienthosted.SubmitUserMessage spells out why: webd holds
-// no memory-write credential, so it must round-trip through view_message).
-//
-// The five subjects below are webd's complete publish surface, each a verified
-// call site: view_message (chat SubmitUserMessage and the /interact
-// user_message | annotation_batch | mcp_ui_action kinds, all via
-// channelkinds.RequestViewMessage), interrupt_request and interaction_decision
-// (clienthosted.Listener), resurface_request (channelkinds.
-// PublishResurfaceRequest) and app_tool_call (webui/interact). webd links
-// pkg/channels/channelsd/pipeline but only for its Authz interface type — it constructs
-// no Pipeline, so none of that package's publishes can fire here.
-//
-// webd needs no publish grant on any inbox: it is never a NATS responder
-// (nothing in its import graph calls msg.Respond), and a requester publishes to
-// the target subject, not to its own reply inbox.
-//
-// TestWebdNATSGrantPublishSurface asserts every line of this against a real
-// server; add a subject there and here together.
-var webdNATSGrant = apnats.UserGrant{
-	Name: webdNATSUser,
-	PubAllow: []string{
-		"ap.session.*.*.in.view_message",
-		"ap.session.*.*.in.interrupt_request",
-		"ap.session.*.*.in.interaction_decision",
-		"ap.session.*.*.in.resurface_request",
-		"ap.session.*.*.in.app_tool_call",
-		// ui_data_binding is the agent-UI's own data path: pkg/web/webui/agentui's
-		// bindingsHandler resolves every `source: tool` binding by asking the
-		// session's runner, via pkg/web/uibindings/tool.
-		//
-		// Its absence is why that feature had never worked on a real install.
-		// The failure gave nothing away: a publish the server refuses does not
-		// fail the caller's request — NATS reports the violation as an ASYNC
-		// error on the connection, while the request itself simply waits for a
-		// reply that can now never come and dies on its own timeout. So every
-		// binding surfaced as "the runner did not answer", which reads as a
-		// missing or busy runner and is why the first diagnosis of it chased a
-		// sleeping session instead of a permission.
-		"ap.session.*.*.in.ui_data_binding",
-		// ui_presence is the liveness heartbeat webd republishes while a
-		// viewer has an agent-UI open and focused, so the runner answering
-		// that UI's bindings does not idle out underneath them.
-		//
-		// Added in the SAME change as the kind and as its row in
-		// TestWebdNATSGrantPublishSurface, which is the discipline the line
-		// above exists to teach: ui_data_binding shipped without its grant and
-		// the whole agent-UI data path silently never worked.
-		"ap.session.*.*.in.ui_presence",
-		// ui_action is the agent-UI's INVOKE path: pkg/web/webui/agentui's
-		// actions handler sends the declared action to the session's runner and
-		// relays the synchronous reply. It shipped without this entry, so every
-		// agent-UI action failed exactly the way ui_data_binding did — see above.
-		"ap.session.*.*.in.ui_action",
-		// channelevents.WebhookInboundSubject — not a *.* session template
-		// (there is no session yet at delivery time, see that constant's own
-		// doc) but the same failure shape as ui_data_binding above: without
-		// this entry, pkg/web/webui/channelwebhook's Publish call is silently
-		// refused by the server, its returned error is nil either way (NATS
-		// reports permission violations asynchronously on the connection, not
-		// to the caller), and the handler answers the webhook sender with 202
-		// for a delivery that was actually dropped — the one status the
-		// route's whole retry contract promises will never happen. Referenced
-		// via the exported constant, not a copied literal, so this and the
-		// route's own Publish call cannot drift apart.
-		channelevents.WebhookInboundSubject,
-	},
-	SubAllow: []string{"ap.session.*.*.out.>", apnats.InboxSubjectFor(webdNATSUser)},
-}
-
 func ensureNATSClientCreds(ctx context.Context, restCfg *rest.Config, logf func(string, ...any)) error {
 	cli, err := client.New(restCfg, client.Options{Scheme: kube.Scheme})
 	if err != nil {
 		return err
 	}
-	return ensureNATSClientCredsWithClient(ctx, cli, logf)
-}
-
-// logf narrates a credential rotation. It is threaded rather than written to a
-// package-level writer because a rotation is the one thing here an operator
-// must be able to read afterwards: everything else this function does is a
-// no-op on a healthy re-run. nil is accepted and discards.
-func ensureNATSClientCredsWithClient(ctx context.Context, c client.Client, logf func(string, ...any)) error {
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-	var identitySec corev1.Secret
-	if err := c.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      "spicebox-nats-identity",
-	}, &identitySec); err != nil {
-		return fmt.Errorf("get nats identity secret (run ensureNATSIdentity first): %w", err)
-	}
-
-	var tlsSec corev1.Secret
-	if err := c.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      "spicebox-nats-tls",
-	}, &tlsSec); err != nil {
-		return fmt.Errorf("get nats tls secret (run ensureNATSTLS first): %w", err)
-	}
-	caCrt := tlsSec.Data["ca.crt"]
-	if len(caCrt) == 0 {
-		return fmt.Errorf("nats tls secret is missing ca.crt")
-	}
-
-	// MintUser only consults AccountPublicKey + AccountSigningSeed.
-	id := &apnats.Identity{
-		AccountPublicKey:   string(identitySec.Data["account-public-key"]),
-		AccountSigningSeed: identitySec.Data["account-signing-seed"],
-	}
-	if id.AccountPublicKey == "" || len(id.AccountSigningSeed) == 0 {
-		return fmt.Errorf("nats identity secret is missing account-public-key or account-signing-seed")
-	}
-
-	// Creds are minted lazily, per Secret, by ensureNATSCredsSecret: a Secret
-	// already carrying the shipped grant is left byte-identical (minting is
-	// non-deterministic — a fresh user nkey every call — so writing
-	// unconditionally would rotate every principal's credential on every
-	// re-run), and one carrying a STALE grant is re-minted. See that
-	// function's doc for why "already exists" is not a sufficient answer.
-	//
-	// Both the channelsd broker and the `oap` CLI get broad `ap.>`. channelsd IS
-	// the broker (it relays every session's in/out traffic and serves
-	// read_thread_history via NATS request/reply). The `oap chat` command embeds
-	// a full channelsd pipeline + outbound relay in-process, so the CLI
-	// legitimately publishes the same `ap.session.*.*.out.*` and `ap.channel.*`
-	// subjects. The runner's per-session JWT (minted in the AgentSession
-	// controller) stays narrowly scoped to its own session.
-	//
-	// Both keep `_INBOX.>` on PUBLISH and narrow only SUBSCRIBE. Both are
-	// responders — `m.Respond` publishes to whichever principal asked, on a
-	// top-level inbox subject NOT under `ap.>` — and a responder cannot know
-	// its requesters' names, so its publish side must span the whole inbox
-	// root. Subscribing is the direction that leaks (any `_INBOX.>` subscriber
-	// reads every reply on the bus), and that is the direction scoped here.
-	//
-	// The channelsd creds Secret is mounted by three binaries — channelsd,
-	// authzd and the operator — which is exactly why the inbox prefix is
-	// derived from the JWT's name rather than from each process's connection
-	// name: all three resolve to the same "channelsd" principal and the same
-	// inbox root, with their own nuids underneath.
-	for _, cred := range natsClientCreds() {
-		if err := ensureNATSCredsSecret(ctx, c, cred, id, caCrt, logf); err != nil {
-			return err
-		}
-	}
-	return nil
+	return bootstrap.EnsureNATSClientCreds(ctx, cli, logf)
 }
 
 // ensureWebdExternalURLConfigMap creates the spicebox-webd-external-url
@@ -3467,63 +3112,8 @@ func ensureWebdExternalURLConfigMap(ctx context.Context, logf func(string, ...an
 // ensureWebdExternalURLConfigMap for why these do not write straight to a
 // writer while the checklist's live region is up.
 func ensurePassthroughLinkSigningKey(ctx context.Context, logf func(string, ...any), c client.Client) error {
-	var existing corev1.Secret
-	err := c.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      v1alpha1.PassthroughLinkSigningKeySecret,
-	}, &existing)
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get %s secret: %w", v1alpha1.PassthroughLinkSigningKeySecret, err)
-	}
-	exists := err == nil
-	// unusable is why the existing key is being replaced — the readers' own
-	// verdict, phrased in their words ("is empty", "is not valid hex", "is too
-	// short"). It doubles as the text of the repair message below, so an
-	// operator whose provisioner owns this Secret sees that their material was
-	// REJECTED rather than a bare "regenerated". DecodeHexKey deliberately never
-	// echoes key bytes into its error (see its doc), so this is log-safe.
-	var unusable error
-	if exists {
-		if _, unusable = passthroughlink.DecodeHexKey(existing.Data["key"]); unusable == nil {
-			logf("  %s Secret exists with a usable key, skipping", v1alpha1.PassthroughLinkSigningKeySecret)
-			return nil
-		}
-	}
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Errorf("generate passthrough link signing key: %w", err)
-	}
-	encoded := []byte(hex.EncodeToString(buf))
-
-	// Update in place when the Secret is already there, so we fill in the key
-	// without disturbing labels, annotations, or other data keys its
-	// provisioner owns.
-	if exists {
-		if existing.Data == nil {
-			existing.Data = map[string][]byte{}
-		}
-		existing.Data["key"] = encoded
-		if err := c.Update(ctx, &existing); err != nil {
-			return fmt.Errorf("update %s secret: %w", v1alpha1.PassthroughLinkSigningKeySecret, err)
-		}
-		logf("  regenerated the key in the existing %s Secret (%v)",
-			v1alpha1.PassthroughLinkSigningKeySecret, unusable)
-		return nil
-	}
-
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      v1alpha1.PassthroughLinkSigningKeySecret,
-			Namespace: "agentprimitives-system",
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{"key": encoded},
-	}
-	if err := c.Create(ctx, sec); err != nil {
-		return fmt.Errorf("create %s secret: %w", v1alpha1.PassthroughLinkSigningKeySecret, err)
-	}
-	logf("  generated %s Secret", v1alpha1.PassthroughLinkSigningKeySecret)
-	return nil
+	_, err := bootstrap.EnsurePassthroughLinkKey(ctx, c, c, logf)
+	return err
 }
 
 // ensureSlackOAuthSecret creates the spicebox-slack-oauth Secret with empty
@@ -3573,200 +3163,6 @@ func ensureSlackOAuthSecret(ctx context.Context, logf func(string, ...any), c cl
 	return nil
 }
 
-// createNATSCredsSecret creates a per-client NATS creds Secret if it does not
-// already exist. Idempotent per-secret so a re-install does not re-mint creds.
-// natsClientCred pairs one creds Secret with the grant its user JWT must
-// carry. Pairing them in one value is what lets the mint and the staleness
-// check read the SAME grant: a subject added to a grant reaches both by
-// construction, instead of by remembering to change a second place.
-type natsClientCred struct {
-	secretName string
-	grant      apnats.UserGrant
-}
-
-// natsClientCreds is every principal `oap install` mints a bus credential for.
-//
-// A function rather than a var because two of the three grants call
-// apnats.InboxSubjectFor, and building them at package-init time would put
-// their evaluation order before the constants they read in a way nothing
-// enforces; there is one caller and it runs once per install.
-func natsClientCreds() []natsClientCred {
-	return []natsClientCred{
-		{
-			secretName: "spicebox-channelsd-nats-creds",
-			grant: apnats.UserGrant{
-				Name:     channelsdNATSUser,
-				PubAllow: []string{"ap.>", "_INBOX.>"},
-				SubAllow: []string{"ap.>", apnats.InboxSubjectFor(channelsdNATSUser)},
-			},
-		},
-		{
-			secretName: "spicebox-cli-nats-creds",
-			grant: apnats.UserGrant{
-				Name:     cliNATSUser,
-				PubAllow: []string{"ap.>", "_INBOX.>"},
-				SubAllow: []string{"ap.>", apnats.InboxSubjectFor(cliNATSUser)},
-			},
-		},
-		{secretName: "spicebox-webd-nats-creds", grant: webdNATSGrant},
-	}
-}
-
-// ensureNATSCredsSecret reconciles one creds Secret against the grant this
-// binary ships, minting a user JWT only when the stored one does not already
-// carry it.
-//
-// "The Secret already exists" is NOT a sufficient answer, and treating it as
-// one was a real, silent defect: a user JWT is a frozen copy of the grant it
-// was minted from, so a cluster installed before a subject was added to a
-// grant kept a JWT without it forever. Every upgrade re-ran this, saw the
-// Secret, and skipped. The webd grant gaining ap.channel.webhook_inbound is
-// the case that exposed it — nats-server reports a permission violation
-// asynchronously, so the webhook handler's Publish returned nil and it
-// answered 202 Accepted for a delivery the bus had dropped.
-//
-// A re-mint rotates the user nkey, so it MUST be rare: minting is
-// non-deterministic and an unconditional write would rotate every principal on
-// every re-run, disconnecting live clients for nothing. apnats.UserGrant's
-// CredsDrift is the gate, and it compares allow-lists as sets so ordering
-// alone never triggers a rotation.
-//
-// ca.crt is refreshed on the same write, because a creds Secret carrying a CA
-// that no longer matches the server's is the same class of stale.
-func ensureNATSCredsSecret(
-	ctx context.Context, c client.Client, cred natsClientCred, id *apnats.Identity, caCrt []byte,
-	logf func(string, ...any),
-) error {
-	key := types.NamespacedName{Namespace: "agentprimitives-system", Name: cred.secretName}
-
-	var existing corev1.Secret
-	err := c.Get(ctx, key, &existing)
-	switch {
-	case err == nil:
-		drift := cred.grant.CredsDrift(string(existing.Data["nats.creds"]))
-		if drift == "" && bytes.Equal(existing.Data["ca.crt"], caCrt) {
-			return nil
-		}
-		if drift == "" {
-			drift = "the stored CA no longer matches the NATS server's"
-		}
-		// Say why out loud. The whole defect class here is a permission the
-		// bus refuses without telling anyone, so an operator who later sees a
-		// component reconnect deserves a line explaining what rotated and why.
-		logf("re-minting %s: %s", cred.secretName, drift)
-
-		creds, mintErr := apnats.MintUser(id, cred.grant)
-		if mintErr != nil {
-			return fmt.Errorf("re-mint %s nats creds: %w", cred.grant.Name, mintErr)
-		}
-		if existing.Data == nil {
-			existing.Data = map[string][]byte{}
-		}
-		existing.Data["nats.creds"] = []byte(creds)
-		existing.Data["ca.crt"] = caCrt
-		if err := c.Update(ctx, &existing); err != nil {
-			return fmt.Errorf("update %s secret: %w", cred.secretName, err)
-		}
-		// A running process read its creds file once, at connect time; the
-		// kubelet refreshing the mounted file changes nothing for it. Without
-		// this the re-mint lands in the cluster and the stale JWT stays on the
-		// wire — the exact half-fix this function exists to close.
-		return restartWorkloadsMountingSecret(ctx, c, key, logf)
-
-	case apierrors.IsNotFound(err):
-		creds, mintErr := apnats.MintUser(id, cred.grant)
-		if mintErr != nil {
-			return fmt.Errorf("mint %s nats creds: %w", cred.grant.Name, mintErr)
-		}
-		sec := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      cred.secretName,
-				Namespace: "agentprimitives-system",
-			},
-			Type: corev1.SecretTypeOpaque,
-			Data: map[string][]byte{
-				"nats.creds": []byte(creds),
-				"ca.crt":     caCrt,
-			},
-		}
-		return c.Create(ctx, sec)
-
-	default:
-		return fmt.Errorf("get %s secret: %w", cred.secretName, err)
-	}
-}
-
-// restartWorkloadsMountingSecret rolls every Deployment in the Secret's
-// namespace whose pod template mounts it, so a rotated credential actually
-// reaches the processes using it.
-//
-// Which Deployments those are is DERIVED from the live pod specs rather than
-// transcribed into a table here: the channelsd creds Secret alone is mounted
-// by three different binaries, and a table would go stale the first time a
-// fourth mounted it — silently, in the direction of "the rotation did not
-// reach someone".
-//
-// Nothing to roll is the normal case on a first install: the component
-// manifests have not been applied yet, so whatever starts later mounts the
-// current Secret and needs no restart.
-func restartWorkloadsMountingSecret(ctx context.Context, c client.Client, secret types.NamespacedName, logf func(string, ...any)) error {
-	var deps appsv1.DeploymentList
-	if err := c.List(ctx, &deps, client.InNamespace(secret.Namespace)); err != nil {
-		return fmt.Errorf("list deployments in %s to roll after rotating %s: %w",
-			secret.Namespace, secret.Name, err)
-	}
-	stamp := time.Now().UTC().Format(time.RFC3339Nano)
-	for i := range deps.Items {
-		d := &deps.Items[i]
-		if !podSpecMountsSecret(&d.Spec.Template.Spec, secret.Name) {
-			continue
-		}
-		patch := []byte(fmt.Sprintf(
-			`{"spec":{"template":{"metadata":{"annotations":{"ap.authzed.com/restartedAt":%q}}}}}`, stamp))
-		if err := c.Patch(ctx, d, client.RawPatch(types.StrategicMergePatchType, patch)); err != nil {
-			return fmt.Errorf("rollout-restart %s/%s after rotating %s: %w",
-				d.Namespace, d.Name, secret.Name, err)
-		}
-		logf("restarting %s to pick up the re-minted %s", d.Name, secret.Name)
-	}
-	return nil
-}
-
-// podSpecMountsSecret reports whether the pod template reads the named Secret
-// — as a volume (the creds-file shape) or through env/envFrom, so a future
-// consumer that reads it a different way is still rolled.
-func podSpecMountsSecret(spec *corev1.PodSpec, name string) bool {
-	for _, v := range spec.Volumes {
-		if v.Secret != nil && v.Secret.SecretName == name {
-			return true
-		}
-		if v.Projected == nil {
-			continue
-		}
-		for _, src := range v.Projected.Sources {
-			if src.Secret != nil && src.Secret.Name == name {
-				return true
-			}
-		}
-	}
-	containers := make([]corev1.Container, 0, len(spec.Containers)+len(spec.InitContainers))
-	containers = append(containers, spec.Containers...)
-	containers = append(containers, spec.InitContainers...)
-	for _, ctr := range containers {
-		for _, ef := range ctr.EnvFrom {
-			if ef.SecretRef != nil && ef.SecretRef.Name == name {
-				return true
-			}
-		}
-		for _, e := range ctr.Env {
-			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == name {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // ensurePostgresToken creates the spicebox-postgres-token Secret if it does
 // not already exist. The Secret holds the Postgres password and a full
 // connection URI for the in-cluster Postgres instance backing the memory
@@ -3776,42 +3172,7 @@ func ensurePostgresToken(ctx context.Context, restCfg *rest.Config) error {
 	if err != nil {
 		return err
 	}
-	var existing corev1.Secret
-	err = cli.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      "spicebox-postgres-token",
-	}, &existing)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get postgres token secret: %w", err)
-	}
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Errorf("generate postgres password: %w", err)
-	}
-	password := hex.EncodeToString(buf)
-	pgURL := &url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword("postgres", password),
-		Host:     "spicebox-postgres.agentprimitives-system.svc:5432",
-		Path:     "/memory",
-		RawQuery: "sslmode=disable",
-	}
-	uri := pgURL.String()
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "spicebox-postgres-token",
-			Namespace: "agentprimitives-system",
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"password": []byte(password),
-			"uri":      []byte(uri),
-		},
-	}
-	return cli.Create(ctx, sec)
+	return bootstrap.EnsurePostgresToken(ctx, cli, cli)
 }
 
 // ensureNeo4jToken creates the spicebox-neo4j-token Secret if it does not

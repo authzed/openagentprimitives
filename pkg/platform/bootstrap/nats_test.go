@@ -1,4 +1,4 @@
-package installcmd
+package bootstrap
 
 import (
 	"bytes"
@@ -12,15 +12,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-
-	"github.com/authzed/openagentprimitives/cmd/oap/internal/kube"
 )
 
 func TestEnsureNATSIdentityIsIdempotent(t *testing.T) {
 	ctx := context.Background()
-	c := fake.NewClientBuilder().WithScheme(kube.Scheme).Build()
+	c := fake.NewClientBuilder().Build()
 
-	require.NoError(t, ensureNATSIdentityWithClient(ctx, c), "first call must succeed")
+	require.NoError(t, EnsureNATSIdentity(ctx, c), "first call must succeed")
 
 	var first corev1.Secret
 	require.NoError(t, c.Get(ctx, types.NamespacedName{
@@ -36,7 +34,7 @@ func TestEnsureNATSIdentityIsIdempotent(t *testing.T) {
 	assert.Contains(t, string(authConf), "resolver: MEMORY")
 	assert.Contains(t, string(authConf), "resolver_preload")
 
-	require.NoError(t, ensureNATSIdentityWithClient(ctx, c), "second call must succeed")
+	require.NoError(t, EnsureNATSIdentity(ctx, c), "second call must succeed")
 
 	var second corev1.Secret
 	require.NoError(t, c.Get(ctx, types.NamespacedName{
@@ -49,9 +47,9 @@ func TestEnsureNATSIdentityIsIdempotent(t *testing.T) {
 
 func TestEnsureNATSTLSIsIdempotent(t *testing.T) {
 	ctx := context.Background()
-	c := fake.NewClientBuilder().WithScheme(kube.Scheme).Build()
+	c := fake.NewClientBuilder().Build()
 
-	require.NoError(t, ensureNATSTLSWithClient(ctx, c), "first call must succeed")
+	require.NoError(t, EnsureNATSTLS(ctx, c), "first call must succeed")
 
 	var first corev1.Secret
 	require.NoError(t, c.Get(ctx, types.NamespacedName{
@@ -63,7 +61,7 @@ func TestEnsureNATSTLSIsIdempotent(t *testing.T) {
 	}
 	firstKey := first.Data["tls.key"]
 
-	require.NoError(t, ensureNATSTLSWithClient(ctx, c), "second call must succeed")
+	require.NoError(t, EnsureNATSTLS(ctx, c), "second call must succeed")
 
 	var second corev1.Secret
 	require.NoError(t, c.Get(ctx, types.NamespacedName{
@@ -76,12 +74,12 @@ func TestEnsureNATSTLSIsIdempotent(t *testing.T) {
 
 func TestEnsureNATSClientCredsMintsBothSecrets(t *testing.T) {
 	ctx := context.Background()
-	c := fake.NewClientBuilder().WithScheme(kube.Scheme).Build()
+	c := fake.NewClientBuilder().Build()
 
-	require.NoError(t, ensureNATSIdentityWithClient(ctx, c), "seed identity")
-	require.NoError(t, ensureNATSTLSWithClient(ctx, c), "seed tls")
+	require.NoError(t, EnsureNATSIdentity(ctx, c), "seed identity")
+	require.NoError(t, EnsureNATSTLS(ctx, c), "seed tls")
 
-	require.NoError(t, ensureNATSClientCredsWithClient(ctx, c, nil), "mint client creds")
+	require.NoError(t, EnsureNATSClientCreds(ctx, c, nil), "mint client creds")
 
 	for _, name := range []string{"spicebox-channelsd-nats-creds", "spicebox-cli-nats-creds", "spicebox-webd-nats-creds"} {
 		var sec corev1.Secret
@@ -108,16 +106,16 @@ func TestEnsureNATSClientCredsFailsWithoutPrerequisites(t *testing.T) {
 		{
 			name: "only identity seeded: TLS missing",
 			setup: func(ctx context.Context, c client.Client) {
-				require.NoError(t, ensureNATSIdentityWithClient(ctx, c), "seed identity")
+				require.NoError(t, EnsureNATSIdentity(ctx, c), "seed identity")
 			},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			c := fake.NewClientBuilder().WithScheme(kube.Scheme).Build()
+			c := fake.NewClientBuilder().Build()
 			tc.setup(ctx, c)
-			err := ensureNATSClientCredsWithClient(ctx, c, nil)
+			err := EnsureNATSClientCreds(ctx, c, nil)
 			require.Error(t, err, "must fail when prerequisites are not fully seeded")
 		})
 	}
@@ -125,12 +123,12 @@ func TestEnsureNATSClientCredsFailsWithoutPrerequisites(t *testing.T) {
 
 func TestEnsureNATSClientCredsIsIdempotent(t *testing.T) {
 	ctx := context.Background()
-	c := fake.NewClientBuilder().WithScheme(kube.Scheme).Build()
+	c := fake.NewClientBuilder().Build()
 
-	require.NoError(t, ensureNATSIdentityWithClient(ctx, c), "seed identity")
-	require.NoError(t, ensureNATSTLSWithClient(ctx, c), "seed tls")
+	require.NoError(t, EnsureNATSIdentity(ctx, c), "seed identity")
+	require.NoError(t, EnsureNATSTLS(ctx, c), "seed tls")
 
-	require.NoError(t, ensureNATSClientCredsWithClient(ctx, c, nil), "first call must succeed")
+	require.NoError(t, EnsureNATSClientCreds(ctx, c, nil), "first call must succeed")
 
 	// Capture creds bytes from both Secrets after the first call.
 	var firstChannelsd, firstCLI corev1.Secret
@@ -146,7 +144,7 @@ func TestEnsureNATSClientCredsIsIdempotent(t *testing.T) {
 	require.NotEmpty(t, firstChannelsdCreds, "channelsd nats.creds must be populated")
 	require.NotEmpty(t, firstCLICreds, "cli nats.creds must be populated")
 
-	require.NoError(t, ensureNATSClientCredsWithClient(ctx, c, nil), "second call must succeed")
+	require.NoError(t, EnsureNATSClientCreds(ctx, c, nil), "second call must succeed")
 
 	// Assert that neither Secret was modified — stored creds are byte-identical.
 	var secondChannelsd, secondCLI corev1.Secret

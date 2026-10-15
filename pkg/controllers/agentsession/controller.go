@@ -144,6 +144,10 @@ import (
 // NATS and Neo4j ship as StatefulSets.
 // +kubebuilder:rbac:groups="apps",resources=deployments,verbs=get;list
 // +kubebuilder:rbac:groups="apps",resources=statefulsets,verbs=get;list
+// The bootstrap Job's NATS-creds re-mint (pkg/platform/bootstrap, run via the
+// operator SA) rolls consumer Deployments when a grant gains a subject on
+// upgrade, so a stale JWT does not stay on the wire — that patch needs deployments/patch.
+// +kubebuilder:rbac:groups="apps",resources=deployments,verbs=patch
 // metrics.k8s.io pods (get;list) backs the same snapshot's CPU/Memory rollup,
 // summing live PodMetrics for the namespace. Best-effort: absent
 // metrics-server the List degrades to "n/a" rather than failing.
