@@ -115,11 +115,6 @@ type Payload struct {
 	// points at (Purpose == PurposeArtifactView). webd resolves the
 	// artifact's SpiceDB `view` permission for the visitor.
 	ArtifactID string `json:"artifactId,omitempty"`
-	// BackLink is an optional, opaque URL the consuming web UI renders as a
-	// "back to origin" link (e.g. a Slack thread permalink for artifact_view
-	// links). Empty when the minting channel kind has no permalink concept.
-	// Tamper-proof (it rides inside the signed body) but not confidential.
-	BackLink string `json:"backLink,omitempty"`
 	// AgentIdentityRef is "<workshopNamespace>/<agentIdentityName>" — the
 	// AgentIdentity in the workshop namespace W whose credential a
 	// PurposeWorkshopCredential link connects. Empty for every other purpose.

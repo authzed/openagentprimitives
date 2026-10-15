@@ -51,7 +51,7 @@ func (s *liveViewOfferSender) Send(ctx context.Context, sess channelkinds.Sessio
 	}
 
 	sessionRef := sess.Namespace + "/" + sess.Name
-	url, err := s.minter.MintArtifactViewLink(p.ArtifactID, sessionRef, s.principal, "")
+	url, err := s.minter.MintArtifactViewLink(p.ArtifactID, sessionRef, s.principal)
 	if err != nil {
 		logger.Info("local live_view_offer: mint failed", "artifactID", p.ArtifactID, "err", err.Error())
 		s.sink.Emit(MsgSendError{Session: refOf(sess), Kind: env.Kind, Err: "mint artifact view link: " + err.Error(), At: timeNowUTC()})

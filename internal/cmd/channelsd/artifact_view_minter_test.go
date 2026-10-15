@@ -38,9 +38,8 @@ func TestNewArtifactViewMinter_HappyPath(t *testing.T) {
 	artifactID := "art-abc123"
 	sessionRef := "default/sess-1"
 	subject := identity.RawSubject("user:alice")
-	backLink := "https://example.slack.com/archives/C1/p170?thread_ts=170&cid=C1"
 
-	u, err := m.MintArtifactViewLink(artifactID, sessionRef, subject, backLink)
+	u, err := m.MintArtifactViewLink(artifactID, sessionRef, subject)
 	require.NoError(t, err, "MintArtifactViewLink should succeed")
 	assert.True(t, strings.HasPrefix(u, base+"/artifact-view?"), "URL must start with base+/artifact-view?")
 	assert.Contains(t, u, "d=", "URL must contain d= query param")
@@ -57,7 +56,6 @@ func TestNewArtifactViewMinter_HappyPath(t *testing.T) {
 	require.NoError(t, err, "Verify with aud=webd must succeed — audience-override regression guard")
 	assert.Equal(t, artifactID, p.ArtifactID)
 	assert.Equal(t, passthroughlink.AudienceWebd, p.Audience)
-	assert.Equal(t, backLink, p.BackLink)
 }
 
 // TestNewArtifactViewMinter_EmptyBaseURL verifies that a missing webd base URL
@@ -66,7 +64,7 @@ func TestNewArtifactViewMinter_EmptyBaseURL(t *testing.T) {
 	signer := passthroughlink.New(make([]byte, 32))
 	m := newArtifactViewMinter(signer, func() string { return "" })
 
-	u, err := m.MintArtifactViewLink("art-1", "ns/sess", identity.RawSubject(""), "")
+	u, err := m.MintArtifactViewLink("art-1", "ns/sess", identity.RawSubject(""))
 	require.NoError(t, err, "empty base URL must return nil error (clean skip)")
 	assert.Empty(t, u, "empty base URL must return empty URL string")
 }

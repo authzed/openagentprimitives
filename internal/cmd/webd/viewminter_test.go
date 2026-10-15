@@ -27,7 +27,7 @@ func TestNewArtifactViewMinter_MintsLinkWebdCanVerify(t *testing.T) {
 	m := newArtifactViewMinter(key, func() string { return base })
 	require.NotNil(t, m, "a non-empty key must yield a minter")
 
-	link, err := m.MintArtifactViewLink("art-1", "default/sess-1", identity.RawSubject("user:alice"), "")
+	link, err := m.MintArtifactViewLink("art-1", "default/sess-1", identity.RawSubject("user:alice"))
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(link, base+"/artifact-view?"), "link = %s", link)
 

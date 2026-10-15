@@ -22,15 +22,13 @@ func TestArtifactViewDeps_VerifyLink_SessionView(t *testing.T) {
 	d := &artifactViewDeps{cookieSigner: signer}
 
 	m := &sessionviewlink.Minter{Signer: signer}
-	backLink := "https://example.slack.com/archives/C1/p170?thread_ts=170&cid=C1"
-	raw, err := m.Mint("default/sess-1", identity.RawSubject("user:alice"), backLink)
+	raw, err := m.Mint("default/sess-1", identity.RawSubject("user:alice"))
 	require.NoError(t, err)
 
-	artifactID, sessionRef, gotBackLink, err := d.VerifyLink(raw)
+	artifactID, sessionRef, err := d.VerifyLink(raw)
 	require.NoError(t, err, "a valid session_view link must verify")
 	assert.Empty(t, artifactID, "a session_view link carries no ArtifactID")
 	assert.Equal(t, "default/sess-1", sessionRef)
-	assert.Equal(t, backLink, gotBackLink)
 }
 
 // TestArtifactViewDeps_VerifyLink_SessionView_MissingSessionRefRejected proves
@@ -50,7 +48,7 @@ func TestArtifactViewDeps_VerifyLink_SessionView_MissingSessionRefRejected(t *te
 	})
 	require.NoError(t, err)
 
-	_, _, _, err = d.VerifyLink(raw)
+	_, _, err = d.VerifyLink(raw)
 	require.Error(t, err, "a session_view link with no SessionRef must be rejected")
 }
 
@@ -72,7 +70,7 @@ func TestArtifactViewDeps_VerifyLink_ArtifactViewStillRequiresBoth(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	_, _, _, err = d.VerifyLink(raw)
+	_, _, err = d.VerifyLink(raw)
 	require.Error(t, err, "artifact_view link missing SessionRef must still be rejected")
 }
 
@@ -92,6 +90,6 @@ func TestArtifactViewDeps_VerifyLink_UnknownPurposeRejected(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, _, _, err = d.VerifyLink(raw)
+	_, _, err = d.VerifyLink(raw)
 	require.Error(t, err, "an unrecognized link purpose must be rejected")
 }

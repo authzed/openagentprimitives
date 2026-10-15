@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -158,6 +159,44 @@ func (Kind) FeatureSupport() map[channelfeatures.Feature]channelkinds.FeatureReq
 // this kind renders (a review comment's @-mentions are the agent's own
 // output, composed by the tool that posts it, not by this kind).
 func (Kind) RenderMention(externalID string) string { return externalID }
+
+var _ channelkinds.OriginLinkProvider = Kind{}
+
+// OriginLink returns a human-facing link to the pull request this binding
+// correlates to, satisfying channelkinds.OriginLinkProvider. It uses only the
+// host-correct html_url persisted at session creation (External["origin_url"],
+// captured from the verified webhook payload — correct on a GitHub Enterprise
+// Server host). ok=false when it is absent.
+//
+// There is deliberately NO github.com fallback: this kind supports GHES, where
+// the host is customer-specific and unknowable from the binding alone (the
+// GHES base URL lives on the RelationshipSource spec, not here). A reconstructed
+// github.com/<owner>/<repo>/pull/<n> would leak internal org/repo names to a
+// third party, and could point viewers at a public repo squatting the same
+// path. A missing link is the safe degrade; new sessions always persist
+// origin_url. External is user-writable, so the URL is returned only when it is
+// a plausible https URL.
+func (Kind) OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (channelkinds.OriginLink, bool) {
+	if binding == nil {
+		return channelkinds.OriginLink{}, false
+	}
+	u := binding.External["origin_url"]
+	if !isHTTPSURL(u) {
+		return channelkinds.OriginLink{}, false
+	}
+	return channelkinds.OriginLink{URL: u, Label: "View the pull request", Icon: "github"}, true
+}
+
+// isHTTPSURL reports whether u parses as an https URL with a host — the trust
+// check for a user-writable persisted origin_url. GHES hosts are arbitrary and
+// customer-specific, so this validates the scheme only, not the host.
+func isHTTPSURL(u string) bool {
+	if u == "" {
+		return false
+	}
+	parsed, err := url.Parse(u)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
+}
 
 // SupportedMentionLookups returns nil — a pull request's participants have no
 // AP directory to look up against.

@@ -53,7 +53,7 @@ func (s *sessionViewOfferSender) Send(ctx context.Context, sess channelkinds.Ses
 	// No per-viewer identity is meaningful: the link carries no signed
 	// capability, so s.principal has no bearing on the composed URL. Passed
 	// anyway to keep this sender symmetric with liveViewOfferSender.
-	url, err := s.minter.MintSessionViewLink(p.SessionRef, s.principal, "")
+	url, err := s.minter.MintSessionViewLink(p.SessionRef, s.principal)
 	if err != nil {
 		logger.Info("browser session_view_offer: mint failed", "sessionRef", p.SessionRef, "err", err.Error())
 		s.sink.Emit(MsgSendError{Session: refOf(sess), Kind: env.Kind, Err: "mint session view link: " + err.Error(), At: timeNowUTC()})

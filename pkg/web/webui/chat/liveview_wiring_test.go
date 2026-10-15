@@ -19,7 +19,7 @@ import (
 // fakeViewMinter is a test ArtifactViewMinter that returns a canned URL.
 type fakeViewMinter struct{ url string }
 
-func (m fakeViewMinter) MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal, backLink string) (string, error) {
+func (m fakeViewMinter) MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal) (string, error) {
 	return m.url, nil
 }
 
@@ -72,7 +72,7 @@ func TestNewBrowserHost_WiresArtifactViewMinter(t *testing.T) {
 // fakeSessionViewMinter is a test SessionViewMinter that returns a canned URL.
 type fakeSessionViewMinter struct{ url string }
 
-func (m fakeSessionViewMinter) MintSessionViewLink(sessionRef string, subject identity.Principal, backLink string) (string, error) {
+func (m fakeSessionViewMinter) MintSessionViewLink(sessionRef string, subject identity.Principal) (string, error) {
 	return m.url, nil
 }
 

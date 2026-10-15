@@ -18,7 +18,7 @@ type fakeMinter struct {
 	err error
 }
 
-func (f *fakeMinter) MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal, backLink string) (string, error) {
+func (f *fakeMinter) MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal) (string, error) {
 	return f.url, f.err
 }
 

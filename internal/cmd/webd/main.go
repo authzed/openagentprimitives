@@ -786,26 +786,26 @@ var _ sessions.Deps = (*artifactViewDeps)(nil)
 // ArtifactID; the returned artifactID is always "" for this purpose. Any
 // other purpose (including empty) is rejected — the bearer capability is
 // fail-closed: a link that doesn't match a known purpose grants nothing.
-func (d *artifactViewDeps) VerifyLink(raw string) (string, string, string, error) {
+func (d *artifactViewDeps) VerifyLink(raw string) (string, string, error) {
 	p, err := d.cookieSigner.Verify(raw,
 		passthroughlink.WithExpectedIssuer(passthroughlink.IssuerChannelsd),
 		passthroughlink.WithExpectedAudience(passthroughlink.AudienceWebd))
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	switch p.Purpose {
 	case passthroughlink.PurposeArtifactView:
 		if p.ArtifactID == "" || p.SessionRef == "" {
-			return "", "", "", fmt.Errorf("link missing artifactId/sessionRef")
+			return "", "", fmt.Errorf("link missing artifactId/sessionRef")
 		}
-		return p.ArtifactID, p.SessionRef, p.BackLink, nil
+		return p.ArtifactID, p.SessionRef, nil
 	case passthroughlink.PurposeSessionView:
 		if p.SessionRef == "" {
-			return "", "", "", fmt.Errorf("link missing sessionRef")
+			return "", "", fmt.Errorf("link missing sessionRef")
 		}
-		return "", p.SessionRef, p.BackLink, nil
+		return "", p.SessionRef, nil
 	default:
-		return "", "", "", fmt.Errorf("link purpose %q is not supported", p.Purpose)
+		return "", "", fmt.Errorf("link purpose %q is not supported", p.Purpose)
 	}
 }
 
@@ -1236,21 +1236,6 @@ func (d *artifactViewDeps) ArtifactMeta(ctx context.Context, ns, sess, artifactI
 		return "", "", nil
 	}
 	return head.Name, head.Description, nil
-}
-
-// ChannelKind returns the AgentSession's input-channel kind (e.g. "slack") so the
-// live-view toolbar can pick the right thread-link icon. Returns "" (with nil
-// error) when the session has no input channel (kubectl-driven sessions). On a
-// Get error it returns ("", err) so the page can log and fall back.
-func (d *artifactViewDeps) ChannelKind(ctx context.Context, ns, sess string) (string, error) {
-	var cur spiceboxv1alpha1.AgentSession
-	if err := d.K8s().Get(ctx, client.ObjectKey{Namespace: ns, Name: sess}, &cur); err != nil {
-		return "", err
-	}
-	if cur.Spec.InputChannel == nil {
-		return "", nil
-	}
-	return cur.Spec.InputChannel.Kind, nil
 }
 
 // SessionViews implements artifactview.Deps: returns the granted

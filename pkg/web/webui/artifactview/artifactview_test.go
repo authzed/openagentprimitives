@@ -32,11 +32,11 @@ const bakedCSP = `default-src 'none'; img-src 'self' data:; style-src 'unsafe-in
 // interface; an unset func field would panic, but fakeAV() populates the
 // happy-path defaults so the shell + content flows succeed end to end.
 type fakeDeps struct {
-	verifyLink          func(raw string) (string, string, string, error)
+	verifyLink          func(raw string) (string, string, error)
 	checkView           func(ctx context.Context, artifactID, subject string) (bool, error)
 	checkInteract       func(ctx context.Context, ns, sess, subject string) (bool, error)
 	artifactMeta        func(ctx context.Context, ns, sess, artifactID string) (string, string, error)
-	channelKind         func(ctx context.Context, ns, sess string) (string, error)
+	originLinks         func(ctx context.Context, ns, sess string) []artifactview.OriginLink
 	sessionViews        func(ctx context.Context, ns, sess string) []string
 	resolveRender       func(ctx context.Context, ns, sess, artifactID string) (string, error)
 	contentRender       func(ctx context.Context, ns, sess, artifactID string) (string, bool, error)
@@ -56,7 +56,7 @@ type fakeDeps struct {
 	logger              logr.Logger
 }
 
-func (f *fakeDeps) VerifyLink(raw string) (string, string, string, error) { return f.verifyLink(raw) }
+func (f *fakeDeps) VerifyLink(raw string) (string, string, error) { return f.verifyLink(raw) }
 func (f *fakeDeps) CheckView(ctx context.Context, artifactID, subject string) (bool, error) {
 	return f.checkView(ctx, artifactID, subject)
 }
@@ -76,11 +76,11 @@ func (f *fakeDeps) ArtifactMeta(ctx context.Context, ns, sess, artifactID string
 	}
 	return f.artifactMeta(ctx, ns, sess, artifactID)
 }
-func (f *fakeDeps) ChannelKind(ctx context.Context, ns, sess string) (string, error) {
-	if f.channelKind == nil {
-		return "", nil
+func (f *fakeDeps) OriginLinks(ctx context.Context, ns, sess string) []artifactview.OriginLink {
+	if f.originLinks == nil {
+		return nil
 	}
-	return f.channelKind(ctx, ns, sess)
+	return f.originLinks(ctx, ns, sess)
 }
 func (f *fakeDeps) ResolveRender(ctx context.Context, ns, sess, artifactID string) (string, error) {
 	return f.resolveRender(ctx, ns, sess, artifactID)
@@ -220,14 +220,11 @@ func (f *fakeDeps) Logger() logr.Logger    { return f.logger }
 // two fields it exercises.
 func fakeAV() *fakeDeps {
 	return &fakeDeps{
-		verifyLink: func(raw string) (string, string, string, error) {
-			return "artifact-x", "default/s1", "", nil
+		verifyLink: func(raw string) (string, string, error) {
+			return "artifact-x", "default/s1", nil
 		},
 		checkView: func(ctx context.Context, artifactID, subject string) (bool, error) {
 			return true, nil
-		},
-		channelKind: func(ctx context.Context, ns, sess string) (string, error) {
-			return "slack", nil
 		},
 		resolveRender: func(ctx context.Context, ns, sess, artifactID string) (string, error) {
 			return "ar-1", nil
@@ -314,7 +311,7 @@ func TestDownload_HappyPath_ServesBytesAsAttachment(t *testing.T) {
 // the artifact id + a MIME-based extension, sanitized.
 func TestDownload_FilenameFallbackFromMIME(t *testing.T) {
 	av := fakeAV()
-	av.verifyLink = func(raw string) (string, string, string, error) { return "art-xyz", "default/s1", "", nil }
+	av.verifyLink = func(raw string) (string, string, error) { return "art-xyz", "default/s1", nil }
 	av.fetchRender = func(ctx context.Context, ns, sess, renderName string) ([]byte, string, error) {
 		return []byte("data"), "text/html", nil
 	}
@@ -511,10 +508,13 @@ func TestShell_ShowsArtifactTitleAndDescription(t *testing.T) {
 	assert.Contains(t, body, "<title>Live view — Quarterly Report</title>", "document title carries the artifact name")
 }
 
-func TestShell_RendersBackLinkWhenPresent(t *testing.T) {
-	av := fakeAV()
-	av.verifyLink = func(raw string) (string, string, string, error) {
-		return "artifact-x", "default/s1", "https://example.slack.com/archives/C1/p170?thread_ts=170&cid=C1", nil
+func TestShell_RendersOriginLinksWhenPresent(t *testing.T) {
+	av := fakeAV() // default CheckInteract=true → a session participant
+	av.originLinks = func(ctx context.Context, ns, sess string) []artifactview.OriginLink {
+		return []artifactview.OriginLink{
+			{Href: "https://github.com/demo-org/platform/pull/42", Label: "View the pull request", Icon: "github"},
+			{Href: "https://example.slack.com/archives/C1/p170", Label: "Open the Slack thread", Icon: "slack"},
+		}
 	}
 	s := newServer(t, "user:abc", av)
 
@@ -523,21 +523,52 @@ func TestShell_RendersBackLinkWhenPresent(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	// The back link is now passed to the client via props (json key "backLink");
-	// the React app renders the "Back to thread" affordance. The bootstrap JSON is
-	// HTML-escaped, so the URL's "&" appears as "&" — match the stable prefix.
-	assert.Contains(t, body, `"backLink":"https://example.slack.com/archives/C1/p170`, "bootstrap props carry the back-link URL")
+	// The origin links are passed to the client via props (json key "originLinks");
+	// the React app renders one "back to origin" affordance per entry, using the
+	// kind-supplied label (tooltip) and icon key — never branching on the kind.
+	assert.Contains(t, body, `"originLinks":[`, "bootstrap props carry the origin links array")
+	assert.Contains(t, body, `"href":"https://github.com/demo-org/platform/pull/42"`, "props carry the PR link")
+	assert.Contains(t, body, `"label":"View the pull request"`, "props carry the PR link's tooltip label")
+	assert.Contains(t, body, `"icon":"github"`, "props carry the PR link's icon key")
+	assert.Contains(t, body, `"href":"https://example.slack.com/archives/C1/p170"`, "props carry the Slack thread link")
 }
 
-func TestShell_OmitsBackLinkWhenEmpty(t *testing.T) {
-	av := fakeAV() // fakeAV's verifyLink returns "" back-link
+// TestShell_OriginLinksGatedForNonParticipant covers the security gate: origin
+// links are SESSION-scoped (a private Slack permalink, a private-repo PR URL),
+// so a subject who passes the artifact's CheckView but is NOT a session
+// participant (CheckInteract=false — a platform admin, or any user on an
+// org-visible session) must receive NO origin links, even though the Deps would
+// resolve them.
+func TestShell_OriginLinksGatedForNonParticipant(t *testing.T) {
+	av := fakeAV()
+	av.checkInteract = func(ctx context.Context, ns, sess, subject string) (bool, error) {
+		return false, nil // viewer may VIEW the artifact but is not in the conversation
+	}
+	av.originLinks = func(ctx context.Context, ns, sess string) []artifactview.OriginLink {
+		return []artifactview.OriginLink{
+			{Href: "https://example.slack.com/archives/C1/p170", Label: "Open the Slack thread", Icon: "slack"},
+		}
+	}
 	s := newServer(t, "user:abc", av)
 
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req(trustedHost, "/artifact-view?d=AA&sig=BB"))
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), `"backLink":""`, "bootstrap props carry an empty back-link when none is set")
+	body := rec.Body.String()
+	assert.Contains(t, body, `"originLinks":[]`, "a non-participant viewer gets an empty origin links array")
+	assert.NotContains(t, body, "example.slack.com", "the private Slack permalink must not leak to a non-participant")
+}
+
+func TestShell_OriginLinksEmptyIsAnArray(t *testing.T) {
+	av := fakeAV() // fakeAV's originLinks unset → the page coerces nil to []
+	s := newServer(t, "user:abc", av)
+
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req(trustedHost, "/artifact-view?d=AA&sig=BB"))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"originLinks":[]`, "empty origin links serialize as an array, never null")
 }
 
 func TestShell_FallsBackToArtifactIDWhenNoName(t *testing.T) {
@@ -631,8 +662,8 @@ func TestShell_Forbidden_DoesNotLeakContentURL(t *testing.T) {
 
 func TestShell_BadLink_Forbidden(t *testing.T) {
 	av := fakeAV()
-	av.verifyLink = func(raw string) (string, string, string, error) {
-		return "", "", "", assert.AnError
+	av.verifyLink = func(raw string) (string, string, error) {
+		return "", "", assert.AnError
 	}
 	s := newServer(t, "user:abc", av)
 
@@ -650,9 +681,9 @@ func TestShell_BadLink_Forbidden(t *testing.T) {
 func TestShell_UnsignedParams_AdminPath(t *testing.T) {
 	av := fakeAV()
 	var verifyLinkCalled bool
-	av.verifyLink = func(raw string) (string, string, string, error) {
+	av.verifyLink = func(raw string) (string, string, error) {
 		verifyLinkCalled = true
-		return "", "", "", assert.AnError
+		return "", "", assert.AnError
 	}
 	var gotArtifactID, gotSubject string
 	av.checkView = func(ctx context.Context, artifactID, subject string) (bool, error) {
@@ -669,7 +700,10 @@ func TestShell_UnsignedParams_AdminPath(t *testing.T) {
 	assert.Equal(t, "user:admin", gotSubject, "CheckView runs with the authenticated cookie subject")
 	assert.Equal(t, "artifact-x", gotArtifactID, "CheckView runs with the query artifact id")
 	assert.Contains(t, rec.Body.String(), `data-app="artifact-view"`, "shell mounts the React app")
-	assert.Contains(t, rec.Body.String(), `"backLink":""`, "the unsigned admin path carries no back link")
+	// Origin links are session-derived now, not carried in the link, so the
+	// unsigned/durable path produces them too (the whole point of the change).
+	// This fake returns none, so an empty array — never null.
+	assert.Contains(t, rec.Body.String(), `"originLinks":[]`, "the unsigned admin path still derives origin links from the session")
 }
 
 // TestShell_UnsignedParams_ForbiddenStillGated confirms the unsigned path is NOT
@@ -724,9 +758,9 @@ func TestShell_NoLinkNoParams_Forbidden(t *testing.T) {
 func TestShell_SignedPath_TakesPrecedence(t *testing.T) {
 	av := fakeAV()
 	var verifiedRaw string
-	av.verifyLink = func(raw string) (string, string, string, error) {
+	av.verifyLink = func(raw string) (string, string, error) {
 		verifiedRaw = raw
-		return "signed-artifact", "default/s1", "", nil
+		return "signed-artifact", "default/s1", nil
 	}
 	var gotArtifactID string
 	av.checkView = func(ctx context.Context, artifactID, subject string) (bool, error) {
@@ -1003,9 +1037,9 @@ func TestUnboundSessionRef_RefusedOnEveryRoute(t *testing.T) {
 				return []artifactview.RevisionMeta{{Seq: 1, RevisionID: "rev-1", RenderName: "ar-1"}}, nil
 			}
 			var touched []string
-			av.channelKind = func(ctx context.Context, ns, sess string) (string, error) {
-				touched = append(touched, "ChannelKind "+ns+"/"+sess)
-				return "slack", nil
+			av.originLinks = func(ctx context.Context, ns, sess string) []artifactview.OriginLink {
+				touched = append(touched, "OriginLinks "+ns+"/"+sess)
+				return nil
 			}
 			av.artifactMeta = func(ctx context.Context, ns, sess, artifactID string) (string, string, error) {
 				touched = append(touched, "ArtifactMeta "+ns+"/"+sess)

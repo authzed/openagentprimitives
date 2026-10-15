@@ -870,18 +870,6 @@ func (l *slackListener) handleLiveViewClick(ctx context.Context, cb slackapi.Int
 			return true, nil
 		}
 
-		// Best-effort thread back-link. A getPermalink failure must NOT block
-		// the view — log it and mint with an empty back-link.
-		backLink := ""
-		if v.T != "" {
-			if pl, err := sc.GetPermalinkContext(ctx, &slackapi.PermalinkParameters{Channel: channelID, Ts: v.T}); err != nil {
-				logger.Info("live_view click: getPermalink failed; back-link omitted",
-					"channel", channelID, "thread", v.T, "err", err.Error())
-			} else {
-				backLink = pl
-			}
-		}
-
 		// Canonical SpiceDB subject for the clicker. This is NOT merely audit
 		// metadata: on an OIDC-off install (no WebAuthenticator for the kind),
 		// webd/identityd's trust-link fallback mints the session cookie from
@@ -898,7 +886,7 @@ func (l *slackListener) handleLiveViewClick(ctx context.Context, cb slackapi.Int
 			identity.RawExternalID(ext.ExternalID),
 			identity.Email(ext.Email),
 		).AllowSynthetic()
-		url, err := minter.MintArtifactViewLink(v.A, v.S, subject, backLink)
+		url, err := minter.MintArtifactViewLink(v.A, v.S, subject)
 		if err != nil {
 			logger.Info("live_view click: mint failed", "artifactID", v.A, "session", v.S, "err", err.Error())
 			if perr := PostEphemeral(ctx, sc, channelID, cb.User.ID,
@@ -929,7 +917,7 @@ func (l *slackListener) handleLiveViewClick(ctx context.Context, cb slackapi.Int
 			return true, fmt.Errorf("live_view click: postEphemeral: %w", err)
 		}
 		logger.Info("live_view click: posted fresh open link",
-			"artifactID", v.A, "session", v.S, "clicker", cb.User.ID, "withBackLink", backLink != "")
+			"artifactID", v.A, "session", v.S, "clicker", cb.User.ID)
 		return true, nil
 	}
 	return false, nil

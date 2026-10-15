@@ -116,11 +116,11 @@ func TestBuildChildSession_CarriesForwardSpec(t *testing.T) {
 }
 
 // TestBuildChildSession_ClearsThreadTSAndChannelKeyLabel verifies that a
-// restart-from-here (-fk) fork's ChannelBinding has thread_ts stripped (so
-// the Slack sender posts at channel level, creating a new thread root) and
-// LabelChannelKey is absent (the old hash was tied to the parent's
-// thread_ts). An inherit fork does NOT do this — see
-// TestBuildChildSession_InheritForkStaysInTheParentThread.
+// restart-from-here (-fk) fork's ChannelBinding has thread_ts (and the
+// parent-thread permalink) stripped (so the Slack sender posts at channel
+// level, creating a new thread root) and LabelChannelKey is absent (the old
+// hash was tied to the parent's thread_ts). An inherit fork does NOT do this —
+// see TestBuildChildSession_InheritForkStaysInTheParentThread.
 func TestBuildChildSession_ClearsThreadTSAndChannelKeyLabel(t *testing.T) {
 	parent := &v1alpha1.AgentSession{
 		ObjectMeta: metav1.ObjectMeta{
@@ -141,6 +141,7 @@ func TestBuildChildSession_ClearsThreadTSAndChannelKeyLabel(t *testing.T) {
 					"thread_ts":   "1234.5678",
 					"team_id":     "T99",
 					"bot_user_id": "B1",
+					"permalink":   "https://demo.slack.com/archives/C123/p12345678",
 				},
 			},
 		},
@@ -156,6 +157,13 @@ func TestBuildChildSession_ClearsThreadTSAndChannelKeyLabel(t *testing.T) {
 	require.NotNil(t, child.Spec.InputChannel)
 	assert.NotContains(t, child.Spec.InputChannel.External, "thread_ts",
 		"thread_ts must be cleared on child to spawn a new thread")
+
+	// permalink must be absent too: it is the canonical link to the PARENT
+	// thread. Carrying it would make the child's artifact-view origin link point
+	// at the wrong conversation; stripping it lets OriginLink reconstruct the
+	// child's own thread link once first-send roots it.
+	assert.NotContains(t, child.Spec.InputChannel.External, "permalink",
+		"parent-thread permalink must be cleared on a branching fork")
 
 	// Other external keys that are needed for routing must survive.
 	assert.Equal(t, "C123", child.Spec.InputChannel.External["channel_id"])
@@ -239,7 +247,8 @@ func TestBuildChildSession_InheritForkStaysInTheParentThread(t *testing.T) {
 		Spec: v1alpha1.AgentSessionSpec{
 			InputChannel: &v1alpha1.ChannelBinding{
 				Name: "ch", Kind: "slack",
-				External: map[string]string{"team_id": "T1", "channel_id": "C1", "thread_ts": "111.1"},
+				External: map[string]string{"team_id": "T1", "channel_id": "C1", "thread_ts": "111.1",
+					"permalink": "https://demo.slack.com/archives/C1/p1111"},
 			},
 		},
 	}
@@ -250,6 +259,8 @@ func TestBuildChildSession_InheritForkStaysInTheParentThread(t *testing.T) {
 	require.NotNil(t, inherit.Spec.InputChannel)
 	assert.Equal(t, "111.1", inherit.Spec.InputChannel.External["thread_ts"],
 		"a continuation must stay in the thread the user is reading")
+	assert.Equal(t, "https://demo.slack.com/archives/C1/p1111", inherit.Spec.InputChannel.External["permalink"],
+		"same thread ⇒ the parent permalink still points at the right conversation, so it is kept")
 	assert.Equal(t, "key-hash", inherit.Labels[v1alpha1.LabelChannelKey],
 		"same thread ⇒ same channel key; Deliver prefers the active child")
 	assert.NotContains(t, inherit.Annotations, v1alpha1.AnnotationForkedFromThread,

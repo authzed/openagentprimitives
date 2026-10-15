@@ -29,7 +29,7 @@ func TestNewSessionViewMinter_HappyPath(t *testing.T) {
 	m := newSessionViewMinter(func() string { return "https://webd.example" })
 
 	subj := identity.RawSubject("user:alice")
-	u, err := m.MintSessionViewLink("ns1/sess1", subj, "")
+	u, err := m.MintSessionViewLink("ns1/sess1", subj)
 	require.NoError(t, err, "MintSessionViewLink should succeed")
 	assert.Equal(t, "https://webd.example/session-view/ns1/sess1", u,
 		"URL must be a plain path with no ?d=&sig= — access is CheckInteract at open time, not a signed capability")
@@ -39,7 +39,7 @@ func TestNewSessionViewMinter_HappyPath(t *testing.T) {
 // the base URL doesn't produce a double slash.
 func TestNewSessionViewMinter_TrimsTrailingSlash(t *testing.T) {
 	m := newSessionViewMinter(func() string { return "https://webd.example/" })
-	u, err := m.MintSessionViewLink("ns1/sess1", identity.Principal{}, "")
+	u, err := m.MintSessionViewLink("ns1/sess1", identity.Principal{})
 	require.NoError(t, err)
 	assert.Equal(t, "https://webd.example/session-view/ns1/sess1", u)
 }
@@ -48,7 +48,7 @@ func TestNewSessionViewMinter_TrimsTrailingSlash(t *testing.T) {
 // are URL-escaped independently.
 func TestNewSessionViewMinter_EscapesSegments(t *testing.T) {
 	m := newSessionViewMinter(func() string { return "https://webd.example" })
-	u, err := m.MintSessionViewLink("my ns/my sess", identity.Principal{}, "")
+	u, err := m.MintSessionViewLink("my ns/my sess", identity.Principal{})
 	require.NoError(t, err)
 	assert.Equal(t, "https://webd.example/session-view/my%20ns/my%20sess", u)
 }
@@ -57,7 +57,7 @@ func TestNewSessionViewMinter_EscapesSegments(t *testing.T) {
 // URL returns ("", nil) — a clean skip, not an error.
 func TestNewSessionViewMinter_EmptyBaseURL(t *testing.T) {
 	m := newSessionViewMinter(func() string { return "" })
-	u, err := m.MintSessionViewLink("ns1/sess1", identity.Principal{}, "")
+	u, err := m.MintSessionViewLink("ns1/sess1", identity.Principal{})
 	require.NoError(t, err, "empty base URL must return nil error (clean skip)")
 	assert.Empty(t, u, "empty base URL must return empty URL string")
 }
@@ -66,7 +66,7 @@ func TestNewSessionViewMinter_EmptyBaseURL(t *testing.T) {
 // sessionRef without a "/" is rejected rather than producing a malformed URL.
 func TestNewSessionViewMinter_MalformedSessionRef_ReturnsError(t *testing.T) {
 	m := newSessionViewMinter(func() string { return "https://webd.example" })
-	_, err := m.MintSessionViewLink("no-slash", identity.Principal{}, "")
+	_, err := m.MintSessionViewLink("no-slash", identity.Principal{})
 	require.Error(t, err, "sessionRef without ns/name must be rejected")
 	assert.Contains(t, err.Error(), "sessionRef")
 }
