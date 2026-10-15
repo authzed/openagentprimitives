@@ -101,9 +101,9 @@ const poly4 = (g) => [g.L, g.T, g.R, g.B].map(P).join(" ");
 
 const FIGS = {};
 
-/* Problem: one agent holding everyone's access, each call needing one slice. */
+/* Problem: one token reaching every repository, each task needing one of them. */
 {
-  const D = 76, R = 46, users = ["maya", "jon", "priya", "sam", "leo"];
+  const D = 76, R = 46, users = ["api", "web", "infra", "billing", "docs"];
   const at = (k, d = D) => {
     const a = ((-90 + k * 72) * Math.PI) / 180;
     return [200 + d * Math.cos(a), 200 + d * Math.sin(a)];
@@ -121,7 +121,7 @@ const FIGS = {};
         b += `<circle data-k="uf${k}" cx="${x}" cy="${y}" r="${R}" style="fill:url(#geo-g-union)" opacity="0"/><circle data-k="u${k}" class="i" cx="${x}" cy="${y}" r="${R}"/>` + T(lx, ly + 4, u, "", "middle");
       });
       b += `<line data-k="ln" class="a" x1="200" y1="200" x2="200" y2="200"/>` + agent(200, 200, 13);
-      b += T(20, 30, "agent holds ∪ users") + Tk("need", 200, 366, "this call needs user:maya", "ac", "middle");
+      b += T(20, 30, "token reaches ∪ repos") + Tk("need", 200, 366, "this task needs repo:api", "ac", "middle");
       return S(b, hatch("geo-h-union") + rad("geo-g-union", 0.75));
     },
     anim: (r, t) => {
@@ -135,12 +135,12 @@ const FIGS = {};
       ln.setAttribute("x1", x); ln.setAttribute("y1", y);
       ln.setAttribute("x2", x + (200 - x) * dr); ln.setAttribute("y2", y + (200 - y) * dr);
       ln.setAttribute("opacity", env);
-      setText(q(r, "need"), "this call needs user:" + users[n]);
+      setText(q(r, "need"), "this task needs repo:" + users[n]);
     },
   };
 }
 
-/* Define: an AgentClass in git stamps out sessions, each with its own pod, torn down when done.
+/* Define: a versioned AgentClass stamps out sessions, each with its own runtime, torn down when done.
    The class is the OAP triangle; each session is a smaller triangle cut from it. */
 {
   const xs = [90, 200, 310], base = 300, sh = 70;
@@ -154,8 +154,8 @@ const FIGS = {};
         const d = triD(x, base, sh);
         b += `<path data-k="sf${k}" d="${d}" style="fill:url(#geo-g-define)" opacity="0"/><path data-k="s${k}" class="i" d="${d}"/><path class="f" d="${holeD(x, base, sh)}"/>`;
       });
-      b += T(250, 122, "agentclass") + T(250, 140, "in git") + Tk("lbl", 200, 326, "session", "ac", "middle");
-      b += T(200, 370, "own pod · budget · memory", "", "middle");
+      b += T(250, 122, "agentclass") + T(250, 140, "versioned") + Tk("lbl", 200, 326, "session", "ac", "middle");
+      b += T(200, 370, "own runtime · budget · audit trail", "", "middle");
       return S(b, lin("geo-g-define", 0, 0, 0, 1, 0.7, 0.05));
     },
     anim: (r, t) => {
@@ -185,7 +185,7 @@ const FIGS = {};
    X on the way out. */
 {
   const DENY = "var(--deny)";
-  const calls = [["git clone", 1], ["gh pr view", 1], ["git push", 0], ["gh pr checks", 1], ["gh pr comment", 0], ["gh api", 1]];
+  const calls = [["git clone", 1], ["gh pr view", 1], ["git push", 0], ["gh pr checks", 1], ["gh pr comment", 0], ["gh api GET", 1], ["gh api -X POST", 0]];
   FIGS.gate = {
     t0: 1.4,
     svg: () => {
@@ -240,7 +240,7 @@ const FIGS = {};
       b += agent(ag[0], ag[1], 22) + `<circle class="dot" cx="${ag[0] + 30}" cy="${ag[1] + 30}" r="5"/>`;
       b += `<rect data-k="tool" class="dot" x="${tl[0] - 10}" y="${tl[1] - 10}" width="20" height="20"/>`;
       b += `<circle data-k="call" class="pf" r="4" cx="-10" cy="-10"/><circle data-k="kd" class="af" r="5" cx="-10" cy="-10"/>`;
-      b += T(ag[0], ag[1] - 34, "agent", "", "middle") + T(ag[0] + 40, ag[1] + 34, "handle") + T(tl[0], tl[1] - 22, "tool", "", "middle");
+      b += T(ag[0], ag[1] - 34, "agent", "", "middle") + T(ag[0] + 40, ag[1] + 34, "reference") + T(tl[0], tl[1] - 22, "tool", "", "middle");
       b += T(br[0], br[1] + 24, "broker", "", "middle") + T(290, 252, "key at use", "ac", "middle");
       return S(b);
     },
@@ -258,7 +258,11 @@ const FIGS = {};
   };
 }
 
-/* Decide: with a person in the loop the check sees the overlap; unattended, the agent's own service identity. */
+/* Decide: unattended, the agent works with its full scope, the whole lit
+   circle. A person in the loop attenuates it: the agent may do only what both
+   the person and the agent allow, the lit overlap. The person is hatched and the
+   agent is plain line work, so the two sets read apart and the accent marks only
+   the answer. Left-to-right order matches the caption. */
 {
   const ax = 252, r1 = 78, d0 = 98, d1 = 196;
   const lens = (d) => {
@@ -269,31 +273,32 @@ const FIGS = {};
     t0: 1.5,
     svg: () => {
       let b = `<line class="d" x1="30" y1="200" x2="370" y2="200"/>`;
-      b += `<circle data-k="af" cx="${ax}" cy="200" r="${r1}" style="fill:url(#geo-g-lens)" opacity="0"/><path data-k="lens" d="${lens(d0)}" style="fill:url(#geo-g-lens)" class="a"/>`;
-      b += `<g data-k="user"><circle class="i" cx="${ax - d0}" cy="200" r="${r1}"/><circle class="f" cx="${ax - d0}" cy="200" r="50"/><circle class="f" cx="${ax - d0}" cy="200" r="24"/><circle class="dot" cx="${ax - d0}" cy="200" r="3.5"/>` + T(ax - d0, 108, "person", "", "middle") + `</g>`;
-      b += `<circle data-k="ag" class="i" cx="${ax}" cy="200" r="${r1}"/><polygon class="f" points="${poly(hex(ax, 200, 30))}"/><circle class="dot" cx="${ax}" cy="200" r="3.5"/>` + T(ax, 108, "agent class", "", "middle");
-      b += Tk("subj", 200, 318, "class ∩ user:maya", "ac", "middle");
-      return S(b, lin("geo-g-lens", 0, 0, 0, 1, 0.75, 0.1));
+      b += `<circle class="i" cx="${ax}" cy="200" r="${r1}" style="fill:var(--card)"/>`;
+      b += `<g data-k="user"><circle class="i" cx="${ax - d0}" cy="200" r="${r1}" style="fill:url(#geo-h-lens)"/><circle class="f" cx="${ax - d0}" cy="200" r="24" style="fill:var(--card)"/><circle class="dot" cx="${ax - d0}" cy="200" r="3.5"/>` + T(ax - d0, 108, "user:maya", "", "middle") + `</g>`;
+      b += `<path data-k="lens" d="${lens(d0)}" class="a" style="fill:url(#geo-g-lens)"/>`;
+      b += `<circle data-k="full" class="a" cx="${ax}" cy="200" r="${r1}" style="fill:url(#geo-g-lens)" opacity="0"/>`;
+      b += `<polygon class="f" points="${poly(hex(ax, 200, 30))}"/><circle class="dot" cx="${ax}" cy="200" r="3.5"/>` + T(ax, 108, "agent", "", "middle");
+      b += Tk("subj", 200, 318, "user:maya ∩ agent", "ac", "middle");
+      return S(b, lin("geo-g-lens", 0, 0, 0, 1, 0.85, 0.35) + hatch("geo-h-lens"));
     },
     anim: (r, t) => {
       const p = (t % 8) / 8;
       const e = p < 0.38 ? 0 : p < 0.5 ? sm((p - 0.38) / 0.12) : p < 0.88 ? 1 : 1 - sm((p - 0.88) / 0.12);
       const d = d0 + (d1 - d0) * e, u = q(r, "user");
       u.setAttribute("transform", `translate(${(d0 - d).toFixed(1)} 0)`);
-      u.setAttribute("opacity", 1 - 0.55 * clamp((d - 160) / 30));
+      u.setAttribute("opacity", 1 - 0.6 * clamp((d - 160) / 30));
       const L = q(r, "lens");
       if (d < 2 * r1 - 2) { L.setAttribute("d", lens(d)); L.setAttribute("opacity", 1); } else L.setAttribute("opacity", 0);
-      const alone = clamp((d - 160) / 30);
-      q(r, "af").setAttribute("opacity", alone);
-      q(r, "ag").style.stroke = alone > 0.2 ? ACC : "";
-      setText(q(r, "subj"), d < 158 ? "class ∩ user:maya" : "class ∩ service:nightly");
+      // The overlap hands over to the whole circle as the person leaves.
+      q(r, "full").setAttribute("opacity", clamp((d - 130) / 50));
+      setText(q(r, "subj"), d < 158 ? "user:maya ∩ agent" : "agent · full scope");
     },
   };
 }
 
 /* Carry: a scheduled run, a GitHub webhook, a Slack thread. Each wakes a session. */
 {
-  const src = [[70, 108, "cron"], [70, 200, "github"], [70, 292, "slack"]], seq = [0, 1, 0, 2], tx = 300, tb = 236, th = 104;
+  const src = [[70, 108, "schedule"], [70, 200, "github"], [70, 292, "slack"]], seq = [0, 1, 0, 2], tx = 300, tb = 236, th = 104;
   const cD = (y) => `M86,${y} C170,${y} 200,188 ${tx - th / 2 / Math.sqrt(3) - 4},188`;
   FIGS.channels = {
     t0: 1.3,
@@ -305,7 +310,7 @@ const FIGS = {};
       b += `<line data-k="hand" class="i" x1="70" y1="108" x2="70" y2="97"/><circle class="pf" cx="70" cy="108" r="2"/>`;
       b += `<polygon class="f" points="${poly(hex(70, 200, 7))}"/><circle class="f" cx="70" cy="292" r="6"/>`;
       b += `<circle data-k="pu" class="af" r="4" cx="-10" cy="-10"/>`;
-      b += T(tx, tb + 28, "session", "", "middle") + Tk("fired", tx, tb - th - 16, "cron", "ac", "middle");
+      b += T(tx, tb + 28, "session", "", "middle") + Tk("fired", tx, tb - th - 16, "schedule", "ac", "middle");
       return S(b, lin("geo-g-chan", 0, 0, 0, 1, 0.7, 0.05));
     },
     anim: (r, t) => {
@@ -332,7 +337,7 @@ const FIGS = {};
   };
 }
 
-/* Remember: the session is committed to one slot. Reading another slot's memory is refused at the gate. */
+/* Remember: the session reads memory only for the resources it is bound to. Reading another's is refused at the gate. */
 {
   const ag = [64, 200], gate = 166, slabs = [[300, 112, "acme"], [300, 200, "globex"], [300, 288, "initech"]], seq = [0, 1, 0, 2];
   FIGS.memory = {
@@ -347,7 +352,7 @@ const FIGS = {};
       });
       b += `<path class="i" d="${triD(gate, 238, 84)}" style="fill:var(--card)"/><path data-k="hole" class="i" d="${holeD(gate, 238, 84)}"/>`;
       b += agent(ag[0], ag[1], 17) + `<circle data-k="m" class="pf" r="4" cx="-10" cy="-10"/>`;
-      b += T(ag[0] - 36, ag[1] - 32, "company:acme", "ac", "start") + Tk("vd", gate, 270, "", "", "middle");
+      b += T(ag[0] - 36, ag[1] - 32, "bound to acme", "ac", "start") + Tk("vd", gate, 270, "", "", "middle");
       b += T(200, 372, "reading memory is a check", "", "middle");
       return S(b);
     },
@@ -609,10 +614,10 @@ const FIGS = {};
 /* Close: defense in depth. An attack (a neutral dot) falls through the stack;
    each layer it breaks turns red. Each layer
    it gets past cracks along a seam and its halves drift apart; the next layer
-   holds (the accent). Each cycle one more layer fails, so every layer gets to
-   be the one that holds. */
+   holds (the accent). Each cycle one more layer fails, so every layer after the
+   first gets to be the one that holds. */
 {
-  const names = ["plan", "slot", "tool spec", "call check", "sandbox"];
+  const names = ["plan", "slot", "call check", "tool spec", "sandbox"];
   const ys = [92, 144, 196, 248, 300], W = 110, CX = 170, K = 0.36;
   const BROKE = "var(--deny)";
   const halves = (y) => {

@@ -105,8 +105,8 @@ const COMPARE: [string, string, string][] = [
   ],
   [
     "Tool credentials",
-    "Shared across tools in one sandbox",
-    "Held only by the tool that uses them",
+    "Visible to the model and every tool",
+    "Injected for the tool that needs them, never shown to the model",
   ],
   [
     "Restricting an MCP server",
@@ -140,17 +140,17 @@ const PRIMITIVES: Primitive[] = [
   {
     verb: "Define",
     title: "Agent definition",
-    body: "An AgentClass is a reviewable template kept in git. Each AgentSession gets its own pod, budget and memory, and is torn down when the work is done.",
+    body: "An AgentClass is a reviewable, versioned template. Each AgentSession gets its own isolated runtime, budget and audit trail, and is torn down when the work is done.",
     href: "/docs/agent-definition",
     hue: 0,
     geo: "define",
     figLabel:
-      "An agent class stamps out sessions, each with its own pod, torn down when done",
+      "An agent class stamps out sessions, each with its own runtime, torn down when done",
   },
   {
     verb: "Constrain",
     title: "Safe tools",
-    body: "A tool is a declarative contract, checked when it is written and again when it runs. Calls execute in a hardened sandbox, never through a shell.",
+    body: "A tool is a declarative contract, checked when it is written and again when it runs. Calls execute in a hardened sandbox, with no shell interpolation of arguments.",
     href: "/docs/safe-tools",
     hue: 1,
     geo: "gate",
@@ -160,12 +160,12 @@ const PRIMITIVES: Primitive[] = [
   {
     verb: "Broker",
     title: "Identity & credentials",
-    body: "Credentials resolve at the moment of use, and the agent never holds them.",
+    body: "Credentials are resolved by a broker outside the model and injected into the tool that needs them; the model never sees them.",
     href: "/docs/identity",
     hue: 2,
     geo: "broker",
     figLabel:
-      "The broker hands the credential straight to the tool at the moment of use; the agent holds only a handle",
+      "The broker injects the credential into the tool that uses it; the model holds only a reference",
   },
   {
     verb: "Decide",
@@ -175,7 +175,7 @@ const PRIMITIVES: Primitive[] = [
     hue: 3,
     geo: "lens",
     figLabel:
-      "With a person present the check runs as that person, inside the class's ceiling; unattended, as the service subject its channel declares",
+      "Two overlapping circles, a person and the agent. Unattended, the agent works with its full scope; with a person present it may do only what both allow",
   },
   {
     verb: "Carry",
@@ -184,7 +184,7 @@ const PRIMITIVES: Primitive[] = [
     href: "/docs/channels",
     hue: 4,
     geo: "channels",
-    figLabel: "Cron, GitHub and Slack channels each wake a session",
+    figLabel: "A schedule, GitHub and Slack each wake a session",
   },
   {
     verb: "Remember",
@@ -194,7 +194,7 @@ const PRIMITIVES: Primitive[] = [
     hue: 0,
     geo: "memory",
     figLabel:
-      "A session committed to one slot reads its own memory; reading another slot is refused",
+      "A session reads memory only for the resources it's bound to; reading another is refused",
   },
 ];
 
@@ -332,8 +332,8 @@ const AREAS: Area[] = [
         "No tool or capability is granted until someone adds it.",
       ],
       [
-        "A sandbox per tool.",
-        "Each tool holds only its own credentials, and the agent holds none.",
+        "Isolated sandboxes.",
+        "Credentials are injected only for the tool that needs them, and the model never sees them.",
       ],
       [
         "Narrowing delegation.",
@@ -401,11 +401,11 @@ const AREAS: Area[] = [
       ],
       [
         "Separate pods.",
-        "Runner, operator and sanitizers run apart, on micro-VMs where available.",
+        "Runner, operator and sanitizers run in separate pods, and tool sandboxes can run on micro-VMs where the cluster provides them.",
       ],
       [
         "Scoped credentials.",
-        "Each component reaches only its own session on the control-plane bus.",
+        "Every component gets its own bus credential, and a session's pods can publish only on that session's channels.",
       ],
       [
         "Reviewable packages.",
@@ -496,7 +496,7 @@ const EVERYTHING: { title: string; body: string; hue: Hue; icon: ReactNode }[] =
     },
     {
       title: "Built in and swappable",
-      body: "The runner, authorization, approvals, sandboxing, credentials, memory and audit ship built in, and each can be swapped for one you already run.",
+      body: "The runner, authorization, approvals, sandboxing, credentials, memory and audit ship built in. Model providers, sandbox backends, memory stores, channels and artifact storage plug in through interfaces, so you can use what you already run.",
       hue: 4,
       icon: (
         <>
@@ -1239,7 +1239,7 @@ export function Landing() {
             <div className="geo-slot lp-split-fig">
               <GeoFigure
                 name="union"
-                label="One agent holds the union of five people's access, while each call needs only one person's slice"
+                label="One token reaches all five repositories, while each task needs only one of them"
                 hue={0}
               />
             </div>
@@ -1433,8 +1433,8 @@ export function Landing() {
             <h2 className="lp-h2">Every layer assumes the others may fail.</h2>
             <p className="lp-lede">
               To misuse an agent, an attacker has to get past an approved plan,
-              a locked slot, a tool spec, a check on every call, and a sandbox
-              that never held the credential.
+              a locked slot, a check on every call, a tool spec, and a sandbox.
+              The model never sees a credential.
             </p>
             <div className="lp-hero-cta">
               <a className="lp-btn lp-btn--primary" href="/docs/quickstart">
@@ -1451,7 +1451,7 @@ export function Landing() {
           <div className="geo-slot lp-close-fig">
             <GeoFigure
               name="depth"
-              label="Five stacked layers: plan, slot, tool spec, call check, sandbox. An attack gets through one layer and the next holds"
+              label="Five stacked layers: plan, slot, call check, tool spec, sandbox. An attack gets through one layer and the next holds"
               hue={0}
             />
           </div>
