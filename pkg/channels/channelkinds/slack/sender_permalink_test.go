@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 )
 
@@ -50,4 +52,40 @@ func TestSender_FirstSend_PermalinkFailureOmitsLink(t *testing.T) {
 	assert.Equal(t, "1234.5678", res.External["thread_ts"], "thread root still captured")
 	_, has := res.External["permalink"]
 	assert.False(t, has, "permalink omitted when getPermalink fails")
+}
+
+// TestSender_AttachmentFirstRoot_CapturesPermalink: a reviewbot-style first
+// output that is an ATTACHMENT (github-in/slack-out, no inbound thread_ts) roots
+// the thread via the files.uploadV2 path. That root must capture a permalink
+// too — the output binding carries no team_id, so OriginLink's reconstruction
+// fallback cannot rebuild a Slack link otherwise and the artifact view would
+// show no origin.
+func TestSender_AttachmentFirstRoot_CapturesPermalink(t *testing.T) {
+	c := &fakeSlackClient{postedTS: "888.1", getPermalinkResult: "https://slack.test/archives/C01ABCDEF/p8881"}
+	af := &stubAssetFetcher{bytes: []byte("<html>hi</html>"), mime: "text/html", filename: "report.html"}
+	s := &slackSender{deps: channelkinds.Deps{AssetFetcher: af}, client: c}
+	sess := channelkinds.SessionInfo{
+		Namespace: "default", Name: "reviewbot",
+		Channel: &spiceboxv1alpha1.ChannelBinding{
+			// no thread_ts: the attachment upload must root the thread first.
+			External: map[string]string{"channel_id": "C01ABCDEF"},
+		},
+	}
+	pl := channelevents.OutboundUserMessagePayload{
+		Text:        "Here is the review",
+		Attachments: []channelevents.AttachmentRef{{RenderName: "ar-1", MIME: "text/html", Filename: "review.html"}},
+	}
+	plBytes, err := json.Marshal(pl)
+	require.NoError(t, err, "marshal payload")
+	env := channelevents.Envelope{
+		Version: 1, Kind: channelevents.KindUserMessage,
+		Session: channelevents.SessionRef{Namespace: "default", Name: "reviewbot"},
+		Payload: plBytes,
+	}
+	res, err := s.Send(context.Background(), sess, env)
+	require.NoError(t, err, "Send")
+	assert.Equal(t, "888.1", res.External["thread_ts"], "attachment upload rooted the thread")
+	assert.Equal(t, "https://slack.test/archives/C01ABCDEF/p8881", res.External["permalink"],
+		"attachment root resolves a permalink for the artifact-view origin link")
+	require.Len(t, c.getPermalinkCalls, 1, "getPermalink called once on the attachment root")
 }

@@ -509,11 +509,11 @@ func TestShell_ShowsArtifactTitleAndDescription(t *testing.T) {
 }
 
 func TestShell_RendersOriginLinksWhenPresent(t *testing.T) {
-	av := fakeAV()
+	av := fakeAV() // default CheckInteract=true → a session participant
 	av.originLinks = func(ctx context.Context, ns, sess string) []artifactview.OriginLink {
 		return []artifactview.OriginLink{
-			{Href: "https://github.com/demo-org/platform/pull/42", ChannelKind: "github"},
-			{Href: "https://example.slack.com/archives/C1/p170", ChannelKind: "slack"},
+			{Href: "https://github.com/demo-org/platform/pull/42", Label: "View the pull request", Icon: "github"},
+			{Href: "https://example.slack.com/archives/C1/p170", Label: "Open the Slack thread", Icon: "slack"},
 		}
 	}
 	s := newServer(t, "user:abc", av)
@@ -524,11 +524,40 @@ func TestShell_RendersOriginLinksWhenPresent(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	// The origin links are passed to the client via props (json key "originLinks");
-	// the React app renders one "back to origin" affordance per entry.
+	// the React app renders one "back to origin" affordance per entry, using the
+	// kind-supplied label (tooltip) and icon key — never branching on the kind.
 	assert.Contains(t, body, `"originLinks":[`, "bootstrap props carry the origin links array")
 	assert.Contains(t, body, `"href":"https://github.com/demo-org/platform/pull/42"`, "props carry the PR link")
-	assert.Contains(t, body, `"channelKind":"github"`, "props carry the PR link's channel kind")
+	assert.Contains(t, body, `"label":"View the pull request"`, "props carry the PR link's tooltip label")
+	assert.Contains(t, body, `"icon":"github"`, "props carry the PR link's icon key")
 	assert.Contains(t, body, `"href":"https://example.slack.com/archives/C1/p170"`, "props carry the Slack thread link")
+}
+
+// TestShell_OriginLinksGatedForNonParticipant covers the security gate: origin
+// links are SESSION-scoped (a private Slack permalink, a private-repo PR URL),
+// so a subject who passes the artifact's CheckView but is NOT a session
+// participant (CheckInteract=false — a platform admin, or any user on an
+// org-visible session) must receive NO origin links, even though the Deps would
+// resolve them.
+func TestShell_OriginLinksGatedForNonParticipant(t *testing.T) {
+	av := fakeAV()
+	av.checkInteract = func(ctx context.Context, ns, sess, subject string) (bool, error) {
+		return false, nil // viewer may VIEW the artifact but is not in the conversation
+	}
+	av.originLinks = func(ctx context.Context, ns, sess string) []artifactview.OriginLink {
+		return []artifactview.OriginLink{
+			{Href: "https://example.slack.com/archives/C1/p170", Label: "Open the Slack thread", Icon: "slack"},
+		}
+	}
+	s := newServer(t, "user:abc", av)
+
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req(trustedHost, "/artifact-view?d=AA&sig=BB"))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, `"originLinks":[]`, "a non-participant viewer gets an empty origin links array")
+	assert.NotContains(t, body, "example.slack.com", "the private Slack permalink must not leak to a non-participant")
 }
 
 func TestShell_OriginLinksEmptyIsAnArray(t *testing.T) {

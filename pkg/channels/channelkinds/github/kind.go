@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -161,25 +162,40 @@ func (Kind) RenderMention(externalID string) string { return externalID }
 
 var _ channelkinds.OriginLinkProvider = Kind{}
 
-// OriginLink returns a human-facing URL to the pull request this binding
-// correlates to, satisfying channelkinds.OriginLinkProvider. It prefers the
-// host-correct html_url persisted at session creation
-// (External["origin_url"] — correct on a GitHub Enterprise Server host), and
-// falls back to reconstructing a github.com URL from the "pr:<owner>/<repo>#<n>"
-// Key for sessions created before that value was persisted. ok=false when
-// neither is available.
-func (Kind) OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (string, bool) {
+// OriginLink returns a human-facing link to the pull request this binding
+// correlates to, satisfying channelkinds.OriginLinkProvider. It uses only the
+// host-correct html_url persisted at session creation (External["origin_url"],
+// captured from the verified webhook payload — correct on a GitHub Enterprise
+// Server host). ok=false when it is absent.
+//
+// There is deliberately NO github.com fallback: this kind supports GHES, where
+// the host is customer-specific and unknowable from the binding alone (the
+// GHES base URL lives on the RelationshipSource spec, not here). A reconstructed
+// github.com/<owner>/<repo>/pull/<n> would leak internal org/repo names to a
+// third party, and could point viewers at a public repo squatting the same
+// path. A missing link is the safe degrade; new sessions always persist
+// origin_url. External is user-writable, so the URL is returned only when it is
+// a plausible https URL.
+func (Kind) OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (channelkinds.OriginLink, bool) {
 	if binding == nil {
-		return "", false
+		return channelkinds.OriginLink{}, false
 	}
-	if u := binding.External["origin_url"]; u != "" {
-		return u, true
+	u := binding.External["origin_url"]
+	if !isHTTPSURL(u) {
+		return channelkinds.OriginLink{}, false
 	}
-	owner, repo, number, err := parseChannelKey(binding.Key)
-	if err != nil {
-		return "", false
+	return channelkinds.OriginLink{URL: u, Label: "View the pull request", Icon: "github"}, true
+}
+
+// isHTTPSURL reports whether u parses as an https URL with a host — the trust
+// check for a user-writable persisted origin_url. GHES hosts are arbitrary and
+// customer-specific, so this validates the scheme only, not the host.
+func isHTTPSURL(u string) bool {
+	if u == "" {
+		return false
 	}
-	return fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, number), true
+	parsed, err := url.Parse(u)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
 }
 
 // SupportedMentionLookups returns nil — a pull request's participants have no

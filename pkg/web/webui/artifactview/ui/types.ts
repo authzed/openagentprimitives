@@ -2,10 +2,13 @@
 // deps.go StatusSnapshot/PlanStatusItem) and the Page.Build props (page.go).
 
 // OriginLink mirrors the Go artifactview.OriginLink (deps.go): one "back to
-// origin" link — the href to open and the channelKind that selects its icon.
+// origin" link — the href to open, the label to show as its tooltip, and an
+// icon key naming the glyph. label and icon come from the originating channel
+// kind; the UI renders them without branching on the kind.
 export interface OriginLink {
   href: string;
-  channelKind: string;
+  label: string;
+  icon: string;
 }
 
 export interface ArtifactViewProps {

@@ -341,11 +341,22 @@ func (s *toolSessionSender) apply(ctx context.Context, sess channelkinds.Session
 	if rootTS == "" {
 		rootTS = ref.msgTS
 	}
-	res := channelkinds.SubChannelSendResult{
-		External: map[string]string{"channel_id": ref.channelID, "thread_ts": rootTS},
-	}
+	snapChannelID := ref.channelID
 	ref.mu.Unlock()
-	return res, nil
+
+	// On the apply that ESTABLISHED the root, resolve the canonical permalink
+	// (chat.getPermalink) so webd's artifact-view can link back to this Slack
+	// thread — the output binding carries no team_id, so OriginLink's
+	// reconstruction fallback cannot rebuild one for a tool_session-first
+	// session. Only on `first`, and OUTSIDE ref.mu: getPermalink is a network
+	// call, and the relay patches a thread root exactly once (its thread_ts
+	// guard), so later applies carry the same root and need no permalink —
+	// spending a getPermalink per debounced flush would be pure waste.
+	ext := map[string]string{"channel_id": snapChannelID, "thread_ts": rootTS}
+	if first && rootTS != "" {
+		ext = threadOriginExternal(ctx, s.cli, log.FromContext(ctx), snapChannelID, rootTS)
+	}
+	return channelkinds.SubChannelSendResult{External: ext}, nil
 }
 
 // post does the first chat.postMessage and records the ts.

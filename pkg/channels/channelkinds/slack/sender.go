@@ -286,10 +286,11 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 		if err == nil && forkRootTS != "" && len(res.External) == 0 {
 			// ensure() created this thread; sendWithAttachments only captures a
 			// root it created itself. Report ours so the relay patches the
-			// child's binding + LabelChannelKey.
-			res = channelkinds.SubChannelSendResult{External: map[string]string{
-				"thread_ts": forkRootTS, "channel_id": channelID,
-			}}
+			// child's binding + LabelChannelKey — through threadOriginExternal so
+			// the artifact-view origin link gets a permalink too.
+			res = channelkinds.SubChannelSendResult{
+				External: threadOriginExternal(ctx, s.client, log.FromContext(ctx), channelID, forkRootTS),
+			}
 		}
 		return res, err
 	}
@@ -371,7 +372,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 				}
 				if rootTS != "" {
 					return channelkinds.SubChannelSendResult{
-						External: s.threadOriginExternal(ctx, logger, channelID, rootTS),
+						External: threadOriginExternal(ctx, s.client, logger, channelID, rootTS),
 					}, nil
 				}
 			}
@@ -460,7 +461,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 			rootTS = postedTS // plain cron first-send: the reply itself is the root
 		}
 		return channelkinds.SubChannelSendResult{
-			External: s.threadOriginExternal(ctx, logger, ch, rootTS),
+			External: threadOriginExternal(ctx, s.client, logger, ch, rootTS),
 		}, nil
 	}
 	return channelkinds.SubChannelSendResult{}, nil
@@ -473,9 +474,16 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 // origin" link. The permalink is resolved here because only the sender holds a
 // Slack client. A getPermalink failure is logged and the permalink omitted — it
 // must never block the send, exactly as the former click-time lookup did.
-func (s *slackSender) threadOriginExternal(ctx context.Context, logger interface{ Info(string, ...any) }, channelID, rootTS string) map[string]string {
+//
+// A package function (taking the client) rather than a method so every
+// first-root path shares it — the user_message postMessage and streaming-bubble
+// paths, the attachment thread root, and the tool_session bubble (on
+// toolSessionSender, whose client field differs) — instead of each inventing
+// its own permalink-free External. Callers MUST invoke it outside any lock:
+// GetPermalinkContext is a network call.
+func threadOriginExternal(ctx context.Context, cli slackClient, logger interface{ Info(string, ...any) }, channelID, rootTS string) map[string]string {
 	ext := map[string]string{"thread_ts": rootTS, "channel_id": channelID}
-	if pl, err := s.client.GetPermalinkContext(ctx, &slackapi.PermalinkParameters{Channel: channelID, Ts: rootTS}); err != nil {
+	if pl, err := cli.GetPermalinkContext(ctx, &slackapi.PermalinkParameters{Channel: channelID, Ts: rootTS}); err != nil {
 		logger.Info("slack first-send: getPermalink failed; thread origin link omitted",
 			"channel", channelID, "thread", rootTS, "err", err.Error())
 	} else if pl != "" {
@@ -788,8 +796,10 @@ func (s *slackSender) sendWithAttachments(
 		}
 		threadTS = rootTS
 		initialComment = "" // already posted; do not duplicate
+		// Route through threadOriginExternal so this first-root send captures a
+		// permalink for the artifact-view origin link, like the text paths do.
 		res = channelkinds.SubChannelSendResult{
-			External: map[string]string{"thread_ts": rootTS, "channel_id": channelID},
+			External: threadOriginExternal(ctx, s.client, logger, channelID, rootTS),
 		}
 	}
 

@@ -32,6 +32,12 @@ func slackBinding(permalink string) *spiceboxv1alpha1.ChannelBinding {
 func TestOriginLinksFrom(t *testing.T) {
 	const prURL = "https://github.com/demo-org/platform/pull/42"
 	const slackURL = "https://demo.slack.com/archives/C1/p17001"
+	ghLink := func() artifactview.OriginLink {
+		return artifactview.OriginLink{Href: prURL, Label: "View the pull request", Icon: "github"}
+	}
+	slackLink := func() artifactview.OriginLink {
+		return artifactview.OriginLink{Href: slackURL, Label: "Open the Slack thread", Icon: "slack"}
+	}
 
 	cases := []struct {
 		name string
@@ -43,22 +49,19 @@ func TestOriginLinksFrom(t *testing.T) {
 			name: "reviewbot: github input + slack output, input first",
 			in:   ghBinding(prURL),
 			out:  slackBinding(slackURL),
-			want: []artifactview.OriginLink{
-				{Href: prURL, ChannelKind: "github"},
-				{Href: slackURL, ChannelKind: "slack"},
-			},
+			want: []artifactview.OriginLink{ghLink(), slackLink()},
 		},
 		{
 			name: "interactive slack: input only, no output",
 			in:   slackBinding(slackURL),
 			out:  nil,
-			want: []artifactview.OriginLink{{Href: slackURL, ChannelKind: "slack"}},
+			want: []artifactview.OriginLink{slackLink()},
 		},
 		{
 			name: "input==output same thread: de-duped to one link",
 			in:   slackBinding(slackURL),
 			out:  slackBinding(slackURL),
-			want: []artifactview.OriginLink{{Href: slackURL, ChannelKind: "slack"}},
+			want: []artifactview.OriginLink{slackLink()},
 		},
 		{
 			name: "kubectl-driven: no bindings, empty",
@@ -73,16 +76,27 @@ func TestOriginLinksFrom(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "github reconstructs from key when origin_url absent",
+			// Fail-closed: no github.com fallback (GHES host is unknowable from
+			// the binding). A session with no persisted origin_url contributes
+			// no link rather than a possibly-wrong github.com one.
+			name: "github without origin_url: omitted (no github.com fallback)",
 			in:   ghBinding(""),
 			out:  nil,
-			want: []artifactview.OriginLink{{Href: prURL, ChannelKind: "github"}},
+			want: nil,
 		},
 		{
-			name: "slack output without permalink: omitted",
+			name: "slack output without permalink and no team_id: omitted",
 			in:   ghBinding(prURL),
 			out:  slackBinding(""),
-			want: []artifactview.OriginLink{{Href: prURL, ChannelKind: "github"}},
+			want: []artifactview.OriginLink{ghLink()},
+		},
+		{
+			// External is user-writable; a non-https href (even if a kind let it
+			// through) is dropped by the generic backstop in originLinksFrom.
+			name: "non-https origin href: dropped by the scheme backstop",
+			in:   ghBinding("javascript:alert(1)"),
+			out:  nil,
+			want: nil,
 		},
 	}
 	for _, tc := range cases {
@@ -91,6 +105,27 @@ func TestOriginLinksFrom(t *testing.T) {
 			sess.Spec.InputChannel = tc.in
 			sess.Spec.OutputChannel = tc.out
 			assert.Equal(t, tc.want, originLinksFrom(sess))
+		})
+	}
+}
+
+func TestIsHTTPSOriginHref(t *testing.T) {
+	cases := []struct {
+		name string
+		href string
+		want bool
+	}{
+		{"https with host", "https://github.com/x/y/pull/1", true},
+		{"https slack", "https://demo.slack.com/archives/C1/p1", true},
+		{"http not https", "http://github.com/x", false},
+		{"javascript scheme", "javascript:alert(1)", false},
+		{"data scheme", "data:text/html,<script>1</script>", false},
+		{"relative ref", "/x/y", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isHTTPSOriginHref(tc.href))
 		})
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/url"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -33,21 +34,40 @@ func originLinksFrom(sess *spiceboxv1alpha1.AgentSession) []artifactview.OriginL
 		if !ok {
 			return
 		}
-		u, ok := p.OriginLink(b)
-		if !ok || u == "" || seen[u] {
+		link, ok := p.OriginLink(b)
+		if !ok || link.URL == "" || seen[link.URL] {
 			return
 		}
-		seen[u] = true
-		out = append(out, artifactview.OriginLink{Href: u, ChannelKind: b.Kind})
+		// Generic backstop: these hrefs derive from the user-writable
+		// External map and are rendered as <a href>. A kind vouches for its
+		// own host (slack: *.slack.com), but every link must at least be an
+		// https URL — never a javascript:/data: scheme or a relative ref —
+		// before it reaches the toolbar. Fail-closed: drop anything that is
+		// not.
+		if !isHTTPSOriginHref(link.URL) {
+			return
+		}
+		seen[link.URL] = true
+		out = append(out, artifactview.OriginLink{Href: link.URL, Label: link.Label, Icon: link.Icon})
 	}
 	add(sess.Spec.InputChannel)
 	add(sess.Spec.OutputChannel)
 	return out
 }
 
+// isHTTPSOriginHref reports whether href is an https URL with a host — the
+// scheme backstop every origin link must pass before it is rendered as an
+// <a href>, independent of any per-kind host check. Rejects javascript:/data:
+// schemes, plain http, and relative refs.
+func isHTTPSOriginHref(href string) bool {
+	parsed, err := url.Parse(href)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
+}
+
 // OriginLinks implements artifactview.Deps: it loads the session and derives its
 // origin links. A Get failure logs and returns no links — never an error, the
-// toolbar simply shows nothing — matching ChannelKind's best-effort contract.
+// toolbar simply shows nothing. Best-effort by design: an origin link is a
+// convenience affordance, never a gate, so no failure here is surfaced as one.
 func (d *artifactViewDeps) OriginLinks(ctx context.Context, ns, sess string) []artifactview.OriginLink {
 	var cur spiceboxv1alpha1.AgentSession
 	if err := d.K8s().Get(ctx, client.ObjectKey{Namespace: ns, Name: sess}, &cur); err != nil {

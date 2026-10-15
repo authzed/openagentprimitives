@@ -32,7 +32,7 @@ const baseProps = {
   hostUrl: "",
   contentUrl: "",
   sandboxOrigin: "https://example.com",
-  originLinks: [] as { href: string; channelKind: string }[],
+  originLinks: [] as { href: string; label: string; icon: string }[],
   ns: "default",
   name: "sess-1",
   artifactId: "art-1",
@@ -223,8 +223,8 @@ describe("ArtifactView – origin links toolbar", () => {
       <ArtifactView
         {...baseProps}
         originLinks={[
-          { href: "https://github.com/demo-org/platform/pull/42", channelKind: "github" },
-          { href: "https://example.slack.com/archives/C1/p170", channelKind: "slack" },
+          { href: "https://github.com/demo-org/platform/pull/42", label: "View the pull request", icon: "github" },
+          { href: "https://example.slack.com/archives/C1/p170", label: "Open the Slack thread", icon: "slack" },
         ]}
       />,
     );

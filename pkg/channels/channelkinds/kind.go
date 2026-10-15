@@ -728,16 +728,34 @@ type SessionOwnerProvider interface {
 	SessionOwner(ev InboundEvent) (subject string, provides bool)
 }
 
+// OriginLink is one resolved "back to origin" link: the URL to open, the
+// human-facing Label a view renders as its tooltip/accessible text, and an
+// Icon key naming the glyph the view draws. Label and Icon keep the kind's
+// own presentation choices inside the kind — the artifact-view UI renders
+// them verbatim rather than branching on the channel kind (see
+// pkg/web/webui/artifactview/ui). Icon is a presentation vocabulary, not the
+// kind name: kinds sharing a glyph return the same key, and only a kind that
+// needs a brand-new glyph obliges a new UI icon component.
+type OriginLink struct {
+	URL   string
+	Label string
+	Icon  string
+}
+
 // OriginLinkProvider is an OPTIONAL Kind capability — discovered by
 // type-assertion, never a method on Kind — that turns one of a session's
-// channel bindings into a human-facing URL back to where the conversation
+// channel bindings into a human-facing link back to where the conversation
 // lives: a Slack thread, a GitHub pull request. A kind with no such surface
 // does not implement it and contributes no link. ok=false means "this binding
 // has no resolvable origin yet" (a Slack thread not rooted, a permalink that
-// failed to resolve) and the caller drops it silently. Consumed by webd's
-// artifact-view page to offer a "back to origin" link per distinct origin.
+// failed to resolve) and the caller drops it silently. The kind is also the
+// place any per-kind URL trust check lives (a Slack permalink must be a
+// *.slack.com https URL) — the binding's External map is user-writable, so a
+// kind returns ok=false rather than a link it cannot vouch for. Consumed by
+// webd's artifact-view page to offer a "back to origin" link per distinct
+// origin.
 type OriginLinkProvider interface {
-	OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (url string, ok bool)
+	OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (link OriginLink, ok bool)
 }
 
 // OwnerGroupProvider is an optional Kind capability: return the channel's live

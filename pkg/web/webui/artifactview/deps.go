@@ -122,12 +122,15 @@ type Deps interface {
 }
 
 // OriginLink is one "back to where this came from" link shown in the
-// artifact-view toolbar: the Href to open and the ChannelKind that selects its
-// icon and tooltip. Built by Deps.OriginLinks from the session's channel
-// bindings; the artifactview package never resolves kinds itself.
+// artifact-view toolbar: the Href to open, the Label the UI renders as its
+// tooltip, and an Icon key naming the glyph. Label and Icon are supplied by the
+// originating kind's OriginLinkProvider — the artifactview package and its UI
+// never branch on the channel kind, they render what the kind chose. Built by
+// Deps.OriginLinks from the session's channel bindings.
 type OriginLink struct {
-	Href        string `json:"href"`
-	ChannelKind string `json:"channelKind"`
+	Href  string `json:"href"`
+	Label string `json:"label"`
+	Icon  string `json:"icon"`
 }
 
 // StatusSnapshot mirrors the session's presentation status for the live-view.

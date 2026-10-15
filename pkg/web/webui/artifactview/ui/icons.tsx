@@ -1,4 +1,9 @@
 import { Github, MessageSquare } from "lucide-react";
+import type { ComponentType } from "react";
+
+// Glyph is the uniform shape every entry in channelGlyphs accepts, so the map
+// can be a plain key → component lookup.
+type Glyph = ComponentType<{ className?: string }>;
 
 // SlackIcon is the multicolor Slack glyph, copied verbatim from the approved
 // live-view mockup (the four-color hashtag). It carries no currentColor — the
@@ -18,11 +23,24 @@ export function SlackIcon({ className }: { className?: string }) {
   );
 }
 
-// ChannelIcon picks the originating-channel glyph for an origin link: the Slack
-// logo for "slack", the GitHub mark for "github", a generic message bubble
-// otherwise.
-export function ChannelIcon({ kind, className }: { kind: string; className?: string }) {
-  if (kind === "slack") return <SlackIcon className={className} />;
-  if (kind === "github") return <Github className={className} aria-hidden="true" />;
-  return <MessageSquare className={className} aria-hidden="true" />;
+// GithubGlyph / MessageGlyph wrap the lucide marks so every channelGlyphs entry
+// shares one `{ className }` signature (and carries aria-hidden, since the label
+// rides the tooltip).
+const GithubGlyph: Glyph = ({ className }) => <Github className={className} aria-hidden="true" />;
+const MessageGlyph: Glyph = ({ className }) => <MessageSquare className={className} aria-hidden="true" />;
+
+// channelGlyphs maps an origin link's icon KEY — a small presentation vocabulary
+// the originating channel kind picks (OriginLinkProvider), not the kind name —
+// to its glyph. A new channel kind that reuses an existing key needs no change
+// here; only one that wants a brand-new glyph adds a row.
+const channelGlyphs: Record<string, Glyph> = {
+  slack: SlackIcon,
+  github: GithubGlyph,
+};
+
+// ChannelIcon renders the glyph for an origin link's icon key, falling back to a
+// generic message bubble for an unknown key.
+export function ChannelIcon({ icon, className }: { icon: string; className?: string }) {
+  const Icon = channelGlyphs[icon] ?? MessageGlyph;
+  return <Icon className={className} />;
 }

@@ -15,7 +15,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -427,7 +429,7 @@ func (*Kind) RenderMention(externalID string) string {
 
 var _ channelkinds.OriginLinkProvider = (*Kind)(nil)
 
-// OriginLink returns a URL back to the Slack thread this binding addresses,
+// OriginLink returns a link back to the Slack thread this binding addresses,
 // satisfying channelkinds.OriginLinkProvider. It prefers the canonical permalink
 // persisted onto the binding at first thread-root (External["permalink"],
 // resolved by the sender via chat.getPermalink on a bot-rooted thread such as
@@ -436,17 +438,46 @@ var _ channelkinds.OriginLinkProvider = (*Kind)(nil)
 // back to reconstructing a thread deep-link from the team_id/channel_id/thread_ts
 // the listener stamps at session creation. ok=false only when neither is
 // available (no thread rooted yet).
-func (*Kind) OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (string, bool) {
+//
+// External is user-writable, so the persisted permalink is trusted only when it
+// is an https *.slack.com URL — a value that is not (a javascript: URL, an
+// attacker's host) is ignored and the reconstruction fallback is used instead.
+// The reconstructed URL is safe by construction (BuildSlackThreadURL hardcodes
+// app.slack.com).
+func (*Kind) OriginLink(binding *spiceboxv1alpha1.ChannelBinding) (channelkinds.OriginLink, bool) {
 	if binding == nil {
-		return "", false
+		return channelkinds.OriginLink{}, false
 	}
-	if u := binding.External["permalink"]; u != "" {
-		return u, true
+	if u := binding.External["permalink"]; isSlackURL(u) {
+		return slackOriginLink(u), true
 	}
 	if u := BuildSlackThreadURL(binding.External["team_id"], binding.External["channel_id"], binding.External["thread_ts"]); u != "" {
-		return u, true
+		return slackOriginLink(u), true
 	}
-	return "", false
+	return channelkinds.OriginLink{}, false
+}
+
+// slackOriginLink wraps a validated Slack URL with this kind's fixed
+// presentation — the tooltip text and the "slack" glyph key the artifact-view
+// UI maps to the Slack mark — so that choice lives here, not in the view.
+func slackOriginLink(u string) channelkinds.OriginLink {
+	return channelkinds.OriginLink{URL: u, Label: "Open the Slack thread", Icon: "slack"}
+}
+
+// isSlackURL reports whether u is an https URL whose host is slack.com or a
+// subdomain of it — the trust check for a user-writable persisted permalink.
+// Both the team permalink host (<team>.slack.com) and the reconstructed deep
+// link (app.slack.com) satisfy it.
+func isSlackURL(u string) bool {
+	if u == "" {
+		return false
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Scheme != "https" {
+		return false
+	}
+	host := parsed.Hostname()
+	return host == "slack.com" || strings.HasSuffix(host, ".slack.com")
 }
 
 // SupportedMentionLookups returns the set of identifier shapes this

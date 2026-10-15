@@ -58,10 +58,20 @@ func shellPageBuild(av Deps) func(context.Context, *http.Request) (any, webui.Pa
 			return nil, webui.PageMeta{}, denial.pageError()
 		}
 		artifactID, ns, sess, sessionRef := b.artifactID, b.ns, b.sess, b.sessionRef()
-		// "Back to origin" links derived from the session's channel bindings. A
+		// "Back to origin" links derived from the session's channel bindings are
+		// SESSION-scoped data — a private Slack thread permalink (team/channel
+		// IDs, the fact a DM exists), a private-repo PR URL — so they are gated
+		// exactly like the other session mirrors: only a session PARTICIPANT
+		// (CheckInteract, via mirrorsAllowed) sees them. CheckView admitted this
+		// page, but it is a strict superset of interact, so a platform admin or,
+		// on an org-visible session, any authenticated user reaches it without
+		// being in the conversation — and must not be handed the origin. A
 		// best-effort lookup (OriginLinks never errors), coerced to a non-nil
 		// slice so the bootstrap JSON is always an array the client can map over.
-		originLinks := av.OriginLinks(ctx, ns, sess)
+		var originLinks []OriginLink
+		if b.mirrorsAllowed(ctx, av, webui.SubjectFromContext(ctx)) {
+			originLinks = av.OriginLinks(ctx, ns, sess)
+		}
 		if originLinks == nil {
 			originLinks = []OriginLink{}
 		}
