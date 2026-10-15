@@ -58,6 +58,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/apimage"
 	"github.com/authzed/openagentprimitives/pkg/platform/artifactstore"
 	blobstore "github.com/authzed/openagentprimitives/pkg/platform/artifactstore/blob"
+	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/web/admind"
 
 	// mcpui is registered ONLY here (the artifactrender controller's
@@ -86,6 +87,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/revocation"
 	"github.com/authzed/openagentprimitives/pkg/authz/spicedb"
 	_ "github.com/authzed/openagentprimitives/pkg/authz/spicedb/relsource/imports" // completes the relsource claim table before any guarded write (BootstrapSource, pttagmint, ...) is checked
+	spicedbschema "github.com/authzed/openagentprimitives/pkg/authz/spicedb/schema"
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelassets/mcpui"
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelassets/svg"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
@@ -840,6 +842,9 @@ func newCommand() *cobra.Command {
 			return nil
 		},
 	}
+	// Pre-start bootstrap Job entrypoint: `operator bootstrap-secrets` mints the
+	// internal Secrets and exits, without starting the manager.
+	cmd.AddCommand(newBootstrapSecretsCmd())
 	fs := cmd.Flags()
 	fs.StringVar(&cfg.metricsAddr, "metrics-bind-address", "127.0.0.1:8080",
 		"Address for the metrics endpoint. The endpoint is unauthenticated, so the default binds loopback-only; widen it (e.g. \":8080\") only behind an authenticating or network-policy-enforced scrape path.")
@@ -3055,6 +3060,21 @@ func run(cfg *config) {
 		log.Info("admind token file empty; admin API disabled", "path", admindTokenFile)
 	} else {
 		log.Info("admind token not present; admin API disabled", "path", admindTokenFile)
+	}
+
+	// Leader-only bootstrap: apply the SpiceDB base schema so a bare GitOps apply
+	// (Argo/Flux, no `oap install`) has its schema seeded. The internal Secrets
+	// are minted earlier, by the pre-start bootstrap Job (MintAllInternalSecrets),
+	// not here — schema is the one step that needs SpiceDB already running. A plain
+	// RunnableFunc does not implement LeaderElectionRunnable, so controller-runtime
+	// runs it only on the leader. spiceDBClient is a real, non-nil *spicedb.Client
+	// by this point (construction failure exits above), so SchemaIOFor cannot
+	// produce a typed-nil interface.
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		return bootstrap.RunBootstrap(ctx, spicedb.SchemaIOFor(spiceDBClient), spicedbschema.Schema)
+	})); err != nil {
+		log.Error(err, "registering bootstrap runnable")
+		os.Exit(1)
 	}
 
 	if adm != nil {

@@ -50,10 +50,10 @@ var installTimeSecrets = map[string]string{
 	"spicebox-channelsd-memory-token":     "ensureChannelsdMemoryToken (init.go)",
 	"spicebox-webd-memory-token":          "ensureWebdMemoryToken (init.go)",
 	"agentprimitives-authzd-memory-token": "ensureAuthzdMemoryToken (init.go)",
-	"spicebox-spicedb-token":              "ensureSpiceDBToken (install.go)",
-	"spicebox-channelsd-nats-creds":       "ensureNATSClientCreds (install.go)",
-	"spicebox-webd-nats-creds":            "ensureNATSClientCreds (install.go)",
-	"spicebox-passthrough-link-key":       "ensurePassthroughLinkSigningKey (install.go)",
+	"spicebox-spicedb-token":              "EnsureSpiceDBToken (mint.go)",
+	"spicebox-channelsd-nats-creds":       "EnsureNATSClientCreds (nats.go)",
+	"spicebox-webd-nats-creds":            "EnsureNATSClientCreds (nats.go)",
+	"spicebox-passthrough-link-key":       "EnsurePassthroughLinkKey (appsecrets.go)",
 	"spicebox-webhook-tls":                "ensureWebhookTLSWithClient (install.go)",
 	// No row for spicebox-anthropic-api-key: nothing in the repo creates it.
 	// Every reference to it (authzd's env, channelsd's volume) is optional:true,
@@ -141,6 +141,9 @@ func TestInstallTimeSecretsMapIsLoadBearing(t *testing.T) {
 	src := newGoIndex(t,
 		filepath.Join("..", "..", "..", "cmd", "oap"),
 		filepath.Join("..", "..", "apis", "v1alpha1"),
+		// NATS creds minting moved to the shared bootstrap package (the pre-start
+		// Job mints them); the creator resolver must scan it too.
+		filepath.Join("..", "bootstrap"),
 	)
 	referenced := allReferencedSecretNames(t)
 
@@ -294,7 +297,10 @@ func newGoIndex(t *testing.T, funcDir string, constDirs ...string) goIndex {
 	ix := goIndex{funcs: map[string]*ast.FuncDecl{}, consts: map[string]string{}}
 	fset := token.NewFileSet()
 	for _, root := range append([]string{funcDir}, constDirs...) {
-		collectFuncs := root == funcDir
+		// Creators now live in more than one root (cmd/oap AND the shared
+		// pkg/platform/bootstrap), so index functions from every root, not just
+		// funcDir. Constant collection already spans all roots below.
+		collectFuncs := true
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err

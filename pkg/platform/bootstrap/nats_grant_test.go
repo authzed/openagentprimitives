@@ -1,4 +1,4 @@
-package installcmd
+package bootstrap
 
 import (
 	"testing"
@@ -26,11 +26,11 @@ import (
 func TestWebdNATSGrantAllowsInboxReply(t *testing.T) {
 	h := natstest.New(t)
 
-	assert.True(t, h.SubscribeAllowed(t, webdNATSGrant, apnats.InboxPrefixFor(webdNATSUser)+".abc.def"),
+	assert.True(t, h.SubscribeAllowed(t, WebdNATSGrant, apnats.InboxPrefixFor(webdNATSUser)+".abc.def"),
 		"webd does NATS request-reply (view_message); its reply inbox must be subscribable or replies time out")
-	assert.True(t, h.SubscribeAllowed(t, webdNATSGrant, "ap.session.ns1.sess1.out.user_message"),
+	assert.True(t, h.SubscribeAllowed(t, WebdNATSGrant, "ap.session.ns1.sess1.out.user_message"),
 		"webd must still subscribe to session out-subjects for the chat/live-view mirror")
-	assert.False(t, h.SubscribeAllowed(t, webdNATSGrant, "_INBOX.>"),
+	assert.False(t, h.SubscribeAllowed(t, WebdNATSGrant, "_INBOX.>"),
 		"webd must NOT be able to read every principal's replies off the shared inbox root")
 }
 
@@ -49,7 +49,7 @@ func TestWebdNATSGrantAllowsInboxReply(t *testing.T) {
 //
 // Each permitted subject below is a verified call site; each denied one is a
 // subject no webd code path publishes. If a new webd surface needs one, add it
-// here and to webdNATSGrant together — a missing entry surfaces as a logged
+// here and to WebdNATSGrant together — a missing entry surfaces as a logged
 // publish error, not silence.
 func TestWebdNATSGrantPublishSurface(t *testing.T) {
 	h := natstest.New(t)
@@ -79,7 +79,7 @@ func TestWebdNATSGrantPublishSurface(t *testing.T) {
 		channelevents.WebhookInboundSubject: "pkg/web/webui/channelwebhook's verified-delivery handoff to channelsd",
 	}
 	for subject, why := range permitted {
-		assert.True(t, h.PublishAllowed(t, webdNATSGrant, subject),
+		assert.True(t, h.PublishAllowed(t, WebdNATSGrant, subject),
 			"webd must be able to publish %s — %s", subject, why)
 	}
 
@@ -97,7 +97,7 @@ func TestWebdNATSGrantPublishSurface(t *testing.T) {
 		"ap.channel.session_attached":                 "the only publisher is the outbound relay's patchOutputChannel, unreachable in webd (every builtin sender returns a zero SubChannelSendResult, so captured is empty and it returns early)",
 	}
 	for subject, why := range denied {
-		assert.False(t, h.PublishAllowed(t, webdNATSGrant, subject),
+		assert.False(t, h.PublishAllowed(t, WebdNATSGrant, subject),
 			"webd must NOT be able to publish %s — %s", subject, why)
 	}
 }

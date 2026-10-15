@@ -59,6 +59,7 @@ func NewRootCmdWithGlobals(g *Globals) *cobra.Command {
 	root.AddCommand(installcmd.NewImageCmd(g))
 	root.AddCommand(installcmd.NewInitCmd(g))
 	root.AddCommand(installcmd.NewCleanCmd(g))
+	root.AddCommand(installcmd.NewRenderCmd(g))
 	root.AddCommand(toolscmd.NewCmd(g))
 	root.AddCommand(identitycmd.NewCmd(g))
 	root.AddCommand(identitycmd.NewUserIdentityCmd(g))

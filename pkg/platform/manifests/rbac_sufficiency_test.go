@@ -576,8 +576,11 @@ func operatorComponent() component {
 	})...)
 	// admind's cluster-health snapshot reads component Deployments/StatefulSets
 	// (replica/ready counts) for the admin Overview — read-only, no watch.
+	// deployments also gets `patch`: the bootstrap Job's NATS-creds re-mint
+	// (pkg/platform/bootstrap, via the operator SA) rolls consumer Deployments
+	// when a grant gains a subject on upgrade.
 	required = append(required, reqs("apps", map[string][]string{
-		"deployments":  {"get", "list"},
+		"deployments":  {"get", "list", "patch"},
 		"statefulsets": {"get", "list"},
 	})...)
 	// The same health snapshot sums live PodMetrics (metrics.k8s.io) for the
