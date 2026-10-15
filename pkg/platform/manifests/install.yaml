@@ -26170,6 +26170,13 @@ rules:
   - apps
   resources:
   - deployments
+  verbs:
+  - get
+  - list
+  - patch
+- apiGroups:
+  - apps
+  resources:
   - statefulsets
   verbs:
   - get

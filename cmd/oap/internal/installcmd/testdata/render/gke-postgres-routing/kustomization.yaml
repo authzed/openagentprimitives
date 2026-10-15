@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - base/install.yaml
+  - base/channelsd.yaml
+  - base/nats.yaml
+  - bootstrap-job.yaml
+  - routing.yaml
+  - webhook-cert.yaml
+patches:
+  - path: patches/cluster-kind.yaml
+  - path: patches/webhook-ca-inject.yaml
+components:
+  - components/postgres
