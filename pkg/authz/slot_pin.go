@@ -47,6 +47,26 @@ var ErrSlotMoveDrifted = errors.New("approved slot move found the pin had change
 // changed rather than reporting that nothing was granted.
 var ErrSlotMoveCommitted = errors.New("approved slot move committed but the new grant was not written")
 
+// ErrSlotStore marks a TRANSIENT STORE FAILURE inside GrantSlots — an EnsurePin,
+// WriteGrantsPinned or plain-write that erred against SpiceDB — as distinct from
+// an authorization ruling (ErrSlotPinned). The distinction is load-bearing in
+// two places that would otherwise lie:
+//
+//   - A store blip gets errors.Join'd alongside a genuine ErrSlotPinned refusal
+//     for a DIFFERENT type in the same call, so errors.Is(err, ErrSlotPinned)
+//     turns true and the refusal would be reported as final ("re-approving will
+//     not move it") when a retry would in fact bind the type that timed out.
+//     Callers that route on the outcome check ErrSlotStore FIRST and treat it as
+//     a recoverable fault.
+//   - The store cause carries raw endpoints and gRPC status text (dial tcp …,
+//     Unavailable), which is operator detail, not something a model or a chat
+//     reader can act on. User-facing surfaces check ErrSlotStore and stay
+//     operator-log-only rather than quoting the wrapped text.
+//
+// The raw cause is still wrapped (operators read it in logs); the sentinel only
+// lets a reader tell "we could not reach the store" from "this is the answer".
+var ErrSlotStore = errors.New("slot grant store failure")
+
 // SlotPinner is the precondition-capable surface the single-occupancy gate
 // needs and plain RelWriter cannot express. A non-nil RelWriter that does not
 // also implement it cannot bind a single-occupancy slot: the gate refuses
@@ -70,8 +90,18 @@ type SlotPinner interface {
 
 	// MovePin atomically repoints the pin fromID -> toID, guarded by
 	// MUST_MATCH that fromID is still pinned, deleting fromID's grant
-	// relations (revoke) in the same RPC. A failed precondition returns an
-	// error wrapping ErrSlotPinned.
+	// relations (revoke) in the same RPC.
+	//
+	// IDEMPOTENT at the target: if the precondition fails because the pin
+	// ALREADY names toID, the move is a no-op and returns nil, not an error. A
+	// plan-scoped approval resolves one BindApproved call per covered phase and
+	// each re-attempts the SAME move, so the first lands it and the rest find it
+	// already landed — without this they would drift-fail and drop their grant.
+	// The displaced instance's grants were revoked by whoever performed the real
+	// move; a no-op does not re-revoke (a straggler lapses via the grant's
+	// mandatory expiry, the same inherent window a real move leaves). A failed
+	// precondition where the pin is NEITHER fromID nor toID is genuine drift and
+	// returns an error wrapping ErrSlotPinned.
 	MovePin(ctx context.Context, resourceType, fromID, toID string, revoke []Relation, scope SessionRef) error
 
 	// ReadPin returns the currently pinned instance for resourceType, or ""

@@ -81,12 +81,20 @@ func (b *movingBinder) WriteGrantsPinned(_ context.Context, rels []authz.Relatio
 }
 
 func (b *movingBinder) MovePin(_ context.Context, resourceType, fromID, toID string, _ []authz.Relation, _ authz.SessionRef) error {
-	b.moveCalls++
-	if b.pinned[resourceType] != fromID {
-		// The pin drifted — an earlier phase in this approval already moved it —
-		// so the MUST_MATCH on fromID fails.
+	cur := b.pinned[resourceType]
+	if cur == toID {
+		// Idempotent no-op: the pin already names the target (an earlier phase of
+		// this same approval moved it). Matches the real MovePin contract — no
+		// repoint, so moveCalls is NOT incremented.
+		return nil
+	}
+	if cur != fromID {
+		// Genuine drift: the pin is neither the displaced instance nor the target.
 		return fmt.Errorf("move pin %s:%s -> %s:%s: %w", resourceType, fromID, resourceType, toID, authz.ErrSlotPinned)
 	}
+	// A real repoint. moveCalls counts these, so "moves at most once per approval"
+	// is observable even though MovePin is INVOKED once per covered phase.
+	b.moveCalls++
 	b.pinned[resourceType] = toID
 	return nil
 }
@@ -219,11 +227,51 @@ func TestNarrowToApproved_plainPinnedRefusalSaysCommittedElsewhere(t *testing.T)
 			assert.Contains(t, pl.Lead, "Other instances",
 				"it must not claim nothing was granted — other types may have bound")
 			assert.Contains(t, pl.NextStep, "Re-approving this card will not move it")
+			// A movable (default-rebind) slot: the route is an amendment naming the
+			// instance the approval WANTED, then a new session — never pointed at
+			// the already-committed instance the old copy named.
+			assert.Contains(t, pl.NextStep, "the instance you wanted",
+				"the route must name the instance the approval wanted, not the committed one")
+			assert.Contains(t, pl.NextStep, "approved amendment moves the commitment",
+				"a movable slot's commitment can be moved by an approved amendment")
+			assert.NotContains(t, pl.NextStep, "To target the committed instance",
+				"the old copy pointed the approver at the wrong instance")
 			assert.NotContains(t, pl.Lead, "fault on our side",
 				"a refusal is not a fault")
 		}
 	}
 	assert.True(t, told, "a plain pinned refusal must tell the approver (under the slot-bind-refused category) why their approval did not bind this instance")
+}
+
+// A pinned refusal whose every refused slot is `rebind: never` must route to a
+// NEW SESSION only: no amendment can move a commitment fixed for the session's
+// life, so the amendment copy would lead the approver into widenings refused
+// every time. The notice says the commitment cannot be moved and to start a new
+// session — never the amendment route.
+func TestPublishPlanGateApprovalFailed_rebindNeverRoutesToNewSessionOnly(t *testing.T) {
+	var published []channelevents.Envelope
+	h := planGateHost(t, &channelevents.Envelope{})
+	h.l.InteractionRequestPublish = func(_ context.Context, _, _ string, env channelevents.Envelope) error {
+		published = append(published, env)
+		return nil
+	}
+	cause := fmt.Errorf("pinned to git_repo:repoA: %w", authz.ErrSlotPinned)
+
+	h.publishPlanGateApprovalFailed(context.Background(), cause, approvalPinnedRefusal, true)
+
+	var told bool
+	for _, env := range published {
+		pl := decodeInteractionRequest(t, env)
+		if pl.Category != categories.SlotBindRefused {
+			continue
+		}
+		told = true
+		assert.Contains(t, pl.NextStep, "cannot be moved", "a never slot's commitment cannot be moved")
+		assert.Contains(t, pl.NextStep, "Start a new session", "the only route is a new session")
+		assert.NotContains(t, pl.NextStep, "amendment",
+			"a never slot must not be pointed at an amendment that can never succeed")
+	}
+	assert.True(t, told, "a never pinned refusal must still tell the approver, under the slot-bind-refused category")
 }
 
 // The control: the SAME binding WITHOUT a recorded move (a first-fill) does not
@@ -271,16 +319,15 @@ func TestNarrowToApproved_firstFillDoesNotRaiseAMoveFailure(t *testing.T) {
 }
 
 // A plan-scoped approval that covers TWO phases both naming the moved-to
-// instance of ONE single-occupancy slot must move the pin exactly ONCE and bind
-// BOTH phases' permissions. stampMovedFrom stamps the same repoA->repoB move
-// onto every covered record, and the approval is resolved one BindApproved call
-// PER covered record — so without deduping the move, the first phase repoints
-// repoA->repoB and the second re-attempts the identical move with a now-stale
-// PriorID=repoA, whose MUST_MATCH fails as a drift. That silently drops the
-// second phase's grant (here: push) while still recording the phase approved,
-// wedging the agent (the gate says approved, SpiceDB has no grant) and making
-// re-approval drift-fail both. The pin moves at most once per approval; the
-// later phase binds same-instance.
+// instance of ONE single-occupancy slot must repoint the pin exactly ONCE and
+// bind BOTH phases' permissions. stampMovedFrom stamps the same repoA->repoB
+// move onto every covered record, and the approval is resolved one BindApproved
+// call PER covered record — so the first phase repoints repoA->repoB and the
+// second re-attempts the identical move with a now-stale PriorID=repoA. Because
+// MovePin is idempotent at the target (the pin already names repoB), the second
+// attempt is a no-op rather than a drift-fail: both phases' grants land, no
+// phase is wedged, and every covered record keeps its MovedFrom for the audit
+// trail. This is what replaced the earlier dedupe-the-move band-aid.
 func TestRecordPlanGateDecision_multiPhaseMoveBindsEveryCoveredPhase(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	var published []channelevents.Envelope

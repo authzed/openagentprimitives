@@ -144,15 +144,25 @@ func TestRequestPhaseApproval_firstApprovalCardShowsTheMove(t *testing.T) {
 		"the card must show the revocation approving it carries out")
 }
 
-// A `rebind: never` slot cannot move by approval, so the card records no move
-// and shows none, even when the pin names a different instance. The bind is
-// then refused by GrantSlots with the new-session route.
-func TestRequestPhaseApproval_rebindNeverRecordsNoMove(t *testing.T) {
+// A `rebind: never` slot pinned to a DIFFERENT instance cannot move by approval,
+// so it records no MOVE — but it must not render as a plain first-fill either,
+// which would read to the approver as grantable. It is recorded immovable and
+// the card says the named instance cannot be granted, with the new-session
+// route. The bind is then refused by GrantSlots.
+func TestRequestPhaseApproval_rebindNeverRendersBlockedNotGrantable(t *testing.T) {
 	h := enforcingSlotGate(t, fakePinner{pins: map[string]string{"git_repo": "repoA"}})
 	h.deps.SlotRebind = map[string]string{"git_repo": authz.SlotRebindNever}
+
 	ref := firstSlotRef(t, coveredFromPhaseAsk(t, h))
 	assert.Empty(t, ref.MovedFrom, "a never-rebind slot must not be offered as a move")
-	assert.NotContains(t, cardFromPhaseAsk(t, h).What, "→", "and the card must not show one")
+	assert.Equal(t, "repoA", ref.PinnedImmovable,
+		"a never slot pinned elsewhere is recorded immovable so the card can say it can't be granted")
+
+	card := cardFromPhaseAsk(t, h)
+	assert.NotContains(t, card.What, "→", "a never slot must not render as a move")
+	assert.Contains(t, card.What, "Cannot be granted", "the card must say the named instance can't be granted")
+	assert.Contains(t, card.What, "pinned to repoA", "it must name the instance the pin is stuck on")
+	assert.Contains(t, card.What, "Start a new session", "and the route out")
 }
 
 // No pinner wired (the unit fixtures, any binary with no SlotBinder): ReadPin is
@@ -202,4 +212,27 @@ func TestThreadMovedFrom_noMoveIsNoOp(t *testing.T) {
 	}}})
 	require.Len(t, out, 1)
 	assert.Empty(t, out[0].MovedFrom)
+}
+
+// threadMovedFrom also carries an IMMOVABLE pin (a `rebind: never` slot pinned
+// elsewhere) onto the card's slots, matched by (type, id) — the same path
+// MovedFrom takes — so the card can render it as a block rather than a grant.
+func TestThreadMovedFrom_carriesPinnedImmovable(t *testing.T) {
+	covered := []plangateaudit.Content{{SlotRefs: []plangateaudit.SlotRef{
+		{Type: "git_repo", ID: "repoB", PinnedImmovable: "repoA"},
+		{Type: "crm_company", ID: "4299", MovedFrom: "4210"}, // a move alongside, unaffected
+	}}}
+	in := []plangate.Slot{
+		{Type: "git_repo", ID: "repoB"},
+		{Type: "crm_company", ID: "4299"},
+	}
+
+	out := threadMovedFrom(in, covered)
+
+	require.Len(t, out, 2)
+	assert.Equal(t, "repoA", out[0].PinnedImmovable, "the immovable pin is carried onto the slot")
+	assert.Empty(t, out[0].MovedFrom, "an immovable slot is not a move")
+	assert.Equal(t, "4210", out[1].MovedFrom, "a move alongside is still carried")
+	assert.Empty(t, out[1].PinnedImmovable)
+	assert.Empty(t, in[0].PinnedImmovable, "the input delta must not be mutated")
 }

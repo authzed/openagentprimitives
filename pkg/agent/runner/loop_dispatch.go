@@ -786,7 +786,7 @@ func (l *Loop) dispatchToolUses(ctx context.Context, uses []llm.ToolUseBlock, se
 					// and the per-tool Check below still gates the call.
 					if perr := l.Engine.PromoteExtractedSlots(callCtx, l.bindingScope(), l.authzSessionRef(),
 						specs, l.AuthSubject(), l.CurrentInboxIdx); perr != nil {
-						if errors.Is(perr, authz.ErrSlotPinned) {
+						if errors.Is(perr, authz.ErrSlotPinned) && !errors.Is(perr, authz.ErrSlotStore) {
 							// An authorization outcome, not a hiccup: a
 							// single-occupancy pin refused this instance. Warn
 							// (louder than a mechanism error), keep the Info-trail
@@ -798,6 +798,13 @@ func (l *Loop) dispatchToolUses(ctx context.Context, uses []llm.ToolUseBlock, se
 								"tool", t.Name(), "turn", l.CurrentInboxIdx, "err", perr.Error())
 							l.recordSlotPinRefusal(callCtx, specs, perr.Error())
 						} else {
+							// Either a plain mechanism error, or a pin refusal
+							// errors.Join'd with a TRANSIENT store fault
+							// (ErrSlotStore). The latter must NOT be recorded as a
+							// model-facing refusal: its text carries raw store detail
+							// and a retry may yet bind the type that blipped, so it is
+							// logged and left unbound rather than surfaced as a final
+							// ruling.
 							slog.Default().Info("promoting extracted slot candidates failed; continuing unbound",
 								"tool", t.Name(), "turn", l.CurrentInboxIdx, "err", perr.Error())
 						}

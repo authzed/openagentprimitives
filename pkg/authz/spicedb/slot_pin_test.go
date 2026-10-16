@@ -259,6 +259,41 @@ func TestMovePin_FailedPreconditionWrapsErrSlotPinned(t *testing.T) {
 	assert.ErrorIs(t, err, authz.ErrSlotPinned)
 }
 
+// TestMovePin_AlreadyAtTargetIsIdempotentNoOp: the MUST_MATCH(fromID) fails
+// because the pin ALREADY names toID — a prior covered phase of the same
+// approval landed this exact move. That is a no-op, not drift: MovePin reads the
+// pin back, sees it is already the target, and returns nil so the caller's
+// WriteGrantsPinned can bind same-instance. Without this, a plan-scoped approval
+// would drift-fail every covered phase after the first.
+func TestMovePin_AlreadyAtTargetIsIdempotentNoOp(t *testing.T) {
+	cl, srv := newRecordingWriterClient(t)
+	srv.writeErr = status.Error(codes.FailedPrecondition, "fromID no longer pinned")
+	scope := authz.SessionRef{Namespace: "ns", Name: "s"}
+	// The read-back finds the pin already on the target.
+	srv.readRels = []*v1.Relationship{pinTuple("git_repo", "repoB", scope)}
+	w := &RelationWriter{c: &Client{cl: cl}}
+
+	err := w.MovePin(context.Background(), "git_repo", "repoA", "repoB", nil, scope)
+	require.NoError(t, err, "a move whose target is already pinned is an idempotent no-op")
+}
+
+// TestMovePin_DriftToAThirdInstanceWrapsErrSlotPinned: MUST_MATCH(fromID) fails
+// and the read-back finds the pin on an instance that is NEITHER fromID nor
+// toID. That is genuine drift — the card showed a move from fromID, and the pin
+// is somewhere else entirely — so it must surface as ErrSlotPinned, not be
+// absorbed as a no-op.
+func TestMovePin_DriftToAThirdInstanceWrapsErrSlotPinned(t *testing.T) {
+	cl, srv := newRecordingWriterClient(t)
+	srv.writeErr = status.Error(codes.FailedPrecondition, "fromID no longer pinned")
+	scope := authz.SessionRef{Namespace: "ns", Name: "s"}
+	srv.readRels = []*v1.Relationship{pinTuple("git_repo", "repoC", scope)}
+	w := &RelationWriter{c: &Client{cl: cl}}
+
+	err := w.MovePin(context.Background(), "git_repo", "repoA", "repoB", nil, scope)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, authz.ErrSlotPinned, "a pin on a third instance is drift, not a no-op")
+}
+
 // TestListGrantsFor_ReturnsOnlyTheInstancesGrants_FullyConsistent: the read
 // used to build a MovePin's revoke set must filter to this instance under this
 // session, keep only the slot_grant_ relations (the pin and any other relation

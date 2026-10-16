@@ -373,3 +373,61 @@ func TestBuildCard_WholePlanResourceLineShowsAMove(t *testing.T) {
 	assert.Equal(t, "demo-org/old-repo", line.MovedFrom)
 	assert.Equal(t, "https://github.com/demo-org/new-repo", line.Detail, "Detail stays the new instance")
 }
+
+// A `rebind: never` slot pinned to a DIFFERENT instance must render as a BLOCK,
+// not a grant: the card names the requested instance, says it cannot be granted,
+// names the instance the pin is stuck on, and gives the new-session route. The
+// resource line carries PinnedImmovable (not MovedFrom) so a surface renders it
+// as blocked.
+func TestBuildCard_WholePlanRebindNeverPinnedElsewhereRendersBlocked(t *testing.T) {
+	p := planWithPushPhaseAndRepo(t, "repoB")
+	p.Phases[0].Slots[0].PinnedImmovable = "repoA"
+	card := BuildCard(CardInput{Plan: p, WholePlan: true})
+
+	assert.Contains(t, card.What, "Cannot be granted", "the named instance cannot be granted here")
+	assert.Contains(t, card.What, "pinned to repoA", "it must name the instance the pin is stuck on")
+	assert.Contains(t, card.What, "Start a new session to reach repoB", "and the route out")
+	assert.NotContains(t, card.What, "repoA → repoB", "an immovable pin is not a move")
+
+	require.Len(t, card.Phases, 1)
+	require.Len(t, card.Phases[0].Resources, 1)
+	line := card.Phases[0].Resources[0]
+	assert.Equal(t, "repoA", line.PinnedImmovable, "the line carries the immovable pin for a surface to render as blocked")
+	assert.Empty(t, line.MovedFrom, "an immovable pin is not a move")
+	assert.Equal(t, "repoB", line.Detail, "Detail stays the requested instance")
+}
+
+// A move recorded on the type that LOSES the derived-id dedup must still render.
+// One repository reached through two toolkits is one line (the git/gh merge),
+// and the pin is per type — so a re-point recorded on github_repo (which sorts
+// AFTER git_repo and is therefore the slot the dedup drops) would otherwise be
+// swallowed, leaving the whole-plan card showing a plain first-fill while the
+// approval it records revokes the displaced instance. The one kept line has to
+// carry the move whichever same-id slot the dedup happened to keep.
+func TestBuildCard_WholePlanMergedLineShowsAMoveRecordedOnTheDedupedType(t *testing.T) {
+	p := planWithPushPhase(t)
+	p.Phases[0].Slots = []Slot{
+		// git_repo sorts first and carries NO move; github_repo sorts second and
+		// is the one actually repointing. Pre-fix, git_repo won the dedup and the
+		// move vanished.
+		{Type: "git_repo", ID: "https://github.com/demo-org/demo-repo.git"},
+		{Type: "github_repo", ID: "demo-org/demo-repo", MovedFrom: "demo-org/old-repo"},
+	}
+
+	card := BuildCard(CardInput{
+		Plan:      p,
+		WholePlan: true,
+		Surface:   []permsurface.Descriptor{permDesc(t, "push", "git_repo", "")},
+		SlotValueTransforms: map[string][]string{
+			"git_repo":    {"github_repo_id", "normalize_url", "spicedb_escape"},
+			"github_repo": {"github_repo_id", "spicedb_escape"},
+		},
+	})
+
+	require.Len(t, card.Phases, 1)
+	require.Len(t, card.Phases[0].Resources, 1,
+		"one repository reached two ways is still one line; got %d", len(card.Phases[0].Resources))
+	assert.Equal(t, "demo-org/old-repo", card.Phases[0].Resources[0].MovedFrom,
+		"the move recorded on the deduped type must survive onto the kept line")
+	assert.Contains(t, card.What, "revokes this session's access to demo-org/old-repo")
+}

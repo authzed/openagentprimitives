@@ -132,6 +132,17 @@ type Slot struct {
 	// cannot re-key a plan or discard an approval. Empty is the common
 	// first-fill case and renders byte-identically to the pre-move card.
 	MovedFrom string
+
+	// PinnedImmovable, when non-empty, is the instance a `rebind: never` slot is
+	// CURRENTLY pinned to while this card names a DIFFERENT one. It is NOT a move
+	// (a never slot's pin cannot change), so the card renders it as "pinned to
+	// <PinnedImmovable>, cannot change it; start a new session to reach <ID>"
+	// rather than the "<from> → <to>" move line — the instance this phase names
+	// simply cannot be granted in this session. DISPLAY ONLY and excluded from
+	// identity exactly like MovedFrom; threaded onto the card's slots at
+	// card-build time from the approval record's PinnedImmovable. Mutually
+	// exclusive with MovedFrom.
+	PinnedImmovable string
 }
 
 // AuthoredSlot is a slot request as the agent wrote it, before validation.

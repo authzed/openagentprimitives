@@ -467,8 +467,33 @@ func TestGrantSlots_PinStoreErrorDoesNotStrandOtherTypes(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ensure pin for git_repo:acme/app", "the store failure must surface")
 	assert.NotErrorIs(t, err, authz.ErrSlotPinned, "a store failure is not a pin refusal")
+	assert.ErrorIs(t, err, authz.ErrSlotStore, "a store failure is tagged so a reader can tell it from a ruling")
 	require.Len(t, w.plain, 1, "the multi-occupancy type after it must still be written")
 	assert.Equal(t, "label", w.plain[0].ResourceType)
+}
+
+// A TRANSIENT store fault and a genuine pin refusal can land in the SAME call —
+// one type is pinned elsewhere while another type's write blips. The joined
+// error must carry BOTH sentinels: ErrSlotPinned (so a reader still sees the
+// ruling) and ErrSlotStore (so a reader that checks it FIRST treats the whole
+// thing as a recoverable fault rather than telling the approver "re-approving
+// will not move it" for a type that merely timed out).
+func TestGrantSlots_StoreFaultJoinedWithPinRefusalCarriesBothSentinels(t *testing.T) {
+	scope := testScope()
+	// git_repo is already pinned to a DIFFERENT instance → a genuine refusal.
+	// The multi-occupancy label's plain write is made to blip → a store fault.
+	w := &pinningFake{writeErr: errors.New("spicedb unavailable: dial tcp 10.0.0.1:50051")}
+	w.seedPin(scope, "git_repo", "acme/other")
+
+	err := authz.GrantSlots(context.Background(), w, scope, []authz.SlotBinding{
+		{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("acme/app"), Permission: "push"},
+		{ResourceType: "label", ResourceID: authz.TrustedObjectID("bug"), Permission: "apply", Occupancy: "multi"},
+	}, testExpiry())
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, authz.ErrSlotPinned, "the genuine pin refusal must remain visible")
+	assert.ErrorIs(t, err, authz.ErrSlotStore, "the co-occurring store blip must be taggable so it is not read as a final ruling")
+	assert.Contains(t, err.Error(), "acme/other", "the refusal still names the pinned instance for an operator")
 }
 
 // A plain RelWriter that is not a SlotPinner cannot express the pin's
@@ -497,6 +522,21 @@ func TestGrantSlots_MultiOccupancy_BindsAsetWithoutPinning(t *testing.T) {
 	assert.Empty(t, w.pinned, "multi occupancy must NOT route through the pinned write")
 	assert.Empty(t, w.pins, "multi occupancy writes no pin")
 	assert.Len(t, w.plain, 2, "multi grants take the plain batched write")
+}
+
+// AllRebindNever decides "new session only" vs "amendment or new session" for
+// every pin-refusal surface, so its edges are load-bearing: a single
+// non-never (or unset) binding has the amendment route and must flip it false,
+// and an empty set must NOT foreclose the amendment route.
+func TestAllRebindNever(t *testing.T) {
+	never := authz.SlotBinding{ResourceType: "git_repo", Rebind: authz.SlotRebindNever}
+	approval := authz.SlotBinding{ResourceType: "git_repo", Rebind: "approval"}
+	unset := authz.SlotBinding{ResourceType: "git_repo"}
+
+	assert.True(t, authz.AllRebindNever([]authz.SlotBinding{never, never}), "every binding never → true")
+	assert.False(t, authz.AllRebindNever([]authz.SlotBinding{never, approval}), "any movable binding → false")
+	assert.False(t, authz.AllRebindNever([]authz.SlotBinding{never, unset}), "unset reads as approval → false")
+	assert.False(t, authz.AllRebindNever(nil), "empty must not foreclose the amendment route")
 }
 
 // SlotGrantExpiry anchors to the session's WALL-CLOCK cap, and a session that

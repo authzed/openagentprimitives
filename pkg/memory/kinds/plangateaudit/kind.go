@@ -126,6 +126,19 @@ type SlotRef struct {
 	// wired. Additive, like Standing: a record written before this field existed
 	// unmarshals with it empty, which reads as "no move" everywhere downstream.
 	MovedFrom string `json:"movedFrom,omitempty"`
+
+	// PinnedImmovable, when non-empty, is the instance a `rebind: never` slot is
+	// CURRENTLY pinned to when the card names a DIFFERENT one. Unlike MovedFrom,
+	// this is NOT a move the approval will execute: a never slot's pin is fixed
+	// for the session's life, so the instance this phase names cannot be granted
+	// here at all. Recorded so the card says exactly that — "pinned to X, cannot
+	// change it; start a new session" — instead of rendering the named instance
+	// as a plain first-fill the human would wrongly read as grantable. DISPLAY
+	// ONLY and mutually exclusive with MovedFrom: the decision path never derives
+	// a PriorID from it (there is no move to make), so the bind takes the
+	// ordinary first-fill path and GrantSlots refuses the instance with the
+	// new-session route. Additive, like MovedFrom.
+	PinnedImmovable string `json:"pinnedImmovable,omitempty"`
 }
 
 // Content is one plan-gate record.
