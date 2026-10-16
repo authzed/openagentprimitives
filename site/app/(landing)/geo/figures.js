@@ -101,41 +101,55 @@ const poly4 = (g) => [g.L, g.T, g.R, g.B].map(P).join(" ");
 
 const FIGS = {};
 
-/* Problem: one token reaching every repository, each task needing one of them. */
+/* Problem: the agent's token can access five repositories, but its task needs
+   one. Lines are access: all five draw in, the one the task needs takes the
+   accent, then the four it doesn't need turn red as unneeded access. */
 {
-  const D = 76, R = 46, users = ["api", "web", "infra", "billing", "docs"];
+  const D = 86, R = 40, repos = ["api", "web", "infra", "billing", "docs"], DENY = "var(--deny)";
   const at = (k, d = D) => {
     const a = ((-90 + k * 72) * Math.PI) / 180;
     return [200 + d * Math.cos(a), 200 + d * Math.sin(a)];
   };
   FIGS.union = {
-    t0: 0.9,
+    t0: 4.2,
     svg: () => {
       let b = "";
-      users.forEach((u, k) => {
-        const [x, y] = at(k);
-        b += `<circle cx="${x}" cy="${y}" r="${R}" style="fill:url(#geo-h-union)"/>`;
+      repos.forEach((_, k) => {
+        const [x, y] = at(k, D - R);
+        b += `<line data-k="l${k}" class="f" x1="200" y1="200" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}"/>`;
       });
-      users.forEach((u, k) => {
-        const [x, y] = at(k), [lx, ly] = at(k, D + R + 16);
-        b += `<circle data-k="uf${k}" cx="${x}" cy="${y}" r="${R}" style="fill:url(#geo-g-union)" opacity="0"/><circle data-k="u${k}" class="i" cx="${x}" cy="${y}" r="${R}"/>` + T(lx, ly + 4, u, "", "middle");
+      repos.forEach((nm, k) => {
+        const [x, y] = at(k), fill = k === 0 ? "url(#geo-g-union)" : "url(#geo-h-union)";
+        b += `<circle class="i" cx="${x}" cy="${y}" r="${R}" style="fill:var(--card)"/><circle data-k="cf${k}" cx="${x}" cy="${y}" r="${R}" style="fill:${fill}" opacity="0"/><circle data-k="c${k}" class="i" cx="${x}" cy="${y}" r="${R}"/>`;
+        // Labels sit a fixed gap off each circle's outer side: above the top one,
+        // beside the side ones, below the bottom ones.
+        const side = Math.abs(x - 200) > 60 && Math.abs(y - 200) < 30;
+        b += side
+          ? T(x + Math.sign(x - 200) * (R + 10), y + 5, nm, "", x > 200 ? "start" : "end")
+          : T(x, y < 200 ? y - R - 10 : y + R + 20, nm, "", "middle");
       });
-      b += `<line data-k="ln" class="a" x1="200" y1="200" x2="200" y2="200"/>` + agent(200, 200, 13);
-      b += T(20, 30, "token reaches ∪ repos") + Tk("need", 200, 366, "this task needs repo:api", "ac", "middle");
+      b += agent(200, 200, 13);
+      b += T(20, 30, "token access: 5 repos");
+      b += Tk("need", 200, 362, "task needs: api", "ac", "middle", 0);
+      b += `<text data-k="excess" class="lbl" x="200" y="386" text-anchor="middle" opacity="0" style="fill:${DENY}">unneeded access: 4 repos</text>`;
       return S(b, hatch("geo-h-union") + rad("geo-g-union", 0.75));
     },
     anim: (r, t) => {
-      const n = Math.floor(t / 1.8) % 5, f = (t % 1.8) / 1.8, env = clamp(f / 0.2) * (1 - clamp((f - 0.8) / 0.2));
-      hueAt(r, n);
-      users.forEach((_, k) => {
-        q(r, "uf" + k).setAttribute("opacity", k === n ? env : 0);
-        q(r, "u" + k).style.stroke = k === n && env > 0.3 ? ACC : "";
+      const p = (t % 7) / 7, L = D - R;
+      const draw = sm(p / 0.15), need = clamp((p - 0.22) / 0.08), excess = clamp((p - 0.45) / 0.08);
+      const fade = 1 - clamp((p - 0.9) / 0.1);
+      repos.forEach((_, k) => {
+        const l = q(r, "l" + k), c = q(r, "c" + k), on = k === 0 ? need > 0.3 : excess > 0.3;
+        const col = on && fade > 0.3 ? (k === 0 ? ACC : DENY) : "";
+        l.style.strokeDasharray = L;
+        l.style.strokeDashoffset = L * (1 - draw);
+        l.setAttribute("opacity", fade);
+        l.style.stroke = c.style.stroke = col;
+        l.style.strokeWidth = col ? "1.6px" : "";
+        q(r, "cf" + k).setAttribute("opacity", (k === 0 ? need : excess) * fade);
       });
-      const [x, y] = at(n), ln = q(r, "ln"), dr = sm(f / 0.3);
-      ln.setAttribute("x1", x); ln.setAttribute("y1", y);
-      ln.setAttribute("x2", x + (200 - x) * dr); ln.setAttribute("y2", y + (200 - y) * dr);
-      ln.setAttribute("opacity", env);
-      setText(q(r, "need"), "this task needs repo:" + users[n]);
+      q(r, "need").setAttribute("opacity", need * fade);
+      q(r, "excess").setAttribute("opacity", excess * fade);
     },
   };
 }

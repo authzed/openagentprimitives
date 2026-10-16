@@ -160,7 +160,7 @@ const PRIMITIVES: Primitive[] = [
   {
     verb: "Broker",
     title: "Identity & credentials",
-    body: "Credentials are resolved by a broker outside the model and injected into the tool that needs them; the model never sees them.",
+    body: "An agent acts as itself or on a person's behalf. It gets the use of a credential without being given it: a broker injects it into the tool that needs it, and the model never sees it.",
     href: "/docs/identity",
     hue: 2,
     geo: "broker",
@@ -170,7 +170,7 @@ const PRIMITIVES: Primitive[] = [
   {
     verb: "Decide",
     title: "Authorization",
-    body: "One relationship graph answers every action: may this person do this, to this resource, right now. Every path fails closed.",
+    body: "Every action is checked at the moment it runs: may this agent, or the person it acts for, do this to this resource? The agent asks; it never answers.",
     href: "/docs/authorization",
     hue: 3,
     geo: "lens",
@@ -180,7 +180,7 @@ const PRIMITIVES: Primitive[] = [
   {
     verb: "Carry",
     title: "Channels & continuity",
-    body: "Agents work in Slack, the browser, the CLI and GitHub. Threads last for days, and approvals appear where the conversation already is.",
+    body: "Agents work in Slack, the browser, the CLI and GitHub. Every message and approval click is checked against who sent it before it counts.",
     href: "/docs/channels",
     hue: 4,
     geo: "channels",
@@ -189,7 +189,7 @@ const PRIMITIVES: Primitive[] = [
   {
     verb: "Remember",
     title: "Memory & knowledge",
-    body: "Recall, search and a knowledge graph. Reading memory is an authorization decision, and the transcript is a signed ledger.",
+    body: "One store holds what the agent learned and a signed record of what it did. Every read is checked item by item against who is asking.",
     href: "/docs/memory",
     hue: 0,
     geo: "memory",
@@ -927,7 +927,7 @@ function Primitives() {
             </div>
             <p className="lp-tcard-title">Six primitives</p>
             <p className="lp-tcard-foot">
-              <span>Scroll to deal</span>
+              <span>Scroll to view</span>
               <span>{PRIMITIVES.length} cards</span>
             </p>
           </DeckCard>
@@ -1239,7 +1239,7 @@ export function Landing() {
             <div className="geo-slot lp-split-fig">
               <GeoFigure
                 name="union"
-                label="One token reaches all five repositories, while each task needs only one of them"
+                label="The agent's token can access five repositories, but its task needs only one; the other four are unneeded access"
                 hue={0}
               />
             </div>
@@ -1360,7 +1360,7 @@ export function Landing() {
                 <span className="lp-nowrap">Agentic Top 10.</span>
               </>
             }
-            lede="How OAP maps to each risk in the OWASP Top 10 for Agentic Applications, with the remaining gaps listed alongside. This is a self-assessment, not a certification."
+            lede="How OAP maps to each risk in the OWASP Top 10 for Agentic Applications, with the remaining gaps listed alongside. Each item links to its full write-up."
           />
           <div className="lp-owasp-wrap">
             <table className="lp-owasp">
