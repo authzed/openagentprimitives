@@ -123,7 +123,7 @@ func TestBuilderClass_WorkshopDraftSlotResolvesFromTheSidecarAlone(t *testing.T)
 // TestBuilderClass_DraftSlotLeavesMembershipToTheInstaller pins the one field
 // the manifest deliberately omits. `oap install` completes every slot's
 // membership to the CRD's own default before applying
-// (completeAuthzSlotMembershipDefaults, pkg/platform/oap/install/apply.go),
+// (completeAuthzSlotDefaults, pkg/platform/oap/install/apply.go),
 // because spec.authz.slots is +listType=atomic: SSA replaces the whole list, so
 // an applied slot that omits membership differs from the live one the apiserver
 // has since defaulted and every re-apply records a change — a byte-identical

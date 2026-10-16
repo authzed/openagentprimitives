@@ -268,12 +268,12 @@ func Prepare(ctx context.Context, c client.Client, b *oap.Bundle, answers oap.An
 		return nil, fmt.Errorf("install: stamp oap-source annotation: %w", err)
 	}
 
-	// Same reasoning, same place: complete every slot's membership BEFORE the
-	// SSA-apply loop so the applied payload matches what the apiserver would
-	// store, keeping a byte-identical re-install a true no-op. See
-	// completeAuthzSlotMembershipDefaults's doc comment for why this is
+	// Same reasoning, same place: complete every slot's membership, occupancy,
+	// and rebind BEFORE the SSA-apply loop so the applied payload matches what
+	// the apiserver would store, keeping a byte-identical re-install a true
+	// no-op. See completeAuthzSlotDefaults's doc comment for why this is
 	// necessary at all (spec.authz.slots is +listType=atomic).
-	if err := completeAuthzSlotMembershipDefaults(agentClass); err != nil {
+	if err := completeAuthzSlotDefaults(agentClass); err != nil {
 		return nil, fmt.Errorf("install: complete authz slot defaults: %w", err)
 	}
 

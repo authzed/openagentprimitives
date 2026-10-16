@@ -52,44 +52,96 @@ func (r *recordingEngine) BindClassDefaults(ctx context.Context, scope memory.Sc
 }
 
 // slotGrantStore is an in-memory stand-in for SpiceDB's slot-grant tuples: it
-// satisfies both the write side (engine.RelWriter) and the read side
-// (engine.SlotListerImpl), so a test can assert that what BindClassDefaults
-// grants is exactly what FillToolArgs later reads back.
+// satisfies the write side (engine.RelWriter), the read side
+// (engine.SlotListerImpl), AND authz.SlotPinner — the single-occupancy gate
+// refuses a plain RelWriter, so a slot-mechanics fake that is not also a pinner
+// cannot bind the (single-by-default) slots these tests exercise. Every grant
+// lands in `grants` whether it arrived through the pinned write (single types)
+// or the plain batched write (multi types), so a read-back reads the same
+// whichever path a binding took.
 type slotGrantStore struct {
 	grants map[string][]authz.SlotBinding // keyed by "<ns>/<name>"
+	pins   map[string]string              // keyed by "<ns>/<name>\x00<type>"
 }
 
 func newSlotGrantStore() *slotGrantStore {
-	return &slotGrantStore{grants: map[string][]authz.SlotBinding{}}
+	return &slotGrantStore{grants: map[string][]authz.SlotBinding{}, pins: map[string]string{}}
+}
+
+// recordGrant applies one grant tuple with TOUCH semantics, shared by the plain
+// and pinned write paths so ListSlotGrants reads the same set regardless of
+// which one a binding took.
+func (s *slotGrantStore) recordGrant(rel authz.Relation) {
+	if !strings.HasPrefix(rel.Relation, authz.SlotGrantRelationPrefix) {
+		return
+	}
+	key := rel.SubjectID
+	b := authz.SlotBinding{
+		ResourceType: rel.ResourceType,
+		// TrustedObjectID: rel.ResourceID is a tuple already written by
+		// GrantSlots, so this is the read-back stand-in for the real
+		// ListSlotGrants (pkg/spicedb/slot_grants.go), which does the same.
+		ResourceID: authz.TrustedObjectID(rel.ResourceID),
+		Permission: strings.TrimPrefix(rel.Relation, authz.SlotGrantRelationPrefix),
+	}
+	// TOUCH semantics, keyed on the grant-identifying triple: SlotBinding
+	// carries a []precondition.Rule now and so is no longer comparable, but
+	// this read-back stand-in only ever populates the triple anyway.
+	dup := slices.ContainsFunc(s.grants[key], func(g authz.SlotBinding) bool {
+		return g.ResourceType == b.ResourceType &&
+			g.ResourceID.String() == b.ResourceID.String() &&
+			g.Permission == b.Permission
+	})
+	if !dup {
+		s.grants[key] = append(s.grants[key], b)
+	}
 }
 
 func (s *slotGrantStore) WriteRelationships(_ context.Context, rels []authz.Relation) error {
 	for _, rel := range rels {
-		if !strings.HasPrefix(rel.Relation, authz.SlotGrantRelationPrefix) {
-			continue
-		}
-		key := rel.SubjectID
-		b := authz.SlotBinding{
-			ResourceType: rel.ResourceType,
-			// TrustedObjectID: rel.ResourceID is a tuple already written by
-			// GrantSlots, so this is the read-back stand-in for the real
-			// ListSlotGrants (pkg/spicedb/slot_grants.go), which does the same.
-			ResourceID: authz.TrustedObjectID(rel.ResourceID),
-			Permission: strings.TrimPrefix(rel.Relation, authz.SlotGrantRelationPrefix),
-		}
-		// TOUCH semantics, keyed on the grant-identifying triple: SlotBinding
-		// carries a []precondition.Rule now and so is no longer comparable, but
-		// this read-back stand-in only ever populates the triple anyway.
-		dup := slices.ContainsFunc(s.grants[key], func(g authz.SlotBinding) bool {
-			return g.ResourceType == b.ResourceType &&
-				g.ResourceID.String() == b.ResourceID.String() &&
-				g.Permission == b.Permission
-		})
-		if !dup {
-			s.grants[key] = append(s.grants[key], b)
-		}
+		s.recordGrant(rel)
 	}
 	return nil
+}
+
+func slotGrantStorePinKey(scope authz.SessionRef, resourceType string) string {
+	return scope.String() + "\x00" + resourceType
+}
+
+func (s *slotGrantStore) EnsurePin(_ context.Context, resourceType, resourceID string, scope authz.SessionRef) (bool, string, error) {
+	key := slotGrantStorePinKey(scope, resourceType)
+	if cur, ok := s.pins[key]; ok {
+		return true, cur, nil
+	}
+	s.pins[key] = resourceID
+	return false, resourceID, nil
+}
+
+func (s *slotGrantStore) WriteGrantsPinned(_ context.Context, rels []authz.Relation, _, _ string, _ authz.SessionRef) error {
+	for _, rel := range rels {
+		s.recordGrant(rel)
+	}
+	return nil
+}
+
+func (s *slotGrantStore) MovePin(_ context.Context, resourceType, _, toID string, revoke []authz.Relation, scope authz.SessionRef) error {
+	s.pins[slotGrantStorePinKey(scope, resourceType)] = toID
+	_ = s.DeleteRelationships(context.Background(), revoke)
+	return nil
+}
+
+func (s *slotGrantStore) ReadPin(_ context.Context, resourceType string, scope authz.SessionRef) (string, error) {
+	return s.pins[slotGrantStorePinKey(scope, resourceType)], nil
+}
+
+func (s *slotGrantStore) ListGrantsFor(_ context.Context, resourceType, resourceID string, scope authz.SessionRef) ([]authz.Relation, error) {
+	var out []authz.Relation
+	for _, b := range s.grants[scope.String()] {
+		if b.ResourceType == resourceType && b.ResourceID.String() == resourceID {
+			out = append(out, authz.SlotGrantRelation(resourceType, resourceID, b.Permission, scope))
+		}
+	}
+	return out, nil
 }
 
 func (s *slotGrantStore) DeleteRelationships(_ context.Context, rels []authz.Relation) error {
@@ -164,6 +216,14 @@ func TestLoop_BindClassDefaults_WritesAllowedDefaultsToMemory(t *testing.T) {
 		},
 	}
 	entities := boundEntitySpecsForTest(classEntities)
+	// Two defaults of one type is a MULTI-occupancy slot: the class pins a SET
+	// of default repos it wants all reachable, not one. The AgentClass validator
+	// refuses two defaults on a single-occupancy slot (slot_declaration.go) and
+	// says exactly this — "set occupancy: multi" — so the valid class a test of
+	// the multiple-default bind loop must model is a multi slot, and GrantSlots'
+	// pinning gate (empty occupancy = single) would otherwise refuse the second
+	// arrival.
+	entities[0].Occupancy = authz.SlotOccupancyMulti
 
 	err := rec.BindClassDefaults(memory.WithSystemApproval(context.Background(), "test"), scope, bindTestSession(), entities, "alice@example.com")
 	require.NoError(t, err)

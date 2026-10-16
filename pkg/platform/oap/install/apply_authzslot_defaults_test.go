@@ -12,7 +12,7 @@ import (
 
 // agentClassWithSlots builds a bare AgentClass unstructured object whose
 // spec.authz.slots is exactly the given slot maps — enough to exercise
-// completeAuthzSlotMembershipDefaults without a real bundle or envtest.
+// completeAuthzSlotDefaults without a real bundle or envtest.
 func agentClassWithSlots(t *testing.T, slots []interface{}) *unstructured.Unstructured {
 	t.Helper()
 	ac := &unstructured.Unstructured{}
@@ -42,7 +42,7 @@ func TestCompleteAuthzSlotMembershipDefaults_FillsAbsentMembership(t *testing.T)
 		map[string]interface{}{"resourceType": "git_repo", "permission": "read"},
 	})
 
-	require.NoError(t, completeAuthzSlotMembershipDefaults(ac))
+	require.NoError(t, completeAuthzSlotDefaults(ac))
 
 	slots := slotsOf(t, ac)
 	require.Len(t, slots, 1)
@@ -61,7 +61,7 @@ func TestCompleteAuthzSlotMembershipDefaults_LeavesEmptyStringFilled(t *testing.
 		map[string]interface{}{"resourceType": "git_repo", "permission": "read", "membership": ""},
 	})
 
-	require.NoError(t, completeAuthzSlotMembershipDefaults(ac))
+	require.NoError(t, completeAuthzSlotDefaults(ac))
 
 	slots := slotsOf(t, ac)
 	slot, ok := slots[0].(map[string]interface{})
@@ -79,7 +79,7 @@ func TestCompleteAuthzSlotMembershipDefaults_LeavesExplicitDynamicAlone(t *testi
 		map[string]interface{}{"resourceType": "git_repo", "permission": "read", "membership": "dynamic"},
 	})
 
-	require.NoError(t, completeAuthzSlotMembershipDefaults(ac))
+	require.NoError(t, completeAuthzSlotDefaults(ac))
 
 	slots := slotsOf(t, ac)
 	slot, ok := slots[0].(map[string]interface{})
@@ -97,7 +97,7 @@ func TestCompleteAuthzSlotMembershipDefaults_NoSlotsIsUntouched(t *testing.T) {
 	ac.SetName("demo-class")
 	before := ac.DeepCopy()
 
-	require.NoError(t, completeAuthzSlotMembershipDefaults(ac))
+	require.NoError(t, completeAuthzSlotDefaults(ac))
 
 	assert.Equal(t, before.Object, ac.Object, "a class with no slots must be left byte-identical")
 }
@@ -112,7 +112,7 @@ func TestCompleteAuthzSlotMembershipDefaults_MixedSlotsOnlyFillsAbsent(t *testin
 		map[string]interface{}{"resourceType": "slack_channel", "permission": "read", "membership": "frozen"},
 	})
 
-	require.NoError(t, completeAuthzSlotMembershipDefaults(ac))
+	require.NoError(t, completeAuthzSlotDefaults(ac))
 
 	slots := slotsOf(t, ac)
 	require.Len(t, slots, 3)
@@ -122,6 +122,24 @@ func TestCompleteAuthzSlotMembershipDefaults_MixedSlotsOnlyFillsAbsent(t *testin
 		got[i] = slot["membership"].(string)
 	}
 	assert.Equal(t, []string{"frozen", "dynamic", "frozen"}, got)
+}
+
+// TestCompleteAuthzSlotDefaults_FillsOccupancyAndRebind pins the new fields
+// riding the same completion as membership: a slot that leaves occupancy
+// and/or rebind unset must be completed with their +kubebuilder:default
+// values, for the same SSA-idempotency reason membership is.
+func TestCompleteAuthzSlotDefaults_FillsOccupancyAndRebind(t *testing.T) {
+	ac := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{"authz": map[string]any{"slots": []any{
+			map[string]any{"resourceType": "git_repo", "permission": "push"},
+		}}},
+	}}
+	require.NoError(t, completeAuthzSlotDefaults(ac))
+	slots, _, _ := unstructured.NestedSlice(ac.Object, "spec", "authz", "slots")
+	slot := slots[0].(map[string]any)
+	assert.Equal(t, v1alpha1.AuthzSlotOccupancyDefault, slot["occupancy"])
+	assert.Equal(t, v1alpha1.AuthzSlotRebindDefault, slot["rebind"])
+	assert.Equal(t, v1alpha1.AuthzSlotMembershipDefault, slot["membership"])
 }
 
 // TestCompleteAuthzSlotMembershipDefaults_MalformedSlotIsAnError pins the
@@ -142,7 +160,7 @@ func TestCompleteAuthzSlotMembershipDefaults_MalformedSlotIsAnError(t *testing.T
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ac := agentClassWithSlots(t, tc.slots)
-			err := completeAuthzSlotMembershipDefaults(ac)
+			err := completeAuthzSlotDefaults(ac)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})

@@ -1,11 +1,14 @@
 package runner
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 )
@@ -119,4 +122,68 @@ func TestPlanGateItems_ResourceLineWithNoHrefCarriesNone(t *testing.T) {
 	require.Len(t, items[0].Items, 1)
 	assert.Empty(t, items[0].Items[0].Href)
 	assert.Empty(t, items[0].Items[0].Icon)
+}
+
+// A slot move on a resource line gets its own revocation line on the wire, so
+// a surface cannot render the move while dropping what it costs.
+func TestPlanGateItems_MoveCarriesARevocationLine(t *testing.T) {
+	items := planGateItems(plangate.Card{Phases: []plangate.CardPhase{{
+		Title:     "Phase 1",
+		Resources: []plangate.CardLine{{Text: "git_repo", Detail: "repoB", MovedFrom: "repoA"}},
+	}}})
+	require.Len(t, items, 1)
+	require.Len(t, items[0].Items, 2, "the resource line, then its revocation")
+	assert.Equal(t, "repoB", items[0].Items[0].Detail)
+	assert.Contains(t, items[0].Items[1].Text, "revokes this session's access to repoA")
+	assert.Equal(t, channelevents.ToneExternal, items[0].Items[1].Tone)
+}
+
+// A `rebind: never` slot pinned elsewhere carries a BLOCKED line over the wire:
+// the resource line, then its own line saying the named instance cannot be
+// granted and the new-session route — external tone so a surface cannot render
+// the resource above as grantable.
+func TestPlanGateItems_PinnedImmovableCarriesABlockedLine(t *testing.T) {
+	items := planGateItems(plangate.Card{Phases: []plangate.CardPhase{{
+		Title:     "Phase 1",
+		Resources: []plangate.CardLine{{Text: "git_repo", Detail: "repoB", PinnedImmovable: "repoA"}},
+	}}})
+	require.Len(t, items, 1)
+	require.Len(t, items[0].Items, 2, "the resource line, then its blocked notice")
+	assert.Equal(t, "repoB", items[0].Items[0].Detail)
+	assert.Contains(t, items[0].Items[1].Text, "cannot be granted")
+	assert.Contains(t, items[0].Items[1].Text, "pinned to repoA")
+	assert.Contains(t, items[0].Items[1].Text, "start a new session to reach repoB")
+	assert.Equal(t, channelevents.ToneExternal, items[0].Items[1].Tone)
+}
+
+// Each BindApproved failure maps onto the approver copy that is true for it.
+// The order matters: a committed move wraps whatever failed after it, and a
+// drifted move also wraps ErrSlotPinned.
+func TestClassifyApprovalBindFailure(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		want   approvalFailure
+		wantOK bool
+	}{
+		{"committed move wrapping a later pin refusal: move-committed",
+			fmt.Errorf("%w: %w", authz.ErrSlotMoveCommitted, authz.ErrSlotPinned), approvalMoveCommitted, true},
+		{"drifted move (also ErrSlotPinned): retryable fault",
+			fmt.Errorf("%w: %w", authz.ErrSlotMoveDrifted, authz.ErrSlotPinned), approvalFault, true},
+		{"plain pin refusal: pinned-refusal",
+			fmt.Errorf("wrap: %w", authz.ErrSlotPinned), approvalPinnedRefusal, true},
+		{"store fault joined with a pin refusal: retryable fault, not a final refusal",
+			errors.Join(fmt.Errorf("wrap: %w", authz.ErrSlotStore), fmt.Errorf("wrap: %w", authz.ErrSlotPinned)), approvalFault, true},
+		{"store fault alone: retryable fault",
+			fmt.Errorf("wrap: %w", authz.ErrSlotStore), approvalFault, true},
+		{"unrelated store error: not a slot-pin outcome",
+			errors.New("spicedb unavailable"), approvalFault, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := classifyApprovalBindFailure(tc.err)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }

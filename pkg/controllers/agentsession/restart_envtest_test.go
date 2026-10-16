@@ -471,20 +471,25 @@ func TestEnvtest_RestartFromHere_TriggeredByStatusPatch(t *testing.T) {
 }
 
 // recordingSlotCopier records whether the fork carried the parent's bound
-// instances onto the child.
+// instances (and pins) onto the child. copied is every relation
+// authz.CopySlotGrants asked it to write — the gate-bypassing verbatim copy
+// writes through CopySlotTuples alone, not GrantSlots.
 type recordingSlotCopier struct {
-	held      []authz.SlotBinding
-	grantedTo string
-	granted   []authz.SlotBinding
+	held   []authz.SlotBinding
+	pins   []authz.Relation
+	copied []authz.Relation
 }
 
 func (c *recordingSlotCopier) ListSlotGrants(_ context.Context, _, _ string) ([]authz.SlotBinding, error) {
 	return c.held, nil
 }
 
-func (c *recordingSlotCopier) GrantSlots(_ context.Context, ns, name string, b []authz.SlotBinding, _ time.Time) error {
-	c.grantedTo = ns + "/" + name
-	c.granted = append(c.granted, b...)
+func (c *recordingSlotCopier) ListSlotPins(_ context.Context, _, _ string) ([]authz.Relation, error) {
+	return c.pins, nil
+}
+
+func (c *recordingSlotCopier) CopySlotTuples(_ context.Context, rels []authz.Relation) error {
+	c.copied = append(c.copied, rels...)
 	return nil
 }
 
@@ -568,9 +573,8 @@ func TestEnvtest_Takeover_CarriesNoSlotGrantsToTheNewOwner(t *testing.T) {
 	require.NoError(t, env.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: "parent-takeover-slots-child"}, &child))
 	assert.Equal(t, "user:bob", child.Annotations[spiceboxv1alpha1.AnnotationStartedByCanonicalID])
 
-	assert.Empty(t, copier.granted,
+	assert.Empty(t, copier.copied,
 		"a takeover must carry NO slot grants: the new owner would inherit instance authority a human approved for someone else")
-	assert.Empty(t, copier.grantedTo)
 }
 
 // TestEnvtest_Inherit_CarriesSlotGrantsToTheChild is the companion the
@@ -645,7 +649,10 @@ func TestEnvtest_Inherit_CarriesSlotGrantsToTheChild(t *testing.T) {
 	_, _, err := r.ReconcileRestart(ctx, parent)
 	require.NoError(t, err)
 
-	assert.Equal(t, ns+"/parent-inherit-slots-child", copier.grantedTo,
+	require.Len(t, copier.copied, len(copier.held),
 		"the same-owner continuation must receive the parent's bound instances")
-	assert.ElementsMatch(t, copier.held, copier.granted)
+	childScope := authz.SessionRef{Namespace: ns, Name: "parent-inherit-slots-child"}
+	for _, rel := range copier.copied {
+		assert.Equal(t, childScope.String(), rel.SubjectID, "a copied grant must be re-pointed at the child")
+	}
 }

@@ -224,7 +224,7 @@ func TestBindPrecondition_HoldsACandidateOutOfItsSlot(t *testing.T) {
 			mem := memory.NewLocal(inmem.NewBackend())
 			memScope := memory.Scope{Kind: "session", ID: "ns/" + tc.name}
 			tc.seed(t, mem, memScope)
-			w := &recordingRelWriter{}
+			w := &pinningFake{}
 
 			// Built once: the row under test is a single slot, and calling the
 			// factory again to read a field back would recompile its predicates
@@ -285,7 +285,7 @@ func TestBindPrecondition_LooksFactsUpByTheRawID(t *testing.T) {
 	require.NotEqual(t, "demo-org/demo-repo#6", derived.String(),
 		"the fixture is only meaningful while the transform actually changes the id")
 
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	require.NoError(t, authz.PromoteObservedSlots(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{slot}, allowAll(), w, "alice", time.Now, 0))
 
@@ -313,7 +313,7 @@ func TestBindPrecondition_GatesEveryFillSource(t *testing.T) {
 		Defaults:     []string{"ba03f5969a"},
 		Requires:     []precondition.Rule{mustCompile(t, `facts.observed.is_cross_repository == false`)},
 	}
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{gated}, allowAll(), w, "alice", time.Now, 0))
 	assert.Empty(t, w.wrote, "a class-pinned default is a candidate like any other and its precondition governs it")
@@ -322,7 +322,7 @@ func TestBindPrecondition_GatesEveryFillSource(t *testing.T) {
 	// path binds nothing at all: the same default, ungated, binds.
 	ungated := gated
 	ungated.Requires = nil
-	w2 := &recordingRelWriter{}
+	w2 := &pinningFake{}
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{ungated}, allowAll(), w2, "alice", time.Now, 0))
 	require.Len(t, w2.wrote, 1, "without the precondition the very same default binds")
@@ -347,7 +347,7 @@ func TestBindPrecondition_ApprovalWaivesTheGate(t *testing.T) {
 	memScope := memory.Scope{Kind: "session", ID: "ns/approval-waives"}
 	recordObserved(t, mem, memScope, "git_commit", "ba03f5969a", true) // a fork: Refused
 
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	require.NoError(t, authz.BindApproved(systemCtx(), mem, memScope, bindSession(), w,
 		[]authz.SlotBinding{{
 			ResourceType: "git_commit",
@@ -403,7 +403,7 @@ func TestBindApproved_planGatePolicyEnforcesPreconditions(t *testing.T) {
 			memScope := memory.Scope{Kind: "session", ID: "ns/plangate-enforces-" + tc.name}
 			recordObserved(t, mem, memScope, "git_commit", "ba03f5969a", tc.crossRepo)
 
-			w := &recordingRelWriter{}
+			w := &pinningFake{}
 			require.NoError(t, authz.BindApproved(systemCtx(), mem, memScope, bindSession(), w,
 				[]authz.SlotBinding{{
 					ResourceType: "git_commit",

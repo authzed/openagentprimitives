@@ -48,6 +48,19 @@ type slotCandidate struct {
 	// NoGrantRelation mirrors SlotBinding.NoGrantRelation: the type has no
 	// slot_grant relation to write, so this candidate narrows scope only.
 	NoGrantRelation bool
+	// Occupancy and Rebind mirror SlotBinding's fields, copied from the
+	// candidate's BoundEntitySpec so bindSlots can stamp them onto the
+	// SlotBinding the GrantSlots pinning gate reads. Empty Occupancy is single.
+	Occupancy string
+	Rebind    string
+
+	// PriorID mirrors SlotBinding.PriorID: when non-zero, this candidate MOVES a
+	// filled single-occupancy slot from PriorID to ResourceID. Carried through
+	// checkPreconditions so the move executes only for a candidate that actually
+	// survived the gate — a held instance must not have the pin moved to it, and
+	// the prior instance's grants must not be revoked, for a bind that never
+	// happens.
+	PriorID ObjectID
 }
 
 // admissibleCandidates is the one filter chain every fill source runs its
@@ -365,7 +378,20 @@ func bindSlots(
 		if c.NoGrantRelation {
 			continue
 		}
-		bindings = append(bindings, SlotBinding{ResourceType: c.ResourceType, ResourceID: c.ResourceID, Permission: c.Permission})
+		bindings = append(bindings, SlotBinding{
+			ResourceType: c.ResourceType,
+			ResourceID:   c.ResourceID,
+			Permission:   c.Permission,
+			Occupancy:    c.Occupancy,
+			Rebind:       c.Rebind,
+			// Carried so GrantSlots can execute an approved MOVE as part of this
+			// type's own per-type handling (repoint the pin off PriorID, revoke
+			// its grants, write the new grant) rather than in a separate
+			// all-types pass. Zero for every first-fill — class defaults and
+			// promoted extractions never set it — so their grant path is byte-for-
+			// byte unchanged.
+			PriorID: c.PriorID,
+		})
 	}
 
 	var scopeErr error
@@ -522,6 +548,9 @@ func BindApproved(
 			RawID:           b.RawID,
 			Requires:        b.Requires,
 			NoGrantRelation: b.NoGrantRelation,
+			Occupancy:       b.Occupancy,
+			Rebind:          b.Rebind,
+			PriorID:         b.PriorID,
 		})
 	}
 	if policy == EnforcePreconditions {
@@ -530,5 +559,14 @@ func BindApproved(
 			return nil
 		}
 	}
+	// The approved MOVE is no longer a separate all-types pass here: each moving
+	// candidate carries its PriorID through bindSlots into GrantSlots, which
+	// repoints the pin and revokes the prior instance's grants as part of THAT
+	// type's own per-type handling, atomically, alongside writing the new grant.
+	// That is what keeps one type's move failure from stranding or mislabeling
+	// another type's grant (the all-moves-first pass that used to live here could
+	// do both). A per-type outcome — a drift, a committed move, a refusal — rides
+	// out on the joined error GrantSlots already returns.
 	return bindSlots(ctx, mem, memScope, sess, w, scope.SourceApproved, logger, now, expiresAt, bound)
 }
+

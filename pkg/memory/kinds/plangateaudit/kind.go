@@ -109,6 +109,36 @@ type SlotRef struct {
 	// from the CRD shape (see pkg/authz/hooks/activation.go); callers compare
 	// against the same string constants.
 	Standing string `json:"standing,omitempty"`
+
+	// MovedFrom, when non-empty, is the instance this slot was CURRENTLY pinned
+	// to when the approval card was built — recorded ONLY when the card named a
+	// DIFFERENT instance of a single-occupancy slot, i.e. when approving this
+	// card MOVES a filled slot rather than filling an empty one. It is the
+	// already-canonical object id read back from the pin (SlotPinner.ReadPin),
+	// not the raw value the phase declared, so the decision path can derive the
+	// move's PriorID from it directly.
+	//
+	// It is written at CARD-BUILD time, off an advisory read, so the human
+	// approves exactly the move they were shown: a card parked for days executes
+	// the move it displayed, never one the pin silently drifted into. Empty is
+	// the overwhelmingly common first-fill case — an empty slot, a
+	// multi-occupancy slot (which holds no pin), or a card built with no pinner
+	// wired. Additive, like Standing: a record written before this field existed
+	// unmarshals with it empty, which reads as "no move" everywhere downstream.
+	MovedFrom string `json:"movedFrom,omitempty"`
+
+	// PinnedImmovable, when non-empty, is the instance a `rebind: never` slot is
+	// CURRENTLY pinned to when the card names a DIFFERENT one. Unlike MovedFrom,
+	// this is NOT a move the approval will execute: a never slot's pin is fixed
+	// for the session's life, so the instance this phase names cannot be granted
+	// here at all. Recorded so the card says exactly that — "pinned to X, cannot
+	// change it; start a new session" — instead of rendering the named instance
+	// as a plain first-fill the human would wrongly read as grantable. DISPLAY
+	// ONLY and mutually exclusive with MovedFrom: the decision path never derives
+	// a PriorID from it (there is no move to make), so the bind takes the
+	// ordinary first-fill path and GrantSlots refuses the instance with the
+	// new-session route. Additive, like MovedFrom.
+	PinnedImmovable string `json:"pinnedImmovable,omitempty"`
 }
 
 // Content is one plan-gate record.

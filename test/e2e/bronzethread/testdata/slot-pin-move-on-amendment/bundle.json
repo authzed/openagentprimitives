@@ -1,0 +1,88 @@
+{
+  "name": "slot-pin-move-on-amendment",
+  "description": "Single-occupancy pinning, end to end through the plan gate: the agent is cleared for repo-alpha, then re-plans the SAME phase to point at repo-bravo, and the second card is a MOVE.\n\ncode_repo is session-only, so the first approval BINDS and therefore PINS repo-alpha (a non-expiring slot_pin tuple), and the first codepin_fetch(repo-alpha) succeeds on the grant that approval wrote. The re-plan re-points the phase's one slot to repo-bravo: same handle, same budget, so nothing widens but the instance. That arrives as a plan_amendment (DiffPhase finds the slot value changed), and because the session is already pinned to repo-alpha the amendment card is a MOVE — it names BOTH instances (repo-alpha → repo-bravo) and says in words that approving moves the pin and revokes this session's access to repo-alpha. Approving it repoints the pin and revokes repo-alpha's grant in one request, so the second codepin_fetch(repo-bravo) then succeeds on the moved grant.\n\ncardWhatContains asserts the move copy, not just the two ids: a card that rendered repo-bravo as a plain first-fill would hide the revocation the approval comes with, and a bare-ids assertion would pass it (repo-alpha appears on the first card regardless). The category stays plan_amendment (the spec decision — no new interaction kind for a move), so autoApprove clears it exactly as it clears the first phase.\n\nThe companion slot_pinning e2e scenario asserts the same pin/move at the SpiceDB-tuple level (slot_pin present, the read grant moving off repo-alpha onto repo-bravo) and proves the ErrSlotPinned refusal text for both rebind modes; this bundle proves the move renders on a REAL published card driven by a real model script. approvalPrompts is 2 and WHICH two is the point: one plan_phase for repo-alpha, one plan_amendment MOVE for repo-bravo.",
+
+  "agentDir": "testdata/slot-pin-move-on-amendment",
+  "agentClass": "codepin-fixture",
+
+  "autoApprove": ["plan_phase", "plan_amendment"],
+
+  "toolOutputs": {
+    "fetch": { "content": "f3tch3d" }
+  },
+
+  "userTurns": ["read repo-alpha, then read repo-bravo"],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "read repo-alpha" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [{ "id": "s1", "label": "read a repository", "status": "pending", "phase": "look" }],
+              "phases": [
+                {
+                  "id": "look",
+                  "label": "Read the repository",
+                  "why": "the user named repo-alpha first",
+                  "permissions": [{ "handle": "perm:read:code_repo", "why": "reading needs read access" }],
+                  "slots": [{ "type": "code_repo", "id": "repo-alpha", "why": "the user named repo-alpha" }]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "codepin_fetch", "args": { "operation_id": "op-alpha", "_reason": "reading repo-alpha", "args": { "repo": "repo-alpha" } } } }]
+    },
+    {
+      "expect": { "lastToolResult": "codepin_fetch", "lastToolResultIsError": false, "lastToolResultContains": "f3tch3d" },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [{ "id": "s1", "label": "read a repository", "status": "pending", "phase": "look" }],
+              "phases": [
+                {
+                  "id": "look",
+                  "label": "Read the repository",
+                  "why": "now the user wants repo-bravo",
+                  "permissions": [{ "handle": "perm:read:code_repo", "why": "reading needs read access" }],
+                  "slots": [{ "type": "code_repo", "id": "repo-bravo", "why": "the user named repo-bravo" }]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "codepin_fetch", "args": { "operation_id": "op-bravo", "_reason": "reading repo-bravo", "args": { "repo": "repo-bravo" } } } }]
+    },
+    {
+      "expect": { "lastToolResult": "codepin_fetch", "lastToolResultIsError": false, "lastToolResultContains": "f3tch3d" },
+      "reply": [{ "text": "read both repositories" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "read both" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["read both repositories"],
+    "planGate": {
+      "approvalPrompts": 2,
+      "cardWhatContains": ["repo-alpha", "repo-bravo", "repo-alpha → repo-bravo", "revokes this session's access to repo-alpha"]
+    }
+  }
+}

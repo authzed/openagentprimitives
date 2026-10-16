@@ -94,6 +94,11 @@ var operatorOwnedStatusFields = map[string]bool{
 	"resolvedContentGuardDetectors": true,
 	"resolvedSkillBundles":          true,
 	"observedPins":                  true,
+	// slotPins is written by the RUNNER (the plan-gate approval path,
+	// narrowToApproved), like observedPins beside it — a display-only mirror
+	// of SpiceDB's slot_pin relation, never read by channelsd's approvals
+	// surface.
+	"slotPins": true,
 	// sidecarReachability is written by the RUNNER (the session-layer sidecar
 	// prober), like observedPins/progress — the operator never writes it, so a
 	// runner merge-patch of it never conflicts with the operator rebuilding the

@@ -38,8 +38,15 @@ func systemCtx() context.Context {
 func TestBindClassDefaults_AllowedDefaultsGrantSlotsAndWriteSessionScope(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/n"}
-	entities := entitiesFor("github_repo", "read", "demo-org/demo-repo", "demo-org/internal")
-	w := &recordingRelWriter{}
+	// Two single-occupancy TYPES, one default each: each pins its own slot, so
+	// both allowed defaults become grants and both narrow scope. Two IDs of ONE
+	// single-occupancy type would instead be a multi-arrival refusal — that is a
+	// multi-occupancy scenario, exercised where occupancy can be set directly.
+	entities := []authz.BoundEntitySpec{
+		{ResourceType: "github_repo", Permission: "read", Defaults: []string{"demo-org/demo-repo"}},
+		{ResourceType: "github_org", Permission: "read", Defaults: []string{"demo-org"}},
+	}
+	w := &pinningFake{}
 	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
 
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", now, 0))
@@ -48,7 +55,6 @@ func TestBindClassDefaults_AllowedDefaultsGrantSlotsAndWriteSessionScope(t *test
 	// resource at the session.
 	require.Len(t, w.wrote, 2, "each allowed default must bind a slot grant")
 	for _, rel := range w.wrote {
-		assert.Equal(t, "github_repo", rel.ResourceType)
 		assert.Equal(t, authz.SlotGrantRelationName("read"), rel.Relation,
 			"the relation carries the permission, so a read grant cannot satisfy write")
 		assert.Equal(t, "agentsession", rel.SubjectType)
@@ -61,11 +67,49 @@ func TestBindClassDefaults_AllowedDefaultsGrantSlotsAndWriteSessionScope(t *test
 	require.NoError(t, err)
 	require.True(t, ok, "session_scope entry must exist after BindClassDefaults")
 
-	require.Len(t, sc.Resources, 1, "one ScopeResource entry for github_repo")
-	r := sc.Resources[0]
-	assert.Equal(t, "github_repo", r.ResourceType)
-	assert.ElementsMatch(t, []string{"demo-org/demo-repo", "demo-org/internal"}, r.IDs)
-	assert.Equal(t, "default", string(r.Source))
+	require.Len(t, sc.Resources, 2, "one ScopeResource entry per bound type")
+	byType := map[string][]string{}
+	for _, r := range sc.Resources {
+		assert.Equal(t, "default", string(r.Source), "a class default is recorded as its own source")
+		byType[r.ResourceType] = r.IDs
+	}
+	assert.ElementsMatch(t, []string{"demo-org/demo-repo"}, byType["github_repo"])
+	assert.ElementsMatch(t, []string{"demo-org"}, byType["github_org"])
+}
+
+// TestBindClassDefaults_CarriesOccupancyThroughToTheGate proves the field
+// reaches GrantSlots' pinning gate: a single-occupancy default (empty, the
+// default) binds THROUGH the pin, while a multi-occupancy default takes the
+// plain unpinned write. If BoundEntitySpec.Occupancy stopped propagating onto
+// the SlotBinding, the multi default would be gated as single and pin — caught
+// here by the pin's presence, not merely by the grant landing.
+func TestBindClassDefaults_CarriesOccupancyThroughToTheGate(t *testing.T) {
+	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+
+	t.Run("single-occupancy default binds through the pin", func(t *testing.T) {
+		mem := memory.NewLocal(inmem.NewBackend())
+		memScope := memory.Scope{Kind: "session", ID: "ns/n-occ-single"}
+		entities := entitiesFor("github_repo", "read", "demo-org/demo-repo") // Occupancy unset == single
+		w := &pinningFake{}
+		require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", now, 0))
+		require.Len(t, w.wrote, 1)
+		assert.NotEmpty(t, w.pinned, "a single-occupancy default must route through the pinned write")
+		assert.Equal(t, "demo-org/demo-repo", w.pins[pinKey(bindSession(), "github_repo")], "and must pin the slot")
+		assert.Empty(t, w.plain, "nothing may take the unpinned plain path for a single type")
+	})
+
+	t.Run("multi-occupancy default binds without a pin", func(t *testing.T) {
+		mem := memory.NewLocal(inmem.NewBackend())
+		memScope := memory.Scope{Kind: "session", ID: "ns/n-occ-multi"}
+		entities := entitiesFor("label", "apply", "bug")
+		entities[0].Occupancy = authz.SlotOccupancyMulti
+		w := &pinningFake{}
+		require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", now, 0))
+		require.Len(t, w.wrote, 1)
+		assert.Empty(t, w.pinned, "a multi-occupancy default must NOT route through the pinned write")
+		assert.Empty(t, w.pins, "multi occupancy writes no pin")
+		assert.Len(t, w.plain, 1, "the multi grant takes the plain batched write")
+	})
 }
 
 // The ScopeResource write is load-bearing, and this test exists because an
@@ -85,7 +129,7 @@ func TestBindClassDefaults_ScopeWriteIsLoadBearing(t *testing.T) {
 
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(),
 		entitiesFor("github_repo", "read", "demo-org/demo-repo"),
-		allowAll(), &recordingRelWriter{}, "alice", now, 0))
+		allowAll(), &pinningFake{}, "alice", now, 0))
 
 	// A second source binds a DIFFERENT instance of the SAME type, exactly as a
 	// query or ask fill would.
@@ -125,7 +169,7 @@ func TestBindClassDefaults_DeniedDefaultsGrantNothing(t *testing.T) {
 	deny := authz.CheckerFunc(func(_ context.Context, _ authz.Permission, _ authz.Inputs) authz.Result {
 		return authz.Result{Outcome: authz.OutcomeDenied, Message: "no access"}
 	})
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, deny, w, "alice", time.Now, 0))
 
@@ -149,7 +193,7 @@ func TestBindClassDefaults_GrantFailureStillNarrowsScope(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/n-grantfail"}
 	entities := entitiesFor("github_repo", "read", "demo-org/demo-repo")
-	w := &recordingRelWriter{err: errors.New("relation slot_grant not found under definition github_repo")}
+	w := &pinningFake{writeErr: errors.New("relation slot_grant not found under definition github_repo")}
 
 	err := authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", time.Now, 0)
 	require.Error(t, err, "a failed grant write must reach the caller")
@@ -165,7 +209,7 @@ func TestBindClassDefaults_Idempotent(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/n3"}
 	entities := entitiesFor("github_repo", "read", "demo-org/demo-repo")
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", time.Now, 0))
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", time.Now, 0))
@@ -193,7 +237,7 @@ func TestBindClassDefaults_NoOpInputs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w := &recordingRelWriter{}
+			w := &pinningFake{}
 			err := authz.BindClassDefaults(systemCtx(), mem,
 				memory.Scope{Kind: "session", ID: "ns/noop"}, bindSession(), tc.entities, tc.chk, w, tc.subject, time.Now, 0)
 			assert.NoError(t, err)
@@ -227,7 +271,7 @@ func TestBindClassDefaults_FillFromExcludingDefault_BindsNothing(t *testing.T) {
 	memScope := memory.Scope{Kind: "session", ID: "ns/n-nofill"}
 	entities := entitiesFor("github_repo", "read", "demo-org/demo-repo")
 	entities[0].FillFrom = []string{"ask"}
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", time.Now, 0))
 
@@ -254,7 +298,7 @@ func TestBindClassDefaults_FillFromIncludingDefault_StillBinds(t *testing.T) {
 			memScope := memory.Scope{Kind: "session", ID: "ns/n-" + tc.name}
 			entities := entitiesFor("github_repo", "read", "demo-org/demo-repo")
 			entities[0].FillFrom = tc.fillFrom
-			w := &recordingRelWriter{}
+			w := &pinningFake{}
 
 			require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", time.Now, 0))
 
@@ -277,7 +321,7 @@ func TestBindClassDefaults_DefaultRunsThroughTheDeclaredTransformChain(t *testin
 	memScope := memory.Scope{Kind: "session", ID: "ns/n-transform"}
 	entities := entitiesFor("git_repo", "push", "https://github.com/acme/app")
 	entities[0].ValueTransforms = []string{"normalize_url", "spicedb_escape"}
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", time.Now, 0))
 
@@ -294,7 +338,7 @@ func TestBindClassDefaults_UndrivableDefaultIsSkippedNotBoundRaw(t *testing.T) {
 	memScope := memory.Scope{Kind: "session", ID: "ns/n-baddefault"}
 	entities := entitiesFor("git_repo", "push", "https://github.com/acme/app")
 	entities[0].ValueTransforms = []string{"no_such_transform"}
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", time.Now, 0))
 
@@ -310,7 +354,7 @@ func TestBindClassDefaults_GatesPerSlot_NotPerClass(t *testing.T) {
 		{ResourceType: "github_repo", Permission: "read", Defaults: []string{"demo-org/demo-repo"}, FillFrom: []string{"default"}},
 		{ResourceType: "http_target", Permission: "reachable", Defaults: []string{"hash-abc"}, FillFrom: []string{"ask"}},
 	}
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.BindClassDefaults(systemCtx(), mem, memScope, bindSession(), entities, allowAll(), w, "alice", time.Now, 0))
 
