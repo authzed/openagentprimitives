@@ -125,9 +125,9 @@ places the decision outside the model.
 - **Opt-in capabilities.** Every toolkit, tool spec, and capability an agent has
   is one someone added deliberately, so a review covers what was added rather
   than what was left enabled.
-- **A sandbox per tool.** Each tool holds only its own credentials, so a
-  compromised tool cannot borrow another's access. The orchestrating agent never
-  holds them at all.
+- **Isolated sandboxes.** Tools run in sandboxes apart from the agent, and a
+  credential is injected only for the tool that needs it. The model never sees
+  it.
 - **Sub-agents request their own permissions.** Delegation narrows access
   instead of copying it.
 - **Sidecar toolboxes.** Run arbitrary code as an MCP server in its own sandbox,
@@ -168,9 +168,10 @@ are listed here so the set is complete.
 - **Memory and knowledge graph.** Structured recall, ranked search, and
   graph-native queries over what an agent has learned.
 - **Built in and swappable.** The runner, authorization, approvals, sandboxing,
-  credential handling, memory, and audit all ship built in, and every one can be
-  swapped for something your organization already runs without rebuilding the
-  platform around it.
+  credential handling, memory, and audit all ship built in. Model providers,
+  sandbox backends, memory and search stores, channels, and artifact storage
+  plug in through interfaces, so you can use what your organization already
+  runs.
 
 ## Quick start
 
@@ -368,8 +369,8 @@ For architecture and implementation:
 
 To misuse an OAP agent, an attacker has to get past a plan a human approved, a
 slot that cannot be reopened, a tool lens that cannot be widened, an
-authorization check on every call, and a sandbox that never held the credential
-in the first place. None of them is sufficient alone, and each is built on the
+authorization check on every call, and a sandbox, while the model itself never
+sees a credential. None of them is sufficient alone, and each is built on the
 assumption that the others may fail.
 
 ## Contributing

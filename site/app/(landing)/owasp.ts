@@ -14,71 +14,74 @@ export const OWASP: readonly (readonly [
     "ASI01",
     "Agent Goal Hijack",
     "partial",
-    "No goal-lock or plan-divergence detection.",
+    "Goal-lock and plan-divergence detection aren't built yet.",
   ],
   [
     "ASI02",
     "Tool Misuse and Exploitation",
     "substantial",
-    "Egress enforcement is L3/L4; volume budgets are per-call and opt-in.",
+    "Egress is enforced at L3/L4 so far, and volume budgets are per call and opt-in for now.",
   ],
   [
     "ASI03",
     "Identity and Privilege Abuse",
     "substantial",
-    "Sidecar credentials freeze at pod-create; revocation delivery is at-most-once.",
+    "Sidecar credentials are fixed when the pod starts, and revocation is delivered at most once for now.",
   ],
   [
     "ASI04",
     "Agentic Supply Chain",
     "partial",
-    "A hash pins content, not origin. No descriptor signing, no SBOM or AIBOM.",
+    "A hash pins content but not yet origin. Descriptor signing and an SBOM or AIBOM aren't there yet.",
   ],
   [
     "ASI05",
     "Unexpected Code Execution",
     "substantial",
-    "Isolation is per session: tool calls within one session share a UID, /proc, /tmp and /work.",
+    "Isolation is per session for now: tool calls within one session share a UID, /proc, /tmp and /work.",
   ],
   [
     "ASI06",
     "Memory and Context Poisoning",
     "partial",
-    "No content validation on writes; no quarantine, decay or rollback.",
+    "Writes aren't content-validated yet, and quarantine, decay and rollback aren't built yet.",
   ],
   [
     "ASI07",
     "Insecure Inter-Agent Communication",
     "partial",
-    "Delegation stays within one cluster; there is no protocol for agents outside it.",
+    "Delegation stays within one cluster for now; a protocol for agents outside it isn't there yet.",
   ],
   [
     "ASI08",
     "Cascading Failures",
     "partial",
-    "Breakers are per tool and per origin rather than cross-cutting.",
+    "Breakers work per tool and per origin; cross-cutting breakers aren't there yet.",
   ],
   [
     "ASI09",
     "Human-Agent Trust Exploitation",
     "substantial",
-    "No plan-divergence cross-check; no confidence-weighted cues in the UI.",
+    "A plan-divergence cross-check and confidence-weighted cues in the UI aren't built yet.",
   ],
   [
     "ASI10",
     "Rogue Agents",
     "partial",
-    "The tool manifest is enforced but unsigned; tamper-evidence is not tamper-proofing.",
+    "The tool manifest is enforced but not signed yet: it's tamper-evident, not tamper-proof.",
   ],
 ];
 
-const SUMMARY_LABEL: Record<CoverageLevel, string> = {
-  substantial: "substantial",
-  partial: "partial",
-  na: "architectural N/A",
+/** How each level reads in the table's Coverage column. */
+export const COVERAGE_LABEL: Record<CoverageLevel, string> = {
+  substantial: "Substantial",
+  partial: "In progress",
+  na: "Architectural N/A",
 };
 
-/** The table caption, counted from the rows so it cannot drift from them. */
+/** The table caption, counted from the rows so it cannot drift from them.
+ * Labels are COVERAGE_LABEL with the first letter lowercased, so the caption and
+ * the column always name a level the same way. */
 export function coverageSummary(
   rows: readonly (readonly [string, string, CoverageLevel, string])[],
 ): string {
@@ -86,6 +89,10 @@ export function coverageSummary(
   return order
     .map((level) => [level, rows.filter((r) => r[2] === level).length] as const)
     .filter(([, n]) => n > 0)
-    .map(([level, n]) => `${n} ${SUMMARY_LABEL[level]}`)
+    .map(([level, n]) => `${n} ${summaryLabel(level)}`)
     .join(" · ");
+}
+
+function summaryLabel(level: CoverageLevel): string {
+  return COVERAGE_LABEL[level].replace(/^\S/, (c) => c.toLowerCase());
 }
