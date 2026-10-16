@@ -291,32 +291,24 @@ func (p *Pipeline) publishSlotBindRefusedNotice(ctx context.Context, sess *spice
 	if err == nil || !errors.Is(err, authz.ErrSlotPinned) {
 		return
 	}
+	if errors.Is(err, authz.ErrSlotStore) {
+		// A transient store fault was errors.Join'd with the pin refusal (one type
+		// refused, another blipped against SpiceDB). The refusal text then carries
+		// raw endpoints and gRPC status, which is operator detail — not a
+		// user-actionable commitment. Stay operator-only, exactly as this notice
+		// already does for a bare transient failure; the agent retries or asks.
+		log.FromContext(ctx).Info("slot bind refused alongside a transient store fault; the user-facing notice is suppressed to avoid leaking store detail",
+			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+		return
+	}
 	if p.NATS == nil {
 		return
 	}
 	ref := channelevents.SessionRef{Namespace: sess.Namespace, Name: sess.Name}
-	if perr := slotBindRefusedNotice(err.Error(), allRebindNever(bindings)).Publish(p.NATS.Publish, ref, mintRequestID()); perr != nil {
+	if perr := slotBindRefusedNotice(err.Error(), authz.AllRebindNever(bindings)).Publish(p.NATS.Publish, ref, mintRequestID()); perr != nil {
 		log.FromContext(ctx).Info("slot bind refused: publishing the user-facing notice failed; the refusal remains in the operator log only",
 			"session", sess.Namespace+"/"+sess.Name, "err", perr.Error())
 	}
-}
-
-// allRebindNever reports whether EVERY binding in the refused set declares
-// rebind:never — the one case whose only route out is a new session. An empty
-// Rebind reads as the default ("approval"), which DOES have a re-plan route, so
-// any approval/unset binding flips this false. Empty bindings → false: default
-// to naming the re-plan route, which also names the new-session fallback, rather
-// than foreclosing it.
-func allRebindNever(bindings []authz.SlotBinding) bool {
-	if len(bindings) == 0 {
-		return false
-	}
-	for _, b := range bindings {
-		if b.Rebind != authz.SlotRebindNever {
-			return false
-		}
-	}
-	return true
 }
 
 // slotBindRefusedNotice builds the user-facing SlotBindRefused notice. The

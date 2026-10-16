@@ -149,6 +149,11 @@ func (w *RelationWriter) WriteGrantsPinned(ctx context.Context, rels []authz.Rel
 // toID pin, and a DELETE of every relation in revoke — atomic, so an
 // approved move either fully lands (old pin gone, new pin held, old grants
 // revoked) or changes nothing at all.
+//
+// Idempotent at the target: if the precondition fails because the pin already
+// names toID, the move is treated as a no-op (nil), not drift. See the
+// SlotPinner.MovePin contract for why — a plan-scoped approval re-attempts the
+// same move once per covered phase, and all but the first find it already done.
 func (w *RelationWriter) MovePin(ctx context.Context, resourceType, fromID, toID string, revoke []authz.Relation, scope authz.SessionRef) error {
 	fromPin := authz.SlotPinRelation(resourceType, fromID, scope)
 	toPin := authz.SlotPinRelation(resourceType, toID, scope)
@@ -189,6 +194,23 @@ func (w *RelationWriter) MovePin(ctx context.Context, resourceType, fromID, toID
 		return nil
 	}
 	if status.Code(err) == codes.FailedPrecondition {
+		// fromID is no longer the pin. Idempotency: if the pin ALREADY names
+		// toID, a prior move (an earlier covered phase of this same approval, or
+		// a retry) landed this exact repoint — so this is a no-op, not drift.
+		// Read fully consistently and treat pin==toID as success; anything else
+		// is a genuine drift the approver must be told about. The read runs only
+		// on this already-rare precondition-failure path.
+		cur, rerr := w.ReadPin(ctx, resourceType, scope)
+		if rerr != nil {
+			return fmt.Errorf("move pin %s:%s -> %s:%s for %s: checking whether the move already landed: %w",
+				resourceType, fromID, resourceType, toID, scope, rerr)
+		}
+		if cur == toID {
+			// Already at the target. The real move revoked the displaced
+			// instance's grants; a no-op does not re-revoke (see the contract).
+			// The caller's WriteGrantsPinned(toID) binds same-instance next.
+			return nil
+		}
 		return fmt.Errorf("move pin %s:%s -> %s:%s for %s: %w", resourceType, fromID, resourceType, toID, scope, authz.ErrSlotPinned)
 	}
 	return fmt.Errorf("move pin %s:%s -> %s:%s for %s: %w", resourceType, fromID, resourceType, toID, scope, err)

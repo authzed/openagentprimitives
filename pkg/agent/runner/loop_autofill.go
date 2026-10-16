@@ -377,7 +377,7 @@ func (l *Loop) promoteObservedSlots(ctx context.Context) {
 	}
 	if err := l.Engine.PromoteObservedSlots(ctx, l.bindingScope(), l.authzSessionRef(),
 		specs, l.AuthSubject()); err != nil {
-		if errors.Is(err, authz.ErrSlotPinned) {
+		if errors.Is(err, authz.ErrSlotPinned) && !errors.Is(err, authz.ErrSlotStore) {
 			// An authorization outcome, not a hiccup: a single-occupancy pin
 			// refused this instance. Warn (louder than a mechanism error), keep
 			// the Info-trail grep key below for an operator, and record the
@@ -388,6 +388,11 @@ func (l *Loop) promoteObservedSlots(ctx context.Context) {
 			l.recordSlotPinRefusal(ctx, specs, err.Error())
 			return
 		}
+		// Either a plain mechanism error, or a pin refusal errors.Join'd with a
+		// TRANSIENT store fault (ErrSlotStore). The latter must NOT be recorded as
+		// a model-facing refusal: its text carries raw store detail and a retry may
+		// yet bind the type that blipped, so it is logged and left unbound rather
+		// than surfaced as a final ruling.
 		slog.Default().Info("promoting observed slot candidates failed; any gated call stays unbound",
 			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "err", err.Error())
 		return

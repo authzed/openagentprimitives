@@ -96,9 +96,21 @@ func (w *approvedRecordingWriter) MovePin(_ context.Context, resourceType, fromI
 	if w.pins == nil {
 		w.pins = map[string]string{}
 	}
+	key := scope.String() + "\x00" + resourceType
+	cur := w.pins[key]
+	// Model the real MovePin's MUST_MATCH(fromID) and its idempotent no-op at the
+	// target: if the pin already names toID, a prior phase of the same approval
+	// landed this exact move, so it is a no-op (nil), never a drift. If the pin
+	// is NEITHER fromID nor toID, MUST_MATCH fails for real — genuine drift.
+	if cur == toID {
+		return nil
+	}
+	if cur != fromID {
+		return fmt.Errorf("fake move pin %s:%s -> %s:%s: %w", resourceType, fromID, resourceType, toID, ErrSlotPinned)
+	}
 	w.ops = append(w.ops, "move")
 	w.moves = append(w.moves, moveCall{resourceType: resourceType, fromID: fromID, toID: toID, revoke: revoke})
-	w.pins[scope.String()+"\x00"+resourceType] = toID
+	w.pins[key] = toID
 	delete(w.grantsFor, grantStoreKey(resourceType, fromID))
 	return nil
 }
@@ -405,25 +417,26 @@ func TestBindApproved_grantFailureAfterMoveReportsCommittedMove(t *testing.T) {
 	assert.Equal(t, "repoB", w.pins[sess.String()+"\x00git_repo"])
 }
 
-// A read failure (ListGrantsFor) on a LATER moving type, AFTER an earlier type's
-// move already committed, must report the committed move — the same as a grant
-// failure does. The earlier type's prior instance is already revoked, so a bare
-// error (which the approval path classifies as "nothing happened, retry") would
-// tell the approver nothing was granted while access was removed — the exact gap
-// ErrSlotMoveCommitted exists to close. The sibling MovePin failure path wraps
-// it; this one must too.
-func TestBindApproved_listGrantsFailureAfterMoveReportsCommittedMove(t *testing.T) {
+// One type's store failure must NOT strand another type's move-and-grant.
+// GrantSlots handles each type independently, so when crm_company's revoke-set
+// read fails, git_repo's move has ALREADY landed its new grant in git_repo's own
+// iteration — not been abandoned before bindSlots ran (the all-moves-first pass
+// this replaces would have dropped it). crm_company's failure rides out as a
+// transient store fault for that type alone, never mislabeled as a committed
+// move of git_repo.
+func TestBindApproved_oneTypesStoreFailureLeavesAnotherTypesMoveGrantIntact(t *testing.T) {
 	ctx := memory.WithSystemApproval(context.Background(), "test")
 	mem := memory.NewLocal(inmem.NewBackend())
 	sess := SessionRef{Namespace: "ns", Name: "s"}
 	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+	gitPrior := SlotGrantRelation("git_repo", "repoA", "push", sess)
 	w := &approvedRecordingWriter{
 		pins: map[string]string{
 			sess.String() + "\x00git_repo":    "repoA",
 			sess.String() + "\x00crm_company": "coX",
 		},
-		// git_repo moves first and commits; crm_company's revoke-set read then
-		// fails, after the git_repo move is already irreversible in this call.
+		grantsFor: map[string][]Relation{grantStoreKey("git_repo", "repoA"): {gitPrior}},
+		// crm_company's revoke-set read fails; git_repo's move is unaffected.
 		listErr: map[string]error{grantStoreKey("crm_company", "coX"): errors.New("spicedb read unavailable")},
 	}
 
@@ -435,17 +448,62 @@ func TestBindApproved_listGrantsFailureAfterMoveReportsCommittedMove(t *testing.
 		EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrSlotMoveCommitted,
-		"an earlier type already moved, so a later read failure must report a committed move, not a bare error")
-	assert.Len(t, w.moves, 1, "exactly the first type's move landed before the read failed")
-	assert.Equal(t, "repoB", w.pins[sess.String()+"\x00git_repo"], "the committed move's pin stays repointed")
+	assert.ErrorIs(t, err, ErrSlotStore, "the failing type surfaces as a transient store fault")
+	assert.NotErrorIs(t, err, ErrSlotMoveCommitted,
+		"git_repo's success must not be dragged into a committed-move report for a sibling's failure")
+	// git_repo fully landed: moved and granted.
+	assert.Len(t, w.moves, 1, "git_repo's move landed independently")
+	assert.Equal(t, "repoB", w.pins[sess.String()+"\x00git_repo"], "git_repo repointed to the new instance")
+	newGrant := SlotGrantRelation("git_repo", "repoB", "push", sess)
+	assert.True(t, slices.ContainsFunc(w.wrote, func(r Relation) bool {
+		return r.ResourceType == newGrant.ResourceType && r.ResourceID == newGrant.ResourceID && r.Relation == newGrant.Relation
+	}), "git_repo's new grant is written, not stranded by the sibling type's failure")
+	// crm_company never moved.
+	assert.Equal(t, "coX", w.pins[sess.String()+"\x00crm_company"], "the failing type's pin is untouched")
+}
+
+// A plan-scoped approval resolves one BindApproved call per covered phase, and
+// each re-attempts the SAME move. The first repoints the pin; every later one
+// finds the pin already at the target and is a no-op (MovePin's idempotency) —
+// not a drift that drops that phase's grant. This is what lets the move stop
+// depending on which covered phase happens to run first.
+func TestBindApproved_repeatedMoveAcrossPhasesIsIdempotentNotDrift(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	mem := memory.NewLocal(inmem.NewBackend())
+	memScope := memory.Scope{Kind: "session", ID: "ns/s"}
+	sess := SessionRef{Namespace: "ns", Name: "s"}
+	now := func() time.Time { return time.Unix(1700000000, 0).UTC() }
+	gitPrior := SlotGrantRelation("git_repo", "repoA", "push", sess)
+	w := &approvedRecordingWriter{
+		pins:      map[string]string{sess.String() + "\x00git_repo": "repoA"},
+		grantsFor: map[string][]Relation{grantStoreKey("git_repo", "repoA"): {gitPrior}},
+	}
+
+	move := []SlotBinding{{
+		ResourceType: "git_repo", ResourceID: TrustedObjectID("repoB"),
+		Permission: "push", PriorID: TrustedObjectID("repoA"),
+	}}
+
+	// Phase 1: the real move.
+	require.NoError(t, BindApproved(ctx, mem, memScope, sess, w, move,
+		EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now))
+	assert.Len(t, w.moves, 1, "the first phase performs the real move")
+	assert.Equal(t, "repoB", w.pins[sess.String()+"\x00git_repo"])
+
+	// Phase 2: the SAME move, with the now-stale PriorID=repoA. Must succeed as a
+	// no-op (pin already repoB) and still write the grant — not drift-fail.
+	require.NoError(t, BindApproved(ctx, mem, memScope, sess, w, move,
+		EnforcePreconditions, now().Add(time.Hour), logr.Discard(), now),
+		"a repeated move whose target is already pinned must be an idempotent no-op, not a drift")
+	assert.Len(t, w.moves, 1, "no second MovePin is performed; the pin already names the target")
+	assert.Equal(t, "repoB", w.pins[sess.String()+"\x00git_repo"], "the pin stays on the target")
 }
 
 // Two DISTINCT move targets for ONE single-occupancy type in one approval
-// cannot both occupy the slot. moveApprovedPins must refuse the whole set
-// BEFORE any MovePin runs — executing even the first would commit the slot to
-// whichever target happened to be ordered first, an instance the approver was
-// not necessarily shown as THE move.
+// cannot both occupy the slot. GrantSlots refuses the type (two distinct
+// instances) BEFORE any MovePin runs — executing even the first would commit the
+// slot to whichever target happened to be ordered first, an instance the
+// approver was not necessarily shown as THE move.
 func TestBindApproved_twoDistinctMoveTargetsRefusedBeforeAnyMove(t *testing.T) {
 	ctx := memory.WithSystemApproval(context.Background(), "test")
 	mem := memory.NewLocal(inmem.NewBackend())
@@ -468,9 +526,9 @@ func TestBindApproved_twoDistinctMoveTargetsRefusedBeforeAnyMove(t *testing.T) {
 }
 
 // A binding whose PriorID equals its ResourceID is not a move: the pin already
-// names that instance. moveApprovedPins must SKIP it (no MovePin, no needless
-// revoke of the instance's own grants); the subsequent same-instance GrantSlots
-// re-binds it through the normal pinned path.
+// names that instance. GrantSlots must SKIP the move (no MovePin, no needless
+// revoke of the instance's own grants) and bind it through the normal
+// same-instance pinned path (EnsurePin + WriteGrantsPinned).
 func TestBindApproved_moveToSameInstanceIsSkippedNotMoved(t *testing.T) {
 	ctx := memory.WithSystemApproval(context.Background(), "test")
 	mem := memory.NewLocal(inmem.NewBackend())

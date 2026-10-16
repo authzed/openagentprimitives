@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -159,4 +160,40 @@ func TestBindTriggerSlots_TransientError_NoNotice(t *testing.T) {
 
 	assert.Empty(t, slotBindRefusedNotices(t, natsRec),
 		"a transient failure is not a pin ruling and must not be announced as one")
+}
+
+// TestBindTriggerSlots_PinRefusalWithStoreFault_NoNotice is the leak guard: when
+// GrantSlots joins a genuine pin refusal (ErrSlotPinned) with a transient store
+// fault (ErrSlotStore) for a different type, errors.Is(err, ErrSlotPinned) is
+// true — the condition that used to publish — yet the refusal text now carries
+// raw store endpoints and gRPC status. That detail is operator-only; the notice
+// must be suppressed rather than quoting the wrapped store cause to the session.
+func TestBindTriggerSlots_PinRefusalWithStoreFault_NoNotice(t *testing.T) {
+	class := classWithSlots(spiceboxv1alpha1.AuthzSlot{
+		ResourceType: "github_pull_request", Permission: "write_memory",
+		FillFrom: []string{"trigger"},
+	})
+	reqs := TriggerSlotRequestsFor(context.Background(), class)
+	require.Len(t, reqs, 1)
+
+	joined := errors.Join(
+		fmt.Errorf("slot already pinned to a different instance: pinned to github_pull_request:acme/original: %w", authz.ErrSlotPinned),
+		fmt.Errorf("%w: write slot grants: spicedb unavailable: dial tcp 10.0.0.1:50051", authz.ErrSlotStore),
+	)
+	az := &fakeAuthz{grantSlotsErr: joined}
+	natsRec := &fakeNATS{}
+	p := &Pipeline{Authz: az, NATS: natsRec}
+	ch := newGitHubChannel("gh-in", "service:demo")
+	ev := channelkinds.InboundEvent{
+		Channel: ch, DeliveryEvent: "pull_request",
+		RawDelivery: []byte(`{"action":"opened","number":7,"repository":{"full_name":"acme/widgets"},` +
+			`"pull_request":{"node_id":"PR_x"}}`),
+	}
+
+	p.BindTriggerSlots(context.Background(),
+		triggerTestSession(),
+		ev, reqs, time.Now())
+
+	assert.Empty(t, slotBindRefusedNotices(t, natsRec),
+		"a pin refusal joined with a transient store fault must stay operator-only, not leak store detail")
 }

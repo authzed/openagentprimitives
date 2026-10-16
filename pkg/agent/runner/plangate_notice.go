@@ -70,7 +70,12 @@ func approverIDOf(p identity.Principal) string {
 //     new instance was not written. "Nothing was granted" would hide the
 //     revocation; the honest copy says what changed and that the new target
 //     will ask again when the agent reaches it.
-func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error, kind approvalFailure) {
+//
+// rebindNeverOnly refines ONLY the plain-pinned-refusal copy: when every refused
+// binding is a `rebind: never` slot, its commitment cannot be moved by any
+// amendment, so the only route is a new session — the same split channelsd makes
+// (authz.AllRebindNever). Ignored for the fault and committed-move kinds.
+func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error, kind approvalFailure, rebindNeverOnly bool) {
 	if h.l == nil || h.l.InteractionRequestPublish == nil {
 		return
 	}
@@ -106,9 +111,23 @@ func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause er
 		lead = "This session is already committed to a different target for one of its " +
 			"slots, so the instance your approval named was not granted. Other instances " +
 			"the plan named may have been granted; this one was not."
-		nextStep = "To target the committed instance, the plan must name it so an approved " +
-			"amendment can move the commitment; otherwise start a new session for it. " +
-			"Re-approving this card will not move it."
+		if rebindNeverOnly {
+			// A `rebind: never` slot: its commitment is fixed for the session's
+			// life, so NO amendment can move it. Naming the amendment route here
+			// would send the approver into widenings that are refused every time;
+			// the only route is a new session.
+			nextStep = "This commitment is fixed for the session's life and cannot be " +
+				"moved. Start a new session to work on the instance you wanted. " +
+				"Re-approving this card will not change it."
+		} else {
+			// The default (movable) case. The route names the instance the approval
+			// WANTED — not the one already committed, which is what the old copy
+			// pointed at: an approved amendment naming it moves the commitment to
+			// it, or a new session.
+			nextStep = "To reach the instance you wanted, the plan must name it so an " +
+				"approved amendment moves the commitment to it; otherwise start a new " +
+				"session for it. Re-approving this card will not move it."
+		}
 	case approvalFault:
 	}
 
@@ -217,6 +236,17 @@ func planGateItems(c plangate.Card) []channelevents.InteractionItem {
 					Tone: channelevents.ToneExternal,
 				})
 			}
+			if r.PinnedImmovable != "" {
+				// A `rebind: never` slot pinned elsewhere: the named instance
+				// cannot be granted here. Carried as its own line so a surface
+				// cannot render the resource above as grantable — external tone
+				// because it is a hard limit the approver must not skim past.
+				item.Items = append(item.Items, channelevents.InteractionItem{
+					Text: "cannot be granted — this session is pinned to " + r.PinnedImmovable +
+						" for its life; start a new session to reach " + r.Detail,
+					Tone: channelevents.ToneExternal,
+				})
+			}
 		}
 		out = append(out, item)
 	}
@@ -254,13 +284,23 @@ func (k approvalFailure) String() string {
 // classifyApprovalBindFailure maps a BindApproved error onto the notice the
 // approver gets. ok=false means the error is none of the slot-pin outcomes and
 // the caller keeps its own (log-only) handling. Order matters: a committed move
-// can wrap a drifted or pinned error from a later type, and a drifted move also
-// wraps ErrSlotPinned.
+// can wrap a drifted or pinned error from a later type, a drifted move also
+// wraps ErrSlotPinned, and a transient store fault (ErrSlotStore) can be
+// errors.Join'd alongside a genuine ErrSlotPinned refusal for a DIFFERENT type.
+//
+// ErrSlotStore is therefore checked BEFORE the plain pin refusal: a store blip
+// is recoverable, so reporting the whole call as a final "re-approving will not
+// move it" when a retry would bind the timed-out type is the wrong answer. A
+// committed or drifted move still wins above it — those name what definitively
+// happened to the pin, which the approver needs told regardless of a co-occurring
+// blip.
 func classifyApprovalBindFailure(err error) (approvalFailure, bool) {
 	switch {
 	case errors.Is(err, authz.ErrSlotMoveCommitted):
 		return approvalMoveCommitted, true
 	case errors.Is(err, authz.ErrSlotMoveDrifted):
+		return approvalFault, true
+	case errors.Is(err, authz.ErrSlotStore):
 		return approvalFault, true
 	case errors.Is(err, authz.ErrSlotPinned):
 		return approvalPinnedRefusal, true

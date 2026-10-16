@@ -1173,9 +1173,11 @@ func slotValuesOf(plan plangate.Plan, index int) map[string]string {
 //     first-fill, which is the pre-move behaviour;
 //   - a multi-occupancy slot holds no pin, so ReadPin returns "" and nothing is
 //     stamped;
-//   - a `rebind: never` slot (SlotRebind) is never stamped: it cannot move by
-//     approval, so the approval binds as a plain request and GrantSlots refuses
-//     it with the new-session route;
+//   - a `rebind: never` slot (SlotRebind) pinned to a DIFFERENT instance is
+//     stamped PinnedImmovable, not MovedFrom: it cannot move by approval, so the
+//     card must say the named instance cannot be granted (new-session route)
+//     rather than render a plain first-fill. The bind still takes the ordinary
+//     first-fill path and GrantSlots refuses it;
 //   - a read failure, or a value that will not derive to an object id, leaves
 //     MovedFrom empty and logs — a first-fill card, never an error at card time.
 //
@@ -1209,13 +1211,6 @@ func (h *PlanGate) stampMovedFrom(ctx context.Context, sess authz.SessionRef, re
 				// compare and no move to record.
 				continue
 			}
-			if h.deps.SlotRebind[ref.Type] == authz.SlotRebindNever {
-				// rebind: never — the pin is for the session's life. Offering a
-				// move here would have the approval retarget a slot the class
-				// declared unmovable; the bind is refused instead, with the
-				// "start a new session" route.
-				continue
-			}
 			pinned, ok := currentPin(ref.Type)
 			if !ok || pinned == "" {
 				continue
@@ -1226,41 +1221,70 @@ func (h *PlanGate) stampMovedFrom(ctx context.Context, sess authz.SessionRef, re
 					"session", sess.String(), "slotType", ref.Type, "err", err.Error())
 				continue
 			}
-			if pinned != objID.String() {
-				ref.MovedFrom = pinned
+			if pinned == objID.String() {
+				// Already pinned to this instance — a same-instance re-grant, not
+				// a move and not a block. Nothing to record.
+				continue
 			}
+			if h.deps.SlotRebind[ref.Type] == authz.SlotRebindNever {
+				// rebind: never — the pin is fixed for the session's life, so the
+				// instance this phase names CANNOT be granted here. Record it as
+				// immovable (not a move) so the card says exactly that with the
+				// new-session route, rather than rendering a plain first-fill the
+				// human would read as grantable. No PriorID is derived from this,
+				// so the bind takes the ordinary first-fill path and GrantSlots
+				// refuses the instance.
+				ref.PinnedImmovable = pinned
+				continue
+			}
+			ref.MovedFrom = pinned
 		}
 	}
 }
 
-// threadMovedFrom copies the MovedFrom that stampMovedFrom recorded on the
-// covered records onto the card's added slots, matched by (type, id), so the
-// amendment card renders a re-point as a move rather than a first-fill.
+// threadMovedFrom copies the pin state stampMovedFrom recorded on the covered
+// records onto the card's added slots, matched by (type, id): MovedFrom so the
+// amendment card renders a re-point as a move, and PinnedImmovable so a
+// `rebind: never` slot pinned elsewhere renders as a blocked line rather than a
+// first-fill.
 //
 // The two carry the same instance by different routes: a covered record's
 // SlotRef names the phase's slot, and addedSlots is the delta DiffPhase found —
 // a re-point is a changed slot value, so the newly-pointed instance appears in
 // both. Returns a copy; the input delta is never mutated, and an addedSlot with
-// no matching stamped move is left a first-fill. A no-op when nothing moved.
+// no matching stamped state is left a first-fill. A no-op when nothing was
+// stamped.
 func threadMovedFrom(slots []plangate.Slot, covered []plangateaudit.Content) []plangate.Slot {
 	if len(slots) == 0 {
 		return slots
 	}
 	moved := map[string]string{}
+	immovable := map[string]string{}
 	for _, rec := range covered {
 		for _, ref := range rec.SlotRefs {
-			if ref.MovedFrom != "" && ref.ID != "" {
-				moved[ref.Type+"\x00"+ref.ID] = ref.MovedFrom
+			if ref.ID == "" {
+				continue
+			}
+			key := ref.Type + "\x00" + ref.ID
+			if ref.MovedFrom != "" {
+				moved[key] = ref.MovedFrom
+			}
+			if ref.PinnedImmovable != "" {
+				immovable[key] = ref.PinnedImmovable
 			}
 		}
 	}
-	if len(moved) == 0 {
+	if len(moved) == 0 && len(immovable) == 0 {
 		return slots
 	}
 	out := append([]plangate.Slot(nil), slots...)
 	for i := range out {
-		if mf, ok := moved[out[i].Type+"\x00"+out[i].ID]; ok {
+		key := out[i].Type + "\x00" + out[i].ID
+		if mf, ok := moved[key]; ok {
 			out[i].MovedFrom = mf
+		}
+		if pi, ok := immovable[key]; ok {
+			out[i].PinnedImmovable = pi
 		}
 	}
 	return out

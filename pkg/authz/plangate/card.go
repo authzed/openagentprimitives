@@ -125,6 +125,14 @@ type CardLine struct {
 	// stays the instance itself (and Href stays byte-identical to it), and so a
 	// surface renders the revocation as its own line instead of losing it.
 	MovedFrom string `json:"movedFrom,omitempty"`
+
+	// PinnedImmovable, on a RESOURCE line, is the display label of the instance a
+	// `rebind: never` slot is pinned to while this card names a different one
+	// (Detail). Approving does NOT move it — the pin is fixed for the session's
+	// life — so Detail cannot be granted here. A surface renders this as a
+	// blocked line ("pinned to PinnedImmovable, cannot change it; start a new
+	// session"), never as a grant. Mutually exclusive with MovedFrom.
+	PinnedImmovable string `json:"pinnedImmovable,omitempty"`
 }
 
 func (c Card) JSON() (string, error) {
@@ -432,6 +440,9 @@ func buildProjectedPlanWhat(
 	}
 	var b strings.Builder
 	var deferred []int
+	// Set when any rendered resource is a `rebind: never` slot pinned elsewhere —
+	// named, but not grantable here — so the coverage line does not over-claim.
+	blocked := false
 	phases := make([]CardPhase, 0, len(visible))
 
 	for _, i := range visible {
@@ -481,6 +492,41 @@ func buildProjectedPlanWhat(
 		// the DERIVED id, so it can only merge slots that genuinely resolve to
 		// the same object; a type with no declared chain falls back to its raw
 		// value and merges with nothing.
+		// A MOVE is a per-TYPE property — the pin lives on one resource type — but
+		// the dedup below collapses every type that resolves to ONE instance onto a
+		// single line. So a move recorded on one of those types (git_repo keyed on
+		// the remote URL) has to render on the one kept line even when a DIFFERENT
+		// type of the same instance (github_repo keyed on owner/name) sorts first
+		// and wins the dedup. Pre-scan for the move per derived id so whichever
+		// slot the dedup keeps still shows it: without this, a whole-plan card
+		// rendered a re-point as a plain first-fill while the approval it recorded
+		// revoked the displaced instance — the approver authorizing a revocation
+		// they were never shown.
+		// An IMMOVABLE pin (a `rebind: never` slot pinned elsewhere) is carried the
+		// same way, and for the same dedup reason: whichever type wins the merge,
+		// the one kept line must say the instance cannot be granted here.
+		type pinInstance struct {
+			resourceType string
+			from         string
+		}
+		movedByID := make(map[string]pinInstance, len(ordered))
+		immovableByID := make(map[string]pinInstance, len(ordered))
+		for _, s := range ordered {
+			if s.ID == "" {
+				continue
+			}
+			id, _ := derivedInstanceID(slotValueTransforms, s.Type, s.ID)
+			if s.MovedFrom != "" {
+				if _, ok := movedByID[id]; !ok {
+					movedByID[id] = pinInstance{resourceType: s.Type, from: s.MovedFrom}
+				}
+			}
+			if s.PinnedImmovable != "" {
+				if _, ok := immovableByID[id]; !ok {
+					immovableByID[id] = pinInstance{resourceType: s.Type, from: s.PinnedImmovable}
+				}
+			}
+		}
 		slotSeen := make(map[string]bool, len(ordered))
 		for _, s := range ordered {
 			id, shown := derivedInstanceID(slotValueTransforms, s.Type, s.ID)
@@ -504,16 +550,26 @@ func buildProjectedPlanWhat(
 				href = ""
 			}
 			line := CardLine{Text: text, Detail: detail, Icon: icon, Href: href}
-			if shown != "" && s.MovedFrom != "" {
+			if mv, moving := movedByID[id]; moving && shown != "" {
 				// A MOVE, rendered exactly as the single-phase and amendment
 				// cards render it (buildSlotSection): both instances, and the
-				// revocation the approver must not miss. Without this a whole-plan
-				// card showed a re-point as a plain first-fill while the approval
-				// it recorded repointed the pin.
-				displaced := displacedLabel(resourceDisplays, s.Type, s.MovedFrom)
+				// revocation the approver must not miss. The displaced label is
+				// resolved through the type that actually carries the move (its
+				// pin is the one repointing), not whichever type won the dedup.
+				displaced := displacedLabel(resourceDisplays, mv.resourceType, mv.from)
 				line.MovedFrom = displaced
 				b.WriteString("\n  reaches " + text + " — " + displaced + " → " + detail)
 				b.WriteString("\n    Approving moves the pin and revokes this session's access to " + displaced + ".")
+			} else if im, stuck := immovableByID[id]; stuck && shown != "" {
+				// A `rebind: never` slot pinned elsewhere: the named instance
+				// cannot be granted here. Say so — the instance, then why and the
+				// route out — rather than render a grantable-looking line.
+				pinnedLabel := displacedLabel(resourceDisplays, im.resourceType, im.from)
+				line.PinnedImmovable = pinnedLabel
+				blocked = true
+				b.WriteString("\n  reaches " + text + " — " + detail)
+				b.WriteString("\n    Cannot be granted: this session is pinned to " + pinnedLabel +
+					" for its life and cannot change it. Start a new session to reach " + detail + ".")
 			} else {
 				b.WriteString("\n  reaches " + text + " — " + detail)
 			}
@@ -577,6 +633,11 @@ func buildProjectedPlanWhat(
 		}
 		coverage = "Approving covers the phases whose target is named. " +
 			strings.Join(names, ", ") + " names no target yet and will ask again once it does."
+	}
+	if blocked {
+		// A named-but-immovable resource is not covered by this approval, so the
+		// coverage line must not let "covers every phase" be read as covering it.
+		coverage += " Resources marked as blocked above cannot be granted in this session; start a new session to reach them."
 	}
 	coverage += "\nApproving grants only the resources you have access to; the rest go to their owners."
 	b.WriteString("\n" + coverage)
@@ -725,6 +786,7 @@ func buildSlotSection(
 	var b strings.Builder
 	b.WriteString("\n\nAlso asks to reach:")
 	unnamed := 0
+	blocked := 0
 	for _, s := range ordered {
 		text, _, _ := resolveResourceLine(displays, s.Type, s.ID)
 		b.WriteString("\n  " + text + " — ")
@@ -736,7 +798,9 @@ func buildSlotSection(
 		// "<current> → <proposed>": the session is already pinned to a different
 		// instance of this single-occupancy slot, and approving repoints it. A
 		// first-fill (MovedFrom empty) renders the proposed instance alone,
-		// byte-identically to the pre-move card.
+		// byte-identically to the pre-move card. An IMMOVABLE pin
+		// (PinnedImmovable set) renders the named instance too, but is a BLOCK
+		// rather than a grant — see below.
 		switch {
 		case s.ID == "":
 			unnamed++
@@ -745,6 +809,18 @@ func buildSlotSection(
 			b.WriteString(displacedLabel(displays, s.Type, s.MovedFrom) + " → " + s.ID)
 		default:
 			b.WriteString(s.ID)
+		}
+		// A `rebind: never` slot pinned to a DIFFERENT instance cannot be granted
+		// here at all: the pin is fixed for the session's life. Say exactly that —
+		// the named instance, then why it can't take and the route out — in place
+		// of the grant sentence a first-fill would get, so the approver is not
+		// shown a line that reads as grantable when it never will be.
+		if s.ID != "" && s.PinnedImmovable != "" {
+			blocked++
+			b.WriteString("\n    Cannot be granted: this session is pinned to " +
+				displacedLabel(displays, s.Type, s.PinnedImmovable) +
+				" for its life and cannot change it. Start a new session to reach " + s.ID + ".")
+			continue
 		}
 		perm := permission[s.Type]
 		if p, ok := granting[s.Type]; ok && p != "" {
@@ -763,11 +839,16 @@ func buildSlotSection(
 	// The coverage state is the actual question being answered: does saying yes
 	// finish this, or is it the first of several prompts? An approver who is not
 	// told cannot tell the two apart, and the whole point of naming targets in
-	// the plan is that the first case becomes possible.
-	if unnamed == 0 {
-		b.WriteString("\nEvery resource above is named, so this approval covers them.")
-	} else {
+	// the plan is that the first case becomes possible. A blocked (immovable)
+	// resource is named yet NOT covered, so it must not be swept into "covers
+	// them" — that would contradict the block line printed right above.
+	switch {
+	case unnamed > 0:
 		b.WriteString("\nSome resources are not named yet, so this phase will ask again once they are.")
+	case blocked > 0:
+		b.WriteString("\nThe resources above that are not marked blocked are covered by this approval.")
+	default:
+		b.WriteString("\nEvery resource above is named, so this approval covers them.")
 	}
 	b.WriteString("\n" + slotStandingSummary(ordered, standing))
 	return b.String()

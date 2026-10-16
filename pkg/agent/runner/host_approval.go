@@ -2349,16 +2349,14 @@ func (h *runnerHost) recordPlanGateDecision(
 	// A single-occupancy pin moves at most ONCE per approval. A plan-scoped card
 	// covers several phases and stampMovedFrom stamps the SAME move onto every
 	// covered phase that names the moved-to instance; each phase is then bound by
-	// its OWN BindApproved call. Left as-is, the first phase repoints the pin
-	// (repoA->repoB) and each later phase re-attempts the identical move with a
-	// now-stale PriorID=repoA, whose MUST_MATCH drift-fails — silently dropping
-	// that phase's grant while still recording it approved. Dedupe so only the
-	// first covered record per type carries the move; the rest bind same-instance
-	// against the pin the first move already set. Done BEFORE the delegable lookup
-	// below (and the union it reads), because a SlotRef's identity includes
-	// MovedFrom: clearing it afterward would leave a later phase's requested ref
-	// no longer matching the delegable key looked up for it, dropping its grant.
-	dedupeCoveredMoves(pg.covered)
+	// its OWN BindApproved call, each carrying the same PriorID. The FIRST repoints
+	// the pin (repoA->repoB); every later one finds the pin already at the target
+	// and is an idempotent no-op in MovePin, not a drift — so no record's MovedFrom
+	// has to be stripped to keep the move from being re-attempted, and every
+	// covered phase keeps it on its own approved record for the audit trail. (This
+	// used to require clearing MovedFrom off all but the first covered record,
+	// which also erased it from those phases' audit records; MovePin's idempotency
+	// made that band-aid unnecessary.)
 
 	// Asked ONCE for the union and intersected per phase. A plan-scoped card
 	// covers several phases that often request the same instance, and asking
@@ -2380,7 +2378,7 @@ func (h *runnerHost) recordPlanGateDecision(
 		//
 		// A standing-lookup blip is a recoverable FAULT, not a pin refusal, so the
 		// "fault on our side, try once more" copy is the honest one here.
-		h.publishPlanGateApprovalFailed(ctx, err, approvalFault)
+		h.publishPlanGateApprovalFailed(ctx, err, approvalFault, false)
 		return
 	}
 
@@ -2572,7 +2570,11 @@ func (h *runnerHost) narrowToApproved(
 			//     nothing.
 			slog.Default().Info("plan_gate: an approved slot bind did not fully apply; telling the approver",
 				"session", scp.ID, "bindings", len(bindings), "failure", kind.String(), "err", err.Error())
-			h.publishPlanGateApprovalFailed(ctx, err, kind)
+			// A pinned refusal whose every refused binding is `rebind: never` can
+			// only be worked in a new session — no amendment moves it — so the
+			// notice must route there, not to a widening that would be refused
+			// every time. Same split channelsd makes.
+			h.publishPlanGateApprovalFailed(ctx, err, kind, authz.AllRebindNever(bindings))
 			return
 		}
 		slog.Default().Info("plan_gate: the approval was recorded but did not narrow the session; "+
@@ -2690,38 +2692,6 @@ func (l *Loop) slotRebindByType() map[string]string {
 		}
 	}
 	return out
-}
-
-// dedupeCoveredMoves keeps each single-occupancy slot's MovedFrom on only the
-// FIRST covered record that names that type, clearing it from every later one.
-//
-// A plan-scoped approval is resolved one BindApproved call PER covered phase,
-// and stampMovedFrom stamps the same pin move onto every covered phase that
-// names the moved-to instance. A pin moves at most once per approval: the first
-// phase's BindApproved repoints it, and once it has, a later phase carrying the
-// same (now-stale) PriorID would re-attempt the identical move and drift-fail
-// its MUST_MATCH — dropping that phase's grant while the phase is still recorded
-// approved, and making a re-approval drift-fail every phase. Clearing MovedFrom
-// on the later records turns them into same-instance binds against the pin the
-// first move already set, which is what the pinned grant path expects. MovedFrom
-// is advisory display metadata, outside the plan digest and the fold, so
-// clearing it changes no approval/ceiling state — only whether that phase
-// re-attempts a move it must not.
-func dedupeCoveredMoves(recs []plangateaudit.Content) {
-	movedType := map[string]bool{}
-	for ri := range recs {
-		for si := range recs[ri].SlotRefs {
-			ref := &recs[ri].SlotRefs[si]
-			if ref.MovedFrom == "" {
-				continue
-			}
-			if movedType[ref.Type] {
-				ref.MovedFrom = ""
-				continue
-			}
-			movedType[ref.Type] = true
-		}
-	}
 }
 
 // approvedPhaseRecords is what a yes writes: one record per covered phase, or
