@@ -57,11 +57,20 @@ func FromApplied(pl channelevents.InteractionAppliedPayload) (d Decision, delive
 		// Denied and expired both resume as false; only an explicit approval is
 		// true. A client-side timeout that already forgot the request makes the
 		// false a no-op.
+		//
+		// ResponseText rides the SAME arm as the approve/deny boolean because the
+		// code path IS an approval (login_human_step kind:code): the human both
+		// approves AND supplies the free-text code. It is distinct from the
+		// ResumeChoice arm's OutcomeText, which carries a CLOSED action id, not a
+		// typed string. Empty for every confirm/tool/content/plan approval, so
+		// threading it here is a no-op for them. SECURITY: consumed only by the
+		// runner's human-step handler, never surfaced to the model.
 		return Decision{
-			Approved:   pl.Outcome == channelevents.OutcomeApproved,
-			ApproverID: approverID,
-			Approver:   approver,
-			Reason:     pl.Reason,
+			Approved:     pl.Outcome == channelevents.OutcomeApproved,
+			ApproverID:   approverID,
+			Approver:     approver,
+			Reason:       pl.Reason,
+			ResponseText: pl.ResponseText,
 		}, true, true
 
 	default:

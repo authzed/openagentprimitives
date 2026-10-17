@@ -25,6 +25,14 @@ type Outcome struct {
 	Reason      string
 	MintedURL   string
 
+	// ResponseText is a FREE-TEXT answer a handler carries from the decision
+	// through to the applied envelope — distinct from the closed OutcomeText.
+	// Today only login_human_step's kind:code handler sets it (the human's typed
+	// login code). SECURITY: a secret on that path; the pipe places it on the
+	// OUTBOUND applied (the leg the runner resumes off) only, stripped from the IN
+	// cleanup copy, never rendered, never logged. Empty for every other handler.
+	ResponseText string
+
 	// Suppressed marks an ASYNC category whose real resolution is out-of-band
 	// (queued_messages fires a KindInterruptRequest; the eventual
 	// KindInterruptApplied is bridged back into interaction_applied). When

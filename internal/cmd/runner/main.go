@@ -153,7 +153,9 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/broker/inproc"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/githubapp"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/imports" // register the static/oauth/federated/githubApp credkind.Kinds the broker dispatches to via registry.Get
+	credkindregistry "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/registry"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credresolve"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/directcred"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/onepassword"  // register the "onepassword" directcred.Source Phase C's browser form filler dispatches to via directcred.Get (Fetch at use time)
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/secretsource" // register the "secret" directcred.Source for the same Phase C Fetch consumer
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/externaltoken"
@@ -394,6 +396,14 @@ func run(cfg *config) error {
 	// race-free and establishes a happens-before with the Loop's field writes.
 	var loopRef atomic.Pointer[runner.Loop]
 
+	// browserCapturersRef holds the per-session `persistent` browser toolboxes'
+	// state capturers, stored once the browser tools are synthesized (below) and
+	// read late-bound by the SIGTERM handler so the last login state is captured
+	// into each state Secret BEFORE the pod dies (spec §2.3 "and on graceful
+	// stop"). Empty (nil) until browser tools exist and for every ephemeral-only
+	// session, so the handler is a no-op in the common case.
+	var browserCapturersRef atomic.Pointer[[]browsertoolboxsynth.StateCapturer]
+
 	// All memory access — turn transcripts and the gap Kinds
 	// (authz_decision, relwrites_audit, label, approval, lifecycle) —
 	// goes over HTTP to the operator-hosted Memory. The runner keeps no
@@ -483,6 +493,11 @@ func run(cfg *config) error {
 			loop = l
 		}
 		runStopHandler(stopCtx, memSigned, scope, loop, sessionUID, time.Now().UTC())
+		// Capture each persistent browser toolbox's session state BEFORE the loop
+		// is cancelled and the pod dies, so a login that happened this run survives
+		// the reap and is re-injected on wake. Best-effort on its own timeout; a
+		// failure is logged and never blocks the stop.
+		captureBrowserStateOnStop(browserCapturersRef.Load())
 		stopCancel()
 		cancel()
 	}()
@@ -1489,6 +1504,17 @@ func run(cfg *config) error {
 	const browserPodIPPollInterval = 2 * time.Second
 
 	browserTools := []tool.Tool{}
+	// browserCapturers accumulates the persistent toolboxes' SIGTERM-time state
+	// capturers, published to browserCapturersRef after the loop.
+	var browserCapturers []browsertoolboxsynth.StateCapturer
+	// browserSections carries each resolved toolbox's one-line prompt fragment
+	// (spec §5.1 — query_logins' catalog size, and the allowed-host count in
+	// allowlist mode). The browser toolbox is hand-wired here rather than
+	// through capability.Capability/SectionOfferer (see
+	// browsertoolboxsynth.PromptSection's doc comment), so this is a second,
+	// independent source of PromptSections alongside assembled.Sections below
+	// — merged at the WithPromptSections call rather than decided there.
+	var browserSections []capability.PromptSection
 	for _, rt := range sess.Status.ResolvedBrowserToolboxes {
 		if rt.BrowserPodIP == "" {
 			slog.Info("browser toolbox IP not yet reflected; polling",
@@ -1560,7 +1586,22 @@ func run(cfg *config) error {
 		// offered to a model that cannot consume it.
 		acceptsImages := provider.NativeInputMIMEs(sess.Status.EffectiveSettings.Model.Name).Has("image/png")
 		gateURL := fmt.Sprintf("http://%s:%d", rt.BrowserPodIP, rt.GatePort)
-		built, serr := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages)
+		// The credential-filler Fetch seam: resolves {{login...}} placeholders at
+		// use time against the bound identity's directcred source. nil when the
+		// toolbox binds no identity (no catalog → no placeholder resolves).
+		fetch := newBrowserCredentialFetcher(c, ns, rt)
+		// request_human_step's blocking confirm + captcha notice. Late-bound over
+		// loopRef the same way PreferenceSaver is (the tool table is assembled
+		// before the session's Loop exists), so the requester resolves the live
+		// host/Loop only at call time. Shared across this session's toolboxes.
+		humanStep := runner.NewLateBoundHumanStepRequester(func() *runner.Loop { return loopRef.Load() })
+		// Persistent-state store (Task C9): a StateStore over the per-session state
+		// Secret for a `persistent` toolbox (the effective state resolved by the
+		// operator and frozen into rt.Spec.State), nil for an ephemeral one — which
+		// disables capture/inject in Synthesize. The operator created the Secret
+		// empty and pinned the runner Role's get;update to exactly it.
+		store := newBrowserStateStore(c, ns, &sess, rt)
+		built, serr := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch, humanStep, store)
 		if serr != nil {
 			if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
 				fmt.Sprintf("browser toolbox %q: %v", rt.Name, serr)); werr != nil {
@@ -1569,6 +1610,20 @@ func run(cfg *config) error {
 			return nil
 		}
 		browserTools = append(browserTools, built...)
+		// Collect the state capturer for the SIGTERM handler (one per toolbox; every
+		// tool of a toolbox shares one Session, so the first built tool is enough).
+		if store != nil && len(built) > 0 {
+			if sc, ok := built[0].(browsertoolboxsynth.StateCapturer); ok {
+				browserCapturers = append(browserCapturers, sc)
+			}
+		}
+		if sec := browsertoolboxsynth.PromptSection(rt); sec != nil {
+			browserSections = append(browserSections, *sec)
+		}
+	}
+	// Publish the persistent-browser capturers for the late-bound SIGTERM handler.
+	if len(browserCapturers) > 0 {
+		browserCapturersRef.Store(&browserCapturers)
 	}
 
 	// Resolve opted-in skills for this agent class. The ceiling enforcement
@@ -2168,7 +2223,13 @@ func run(cfg *config) error {
 	// Capability-owned prompt sections ride with the tools they describe
 	// (capability.SectionOfferer): the views capability's "Your page" exists
 	// only when update_view does. Nothing here decides whether to include one.
-	composeOpts = append(composeOpts, runner.WithPromptSections(assembled.Sections))
+	//
+	// browserSections is the browser toolbox's analog of the same rule, from
+	// its own hand-wired path (built alongside browserTools above, not through
+	// capability.Capability): PromptSection returns nil exactly when
+	// query_logins is withheld, so appending it here is still "the tool's own
+	// decision rides along", not a decision made in this file.
+	composeOpts = append(composeOpts, runner.WithPromptSections(append(assembled.Sections, browserSections...)))
 	composedSystem := runner.ComposeSystem(systemPrompt, mergedTools, skillMeta, repoInstrs, assetKinds, modalityInstructions, composeOpts...)
 
 	// Record WHAT the agent was asked, alongside the turn log's record of WHICH
@@ -2346,10 +2407,14 @@ func run(cfg *config) error {
 		PlanGateSlotStanding:       runner.SlotStandingOf(&class),
 		PlanGatePermissionTitles:   runner.PermissionTitlesOf(&class),
 		PlanGateResourceDisplays:   runner.ResourceDisplaysOf(&class),
-		ResourceStandings:          runner.ResourceStandingsOf(&class),
-		PlanGateMaxCardHandles:     runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
-		PlanGateMaxAutoApprove:     runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings),
-		PlanGateRequirePlan:        runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
+		// Display only (C8): names the signing identity on the web_host#act
+		// card line, from the resolved toolboxes' own catalog -- not from the
+		// class, since the identity binding is a BrowserToolbox concern.
+		PlanGateWebHostIdentityLabels: runner.BrowserHostIdentityLabels(sess.Status.ResolvedBrowserToolboxes),
+		ResourceStandings:             runner.ResourceStandingsOf(&class),
+		PlanGateMaxCardHandles:        runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
+		PlanGateMaxAutoApprove:        runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings),
+		PlanGateRequirePlan:           runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
 
 		// Live CR pointers, so the loop can dispatch autofill and
 		// per-user-message binding. Nil disables those paths, as a defence
@@ -2554,6 +2619,25 @@ func run(cfg *config) error {
 				slog.Info("authz BindClassDefaults failed",
 					"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
 			}
+		}
+	}
+
+	// Unattended browser sites (C8): write their web_host#act grant
+	// UNCONDITIONALLY at session cold start — no Check, no human card. An
+	// operator's BrowserSite.Unattended declaration IS the authorization,
+	// exactly like an approved plan-gate card writes its grant directly (see
+	// authz.BindApproved) — never through BindClassDefaults above, whose
+	// admissibleCandidates gate Checks each candidate against the subject's
+	// EXISTING standing. web_host's own standing arm is inert (its `owner`
+	// relation is never written — see browserschema.Resource), so that Check
+	// would always deny and drop every unattended candidate before any grant
+	// existed. See engine.Engine.GrantUnattendedSlots's doc for the same
+	// reasoning at the interface boundary.
+	if unattended := runner.UnattendedBrowserSlotBindings(sess.Status.ResolvedBrowserToolboxes, runner.SlotTransformsOf(&class)); len(unattended) > 0 {
+		sessRef := authz.SessionRef{Namespace: sess.Namespace, Name: sess.Name}
+		if err := loop.Engine.GrantUnattendedSlots(rootCtx, sessRef, unattended); err != nil {
+			slog.Info("authz GrantUnattendedSlots failed: unattended browser site(s) will not be acted on until a human approves",
+				"session", sess.Namespace+"/"+sess.Name, "bindings", len(unattended), "err", err.Error())
 		}
 	}
 
@@ -3972,5 +4056,161 @@ func sidecarNoticeSink(loop *runner.Loop, sessKey client.ObjectKey) func(context
 		besteffort.Log(slog.Default().Info, "publish sidecar failure notice",
 			loop.InteractionRequestPublish(ctx, sessKey.Namespace, sessKey.Name, env),
 			"session", sessKey.String())
+	}
+}
+
+// newBrowserCredentialFetcher builds the credential-filler Fetch seam for one
+// resolved browser toolbox, mirroring the operator's resolveBrowserCatalog
+// recipe (pkg/controllers/agentsession/browserpod.go): it resolves the bound
+// identity's first directCredentials credential and its directcred source, then
+// — lazily, on each Fetch — reads the backing Secret and dispatches to the
+// source's Fetch. Reading the Secret per Fetch (rather than capturing its bytes
+// for the session's lifetime) keeps the raw credential material in memory only
+// for the moment of use plus the browser session's short §5.3 hold.
+//
+// Returns nil when the toolbox binds no identity: with no catalog, no
+// {{login...}} placeholder can resolve (the filler's rule 2 denies first), so
+// there is nothing to Fetch. Every error path returns the error to the filler,
+// which renders it as a fail-closed tool result — never a credential value.
+func newBrowserCredentialFetcher(c client.Client, ns string, rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.CredentialFetcher {
+	if rt.IdentityName == "" {
+		return nil
+	}
+	identityName := rt.IdentityName
+	return func(ctx context.Context, catalogID string) (directcred.Credential, error) {
+		var id spiceboxv1alpha1.AgentIdentity
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: identityName}, &id); err != nil {
+			return directcred.Credential{}, fmt.Errorf("get AgentIdentity %q: %w", identityName, err)
+		}
+		var cred *spiceboxv1alpha1.AgentCredential
+		for i := range id.Spec.Credentials {
+			if id.Spec.Credentials[i].DirectCredentials != nil {
+				cred = &id.Spec.Credentials[i]
+				break
+			}
+		}
+		if cred == nil {
+			return directcred.Credential{}, fmt.Errorf("AgentIdentity %q has no directCredentials credential", identityName)
+		}
+		// Classify through the credkind registry (never a cred.Type switch) to
+		// locate the backing Secret and key, exactly as resolveBrowserCatalog does.
+		k, err := credkindregistry.Get(cred.Type)
+		if err != nil {
+			return directcred.Credential{}, fmt.Errorf("classify credential %q: %w", cred.Name, err)
+		}
+		secRef := k.SecretRef(*cred)
+		if secRef == nil || secRef.Name == "" {
+			return directcred.Credential{}, fmt.Errorf("credential %q has no backing Secret", cred.Name)
+		}
+		var sec corev1.Secret
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: secRef.Name}, &sec); err != nil {
+			return directcred.Credential{}, fmt.Errorf("read credential Secret %q: %w", secRef.Name, err)
+		}
+		src, ok := directcred.Get(cred.DirectCredentials.Source)
+		if !ok {
+			return directcred.Credential{}, fmt.Errorf(
+				"no directcred source registered for %q (the binary may be missing its blank import)", cred.DirectCredentials.Source)
+		}
+		cfg := directcred.Config{
+			SecretData: sec.Data,
+			Vault:      cred.DirectCredentials.Vault,
+			VaultID:    pinnedBrowserVaultID(&id, cred.Name),
+		}
+		return src.Fetch(ctx, cfg, catalogID)
+	}
+}
+
+// pinnedBrowserVaultID returns the vault id the identity's status pinned for
+// credName (onepassword), or "" when none is recorded (the secret source has no
+// vault concept). Mirrors the operator's pinnedVaultID, which is unexported.
+func pinnedBrowserVaultID(id *spiceboxv1alpha1.AgentIdentity, credName string) string {
+	for _, pv := range id.Status.PinnedVaults {
+		if pv.Credential == credName {
+			return pv.VaultID
+		}
+	}
+	return ""
+}
+
+// browserStateSecretDataKey is the state Secret's one data key the runner writes
+// the captured state blob under. The runner is the SOLE owner of this key: the
+// operator creates the state Secret EMPTY (ensureBrowserStateSecret) and never
+// reads or writes this key itself, so there is no operator-side constant to stay
+// byte-identical with — the same pattern the gate-token "token" key already uses
+// in this file.
+const browserStateSecretDataKey = "state"
+
+// browserStateStore persists a persistent browser toolbox's captured session
+// state (cookies + localStorage) into the per-session state Secret the operator
+// created empty. The runner is the SOLE writer: its per-session Role grants
+// get;update pinned to exactly this Secret (agentsession.BrowserStateRBACRules).
+type browserStateStore struct {
+	c   client.Client
+	key client.ObjectKey
+}
+
+var _ browsertoolboxsynth.StateStore = (*browserStateStore)(nil)
+
+// newBrowserStateStore returns a StateStore for a PERSISTENT toolbox, or nil for
+// an ephemeral one (which disables capture/inject in Synthesize). The effective
+// state was resolved by the operator and frozen into rt.Spec.State, so the runner
+// reads one consistent answer.
+func newBrowserStateStore(c client.Client, ns string, sess *spiceboxv1alpha1.AgentSession, rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.StateStore {
+	if rt.Spec.State != spiceboxv1alpha1.BrowserStatePersistent {
+		return nil
+	}
+	return &browserStateStore{
+		c:   c,
+		key: client.ObjectKey{Namespace: ns, Name: agentsession.BrowserStateSecretName(sess, rt.Ref)},
+	}
+}
+
+// Load returns the last-saved state blob, or (nil, nil) when the Secret is empty
+// (a first boot — the operator created it with no data). A missing Secret is also
+// treated as empty rather than an error: an ephemeral→persistent edit mid-session
+// is degenerate, and a clean start is the safe behavior.
+func (s *browserStateStore) Load(ctx context.Context) ([]byte, error) {
+	var sec corev1.Secret
+	if err := s.c.Get(ctx, s.key, &sec); err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get browser state Secret %q: %w", s.key.Name, err)
+	}
+	return sec.Data[browserStateSecretDataKey], nil
+}
+
+// Save overwrites the state Secret's single data key. The operator created the
+// Secret, so a get-then-update preserves its labels/ownerRefs; the runner only
+// ever rewrites this one key.
+func (s *browserStateStore) Save(ctx context.Context, data []byte) error {
+	var sec corev1.Secret
+	if err := s.c.Get(ctx, s.key, &sec); err != nil {
+		return fmt.Errorf("get browser state Secret %q for update: %w", s.key.Name, err)
+	}
+	if sec.Data == nil {
+		sec.Data = map[string][]byte{}
+	}
+	sec.Data[browserStateSecretDataKey] = data
+	if err := s.c.Update(ctx, &sec); err != nil {
+		return fmt.Errorf("update browser state Secret %q: %w", s.key.Name, err)
+	}
+	return nil
+}
+
+// captureBrowserStateOnStop runs each persistent toolbox's SIGTERM-time state
+// capture on its own bounded context. Best-effort: a capture failure is logged
+// and never blocks the stop (the pod is terminating anyway). A nil/empty set
+// (ephemeral-only or pre-boot SIGTERM) is a no-op.
+func captureBrowserStateOnStop(capturers *[]browsertoolboxsynth.StateCapturer) {
+	if capturers == nil {
+		return
+	}
+	for _, sc := range *capturers {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := sc.CaptureState(ctx); err != nil {
+			slog.Info("browser: capture-on-stop failed (best-effort)", "err", err.Error())
+		}
+		cancel()
 	}
 }

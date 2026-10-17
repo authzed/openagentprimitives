@@ -20,6 +20,39 @@ func applied(category, outcome, outcomeText string) channelevents.InteractionApp
 	}
 }
 
+// TestFromApplied_LoginHumanStepCarriesResponseText is the C7 carrier crux: a
+// login_human_step approval that carries a free-text code (the human's typed
+// login code) delivers it on Decision.ResponseText — a GENUINE text field, not
+// smuggled through the closed OutcomeText/Action. This is the one thing the
+// confirm half never needed and the code half cannot work without.
+func TestFromApplied_LoginHumanStepCarriesResponseText(t *testing.T) {
+	pl := applied(categories.LoginHumanStep, channelevents.OutcomeApproved, "")
+	pl.ResponseText = "123456"
+
+	d, deliver, registered := approval.FromApplied(pl)
+
+	require.True(t, registered)
+	require.True(t, deliver)
+	assert.True(t, d.Approved, "the code path is an approval")
+	assert.Equal(t, "123456", d.ResponseText, "the typed code must ride back as free text")
+	assert.Empty(t, d.Action, "the code must NOT be smuggled through the closed Action field")
+}
+
+// TestFromApplied_DeniedCodeCarriesNoText proves a denial drops the free text —
+// a declined code must not resume as approved and must carry nothing to type.
+func TestFromApplied_DeniedCodeCarriesNoText(t *testing.T) {
+	pl := applied(categories.LoginHumanStep, channelevents.OutcomeDenied, "")
+	pl.ResponseText = "should-not-matter"
+
+	d, deliver, registered := approval.FromApplied(pl)
+
+	require.True(t, registered)
+	require.True(t, deliver)
+	assert.False(t, d.Approved, "a denial is not an approval")
+	// The runner's RequestCode only reads the code on an approval, so even a
+	// (malformed) denial that carried text never reaches the page.
+}
+
 // The guard that was missing. Every category the runner blocks on must resume
 // off an applied envelope; a category that does not is a session that publishes
 // its prompt, accepts the click, and then hangs until its approval timeout with
@@ -59,6 +92,15 @@ func TestFromApplied_EveryRunnerGateResumes(t *testing.T) {
 		},
 		{
 			name: "plan_amendment: approved → Approved=true", category: categories.PlanAmendment,
+			wantDeliver: true,
+			check:       func(t *testing.T, d approval.Decision) { assert.True(t, d.Approved) },
+		},
+		{
+			// login_human_step (confirm half): a pure approve/deny the runner's
+			// request_human_step block resumes off. Registered here proves the
+			// browser human-step card can never hang the runner the way plan_phase
+			// once did — the whole reason FromApplied is registry-driven.
+			name: "login_human_step: approved → Approved=true", category: categories.LoginHumanStep,
 			wantDeliver: true,
 			check:       func(t *testing.T, d approval.Decision) { assert.True(t, d.Approved) },
 		},

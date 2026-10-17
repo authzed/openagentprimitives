@@ -1905,6 +1905,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		mcpSecretNames = collectCredentialSecretNames(ctx, &ai)
 	}
 
+	// Browser toolboxes resolve their OWN per-toolbox identity's website logins
+	// runner-side (the credential filler, Phase C Task C4), so the per-session
+	// Role pins agentidentities/secrets `get` to each toolbox's bound identity and
+	// that identity's directCredentials backing Secret. Resolved from the class's
+	// browser refs; the Role is rebuilt on every reconcile, so a pin not yet
+	// resolvable this pass appears on the next — before the runner (held until the
+	// browser pod is Ready) ever needs it. These rules are appended to the Role
+	// BuildRunnerRBAC returns, below.
+	browserIdentityNames, browserCredSecretNames, browserStateSecretNames := r.resolveBrowserIdentityPins(ctx, &sess, &ac)
+	browserRBACRules := BrowserIdentityRBACRules(browserIdentityNames, browserCredSecretNames)
+	// The runner's ONLY secret-WRITE grant: get;update pinned to each persistent
+	// browser toolbox's per-session state Secret (C9). Appended to the same Role
+	// as the identity read pins above, at both the create and update apply sites.
+	browserRBACRules = append(browserRBACRules, BrowserStateRBACRules(browserStateSecretNames)...)
+
 	memTokenSecretName := MemoryTokenSecretName(&sess)
 	var existingSec corev1.Secret
 	// argsHashKeyBytes is the per-session 32-byte HMAC key used for both
@@ -1981,6 +1996,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// every per-session Secret; the runner mounts it as a file rather than
 		// receiving a plaintext env var.
 		sa, role, rb, sec, crb := BuildRunnerRBAC(&sess, &ac, tokenStr, bundleNames, channelSecretNames, natsCreds, r.SpiceDBToken, argsHashKey, auditSeedHex, llmAPIKey, mcpAgentIdentityName, mcpSecretNames)
+		role.Rules = append(role.Rules, browserRBACRules...)
 		if natsCreds != "" {
 			// nats.ca rides in the same per-session Secret as the creds.
 			// BuildRunnerRBAC always initializes sec.Data, so no nil guard.
@@ -2070,6 +2086,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// arguments make this path discard the returned Secret and leave the live
 		// one's data untouched, beyond the ensures above.
 		sa, role, rb, _, crb := BuildRunnerRBAC(&sess, &ac, tokenStr, bundleNames, channelSecretNames, "", "", "", "", "", mcpAgentIdentityName, mcpSecretNames)
+		role.Rules = append(role.Rules, browserRBACRules...)
 		for _, obj := range []client.Object{sa, role, rb} {
 			if err := r.Client.Patch(ctx, obj,
 				client.Apply, client.ForceOwnership, client.FieldOwner("agentsession-rbac"),
@@ -2660,6 +2677,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			// cache, and the resolved snapshot is mutated/read downstream.
 			tbSpec := *tb.Spec.DeepCopy()
 
+			// C-R5: resolve the EFFECTIVE state here, at the snapshot, rather than
+			// via a static CRD default (which would mask the identity-driven default,
+			// see browsertoolbox_types.go State). An UNSET state defaults to
+			// persistent iff an identity is bound, else ephemeral (spec §1.4);
+			// an EXPLICIT state is honored as-is (the CEL rule already refuses an
+			// explicit persistent with no identity). The frozen tbSpec.State then
+			// carries the effective value into status, so the operator (state-Secret
+			// lifecycle, RBAC pins) and the runner (capture/inject) read one
+			// consistent answer. The derivation is a pure function of the spec, so
+			// the status write stays idempotent across re-reconciles.
+			if tbSpec.State == "" {
+				if tbSpec.Access.Identity != "" {
+					tbSpec.State = spiceboxv1alpha1.BrowserStatePersistent
+				} else {
+					tbSpec.State = spiceboxv1alpha1.BrowserStateEphemeral
+				}
+			}
+
 			// Resolve the bound identity's login catalog + identity-derived hosts.
 			// Permanent misconfiguration (missing identity, no directCredentials
 			// credential, unregistered credential/source kind, a backing Secret
@@ -2702,6 +2737,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 					fmt.Sprintf("mint gate token for browser %q: %v", ref.Ref, err))
 			}
 			rt.BrowserPodName = BrowserPodName(&sess, rt.Ref)
+			// Persistent toolboxes only: create the per-session state Secret EMPTY so
+			// the runner (the sole writer of its content) has a target to write
+			// captured cookies + localStorage into. Read-before-create and never
+			// overwritten here, exactly like mintBrowserToken, so a re-reconcile and
+			// a reap/wake leave a populated Secret untouched. An ephemeral toolbox
+			// gets no state Secret at all (C-R5, spec §2.3).
+			if rt.Spec.State == spiceboxv1alpha1.BrowserStatePersistent {
+				if err := r.ensureBrowserStateSecret(ctx, &sess, rt); err != nil {
+					return r.markBootFailed(ctx, &sess,
+						spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+						fmt.Sprintf("ensure state Secret for browser %q: %v", ref.Ref, err))
+				}
+			}
 			// Stamp the NetworkPolicy BEFORE the pod exists (an enforcing CNI must
 			// never see an unconstrained browser pod), then the policy ConfigMap the
 			// gate mounts, then create the pod — same ordering the sidecar path uses.
@@ -4171,6 +4219,91 @@ func collectCredentialSecretNames(ctx context.Context, ai *spiceboxv1alpha1.Agen
 	}
 	sort.Strings(names)
 	return names
+}
+
+// resolveBrowserIdentityPins returns the deduplicated, sorted browser
+// AgentIdentity names and directCredentials backing-Secret names the credential
+// filler reads at runtime, resolved from the AgentClass's browser toolbox refs.
+// For each ref it reads the BrowserToolbox CR's spec.access.identity and, when
+// set, that identity's directCredentials backing Secret name(s).
+//
+// Best-effort and fail-OPEN on resolution blips (a missing CR, a Get error): the
+// Role is rebuilt every reconcile, and the browser block downstream fails the
+// session closed if an identity is truly absent — so skipping a pin here only
+// delays it to a later pass, it never grants more than intended. A pin that is
+// resolvable always lands before the runner (held until the browser pod is
+// Ready) needs it.
+func (r *Reconciler) resolveBrowserIdentityPins(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ac *spiceboxv1alpha1.AgentClass) (identityNames, secretNames, stateSecretNames []string) {
+	if ac == nil || len(ac.Spec.BrowserToolboxes) == 0 {
+		return nil, nil, nil
+	}
+	idSeen := map[string]bool{}
+	secSeen := map[string]bool{}
+	stateSeen := map[string]bool{}
+	for _, ref := range ac.Spec.BrowserToolboxes {
+		if ref.Ref == "" {
+			continue
+		}
+		var tb spiceboxv1alpha1.BrowserToolbox
+		if err := r.Client.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: ref.Ref}, &tb); err != nil {
+			log.FromContext(ctx).Info("resolveBrowserIdentityPins: get BrowserToolbox failed; skipping its identity pin this pass",
+				"session", sess.Namespace+"/"+sess.Name, "browsertoolbox", ref.Ref, "err", err.Error())
+			continue
+		}
+		idName := tb.Spec.Access.Identity
+		// PERSISTENT-ONLY state-Secret write pin. The effective state is resolved
+		// the SAME way the snapshot resolves it (C-R5): an explicit persistent, or
+		// an unset state with a bound identity. An explicit ephemeral (even with an
+		// identity) and an identity-less toolbox both earn NO state-write rule, so
+		// the runner can only write the Secret the operator actually created.
+		effPersistent := tb.Spec.State == spiceboxv1alpha1.BrowserStatePersistent ||
+			(tb.Spec.State == "" && idName != "")
+		if effPersistent {
+			stateName := BrowserStateSecretName(sess, ref.Ref)
+			if !stateSeen[stateName] {
+				stateSeen[stateName] = true
+				stateSecretNames = append(stateSecretNames, stateName)
+			}
+		}
+		if idName == "" {
+			continue // no bound identity → no filler → nothing to pin.
+		}
+		if !idSeen[idName] {
+			idSeen[idName] = true
+			identityNames = append(identityNames, idName)
+		}
+		var ai spiceboxv1alpha1.AgentIdentity
+		if err := r.Client.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: idName}, &ai); err != nil {
+			log.FromContext(ctx).Info("resolveBrowserIdentityPins: get AgentIdentity failed; skipping its Secret pin this pass",
+				"session", sess.Namespace+"/"+sess.Name, "agentidentity", idName, "err", err.Error())
+			continue
+		}
+		for _, secName := range directCredentialSecretNames(&ai) {
+			if secName != "" && !secSeen[secName] {
+				secSeen[secName] = true
+				secretNames = append(secretNames, secName)
+			}
+		}
+	}
+	sort.Strings(identityNames)
+	sort.Strings(secretNames)
+	sort.Strings(stateSecretNames)
+	return identityNames, secretNames, stateSecretNames
+}
+
+// directCredentialSecretNames returns the backing Secret names of every
+// directCredentials credential on ai — the Secrets the browser credential filler
+// reads at use time. Read straight off the block (the SecretRef is right there),
+// so it needs no credkind-registry round-trip.
+func directCredentialSecretNames(ai *spiceboxv1alpha1.AgentIdentity) []string {
+	var out []string
+	for i := range ai.Spec.Credentials {
+		dc := ai.Spec.Credentials[i].DirectCredentials
+		if dc != nil && dc.SecretRef.Name != "" {
+			out = append(out, dc.SecretRef.Name)
+		}
+	}
+	return out
 }
 
 // runnerNATSUserGrant builds the per-session NATS user grant for a runner.

@@ -286,6 +286,36 @@ type InProcessRunnerFactory struct {
 	// from the per-session Secret agentsession.BrowserTokenSecretName names.
 	BrowserConnect func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) (gateURL, token string)
 
+	// BrowserFiller, when non-nil, supplies the credential-filler Fetch seam for
+	// a resolved browser toolbox — the test analogue of the production runner's
+	// directcred-backed fetcher, so a {{login...}} fill resolves against a FAKE
+	// source and no test ever touches a real vault. nil leaves the filler with no
+	// fetcher, so a {{login...}} placeholder fails closed (rule 2 denies a host
+	// absent from the catalog; a catalogued host with no fetcher errors) — which
+	// is correct for every scenario that does not deliberately fill a credential.
+	BrowserFiller func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.CredentialFetcher
+
+	// BrowserHumanStep, when non-nil, supplies request_human_step's blocking
+	// confirm/code + captcha-notice seam — the test analogue of production's
+	// runner.NewLateBoundHumanStepRequester. It is handed a per-session loopFn (read
+	// at tool-call time, well after the Loop exists) so the requester binds its
+	// approval host to the live Loop, exactly as NewLateBoundHumanStepRequester does
+	// over main.go's loopRef. A scenario exercising a human sign-in step sets it to
+	// `func(loopFn) { return runner.NewLateBoundHumanStepRequester(loopFn) }`; nil
+	// leaves request_human_step offered (in act mode) but erroring at call time,
+	// which is correct for every scenario that does not deliberately drive one.
+	BrowserHumanStep func(loopFn func() *runner.Loop) browsertoolboxsynth.HumanStepRequester
+
+	// BrowserStateStore, when non-nil, supplies the persistent-state seam (Task
+	// C9): the StateStore a `persistent` browser toolbox captures cookies +
+	// localStorage into and injects from across reap/wake — the test analogue of
+	// production's newBrowserStateStore over the per-session state Secret. nil
+	// leaves capture/inject OFF (the ephemeral posture), which is correct for every
+	// scenario that does not deliberately exercise persistence. Wiring the seam
+	// here (not only in internal/cmd/runner) is the "wire it in both places" rule:
+	// a future persistence bundle sets it, and the control is never silently off.
+	BrowserStateStore func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.StateStore
+
 	// ExtraTools, when non-empty, are appended to every spawned runner.Loop's
 	// tool set. Test seam for scenarios that need a tool the CRD-driven
 	// synthesis paths can't produce in-process (e.g. a producer tool that
@@ -1177,10 +1207,23 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 	if f.LLM != nil && sess.Status.EffectiveSettings != nil {
 		browserAcceptsImages = f.LLM.NativeInputMIMEs(sess.Status.EffectiveSettings.Model.Name).Has("image/png")
 	}
-	browserTools, err := f.buildBrowserTools(sess, sess.Status.ResolvedBrowserToolboxes, browserAcceptsImages)
+	// The per-session loopFn the browser human-step requester binds to (read at
+	// tool-call time, after `loop` is assigned below) — the harness analogue of
+	// production's loopRef accessor. Shared by the boot pass and the refresher.
+	browserLoopFn := func() *runner.Loop { return loop }
+	browserTools, err := f.buildBrowserTools(sess, sess.Status.ResolvedBrowserToolboxes, browserAcceptsImages, browserLoopFn)
 	if err != nil {
 		return nil, err
 	}
+	// browserSections mirrors internal/cmd/runner/main.go's identical boot-time
+	// collection: one PromptSection per resolved toolbox that binds an identity
+	// (browsertoolboxsynth.PromptSection), merged into WithPromptSections below
+	// alongside assembled.Sections. Like browserTools above, this is normally
+	// empty at boot in this harness (the toolbox is stamped mid-session by
+	// h.MarkBrowserReady) — the Global Constraint this mirrors is boot-time
+	// parity with production, not mid-session parity, which neither runner-side
+	// surface has for a toolbox that becomes Ready after ComposeSystem already ran.
+	browserSections := browserPromptSections(sess.Status.ResolvedBrowserToolboxes)
 
 	// nonMetaTools threads sandbox+mcp+sidecar+browser+ExtraTools into Assemble
 	// in the same order internal/cmd/runner/main.go uses (sandbox, mcp, sidecar,
@@ -1767,7 +1810,10 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		composeOpts = append(composeOpts, runner.WithRequirePlan())
 	}
 	// mirrors internal/cmd/runner/main.go — the harness is a second wiring site.
-	composeOpts = append(composeOpts, runner.WithPromptSections(assembled.Sections))
+	// browserSections rides alongside assembled.Sections for the same reason it
+	// does in main.go: the browser toolbox decides per-toolbox (PromptSection
+	// returns nil without an identity), this call site just merges.
+	composeOpts = append(composeOpts, runner.WithPromptSections(append(assembled.Sections, browserSections...)))
 	composedSystem := runner.ComposeSystem(systemPrompt, tools, nil, nil, nil, nil, composeOpts...)
 
 	// User prompt resolution mirrors the system prompt: inline only.
@@ -1918,10 +1964,13 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		PlanGateSlotStanding:       runner.SlotStandingOf(class),
 		PlanGatePermissionTitles:   runner.PermissionTitlesOf(class),
 		PlanGateResourceDisplays:   runner.ResourceDisplaysOf(class),
-		ResourceStandings:          runner.ResourceStandingsOf(class),
-		PlanGateRequirePlan:        runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
-		PlanGateMaxAutoApprove:     runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings),
-		PlanGateMaxCardHandles:     runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
+		// Mirrors internal/cmd/runner/main.go (C8): display only, from the
+		// resolved toolboxes' own catalog.
+		PlanGateWebHostIdentityLabels: runner.BrowserHostIdentityLabels(sess.Status.ResolvedBrowserToolboxes),
+		ResourceStandings:             runner.ResourceStandingsOf(class),
+		PlanGateRequirePlan:           runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
+		PlanGateMaxAutoApprove:        runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings),
+		PlanGateMaxCardHandles:        runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
 
 		System:            composedSystem,
 		UserPrompt:        userPrompt,
@@ -2197,7 +2246,7 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 	if f.K8s != nil {
 		sessKey := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}
 		sidecarRefresh := f.newSidecarToolRefresher(sessKey, sessionCache)
-		browserRefresh := f.newBrowserToolRefresher(sessKey, browserAcceptsImages)
+		browserRefresh := f.newBrowserToolRefresher(sessKey, browserAcceptsImages, browserLoopFn)
 		loop.ToolRefresher = func(ctx context.Context) (runner.ToolRefreshResult, error) {
 			sr, serr := sidecarRefresh(ctx)
 			br, berr := browserRefresh(ctx)
@@ -3219,13 +3268,13 @@ func portFromURL(raw string) (int32, bool) {
 // status at boot), so `resolved` is normally empty here and this is a no-op;
 // newBrowserToolRefresher picks up the stamped entry on the next turn. The boot
 // pass exists for production parity and for any entry already present at boot.
-func (f *InProcessRunnerFactory) buildBrowserTools(sess *spiceboxv1alpha1.AgentSession, resolved []spiceboxv1alpha1.ResolvedBrowserToolbox, acceptsImages bool) ([]tool.Tool, error) {
+func (f *InProcessRunnerFactory) buildBrowserTools(sess *spiceboxv1alpha1.AgentSession, resolved []spiceboxv1alpha1.ResolvedBrowserToolbox, acceptsImages bool, loopFn func() *runner.Loop) ([]tool.Tool, error) {
 	if len(resolved) == 0 {
 		return nil, nil
 	}
 	var out []tool.Tool
 	for _, rt := range resolved {
-		built, err := f.synthBrowserToolbox(sess, rt, acceptsImages)
+		built, err := f.synthBrowserToolbox(sess, rt, acceptsImages, loopFn)
 		if err != nil {
 			return nil, err
 		}
@@ -3234,13 +3283,28 @@ func (f *InProcessRunnerFactory) buildBrowserTools(sess *spiceboxv1alpha1.AgentS
 	return out, nil
 }
 
+// browserPromptSections collects the one-line prompt fragment
+// (browsertoolboxsynth.PromptSection) for each resolved toolbox that returns
+// one, mirroring internal/cmd/runner/main.go's identical boot-time collection
+// alongside buildBrowserTools. Pure (no I/O, unlike buildBrowserTools), so it
+// is a plain loop rather than a method — nothing here needs f.
+func browserPromptSections(resolved []spiceboxv1alpha1.ResolvedBrowserToolbox) []capability.PromptSection {
+	var out []capability.PromptSection
+	for _, rt := range resolved {
+		if sec := browsertoolboxsynth.PromptSection(rt); sec != nil {
+			out = append(out, *sec)
+		}
+	}
+	return out
+}
+
 // synthBrowserToolbox resolves one toolbox's (gateURL, token) and synthesizes
 // its tools. The BrowserConnect seam, when set, supplies the live in-process
 // gate URL + token (the driver's StartGate result); otherwise it takes the
 // production-shaped path — gate URL from status, token from the per-session
 // Secret — exactly as internal/cmd/runner/main.go does. Shared by the boot pass
 // and the refresher so both run the identical code path.
-func (f *InProcessRunnerFactory) synthBrowserToolbox(sess *spiceboxv1alpha1.AgentSession, rt spiceboxv1alpha1.ResolvedBrowserToolbox, acceptsImages bool) ([]tool.Tool, error) {
+func (f *InProcessRunnerFactory) synthBrowserToolbox(sess *spiceboxv1alpha1.AgentSession, rt spiceboxv1alpha1.ResolvedBrowserToolbox, acceptsImages bool, loopFn func() *runner.Loop) ([]tool.Tool, error) {
 	var gateURL, token string
 	if f.BrowserConnect != nil {
 		gateURL, token = f.BrowserConnect(rt)
@@ -3260,7 +3324,34 @@ func (f *InProcessRunnerFactory) synthBrowserToolbox(sess *spiceboxv1alpha1.Agen
 		}
 		token = string(tokenSecret.Data["token"])
 	}
-	built, err := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages)
+	// The credential-filler Fetch seam: a FAKE source when the test wires one,
+	// else nil (placeholders fail closed; no vault is ever contacted). The
+	// production runner builds this from the bound identity's directcred source
+	// (internal/cmd/runner's newBrowserCredentialFetcher) — the "wire it in both"
+	// seam, kept fake here so e2e needs no real vault.
+	var fetch browsertoolboxsynth.CredentialFetcher
+	if f.BrowserFiller != nil {
+		fetch = f.BrowserFiller(rt)
+	}
+	// request_human_step's blocking confirm + captcha notice. Wired via the
+	// optional BrowserHumanStep seam (the human-step bundle sets it to a
+	// late-bound requester over the live Loop, mirroring production's
+	// runner.NewLateBoundHumanStepRequester); nil otherwise, which leaves
+	// request_human_step offered but erroring at call time — no current bundle
+	// invokes it. Same "fake/real seam wired by the test" shape as BrowserFiller.
+	var humanStep browsertoolboxsynth.HumanStepRequester
+	if f.BrowserHumanStep != nil {
+		humanStep = f.BrowserHumanStep(loopFn)
+	}
+	// Persistent-state store (Task C9): the test seam when wired, else nil (capture
+	// and inject off — the ephemeral posture). Same fake/real-seam-wired-by-test
+	// shape as BrowserFiller/BrowserHumanStep, so the control is present in BOTH
+	// wiring sites and never silently off.
+	var store browsertoolboxsynth.StateStore
+	if f.BrowserStateStore != nil {
+		store = f.BrowserStateStore(rt)
+	}
+	built, err := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch, humanStep, store)
 	if err != nil {
 		return nil, fmt.Errorf("buildBrowserTools: browser %q: %w", rt.Ref, err)
 	}
@@ -3275,7 +3366,7 @@ func (f *InProcessRunnerFactory) synthBrowserToolbox(sess *spiceboxv1alpha1.Agen
 // BrowserPodIP), so a toolbox is synthesized once per pod IP and never
 // duplicated across turns — mirroring the sidecar refresher. Browser tools are
 // not secret-gated, so there is no secret-output gate here.
-func (f *InProcessRunnerFactory) newBrowserToolRefresher(sessKey types.NamespacedName, acceptsImages bool) func(ctx context.Context) (runner.ToolRefreshResult, error) {
+func (f *InProcessRunnerFactory) newBrowserToolRefresher(sessKey types.NamespacedName, acceptsImages bool, loopFn func() *runner.Loop) func(ctx context.Context) (runner.ToolRefreshResult, error) {
 	synthed := map[string]string{}
 	return func(ctx context.Context) (runner.ToolRefreshResult, error) {
 		var sess spiceboxv1alpha1.AgentSession
@@ -3290,7 +3381,7 @@ func (f *InProcessRunnerFactory) newBrowserToolRefresher(sessKey types.Namespace
 			if prevIP, ok := synthed[rt.Name]; ok && prevIP == rt.BrowserPodIP {
 				continue // already synthesized against this pod IP.
 			}
-			built, err := f.synthBrowserToolbox(&sess, rt, acceptsImages)
+			built, err := f.synthBrowserToolbox(&sess, rt, acceptsImages, loopFn)
 			if err != nil {
 				return runner.ToolRefreshResult{Added: added}, fmt.Errorf("inprocess browser refresh: %w", err)
 			}

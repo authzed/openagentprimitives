@@ -29,6 +29,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
@@ -46,8 +47,10 @@ import (
 
 	_ "github.com/authzed/openagentprimitives/pkg/agent/harness/apnative" // register the default harness for agentclassctrl.Reconciler
 	"github.com/authzed/openagentprimitives/pkg/agent/restartmarker"
+	"github.com/authzed/openagentprimitives/pkg/agent/runner"
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/identityadvisor"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
+	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
@@ -96,9 +99,11 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/spicedbauthorizer"
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
 	"github.com/authzed/openagentprimitives/pkg/platform/artifactstore"
+	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/broker/inproc"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind"
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/secretsource" // register the "secret" directcred.Source so a browser toolbox's directCredentials identity resolves its login catalog (AgentIdentity Verify + AgentSession resolveBrowserCatalog), mirroring internal/cmd/operator + internal/cmd/runner
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/federation"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/sensitive"
 	apnats "github.com/authzed/openagentprimitives/pkg/platform/nats"
@@ -582,6 +587,28 @@ func (h *Harness) SetBrowserConnect(fn func(rt spiceboxv1alpha1.ResolvedBrowserT
 	h.runnerFactory.BrowserConnect = fn
 }
 
+// SetBrowserFiller installs the in-process runner factory's credential-filler
+// Fetch seam. The analogue of SetBrowserConnect for the {{login...}} fill path:
+// the fetcher resolves a toolbox's stored login against a FAKE directcred source
+// (never a real vault), so a scenario can exercise the type tool filling a
+// website credential. When nil (the default), a {{login...}} placeholder fails
+// closed. Call after Start and before the browser session's first turn.
+func (h *Harness) SetBrowserFiller(fn func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.CredentialFetcher) {
+	h.runnerFactory.BrowserFiller = fn
+}
+
+// SetBrowserHumanStep installs the in-process runner factory's request_human_step
+// seam — the blocking confirm/code + captcha-notice requester. The analogue of
+// SetBrowserFiller for the human-in-the-loop sign-in path: it is handed a
+// per-session loopFn so the requester binds its approval host to the live Loop,
+// exactly as production's runner.NewLateBoundHumanStepRequester does. A scenario
+// that drives request_human_step (e.g. a kind:code login) sets this; nil (the
+// default) leaves the tool offered but erroring at call time. Call after Start and
+// before the browser session's first turn.
+func (h *Harness) SetBrowserHumanStep(fn func(loopFn func() *runner.Loop) browsertoolboxsynth.HumanStepRequester) {
+	h.runnerFactory.BrowserHumanStep = fn
+}
+
 // SetMinter installs a federation.Minter on the in-process runner
 // factory's token broker seam. Must be called BEFORE the session that
 // needs federated credentials is spawned (the broker is constructed
@@ -823,6 +850,106 @@ func (h *Harness) MarkBrowserReady(ns, name, llmName, ref, gateURL, token string
 	}
 	require.NoError(h.t, h.K8s.Status().Patch(ctx, &sess, client.MergeFrom(base)),
 		"MarkBrowserReady: patch status.resolvedBrowserToolboxes for %s/%s", ns, name)
+}
+
+// e2eBrowserImageRef is the placeholder browser-toolbox image the harness
+// stamps onto every per-session browser pod it builds. BuildBrowserPod refuses
+// an empty ref; the pod is never scheduled (envtest has no kubelet), so the
+// value only has to be non-empty. The runner reaches the real in-process gate
+// through the BrowserConnect seam, never this pod — MarkBrowserPodsReady fakes
+// the readiness a kubelet would report.
+const e2eBrowserImageRef = "e2e.invalid/browser:fixture"
+
+// e2eBrowserPodIP is the dummy PodIP MarkBrowserPodsReady stamps onto a browser
+// pod. The reconciler only needs a non-empty IP + a Ready condition to stop
+// holding runner creation (controller.go's browserPodNotReady gate); the runner
+// dials the BrowserConnect gate, not this address.
+const e2eBrowserPodIP = "10.244.0.254"
+
+// MarkBrowserPodsReady starts a background goroutine that marks every
+// per-session browser pod the operator creates as Running + Ready with a dummy
+// PodIP, until the test ends.
+//
+// A referenced BrowserToolbox makes the AgentSession reconciler create a
+// per-session browser pod and HOLD runner creation until that pod reports a
+// Ready PodIP (controller.go's browserPodNotReady gate). envtest has no kubelet
+// to make a pod Ready, so without this the runner for a browser-referencing
+// bundle never starts. This is the browser analogue of the readiness a real
+// kubelet provides — the same reason MarkSidecarReady/MarkBrowserReady stamp
+// status a kubelet would have produced. It patches ONLY pods carrying the
+// browser-toolbox label, so a bundle's runner/sidecar/detector pods are
+// untouched.
+//
+// Idempotent and self-healing: it re-scans on a ticker, so it covers a pod
+// recreated on reap/wake and one that only appears after a later reconcile. Call
+// once, after Start, for a bundle whose AgentClass references a BrowserToolbox.
+func (h *Harness) MarkBrowserPodsReady() {
+	ctx, cancel := context.WithCancel(context.Background())
+	h.t.Cleanup(cancel)
+	go func() {
+		ticker := time.NewTicker(150 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.markBrowserPodsReadyOnce(ctx)
+			}
+		}
+	}()
+}
+
+// markBrowserPodsReadyOnce patches any browser pod that is not yet Ready-with-IP.
+// Best-effort: a transient List/Patch error is logged, never fatal — the pod is
+// re-scanned on the next tick. Runs on a background goroutine, so it must not
+// touch *testing.T beyond t.Logf (safe before the test completes; the ctx cancel
+// at cleanup stops it first).
+func (h *Harness) markBrowserPodsReadyOnce(ctx context.Context) {
+	var pods corev1.PodList
+	if err := h.K8s.List(ctx, &pods, client.HasLabels{"agentprimitives.authzed.com/browsertoolbox"}); err != nil {
+		if ctx.Err() == nil {
+			h.t.Logf("MarkBrowserPodsReady: list browser pods: %v", err)
+		}
+		return
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		already := pod.Status.PodIP != ""
+		for _, c := range pod.Status.Conditions {
+			if c.Type == corev1.PodReady {
+				already = already && c.Status == corev1.ConditionTrue
+			}
+		}
+		if already {
+			continue
+		}
+		base := pod.DeepCopy()
+		pod.Status.Phase = corev1.PodRunning
+		pod.Status.PodIP = e2eBrowserPodIP
+		setPodReadyTrue(pod)
+		if err := h.K8s.Status().Patch(ctx, pod, client.MergeFrom(base)); err != nil {
+			if ctx.Err() == nil {
+				h.t.Logf("MarkBrowserPodsReady: patch pod %q ready: %v", pod.Name, err)
+			}
+		}
+	}
+}
+
+// setPodReadyTrue sets (or replaces) the pod's Ready condition to True, matching
+// agentsession.podReady's one check. corev1.PodCondition is not a
+// metav1.Condition, so meta.SetStatusCondition cannot be used here.
+func setPodReadyTrue(pod *corev1.Pod) {
+	for i := range pod.Status.Conditions {
+		if pod.Status.Conditions[i].Type == corev1.PodReady {
+			pod.Status.Conditions[i].Status = corev1.ConditionTrue
+			return
+		}
+	}
+	pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
+		Type:   corev1.PodReady,
+		Status: corev1.ConditionTrue,
+	})
 }
 
 // splitHostPort parses a http://host:port URL into its host + numeric port.
@@ -1409,6 +1536,14 @@ func (h *Harness) startManager(t *testing.T, env *testenv.Env, spdbCli *spicedb.
 		// mandatory-dependency check.
 		DeniedLister:    spdbCli,
 		SlotGrantCopier: spdbCli,
+		// Browser pod builder inputs. A referenced BrowserToolbox makes this
+		// reconciler create a per-session browser pod; BuildBrowserPod refuses an
+		// empty image ref, so a placeholder is wired (the pod never runs a real
+		// kubelet here — the driver marks it Ready via MarkBrowserPodsReady and the
+		// runner reaches the in-process gate through the BrowserConnect seam).
+		// Non-browser bundles never reference a toolbox, so this is inert for them.
+		BrowserImageRef: e2eBrowserImageRef,
+		BrowserSandbox:  cloud.BrowserChromeSandbox{Sandboxed: false, Reason: "e2e harness fixture: no real kubelet"},
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("e2e: register AgentSession controller: %v", err)
 	}
@@ -1632,6 +1767,9 @@ func (h *Harness) RestartOperator(t *testing.T) {
 		StartChecker:    h.SpiceDB,
 		DeniedLister:    h.SpiceDB,
 		SlotGrantCopier: h.SpiceDB,
+		// Browser pod builder inputs — see the primary construction site above.
+		BrowserImageRef: e2eBrowserImageRef,
+		BrowserSandbox:  cloud.BrowserChromeSandbox{Sandboxed: false, Reason: "e2e harness fixture: no real kubelet"},
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("e2e: RestartOperator: register AgentSession controller: %v", err)
 	}
@@ -1899,6 +2037,13 @@ func (h *Harness) startChannelsdPlumbing(t *testing.T, mgrCtx context.Context) {
 	// prompt until the class timeout — every triggered precondition bundle
 	// would read as a hang rather than a gate.
 	pipeline.BindPreconditionWaiverHandler(pl)
+	// login_human_step: the browser toolbox's request_human_step confirm/code card.
+	// Its dedicated handler carries the human's typed code (kind:code) through to the
+	// runner on ResponseText; without binding it the code card has no handler and
+	// request_human_step hangs on the prompt until the class timeout — a kind:code
+	// bundle would read as a hang rather than an answered sign-in. Mirrors
+	// internal/cmd/channelsd/main.go's BindLoginHumanStepHandler.
+	pipeline.BindLoginHumanStepHandler(pl)
 	channelinteractions.Bind(categories.InfoLeakage, pipeline.ApprovalDecisionHandler)
 	// data_slot_disclosure needs its REAL handler, not the pure one: the
 	// consent it records on the SubagentRequest is what the operator re-grades

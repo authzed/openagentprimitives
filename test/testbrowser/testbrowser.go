@@ -446,9 +446,187 @@ func ServeSite(t *testing.T, pages map[string]string) (urlForChrome, hostForPoli
 			_, _ = w.Write([]byte(body))
 		})
 	}
+	return serveMux(t, mux)
+}
+
+const (
+	// LoginUser and LoginPassword are the credentials the stateful login site
+	// (ServeLoginSite) accepts. MADE-UP fixture values — never a real
+	// credential. A directCredentials `secret` source whose Secret keys are
+	// "<host>.username"/"<host>.password" must carry exactly these for the
+	// browser-login bundle's filler to sign the fixture in.
+	LoginUser     = "demo"
+	LoginPassword = "s3cr3t-fixture"
+
+	// LoginTOTPCode is the fixed six-digit code the /totp page accepts. The
+	// secret source can derive a live TOTP from a seed, but the fixture page
+	// accepts this constant so a bundle can drive the step deterministically
+	// without a clock.
+	LoginTOTPCode = "654321"
+
+	// LoginEmailedCode is the code the /code page accepts — the emailed/SMS
+	// step a person reads and supplies via request_human_step(kind=code),
+	// mirroring the human-step fixture. MADE-UP.
+	LoginEmailedCode = "246813"
+
+	// loginSentinel is the string the protected page shows ONLY after a valid
+	// sign-in cookie is presented. A bundle asserts lastToolResultContains it to
+	// prove the credentialed round trip actually reached the protected page.
+	loginSentinel = "PROTECTED-CONTENT-SIGNED-IN"
+	// loginUnauthed is what /protected shows WITHOUT a valid cookie, so a bundle
+	// can tell "reached the page but not signed in" from "signed in".
+	loginUnauthed = "PLEASE-SIGN-IN"
+	// loginCookieName/Value is the session cookie the POST handler sets on
+	// success and /protected checks for. The value is fixed (a fixture, not a
+	// secret); the point is that /protected is unreachable WITHOUT it.
+	loginCookieName  = "ap_session"
+	loginCookieValue = "signed-in-fixture-cookie"
+)
+
+// ServeLoginSite starts an httptest server serving a STATEFUL credentialed
+// login flow and returns (urlForChrome, hostForPolicy, port) exactly as
+// ServeSite does. Unlike ServeSite's static path→HTML map, these handlers hold
+// real server-side state: a POST that checks the credentials, a session cookie
+// set on success, and a protected page reachable ONLY with that cookie — so a
+// bundle drives the whole credentialed-acting path (read the form, fill
+// username+password from the filler, submit, land on the protected page)
+// against a site that actually enforces the sign-in rather than a client-side
+// shim.
+//
+// Routes (all under host.docker.internal, reached through the gate proxy):
+//
+//   - GET  /          the sign-in form: a username input (aria-label
+//     "Username"), a password input (type=password, aria-label "Password"),
+//     and a submit button labelled "Sign in", posting to /signin.
+//   - POST /signin     checks username==LoginUser && password==LoginPassword;
+//     on success sets the session cookie and 303-redirects to /protected; on
+//     failure returns 401 with SIGN-IN-FAILED.
+//   - GET  /protected  shows loginSentinel + a "Continue" button WHEN the
+//     session cookie is present, else loginUnauthed. The button is a second
+//     same-host acting target so a bundle can prove one approval covers more
+//     than one acting call.
+//   - GET  /totp       a one-time-code step: a "TotpCode" field that reveals a
+//     TOTP-ACCEPTED sentinel when LoginTOTPCode is entered (client-side, like
+//     the human-step fixture — the step a filler's {{login...otp}} or a person
+//     completes).
+//   - GET  /code       the emailed/SMS code step, mirroring the human-step
+//     fixture's page: a "CodeField" that reveals CODE-ACCEPTED-SIGNED-IN when
+//     LoginEmailedCode is entered.
+//
+// NOTE on /totp and /code: these two routes are NOT yet consumed by any bundle
+// (the emailed-code path is proven by browser-human-step-code's own static
+// fixture site), and their sentinel is revealed CLIENT-SIDE via an oninput
+// handler — unlike /signin+/protected, which enforce the step server-side with a
+// real credential check and a cookie gate. They are scaffolding for a future
+// Phase-D TOTP/code bundle. Before leaning on either as a real proof surface,
+// convert it to server-side enforcement; a client-side reveal proves only that
+// the field was typed into, not that the step actually gated anything.
+//
+// Every handler writes an explicit status and never drops an error silently
+// (repo convention): a write failure is logged to t.
+func ServeLoginSite(t *testing.T) (urlForChrome, hostForPolicy string, port int) {
+	t.Helper()
+	mux := http.NewServeMux()
+
+	write := func(w http.ResponseWriter, status int, body string) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(status)
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Logf("testbrowser login site: write response: %v", err)
+		}
+	}
+
+	mux.HandleFunc("/signin", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			write(w, http.StatusMethodNotAllowed, `<!doctype html><html><body><p>USE-POST</p></body></html>`)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			write(w, http.StatusBadRequest, `<!doctype html><html><body><p>BAD-FORM</p></body></html>`)
+			return
+		}
+		if r.PostFormValue("username") == LoginUser && r.PostFormValue("password") == LoginPassword {
+			http.SetCookie(w, &http.Cookie{Name: loginCookieName, Value: loginCookieValue, Path: "/"})
+			http.Redirect(w, r, "/protected", http.StatusSeeOther)
+			return
+		}
+		write(w, http.StatusUnauthorized,
+			`<!doctype html><html><head><title>Sign-in failed</title></head>`+
+				`<body><h1>SIGN-IN-FAILED</h1><p>Check your username and password.</p></body></html>`)
+	})
+
+	mux.HandleFunc("/protected", func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie(loginCookieName)
+		if err != nil || c.Value != loginCookieValue {
+			write(w, http.StatusOK,
+				`<!doctype html><html><head><title>Protected</title></head>`+
+					`<body><h1>`+loginUnauthed+`</h1><p>You are not signed in.</p></body></html>`)
+			return
+		}
+		// Signed in: show the sentinel plus a second same-host acting target so a
+		// bundle can make another acting call on the already-approved host.
+		write(w, http.StatusOK,
+			`<!doctype html><html><head><title>Account</title></head><body>`+
+				`<h1>`+loginSentinel+`</h1>`+
+				`<p>Welcome back.</p>`+
+				`<form method="GET" action="/protected">`+
+				`<button type="submit" aria-label="Continue">Continue</button>`+
+				`</form>`+
+				`</body></html>`)
+	})
+
+	mux.HandleFunc("/totp", func(w http.ResponseWriter, _ *http.Request) {
+		write(w, http.StatusOK,
+			`<!doctype html><html><head><title>One-time code</title></head><body>`+
+				`<h1>Enter your authenticator code</h1>`+
+				`<form>`+
+				`<input type="text" aria-label="TotpCode" `+
+				`oninput="if(this.value==='`+LoginTOTPCode+`'){document.getElementById('status').textContent='TOTP-ACCEPTED';}">`+
+				`</form>`+
+				`<p id="status">AWAITING-TOTP</p>`+
+				`</body></html>`)
+	})
+
+	mux.HandleFunc("/code", func(w http.ResponseWriter, _ *http.Request) {
+		write(w, http.StatusOK,
+			`<!doctype html><html><head><title>Sign-in code</title></head><body>`+
+				`<h1>Enter your sign-in code</h1>`+
+				`<form>`+
+				`<input type="text" aria-label="CodeField" `+
+				`oninput="if(this.value==='`+LoginEmailedCode+`'){document.getElementById('status').textContent='CODE-ACCEPTED-SIGNED-IN';}">`+
+				`</form>`+
+				`<p id="status">AWAITING-CODE</p>`+
+				`</body></html>`)
+	})
+
+	// The sign-in form at "/". Registered last; "/" matches everything the more
+	// specific routes above did not.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			write(w, http.StatusNotFound, `<!doctype html><html><body><p>NOT-FOUND</p></body></html>`)
+			return
+		}
+		write(w, http.StatusOK,
+			`<!doctype html><html><head><title>Sign in</title></head><body>`+
+				`<h1>Sign in to your account</h1>`+
+				`<form method="POST" action="/signin">`+
+				`<input type="text" name="username" aria-label="Username">`+
+				`<input type="password" name="password" aria-label="Password">`+
+				`<button type="submit" aria-label="Sign in">Sign in</button>`+
+				`</form>`+
+				`</body></html>`)
+	})
+
+	return serveMux(t, mux)
+}
+
+// serveMux starts an httptest server for mux and returns the Chrome-facing URL,
+// the policy host, and the port — the shared tail of ServeSite / ServeLoginSite.
+func serveMux(t *testing.T, mux *http.ServeMux) (urlForChrome, hostForPolicy string, port int) {
+	t.Helper()
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-
 	addr := srv.Listener.Addr().(*net.TCPAddr)
 	return fmt.Sprintf("http://%s:%d/", hostDockerInternal, addr.Port), hostDockerInternal, addr.Port
 }

@@ -62,7 +62,7 @@ func browserLoginIdentity(name, loginSecret string) *spiceboxv1alpha1.AgentIdent
 				Name: "logins", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    directcred.SourceSecret,
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: loginSecret},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: loginSecret},
 				},
 			}},
 		},

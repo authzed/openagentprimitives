@@ -190,6 +190,7 @@ var ApprovalConditionTypes = map[string]bool{
 	AgentSessionConditionContentInspectionApprovalPending: true,
 	AgentSessionConditionPreconditionWaiverPending:        true,
 	AgentSessionConditionPreferenceConfirmPending:         true,
+	AgentSessionConditionLoginHumanStepPending:            true,
 	AgentSessionConditionCredentialRequestPublished:       true,
 	AgentSessionConditionInteractPolicyApplied:            true,
 }
@@ -212,6 +213,7 @@ var pendingApprovalConditionTypes = map[string]bool{
 	AgentSessionConditionContentInspectionApprovalPending: true,
 	AgentSessionConditionPreconditionWaiverPending:        true,
 	AgentSessionConditionPreferenceConfirmPending:         true,
+	AgentSessionConditionLoginHumanStepPending:            true,
 }
 
 // IsPendingApprovalCondition reports whether t, when True, means the session is

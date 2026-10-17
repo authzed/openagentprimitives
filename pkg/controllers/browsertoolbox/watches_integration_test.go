@@ -107,7 +107,7 @@ func identityWithDirectCredentials(t *testing.T, c client.Client, name string, v
 				Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    "secret",
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "dummy", Key: "password"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "dummy", Key: "password"},
 				},
 			}},
 		},

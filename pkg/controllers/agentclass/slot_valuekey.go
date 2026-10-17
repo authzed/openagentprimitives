@@ -12,6 +12,7 @@ import (
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 	embeddedtoolkits "github.com/authzed/openagentprimitives/toolkits"
 )
 
@@ -172,6 +173,23 @@ func resolveSlotValueKeying(
 	// than as a side effect. TestBuiltinToolkits_KeyEachResourceTypeConsistently
 	// guards the shipped toolkits against the divergence meanwhile.
 	keying := map[string]valueKeying{}
+	// Seed the browser's built-in web_host chain. The acting tools that key
+	// web_host are a SYNTHESIZED CAPABILITY (pkg/agent/tool/browser), not an
+	// MCPServer/toolkit/sidecar tool, so keyingSources never sees their Check —
+	// and even if it did, those checks are TEMPLATE-keyed, which the loop below
+	// deliberately skips. So without this seed web_host publishes NO chain, which
+	// reads downstream as "the raw host IS the object id" (SlotTransformsOf,
+	// BindApproved, the unattended grant): the grant is written on a dotted host
+	// SpiceDB rejects, while the tool's Check escapes it, and the two never match.
+	// Seed it from the SAME browserschema source the tool's Check uses so the
+	// published chain cannot drift from the one the check applies. The consistency
+	// rule below still fires if any real tool keys web_host differently.
+	if len(ac.Spec.BrowserToolboxes) > 0 {
+		keying[browserschema.WebHostType] = valueKeying{
+			transforms: browserschema.WebHostValueTransforms(),
+			declaredBy: "browser toolbox (built-in web_host keying)",
+		}
+	}
 	for _, src := range keyingSources(mcpServers, toolkits, sidecarToolboxes) {
 		for _, chk := range src.checks {
 			if chk.ResourceIDExpr == "" || chk.ResourceType == "" {

@@ -1139,6 +1139,15 @@ func run(rootCtx context.Context, cfg *config) error {
 	// (the request's Resources).
 	channelinteractions.Bind(categories.InfoLeakage, pipeline.ApprovalDecisionHandler)
 
+	// Bind login_human_step: a browser toolbox's request_human_step confirm. A
+	// PURE approve/deny the runner resumes off the interaction_applied bridge —
+	// no channelsd-side grant, like content_inspection. Standing is enforced by
+	// the pipe's DecideApprovers policy (the clicker must be in the session
+	// approve-set). Without this binding an approve is published, a person clicks
+	// it, and the decision is dropped — request_human_step waits out its full
+	// approval timeout and the session reads as hung.
+	pipeline.BindLoginHumanStepHandler(pl)
+
 	// Bind the permission_request decision handler: the interaction_decision
 	// pipe already validates standing (DecideOwner — the session's approve-set)
 	// before invoking it; decidePermission's own job is just to apply the

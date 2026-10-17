@@ -1181,6 +1181,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if tkErr != nil {
 		return ctrl.Result{}, fmt.Errorf("resolve toolkits for slot keying: %w", tkErr)
 	}
+	// The browser toolbox is not a toolkit, MCPServer or SidecarToolbox, so its
+	// web_host type would be invisible to every standing/display/keying resolver
+	// below — and a class declaring a web_host slot would be refused for a type
+	// that "declares no standing". Fold in the builtin browser schema toolkit
+	// (session-only web_host, with its display) when this class references a
+	// BrowserToolbox, so web_host resolves through the same path git_repo does.
+	keyingToolkits = append(keyingToolkits, browserSchemaToolkits(&ac)...)
 	var requireStandingFor []string
 	if ac.Status.EffectiveSettings != nil {
 		requireStandingFor = ac.Status.EffectiveSettings.RequireStandingFor

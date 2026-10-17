@@ -92,6 +92,15 @@ func BrowserTokenSecretName(sess *spiceboxv1alpha1.AgentSession, ref string) str
 	return BrowserPodName(sess, ref) + "-token"
 }
 
+// BrowserStateSecretName returns the per-session browser STATE Secret's name:
+// "<session>-browser-<ref>-state". This Secret exists ONLY for a `persistent`
+// toolbox (C9); the operator creates it empty and the runner is its sole
+// content writer (captured cookies + localStorage). Like the gate-token Secret
+// it is deliberately KEPT across reap so a wake re-injects from it.
+func BrowserStateSecretName(sess *spiceboxv1alpha1.AgentSession, ref string) string {
+	return BrowserPodName(sess, ref) + "-state"
+}
+
 // BrowserPolicyConfigMapName returns the per-session browser policy
 // ConfigMap's name: "<session>-browser-<ref>-policy".
 func BrowserPolicyConfigMapName(sess *spiceboxv1alpha1.AgentSession, ref string) string {
@@ -631,6 +640,52 @@ func (r *Reconciler) mintBrowserToken(ctx context.Context, sess *spiceboxv1alpha
 	}
 	rt.TokenHash = SecretTokenHash(sec.Data[browserTokenSecretKey])
 	return nil
+}
+
+// ensureBrowserStateSecret creates the per-session browser STATE Secret EMPTY
+// for a `persistent` toolbox (C9), the target the runner writes captured cookies
+// + localStorage into. READ-BEFORE-CREATE and NEVER-OVERWRITE is the whole point,
+// mirroring mintBrowserToken: an existing Secret — populated by the runner on a
+// prior turn, and KEPT across reap — is left exactly as it is, so a re-reconcile
+// and a reap/wake never clobber the content the runner is the sole owner of.
+// Only when the Secret is absent is an empty one created (with the adoption label
+// for consistency with the other per-session Secrets). A Create race is benign:
+// AlreadyExists means a concurrent writer (the operator or the runner) already
+// landed it, and either way the content must be preserved, so the race is simply
+// swallowed rather than re-read.
+//
+// Called ONLY for a persistent toolbox; an ephemeral one gets no state Secret at
+// all, so there is nothing to inject on its wake and nothing to capture.
+func (r *Reconciler) ensureBrowserStateSecret(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, rt spiceboxv1alpha1.ResolvedBrowserToolbox) error {
+	name := BrowserStateSecretName(sess, rt.Ref)
+	key := types.NamespacedName{Namespace: sess.Namespace, Name: name}
+	_, err := r.getSecret(ctx, key)
+	switch {
+	case err == nil:
+		// Already present — preserve the runner-written content verbatim.
+		return nil
+	case errors.IsNotFound(err):
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: sess.Namespace,
+				Labels: map[string]string{
+					"agentprimitives.authzed.com/agentsession": sess.Name,
+					labelBrowserToolbox:                        rt.Ref,
+				},
+				OwnerReferences: sessionOwnerRef(sess),
+			},
+			Type: corev1.SecretTypeOpaque,
+			// No Data: the operator creates it EMPTY; the runner is the sole writer.
+		}
+		adoptguard.WithAdoptedLabel(sec)
+		if createErr := r.Client.Create(ctx, sec); createErr != nil && !errors.IsAlreadyExists(createErr) {
+			return fmt.Errorf("create browser state Secret %q: %w", name, createErr)
+		}
+		return nil
+	default:
+		return fmt.Errorf("get browser state Secret %q: %w", name, err)
+	}
 }
 
 // ensureBrowserNetworkPolicy stamps (SSA) one per-session browser pod's

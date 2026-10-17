@@ -43,6 +43,16 @@ type runnerHost struct {
 	approvalDenyMu     sync.Mutex
 	approvalDenyReason string
 
+	// humanStepCode carries the human's typed login code (login_human_step
+	// kind:code) from AwaitDecision's resolution to humanStepRequester.RequestCode,
+	// which reads it off this SAME host (one host per round-trip, see hostBinder).
+	// It is a SECRET: captured here only so the runner can type it into the page,
+	// never returned as a tool result, logged, or shown to the model. Guarded by
+	// humanStepCodeMu because AwaitDecision's goroutine writes it and RequestCode
+	// reads it. Mirrors approvalDenyReason's capture-on-the-host handoff exactly.
+	humanStepCodeMu sync.Mutex
+	humanStepCode   string
+
 	// coldStart* capture the SessionStart ColdStartScope hook's turn-0 placement
 	// (place cleaned / place raw / place nothing) so it reaches Run() after the
 	// SessionStart executor returns Allow. The generic Decision deliberately
@@ -140,6 +150,25 @@ func (h *runnerHost) setApprovalDenyReason(reason string) {
 	h.approvalDenyMu.Lock()
 	defer h.approvalDenyMu.Unlock()
 	h.approvalDenyReason = reason
+}
+
+// setHumanStepCode captures the human's typed login code during AwaitDecision's
+// login_human_step resolution. SECRET — see the field doc.
+func (h *runnerHost) setHumanStepCode(code string) {
+	h.humanStepCodeMu.Lock()
+	defer h.humanStepCodeMu.Unlock()
+	h.humanStepCode = code
+}
+
+// takeHumanStepCode returns and CLEARS the captured login code, so the secret
+// does not linger on the host after RequestCode has typed it into the page. It is
+// the humanStepCodeHost capability humanStepRequester.RequestCode reads back.
+func (h *runnerHost) takeHumanStepCode() string {
+	h.humanStepCodeMu.Lock()
+	defer h.humanStepCodeMu.Unlock()
+	c := h.humanStepCode
+	h.humanStepCode = ""
+	return c
 }
 
 // newRunnerHost constructs a runnerHost for the given Loop and session.

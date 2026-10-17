@@ -80,10 +80,11 @@ func init() {
 			// can tell when two slots of different types are one instance —
 			// git names a repository by URL and gh by OWNER/NAME, and a human
 			// deciding should see one target, not two.
-			SlotValueTransforms: l.PlanGateSlotTransforms,
-			PermissionTitles:    l.PlanGatePermissionTitles,
-			ResourceDisplays:    l.PlanGateResourceDisplays,
-			Resolve:             l.planGateHandleResolver(),
+			SlotValueTransforms:   l.PlanGateSlotTransforms,
+			PermissionTitles:      l.PlanGatePermissionTitles,
+			ResourceDisplays:      l.PlanGateResourceDisplays,
+			WebHostIdentityLabels: l.PlanGateWebHostIdentityLabels,
+			Resolve:               l.planGateHandleResolver(),
 			// Records makes the active phase a FOLD of the log rather than a
 			// value the gate holds. Without it the gate would sit on state a
 			// restart loses and the agent's document could contradict.

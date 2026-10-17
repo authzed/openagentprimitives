@@ -24,6 +24,7 @@ type SendOption func(*sendCfg)
 type sendCfg struct {
 	user, thread string
 	attachments  []channelkinds.InboundAttachment
+	responseText string
 }
 
 // AsUser overrides the requester identity for this inbound — both the
@@ -36,6 +37,15 @@ func AsUser(email string) SendOption { return func(c *sendCfg) { c.user = email 
 // channelKey→sessionName index). Default is "default-thread"; tests that
 // want to exercise multi-session correlation pass distinct keys per send.
 func InThread(key string) SendOption { return func(c *sendCfg) { c.thread = key } }
+
+// WithResponseText attaches a FREE-TEXT answer to an interaction decision — the
+// InteractionDecisionPayload.ResponseText carrier a real surface's text input would
+// fill. Today only login_human_step kind:code reads it (the human's typed login
+// code). It is the one way an auto-answer path (bronze's AutoApproveCode) can supply
+// a code so a kind:code card is answered instead of hanging.
+func WithResponseText(text string) SendOption {
+	return func(c *sendCfg) { c.responseText = text }
+}
 
 // WithAttachments makes this inbound carry files, exactly as a real listener
 // records them: ungated, with no capability check and no Channel lookup, since

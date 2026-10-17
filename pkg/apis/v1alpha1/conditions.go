@@ -72,7 +72,7 @@ const (
 	// message. Distinct from ReasonPodCrashed (PodFailed phase), since these pods
 	// never reach PodFailed â they retry forever â so without this the bundle (and
 	// its waiting AgentSession) would hang silently.
-	ReasonPodStartFailed     = "PodStartFailed"
+	ReasonPodStartFailed = "PodStartFailed"
 	// ReasonWorkspaceProvisioningFailed marks a session whose workspace (or
 	// snapshot-store) PVC could not be provisioned by its StorageClass — an
 	// undersized request the backend rejects (Filestore's minimum share size),
@@ -84,12 +84,12 @@ const (
 	// generic "did not become Ready" text.
 	ReasonWorkspaceProvisioningFailed = "WorkspaceProvisioningFailed"
 	ReasonNodeEvicted                 = "NodeEvicted"
-	ReasonClassMissing       = "ClassMissing"
-	ReasonClassInvalid       = "ClassInvalid"
-	ReasonIdleTTL            = "IdleTTL"
-	ReasonMaxDuration        = "MaxDuration"
-	ReasonUserDelete         = "UserDelete"
-	ReasonToolspecNotInClass = "ToolspecNotInClass"
+	ReasonClassMissing                = "ClassMissing"
+	ReasonClassInvalid                = "ClassInvalid"
+	ReasonIdleTTL                     = "IdleTTL"
+	ReasonMaxDuration                 = "MaxDuration"
+	ReasonUserDelete                  = "UserDelete"
+	ReasonToolspecNotInClass          = "ToolspecNotInClass"
 )
 
 // ToolCall condition types.
@@ -868,6 +868,13 @@ const (
 	// AgentSessionConditionPreferenceConfirmPending is True while a user_preference_confirm
 	// decision is outstanding: the addressee is being asked to confirm a preference update.
 	AgentSessionConditionPreferenceConfirmPending = "PreferenceConfirmPending"
+	// AgentSessionConditionLoginHumanStepPending is True while a login_human_step
+	// decision is outstanding: a browser toolbox's request_human_step is blocked
+	// asking a person to complete a sign-in step the agent cannot do itself (a push
+	// approval today; an emailed/SMS code in a later slice). Same generic-park-handler
+	// machinery and observable-only status as the approval conditions above — the
+	// phase stays derived from the runner's signed lifecycle projection.
+	AgentSessionConditionLoginHumanStepPending = "LoginHumanStepPending"
 	// AgentSessionConditionScopeReviewPending is True while a cold-start scope_review
 	// decision is outstanding and turn-0 execution is blocked. Written by the operator
 	// from the folded lifecycle projection; cleared when the decision resolves.

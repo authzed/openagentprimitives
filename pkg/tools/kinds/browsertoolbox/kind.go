@@ -182,6 +182,46 @@ func (k Kind) ValidateFile(path string) ([]contract.Diagnostic, error) {
 		})
 	}
 
+	// Mirrors the field-scoped XValidation rule on BrowserToolbox.Spec (C9): an
+	// EXPLICIT state=persistent captures cookies + localStorage into a per-session
+	// Secret, which is only legitimate for a credentialed (identity-bound) browser.
+	// An UNSET state is left to the AgentSession snapshot to default
+	// (persistent iff an identity is bound), so this fires only on an explicit
+	// persistent with no identity — exactly what the CEL rule refuses.
+	if sp.State == spiceboxv1alpha1.BrowserStatePersistent && sp.Access.Identity == "" {
+		diags = append(diags, contract.Diagnostic{
+			Severity: "error",
+			Path:     "state",
+			Message:  "a persistent browser requires access.identity",
+		})
+	}
+	if sp.State != "" && sp.State != spiceboxv1alpha1.BrowserStateEphemeral && sp.State != spiceboxv1alpha1.BrowserStatePersistent {
+		diags = append(diags, contract.Diagnostic{
+			Severity: "error",
+			Path:     "state",
+			Message:  fmt.Sprintf("state %q is not valid (want %q or %q)", sp.State, spiceboxv1alpha1.BrowserStateEphemeral, spiceboxv1alpha1.BrowserStatePersistent),
+		})
+	}
+
+	// Mirrors the third field-level XValidation rule on BrowserToolbox.Spec
+	// (C8): an unattended site's grant is written with no human card, so it
+	// needs both an allowlist (a blocklist's "every site but these" shape names
+	// no per-site standing to grant against) and a bound identity (there is no
+	// session approver to ask if the binding is missing). One diagnostic per
+	// site, naming both requirements, mirroring the CEL rule's single message.
+	for i, site := range sp.Access.Sites {
+		if !site.Unattended {
+			continue
+		}
+		if sp.Access.Mode != browserpolicy.ModeAllowlist || sp.Access.Identity == "" {
+			diags = append(diags, contract.Diagnostic{
+				Severity: "error",
+				Path:     fmt.Sprintf("access.sites[%d].unattended", i),
+				Message:  "an unattended site requires access.mode=allowlist and access.identity",
+			})
+		}
+	}
+
 	// An allowlist with no sites denies every host — not a structural error,
 	// but almost certainly not what the author intended, so it's a warning
 	// rather than an error.

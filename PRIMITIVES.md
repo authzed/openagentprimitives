@@ -93,13 +93,41 @@ MCP servers, validated against a toolspec.
   (authenticated DevTools + policy-enforced egress) the sandbox pod runs;
   `pkg/tools/browserpolicy/` is the shared site-matching decision both the gate
   and the tool's own pre-check consult. No dedicated controller yet (Phase A) —
-  identity-scoped sites and acting tools (click/type) arrive in later phases.
+  identity-scoped sites arrived in Phase B, acting tools in Phase C (below).
   Phase B adds identity-bound login catalogs: the `directCredentials` credential
   type (`pkg/platform/identity/directcred/`, sources `onepassword` and `secret`)
   lets a BrowserToolbox bind an AgentIdentity and list its logins as
   `{id, label, hosts}` onto `AgentSession.status` — the username/password/OTP
   itself never reaches the model, the broker (`Resolve` errors unconditionally
-  for this type), or status.
+  for this type), or status. Phase C adds credentialed, acting browsing. Acting
+  tools (`web_click`/`web_type`/`web_press`/`web_select`/`web_submit`) are
+  synthesized only for an `interaction: act` toolbox
+  (`pkg/agent/tool/browser/synthesize.go`), each gated External on a per-session
+  `web_host` SpiceDB slot's `act` permission (`pkg/tools/browserschema/`) — so
+  every acting call on a host that lacks a grant routes to a human plan-gate
+  approval card, and one approval covers the whole acting phase for that host.
+  The page host reaches the authz check as live page state via `NamedArgs`, not
+  as an LLM-supplied arg; `web_host` object ids are `spicedb_escape`-encoded
+  because a dotted hostname is not a legal SpiceDB object id. The no-secret
+  filler (`pkg/agent/tool/browser/filler.go`): the runner Fetches the bound
+  login's credential and types it directly into the page (a short-lived
+  in-memory hold keyed by host), so the username/password/OTP never reaches the
+  model — the transcript's `type` args carry a placeholder/login ref, not the
+  value — and observation (`pkg/agent/tool/browser/snapshot.go`) is blinded to
+  filled fields so a subsequent read cannot echo a typed secret back.
+  `request_human_step` (the `login_human_step` interaction category,
+  `pkg/channels/channelinteractions/categories/`) lets the agent ask a person to
+  complete a step (a confirm, or an emailed/SMS code typed into a named page
+  element) — the code rides a free-text carrier to the runner and is typed into
+  the page but is never placed in the model's context, transcript, logs, or tool
+  result (`pkg/agent/tool/browser/humanstep.go`). An operator can mark an
+  allowlist+identity site `unattended` (`BrowserSite.Unattended`) so its
+  `web_host#act` grant is written at session start with no human card. A
+  credentialed browser (default `persistent` when an identity is bound) captures
+  cookies + localStorage after each acting call and on graceful stop into a
+  per-session Secret — the one Secret the runner is RBAC-allowed to write, never
+  model-visible — and re-injects it when the pod wakes after a reap, so a login
+  survives pod churn (`pkg/agent/tool/browser/capture.go`).
 - **Binaries:** `internal/cmd/streamclient/` (claims a streaming ToolCall via
   the gateway); tool execution is otherwise driven from `internal/cmd/runner/`
 

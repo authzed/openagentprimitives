@@ -209,6 +209,19 @@ type Bundle struct {
 	// path it was written to cover.
 	AutoDeny []string `json:"autoDeny,omitempty"`
 
+	// AutoApproveCode is the free-text answer the background approver supplies when
+	// it clears a prompt that expects one — today, a login_human_step kind:code card
+	// (the human's emailed/SMS login code). Without it a code card would be
+	// approved with an EMPTY answer and the runner would have nothing to type, so a
+	// kind:code scenario must set this or it reads as a hang that the auto-approver
+	// "answered" into the void.
+	//
+	// It rides the InteractionDecisionPayload.ResponseText carrier — a genuine
+	// free-text field, never the closed ActionID — exactly as a real surface's text
+	// input would. It is a SECRET on that path: the runner types it into the page
+	// and the model never sees it. Empty for every button-only scenario.
+	AutoApproveCode string `json:"autoApproveCode,omitempty"`
+
 	// AutoApproveAs is the identity the background approver decides as. Empty
 	// means DefaultUser.
 	//

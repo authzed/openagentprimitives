@@ -11,6 +11,7 @@ import (
 	guardianschema "github.com/authzed/openagentprimitives/pkg/authz/guardian/schema"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	channelregistry "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 	"github.com/authzed/openagentprimitives/toolkits"
 )
 
@@ -87,11 +88,19 @@ func TestCompileTimeFragmentsCompose(t *testing.T) {
 	toolkitFrags := guardianschema.ToolkitFragments(toolkits.All())
 	compileTime = append(compileTime, toolkitFrags...)
 
+	// The browser toolbox's builtin web_host fragment is part of the same
+	// compile-time baseline the guardian controller composes (schemaBaseline),
+	// so it must compose here too — this is the only net before a bad builtin
+	// fragment reaches a cluster as a startup-time schema freeze.
+	compileTime = append(compileTime, browserschema.Fragment())
+
 	out, err := guardianschema.ComposeBase(compileTime)
 	require.NoError(t, err, "every compile-time fragment must compose into the base")
 	assert.Contains(t, out, "definition agentsession")
 	assert.Contains(t, out, "definition slack_channel",
 		"the Slack fragment is load-bearing: audience resolution reads slack_channel#view")
+	assert.Contains(t, out, "definition web_host",
+		"the browser toolbox's builtin web_host fragment must reach the composed base")
 
 	// Every definition a built-in toolkit fragment declares must actually
 	// reach the composed base. Until this loop existed, nothing in this test

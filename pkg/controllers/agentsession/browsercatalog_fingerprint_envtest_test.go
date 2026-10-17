@@ -107,7 +107,7 @@ func TestBrowserCatalogRelistsOnTokenFingerprintChange(t *testing.T) {
 				Name: "logins", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    directcred.SourceOnePassword,
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "btb-fp-token", Key: "token"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "btb-fp-token", Key: "token"},
 					Vault:     "Engineering",
 				},
 			}},

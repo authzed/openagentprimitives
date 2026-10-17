@@ -189,7 +189,7 @@ func waitForDevtools(t *testing.T, debugPort int) {
 // shared session for teardown.
 func (fx *fixture) synthTools(t *testing.T, acceptsImages bool) []agenttool.Tool {
 	t.Helper()
-	tools, err := Synthesize(fx.rt, fx.gateURL, chromeToken, acceptsImages)
+	tools, err := Synthesize(fx.rt, fx.gateURL, chromeToken, acceptsImages, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools)
 	if bt, ok := tools[0].(*browserTool); ok {
