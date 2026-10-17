@@ -612,4 +612,35 @@ describe("InteractionCard resolved-state collapsing", () => {
     expect(container.querySelector("details")).toBeNull();
     expect(screen.getByText("Phase 1")).toBeTruthy();
   });
+
+  it("renders the screenshot as an inline img built from the same-origin artifact-download URL", () => {
+    const { container } = render(
+      <InteractionCard
+        request={{
+          ...baseRequest,
+          screenshot: {
+            artifactId: "art-1",
+            renderName: "shot-1",
+            mime: "image/png",
+            filename: "page.png",
+            altText: "the page",
+          },
+        }}
+        onDecision={vi.fn()}
+      />,
+    );
+    const img = container.querySelector("img") as HTMLImageElement | null;
+    expect(img).toBeTruthy();
+    const src = img?.getAttribute("src") ?? "";
+    expect(src).toContain("/artifact-download?");
+    expect(src).toContain("artifactId=art-1");
+    expect(src).toContain(`sessionRef=${baseRequest.agentSessionRef.namespace}%2F${baseRequest.agentSessionRef.name}`);
+    expect(src).toContain("fn=page.png");
+    expect(img?.getAttribute("alt")).toBe("the page");
+  });
+
+  it("renders no img when the request carries no screenshot (the common case)", () => {
+    const { container } = render(<InteractionCard request={{ ...baseRequest }} onDecision={vi.fn()} />);
+    expect(container.querySelector("img")).toBeNull();
+  });
 });

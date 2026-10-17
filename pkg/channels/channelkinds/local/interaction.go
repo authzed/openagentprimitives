@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
 // interactionSender is the host-side "interaction" sub-channel sender:
@@ -18,6 +21,15 @@ import (
 // floor is used for the read-only (link / notice) path where no modal opens.
 type interactionSender struct {
 	sink *inertSink
+	// minter and principal mint the screenshot reference link RenderText
+	// appends for a browser-originated interaction (see screenshotURL below).
+	// Both are the same ArtifactViewMinter/Principal pair host.go already wires
+	// into liveViewOfferSender for the sibling "live_view_offer" sub-channel —
+	// nil minter (no webd base URL configured) degrades to no line, never an
+	// error: unlike a live-view offer, the screenshot line is a side note on a
+	// card whose Lead/Actions must still be delivered.
+	minter    channelkinds.ArtifactViewMinter
+	principal identity.Principal
 }
 
 func (s *interactionSender) emitErr(sess channelkinds.SessionInfo, k channelevents.Kind, err error) (channelkinds.SubChannelSendResult, error) {
@@ -25,7 +37,7 @@ func (s *interactionSender) emitErr(sess channelkinds.SessionInfo, k channeleven
 	return channelkinds.SubChannelSendResult{}, fmt.Errorf("local interaction sender (%s): %w", k, err)
 }
 
-func (s *interactionSender) Send(_ context.Context, sess channelkinds.SessionInfo, env channelevents.Envelope) (channelkinds.SubChannelSendResult, error) {
+func (s *interactionSender) Send(ctx context.Context, sess channelkinds.SessionInfo, env channelevents.Envelope) (channelkinds.SubChannelSendResult, error) {
 	switch env.Kind {
 	case channelevents.KindInteractionRequest:
 		var pl channelevents.InteractionRequestPayload
@@ -42,7 +54,7 @@ func (s *interactionSender) Send(_ context.Context, sess channelkinds.SessionInf
 		// render as plain labels plus a note to respond from a connected app.
 		// The rendered Text is the read-only timeline floor; Payload carries the
 		// structured actions the TUI's decision modal binds keys to.
-		text := channelinteractions.RenderText(pl, nil)
+		text := channelinteractions.RenderText(pl, nil, s.screenshotURL(ctx, sess))
 		s.sink.Emit(MsgInteractionRequest{Session: refOf(sess), Payload: pl, Text: text})
 		return channelkinds.SubChannelSendResult{}, nil
 
@@ -75,5 +87,27 @@ func (s *interactionSender) Send(_ context.Context, sess channelkinds.SessionInf
 
 	default:
 		return s.emitErr(sess, env.Kind, fmt.Errorf("unsupported envelope kind for the interaction sender"))
+	}
+}
+
+// screenshotURL returns the per-call closure RenderText consults to resolve a
+// browser-originated interaction's redacted screenshot to a human-facing
+// link. Best-effort, matching the AGENTS.md "never silently drop errors"
+// rule with a log line rather than a failure: the TUI's decision modal and
+// the rest of the card must still render if minting fails or is unconfigured,
+// so a mint error here is a skipped line, never a dropped card.
+func (s *interactionSender) screenshotURL(ctx context.Context, sess channelkinds.SessionInfo) func(*channelevents.AttachmentRef) string {
+	return func(ref *channelevents.AttachmentRef) string {
+		if s.minter == nil || ref == nil || ref.ArtifactID == "" {
+			return ""
+		}
+		sessionRef := sess.Namespace + "/" + sess.Name
+		url, err := s.minter.MintArtifactViewLink(ref.ArtifactID, sessionRef, s.principal, "")
+		if err != nil {
+			log.FromContext(ctx).Info("local interaction sender: mint screenshot view link failed (best-effort, card still delivered)",
+				"session", sessionRef, "artifactID", ref.ArtifactID, "err", err.Error())
+			return ""
+		}
+		return url
 	}
 }

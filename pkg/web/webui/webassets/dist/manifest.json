@@ -1,50 +1,50 @@
 {
   "identity-link": {
     "scripts": [
-      "/assets/identity-link.BpTVpI-G.js"
+      "/assets/identity-link.DIirqNR1.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "identity-link-form": {
     "scripts": [
-      "/assets/identity-link-form.vFiHWBBM.js"
+      "/assets/identity-link-form.BlrHwqYw.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "identity-portal": {
     "scripts": [
-      "/assets/identity-portal.BFvlFsRb.js"
+      "/assets/identity-portal.62gtlh5n.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "identity-verify-warn": {
     "scripts": [
-      "/assets/identity-verify-warn.CN_Li5hi.js"
+      "/assets/identity-verify-warn.jH6WhRVY.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "admin": {
     "scripts": [
-      "/assets/admin.C9jbAoMt.js"
+      "/assets/admin.D8BEorQ0.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "settings": {
     "scripts": [
-      "/assets/settings.Bs9xT9hr.js"
+      "/assets/settings.D2ZpUumf.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "artifact-host": {
@@ -55,42 +55,42 @@
   },
   "artifact-view": {
     "scripts": [
-      "/assets/artifact-view.D4Y_FHws.js"
+      "/assets/artifact-view.BNqAlmdu.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "chat-embed": {
     "scripts": [
-      "/assets/chat-embed.B187PZKG.js"
+      "/assets/chat-embed.DZrJJN4s.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "health": {
     "scripts": [
-      "/assets/health.DtWM4D-G.js"
+      "/assets/health.B5R65KFZ.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "sessions": {
     "scripts": [
-      "/assets/sessions.DrV0Blkf.js"
+      "/assets/sessions.Bnnp3HNU.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "session-view": {
     "scripts": [
-      "/assets/session-view.dtf-izky.js"
+      "/assets/session-view.D5Vt5OlU.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   },
   "mcpui-host": {
@@ -101,10 +101,10 @@
   },
   "system": {
     "scripts": [
-      "/assets/system.DT_ax8I5.js"
+      "/assets/system.BC8KWmm_.js"
     ],
     "css": [
-      "/assets/mount.BnXLt6oF.css"
+      "/assets/mount.CtR1PZHB.css"
     ]
   }
 }

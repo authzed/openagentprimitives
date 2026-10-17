@@ -795,6 +795,17 @@ type Assertions struct {
 	// pre-runner park never writes.
 	ApprovalPrompts *int `json:"approvalPrompts,omitempty"`
 
+	// ApprovalScreenshotAttached asserts that at least one published
+	// interaction approval prompt carries a non-empty
+	// InteractionRequestPayload.Screenshot.RenderName — the redacted page
+	// screenshot a browser acting-approval or human-step card attaches
+	// (Phase D). False (the default) means "do not check"; this is the one
+	// place a bundle can prove the screenshot reached the published card
+	// rather than merely that the capture/store code compiles — a scripted
+	// reply says the same words whether or not the attachment rode along, so
+	// this has to read the recorded payload, not the transcript.
+	ApprovalScreenshotAttached bool `json:"approvalScreenshotAttached,omitempty"`
+
 	// AgentReplyNotContains is the negative companion, checked against the SAME
 	// per-turn reply, in order: the reply to turn i must NOT contain
 	// AgentReplyNotContains[i]. The only way a bundle can claim a person did not

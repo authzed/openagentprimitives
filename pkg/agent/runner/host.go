@@ -9,6 +9,7 @@ import (
 	"time"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakageaudit"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
@@ -91,6 +92,18 @@ type runnerHost struct {
 	// containParams.approvalEvent and never mutated after — fixed for the host's
 	// lifetime, like proxyExec above.
 	approvalEvent func(approvalObservation)
+
+	// captureScreenshot, when non-nil, captures a redacted screenshot of the
+	// live browser page and stores it as an ArtifactRender, returning the
+	// AttachmentRef to attach to a browser interaction's payload (or nil on
+	// ANY capture/store failure — best-effort, never blocks the approval).
+	// Set once in executeToolContained ONLY when the dispatched tool
+	// implements browser.ScreenshotProvider with a non-nil capturer (D-R3) —
+	// so it is nil for every non-browser tool call, which is the browser-only
+	// gate: buildPlanGatePending / buildLoginHumanStepPending attach a
+	// screenshot only when this is set. Never mutated after being set, like
+	// approvalEvent above.
+	captureScreenshot func(context.Context) *channelevents.AttachmentRef
 }
 
 // setColdStartPlacement records the SessionStart hook's turn-0 placement

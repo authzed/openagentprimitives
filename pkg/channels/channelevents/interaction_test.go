@@ -314,6 +314,26 @@ func TestInteractionRequestValidate_ApproversMustBeAddressable(t *testing.T) {
 	}
 }
 
+func TestInteractionRequestPayload_ScreenshotOmitEmpty(t *testing.T) {
+	// A payload with no screenshot must NOT serialize a "screenshot" key.
+	b, err := json.Marshal(InteractionRequestPayload{Category: "tool_call", RequestRef: "r1", Lead: "x"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "screenshot", "non-browser interaction must not carry a screenshot key")
+
+	// A payload WITH a screenshot round-trips the AttachmentRef.
+	in := InteractionRequestPayload{
+		Category: "login_human_step", RequestRef: "r2", Lead: "act on aa.com",
+		Screenshot: &AttachmentRef{RenderName: "shot-abc", MIME: "image/png", Filename: "page.png", AltText: "page screenshot"},
+	}
+	raw, err := json.Marshal(in)
+	require.NoError(t, err)
+	var out InteractionRequestPayload
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.NotNil(t, out.Screenshot)
+	assert.Equal(t, "shot-abc", out.Screenshot.RenderName)
+	assert.Equal(t, "image/png", out.Screenshot.MIME)
+}
+
 // InteractionItem's three tier tones and its Hint field must survive a JSON
 // round trip intact, the same wire-shape guarantee every other field on this
 // envelope already has — a surface reads Hint from the wire, so a marshaling

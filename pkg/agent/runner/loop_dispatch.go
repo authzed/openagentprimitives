@@ -14,9 +14,11 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/approval/summarizer"
 	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
+	browsertool "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/sandbox"
 	"github.com/authzed/openagentprimitives/pkg/agent/toolenvelope"
 	"github.com/authzed/openagentprimitives/pkg/authz/toolguard"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credupdate"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
@@ -365,6 +367,19 @@ func (l *Loop) executeToolContained(
 	// gate in host_approval.go.
 	host.proxyExec = p.proxyExec
 	host.approvalEvent = p.approvalEvent
+	// D-R3: web_request_human_step IS a browser tool, so BOTH the acting
+	// approval (web_host#act, a plan_phase ask) and the human-step asks
+	// (login_human_step) flow through this one seam — whichever ask kind t
+	// ends up publishing, the SAME host carries the capturer. A non-browser
+	// tool doesn't implement ScreenshotProvider, so host.captureScreenshot
+	// stays nil and no screenshot is ever attempted for it (the browser-only
+	// gate, enforced here rather than in the payload builders).
+	if sp, ok := t.(browsertool.ScreenshotProvider); ok {
+		if cap := sp.ScreenshotCapturer(); cap != nil {
+			host.captureScreenshot = l.captureBrowserScreenshotFn(
+				channelevents.SessionRef{Namespace: sess.Namespace, Name: sess.Name}, cap)
+		}
+	}
 
 	preIn := pipeline.Input{
 		Session: pipeline.SessionRef{

@@ -29,19 +29,19 @@ type fakeHumanStep struct {
 	captchaErr    error
 }
 
-func (f *fakeHumanStep) Confirm(_ context.Context, prompt string) (HumanStepOutcome, error) {
+func (f *fakeHumanStep) Confirm(_ context.Context, prompt string, _ BrowserScreenshotCapturer) (HumanStepOutcome, error) {
 	f.confirmCalls++
 	f.confirmPrompt = prompt
 	return f.outcome, f.confirmErr
 }
 
-func (f *fakeHumanStep) RequestCode(_ context.Context, prompt string) (HumanStepCodeOutcome, error) {
+func (f *fakeHumanStep) RequestCode(_ context.Context, prompt string, _ BrowserScreenshotCapturer) (HumanStepCodeOutcome, error) {
 	f.codeCalls++
 	f.codePrompt = prompt
 	return f.codeOutcome, f.codeErr
 }
 
-func (f *fakeHumanStep) Captcha(_ context.Context, prompt string) error {
+func (f *fakeHumanStep) Captcha(_ context.Context, prompt string, _ BrowserScreenshotCapturer) error {
 	f.captchaCalls++
 	f.captchaPrompt = prompt
 	return f.captchaErr

@@ -1237,6 +1237,14 @@ func (h *runnerHost) buildLoginHumanStepPending(ctx context.Context, reqID strin
 		ExpiresAt:       expiresAtPtr(hostNow().Add(h.loginHumanStepTTL())),
 		Interruptible:   true,
 	}
+	// Best-effort redacted screenshot — see buildPlanGatePending's identical
+	// gate; request_human_step is itself a browser tool (D-R3), so the same
+	// host.captureScreenshot closure is set for this ask kind too.
+	if h.captureScreenshot != nil {
+		if ref := h.captureScreenshot(ctx); ref != nil {
+			pl.Screenshot = ref
+		}
+	}
 	env, eerr := channelevents.BuildEnvelope(sessNS, sessName, channelevents.KindInteractionRequest, pl)
 	if eerr != nil {
 		return nil, fmt.Errorf("build login_human_step interaction envelope: %w", eerr)
@@ -2202,6 +2210,17 @@ func (h *runnerHost) buildPlanGatePending(
 		Audience:      channelevents.InteractionAudience{Scope: channelevents.AudienceApprovers, Approvers: approvers},
 		ExpiresAt:     expiresAtPtr(hostNow().Add(h.l.resolvedApprovalTimeout())),
 		Interruptible: false,
+	}
+	// Best-effort redacted screenshot: h.captureScreenshot is set ONLY when
+	// THIS call's tool implements browser.ScreenshotProvider with a live
+	// capturer (D-R3, see executeToolContained), so a non-browser plan_phase
+	// ask leaves it nil and never attempts a capture. Any capture/store
+	// failure already returned nil (logged at the closure) — only attach when
+	// non-nil.
+	if h.captureScreenshot != nil {
+		if ref := h.captureScreenshot(ctx); ref != nil {
+			pl.Screenshot = ref
+		}
 	}
 	env, eerr := channelevents.BuildEnvelope(sessNS, sessName, channelevents.KindInteractionRequest, pl)
 	if eerr != nil {

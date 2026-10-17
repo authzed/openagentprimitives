@@ -3,10 +3,12 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
@@ -31,7 +33,7 @@ func TestPublishLoginCaptchaNotice_PublishesNotice(t *testing.T) {
 		},
 	}
 
-	err := l.publishLoginCaptchaNotice(context.Background(), report)
+	err := l.publishLoginCaptchaNotice(context.Background(), report, nil)
 	require.NoError(t, err)
 
 	require.Equal(t, channelevents.KindInteractionRequest, published.Kind)
@@ -58,7 +60,63 @@ func TestPublishLoginCaptchaNotice_NoPublisher_Errors(t *testing.T) {
 		SessionKey: memory.NamespacedName{Namespace: "ns", Name: "s"},
 		// InteractionRequestPublish deliberately nil.
 	}
-	err := l.publishLoginCaptchaNotice(context.Background(), "a captcha appeared")
+	err := l.publishLoginCaptchaNotice(context.Background(), "a captcha appeared", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publish hook")
+}
+
+// TestPublishLoginCaptchaNotice_AttachesScreenshot proves that when a screenshot
+// capturer succeeds, the CAPTCHA notice's payload carries the screenshot artifact ref.
+func TestPublishLoginCaptchaNotice_AttachesScreenshot(t *testing.T) {
+	var published channelevents.Envelope
+	l := &Loop{
+		Status:     LocalStatusPatcher(),
+		SessionKey: memory.NamespacedName{Namespace: "ns", Name: "s"},
+		Client:     fake.NewClientBuilder().WithScheme(browserScreenshotTestScheme(t)).Build(),
+		InteractionRequestPublish: func(_ context.Context, ns, name string, env channelevents.Envelope) error {
+			assert.Equal(t, "ns", ns)
+			assert.Equal(t, "s", name)
+			published = env
+			return nil
+		},
+	}
+
+	err := l.publishLoginCaptchaNotice(context.Background(), "a captcha appeared", &fakeCapturer{png: []byte("fakepngbytes")})
+	require.NoError(t, err)
+
+	require.Equal(t, channelevents.KindInteractionRequest, published.Kind)
+	var pl channelevents.InteractionRequestPayload
+	require.NoError(t, json.Unmarshal(published.Payload, &pl))
+
+	require.NotNil(t, pl.Screenshot, "a working capturer must attach a screenshot")
+	assert.NotEmpty(t, pl.Screenshot.RenderName)
+	assert.Equal(t, "image/png", pl.Screenshot.MIME)
+}
+
+// TestPublishLoginCaptchaNotice_CaptureError_PublishesTextOnly proves that
+// when a screenshot capturer fails, the CAPTCHA notice still publishes but
+// without a screenshot (best-effort capture, fail-closed publish).
+func TestPublishLoginCaptchaNotice_CaptureError_PublishesTextOnly(t *testing.T) {
+	var published channelevents.Envelope
+	l := &Loop{
+		Status:     LocalStatusPatcher(),
+		SessionKey: memory.NamespacedName{Namespace: "ns", Name: "s"},
+		Client:     fake.NewClientBuilder().WithScheme(browserScreenshotTestScheme(t)).Build(),
+		InteractionRequestPublish: func(_ context.Context, ns, name string, env channelevents.Envelope) error {
+			assert.Equal(t, "ns", ns)
+			assert.Equal(t, "s", name)
+			published = env
+			return nil
+		},
+	}
+
+	err := l.publishLoginCaptchaNotice(context.Background(), "a captcha appeared", &fakeCapturer{err: errors.New("capture boom")})
+	require.NoError(t, err, "capture error must not fail the notice publish")
+
+	require.Equal(t, channelevents.KindInteractionRequest, published.Kind)
+	var pl channelevents.InteractionRequestPayload
+	require.NoError(t, json.Unmarshal(published.Payload, &pl))
+
+	assert.Nil(t, pl.Screenshot, "a capture error must leave screenshot nil")
+	assert.NotEmpty(t, pl.Excerpt.Content, "the text notice must still be published")
 }

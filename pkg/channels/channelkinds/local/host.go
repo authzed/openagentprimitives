@@ -188,7 +188,11 @@ func (h *Host) SubChannelSenderFor(_ context.Context, sess *spiceboxv1alpha1.Age
 			minter: h.deps.AgentUIMinter,
 		}, nil
 	case "interaction":
-		return &interactionSender{sink: h.sink}, nil
+		return &interactionSender{
+			sink:      h.sink,
+			minter:    h.deps.ArtifactViewMinter,
+			principal: h.principal,
+		}, nil
 	default:
 		return nil, nil
 	}

@@ -135,7 +135,20 @@ var (
 	_ agenttool.OriginTool    = (*browserTool)(nil)
 	_ agenttool.Cancellable   = (*browserTool)(nil)
 	_ agenttool.NamedCallArgs = (*browserTool)(nil)
+	_ ScreenshotProvider      = (*browserTool)(nil)
 )
+
+// ScreenshotCapturer returns this tool's session as a BrowserScreenshotCapturer
+// — every tool of a toolbox shares one *Session (see the browserTool doc
+// comment), so any op's tool can hand the runner a capturer for the same live
+// page. Returns nil only if the tool was synthesized without a session (a unit
+// test), never in production wiring.
+func (t *browserTool) ScreenshotCapturer() BrowserScreenshotCapturer {
+	if t.sess == nil {
+		return nil
+	}
+	return t.sess
+}
 
 func (t *browserTool) Name() string                 { return t.name }
 func (t *browserTool) Kind() agenttool.Kind         { return agenttool.KindMCP }
@@ -366,7 +379,7 @@ func (t *browserTool) requestHumanStep(ctx context.Context, kind, prompt, ref st
 
 	switch kind {
 	case "confirm":
-		outcome, err := t.humanStep.Confirm(ctx, prompt)
+		outcome, err := t.humanStep.Confirm(ctx, prompt, t.ScreenshotCapturer())
 		if err != nil {
 			return errResult("request_human_step failed: %v", err)
 		}
@@ -387,7 +400,7 @@ func (t *browserTool) requestHumanStep(ctx context.Context, kind, prompt, ref st
 	case "", "captcha":
 		// No actionable kind: a CAPTCHA, or any step the agent cannot do. Surface a
 		// notice and tell the model a person must step in.
-		if err := t.humanStep.Captcha(ctx, prompt); err != nil {
+		if err := t.humanStep.Captcha(ctx, prompt, t.ScreenshotCapturer()); err != nil {
 			return errResult("request_human_step: could not notify anyone that human intervention is needed: %v", err)
 		}
 		return errResult("request_human_step: this step needs a person and cannot be completed automatically; a notice has been sent asking someone to take over in the browser")
@@ -405,7 +418,7 @@ func (t *browserTool) requestHumanStepCode(ctx context.Context, prompt, ref stri
 	if ref == "" {
 		return errResult("request_human_step: kind=\"code\" requires a ref naming the input to type the code into — read the page first and pass the code field's ref")
 	}
-	outcome, err := t.humanStep.RequestCode(ctx, prompt)
+	outcome, err := t.humanStep.RequestCode(ctx, prompt, t.ScreenshotCapturer())
 	if err != nil {
 		return errResult("request_human_step failed: %v", err)
 	}
