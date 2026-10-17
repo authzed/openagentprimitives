@@ -18,6 +18,6 @@ func TestAllBuiltinsRegistered(t *testing.T) {
 	sort.Strings(names)
 	assert.Equal(t, []string{
 		"anthropic-oauth", "github-pat", "kubectl-kubeconfig", "oauth-mcp",
-		"onepassword-scim", "slack-bot-token", "tailscale-authkey",
+		"onepassword-scim", "onepassword-service-account", "slack-bot-token", "tailscale-authkey",
 	}, names)
 }

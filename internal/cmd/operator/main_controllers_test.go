@@ -66,6 +66,7 @@ func TestOperatorRegistersExpectedControllers(t *testing.T) {
 		"UserIdentity":               true,
 		"UserIdentityRefresh":        true,
 		"SidecarToolbox":             true,
+		"BrowserToolbox":             true,
 		"ClusterAgentSettings":       true,
 		"AgentSettings":              true,
 		"ClusterSkillSource":         true,

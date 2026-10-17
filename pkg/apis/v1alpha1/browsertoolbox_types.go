@@ -32,6 +32,16 @@ type BrowserToolbox struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
+	// Two Phase B rules live here rather than on BrowserToolboxSpec/BrowserAccess
+	// (see that type's doc comment for why): this field is the ONE place a CRD
+	// validation marker is legal, because BrowserToolboxSpec is also embedded
+	// by value into AgentSession.status.resolvedBrowserToolboxes[].Spec, and a
+	// rule reachable from a status path trips both the status-CEL guard and the
+	// apiserver's rule-cost budget across that unbounded array. Precedent:
+	// workshop_types.go:44-66 attaches its XValidation rules the same way, on
+	// the field, not the type.
+	// +kubebuilder:validation:XValidation:rule="self.access.mode != 'blocklist' || (!has(self.access.identity) && !self.access.identitySites)",message="a blocklist (general-access) browser cannot carry an identity or identitySites"
+	// +kubebuilder:validation:XValidation:rule="!self.access.identitySites || has(self.access.identity)",message="identitySites requires identity"
 	Spec   BrowserToolboxSpec   `json:"spec,omitempty"`
 	Status BrowserToolboxStatus `json:"status,omitempty"`
 }
@@ -93,6 +103,28 @@ type BrowserAccess struct {
 	// +listType=map
 	// +listMapKey=host
 	Sites []BrowserSite `json:"sites,omitempty"`
+
+	// Identity is the name of an AgentIdentity (in this BrowserToolbox's
+	// namespace) carrying a directCredentials credential this browser binds
+	// to -- a Phase B addition. Allowlist-only: the two XValidation rules on
+	// BrowserToolbox.Spec refuse it under Mode=blocklist, because a
+	// general-access browser has no legitimate use for a credential
+	// reference. Identity name syntax and existence are not checked here --
+	// that is the Task 7 BrowserToolbox reconciler's job (Valid=False when
+	// the reference is missing or has no directCredentials credential).
+	// +optional
+	Identity string `json:"identity,omitempty"`
+
+	// IdentitySites, when true, folds every host Identity's directCredentials
+	// catalog lists into this allowlist, alongside any explicit Sites -- a
+	// Phase B addition. Requires Identity to be set (enforced by the second
+	// XValidation rule on BrowserToolbox.Spec). This field only records the
+	// bit; deriving the actual host names from the identity's source happens
+	// in the AgentSession reconciler (DeriveBrowserEffectiveSites, Task 7) and
+	// is recorded onto status, not here.
+	// +optional
+	// +kubebuilder:default=false
+	IdentitySites bool `json:"identitySites,omitempty"`
 }
 
 // BrowserSite is one host entry in a BrowserAccess list.

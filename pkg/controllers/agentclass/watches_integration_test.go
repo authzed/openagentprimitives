@@ -528,11 +528,13 @@ func TestAgentClass_ReReconcilesOnSpiceboxToolkitChange(t *testing.T) {
 // BrowserToolbox watch. The referenced BrowserToolbox does not exist yet, so
 // the AgentClass lands Valid=False reason=AgentClassBrowserToolboxMissing;
 // creating the BrowserToolbox must re-reconcile the AgentClass through a
-// watch. Unlike the SidecarToolbox/AgentUI watch tests, Phase A validation
-// never reads a Valid condition on the BrowserToolbox (there is no
-// BrowserToolbox reconciler yet), so existence alone must flip the class to
-// Valid=True. Fails (times out) when SetupWithManager does not register a
-// watch on BrowserToolbox.
+// watch. Task 7 upgraded validateBrowserToolboxes to also read the toolbox's
+// own Valid condition (mirroring the SidecarToolbox/AgentUI watch tests), so
+// -- same convention as mcpServerWithValid /
+// TestAgentClass_ReReconcilesOnSidecarToolboxStatusChange, since the real
+// BrowserToolbox reconciler is not registered on this manager -- the
+// condition is stamped directly to simulate it. Fails (times out) when
+// SetupWithManager does not register a watch on BrowserToolbox.
 func TestAgentClass_ReReconcilesOnBrowserToolboxCreate(t *testing.T) {
 	env := testenv.Shared(t)
 	startManager(t, env)
@@ -561,6 +563,10 @@ func TestAgentClass_ReReconcilesOnBrowserToolboxCreate(t *testing.T) {
 		},
 	}
 	require.NoError(t, env.Client.Create(ctx, btb), "create BrowserToolbox")
+	btb.Status = spiceboxv1alpha1.BrowserToolboxStatus{Conditions: []metav1.Condition{
+		{Type: spiceboxv1alpha1.BrowserToolboxConditionValid, Status: metav1.ConditionTrue, Reason: spiceboxv1alpha1.ReasonBrowserToolboxValid, LastTransitionTime: metav1.Now()},
+	}}
+	require.NoError(t, env.Client.Status().Update(ctx, btb), "stamp BrowserToolbox Valid=True")
 
 	eventuallyValid(t, env.Client, "ac-btb-watch", metav1.ConditionTrue, "", 5*time.Second)
 }

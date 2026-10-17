@@ -103,6 +103,7 @@ import (
 	agentsessionctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentui"
 	"github.com/authzed/openagentprimitives/pkg/controllers/artifactrender"
+	"github.com/authzed/openagentprimitives/pkg/controllers/browsertoolbox"
 	channelctrl "github.com/authzed/openagentprimitives/pkg/controllers/channel"
 	clusteridpctrl "github.com/authzed/openagentprimitives/pkg/controllers/clusteridentityprovider"
 	clusterskillctrl "github.com/authzed/openagentprimitives/pkg/controllers/clusterskill"
@@ -167,7 +168,9 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/authkind/loader"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/broker/inproc"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/githubapp"
-	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/imports" // register the static/oauth/federated/githubApp credkind.Kinds the broker dispatches to via registry.Get
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/imports"        // register the static/oauth/federated/githubApp credkind.Kinds the broker dispatches to via registry.Get
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/onepassword"  // register the "onepassword" directcred.Source the AgentIdentity controller's vault-pin Verify dispatches to
+	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/directcred/secretsource" // register the "secret" directcred.Source (zero-vault; shape-only Verify)
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/federation/idjag"
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/idp/googlekind"   // register "google" idp.Kind: ClusterIdentityProvider validity controller dispatches via registry.Get
 	_ "github.com/authzed/openagentprimitives/pkg/platform/identity/idp/oidckind"     // register "oidc" idp.Kind
@@ -1528,6 +1531,14 @@ func run(cfg *config) {
 		os.Exit(1)
 	}
 	log.Info("registered controller", "name", "SidecarToolbox")
+
+	if err := (&browsertoolbox.Reconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to create controller", "controller", "BrowserToolbox")
+		os.Exit(1)
+	}
+	log.Info("registered controller", "name", "BrowserToolbox")
 
 	if err := (&workspacesource.Reconciler{
 		Client:                    mgr.GetClient(),

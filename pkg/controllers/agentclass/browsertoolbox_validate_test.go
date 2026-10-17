@@ -2,11 +2,10 @@
 
 // pkg/controllers/agentclass/browsertoolbox_validate_test.go
 //
-// Phase A validation of AgentClass.spec.browserToolboxes: existence-only.
-// Unlike validateSidecarToolboxes, this does NOT read the BrowserToolbox's
-// own Valid condition -- Phase A has no BrowserToolbox reconciler to stamp
-// one (it arrives in Phase B), and the CRD's field-level markers mean the
-// API server already rejects a structurally-invalid BrowserToolbox.
+// Phase B validation of AgentClass.spec.browserToolboxes: existence AND the
+// referenced BrowserToolbox's own Valid condition, mirroring
+// validateSidecarToolboxes exactly now that
+// pkg/controllers/browsertoolbox.Reconciler exists to stamp that condition.
 package agentclass_test
 
 import (
@@ -25,11 +24,12 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/testenv"
 )
 
-// TestAgentClassBrowserToolbox covers the two outcomes of Phase A browser
-// toolbox validation: a class referencing a BrowserToolbox that does not
-// exist lands Valid=False/AgentClassBrowserToolboxMissing, and creating the
-// referenced BrowserToolbox then re-reconciling flips the class to
-// Valid=True.
+// TestAgentClassBrowserToolbox covers two outcomes of browser toolbox
+// validation: a class referencing a BrowserToolbox that does not exist lands
+// Valid=False/AgentClassBrowserToolboxMissing, and creating the referenced
+// BrowserToolbox and stamping it Valid=True (as
+// pkg/controllers/browsertoolbox.Reconciler would for an identity-less
+// toolbox) then re-reconciling flips the class to Valid=True.
 func TestAgentClassBrowserToolbox(t *testing.T) {
 	env := testenv.Shared(t)
 	ctx := context.Background()
@@ -58,9 +58,9 @@ func TestAgentClassBrowserToolbox(t *testing.T) {
 	assert.Equal(t, spiceboxv1alpha1.ReasonAgentClassBrowserToolboxMissing, cond.Reason, "Valid reason")
 	assert.Contains(t, cond.Message, "missing-btb", "message should name the missing ref")
 
-	// Now create the referenced BrowserToolbox and reconcile again -- the
-	// class must flip to Valid=True without needing a Valid condition on
-	// the BrowserToolbox itself (Phase A is existence-only).
+	// Now create the referenced BrowserToolbox, stamp it Valid=True (as
+	// pkg/controllers/browsertoolbox.Reconciler would for this identity-less
+	// toolbox), and reconcile again -- the class must flip to Valid=True.
 	btb := &spiceboxv1alpha1.BrowserToolbox{
 		ObjectMeta: metav1.ObjectMeta{Name: "missing-btb", Namespace: "default"},
 		Spec: spiceboxv1alpha1.BrowserToolboxSpec{
@@ -71,6 +71,10 @@ func TestAgentClassBrowserToolbox(t *testing.T) {
 		},
 	}
 	require.NoError(t, env.Client.Create(ctx, btb), "create BrowserToolbox")
+	btb.Status = spiceboxv1alpha1.BrowserToolboxStatus{Conditions: []metav1.Condition{
+		{Type: spiceboxv1alpha1.BrowserToolboxConditionValid, Status: metav1.ConditionTrue, Reason: spiceboxv1alpha1.ReasonBrowserToolboxValid, LastTransitionTime: metav1.Now()},
+	}}
+	require.NoError(t, env.Client.Status().Update(ctx, btb), "stamp BrowserToolbox Valid=True")
 
 	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "ac-btb-missing"}})
 	require.NoError(t, err, "Reconcile after BrowserToolbox created")
@@ -80,4 +84,59 @@ func TestAgentClassBrowserToolbox(t *testing.T) {
 	assert.True(t,
 		hasCondition(got.Status.Conditions, spiceboxv1alpha1.AgentClassConditionValid, metav1.ConditionTrue),
 		"want Valid=True; got conditions=%+v", got.Status.Conditions)
+}
+
+// TestAgentClassBrowserToolbox_NotValid covers a BrowserToolbox that exists
+// but is itself Valid=False (e.g. pkg/controllers/browsertoolbox.Reconciler
+// found its spec.access.identity unusable) -- the class must surface this as
+// Valid=False/AgentClassBrowserToolboxInvalid, with the toolbox's own
+// condition reason folded into the message, mirroring
+// TestAgentClass_InvalidWhenSidecarToolboxNotValid's shape exactly.
+func TestAgentClassBrowserToolbox_NotValid(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := context.Background()
+	r := &agentclass.Reconciler{Client: env.Client, APIReader: env.Client}
+
+	require.NoError(t, env.Client.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "llm-creds", Namespace: "default"},
+		Data:       map[string][]byte{"api-key": []byte("sk")},
+	}), "create llm-creds")
+
+	btb := &spiceboxv1alpha1.BrowserToolbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "btb-unusable", Namespace: "default"},
+		Spec: spiceboxv1alpha1.BrowserToolboxSpec{
+			Access: spiceboxv1alpha1.BrowserAccess{
+				Mode:     "allowlist",
+				Sites:    []spiceboxv1alpha1.BrowserSite{{Host: "example.com"}},
+				Identity: "no-such-identity",
+			},
+		},
+	}
+	require.NoError(t, env.Client.Create(ctx, btb), "create BrowserToolbox")
+	btb.Status = spiceboxv1alpha1.BrowserToolboxStatus{Conditions: []metav1.Condition{
+		{Type: spiceboxv1alpha1.BrowserToolboxConditionValid, Status: metav1.ConditionFalse,
+			Reason: spiceboxv1alpha1.ReasonBrowserToolboxIdentityMissing, Message: "spec.access.identity: AgentIdentity/no-such-identity not found in namespace default",
+			LastTransitionTime: metav1.Now()},
+	}}
+	require.NoError(t, env.Client.Status().Update(ctx, btb), "stamp BrowserToolbox Valid=False")
+
+	ac := newClass("ac-btb-unusable")
+	ac.Spec.BrowserToolboxes = []spiceboxv1alpha1.AgentClassBrowserToolboxRef{
+		{Name: "web", Ref: "btb-unusable"},
+	}
+	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass")
+
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "ac-btb-unusable"}})
+	require.NoError(t, err, "Reconcile")
+
+	var got spiceboxv1alpha1.AgentClass
+	require.NoError(t, env.Client.Get(ctx, types.NamespacedName{Namespace: "default", Name: "ac-btb-unusable"}, &got),
+		"Get AgentClass")
+	cond := findCondition(got.Status.Conditions, spiceboxv1alpha1.AgentClassConditionValid)
+	require.NotNil(t, cond, "Valid condition")
+	assert.Equal(t, metav1.ConditionFalse, cond.Status, "Valid status")
+	assert.Equal(t, spiceboxv1alpha1.ReasonAgentClassBrowserToolboxInvalid, cond.Reason, "Valid reason")
+	assert.Contains(t, cond.Message, "btb-unusable", "message should name the BrowserToolbox")
+	assert.Contains(t, cond.Message, spiceboxv1alpha1.ReasonBrowserToolboxIdentityMissing,
+		"message should fold in the toolbox's own condition reason")
 }

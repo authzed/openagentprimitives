@@ -179,12 +179,13 @@ func answerFor(t *testing.T) map[string]string {
 			"current-context: \"\"\n# sentinel-contents-must-not-be-summarised\n"), 0o600))
 
 	return map[string]string{
-		"anthropic-oauth":    "sk-ant-oat01-CONTRACTSENTINELVALUE",
-		"github-pat":         "ghp_CONTRACTSENTINELVALUE0123",
-		"slack-bot-token":    "xoxb-CONTRACTSENTINELVALUE0123",
-		"onepassword-scim":   "op-scim-CONTRACTSENTINELVALUE",
-		"tailscale-authkey":  "tskey-auth-kCONTRACT-SENTINELVALUE",
-		"kubectl-kubeconfig": kubeconfig,
+		"anthropic-oauth":             "sk-ant-oat01-CONTRACTSENTINELVALUE",
+		"github-pat":                  "ghp_CONTRACTSENTINELVALUE0123",
+		"slack-bot-token":             "xoxb-CONTRACTSENTINELVALUE0123",
+		"onepassword-scim":            "op-scim-CONTRACTSENTINELVALUE",
+		"onepassword-service-account": "ops_CONTRACTSENTINELVALUE0123",
+		"tailscale-authkey":           "tskey-auth-kCONTRACT-SENTINELVALUE",
+		"kubectl-kubeconfig":          kubeconfig,
 	}
 }
 

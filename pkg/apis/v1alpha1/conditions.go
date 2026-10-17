@@ -179,6 +179,15 @@ const (
 	// both the expected shape and the one the value actually has.
 	ReasonCredentialShapeMismatch = "CredentialShapeMismatch"
 
+	// ReasonAgentIdentityDirectCredentialInvalid: a type=directCredentials
+	// credential's backing token could not be proven to resolve to its declared
+	// vault — the directcred source's Verify returned an error (zero or many
+	// accessible vaults, a vault-name mismatch, or an auth failure). Valid=False
+	// rather than a warning because the browser toolbox would otherwise fill
+	// logins from whatever vault the token now sees; the condition message
+	// carries the verify error (which names vaults/counts, never the token).
+	ReasonAgentIdentityDirectCredentialInvalid = "DirectCredentialInvalid"
+
 	// PlatformLinked reasons. ReasonPlatformLinkFailed is TRANSIENT (SpiceDB
 	// unreachable, schema not composed yet) and keeps being retried. The two
 	// Unrepresentable* reasons are PERMANENT: a Kubernetes name may contain
@@ -1593,6 +1602,38 @@ const (
 	// Operators must remove the reference from each AgentClass before the
 	// finalizer can be released.
 	ReasonSidecarToolboxDeletionBlocked = "DeletionBlocked"
+)
+
+// BrowserToolbox reasons (Valid condition). The condition type itself lives
+// here (rather than on browsertoolbox_types.go, where SidecarToolbox's own
+// equivalent constant sits) because, unlike SidecarToolbox, BrowserToolbox's
+// validity is purely a function of its spec plus one cross-reference -- there
+// is no admission-time probe and no second condition type to anchor a
+// separate home for it.
+const (
+	// BrowserToolboxConditionValid is True when the toolbox's spec passes
+	// validation. CEL already guarantees structural sanity at admission (a
+	// blocklist toolbox can never carry Identity/IdentitySites); this
+	// condition instead carries the identity cross-check: whether
+	// spec.access.identity, when set, names an AgentIdentity that exists in
+	// this BrowserToolbox's namespace, carries a directCredentials
+	// credential, and is itself Valid=True.
+	BrowserToolboxConditionValid = "Valid"
+	// ReasonBrowserToolboxValid is the healthy reason: either no identity is
+	// set, or the named identity exists, carries a directCredentials
+	// credential, and is itself Valid=True.
+	ReasonBrowserToolboxValid = "Valid"
+	// ReasonBrowserToolboxIdentityMissing is set when spec.access.identity
+	// names an AgentIdentity that does not exist in this BrowserToolbox's
+	// namespace.
+	ReasonBrowserToolboxIdentityMissing = "IdentityMissing"
+	// ReasonBrowserToolboxIdentityUnusable is set when the named AgentIdentity
+	// exists but cannot serve this browser: it carries no directCredentials
+	// credential (the one credential type a browser toolbox can bind to), or
+	// its own Valid condition is not True (backing Secret missing or
+	// wrong-keyed, vault verify failed, ...). The condition message says
+	// which, folding in the identity's own condition reason for the latter.
+	ReasonBrowserToolboxIdentityUnusable = "IdentityUnusable"
 )
 
 // AgentSession sidecar-related fatal reasons.

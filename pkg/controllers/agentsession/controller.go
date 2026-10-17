@@ -53,6 +53,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind"
 	credkindregistry "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/registry"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credresolve"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/directcred"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/externaltoken"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/federation"
 	apnats "github.com/authzed/openagentprimitives/pkg/platform/nats"
@@ -2636,6 +2637,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// does not deserve a 2s poll) while the runner surfaces the failure.
 	browserTerminalFailure := false
 	if len(ac.Spec.BrowserToolboxes) > 0 {
+		// Whether THIS reconcile is a wake. Computed before the wake handler below
+		// (section 5a) transitions the session, so it reflects the parked state the
+		// browser block sees: a wake re-lists the identity login catalog, where a
+		// steady-state reconcile carries the prior one forward (resolveBrowserCatalog).
+		browserWaking := shouldWake(&sess)
 		for _, ref := range ac.Spec.BrowserToolboxes {
 			var tb spiceboxv1alpha1.BrowserToolbox
 			if err := r.Client.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: ref.Ref}, &tb); err != nil {
@@ -2653,12 +2659,39 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			// DeepCopy before freezing: tb.Spec's inner slices alias the informer
 			// cache, and the resolved snapshot is mutated/read downstream.
 			tbSpec := *tb.Spec.DeepCopy()
+
+			// Resolve the bound identity's login catalog + identity-derived hosts.
+			// Permanent misconfiguration (missing identity, no directCredentials
+			// credential, unregistered credential/source kind, a backing Secret
+			// that does not exist) ends the session rather than running the
+			// browser with a silently-empty catalog. A TRANSIENT failure (a
+			// Get/List blip against the identity, its Secret, or the directcred
+			// backend) instead requeues the reconcile -- see
+			// errBrowserCatalogTerminal in browserpod.go.
+			catalog, catalogFingerprint, identityName, identityHosts, cErr := r.resolveBrowserCatalog(ctx, &sess, ref.Ref, tbSpec, browserWaking)
+			if cErr != nil {
+				if stderrors.Is(cErr, errBrowserCatalogTerminal) {
+					return r.markBootFailed(ctx, &sess,
+						spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+						fmt.Sprintf("%s: identity %s: %v", ref.Ref, tbSpec.Access.Identity, cErr))
+				}
+				return ctrl.Result{}, fmt.Errorf("resolve browser catalog for %q: %w", ref.Ref, cErr)
+			}
+			// Identity hosts widen the allowlist ONLY when identitySites is set; the
+			// catalog is listed onto status either way.
+			var identitySitesParam []directcred.Host
+			if tbSpec.Access.IdentitySites {
+				identitySitesParam = identityHosts
+			}
 			rt := spiceboxv1alpha1.ResolvedBrowserToolbox{
-				Name:           ref.Name,
-				Ref:            ref.Ref,
-				Spec:           tbSpec,
-				EffectiveSites: DeriveBrowserEffectiveSites(tbSpec),
-				GatePort:       browserGatePort,
+				Name:               ref.Name,
+				Ref:                ref.Ref,
+				Spec:               tbSpec,
+				EffectiveSites:     DeriveBrowserEffectiveSites(tbSpec, identitySitesParam),
+				Catalog:            catalog,
+				CatalogFingerprint: catalogFingerprint,
+				IdentityName:       identityName,
+				GatePort:           browserGatePort,
 			}
 			// Read-before-mint: reuse an existing gate token so TokenHash — and the
 			// token the gate pod is injected from — stays byte-stable across

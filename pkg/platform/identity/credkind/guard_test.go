@@ -22,6 +22,7 @@ import (
 // remove.
 var credentialTypeLiterals = map[string]bool{
 	`"static"`: true, `"oauth"`: true, `"federated"`: true, `"githubApp"`: true,
+	`"directCredentials"`: true,
 }
 
 // falsePositiveSuffixes names specific files (matched by path suffix, not
@@ -160,6 +161,7 @@ func TestNoCredentialTypeSwitchesOutsideCredkind(t *testing.T) {
 // literal-matching AST walk. This is Guard 6.
 var credentialDispatchFields = map[string]bool{
 	"Static": true, "OAuth": true, "Federated": true, "GitHubApp": true,
+	"DirectCredentials": true,
 }
 
 // guard6ExcludedSuffixes names files that legitimately test two or more
