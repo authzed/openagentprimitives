@@ -178,6 +178,7 @@ rules:
   - agentprimitives.authzed.com
   resources:
   - agentsettings
+  - browsertoolboxes
   - clusteragentsettings
   - clusteridentityproviders
   - clusterskillsources

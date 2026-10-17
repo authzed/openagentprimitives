@@ -1,0 +1,32 @@
+# The BrowserToolbox CR this bundle exercises.
+#
+# This file is named in bundle.json's `extraManifests` (as "01-browser-toolbox")
+# as well as being applied through `agentDir` like every other file in this
+# directory. The double listing is deliberate, not an accident of copy-paste:
+# the threadrun driver's setupBrowserFixture/browserToolboxSpecs reads the
+# RAW TEXT of every file named in extraManifests to find and parse a
+# `kind: BrowserToolbox` document — it never looks the object up live through
+# the K8s API, because the whole point of the secret-gated-sidecar-style
+# pattern this bundle follows is that the AgentClass never references the
+# toolbox, so nothing else ever resolves it from a CR. extraManifests is the
+# ONLY route that hands the driver this spec. The AgentDir apply is what
+# actually lands the object on envtest (for parity/realism); the extraManifests
+# listing is what makes it legible to the fixture code. Both applies are
+# idempotent Create-or-Update, so naming the same file twice is harmless.
+#
+# access.sites names an UNRELATED placeholder host ("example.com") on
+# purpose: the bundle's whole point is that "definitely-blocked.test" is NOT
+# in this allowlist. The real test site's host (host.docker.internal) is
+# appended automatically by setupBrowserFixture for every allowlist-mode
+# toolbox — see that function's own comment — so this bundle does not need to
+# (and never does) navigate to the real site at all.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: BrowserToolbox
+metadata: {name: web, namespace: default}
+spec:
+  access:
+    mode: allowlist
+    sites:
+      - host: example.com
+  interaction: act
+  state: ephemeral

@@ -1,0 +1,87 @@
+package browser
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+
+	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+)
+
+func TestWaitForClampsTimeout(t *testing.T) {
+	cases := []struct {
+		name        string
+		seconds     int
+		wantDur     time.Duration
+		wantClamped bool
+	}{
+		{name: "huge value clamps to 30s", seconds: 3600, wantDur: 30 * time.Second, wantClamped: true},
+		{name: "above-max clamps to 30s", seconds: 31, wantDur: 30 * time.Second, wantClamped: true},
+		{name: "in-range passes through unclamped", seconds: 5, wantDur: 5 * time.Second, wantClamped: false},
+		{name: "exactly max is not clamped", seconds: 30, wantDur: 30 * time.Second, wantClamped: false},
+		{name: "exactly min is not clamped", seconds: 1, wantDur: 1 * time.Second, wantClamped: false},
+		{name: "negative clamps up to 1s", seconds: -5, wantDur: 1 * time.Second, wantClamped: true},
+		{name: "unset (0) defaults to 30s, not reported as clamped", seconds: 0, wantDur: 30 * time.Second, wantClamped: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d, clamped := clampWaitTimeout(tc.seconds)
+			assert.Equal(t, tc.wantDur, d)
+			assert.Equal(t, tc.wantClamped, clamped)
+			assert.LessOrEqual(t, d, 30*time.Second, "effective deadline must never exceed 30s")
+		})
+	}
+}
+
+func TestScreenshotOfferedOnlyWithImages(t *testing.T) {
+	rt := spiceboxv1alpha1.ResolvedBrowserToolbox{
+		Name: "demo",
+		Ref:  "demo-browser",
+		Spec: spiceboxv1alpha1.BrowserToolboxSpec{
+			Access:      spiceboxv1alpha1.BrowserAccess{Mode: "blocklist"},
+			Interaction: "readonly",
+			State:       "ephemeral",
+		},
+	}
+
+	hasScreenshot := func(acceptsImages bool) bool {
+		tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", acceptsImages)
+		if err != nil {
+			t.Fatalf("Synthesize: %v", err)
+		}
+		for _, tl := range tools {
+			if strings.HasSuffix(tl.Name(), "_screenshot") {
+				return true
+			}
+		}
+		return false
+	}
+
+	assert.False(t, hasScreenshot(false), "screenshot must be absent when the model does not accept images")
+	assert.True(t, hasScreenshot(true), "screenshot must be offered when the model accepts images")
+}
+
+// TestInteractionActOffersSameSetInPhaseA proves the act/readonly branch offers
+// the identical observation set in Phase A (acting tools arrive in Phase C).
+func TestInteractionActOffersSameSetInPhaseA(t *testing.T) {
+	base := spiceboxv1alpha1.ResolvedBrowserToolbox{
+		Name: "demo",
+		Ref:  "demo-browser",
+		Spec: spiceboxv1alpha1.BrowserToolboxSpec{
+			Access: spiceboxv1alpha1.BrowserAccess{Mode: "blocklist"},
+			State:  "ephemeral",
+		},
+	}
+	readonly := base
+	readonly.Spec.Interaction = "readonly"
+	act := base
+	act.Spec.Interaction = "act"
+
+	ro, err := Synthesize(readonly, "http://127.0.0.1:1", "tok", true)
+	assert.NoError(t, err)
+	ac, err := Synthesize(act, "http://127.0.0.1:1", "tok", true)
+	assert.NoError(t, err)
+	assert.Equal(t, toolNames(ro), toolNames(ac), "act and readonly offer the same set in Phase A")
+}

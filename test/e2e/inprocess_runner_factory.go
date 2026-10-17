@@ -55,6 +55,7 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/agent/session/state/plans" // registers the "plans" state kind so update_plan works in-process
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/authfail"
+	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
 	mcpdispatch "github.com/authzed/openagentprimitives/pkg/agent/tool/mcp"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta/capability"
@@ -273,6 +274,17 @@ type InProcessRunnerFactory struct {
 	// httptest port, not the controller-allocated rt.Port. Production leaves
 	// this nil and probes http://127.0.0.1:<rt.Port>.
 	SidecarProbeURL func(rt spiceboxv1alpha1.ResolvedSidecarToolbox) string
+
+	// BrowserConnect, when non-nil, supplies the live (gateURL, token) for a
+	// resolved browser toolbox. Test seam, mirroring SidecarProbeURL: the real
+	// gate runs in-process (test/testbrowser.StartGate) on an ephemeral
+	// 127.0.0.1 port, not the controller-reflected rt.BrowserPodIP:rt.GatePort,
+	// and the token is the one StartGate was given rather than a per-session
+	// Secret. The driver sets this to its StartGate result keyed by rt.Ref.
+	// When nil, buildBrowserTools falls back to the production-shaped path:
+	// gateURL from status (http://<BrowserPodIP>:<GatePort>) + the token read
+	// from the per-session Secret agentsession.BrowserTokenSecretName names.
+	BrowserConnect func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) (gateURL, token string)
 
 	// ExtraTools, when non-empty, are appended to every spawned runner.Loop's
 	// tool set. Test seam for scenarios that need a tool the CRD-driven
@@ -1147,15 +1159,39 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		return nil, err
 	}
 
-	// nonMetaTools threads sandbox+mcp+sidecar+ExtraTools into Assemble in the
-	// same order internal/cmd/runner/main.go uses (sandbox, mcp, sidecar). ExtraTools are
-	// a harness-only seam (see the field doc); folding them into the non-meta
-	// set keeps them in the LLM-facing catalog AND lets introspection see them,
-	// exactly as production non-meta tools are treated.
-	nonMetaTools := make([]tool.Tool, 0, len(sandboxTools)+len(mcpTools)+len(sidecarTools)+len(f.ExtraTools))
+	// Browser-toolbox tools: boot pass mirroring internal/cmd/runner/main.go's
+	// browser block. acceptsImages gates the screenshot op exactly as production
+	// does — the fake/scripted provider reports no native image/png support, so
+	// this is false and the screenshot tool is withheld (fail-closed). In this
+	// harness the browser toolbox is stamped into status mid-session
+	// (h.MarkBrowserReady), so the boot list is normally empty and the browser
+	// refresher below adds the tools on a later turn; see buildBrowserTools.
+	// EffectiveSettings is nil-guarded here where production (runner main.go)
+	// reads it bare: the runner binary only ever starts AFTER the reconciler
+	// stamped the snapshot, but this factory's buildLoop is also called
+	// directly by harness-level tests (BuildLoopToolNamesForTest) with a
+	// hand-built, never-reconciled session. Missing settings degrade to
+	// acceptsImages=false — the screenshot tool is withheld, the fail-closed
+	// direction this gate already takes for a provider with no image support.
+	browserAcceptsImages := false
+	if f.LLM != nil && sess.Status.EffectiveSettings != nil {
+		browserAcceptsImages = f.LLM.NativeInputMIMEs(sess.Status.EffectiveSettings.Model.Name).Has("image/png")
+	}
+	browserTools, err := f.buildBrowserTools(sess, sess.Status.ResolvedBrowserToolboxes, browserAcceptsImages)
+	if err != nil {
+		return nil, err
+	}
+
+	// nonMetaTools threads sandbox+mcp+sidecar+browser+ExtraTools into Assemble
+	// in the same order internal/cmd/runner/main.go uses (sandbox, mcp, sidecar,
+	// browser). ExtraTools are a harness-only seam (see the field doc); folding
+	// them into the non-meta set keeps them in the LLM-facing catalog AND lets
+	// introspection see them, exactly as production non-meta tools are treated.
+	nonMetaTools := make([]tool.Tool, 0, len(sandboxTools)+len(mcpTools)+len(sidecarTools)+len(browserTools)+len(f.ExtraTools))
 	nonMetaTools = append(nonMetaTools, sandboxTools...)
 	nonMetaTools = append(nonMetaTools, mcpTools...)
 	nonMetaTools = append(nonMetaTools, sidecarTools...)
+	nonMetaTools = append(nonMetaTools, browserTools...)
 	nonMetaTools = append(nonMetaTools, f.ExtraTools...)
 
 	// A whole-session replay holds back the tools its capture ungated at the
@@ -2151,10 +2187,28 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 	// the sidecar into status mid-session, so there's nothing to gate on at boot.
 	// We arm it whenever K8s is wired; the refresher itself is cheap (re-Gets the
 	// session, returns nil unless a newly-ready separate-pod sidecar appears).
+	//
+	// Browser toolboxes are stamped mid-session the same way (h.MarkBrowserReady),
+	// so the single ToolRefresher slot runs BOTH the sidecar and the browser
+	// refresher each turn and merges what each adds — a browser bundle's tools
+	// appear on the turn after MarkBrowserReady, exactly like a secret-gated
+	// sidecar's. The sidecar refresher runs first and unchanged, so a bundle with
+	// no browser toolbox is byte-for-byte on the pre-browser path.
 	if f.K8s != nil {
-		loop.ToolRefresher = f.newSidecarToolRefresher(types.NamespacedName{
-			Namespace: sess.Namespace, Name: sess.Name,
-		}, sessionCache)
+		sessKey := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}
+		sidecarRefresh := f.newSidecarToolRefresher(sessKey, sessionCache)
+		browserRefresh := f.newBrowserToolRefresher(sessKey, browserAcceptsImages)
+		loop.ToolRefresher = func(ctx context.Context) (runner.ToolRefreshResult, error) {
+			sr, serr := sidecarRefresh(ctx)
+			br, berr := browserRefresh(ctx)
+			added := make([]tool.Tool, 0, len(sr.Added)+len(br.Added))
+			added = append(added, sr.Added...)
+			added = append(added, br.Added...)
+			if serr != nil {
+				return runner.ToolRefreshResult{Added: added}, serr
+			}
+			return runner.ToolRefreshResult{Added: added}, berr
+		}
 	}
 
 	// Authz wiring: enables per-tool SpiceDB Checks, the approval flow
@@ -3149,6 +3203,102 @@ func portFromURL(raw string) (int32, bool) {
 		return 0, false
 	}
 	return int32(p), true
+}
+
+// buildBrowserTools synthesizes the observation tools for each resolved browser
+// toolbox, mirroring internal/cmd/runner/main.go's browser block: for each
+// entry it resolves a gate URL + per-session token and calls
+// browsertoolboxsynth.Synthesize. Like the sidecar and MCP paths, a synthesis
+// failure surfaces as a buildLoop error rather than a runner silently missing
+// its browser tools — the same fail-loud shape production uses (failSession
+// there, error here), which is the whole point of "wire it in BOTH places":
+// the control cannot be silently off.
+//
+// In the in-process harness the browser toolbox is stamped into status
+// MID-session by h.MarkBrowserReady (there is no real pod, so nothing is in
+// status at boot), so `resolved` is normally empty here and this is a no-op;
+// newBrowserToolRefresher picks up the stamped entry on the next turn. The boot
+// pass exists for production parity and for any entry already present at boot.
+func (f *InProcessRunnerFactory) buildBrowserTools(sess *spiceboxv1alpha1.AgentSession, resolved []spiceboxv1alpha1.ResolvedBrowserToolbox, acceptsImages bool) ([]tool.Tool, error) {
+	if len(resolved) == 0 {
+		return nil, nil
+	}
+	var out []tool.Tool
+	for _, rt := range resolved {
+		built, err := f.synthBrowserToolbox(sess, rt, acceptsImages)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, built...)
+	}
+	return out, nil
+}
+
+// synthBrowserToolbox resolves one toolbox's (gateURL, token) and synthesizes
+// its tools. The BrowserConnect seam, when set, supplies the live in-process
+// gate URL + token (the driver's StartGate result); otherwise it takes the
+// production-shaped path — gate URL from status, token from the per-session
+// Secret — exactly as internal/cmd/runner/main.go does. Shared by the boot pass
+// and the refresher so both run the identical code path.
+func (f *InProcessRunnerFactory) synthBrowserToolbox(sess *spiceboxv1alpha1.AgentSession, rt spiceboxv1alpha1.ResolvedBrowserToolbox, acceptsImages bool) ([]tool.Tool, error) {
+	var gateURL, token string
+	if f.BrowserConnect != nil {
+		gateURL, token = f.BrowserConnect(rt)
+	} else {
+		// Production parity (internal/cmd/runner/main.go): the runner builds the
+		// gate URL from status and reads the per-session gate-token Secret the
+		// operator minted. The Secret's one data key is "token" (the
+		// agentsession package's browserTokenSecretKey is unexported, so the
+		// literal is duplicated here deliberately, as the production runner does).
+		gateURL = fmt.Sprintf("http://%s:%d", rt.BrowserPodIP, rt.GatePort)
+		var tokenSecret corev1.Secret
+		if err := f.K8s.Get(context.Background(), client.ObjectKey{
+			Namespace: sess.Namespace,
+			Name:      agentsession.BrowserTokenSecretName(sess, rt.Ref),
+		}, &tokenSecret); err != nil {
+			return nil, fmt.Errorf("buildBrowserTools: browser %q: get token secret: %w", rt.Ref, err)
+		}
+		token = string(tokenSecret.Data["token"])
+	}
+	built, err := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages)
+	if err != nil {
+		return nil, fmt.Errorf("buildBrowserTools: browser %q: %w", rt.Ref, err)
+	}
+	return built, nil
+}
+
+// newBrowserToolRefresher is the browser analogue of newSidecarToolRefresher:
+// a Loop.ToolRefresher consulted at the top of each turn that re-Gets the
+// AgentSession and synthesizes the tools of any browser toolbox newly stamped
+// into status.resolvedBrowserToolboxes (by h.MarkBrowserReady) with a
+// BrowserPodIP. It owns its dedup via the captured `synthed` set (rt.Name →
+// BrowserPodIP), so a toolbox is synthesized once per pod IP and never
+// duplicated across turns — mirroring the sidecar refresher. Browser tools are
+// not secret-gated, so there is no secret-output gate here.
+func (f *InProcessRunnerFactory) newBrowserToolRefresher(sessKey types.NamespacedName, acceptsImages bool) func(ctx context.Context) (runner.ToolRefreshResult, error) {
+	synthed := map[string]string{}
+	return func(ctx context.Context) (runner.ToolRefreshResult, error) {
+		var sess spiceboxv1alpha1.AgentSession
+		if err := f.K8s.Get(ctx, sessKey, &sess); err != nil {
+			return runner.ToolRefreshResult{}, fmt.Errorf("inprocess browser refresh: get AgentSession: %w", err)
+		}
+		var added []tool.Tool
+		for _, rt := range sess.Status.ResolvedBrowserToolboxes {
+			if rt.BrowserPodIP == "" {
+				continue // not Ready yet (operator/MarkBrowserReady hasn't stamped the IP).
+			}
+			if prevIP, ok := synthed[rt.Name]; ok && prevIP == rt.BrowserPodIP {
+				continue // already synthesized against this pod IP.
+			}
+			built, err := f.synthBrowserToolbox(&sess, rt, acceptsImages)
+			if err != nil {
+				return runner.ToolRefreshResult{Added: added}, fmt.Errorf("inprocess browser refresh: %w", err)
+			}
+			synthed[rt.Name] = rt.BrowserPodIP
+			added = append(added, built...)
+		}
+		return runner.ToolRefreshResult{Added: added}, nil
+	}
 }
 
 // newSidecarToolRefresher builds the in-process equivalent of

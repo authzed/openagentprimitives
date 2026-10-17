@@ -1,0 +1,60 @@
+{
+  "name": "browser-readonly-catalog",
+  "description": "A readonly browser toolbox's recorded tool catalog is the claim: web_navigate, web_read and web_find are offered, web_click and web_type are not, and a navigate+read round trip actually reaches the fixture's own test site and returns its content.\n\nTwo user turns, a plain warm-up then the real ask. The original sketch assumed the browser refresher only synthesizes a toolbox's tools onto the live set on the turn AFTER MarkBrowserReady stamps status.resolvedBrowserToolboxes (mirroring the secret-gated sidecar's slower, Secret-propagation-gated arrival). Measured directly instead (three consecutive standalone runs): markBrowserFixtureReady's status patch — fired right after the first, fire-and-forget SendUserMessage returns — consistently lands before the runner's first mid-session tool-refresh check, so the tools are already present on turn 1's own first LLM request. This bundle does not assert toolNotOffered on turn 1 for that reason (an earlier draft did and failed consistently against the real driver); the warm-up/real-ask split is kept for readability, not as a timing proof.\n\ntoolOffered/toolNotOffered are spread across turn 2's three requests (one offered- and one not-offered-check per step) rather than all piled on the first, because Expect carries exactly one of each per step — the three offered names (web_navigate, web_read, web_find) and the spec's \"a tool not offered cannot be called\" are still each checked once. web_click/web_type do not exist as ops at all in Phase A (pkg/agent/tool/browser/synthesize.go offers the identical observation set regardless of interaction), so those two assertions pass today independent of readonly — they are the standing guard for Phase C's acting tools, exactly as the brief says.\n\nlastToolResultContains on both the navigate result (\"loaded\") and the read result (the site's BRONZE-FARES-TABLE sentinel) is what proves the round trip actually reached the fixture site and read its real content back, rather than a scripted reply standing in for it.",
+
+  "agentDir": "testdata/browser-readonly-catalog/manifests",
+  "agentClass": "browser-readonly-catalog",
+  "extraManifests": ["01-browser-toolbox"],
+
+  "userTurns": [
+    "hi there",
+    "please check the fares page at http://{{browserSite}}/ and tell me what's listed"
+  ],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "hi there"
+      },
+      "reply": [{ "text": "Hello! How can I help you today?" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "greeted the user" } } }]
+    },
+    {
+      "expect": {
+        "userTextContains": "fares page",
+        "toolOffered": "web_navigate",
+        "toolNotOffered": "web_click"
+      },
+      "reply": [{ "toolUse": { "name": "web_navigate", "args": { "url": "http://{{browserSite}}/" } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_navigate",
+        "lastToolResultContains": "loaded",
+        "toolOffered": "web_read",
+        "toolNotOffered": "web_type"
+      },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_read",
+        "lastToolResultContains": "BRONZE-FARES-TABLE",
+        "toolOffered": "web_find"
+      },
+      "reply": [{ "text": "The fares page shows BRONZE-FARES-TABLE: NYC-LAX $199." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "reported the fares table" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["Hello", "BRONZE-FARES-TABLE"],
+    "toolsCalled": ["web_navigate", "web_read"]
+  }
+}

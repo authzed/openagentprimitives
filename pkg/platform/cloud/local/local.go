@@ -36,6 +36,16 @@ func (Strategy) InstallProfile() cloud.InstallProfile { return cloud.DevProfile 
 // Validate is defined in validate.go — the whole method (managed-providerID
 // refusal + kubeconfig host-pattern heuristic) lives there in one place.
 
+// BrowserChromeSandbox returns the Phase A posture: unsandboxed, pod boundary
+// + gate only. local has not verified unprivileged user namespaces on its
+// nodes. (desktop embeds this Strategy and inherits the same answer.)
+func (Strategy) BrowserChromeSandbox() cloud.BrowserChromeSandbox {
+	return cloud.BrowserChromeSandbox{
+		Sandboxed: false,
+		Reason:    "unprivileged user namespaces not verified on local; Chrome runs --no-sandbox behind the pod boundary and the gate",
+	}
+}
+
 // IsManaged reports false — this strategy covers non-managed clusters.
 func (Strategy) IsManaged() bool { return false }
 

@@ -146,6 +146,16 @@ func (Strategy) Validate(ctx context.Context, p cloud.ValidateParams) error {
 	return fmt.Errorf("this cluster's nodes report %s, but the %s cluster kind was selected: pass --cluster-kind=%s to get its storage, artifact, and Gateway handling", got, cloud.KeyDefault, got)
 }
 
+// BrowserChromeSandbox returns the Phase A posture: unsandboxed, pod boundary
+// + gate only. unmanaged clusters vary too widely (kind, bare-metal, on-prem)
+// to assume unprivileged user namespaces are available on every node.
+func (Strategy) BrowserChromeSandbox() cloud.BrowserChromeSandbox {
+	return cloud.BrowserChromeSandbox{
+		Sandboxed: false,
+		Reason:    "unprivileged user namespaces not verified on unmanaged; Chrome runs --no-sandbox behind the pod boundary and the gate",
+	}
+}
+
 // unmanagedWorkspaceStorage is the unmanaged cloud.WorkspaceStorage implementation.
 type unmanagedWorkspaceStorage struct{}
 

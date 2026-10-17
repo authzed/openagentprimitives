@@ -300,6 +300,30 @@ func BuildRunnerRBAC(
 			)
 		}
 	}
+	// The browser gate-token secrets `get` rule, pinned by name. The runner reads
+	// each per-session gate token to authenticate to its browser pod's gate
+	// (browsergate) over the pod network. The names are DETERMINISTIC from the
+	// session + ref (BrowserTokenSecretName), so — unlike the MCP secrets, which
+	// need the AgentIdentity's credentials resolved — they are derived here
+	// directly from the class's browser refs rather than threaded as a parameter.
+	// Same rule shape as the mcpSecretNames grant above. Empty ref entries are
+	// skipped; an empty name slice emits no rule.
+	if ac != nil && len(ac.Spec.BrowserToolboxes) > 0 {
+		browserSecretNames := make([]string, 0, len(ac.Spec.BrowserToolboxes))
+		for _, ref := range ac.Spec.BrowserToolboxes {
+			if ref.Ref != "" {
+				browserSecretNames = append(browserSecretNames, BrowserTokenSecretName(s, ref.Ref))
+			}
+		}
+		if len(browserSecretNames) > 0 {
+			role.Rules = append(role.Rules, rbacv1.PolicyRule{
+				APIGroups:     []string{""},
+				Resources:     []string{"secrets"},
+				ResourceNames: browserSecretNames,
+				Verbs:         []string{"get"},
+			})
+		}
+	}
 	// The agentuis `get` rule is emitted whenever the AgentClass carries a UI
 	// grant (spec.agentUI != nil): internal/cmd/runner fetches the referenced AgentUI
 	// CR at session start to read spec.tools — condition (1) of the

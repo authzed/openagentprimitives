@@ -39,6 +39,15 @@ func CredentialSecretName(sessionName, ref string) string {
 // selectors agree.
 const labelSidecar = "agentprimitives.authzed.com/sidecartoolbox"
 
+// labelBrowser is the label key that identifies a per-session browser pod by its
+// ref — the sibling of labelSidecar. It is mirrored here (same literal as the
+// parent package's labelBrowserToolbox) so this package's ingress peer selector
+// can exclude browser pods WITHOUT importing the parent (an import cycle). A
+// browser pod carries the session label but is NOT the runner, so admitting it
+// to a sidecar's runner-only ingress would let a hostile page reach that
+// sidecar's credentialed MCP port.
+const labelBrowser = "agentprimitives.authzed.com/browsertoolbox"
+
 // labelSession is the label key that carries the owning AgentSession name on
 // every per-session pod and NetworkPolicy.
 const labelSession = "agentprimitives.authzed.com/agentsession"
@@ -258,9 +267,13 @@ func BuildNetworkPolicy(sess *spiceboxv1alpha1.AgentSession, s Spec) *networking
 		From: []networkingv1.NetworkPolicyPeer{{
 			PodSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{labelSession: sess.Name},
-				MatchExpressions: []metav1.LabelSelectorRequirement{{
-					Key: labelSidecar, Operator: metav1.LabelSelectorOpDoesNotExist,
-				}},
+				// The runner is the one session pod carrying NEITHER a sidecartoolbox
+				// NOR a browsertoolbox label; excluding BOTH keeps a browser pod (a
+				// hostile-page risk) out of this sidecar's runner-only ingress.
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: labelSidecar, Operator: metav1.LabelSelectorOpDoesNotExist},
+					{Key: labelBrowser, Operator: metav1.LabelSelectorOpDoesNotExist},
+				},
 			},
 		}},
 		Ports: []networkingv1.NetworkPolicyPort{{

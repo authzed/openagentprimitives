@@ -124,6 +124,16 @@ func (s Strategy) Validate(ctx context.Context, p cloud.ValidateParams) error {
 	return cloud.ValidateManagedPrefix(ctx, s, p)
 }
 
+// BrowserChromeSandbox returns the Phase A posture: unsandboxed, pod boundary
+// + gate only. GKE has not verified unprivileged user namespaces on its
+// nodes.
+func (Strategy) BrowserChromeSandbox() cloud.BrowserChromeSandbox {
+	return cloud.BrowserChromeSandbox{
+		Sandboxed: false,
+		Reason:    "unprivileged user namespaces not verified on GKE; Chrome runs --no-sandbox behind the pod boundary and the gate",
+	}
+}
+
 // workspaceStorage is the GKE cloud.WorkspaceStorage implementation.
 type workspaceStorage struct{}
 

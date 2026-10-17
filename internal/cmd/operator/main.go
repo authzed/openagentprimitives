@@ -725,6 +725,7 @@ type config struct {
 	gatewayAddr            string
 	runnerImage            string
 	sandboxImage           string
+	browserImage           string
 	imagePullSecret        string
 	channelsdTokenFile     string
 	webdTokenFile          string
@@ -849,6 +850,7 @@ func newCommand() *cobra.Command {
 	fs.StringVar(&cfg.gatewayAddr, "gateway-bind-address", ":8443", "Address for the streaming gRPC gateway. Empty to disable.")
 	fs.StringVar(&cfg.runnerImage, "runner-image", apimage.Runner.LocalRef(), "Container image for the agent runner pod.")
 	fs.StringVar(&cfg.sandboxImage, "sandbox-image", apimage.Sandbox.LocalRef(), "Default container image for sandbox/bundle pods of a SpiceboxClass that does not pin spec.image.")
+	fs.StringVar(&cfg.browserImage, "browser-image", apimage.Browser.LocalRef(), "Container image (chromium + apbrowsergate) for per-session browser-toolbox pods.")
 	fs.StringVar(&cfg.imagePullSecret, "image-pull-secret", "", "Optional imagePullSecret name added to operator-synthesized runner + sidecar pods (private registries).")
 	fs.StringVar(&cfg.natsURL, "nats-url", "nats://spicebox-nats.agentprimitives-system.svc:4222", "NATS connection URL passed to runner pods.")
 	fs.DurationVar(&cfg.defaultChannelArchiveAfter, "default-channel-archive-after", 4*time.Hour,
@@ -2483,6 +2485,16 @@ func run(cfg *config) {
 	// identical question.
 	trustedImageRegistry := trustedImageRegistryFrom(apimage.Sandbox, cfg.sandboxImage)
 
+	// Browser-toolbox posture: the resolved cloud kind decides whether the browser
+	// pod may rely on Chrome's own sandbox. Phase A: every kind returns
+	// Sandboxed=false with a non-empty Reason, logged once here so an operator can
+	// always find WHY Chrome is running unsandboxed (the browser-pod builder reads
+	// this value, never a kind switch).
+	browserSandbox := clusterStrategy.BrowserChromeSandbox()
+	log.Info("browser-toolbox Chrome sandbox posture resolved",
+		"sandboxed", browserSandbox.Sandboxed, "reason", browserSandbox.Reason,
+		"clusterKind", clusterStrategy.Key(), "browserImage", cfg.browserImage)
+
 	podFactory := &agentsessionctrl.PodRunnerFactory{
 		Client:          mgr.GetClient(),
 		RunnerImage:     cfg.runnerImage,
@@ -2577,6 +2589,12 @@ func run(cfg *config) {
 		// pod can carry WORKSHOP_TRUSTED_IMAGE_REGISTRY too (BuildSidecarPod's
 		// identity branch, threaded through reconcileSidecarPod).
 		TrustedImageRegistry:           trustedImageRegistry,
+		// BrowserImageRef resolves like RunnerImage/SandboxImage — a flag defaulting
+		// to apimage.Browser.LocalRef() that `oap install` registry-qualifies via
+		// manifest substitution. BrowserSandbox is the resolved cloud kind's answer,
+		// logged once above. Both feed the per-session browser pod builder.
+		BrowserImageRef:                cfg.browserImage,
+		BrowserSandbox:                 browserSandbox,
 		DefaultChannelArchiveAfter:     cfg.defaultChannelArchiveAfter,
 		DefaultSessionSleepAfter:       cfg.defaultSessionSleepAfter,
 		FailedSandboxReapGrace:         cfg.failedSandboxReapGrace,

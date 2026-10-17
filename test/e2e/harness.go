@@ -569,6 +569,18 @@ func (h *Harness) SetSidecarProbeURL(fn func(rt spiceboxv1alpha1.ResolvedSidecar
 	h.runnerFactory.SidecarProbeURL = fn
 }
 
+// SetBrowserConnect installs the in-process runner factory's browser-toolbox
+// connect seam. The browser gate runs in-process (test/testbrowser.StartGate)
+// on an ephemeral 127.0.0.1 port rather than the controller-reflected
+// BrowserPodIP:GatePort, and the token is the one StartGate was given rather
+// than a per-session Secret — so a browser scenario redirects the runner's
+// per-toolbox (gateURL, token) at its StartGate result, keyed by rt.Ref. The
+// analogue of SetSidecarProbeURL. Call after Start and before the session that
+// uses the browser toolbox runs its first turn.
+func (h *Harness) SetBrowserConnect(fn func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) (gateURL, token string)) {
+	h.runnerFactory.BrowserConnect = fn
+}
+
 // SetMinter installs a federation.Minter on the in-process runner
 // factory's token broker seam. Must be called BEFORE the session that
 // needs federated credentials is spawned (the broker is constructed
@@ -743,6 +755,71 @@ func (h *Harness) MarkSidecarReady(ns, name, llmName, ref, dispatchURL string, s
 	}
 	require.NoError(h.t, h.K8s.Status().Patch(ctx, &sess, client.MergeFrom(base)),
 		"MarkSidecarReady: patch status.resolvedSidecarToolboxes for %s/%s", ns, name)
+}
+
+// MarkBrowserReady simulates the operator bringing up a per-session
+// BrowserToolbox pod in-process: it stamps a full entry into
+// AgentSession.status.resolvedBrowserToolboxes for the given (LLM-facing
+// `name`, CR `ref`) with BrowserPodIP:GatePort parsed from `gateURL`
+// (http://127.0.0.1:<gatePort>, the URL test/testbrowser.StartGate returns),
+// EffectiveSites derived with the SAME agentsession.DeriveBrowserEffectiveSites
+// production uses, TokenHash computed over `token` with the SAME
+// agentsession.SecretTokenHash, and the BrowserToolbox Spec frozen onto the
+// entry.
+//
+// Production does this via real pod-create (the reconciler reflects the pod's
+// PodIP into status once Ready); the in-process harness has no real pod, so the
+// test stamps the equivalent status directly — the mirror of MarkSidecarReady.
+//
+// The per-session gate TOKEN is NOT delivered through a Secret here: the driver
+// hands buildBrowserTools the live (gateURL, token) through the
+// InProcessRunnerFactory.BrowserConnect seam (the precedent is SidecarProbeURL),
+// which is simpler than materializing a Secret and reconstructing the gate URL
+// from status. The TokenHash is still stamped for production parity. (The
+// factory's status-derived fallback path — seam nil, read the token Secret —
+// stays exercised by production and by its own unit test, not by this stamp.)
+//
+// Call AFTER Start and AFTER the session exists (the AgentSession must be
+// Get-able to patch its status). The factory's browser refresher re-reads this
+// status at the top of each turn and synthesizes the browser tools into the
+// live set — so, like the secret-gated sidecar, the tools appear on the turn
+// after the stamp rather than in the boot set.
+func (h *Harness) MarkBrowserReady(ns, name, llmName, ref, gateURL, token string, spec spiceboxv1alpha1.BrowserToolboxSpec) {
+	h.t.Helper()
+	ctx := context.Background()
+
+	host, port := splitHostPort(h.t, gateURL)
+
+	var sess spiceboxv1alpha1.AgentSession
+	require.NoError(h.t, h.K8s.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sess),
+		"MarkBrowserReady: get AgentSession %s/%s", ns, name)
+	base := sess.DeepCopy()
+
+	entry := spiceboxv1alpha1.ResolvedBrowserToolbox{
+		Name:           llmName,
+		Ref:            ref,
+		Spec:           spec,
+		EffectiveSites: agentsessionctrl.DeriveBrowserEffectiveSites(spec),
+		BrowserPodName: agentsessionctrl.BrowserPodName(&sess, ref),
+		BrowserPodIP:   host,
+		GatePort:       port,
+		TokenHash:      agentsessionctrl.SecretTokenHash([]byte(token)),
+	}
+	// Replace any prior entry for this ref (idempotent re-stamp / pod replace),
+	// else append.
+	replaced := false
+	for i := range sess.Status.ResolvedBrowserToolboxes {
+		if sess.Status.ResolvedBrowserToolboxes[i].Ref == ref {
+			sess.Status.ResolvedBrowserToolboxes[i] = entry
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		sess.Status.ResolvedBrowserToolboxes = append(sess.Status.ResolvedBrowserToolboxes, entry)
+	}
+	require.NoError(h.t, h.K8s.Status().Patch(ctx, &sess, client.MergeFrom(base)),
+		"MarkBrowserReady: patch status.resolvedBrowserToolboxes for %s/%s", ns, name)
 }
 
 // splitHostPort parses a http://host:port URL into its host + numeric port.

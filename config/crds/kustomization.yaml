@@ -8,6 +8,7 @@ resources:
   - agentprimitives.authzed.com_agentsettings.yaml
   - agentprimitives.authzed.com_agentuis.yaml
   - agentprimitives.authzed.com_artifactrenders.yaml
+  - agentprimitives.authzed.com_browsertoolboxes.yaml
   - agentprimitives.authzed.com_channels.yaml
   - agentprimitives.authzed.com_clusteragentsettings.yaml
   - agentprimitives.authzed.com_clusteridentityproviders.yaml

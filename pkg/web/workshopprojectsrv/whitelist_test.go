@@ -51,6 +51,7 @@ var notProjectedFields = map[string]bool{
 	"MCPServers":             true,
 	"CredentialExplanations": true,
 	"SidecarToolboxes":       true,
+	"BrowserToolboxes":       true,
 	"WorkspaceSource":        true,
 	"ToolSessionLog":         true,
 	"Budget":                 true,

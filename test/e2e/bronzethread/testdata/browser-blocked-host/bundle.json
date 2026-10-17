@@ -1,0 +1,50 @@
+{
+  "name": "browser-blocked-host",
+  "description": "A navigate call to a host outside the browser toolbox's allowlist is refused by the tool's pre-check (pkg/agent/tool/browser), before Chrome is ever touched, and the model is handed the stable policy-refusal error text verbatim. (The gate's own egress enforcement is a separate layer and is not exercised by this in-process harness.)\n\nTwo user turns, a plain warm-up then the real ask: markBrowserFixtureReady (the driver's secret-gated-sidecar-style status stamp) fires right after the FIRST SendUserMessage returns, and SendUserMessage is fire-and-forget. Measured directly (three consecutive standalone runs, both browser bundles): the status patch consistently lands before the runner's very first mid-session tool-refresh check, so `tools=web_navigate,...` is already present on turn 1's own first LLM request — NOT deferred to turn 2 the way the secret-gated sidecar's slower (Secret-propagation-gated) arrival is. This bundle therefore does NOT assert toolNotOffered on turn 1 (an earlier draft did and failed consistently against the real driver); the two-turn shape is kept anyway as a clean, readable split between greeting and the policy-refusal exchange, not as a timing proof.\n\nlastToolResultIsError + lastToolResultContains is the load-bearing pair: a scripted agentReplyContains alone cannot distinguish a refused call from an allowed one that merely happened to produce similar words, which is this suite's standing lesson about asserting on tool results rather than replies.\n\nThe BrowserToolbox CR's access.sites names an unrelated placeholder host (example.com), not the real test site: setupBrowserFixture appends the real site's host to an allowlist-mode toolbox's effective sites automatically, so this bundle never needs the site reachable at all and never navigates to it. See manifests/01-browser-toolbox.yaml for why that file is named in extraManifests as well as being applied via agentDir.",
+
+  "agentDir": "testdata/browser-blocked-host/manifests",
+  "agentClass": "browser-blocked-host",
+  "extraManifests": ["01-browser-toolbox"],
+
+  "userTurns": [
+    "hi there",
+    "please open https://definitely-blocked.test/"
+  ],
+
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "hi there"
+      },
+      "reply": [{ "text": "Hello! How can I help you today?" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "greeted the user" } } }]
+    },
+    {
+      "expect": {
+        "userTextContains": "definitely-blocked",
+        "toolOffered": "web_navigate"
+      },
+      "reply": [{ "toolUse": { "name": "web_navigate", "args": { "url": "https://definitely-blocked.test/" } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_navigate",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "host definitely-blocked.test is not allowed by browser toolbox web (rule: not in allowlist)"
+      },
+      "reply": [{ "text": "That site is outside my allowed list." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "reported the site is blocked" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["Hello", "outside my allowed list"],
+    "toolsCalled": ["web_navigate"]
+  }
+}

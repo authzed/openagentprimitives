@@ -1563,6 +1563,12 @@ const (
 	ReasonAgentClassSidecarToolboxInvalid = "AgentClassSidecarToolboxInvalid"
 )
 
+// AgentClass condition reasons specific to BrowserToolbox refs.
+const (
+	ReasonAgentClassBrowserToolboxMissing = "AgentClassBrowserToolboxMissing"
+	ReasonAgentClassBrowserToolboxInvalid = "AgentClassBrowserToolboxInvalid"
+)
+
 // SidecarToolbox reasons (Valid / Reachable conditions).
 const (
 	ReasonSidecarToolboxSpecOK                 = "SpecOK"
@@ -1594,6 +1600,7 @@ const (
 	ReasonAgentSessionSidecarToolboxMissing = "SidecarToolboxMissing"
 	ReasonAgentSessionSidecarToolboxInvalid = "SidecarToolboxInvalid"
 	ReasonAgentSessionSidecarBootFailed     = "SidecarBootFailed"
+	ReasonAgentSessionBrowserBootFailed     = "BrowserToolboxBootFailed"
 	// ReasonAgentSessionImagePinDrifted is set on AgentSessionConditionSettingsAccepted
 	// (False) when a SidecarToolbox's image has drifted from its baseline digest
 	// and the cluster/namespace pinning policy mode is "block". The session is

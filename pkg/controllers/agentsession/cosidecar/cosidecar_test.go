@@ -360,12 +360,19 @@ func TestBuildNetworkPolicy_ingressRunnerOnly(t *testing.T) {
 	sess := &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "s6", Namespace: "ns"}}
 	np := BuildNetworkPolicy(sess, Spec{Ref: "det", Port: 7777, Egress: EgressPolicy{Denied: true}})
 	require.Len(t, np.Spec.Ingress, 1)
-	// The ingress rule has a peer that includes the session label + DoesNotExist on sidecar label
+	// The ingress peer includes the session label + DoesNotExist on BOTH the
+	// sidecar and browser labels — the runner is the one session pod carrying
+	// neither, and a browser pod must not be admitted to a sidecar's ingress.
 	require.Len(t, np.Spec.Ingress[0].From, 1)
 	peer := np.Spec.Ingress[0].From[0]
 	require.NotNil(t, peer.PodSelector)
 	assert.Equal(t, "s6", peer.PodSelector.MatchLabels[labelSession])
-	require.Len(t, peer.PodSelector.MatchExpressions, 1)
-	assert.Equal(t, metav1.LabelSelectorOpDoesNotExist, peer.PodSelector.MatchExpressions[0].Operator)
-	assert.Equal(t, labelSidecar, peer.PodSelector.MatchExpressions[0].Key)
+	require.Len(t, peer.PodSelector.MatchExpressions, 2, "excludes BOTH sidecar and browser pods")
+	var excluded []string
+	for _, me := range peer.PodSelector.MatchExpressions {
+		assert.Equal(t, metav1.LabelSelectorOpDoesNotExist, me.Operator)
+		excluded = append(excluded, me.Key)
+	}
+	assert.ElementsMatch(t, []string{labelSidecar, labelBrowser}, excluded,
+		"ingress peer must exclude both sidecar and browser pods")
 }

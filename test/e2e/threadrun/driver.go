@@ -13,6 +13,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,8 +57,10 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/artifactstore"
 	blobstore "github.com/authzed/openagentprimitives/pkg/platform/artifactstore/blob"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserpolicy"
 	"github.com/authzed/openagentprimitives/pkg/tools/sandboxkinds/pod"
 	"github.com/authzed/openagentprimitives/test/e2e"
+	"github.com/authzed/openagentprimitives/test/testbrowser"
 )
 
 // workshopSidecarToolboxRef is the SidecarToolbox CR name every
@@ -368,6 +373,15 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 
 	startAutoApprover(t, h, b)
 
+	// Browser toolbox: boot the fixture (SharedChrome + ServeSite + gate per
+	// toolbox) and resolve {{browserSite}} in the bundle BEFORE the transcript is
+	// registered, so the replay and its divergence checks both see the real
+	// site host:port. nil (and a no-op) for every bundle with no BrowserToolbox.
+	browserFix := setupBrowserFixture(t, dir, h, b)
+	if browserFix != nil {
+		substituteBrowserSite(&b, browserFix.siteValue)
+	}
+
 	tr := registerTranscript(t, h, b)
 
 	// Each bundle gets its OWN thread, and therefore its own session.
@@ -428,6 +442,14 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	workshopSessionBound := false
 	for i, turn := range b.UserTurns {
 		h.SendUserMessage(turn.Text, e2e.InThread("bt-"+b.Name), e2e.WithAttachments(bundleAttachments(t, dir, i, turn)...))
+		// Once the first inbound has created the session, stamp each browser
+		// toolbox into its status (the operator's pod-ready reflection, here with
+		// no real pod). The browser refresher synthesizes the tools on a later
+		// turn — so, like a secret-gated sidecar, a browser bundle uses the tool
+		// from turn 2 on. No-op for every bundle with no BrowserToolbox.
+		if i == 0 && browserFix != nil {
+			markBrowserFixtureReady(t, h, browserFix)
+		}
 		// Contains and NotContains are positional and run on the SAME reply, so a
 		// turn asserting both awaits its reply once and checks presence + absence
 		// together. A turn with neither is not awaited (some turns produce no
@@ -1665,6 +1687,247 @@ func loadManifests(t *testing.T, dir string, b bt.Bundle) []string {
 		out = append(out, string(raw))
 	}
 	return out
+}
+
+// --- Browser toolbox fixture wiring ------------------------------------------
+//
+// When a bundle's manifests declare a BrowserToolbox CR, the driver boots the
+// test/testbrowser fixture (one shared headless-Chrome container, one httptest
+// site, one in-process gate per toolbox), installs the BrowserConnect seam so
+// buildBrowserTools reaches each toolbox's gate, stamps readiness mid-session
+// via h.MarkBrowserReady, and resolves the {{browserSite}} stand-in to the
+// site's host:port in the bundle's toolUse args AND expect strings before
+// replay. Every non-browser bundle takes none of this path (setupBrowserFixture
+// returns nil), so the regression suite is byte-for-byte unaffected.
+//
+// The stand-in uses a driver-local string replacement over the bundle (the
+// brief's sanctioned alternative to the {{name}} capture/vars mechanism):
+// capture/vars only interpolates toolUse args at render time, never expect
+// strings, and it needs a value "captured" from a prior tool result — whereas
+// the site host:port is known at fixture-boot time and must reach both halves.
+
+// browserFixture is the running browser test environment for one bundle.
+type browserFixture struct {
+	siteValue string // "host.docker.internal:<port>" — the {{browserSite}} value
+	toolboxes []browserFixtureToolbox
+}
+
+type browserFixtureToolbox struct {
+	ref     string
+	llmName string
+	spec    spiceboxv1alpha1.BrowserToolboxSpec // effective (site host appended in allowlist mode)
+	gateURL string
+	token   string
+}
+
+// setupBrowserFixture detects BrowserToolbox CRs among the bundle's manifests
+// and boots the fixture for them. Returns nil when the bundle declares none.
+//
+// Mirrors the secret_gated_sidecar pattern: the bundle's AgentClass does NOT
+// reference the toolbox (a referenced browser toolbox makes the AgentSession
+// reconciler try to create a pod the envtest has no kubelet to make Ready, and
+// re-derive status every reconcile, clobbering the stamp). The CR is applied
+// only so its Spec can be read here and snapshotted onto status by
+// MarkBrowserReady; the tools then appear mid-session via the browser refresher.
+func setupBrowserFixture(t *testing.T, dir string, h *e2e.Harness, b bt.Bundle) *browserFixture {
+	t.Helper()
+	specs := browserToolboxSpecs(t, dir, b)
+	if len(specs) == 0 {
+		return nil
+	}
+	// One shared Chrome has ONE global egress proxy (a single host port baked at
+	// container start), so one bundle can exercise exactly one browser gate.
+	// Supporting several would need per-browser-context proxies; no Phase A
+	// bundle uses more than one toolbox. Fail loudly rather than bind-collide.
+	require.LessOrEqual(t, len(specs), 1,
+		"browser bundle %q declares %d BrowserToolbox CRs; the shared-Chrome fixture supports one per bundle", b.Name, len(specs))
+
+	cdp := testbrowser.SharedChrome(t)
+	_, hostForPolicy, port := testbrowser.ServeSite(t, browserSitePages(t, dir))
+
+	fix := &browserFixture{siteValue: fmt.Sprintf("%s:%d", hostForPolicy, port)}
+	conn := map[string]browserFixtureToolbox{}
+	for ref, spec := range specs {
+		effSpec := spec
+		// In allowlist mode the test site must be reachable: add it to BOTH the
+		// gate policy (egress enforcement) and the effective spec (the
+		// runner-side navigate pre-check reads EffectiveSites). Blocklist mode
+		// admits an unlisted host by default, so no addition is needed.
+		if effSpec.Access.Mode == browserpolicy.ModeAllowlist {
+			effSpec.Access.Sites = append(append([]spiceboxv1alpha1.BrowserSite{}, effSpec.Access.Sites...),
+				spiceboxv1alpha1.BrowserSite{Host: hostForPolicy})
+		}
+		token := randomBrowserToken(t)
+		gateURL := testbrowser.StartGate(t, browserPolicyFromSpec(effSpec), token, cdp, port)
+		tb := browserFixtureToolbox{ref: ref, llmName: ref, spec: effSpec, gateURL: gateURL, token: token}
+		fix.toolboxes = append(fix.toolboxes, tb)
+		conn[ref] = tb
+	}
+
+	h.SetBrowserConnect(func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) (string, string) {
+		tb, ok := conn[rt.Ref]
+		if !ok {
+			// Errorf (not Fatalf): runs on the runner's goroutine, where a
+			// Goexit would abandon the loop's stack rather than the test's.
+			t.Errorf("BrowserConnect: no gate wired for browser toolbox ref %q", rt.Ref)
+			return "", ""
+		}
+		return tb.gateURL, tb.token
+	})
+	return fix
+}
+
+// markBrowserFixtureReady stamps each toolbox into the session's status once the
+// session exists, so the browser refresher synthesizes its tools on the next
+// turn. Called after the first user turn is sent (the session is created from
+// the first inbound).
+func markBrowserFixtureReady(t *testing.T, h *e2e.Harness, fix *browserFixture) {
+	t.Helper()
+	ns, name := singleSessionForBrowser(t, h)
+	for _, tb := range fix.toolboxes {
+		h.MarkBrowserReady(ns, name, tb.llmName, tb.ref, tb.gateURL, tb.token, tb.spec)
+	}
+}
+
+// singleSessionForBrowser polls until exactly one AgentSession exists and
+// returns its (namespace, name). Each bundle gets its own session, so there is
+// exactly one. Mirrors secret_gated_sidecar's sessionNameAfterFirstReply.
+func singleSessionForBrowser(t *testing.T, h *e2e.Harness) (ns, name string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		var list spiceboxv1alpha1.AgentSessionList
+		if err := h.K8s.List(context.Background(), &list); err == nil && len(list.Items) == 1 {
+			return list.Items[0].Namespace, list.Items[0].Name
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("markBrowserFixtureReady: no single AgentSession within deadline")
+	return "", ""
+}
+
+// browserToolboxSpecs parses the bundle's manifests for BrowserToolbox CRs,
+// returning ref (metadata.name) → spec. The LLM-facing tool prefix is the ref
+// (setupBrowserFixture uses ref as llmName), since — per the secret_gated
+// pattern — the AgentClass does not reference the toolbox to supply a name.
+func browserToolboxSpecs(t *testing.T, dir string, b bt.Bundle) map[string]spiceboxv1alpha1.BrowserToolboxSpec {
+	t.Helper()
+	out := map[string]spiceboxv1alpha1.BrowserToolboxSpec{}
+	for _, blob := range loadManifests(t, dir, b) {
+		for _, doc := range splitYAMLDocs(blob) {
+			var probe struct {
+				Kind     string `json:"kind"`
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+			}
+			if err := yaml.Unmarshal([]byte(doc), &probe); err != nil || probe.Kind != "BrowserToolbox" {
+				continue
+			}
+			var tb spiceboxv1alpha1.BrowserToolbox
+			require.NoError(t, yaml.Unmarshal([]byte(doc), &tb),
+				"parse BrowserToolbox %q", probe.Metadata.Name)
+			out[probe.Metadata.Name] = tb.Spec
+		}
+	}
+	return out
+}
+
+// splitYAMLDocs splits a multi-document YAML blob on `---` separators, dropping
+// empty documents.
+func splitYAMLDocs(blob string) []string {
+	var docs []string
+	for _, d := range regexp.MustCompile(`(?m)^---\s*$`).Split(blob, -1) {
+		if strings.TrimSpace(d) != "" {
+			docs = append(docs, d)
+		}
+	}
+	return docs
+}
+
+// browserPolicyFromSpec builds the gate PolicyDoc from a BrowserToolbox spec —
+// the same mapping agentsession.BuildBrowserPolicyDoc applies, from the spec
+// rather than the resolved status entry.
+func browserPolicyFromSpec(spec spiceboxv1alpha1.BrowserToolboxSpec) browserpolicy.PolicyDoc {
+	sites := make([]browserpolicy.Site, 0, len(spec.Access.Sites))
+	for _, s := range spec.Access.Sites {
+		sites = append(sites, browserpolicy.Site{Host: s.Host, Exact: s.Exact})
+	}
+	return browserpolicy.PolicyDoc{Mode: spec.Access.Mode, Sites: sites}
+}
+
+// browserSitePages loads the HTML the test site serves: every file under the
+// bundle's site/ directory (served at "/"+relpath, with index.html also at "/"),
+// or a single default page when the directory is absent.
+func browserSitePages(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	siteDir := filepath.Join(dir, "site")
+	entries, err := os.ReadDir(siteDir)
+	if err != nil {
+		return map[string]string{
+			"/": `<!doctype html><html><head><title>Browser Toolbox Test Site</title></head>` +
+				`<body><h1>browser toolbox test site</h1><p>default page</p></body></html>`,
+		}
+	}
+	pages := map[string]string{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		raw, rerr := os.ReadFile(filepath.Join(siteDir, e.Name()))
+		require.NoError(t, rerr, "read site page %q", e.Name())
+		pages["/"+e.Name()] = string(raw)
+		if e.Name() == "index.html" {
+			pages["/"] = string(raw)
+		}
+	}
+	return pages
+}
+
+// randomBrowserToken mints a per-toolbox gate token. A fresh random value per
+// run keeps the gate's constant-time auth meaningful and never reuses a secret.
+func randomBrowserToken(t *testing.T) string {
+	t.Helper()
+	var buf [16]byte
+	_, err := rand.Read(buf[:])
+	require.NoError(t, err, "mint browser gate token")
+	return hex.EncodeToString(buf[:])
+}
+
+// substituteBrowserSite replaces the literal {{browserSite}} with value
+// throughout the bundle's replay-relevant strings — toolUse args and the expect
+// strings the divergence contract checks — so a browser bundle names the site
+// portably. Mutates b's backing slices in place; call before registerTranscript.
+func substituteBrowserSite(b *bt.Bundle, value string) {
+	const ph = "{{browserSite}}"
+	repl := func(s string) string { return strings.ReplaceAll(s, ph, value) }
+
+	for i := range b.UserTurns {
+		b.UserTurns[i].Text = repl(b.UserTurns[i].Text)
+	}
+	for i := range b.Assert.AgentReplyContains {
+		b.Assert.AgentReplyContains[i] = repl(b.Assert.AgentReplyContains[i])
+	}
+	for i := range b.Assert.AgentReplyNotContains {
+		b.Assert.AgentReplyNotContains[i] = repl(b.Assert.AgentReplyNotContains[i])
+	}
+	for i := range b.LLM {
+		e := &b.LLM[i].Expect
+		e.UserTextContains = repl(e.UserTextContains)
+		e.LastToolResult = repl(e.LastToolResult)
+		e.LastToolResultContains = repl(e.LastToolResultContains)
+		e.LastToolResultNotContains = repl(e.LastToolResultNotContains)
+		e.ToolOffered = repl(e.ToolOffered)
+		e.ToolNotOffered = repl(e.ToolNotOffered)
+		for j := range b.LLM[i].Reply {
+			p := &b.LLM[i].Reply[j]
+			p.Text = repl(p.Text)
+			p.BareText = repl(p.BareText)
+			if p.ToolUse != nil && len(p.ToolUse.Args) > 0 {
+				p.ToolUse.Args = []byte(repl(string(p.ToolUse.Args)))
+			}
+		}
+	}
 }
 
 // startAutoApprover clears approval prompts in the background for the

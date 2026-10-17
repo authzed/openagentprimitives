@@ -49,6 +49,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/auditkey"
 	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
+	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind"
 	credkindregistry "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/registry"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credresolve"
@@ -98,6 +99,13 @@ import (
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentsessions/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentsessions/finalizers,verbs=update
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentclasses,verbs=get;list;watch
+// BrowserToolbox: `get` resolves each referenced CR at session start to snapshot
+// its spec into status.resolvedBrowserToolboxes and derive the per-session
+// browser pod/policy/token; `list;watch` back the Owns/Watches cache. Read-only —
+// the AgentSession reconciler never writes a BrowserToolbox. (The per-session
+// pod/secret/configmap/networkpolicy verbs are already granted above for the
+// sidecar path.)
+// +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=browsertoolboxes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=channels,verbs=get;list;watch
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=channels/status,verbs=update;patch
 // Skill bundles: opted-in Skills are read for their bundle digests, and
@@ -806,6 +814,20 @@ type Reconciler struct {
 	// a local/desktop install (no trusted registry): the env var is then
 	// omitted entirely, never sent as "".
 	TrustedImageRegistry string
+
+	// BrowserImageRef is the first-party browser-toolbox image (chromium +
+	// apbrowsergate, images/browser/Dockerfile) the per-session browser pod runs.
+	// Resolved by the operator the same way RunnerImage/SandboxImage are — a flag
+	// defaulting to apimage.Browser.LocalRef() that `oap install` registry-
+	// qualifies — and passed to BuildBrowserPod. Empty fails the pod build with a
+	// clear error rather than creating a pod with no image.
+	BrowserImageRef string
+
+	// BrowserSandbox is the resolved cloud kind's answer to whether the browser
+	// pod may rely on Chrome's own seccomp/userns sandbox (Sandboxed) instead of
+	// --no-sandbox. Phase A: every kind returns Sandboxed=false with a non-empty
+	// Reason, logged once at operator startup. Threaded into BuildBrowserPod.
+	BrowserSandbox cloud.BrowserChromeSandbox
 
 	// MonitoringPublish publishes framework MonitoringEvents onto the fixed
 	// monitoring subject, which channelsd fans out to role=monitoring Channels.
@@ -2594,6 +2616,122 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
+	// 4d'. Browser toolboxes: resolve each referenced BrowserToolbox CR, mint its
+	// per-session gate token (read-before-mint keeps it byte-stable across
+	// re-reconciles and wakes), stamp its NetworkPolicy and policy ConfigMap
+	// BEFORE the pod exists, create the per-session browser pod, and reflect
+	// readiness into status. Mirrors the separate-pod sidecar branch above, minus
+	// the secret-output gate (a browser depends on nothing the runner produces)
+	// and minus token rotation (the token is read, not re-minted). A not-Ready
+	// browser pod sets browserPodNotReady, which joins the sidecar requeue
+	// decision below — so runner-pod creation is held until every browser pod is
+	// Ready, exactly as a satisfied-but-not-ready sidecar holds it.
+	resolvedBrowsers := make([]spiceboxv1alpha1.ResolvedBrowserToolbox, 0, len(ac.Spec.BrowserToolboxes))
+	// browserPodNotReady marks a browser pod that exists but has not reported a
+	// Ready PodIP yet, so the reconcile requeues to reflect the IP on a later pass
+	// — and, until then, holds runner-pod creation. NOT a boot failure.
+	browserPodNotReady := false
+	// browserTerminalFailure marks a browser pod wedged unrecoverably while the
+	// runner is already live, so the requeue slows (a pod that will not recover
+	// does not deserve a 2s poll) while the runner surfaces the failure.
+	browserTerminalFailure := false
+	if len(ac.Spec.BrowserToolboxes) > 0 {
+		for _, ref := range ac.Spec.BrowserToolboxes {
+			var tb spiceboxv1alpha1.BrowserToolbox
+			if err := r.Client.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: ref.Ref}, &tb); err != nil {
+				if errors.IsNotFound(err) {
+					// A dangling ref is a terminal session-setup failure. The
+					// AgentClass validation (Task 4) makes this unreachable in steady
+					// state, but fail closed anyway — this Get is the only gate at
+					// session time.
+					return r.markBootFailed(ctx, &sess,
+						spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+						fmt.Sprintf("BrowserToolbox %q missing in namespace %q", ref.Ref, sess.Namespace))
+				}
+				return ctrl.Result{}, fmt.Errorf("get BrowserToolbox %q: %w", ref.Ref, err)
+			}
+			// DeepCopy before freezing: tb.Spec's inner slices alias the informer
+			// cache, and the resolved snapshot is mutated/read downstream.
+			tbSpec := *tb.Spec.DeepCopy()
+			rt := spiceboxv1alpha1.ResolvedBrowserToolbox{
+				Name:           ref.Name,
+				Ref:            ref.Ref,
+				Spec:           tbSpec,
+				EffectiveSites: DeriveBrowserEffectiveSites(tbSpec),
+				GatePort:       browserGatePort,
+			}
+			// Read-before-mint: reuse an existing gate token so TokenHash — and the
+			// token the gate pod is injected from — stays byte-stable across
+			// re-reconciles and reap/wake.
+			if err := r.mintBrowserToken(ctx, &sess, &rt); err != nil {
+				return r.markBootFailed(ctx, &sess,
+					spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+					fmt.Sprintf("mint gate token for browser %q: %v", ref.Ref, err))
+			}
+			rt.BrowserPodName = BrowserPodName(&sess, rt.Ref)
+			// Stamp the NetworkPolicy BEFORE the pod exists (an enforcing CNI must
+			// never see an unconstrained browser pod), then the policy ConfigMap the
+			// gate mounts, then create the pod — same ordering the sidecar path uses.
+			if err := r.ensureBrowserNetworkPolicy(ctx, &sess, rt); err != nil {
+				return ctrl.Result{}, err
+			}
+			if err := r.ensureBrowserPolicyConfigMap(ctx, &sess, rt); err != nil {
+				return ctrl.Result{}, err
+			}
+			podState, podErr := r.reconcileBrowserPod(ctx, &sess, rt)
+			if podErr != nil {
+				return r.markBootFailed(ctx, &sess,
+					spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+					fmt.Sprintf("reconcile browser pod for %q: %v", ref.Ref, podErr))
+			}
+			rt.PodFailure = podState.Failure
+			if podState.Failure != nil {
+				detail := podState.Failure.Reason
+				if podState.Failure.Message != "" {
+					detail += " — " + podState.Failure.Message
+				}
+				// Before the runner exists nothing can relay the failure, so the
+				// terminal phase (which channelsd relays) is the only way a human
+				// learns why the session is stuck; once the runner is live the agent
+				// surfaces it off this status record and the session keeps serving.
+				if !podAlreadyStarted(&sess) {
+					return r.markBootFailed(ctx, &sess,
+						spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+						fmt.Sprintf("browser %q pod %q failed to start: %s", rt.Ref, rt.BrowserPodName, detail))
+				}
+				browserTerminalFailure = true
+				browserPodNotReady = true
+				log.FromContext(ctx).Info("browser pod terminally failed; recorded for the runner to surface",
+					"session", sess.Namespace+"/"+sess.Name, "browser", rt.Ref, "pod", rt.BrowserPodName, "detail", detail)
+			} else if podState.PodIP == "" {
+				// Created but not Ready yet; requeue and reflect the PodIP on a later
+				// pass. Holds the runner until then.
+				browserPodNotReady = true
+				log.FromContext(ctx).Info("browser pod not Ready yet; awaiting PodIP",
+					"session", sess.Namespace+"/"+sess.Name, "browser", rt.Ref, "pod", rt.BrowserPodName)
+			} else {
+				rt.BrowserPodIP = podState.PodIP
+			}
+			resolvedBrowsers = append(resolvedBrowsers, rt)
+		}
+		sess.Status.ResolvedBrowserToolboxes = resolvedBrowsers
+	}
+
+	// Reap browser pods whose toolbox ref has left the resolved set — a browser
+	// toolbox removed from the AgentClass mid-session. Runs unconditionally (even
+	// at zero browsers); passing the current set keeps live ones. reapSessionPods
+	// passes nil to orphan them all.
+	{
+		currentBrowserRefs := make(map[string]bool, len(resolvedBrowsers))
+		for _, rt := range resolvedBrowsers {
+			currentBrowserRefs[rt.Ref] = true
+		}
+		if cleanupErr := r.cleanupOrphanedBrowserPods(ctx, &sess, currentBrowserRefs); cleanupErr != nil {
+			// A failed delete is worth retrying; the helper has already logged.
+			return ctrl.Result{}, cleanupErr
+		}
+	}
+
 	// A separate-pod sidecar awaiting its secret-output must NOT hold the runner:
 	// the gating secret is produced BY the runner, so returning here would
 	// DEADLOCK the session in Pending — the secret cannot appear without a
@@ -2617,9 +2755,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// and the persisted hash keeps the rotation from being re-detected. The runner
 	// pod may still be created meanwhile — it tolerates an unresolved
 	// SidecarPodIP.
-	if sidecarPodNotReady {
+	//
+	// A per-session browser pod that exists but is not Ready joins this same
+	// decision (browserPodNotReady): the runner must not start until every browser
+	// pod it will drive is Ready, exactly like a satisfied-but-not-ready sidecar.
+	if sidecarPodNotReady || browserPodNotReady {
 		requeue := 2 * time.Second
-		if sidecarTerminalFailure {
+		if sidecarTerminalFailure || browserTerminalFailure {
 			requeue = sidecarTerminalRequeue
 		}
 		return ctrl.Result{RequeueAfter: requeue}, r.applyStatus(ctx, &sess)
@@ -3239,6 +3381,14 @@ func (r *Reconciler) reapSessionPods(ctx context.Context, sess *spiceboxv1alpha1
 		logger.Info("reap: cleanup detector/cosidecar pods failed; will retry",
 			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
 		return ctrl.Result{}, fmt.Errorf("reap detector/cosidecar pods: %w", err)
+	}
+	// 4. Browser pods. Same shape, own label: nil orphans every browser pod and
+	// reaps its NetworkPolicy + policy ConfigMap, while deliberately KEEPING the
+	// gate-token Secret so a wake recreates the pod with the same token.
+	if err := r.cleanupOrphanedBrowserPods(ctx, sess, nil); err != nil {
+		logger.Info("reap: cleanup browser pods failed; will retry",
+			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+		return ctrl.Result{}, fmt.Errorf("reap browser pods: %w", err)
 	}
 	logger.Info("reaped session pods; AgentSession + PVCs + Secrets kept",
 		"session", sess.Namespace+"/"+sess.Name,
