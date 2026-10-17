@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"image"
 	"image/png"
+	"log/slog"
 	"net/http"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func browserRedactFixture(t *testing.T) (tools []agenttool.Tool, sess *Session, 
 	}}
 	ff := &fakeFetcher{}
 	var err error
-	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, ff.fetch(), nil, nil)
+	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, ff.fetch(), nil, nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools)
 	sess = tools[0].(*browserTool).sess
@@ -149,6 +150,83 @@ func fieldScreenshotRect(t *testing.T, sess *Session, backendNodeID int64) image
 		return nil
 	}))
 	return rect
+}
+
+// captureSlogOutput temporarily redirects the slog default logger to a text
+// handler writing into a buffer, runs fn, restores the prior default, and
+// returns everything logged. Used below to observe CaptureRedacted's own
+// INFO diagnostics (Task #53) rather than re-deriving them out-of-band — the
+// log line IS the fast-path proof: "box_resolve_ms=0"/"dpr_eval_ms=0" can
+// only appear if those stages were never entered, since the vars they'd set
+// start zero-valued and are only assigned inside the (skipped) slow path.
+func captureSlogOutput(t *testing.T, fn func()) string {
+	t.Helper()
+	prev := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	fn()
+	return buf.String()
+}
+
+// TestCaptureRedacted_EmptyBlankedTakesFastPath pins the Task #53 robustness
+// fix: when no credential field is blanked (the common case outside a login
+// flow), CaptureRedacted must skip the device-pixel-ratio eval and the
+// GetBoxModel loop entirely — one fewer CDP round trip, less to time out on a
+// cold or busy browser pod — and still return a valid, un-redacted
+// screenshot. The INFO diagnostic line CaptureRedacted emits is the proof:
+// dpr_eval_ms and box_resolve_ms can only read 0 if those stages' bodies
+// never ran (their timers are started and stopped only inside each branch).
+func TestCaptureRedacted_EmptyBlankedTakesFastPath(t *testing.T) {
+	tools, sess, siteBase := browserRedactFixture(t)
+	require.False(t, run(t, toolBy(t, tools, "navigate"), map[string]any{"url": siteBase + "/"}).IsError)
+	require.Empty(t, sess.blankedNodes(), "nothing was typed into the secret field; blanked must be empty")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var shot []byte
+	logOut := captureSlogOutput(t, func() {
+		var err error
+		shot, err = sess.CaptureRedacted(ctx)
+		require.NoError(t, err, "an empty-blanked capture must still succeed")
+	})
+
+	require.NotEmpty(t, shot, "the fast path must still return screenshot bytes")
+	_, decErr := png.Decode(bytes.NewReader(shot))
+	require.NoError(t, decErr, "the fast-path bytes must be a valid PNG")
+
+	assert.Contains(t, logOut, "fast_path=true", "the empty-blanked fast path must be taken")
+	assert.Contains(t, logOut, "blanked_count=0")
+	assert.Contains(t, logOut, "dpr_eval_ms=0", "the fast path must skip the device-pixel-ratio round trip entirely")
+	assert.Contains(t, logOut, "box_resolve_ms=0", "the fast path must skip GetBoxModel entirely — nothing to redact")
+	assert.Contains(t, logOut, "ok=true")
+}
+
+// TestCaptureRedacted_BlankedFieldTakesSlowPath is the fast path's negative
+// control: with a blanked field present, the SAME diagnostic line must show
+// the DPR eval and box-model stages were actually entered (non-fast-path),
+// so the fast-path test above is proving a real branch, not a vacuous one.
+func TestCaptureRedacted_BlankedFieldTakesSlowPath(t *testing.T) {
+	tools, sess, siteBase := browserRedactFixture(t)
+	require.False(t, run(t, toolBy(t, tools, "navigate"), map[string]any{"url": siteBase + "/"}).IsError)
+
+	secretRef := refByName(t, tools, "SecretField")
+	typed := run(t, toolBy(t, tools, "type"), map[string]any{"ref": secretRef, "text": "{{login.site.test.username}}"})
+	require.False(t, typed.IsError, "type into secret field: %s", typed.Content)
+	require.Len(t, sess.blankedNodes(), 1, "the typed-into field must be marked blanked")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	logOut := captureSlogOutput(t, func() {
+		_, err := sess.CaptureRedacted(ctx)
+		require.NoError(t, err, "a resolvable blanked field must still succeed")
+	})
+
+	assert.Contains(t, logOut, "fast_path=false", "a non-empty blanked set must take the full redaction path")
+	assert.Contains(t, logOut, "blanked_count=1")
+	assert.Contains(t, logOut, "ok=true")
 }
 
 // samplePoints returns the center plus the four inset corners of r, staying a

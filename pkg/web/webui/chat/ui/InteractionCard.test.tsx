@@ -68,6 +68,43 @@ describe("InteractionCard", () => {
     expect(onDecision).toHaveBeenCalledWith("req-1", "identity_choice", "agent");
   });
 
+  it("renders a responseInput text box and carries the typed value as responseText on decision", () => {
+    const onDecision = vi.fn();
+    render(
+      <InteractionCard
+        request={{
+          ...baseRequest,
+          category: "login_human_step",
+          responseInput: { placeholder: "6-digit code", required: true },
+          actions: [{ id: "approve", label: "Approve", kind: "decision" }],
+        }}
+        onDecision={onDecision}
+      />,
+    );
+    const input = screen.getByPlaceholderText("6-digit code") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(onDecision).toHaveBeenCalledWith("req-1", "login_human_step", "approve", "123456");
+  });
+
+  it("renders no responseInput box for an ordinary card and calls onDecision with no responseText", () => {
+    const onDecision = vi.fn();
+    render(
+      <InteractionCard
+        request={{
+          ...baseRequest,
+          category: "identity_choice",
+          actions: [{ id: "agent", label: "Let the agent continue", kind: "decision" }],
+        }}
+        onDecision={onDecision}
+      />,
+    );
+    expect(screen.queryByRole("textbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Let the agent continue" }));
+    // Three args only — no trailing responseText — for a button-only card.
+    expect(onDecision).toHaveBeenCalledWith("req-1", "identity_choice", "agent");
+  });
+
   it("disables decision buttons after the first click so a slow round-trip can't double-fire", () => {
     render(
       <InteractionCard
@@ -637,6 +674,39 @@ describe("InteractionCard resolved-state collapsing", () => {
     expect(src).toContain(`sessionRef=${baseRequest.agentSessionRef.namespace}%2F${baseRequest.agentSessionRef.name}`);
     expect(src).toContain("fn=page.png");
     expect(img?.getAttribute("alt")).toBe("the page");
+  });
+
+  it("builds the screenshot img src with the real namespace when agentSessionRef rides the wire as channelevents.SessionRef (json \"ns\"), not browser.SessionRef (json \"namespace\")", () => {
+    // Reproduces the ACTUAL wire shape, not the convenient one: every other
+    // test in this file hand-builds `agentSessionRef: { namespace, name }` as
+    // a plain object literal, which never exercises the bug because
+    // TypeScript's SessionRef type has no runtime effect. InteractionRequestPayload.AgentSessionRef
+    // is channelevents.SessionRef (pkg/channels/channelevents/envelope.go),
+    // which marshals Namespace as "ns" — unlike browser.SessionRef's
+    // "namespace" (pkg/channels/channelkinds/browser/events.go), which is what
+    // the TS SessionRef interface models. Routing the fixture through
+    // JSON.parse(JSON.stringify(...)) with the real "ns" key is what makes
+    // this test fail without the fix: it previously produced
+    // sessionRef=undefined%2Fsess-1, which 403'd against the backend's
+    // CheckView (agentsession:undefined/sess-1 has no parent relationship).
+    const wire = JSON.parse(
+      JSON.stringify({
+        ...baseRequest,
+        agentSessionRef: { ns: "default", name: "sess-1" },
+        screenshot: {
+          artifactId: "art-1",
+          renderName: "shot-1",
+          mime: "image/png",
+          filename: "page.png",
+        },
+      }),
+    ) as InteractionRequestInner;
+
+    const { container } = render(<InteractionCard request={wire} onDecision={vi.fn()} />);
+    const img = container.querySelector("img") as HTMLImageElement | null;
+    const src = img?.getAttribute("src") ?? "";
+    expect(src).toContain("sessionRef=default%2Fsess-1");
+    expect(src).not.toContain("undefined");
   });
 
   it("renders no img when the request carries no screenshot (the common case)", () => {

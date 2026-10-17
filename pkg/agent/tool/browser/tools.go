@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"github.com/chromedp/chromedp/kb"
 
 	agenttool "github.com/authzed/openagentprimitives/pkg/agent/tool"
+	"github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/tools/browserpolicy"
@@ -30,8 +32,19 @@ const (
 	maxPageBytes = 16 * 1024
 	// navigateTimeout bounds a navigation (navigate / follow / back).
 	navigateTimeout = 30 * time.Second
-	// snapshotTimeout bounds an accessibility snapshot (read / find / screenshot).
+	// snapshotTimeout bounds an accessibility snapshot (read / find).
 	snapshotTimeout = 20 * time.Second
+	// redactedScreenshotTimeout bounds CaptureRedacted's own s.do call —
+	// DEDICATED rather than sharing snapshotTimeout, because the approval
+	// screenshot is a best-effort capture whose caller (the runner's
+	// captureBrowserScreenshotFn) already gives it a generous, decoupled outer
+	// deadline (see that closure's doc) to survive a cold first capture
+	// against a real browser pod; read/find have no such margin to spend and
+	// must stay bounded at snapshotTimeout. Kept a few seconds above
+	// snapshotTimeout, not blindly raised to it, so a slow redact (DPR read +
+	// N box-model resolves + the capture itself) has room without widening
+	// every other snapshot-timed call.
+	redactedScreenshotTimeout = 25 * time.Second
 	// shortTimeout bounds a quick action (scroll, a ref resolve).
 	shortTimeout = 10 * time.Second
 	// pollInterval is how often wait_for re-snapshots.
@@ -54,6 +67,22 @@ const (
 	// carries StateImpact Stateless, not External on web_host. See
 	// browserTool.Permission.
 	requestHumanStepOp = "request_human_step"
+
+	// defaultMutateThreshold mirrors haiku.DefaultMutateThreshold (0.15): the
+	// policy cut (ruling E-R3) at or above which the judge's P(mutate) gates a
+	// call as a mutate. Kept as a local constant rather than importing the haiku
+	// backend so this CDP/DOM tool package does not pull the LLM-provider
+	// transitive deps in just for a number; threshold_test.go pins it equal to
+	// haiku.DefaultMutateThreshold so the two cannot drift. See
+	// haiku.DefaultMutateThreshold for why 0.15 (chosen against a live Haiku sweep).
+	defaultMutateThreshold = 0.15
+
+	// webActionClassifyTimeout bounds the whole classify-and-stamp pass NamedArgs
+	// runs on the authz path (action-fact extraction, the model Classify call, and
+	// the page-fingerprint capture). NamedArgs has no caller context to thread, so
+	// this is the standalone deadline for the model round trip; the per-CDP-step
+	// timeouts inside Session.do still apply underneath it.
+	webActionClassifyTimeout = 30 * time.Second
 )
 
 // actingOpNames is the set of ops that reach and mutate external page state
@@ -128,6 +157,21 @@ type browserTool struct {
 	// The runner implements it over the approval host (pkg/agent/runner); a fake
 	// satisfies it in tests.
 	humanStep HumanStepRequester
+
+	// judge is the injected consequence classifier (E7's Haiku backend in
+	// production; a fake in tests) consulted, for an acting op, to decide whether
+	// a call is a MUTATE that needs the per-action web_action grant on top of the
+	// coarse web_host one. A cheap deterministic fast-path (judge.NewDeterministic)
+	// runs first and skips this model call for the obviously-benign cases
+	// (link-follow, search entry, tab switch). nil means per-action revalidation
+	// is NOT wired for this tool (a bare unit test, or an e2e run that did not set
+	// the seam). A nil judge is FAIL-CLOSED, not open: NamedArgs stamps an acting
+	// call on a live host as a mutate with an empty fingerprint (which the
+	// web_action caveat refuses), so an un-judged acting call is gated, never
+	// waved through on the coarse web_host grant alone. The production runner
+	// always injects a non-nil judge (falling back to the deterministic one), so
+	// this is a defensive floor. See NamedArgs.
+	judge judge.ConsequenceJudge
 }
 
 var (
@@ -216,13 +260,34 @@ func (t *browserTool) PermissionVariants() []authz.PermissionVariant { return ni
 
 // NamedArgs surfaces the current page host under hostArgKey so an acting op's
 // web_host check resolves its resource instance from PAGE STATE rather than from
-// a model argument. The host is written LAST so it wins over any "host" key the
-// model may have put in the call — the page the browser is on is a fact, not
-// something the caller gets to assert.
+// a model argument, and — for a call it classifies as a MUTATE — additionally
+// stamps the web_action key + live page fingerprint (Phase E's E8 gate) so the
+// dispatch layer can layer a per-action web_action check on top of the coarse
+// web_host one. Every stamped value is PAGE STATE or a judge verdict, written
+// LAST so it wins over any same-named key the model may have put in the call —
+// the host, the action key and the fingerprint are facts about the page, not
+// things the caller gets to assert.
 //
 // For an observation op the args pass through unchanged (ok=true): those tools
 // are Passthrough and resolve no resource, so there is nothing to surface and no
 // reason to spend a round-trip reading the live location on the authz path.
+//
+// On any acting op, NamedArgs first DELETES the four reserved web_action keys
+// the model may have supplied (reservedWebActionArgs) — they are page facts, not
+// caller input — so nothing the model asserts can survive into the normalized
+// args the dispatch layer lifts from.
+//
+// For a live page (host != "") the gate is then resolved FAIL-CLOSED on both
+// axes. With a judge injected, the per-action classify-and-stamp runs
+// (stampWebAction): a mutate stamps the key + live fingerprint + flag, a
+// positively-benign observe/navigate/session stamps none of the three, and a
+// judge error / unreadable facts stamp the mutate flag so the call is gated. A
+// NIL judge (a degenerate/hand-built wiring; production always injects one)
+// does NOT skip the gate: it stamps a mutate with an EMPTY fingerprint from
+// op+host alone — which the web_action pagestate_matches caveat refuses — rather
+// than letting the call through on the coarse web_host grant by itself. An empty
+// host is the about:blank / no-page case the web_host check already denies on
+// (UnresolvedResource), so there is nothing to revalidate and nothing is stamped.
 //
 // ok is always true: a browser call's arguments are plain JSON that always
 // parse, unlike a sandbox argv. CurrentHost returning "" is NOT a parse failure
@@ -232,12 +297,298 @@ func (t *browserTool) NamedArgs(args map[string]any) (map[string]any, bool) {
 	if !isActingOp(t.op) {
 		return args, true
 	}
-	out := make(map[string]any, len(args)+1)
+	out := make(map[string]any, len(args)+4)
 	for k, v := range args {
 		out[k] = v
 	}
-	out[hostArgKey] = t.sess.CurrentHost()
+	// Strip every reserved web_action key the MODEL may have put in the call
+	// BEFORE stamping. These four are facts the browser tool asserts about the
+	// page (the gate flag, the action key, the live fingerprint, the human
+	// description), never values the caller gets to supply — and the dispatch
+	// layer lifts them off this normalized map into typed authz inputs. Deleting
+	// them up front means a model cannot inject a forged grant/fingerprint on ANY
+	// path below: not the mutate path (which overwrites them anyway), and not the
+	// benign/stale/nil-judge paths (which previously left a model's own injected
+	// keys flowing straight through). Defense in depth with the runner-side lift,
+	// which already trusts only the browser tool for these.
+	for _, k := range reservedWebActionArgs {
+		delete(out, k)
+	}
+	host := t.sess.CurrentHost()
+	out[hostArgKey] = host
+	if host == "" {
+		// about:blank / no page: the web_host check already denies on an empty
+		// instance (UnresolvedResource), so there is nothing to revalidate.
+		return out, true
+	}
+	if t.judge != nil {
+		t.stampWebAction(out, args, host)
+		return out, true
+	}
+	// No judge is wired for per-action revalidation, but this is still an acting
+	// op on a LIVE host. Fail closed: stamp a mutate with an empty fingerprint
+	// (which the web_action pagestate_matches caveat refuses) rather than waving
+	// the call through on the coarse web_host grant alone. Built from op+host
+	// only — a nil judge is a hand-built/degenerate wiring that may have no live
+	// browser, so this path deliberately does NOT read the DOM. Production always
+	// injects a judge (the runner falls back to the deterministic one), so this
+	// is a defensive floor, not a hot path.
+	out[browserschema.WebActionRequiredArg] = true
+	out[browserschema.WebActionKeyArg] = ActionKey(ActionFacts{Op: t.op, Host: host})
+	out[browserschema.WebActionFingerprintArg] = ""
+	out[browserschema.WebActionDescriptionArg] = humanActionDescriptor(ActionFacts{Op: t.op, Host: host})
 	return out, true
+}
+
+// reservedWebActionArgs are the four NamedArgs keys the browser tool stamps and
+// the dispatch layer lifts — the gate flag, the action key, the live page
+// fingerprint, and the human description. They are page facts / a judge verdict,
+// never model-supplied, so NamedArgs deletes any copy the model put in the call
+// before stamping its own.
+var reservedWebActionArgs = []string{
+	browserschema.WebActionRequiredArg,
+	browserschema.WebActionKeyArg,
+	browserschema.WebActionFingerprintArg,
+	browserschema.WebActionDescriptionArg,
+}
+
+// stampWebAction classifies this acting call's consequence tier and, for a
+// MUTATE, stamps the web_action key (E4) and the live page fingerprint (E5) into
+// out so the dispatch layer can require a per-action web_action grant on top of
+// the coarse web_host one. An observe/navigate/session verdict stamps nothing
+// of THOSE three keys — but every call through here (mutate or not) stamps
+// WebActionDescriptionArg, a human-readable "what this does" sentence (see
+// action_descriptor.go): even a benign click can still need approval for the
+// coarse web_host grant (e.g. the agent's first action on a new host), and
+// that card deserves the same phrasing a mutate's does.
+//
+// A `press` is classified SEPARATELY, up front (see stampPress): it carries no
+// element ref — its Execute sends the keystroke to document.activeElement,
+// ignoring any ref the model supplies — so it is classified from its KEY, never
+// from a ref'd element. Honoring a model-supplied ref for a press is exactly how
+// a bogus ref re-opened an un-gated form submit, so the ref is not read here.
+//
+// For the ref-carrying ops (click/type/select/submit), FAIL-CLOSED holds with
+// ONE deliberate exception: if the action's facts cannot be read because the ref
+// is STALE (errors.Is ErrStaleRef — the element is simply gone), the call is NOT
+// gated, because it cannot execute at all; each of those ops re-resolves the
+// SAME ref in its own Execute handler and refuses it independently (see the
+// ErrStaleRef branch below). Every OTHER fact-read fault (a CDP transport error,
+// a JS exception) is treated as a mutate and gated, since those mean "we don't
+// know what this would do," not "this cannot run." If the judge errors or is
+// unavailable the call is treated as a mutate (classifyMutate); and a
+// page-fingerprint capture failure stamps an EMPTY fingerprint, which the
+// web_action check's pagestate_matches caveat refuses — never a silent allow.
+// Every failure is logged (never silently dropped) with toolbox/op/host context.
+func (t *browserTool) stampWebAction(out, args map[string]any, host string) {
+	ctx, cancel := context.WithTimeout(context.Background(), webActionClassifyTimeout)
+	defer cancel()
+
+	// A press has no element ref — its Execute sends the keystroke to whatever
+	// is focused, ignoring any ref the model supplies — so classify it from the
+	// KEY, not from a (model-controlled, Execute-ignored) ref. See stampPress.
+	if t.op == "press" {
+		t.stampPress(ctx, out, args, host)
+		return
+	}
+
+	ref := stringArg(args, "ref")
+	facts, err := t.sess.actionFacts(ctx, t.op, ref)
+	if err != nil {
+		if errors.Is(err, ErrStaleRef) {
+			// The ref named an element that is simply GONE (the page re-rendered
+			// since the agent last read it) — this call cannot execute, so it
+			// cannot mutate anything either. Gating it as a mutate would only
+			// raise a spurious web_action approval the user has to dismiss, with
+			// no grant ever minted because the call never gets to use it (the bug
+			// this exemption addresses). The ref-carrying acting ops
+			// (click/type/select/submit) each independently re-resolve the SAME
+			// ref via lookupRef in their own Execute handler and refuse with a
+			// clean IsError tool result telling the model to read the page again —
+			// nothing runs un-gated. A press never reaches this branch: it is
+			// classified by key above, precisely because its Execute does NOT
+			// re-resolve a ref and so has no such second check to fall back on.
+			slog.Info("browser: ref is stale while extracting action facts; not gating as mutate (the call cannot execute)",
+				"toolbox", t.rtName, "op", t.op, "host", host, "err", err.Error())
+			out[browserschema.WebActionDescriptionArg] = humanActionDescriptor(ActionFacts{Op: t.op, Host: host})
+			return
+		}
+		// Could not read what this call acts on for some OTHER reason (a CDP
+		// fault, a JS error mid-walk, ...), so it cannot be proven benign: gate
+		// it. The key is best-effort from what is known (op + host); the empty
+		// fingerprint makes the web_action check deny regardless. The descriptor
+		// degrades gracefully to a generic op+host phrase (never the raw ref) —
+		// humanActionDescriptor is a pure function of ActionFacts and handles
+		// every field being empty.
+		slog.Warn("browser: action-fact extraction failed; gating acting call as mutate (fail-closed)",
+			"toolbox", t.rtName, "op", t.op, "host", host, "err", err.Error())
+		out[browserschema.WebActionRequiredArg] = true
+		out[browserschema.WebActionKeyArg] = ActionKey(ActionFacts{Op: t.op, Host: host})
+		out[browserschema.WebActionFingerprintArg] = ""
+		out[browserschema.WebActionDescriptionArg] = humanActionDescriptor(ActionFacts{Op: t.op, Host: host})
+		return
+	}
+
+	out[browserschema.WebActionDescriptionArg] = humanActionDescriptor(facts)
+
+	if !t.classifyMutate(ctx, facts) {
+		return // positively benign (observe/navigate/session): no per-action gate
+	}
+
+	key := ActionKey(facts)
+	fingerprint := ""
+	if ps, perr := t.sess.capturePageState(ctx, facts, ref); perr != nil {
+		slog.Warn("browser: page-state capture failed; gating with an empty fingerprint (fail-closed)",
+			"toolbox", t.rtName, "op", t.op, "host", host, "err", perr.Error())
+	} else {
+		fingerprint = PageFingerprint(ps)
+	}
+	out[browserschema.WebActionRequiredArg] = true
+	out[browserschema.WebActionKeyArg] = key
+	out[browserschema.WebActionFingerprintArg] = fingerprint
+}
+
+// stampPress classifies a `press` acting call. A press carries no element ref:
+// its Execute (press()) sends the key to document.activeElement, ignoring any
+// ref the model supplies — so it is classified from the KEY, never from a ref'd
+// element (reading a model-supplied ref here is how a bogus ref re-opened an
+// un-gated form submit). Per the "only submission commits" rule the consequence
+// judge draws for every other op, a key that can COMMIT or ACTIVATE a form —
+// Enter/Return (submit) or Space (activate the focused control) — is a MUTATE
+// and gated; every other key (Tab, Escape, the arrows, editing keys, a single
+// typed character) edits or navigates LOCAL page state and is not, so a press
+// that merely moves focus or scrolls never raises a spurious approval.
+//
+// The gate's page-state fingerprint is captured against the FOCUSED element
+// (capturePageStateAtFocus), the element the keystroke actually targets, so the
+// approval binds to the page the user saw and re-matches on the next identical
+// press. A capture failure stamps an EMPTY fingerprint, which the web_action
+// pagestate_matches caveat refuses (fail-closed) — the same floor every other
+// gated op uses.
+func (t *browserTool) stampPress(ctx context.Context, out, args map[string]any, host string) {
+	key := stringArg(args, "key")
+	pf := ActionFacts{Op: t.op, Host: host, Key: key}
+	out[browserschema.WebActionDescriptionArg] = humanActionDescriptor(pf)
+	if !pressKeyCommits(key) {
+		return // a focus/navigation/editing key: never commits server state
+	}
+	fingerprint := ""
+	if ps, perr := t.sess.capturePageStateAtFocus(ctx); perr != nil {
+		slog.Warn("browser: focus page-state capture failed for a committing press; gating with an empty fingerprint (fail-closed)",
+			"toolbox", t.rtName, "op", t.op, "host", host, "key", key, "err", perr.Error())
+	} else {
+		fingerprint = PageFingerprint(ps)
+	}
+	out[browserschema.WebActionRequiredArg] = true
+	out[browserschema.WebActionKeyArg] = ActionKey(pf)
+	out[browserschema.WebActionFingerprintArg] = fingerprint
+}
+
+// pressKeyCommits reports whether a `press` key can COMMIT or ACTIVATE a form —
+// the only presses that are mutates. Enter/Return submit a focused form (or
+// activate its default button); Space activates the focused control (which may
+// be a submit button). Every other named key the press op accepts (Tab, Escape,
+// Backspace, Delete, the arrows, Home/End, PageUp/PageDown) and every single
+// typed character edits or navigates LOCAL page state only — the same "a field
+// edit is not a commit" line the consequence judge draws for `type`. The press
+// op rejects modifier combos and multi-rune strings (see press()), so matching
+// these three literal key names is exhaustive.
+func pressKeyCommits(key string) bool {
+	switch key {
+	case "Enter", "Return", "Space":
+		return true
+	default:
+		return false
+	}
+}
+
+// classifyMutate reports whether this acting call should be gated as a MUTATE.
+// Per ruling E-R3 the deterministic judge runs first as a cheap fast-path: when
+// it positively recognizes a benign action (link-follow, search entry, tab
+// switch) the model is never consulted. Anything it does not positively clear
+// falls to the injected model (Haiku), the PRIMARY classifier, and the call is a
+// mutate when the model's P(mutate) reaches the policy threshold. FAIL-CLOSED: a
+// judge error is treated as a mutate — the model NEVER authorizes, it only
+// classifies, and an uncertain classification must gate.
+func (t *browserTool) classifyMutate(ctx context.Context, facts ActionFacts) bool {
+	a := judge.Action{
+		Op:            facts.Op,
+		Role:          facts.Role,
+		Text:          facts.Text,
+		FormAction:    facts.FormAction,
+		Container:     facts.Container,
+		Host:          facts.Host,
+		PageURL:       facts.PageURL,
+		Submits:       facts.Submits,
+		FormHasSubmit: facts.FormHasSubmit,
+	}
+	page := judge.PageContext{URLPath: urlPath(facts.PageURL)}
+
+	// Fast-path: the deterministic judge is documented never to error (it fails
+	// closed to mutate for anything not positively benign), but we still treat a
+	// non-nil error as fail-closed — only a derr==nil, non-mutate verdict is a
+	// confident benign that skips the model call; an error, or a mutate verdict,
+	// falls through to the model. A zero Verdict (Tier=="") from an unexpected
+	// error must NEVER clear the call, which a bare "Tier != mutate" check would.
+	// Diagnostic logging below deliberately OMITS facts.Text and facts.Container.
+	// facts.Text is the acted-on element's accessible name; actionFacts already
+	// drops the el.value fallback and blanks Text for a credential-filled field,
+	// so it should not carry a secret — but it is still page-authored content, so
+	// keeping it out of INFO logs is defense in depth. role + formAction (a URL
+	// PATH only, query-stripped by urlPath) + the tier/probability give the full
+	// diagnostic ("which action, what the model decided") with no content sink.
+	// Do not add raw page text back here.
+	//
+	// submits/formHasSubmit ARE included (unlike Text/Container): both are plain
+	// structural booleans about the DOM shape (is this element a submit control;
+	// does its enclosing form have one), never user-entered content, so they
+	// carry no credential risk. They are exactly what distinguishes "the
+	// deterministic path didn't clear this because the role wasn't
+	// radio/checkbox/option/text" from "it didn't clear because FormHasSubmit was
+	// false" — without them, a live-run diagnosis of a gate the fast-path
+	// SHOULD have cleared has to guess between those two causes.
+	detV, derr := judge.NewDeterministic().Classify(ctx, a, page)
+	if derr == nil && detV.Tier != judge.TierMutate {
+		slog.Info("browser: consequence classify = benign (deterministic fast-path cleared it; model NOT consulted)",
+			"toolbox", t.rtName, "op", facts.Op, "host", facts.Host, "role", facts.Role,
+			"formAction", facts.FormAction, "submits", facts.Submits, "formHasSubmit", facts.FormHasSubmit,
+			"detTier", string(detV.Tier))
+		return false
+	}
+	if derr != nil {
+		slog.Warn("browser: deterministic fast-path errored unexpectedly; consulting the model (fail-closed)",
+			"toolbox", t.rtName, "op", t.op, "err", derr.Error())
+	}
+
+	v, err := t.judge.Classify(ctx, a, page)
+	if err != nil {
+		slog.Warn("browser: consequence judge errored; gating acting call as mutate (fail-closed)",
+			"toolbox", t.rtName, "op", t.op, "judge", t.judge.Name(), "err", err.Error())
+		return true
+	}
+	// Gate on EITHER the model's chosen tier being mutate OR its P(mutate)
+	// reaching the policy threshold. A response of {tier:mutate, probs:{mutate:
+	// 0.05}} is internally inconsistent, but its own best label is "mutate", so a
+	// prob-only check that cleared it would ignore the model's explicit call.
+	// Fail-closed takes the union, never just the probability.
+	gated := v.Tier == judge.TierMutate || v.Probs[judge.TierMutate] >= defaultMutateThreshold
+	// See the omission note above: no facts.Text / facts.Container (credential sink).
+	slog.Info("browser: consequence classify (model consulted)",
+		"toolbox", t.rtName, "op", facts.Op, "host", facts.Host, "role", facts.Role,
+		"formAction", facts.FormAction, "submits", facts.Submits, "formHasSubmit", facts.FormHasSubmit,
+		"judge", t.judge.Name(),
+		"modelTier", string(v.Tier), "pMutate", v.Probs[judge.TierMutate],
+		"threshold", defaultMutateThreshold, "gated", gated)
+	return gated
+}
+
+// stringArg reads a string-valued argument, returning "" when absent or of a
+// non-string JSON type.
+func stringArg(args map[string]any, key string) string {
+	if v, ok := args[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // Origin is shared across one toolbox's tools so toolguard's origin-level
@@ -468,9 +819,19 @@ func (t *browserTool) typeHumanCode(ctx context.Context, ref, code string) agent
 		}); ae != nil {
 			return ae
 		}
-		return runAction(c, func(ac context.Context) error {
+		if ae := runAction(c, func(ac context.Context) error {
 			return input.InsertText(code).Do(ac)
-		})
+		}); ae != nil {
+			return ae
+		}
+		// The code is a secret: blank the field so read/find/screenshot redact it
+		// until a real navigation clears the blanking (spec §3.6), exactly as a
+		// filled credential field is treated — INSIDE this critical section so a
+		// concurrent CaptureRedacted (which reads the blanked set under the same
+		// session semaphore) cannot capture the code between the keystroke landing
+		// and the field being marked.
+		t.sess.markBlanked(backendNodeID)
+		return nil
 	}); runErr != nil {
 		// runErr carries only the CDP transport error, never the code value.
 		return errResult("entering the code failed: %v", runErr)
@@ -478,10 +839,6 @@ func (t *browserTool) typeHumanCode(ctx context.Context, ref, code string) agent
 	if handled != nil {
 		return *handled
 	}
-	// The code is a secret: blank the field so read/find/screenshot redact it until
-	// a real navigation clears the blanking (spec §3.6), exactly as a filled
-	// credential field is treated.
-	t.sess.markBlanked(backendNodeID)
 	return okResult(fmt.Sprintf("entered the code into ref %s", ref))
 }
 
@@ -588,7 +945,7 @@ func (t *browserTool) read(ctx context.Context, pageNum int, ref string) agentto
 			}
 			startBackend = e.backendNodeID
 		}
-		lines, refs, e := snapshot(c, startBackend, t.sess.blankedSet())
+		lines, refs, e := snapshot(c, startBackend, t.sess.nextRefGen(), t.sess.blankedSet())
 		if e != nil {
 			return e
 		}
@@ -617,7 +974,7 @@ func (t *browserTool) find(ctx context.Context, text string) agenttool.Result {
 	}
 	var out agenttool.Result
 	runErr := t.sess.do(ctx, snapshotTimeout, func(c context.Context) error {
-		lines, refs, e := snapshot(c, 0, t.sess.blankedSet())
+		lines, refs, e := snapshot(c, 0, t.sess.nextRefGen(), t.sess.blankedSet())
 		if e != nil {
 			return e
 		}
@@ -857,11 +1214,16 @@ func (t *browserTool) waitFor(ctx context.Context, text, ref string, seconds int
 	for {
 		var found bool
 		if e := t.sess.do(ctx, snapshotTimeout, func(c context.Context) error {
-			lines, refs, se := snapshot(c, 0, t.sess.blankedSet())
+			// wait_for only checks PRESENCE (by name or backendNodeID); it must
+			// NOT publish a ref snapshot. setRefs-ing these poll-loop refs under a
+			// fresh generation would replace the ref map and invalidate every ref
+			// the caller already holds — breaking the read -> wait_for -> type
+			// flow with a spurious "ref is stale". The snapshot's refs are
+			// discarded; only its lines are inspected.
+			lines, _, se := snapshot(c, 0, t.sess.nextRefGen(), t.sess.blankedSet())
 			if se != nil {
 				return se
 			}
-			t.sess.setRefs(refs)
 			for _, ln := range lines {
 				if text != "" && strings.Contains(strings.ToLower(ln.name), needle) {
 					found = true
@@ -972,17 +1334,24 @@ func (t *browserTool) typeInto(ctx context.Context, ref, text string) agenttool.
 		}); ae != nil {
 			return ae
 		}
-		return runAction(c, func(ac context.Context) error {
+		if ae := runAction(c, func(ac context.Context) error {
 			return input.InsertText(filled).Do(ac)
-		})
+		}); ae != nil {
+			return ae
+		}
+		// Record the field for C5's blanking pass IFF a credential actually
+		// landed in it — INSIDE this critical section, before the session
+		// semaphore is released. A plain-text type (no placeholder) leaves
+		// nothing to blank. Marking here (not after do() returns) closes a TOCTOU:
+		// a concurrent CaptureRedacted reads the blanked set under the SAME
+		// semaphore, so it can never capture the just-typed credential in the
+		// window between the keystroke landing and the field being marked.
+		if kinds.any() {
+			t.sess.markBlanked(backendNodeID)
+		}
+		return nil
 	}); runErr != nil {
 		return errResult("type failed: %v", runErr)
-	}
-
-	// Record the field for C5's blanking pass IFF a credential actually landed in
-	// it. A plain-text type (no placeholder) leaves nothing to blank.
-	if kinds.any() {
-		t.sess.markBlanked(backendNodeID)
 	}
 	return okResult(fmt.Sprintf("typed into ref %s", ref))
 }

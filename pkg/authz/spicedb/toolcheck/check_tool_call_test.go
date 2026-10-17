@@ -9,6 +9,7 @@ import (
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/scope"
@@ -406,11 +407,16 @@ type recordingSpiceDB struct {
 	answers map[string]v1.CheckPermissionResponse_Permissionship
 	err     error
 	calls   []string
+	// contexts captures each call's caveat check-time Context, in call order and
+	// index-aligned with calls. A web_action check presents the presented_fingerprint
+	// here; every uncaveated check leaves it nil.
+	contexts []*structpb.Struct
 }
 
 func (f *recordingSpiceDB) CheckPermission(_ context.Context, in *v1.CheckPermissionRequest) (*v1.CheckPermissionResponse, error) {
 	key := in.Resource.ObjectType + ":" + in.Resource.ObjectId + "#" + in.Permission
 	f.calls = append(f.calls, key+"@"+in.Subject.Object.ObjectType)
+	f.contexts = append(f.contexts, in.GetContext())
 	if f.err != nil {
 		return nil, f.err
 	}

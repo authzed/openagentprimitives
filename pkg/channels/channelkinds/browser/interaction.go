@@ -42,6 +42,17 @@ func (s *interactionSender) Send(_ context.Context, sess channelkinds.SessionInf
 		if err := json.Unmarshal(env.Payload, &pl); err != nil {
 			return s.emitErr(sess, env.Kind, err)
 		}
+		// ResponseText rides the OUT envelope so the runner — which subscribes
+		// this same subject directly — can resume off it (the human's typed
+		// login code, on a login_human_step kind:code card; see
+		// interaction_decision.go). This sender is the browser's half of the
+		// generic relay-to-sender hand-off: s.sink.Emit below forwards straight
+		// onto chat's websocket frame (pkg/web/webui/chat/sink.go), which fans
+		// out to every tab of every subject holding agentsession#interact on
+		// this session. No browser surface renders ResponseText, so it must
+		// never leave this process in that frame — zero it before it reaches
+		// the sink.
+		pl.ResponseText = ""
 		s.sink.Emit(MsgInteractionApplied{Session: refOf(sess), Payload: pl})
 		return channelkinds.SubChannelSendResult{}, nil
 

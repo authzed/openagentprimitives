@@ -72,7 +72,9 @@ func TestPublishLoginCaptchaNotice_AttachesScreenshot(t *testing.T) {
 	l := &Loop{
 		Status:     LocalStatusPatcher(),
 		SessionKey: memory.NamespacedName{Namespace: "ns", Name: "s"},
-		Client:     fake.NewClientBuilder().WithScheme(browserScreenshotTestScheme(t)).Build(),
+		Client: fake.NewClientBuilder().WithScheme(browserScreenshotTestScheme(t)).
+			WithInterceptorFuncs(readyOnCreateInterceptor()).Build(),
+		Artifacts: uiResourceTestArtifactsService(),
 		InteractionRequestPublish: func(_ context.Context, ns, name string, env channelevents.Envelope) error {
 			assert.Equal(t, "ns", ns)
 			assert.Equal(t, "s", name)

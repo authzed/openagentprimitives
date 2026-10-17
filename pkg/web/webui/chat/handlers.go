@@ -368,6 +368,11 @@ type decisionRequest struct {
 	RequestRef string `json:"requestRef"`
 	// ActionID is the button the user chose, from the prompt's own action set.
 	ActionID string `json:"actionId"`
+	// ResponseText is the free-text answer for an ask that carries a
+	// ResponseInput (today: a login_human_step kind:code login code). Empty for
+	// every button-only decision. Bounded by MaxBytesReader like the rest of the
+	// body; the runner fails closed on an empty code.
+	ResponseText string `json:"responseText,omitempty"`
 }
 
 type decisionResponse struct {
@@ -416,7 +421,7 @@ func decisionHandler(reg *Registry) http.Handler {
 			return
 		}
 
-		if err := reg.SubmitDecision(r.Context(), key, subject, req.Category, req.RequestRef, req.ActionID); err != nil {
+		if err := reg.SubmitDecision(r.Context(), key, subject, req.Category, req.RequestRef, req.ActionID, req.ResponseText); err != nil {
 			status, msg := mapSubmitError(log, err)
 			writeError(log, w, status, msg)
 			return

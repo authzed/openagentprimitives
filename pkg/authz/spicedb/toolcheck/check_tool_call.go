@@ -18,10 +18,12 @@ import (
 	"sync"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/scope"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 )
 
 // Client is the SpiceDB CheckPermission surface Checker uses.
@@ -37,13 +39,67 @@ type Client interface {
 // Checker binds a SpiceDB connection and an optional per-session ZedToken
 // cache to the tool-call gate. The zero value denies every check that needs
 // SpiceDB (nil Cli is fail-CLOSED); a nil Cache disables the freshness floor
-// and cache writes, falling back to MinimizeLatency.
+// and cache writes, falling back to MinimizeLatency. The zero value of
+// RepromptEscalation ({Enabled: false, Judge: nil}) is likewise the
+// escape-safe default — see its doc comment.
 //
-// Copy freely: both fields are references, so a copy shares the same
-// connection and cache.
+// Copy freely: every field is a reference or a plain value, so a copy shares
+// the same connection, cache and escalation config.
 type Checker struct {
 	Cli   Client
 	Cache *ZedTokenCache
+
+	// RepromptEscalation is the OPTIONAL, OFF-BY-DEFAULT model-escalation knob
+	// for a web_action changed-page re-prompt (Phase E's E10 task). See
+	// RepromptEscalationConfig.
+	RepromptEscalation RepromptEscalationConfig
+}
+
+// RepromptJudge is the OPTIONAL model-escalation seam a web_action
+// changed-page re-prompt may consult (Phase E's E10 task): given a web_action
+// instance whose caveated grant check just failed because the live page no
+// longer matches what a human approved, ConfirmBenign answers whether that
+// change is benign enough to skip asking again.
+//
+// Consulted ONLY when a grant for this instance already EXISTS — never for a
+// first-time ask, and never as a substitute for the deterministic caveat,
+// which remains the sole authorization decision whenever this interface
+// returns anything but a confirmed "benign" (an error, or benign=false, both
+// fall through to the ordinary re-prompt).
+//
+// toolcheck deliberately defines no implementation: a real backend (e.g. an
+// adapter over pkg/agent/tool/browser/judge's Haiku ConsequenceJudge) lives
+// above pkg/authz in pkg/agent/runner, which is where the Checker gets
+// constructed for production (see pipeline_wiring.go's engineChecker) — this
+// package stays below pkg/agent in the dependency order (AGENTS.md's
+// package-group table) and never imports it.
+type RepromptJudge interface {
+	// ConfirmBenign reports whether the live page's change since approval is
+	// benign enough to skip the re-prompt for the web_action instance named by
+	// (resourceID, agentSessionRef). An error, or a false benign, means "no
+	// evidence of benign" — the call proceeds through the ordinary deny →
+	// re-prompt path, fail-closed, exactly as a judge.ConsequenceJudge error
+	// maps to TierMutate rather than to an allow.
+	ConfirmBenign(ctx context.Context, resourceID, agentSessionRef string) (benign bool, err error)
+}
+
+// RepromptEscalationConfig is the Checker's model-escalation knob for a
+// web_action changed-page re-prompt (E10). The ZERO VALUE — Enabled: false,
+// Judge: nil (a true nil interface, never a typed-nil pointer — AGENTS.md's
+// "nil interfaces" rule) — is the escape-safe default and is what every
+// production Checker gets today: nothing wires this field, so a caveat
+// failure ALWAYS re-prompts and the model is NEVER consulted. See
+// pkg/agent/runner/pipeline_wiring.go's engineChecker.CheckToolCall for the
+// documented seam where a future config path would construct a non-zero
+// value.
+//
+// Enabled is a separate bool rather than "non-nil Judge means on" so a future
+// config path can carry a Judge handle around (e.g. for a dry-run / shadow
+// mode that logs what the judge WOULD have done) without that alone flipping
+// live behavior — the explicit flag is what an operator actually opts into.
+type RepromptEscalationConfig struct {
+	Enabled bool
+	Judge   RepromptJudge
 }
 
 // CheckToolCall resolves the permission spec and asks SpiceDB. When the
@@ -425,26 +481,202 @@ func (c Checker) checkExternalSlotGrant(ctx context.Context, p authz.Permission,
 		// Flagged as unresolved so the caller routes it back to the agent as a
 		// tool result rather than showing a human a card with an empty object id.
 		return authz.Result{
-			Outcome:            authz.OutcomeDenied,
-			Message:            needsApproval,
-			UnresolvedResource: err != nil || resourceID == "",
+			Outcome: authz.OutcomeDenied,
+			Message: needsApproval,
+			// Tautologically true inside this branch (its guard is the same
+			// disjunction): the call either errored resolving the resource or
+			// produced an empty id, both of which are "the call named no resource".
+			UnresolvedResource: true,
 		}
 	}
 
-	resp, callErr := c.Cli.CheckPermission(ctx, &v1.CheckPermissionRequest{
-		Resource: &v1.ObjectReference{ObjectType: p.Check.ResourceType, ObjectId: resourceID},
-		// The slot_grant_<permission> RELATION, never the permission it feeds.
-		Permission: authz.SlotGrantRelationName(p.Check.Permission),
+	// LAYER 1 — the coarse capability grant: web_host#act for a browser acting
+	// call (git_repo#push for a git tool, etc.). The fingerprint is presented only
+	// for a web_action PRIMARY (keyed on the resource TYPE — web_host is uncaveated,
+	// so its sibling check must carry no caveat context); the browser acting tool's
+	// primary is web_host, so this is normally uncaveated. E2's integration tests
+	// drive this path directly with p.Check.ResourceType == web_action.
+	if res := c.checkOneSlotGrant(ctx, p.Check.ResourceType, p.Check.Permission, resourceID,
+		in.AgentSessionRef, in.PresentedPageFingerprint,
+		p.Check.ResourceType == browserschema.WebActionType, in.RequireFreshest); res.Outcome != authz.OutcomeAllowed {
+		return res
+	}
+
+	// LAYER 2 — the per-action revalidation grant (Phase E's E8 gate). A MUTATE
+	// must hold BOTH the coarse web_host grant (LAYER 1, above) AND a per-action
+	// web_action grant whose pagestate_matches caveat still matches the live page.
+	// Consulted ONLY when the browser tool classified this call a mutate
+	// (in.WebActionRequired) AND the class DECLARED a web_action slot. Gating on
+	// SlotResourceTypes is not optional: a class that declares only web_host has no
+	// web_action#slot_grant_act relation in its composed schema, so asking about it
+	// could only error — the same reason LAYER 1 is gated. observe/navigate/session
+	// calls leave WebActionRequired false and are authorized by LAYER 1 alone,
+	// exactly as before Phase E. The web_action deny routes to a human just like a
+	// host deny.
+	if !in.WebActionRequired || !slices.Contains(in.SlotResourceTypes, browserschema.WebActionType) {
+		return authz.Result{Outcome: authz.OutcomeAllowed}
+	}
+	waID, err := authz.NewObjectID(in.WebActionKey, browserschema.WebActionValueTransforms())
+	if err != nil {
+		// The tool stamped no (or an unescapable) key: the mutate cannot name the
+		// action it acts on, so no grant could match. Route it back to the agent
+		// (unresolved) rather than show a human a card with an empty object id.
+		// CoarseGrantSatisfied: Layer 1 (web_host) already passed to reach here, so
+		// this is a genuine Layer-2 ask — the hook may stamp the web_action marker.
+		return authz.Result{Outcome: authz.OutcomeDenied, Message: needsApproval, UnresolvedResource: true, CoarseGrantSatisfied: true}
+	}
+	res := c.checkOneSlotGrant(ctx, browserschema.WebActionType, p.Check.Permission, waID.String(),
+		in.AgentSessionRef, in.PresentedPageFingerprint, true /* present the pagestate_matches fingerprint */, in.RequireFreshest)
+	// Reaching the web_action check means Layer 1 (web_host) was satisfied; mark
+	// it so the hook stamps the web_action marker only for a genuine Layer-2
+	// denial, never a Layer-1 (coarse-grant-missing) deny — see
+	// authz.Result.CoarseGrantSatisfied.
+	res.CoarseGrantSatisfied = true
+	if res.Outcome == authz.OutcomeAllowed {
+		return res
+	}
+
+	// E10 — distinguish a CHANGED-PAGE RE-PROMPT (a web_action grant for this
+	// instance already exists; only its caveat failed) from an ordinary
+	// FIRST-TIME ASK (no grant at all). Advisory only: this never changes the
+	// Outcome above, which has already denied. See webActionGrantExistsForReprompt.
+	res.ChangedPageReprompt = c.webActionGrantExistsForReprompt(ctx, p.Check.Permission, waID.String(), in.AgentSessionRef)
+
+	// Optional model-escalation (E10, OFF BY DEFAULT — c.RepromptEscalation's
+	// zero value is {Enabled: false, Judge: nil}). Consulted ONLY when this IS a
+	// changed-page re-prompt (a human already approved this exact action once)
+	// AND the operator explicitly turned the knob on AND a judge is wired.
+	// Everything else — the default Checker, a first-time ask
+	// (ChangedPageReprompt false), a judge that errors, or a judge that does not
+	// affirmatively confirm benign — falls straight through to the ordinary
+	// deny below, which is what raises the re-prompt. This is the ONLY place a
+	// model can ever suppress a re-prompt, and only for an action a human has
+	// already approved before: the escape guarantee ("a caveat failure always
+	// re-prompts") never depends on the model unless an operator has opted in.
+	if res.ChangedPageReprompt && c.RepromptEscalation.Enabled && c.RepromptEscalation.Judge != nil {
+		benign, jerr := c.RepromptEscalation.Judge.ConfirmBenign(ctx, waID.String(), in.AgentSessionRef)
+		if jerr != nil {
+			// Fail CLOSED: a judge failure never suppresses a re-prompt, mirroring
+			// judge.ConsequenceJudge's own "an error is not how ambiguity is
+			// expressed" contract — an error here is not evidence of benign-ness.
+			return res
+		}
+		if benign {
+			return authz.Result{Outcome: authz.OutcomeAllowed}
+		}
+	}
+	return res
+}
+
+// webActionGrantExistsForReprompt answers, BEST-EFFORT and ADVISORY ONLY,
+// whether a web_action grant already exists for (resourceID, agentSessionRef)
+// — regardless of whether its pagestate_matches caveat currently passes. It
+// is what lets checkExternalSlotGrant tell a changed-page RE-PROMPT (a human
+// already approved this exact action; the live page just no longer matches)
+// apart from an ordinary FIRST-TIME ask (no grant has ever been written).
+//
+// The result is NEVER consulted for the authorization decision itself —
+// checkOneSlotGrant's HAS_PERMISSION-only mapping already decided allow/deny
+// before this is ever called — so a wrong answer here can only mislabel a
+// card's copy, never change who gets approved.
+//
+// The probe omits the pagestate_matches context entirely (no Context on the
+// request). SpiceDB partial-evaluates a caveated relationship with no context
+// supplied: a grant that EXISTS comes back CONDITIONAL_PERMISSION (the caveat
+// could not finish evaluating because presented_fingerprint was never
+// supplied, but the relationship IS there); no grant at all comes back
+// NO_PERMISSION (there is nothing to partial-evaluate). Any other outcome — an
+// RPC error, a nil response, or anything but CONDITIONAL — is treated as "no
+// evidence of an existing grant" (false), the fail-QUIET direction for a
+// cosmetic signal.
+func (c Checker) webActionGrantExistsForReprompt(ctx context.Context, permission, resourceID, agentSessionRef string) bool {
+	if c.Cli == nil {
+		return false
+	}
+	req := &v1.CheckPermissionRequest{
+		Resource: &v1.ObjectReference{ObjectType: browserschema.WebActionType, ObjectId: resourceID},
+		// The slot_grant_<permission> RELATION, same as checkOneSlotGrant's main
+		// check — never the composed permission it feeds.
+		Permission: authz.SlotGrantRelationName(permission),
 		Subject: &v1.SubjectReference{
-			Object: &v1.ObjectReference{ObjectType: "agentsession", ObjectId: in.AgentSessionRef},
+			Object: &v1.ObjectReference{ObjectType: "agentsession", ObjectId: agentSessionRef},
 		},
-		// Freshness matters most here: narrowToApproved writes the grant
-		// synchronously and the very next dispatch is this Check, so a snapshot
-		// predating that write would refuse the call the approval exists to
-		// authorize. Float on the cache when it has a token, and demand the
-		// freshest read when it does not.
-		Consistency: externalGrantConsistency(c.Cache, p.Check.ResourceType, resourceID),
-	})
+		Consistency: externalGrantConsistency(c.Cache, browserschema.WebActionType, resourceID),
+		// No Context, deliberately: see the doc comment above for why an absent
+		// pagestate_matches context is exactly what distinguishes "a grant exists"
+		// (CONDITIONAL_PERMISSION) from "no grant at all" (NO_PERMISSION).
+	}
+	resp, err := c.Cli.CheckPermission(ctx, req)
+	if err != nil || resp == nil {
+		return false
+	}
+	return resp.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_CONDITIONAL_PERMISSION
+}
+
+// checkOneSlotGrant answers a SINGLE slot-grant leg: does the session named by
+// agentSessionRef hold a grant a human wrote for exactly this
+// (resourceType, resourceID, permission)? It allows ONLY on an unambiguous
+// HAS_PERMISSION; everything else (NO_PERMISSION, CONDITIONAL, a SpiceDB error,
+// a nil response) denies and routes the call to a human. External is the tier
+// whose effects leave the session and cannot be undone, so an uncertain answer
+// must cost a prompt rather than an assumption.
+//
+// When presentFingerprint is set the request carries fingerprint as the
+// pagestate_matches caveat's check-time context — used for the web_action
+// (revalidated) grant, whose slot_grant_act is the ONLY caveated one. ALWAYS
+// supplying the arg (empty or not) keeps the decision a crisp HAS/NO: the
+// caveat's own `presented_fingerprint != ""` guard turns an empty value into a
+// definitive NO_PERMISSION, where an ABSENT arg would partial-evaluate to
+// CONDITIONAL — which the HAS_PERMISSION-only mapping below also denies, but
+// presenting the arg keeps that off the hot path. An uncaveated leg (web_host and
+// every non-browser external type) passes presentFingerprint=false and carries
+// no Context.
+func (c Checker) checkOneSlotGrant(ctx context.Context, resourceType, permission, resourceID, agentSessionRef, fingerprint string, presentFingerprint, requireFreshest bool) authz.Result {
+	const needsApproval = "external tool: human approval required"
+
+	// Freshness matters most here: narrowToApproved writes the grant
+	// synchronously and the very next dispatch is this Check, so a snapshot
+	// predating that write would refuse the call the approval exists to
+	// authorize. Float on the cache when it has a token, and demand the freshest
+	// read when it does not.
+	//
+	// requireFreshest (in.RequireFreshest) OVERRIDES that floor with a fully
+	// consistent read. The caller sets it when a grant was just written by ANOTHER
+	// process (channelsd handling a decision) whose revision this process's cache
+	// token is not guaranteed to cover — AtLeastAsFresh(stale-token) could serve a
+	// pre-write snapshot and re-prompt for a call that is already granted. Mirrors
+	// the readonly/readwrite path's identical RequireFreshest handling; the extra
+	// cost is bounded to the freshest-demanding check, not every external call.
+	consistency := externalGrantConsistency(c.Cache, resourceType, resourceID)
+	if requireFreshest {
+		consistency = &v1.Consistency{Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true}}
+	}
+	req := &v1.CheckPermissionRequest{
+		Resource: &v1.ObjectReference{ObjectType: resourceType, ObjectId: resourceID},
+		// The slot_grant_<permission> RELATION, never the permission it feeds.
+		Permission: authz.SlotGrantRelationName(permission),
+		Subject: &v1.SubjectReference{
+			Object: &v1.ObjectReference{ObjectType: "agentsession", ObjectId: agentSessionRef},
+		},
+		Consistency: consistency,
+	}
+	if presentFingerprint {
+		fpCtx, ctxErr := structpb.NewStruct(map[string]any{
+			"presented_fingerprint": fingerprint,
+		})
+		if ctxErr != nil {
+			// A string value cannot fail structpb serialization, so this is
+			// unreachable — but deny LOUDLY rather than drop the caveat context and
+			// silently widen a revalidated acting check into an uncaveated one.
+			return authz.Result{
+				Outcome: authz.OutcomeDenied,
+				Message: fmt.Sprintf("authz: building pagestate_matches caveat context: %v", ctxErr),
+			}
+		}
+		req.Context = fpCtx
+	}
+
+	resp, callErr := c.Cli.CheckPermission(ctx, req)
 	if callErr != nil {
 		// Deny either way, but never silently: the human still gets a card, and
 		// an operator reading logs gets the reason it cost one. Same shape as
@@ -457,9 +689,22 @@ func (c Checker) checkExternalSlotGrant(ctx context.Context, p authz.Permission,
 	if resp == nil {
 		return authz.Result{Outcome: authz.OutcomeDenied, Message: needsApproval}
 	}
+	// SECURITY INVARIANT — allow ONLY on an unambiguous HAS_PERMISSION. Everything
+	// else denies and routes to a human: NO_PERMISSION, and, critically,
+	// PERMISSIONSHIP_CONDITIONAL_PERMISSION. CONDITIONAL is what a caveated grant
+	// (web_action's pagestate_matches) returns when a required caveat arg was not
+	// supplied — SpiceDB could not finish evaluating the caveat. Treating it as
+	// allow would authorize an irreversible acting call whose page-state
+	// revalidation never actually ran, reopening the exact TOCTOU hole E1 closed.
+	//
+	// Keep this `== HAS_PERMISSION`. A future refactor to `!= NO_PERMISSION` (or
+	// `!= DENIED`) would silently let CONDITIONAL through — a security regression,
+	// not a style change. The web_action path above always supplies the arg so a
+	// CONDITIONAL should not arise in practice, but this mapping is the fail-closed
+	// backstop if it ever does.
 	if resp.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION {
 		if c.Cache != nil && resp.CheckedAt != nil {
-			c.Cache.Set(p.Check.ResourceType, resourceID, resp.CheckedAt.Token)
+			c.Cache.Set(resourceType, resourceID, resp.CheckedAt.Token)
 		}
 		return authz.Result{Outcome: authz.OutcomeAllowed}
 	}

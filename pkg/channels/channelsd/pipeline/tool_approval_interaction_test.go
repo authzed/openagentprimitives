@@ -242,3 +242,55 @@ func TestToolApprovalHandler_ResourcelessCall(t *testing.T) {
 	assert.Equal(t, channelevents.OutcomeApproved, out.Result)
 	assert.Empty(t, rec.relations, "no instance means no slot grant; nothing to point a tuple at and nothing to exclude")
 }
+
+// webActionDecision builds an approve decision for a Layer-2 (browser
+// mutate) ask: det.ResourceType/ResourceID/Permission carry the ACTING
+// tool's own coarse web_host triple (exactly what tc.perm always is on a
+// browser acting op — see host_approval.go), while WebActionKey marks it as
+// the fine-grained E9 re-validation, not the coarse Layer-1 web_host ask.
+func webActionDecision() channelinteractions.Decision {
+	det, _ := json.Marshal(channelevents.ToolApprovalDetails{
+		Permission: "act", ResourceType: "web_host", ResourceID: "example.com",
+		ArgsHash: "h1", StateImpact: "external", WebActionKey: "nav:example.com:submit",
+	})
+	return channelinteractions.Decision{
+		Session: channelevents.SessionRef{Namespace: "default", Name: "demo-session"},
+		Payload: channelevents.InteractionDecisionPayload{Category: "tool_approval", RequestRef: "req-4", ActionID: "approve"},
+		Request: &channelevents.InteractionRequestPayload{Category: "tool_approval", RequestRef: "req-4", Details: det},
+	}
+}
+
+// TestToolApprovalHandler_WebActionAsk_DoesNotTouchWebHostGrant is the G4 fix
+// for the channelsd-side clobber: a Layer-2 (webActionKey != "") ask's
+// det.ResourceType/ResourceID/Permission is the acting tool's own coarse
+// web_host triple, not the resource the approval was actually about (see
+// ToolApprovalDetails.WebActionKey). Before this fix, approving it bound
+// that triple via authz.BindApproved — WriteRelationships is OPERATION_TOUCH
+// and REPLACES a tuple's expiration — which would silently shorten an
+// EXISTING session-length web_host grant (written by an earlier Layer-1
+// approval or a plan-gate phase) down to this ask's 30s external-effect TTL,
+// so every later acting call on that host re-prompted. The runner mints the
+// real, narrowly-scoped web_action grant for this ask itself
+// (persistWebActionApproval); channelsd must write NOTHING for the primary
+// resource here.
+func TestToolApprovalHandler_WebActionAsk_DoesNotTouchWebHostGrant(t *testing.T) {
+	rec := &slotGrantRecorder{}
+	// Seed an existing session-length web_host grant, as an earlier Layer-1
+	// approval (or a plan-gate phase) would have left behind — the standing
+	// grant a web_action re-prompt must not shorten.
+	existingExpiry := time.Now().Add(2 * time.Hour)
+	rec.relations = []authz.Relation{{
+		ResourceType: "web_host", ResourceID: "example.com",
+		Relation: authz.SlotGrantRelationName("act"),
+		SubjectType: "agentsession", SubjectID: "default/demo-session",
+		ExpiresAt: existingExpiry,
+	}}
+
+	out, err := toolApprovalHandler(approvalPipeline(t, rec))(context.Background(), webActionDecision())
+
+	require.NoError(t, err, "a web_action approval must still land as a decision")
+	assert.Equal(t, channelevents.OutcomeApproved, out.Result)
+	require.Len(t, rec.relations, 1, "the handler must write NOTHING for a web_action ask — any write is a potential TOUCH of the standing grant")
+	assert.Equal(t, existingExpiry, rec.relations[0].ExpiresAt,
+		"the pre-existing web_host grant's expiry must survive untouched — not shortened to the web_action ask's 30s TTL")
+}

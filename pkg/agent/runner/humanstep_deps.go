@@ -157,7 +157,11 @@ func (s *humanStepRequester) RequestCode(ctx context.Context, prompt string, cap
 	reqID, err := host.PublishApproval(ctx, pipeline.ApprovalAsk{
 		Kind:    "login_human_step",
 		Summary: prompt,
-		Payload: map[string]any{"prompt": prompt},
+		// wants_code distinguishes the code ask from a confirm/CAPTCHA (whose
+		// ask is otherwise identical): buildLoginHumanStepPending reads it to set
+		// the payload's ResponseInput, so a surface renders a free-text box and
+		// carries the typed code back as the decision's ResponseText.
+		Payload: map[string]any{"prompt": prompt, "wants_code": true},
 	})
 	if err != nil {
 		return browsertool.HumanStepCodeOutcome{}, err

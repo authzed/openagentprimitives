@@ -30,7 +30,7 @@ func buildToolboxWithCatalog(identity string, catalog []spiceboxv1alpha1.Browser
 // URL is unreachable on purpose, same discipline as execNavigate.
 func execQueryLogins(t *testing.T, rt spiceboxv1alpha1.ResolvedBrowserToolbox, args map[string]any) agenttool.Result {
 	t.Helper()
-	tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", false, nil, nil, nil)
+	tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", false, nil, nil, nil, nil)
 	require.NoError(t, err)
 	ql := toolBySuffix(t, tools, "query_logins")
 	raw, err := json.Marshal(args)
@@ -68,7 +68,7 @@ func TestQueryLoginsOfferedOnlyWithIdentity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := buildToolboxWithCatalog(tc.identity, []spiceboxv1alpha1.BrowserLoginRef{aaLogin()}, "blocklist")
-			tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", false, nil, nil, nil)
+			tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", false, nil, nil, nil, nil)
 			require.NoError(t, err)
 			got := false
 			for _, tl := range tools {
@@ -89,7 +89,7 @@ func TestQueryLoginsOfferedInBothModes(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			rt := buildToolboxWithCatalog("my-identity", []spiceboxv1alpha1.BrowserLoginRef{aaLogin()}, "blocklist")
 			rt.Spec.Interaction = mode
-			tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", false, nil, nil, nil)
+			tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", false, nil, nil, nil, nil)
 			require.NoError(t, err)
 			found := false
 			for _, tl := range tools {

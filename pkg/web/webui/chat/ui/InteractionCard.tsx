@@ -23,19 +23,27 @@ import type {
   InteractionScreenshot,
   SessionRef,
 } from "./types";
+import { sessionRefKey } from "./types";
 
 // screenshotDownloadURL builds the same-origin download link for the
 // interaction's screenshot attachment — same shape as ChatView's
-// artifactDownloadURL (not exported from there, so replicated here rather
-// than reached across files): gated by the logged-in session + the viewer's
+// artifactDownloadURL: gated by the logged-in session + the viewer's
 // CheckView, no signed link needed. /artifact-download sets
 // Content-Disposition: attachment, but that only affects a top-level
 // navigation/click, not an <img src> sub-resource load, so it still renders
 // inline here.
+//
+// sessionRefKey (types.ts) is what resolves `session`'s namespace tolerating
+// the ACTUAL wire shape: request.agentSessionRef rides as
+// channelevents.SessionRef (json "ns"), not browser.SessionRef (json
+// "namespace") — see SessionRef's own doc. Without it this built
+// sessionRef=undefined%2F<name> — the server then CheckViews
+// agentsession:undefined/<name> (no parent relationship) and 403s, which is
+// how a real approval card's screenshot failed to load (#55).
 function screenshotDownloadURL(session: SessionRef, shot: InteractionScreenshot): string {
   const params = new URLSearchParams({
     artifactId: shot.artifactId ?? "",
-    sessionRef: `${session.namespace}/${session.name}`,
+    sessionRef: sessionRefKey(session),
     fn: shot.filename || shot.renderName,
   });
   return `/artifact-download?${params.toString()}`;
@@ -345,7 +353,7 @@ function anyExternal(fields: InteractionField[] | undefined): boolean {
 export function InteractionCard(props: {
   request: InteractionRequestInner;
   applied?: InteractionAppliedInner;
-  onDecision: (requestRef: string, category: string, actionId: string) => void;
+  onDecision: (requestRef: string, category: string, actionId: string, responseText?: string) => void;
   footer?: React.ReactNode;
 }) {
   const { request, applied, onDecision, footer } = props;
@@ -359,6 +367,10 @@ export function InteractionCard(props: {
   // fired from a second click. Cleared implicitly once `applied` arrives
   // (the card re-renders resolved and no longer shows actions at all).
   const [pending, setPending] = useState(false);
+  // responseText backs the free-text input a request.responseInput asks for (a
+  // login_human_step kind:code login code). It rides ONLY the inbound decision
+  // submission to the runner; it is never shown to other viewers.
+  const [responseText, setResponseText] = useState("");
   const resolved = !!applied;
 
   return (
@@ -514,24 +526,51 @@ export function InteractionCard(props: {
           {interactionOutcomeText(applied)}
         </div>
       ) : (
-        request.actions &&
-        request.actions.length > 0 && (
-          // Separated from the content above, so the buttons read as the answer
-          // to the card rather than as another row of it.
-          <div className="mt-0.5 flex flex-wrap justify-end gap-1.5 border-t border-border/60 pt-2">
-            {request.actions.map((a) => (
-              <ActionButton
-                key={a.id}
-                action={a}
-                pending={pending}
-                onClick={() => {
-                  setPending(true);
-                  onDecision(request.requestRef, request.category, a.id);
-                }}
-              />
-            ))}
-          </div>
-        )
+        <>
+          {request.responseInput && (
+            // A free-text answer the decision carries back (a login_human_step
+            // kind:code login code). The value never leaves this tab except on
+            // the inbound decision submission; the runner types it into the page.
+            <input
+              type="text"
+              value={responseText}
+              disabled={pending}
+              autoComplete="one-time-code"
+              placeholder={request.responseInput.placeholder || "Enter the code"}
+              aria-label={request.responseInput.placeholder || "Enter the code"}
+              onChange={(e) => setResponseText(e.target.value)}
+              className={cn(
+                "mt-0.5 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm",
+                "placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring",
+                "disabled:cursor-not-allowed disabled:opacity-50",
+              )}
+            />
+          )}
+          {request.actions && request.actions.length > 0 && (
+            // Separated from the content above, so the buttons read as the answer
+            // to the card rather than as another row of it.
+            <div className="mt-0.5 flex flex-wrap justify-end gap-1.5 border-t border-border/60 pt-2">
+              {request.actions.map((a) => (
+                <ActionButton
+                  key={a.id}
+                  action={a}
+                  pending={pending}
+                  onClick={() => {
+                    setPending(true);
+                    // Only pass responseText when the ask actually collects one,
+                    // so an ordinary button-only card still calls onDecision with
+                    // three args (and sends no responseText field).
+                    if (request.responseInput) {
+                      onDecision(request.requestRef, request.category, a.id, responseText);
+                    } else {
+                      onDecision(request.requestRef, request.category, a.id);
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

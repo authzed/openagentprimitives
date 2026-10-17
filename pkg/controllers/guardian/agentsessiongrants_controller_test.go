@@ -66,19 +66,21 @@ func githubRepoFragment() *spiceboxv1alpha1.SpiceDBSchemaFragment {
 // controller would produce so that the RunAll fast-path (cur == desired)
 // skips the write.
 //
-// browserschema.Fragment() is included because the reconciler appends it to
-// its compile-time schemaBaseline UNCONDITIONALLY (agentsessiongrants_controller.go
-// — the `definition web_host` builtin, inert until an AgentClass declares a
-// web_host slot). A seed that omits it would differ from the reconciler's
-// desired schema by exactly that block, making every "no-change" reconcile
-// write once and defeating the fast-path these tests pin. It is NOT gated by
-// BuiltinToolkits (that override only strips the toolkit fragments), so it must
+// browserschema.Fragment() AND browserschema.WebActionFragment() are included
+// because the reconciler appends BOTH to its compile-time schemaBaseline
+// UNCONDITIONALLY (agentsessiongrants_controller.go — the `definition web_host`
+// and `definition web_action` builtins, inert until an AgentClass declares the
+// matching slot). A seed that omits either would differ from the reconciler's
+// desired schema by exactly that block, making every "no-change" reconcile write
+// once and defeating the fast-path these tests pin. Neither is gated by
+// BuiltinToolkits (that override only strips the toolkit fragments), so both must
 // be seeded even in tests that set BuiltinToolkits to nil.
 func mustComposeWithFragment(t *testing.T, frag *spiceboxv1alpha1.SpiceDBSchemaFragment, pairs []guardianschema.GrantPair) string {
 	t.Helper()
 	out, err := guardianschema.ComposeAll(
 		[]guardianschema.IdentifiedFragment{
 			{Fragment: browserschema.Fragment()},
+			{Fragment: browserschema.WebActionFragment()},
 			{Fragment: frag},
 		},
 		nil,
@@ -440,15 +442,19 @@ func TestReconciler_NoCRsIsNoOp(t *testing.T) {
 	env := testenv.Shared(t)
 
 	// Seed cur with what RunAll would produce for a cluster with no CRs: the
-	// canonical-empty schema PLUS the browser toolbox's builtin web_host
-	// fragment, which the reconciler appends to its schemaBaseline
-	// unconditionally (see mustComposeWithFragment). Omitting it would make the
-	// reconcile write once to add web_host, defeating the no-op this pins.
+	// canonical-empty schema PLUS the browser toolbox's builtin web_host AND
+	// web_action fragments, which the reconciler appends to its schemaBaseline
+	// unconditionally (see mustComposeWithFragment). Omitting either would make
+	// the reconcile write once to add the missing block, defeating the no-op this
+	// pins.
 	canonicalEmpty, err := guardianschema.ComposeAll(
-		[]guardianschema.IdentifiedFragment{{Fragment: browserschema.Fragment()}},
+		[]guardianschema.IdentifiedFragment{
+			{Fragment: browserschema.Fragment()},
+			{Fragment: browserschema.WebActionFragment()},
+		},
 		nil, nil,
 	)
-	require.NoError(t, err, "ComposeAll(web_host baseline)")
+	require.NoError(t, err, "ComposeAll(web_host + web_action baseline)")
 	io := &fakeSchemaIO{cur: canonicalEmpty}
 	r := guardian.NewReconciler(env.Client, io, nil)
 	r.BuiltinToolkits = func() []toolkit.Toolkit { return nil } // this test composes only what it declares

@@ -41,6 +41,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/uiaction"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 	"github.com/authzed/openagentprimitives/pkg/x/besteffort"
 	"github.com/authzed/openagentprimitives/pkg/x/stringsx"
 )
@@ -137,6 +138,12 @@ type pendingToolCall struct {
 	perm     authz.Permission
 	approver string
 	useID    string // for memapproval audit; "" when not yet wired
+	// reqID is the ask's OWN request id (newRequestID(), minted fresh per raised
+	// card) — distinct from useID (the model's tool_use id). persistWebActionApproval
+	// uses this, not useID, to key the web_action_approval append-only write: see
+	// its call site for why the model's own id cannot be trusted to disambiguate
+	// two distinct approval events.
+	reqID string
 	// subject + subjects are the PER-CALL principal the post-approval
 	// post-approval re-verify (toolCallPostApprove) checks against: the
 	// widget VIEWER on a proxy-exec (app-tool) approval (D-D1), threaded here so
@@ -146,6 +153,17 @@ type pendingToolCall struct {
 	// l.authSubject/l.authSubjects (unchanged).
 	subject  string
 	subjects []string
+
+	// webActionKey + webActionFingerprint carry the browser per-action
+	// revalidation stamps (Phase E, E9) off the ApprovalAsk the ToolCallAuthz
+	// hook stamped from the DENIED web_action check's Inputs. On approval,
+	// persistWebActionApproval mints a pagestate_matches-caveated web_action
+	// grant keyed on webActionKey and pinned to webActionFingerprint (the page
+	// the human saw) + appends the append-only web_action_approval audit record.
+	// Both empty for every non-browser-mutate approval, where the web_action
+	// persist is a no-op.
+	webActionKey         string
+	webActionFingerprint string
 }
 
 type pendingLeakageShare struct {
@@ -434,6 +452,15 @@ func (h *runnerHost) AwaitDecision(ctx context.Context, reqID string, timeout ti
 			h.recordApprovalOutcome(ctx, pa.toolCallPayload, d, "denied")
 		} else {
 			h.recordApprovalOutcome(ctx, pa.toolCallPayload, d, "approved")
+			// E9: a browser MUTATE approval mints the fingerprint-caveated
+			// web_action grant that lets the subsequent identical acting call pass,
+			// and appends the append-only approval record. No-op (webActionKey
+			// empty) for every non-browser-mutate approval. Best-effort: losing it
+			// costs a re-approval, never the turn — so it runs AFTER toolCallPostApprove
+			// has already cleared the current call.
+			if pa.toolCallPayload != nil && pa.toolCallPayload.webActionKey != "" {
+				h.persistWebActionApproval(ctx, pa.toolCallPayload, d)
+			}
 		}
 
 	case "leakage_share":
@@ -675,6 +702,14 @@ func (h *runnerHost) buildToolCallPending(ctx context.Context, reqID string, ask
 		ArgsJSON:        extractString(ask.Payload, "args_json"),
 		ToolDescription: extractString(ask.Payload, "tool_description"),
 		Justification:   justification,
+		// Carry the Layer-2 marker so the channelsd handler SKIPS the coarse
+		// primary-resource (web_host) grant write for a browser-mutate ask.
+		// Without it, OPERATION_TOUCH would shorten an existing session-length
+		// web_host grant to the ask's flat 30s expiry, collapsing the standing
+		// grant and re-prompting every later acting call on that host. The
+		// runner already skips mutating the coarse grant for webActionKey != ""
+		// in toolCallPostApprove; this closes the channelsd-side half.
+		WebActionKey: ask.WebActionKey,
 	}
 	detJSON, derr := json.Marshal(det)
 	if derr != nil {
@@ -693,6 +728,17 @@ func (h *runnerHost) buildToolCallPending(ctx context.Context, reqID string, ask
 		PermissionTitle: h.l.PlanGatePermissionTitles[resourceType+"/"+permission],
 		ResourceLabel:   resourceDisplayLabel(h.l.PlanGateResourceDisplays, resourceType, resourceID),
 		Justification:   justification,
+		// E10: set ONLY when the ToolCallAuthz hook stamped this ask as a
+		// changed-page re-prompt (a web_action grant already exists for this
+		// instance; only its pagestate_matches caveat failed) — never for a
+		// first-time ask, which carries this false and renders without the
+		// notice toolApprovalFields adds below.
+		ChangedPageReprompt: ask.WebActionChangedPageReprompt,
+		// Disclose the standing upgrade: a declared-slot JIT ask (empty web_action
+		// key, External, declared type) has its 30s grant rebound to session length
+		// on approve, so the card must say the approval covers the rest of the
+		// session rather than one call. Mirrors toolCallPostApprove's upgrade gate.
+		StandingAfterApproval: h.willUpgradeDeclaredSlotToStanding(ask.WebActionKey, stateImpact, resourceType, resourceID),
 	}
 	card.What = whatLine(ask.Summary, card)
 
@@ -713,6 +759,33 @@ func (h *runnerHost) buildToolCallPending(ctx context.Context, reqID string, ask
 		},
 		ExpiresAt:     expiresAtPtr(hostNow().Add(h.l.resolvedApprovalTimeout())),
 		Interruptible: true,
+	}
+	// Best-effort redacted screenshot of the CURRENT page — same gate
+	// buildPlanGatePending/buildLoginHumanStepPending use (h.captureScreenshot
+	// is set only when this call's tool implements browser.ScreenshotProvider
+	// with a live capturer, D-R3). Gated on the ask being a BROWSER acting ask
+	// rather than captureScreenshot's mere presence, so an ordinary (non-
+	// browser) tool_call ask never captures even in a test that wires a
+	// capturer onto the host anyway (TestBuildToolCallPending_
+	// OrdinaryToolCall_NeverCapturesScreenshot) — belt-and-suspenders on top
+	// of executeToolContained's own gate, not a substitute for it.
+	//
+	// Both browser tool_call layers now qualify: the coarse web_host#act
+	// acting approval (resourceType == browserschema.WebHostType,
+	// WebActionKey == "" — the JIT per-call ask raised when no plan-gate grant
+	// already covers the call) and the fine-grained web_action#act mutate
+	// recheck (WebActionKey != "", E9). Widened from web_action-only to also
+	// include web_host per product decision: an approver deciding whether to
+	// grant act on a host wants to see the page too, not only the mutate
+	// re-prompt. Either way the capture runs at ask-raise time — i.e. NOW,
+	// against the live page — never the stale screenshot from whatever
+	// approval first minted the grant. That is what makes a changed-page
+	// re-prompt (or a fresh web_host ask) show the page as it looks today
+	// rather than the page the human already saw once.
+	if (resourceType == browserschema.WebHostType || ask.WebActionKey != "") && h.captureScreenshot != nil {
+		if ref := h.captureScreenshot(ctx); ref != nil {
+			pl.Screenshot = ref
+		}
 	}
 	env, eerr := channelevents.BuildEnvelope(sessNS, sessName, channelevents.KindInteractionRequest, pl)
 	if eerr != nil {
@@ -737,10 +810,17 @@ func (h *runnerHost) buildToolCallPending(ctx context.Context, reqID string, ask
 			// so the approver comes from the stamped payload key.
 			approver: extractString(ask.Payload, "approver_subject"),
 			useID:    useID,
+			reqID:    reqID,
 			// On the app-tool path: subject/subjects are the widget VIEWER
 			// principal the post-approval re-verify checks against.
 			subject:  extractString(ask.Payload, "subject"),
 			subjects: extractStringSlice(ask.Payload, "subjects"),
+			// Browser per-action revalidation stamps (Phase E, E9), read off the
+			// ask's DEDICATED fields (not Payload) the ToolCallAuthz hook stamped
+			// from the denied web_action check — so the fingerprint never traveled
+			// through the rendered card. Empty for every non-browser-mutate ask.
+			webActionKey:         ask.WebActionKey,
+			webActionFingerprint: ask.WebActionFingerprint,
 		},
 	}
 
@@ -1237,6 +1317,16 @@ func (h *runnerHost) buildLoginHumanStepPending(ctx context.Context, reqID strin
 		ExpiresAt:       expiresAtPtr(hostNow().Add(h.loginHumanStepTTL())),
 		Interruptible:   true,
 	}
+	// A kind:code ask (humanStepRequester.RequestCode stamps "wants_code") needs
+	// a free-text answer — the login code the runner types into the page. Signal
+	// the surface to render an input and carry the typed value back as the
+	// decision's ResponseText. A confirm/CAPTCHA leaves this nil (button-only).
+	if wantsCode, _ := ask.Payload["wants_code"].(bool); wantsCode {
+		pl.ResponseInput = &channelevents.InteractionResponseInput{
+			Placeholder: "Enter the code",
+			Required:    true,
+		}
+	}
 	// Best-effort redacted screenshot — see buildPlanGatePending's identical
 	// gate; request_human_step is itself a browser tool (D-R3), so the same
 	// host.captureScreenshot closure is set for this ask kind too.
@@ -1545,7 +1635,13 @@ func toolApprovalLead() string { return "Approval needed" }
 // strings — is how the raw tool id and permission name ended up rendered
 // verbatim: at four arguments nobody notices that two of them are identifiers.
 type toolApprovalCopy struct {
-	ToolName        string
+	ToolName string
+
+	// ToolDescription is the tool's own LLM-facing description, echoed from the
+	// ask payload. toolApprovalFields does NOT render it: the Tool row shows
+	// only the humanized ToolName (see humanToolName) — the full description is
+	// authoring prose for a model, not a one-line identity for a human approval
+	// card, and the Why/What/Permission rows already carry the decision.
 	ToolDescription string
 	Permission      string
 	ResourceType    string
@@ -1563,6 +1659,41 @@ type toolApprovalCopy struct {
 
 	Justification string
 	What          string
+
+	// ChangedPageReprompt marks this card as a web_action changed-page
+	// RE-PROMPT (Phase E's E10 task): a human already approved this exact
+	// action for this session, and the live page no longer matches what they
+	// saw, so toolApprovalFields prepends a notice saying so. False renders
+	// the ordinary first-time-ask card with no such notice.
+	ChangedPageReprompt bool
+
+	// StandingAfterApproval marks a DECLARED-slot JIT ask whose grant
+	// toolCallPostApprove will rebind to SESSION length on approve
+	// (upgradeDeclaredSlotGrantToStanding). The card otherwise reads as a
+	// single-call approval, so toolApprovalFields adds a disclosure that the
+	// approval actually covers the rest of the session. Mutually exclusive with
+	// ChangedPageReprompt (that path requires a non-empty web_action key; this one
+	// requires an empty one). Set only when the upgrade will truly run — see
+	// willUpgradeDeclaredSlotToStanding — so the card never over-promises.
+	StandingAfterApproval bool
+}
+
+// changedPageRepromptNotice is the copy toolApprovalFields prepends when the
+// card is re-asking about a browser mutate whose page changed since the human
+// last approved it — distinct from a first-time ask, which never shows this.
+const changedPageRepromptNotice = "The page changed since you last approved this action — review the current page before approving again."
+
+// declaredSlotStandingNotice is the disclosure toolApprovalFields adds when
+// approving this JIT ask grants STANDING for the rest of the session rather than
+// authorizing the single call the card otherwise describes (the declared-slot
+// upgrade, see upgradeDeclaredSlotGrantToStanding). label is the resource's human
+// label — the host, for a web_host slot; when empty the notice names the resource
+// generically rather than leaking a wire id.
+func declaredSlotStandingNotice(label string) string {
+	if strings.TrimSpace(label) == "" {
+		return "Approving lets this agent keep acting here for the rest of this session, not only this one call."
+	}
+	return fmt.Sprintf("Approving lets this agent keep acting on %s for the rest of this session, not only this one call.", label)
 }
 
 // toolApprovalFields authors the Why / What / Tool / Permission rows of the
@@ -1573,25 +1704,48 @@ type toolApprovalCopy struct {
 // beside a plan-gate card that resolved both to declared human phrases. Two
 // approval surfaces for the same call, one speaking English and one speaking
 // schema.
+//
+// Tool is a concise identity, not the tool's full LLM-facing description. It
+// used to print c.ToolDescription verbatim when present — sometimes several
+// sentences of tool-authoring prose — on a card whose Why/What/Permission
+// rows already carry everything a human needs to decide. humanToolName never
+// reads the description for exactly that reason; see its doc.
 func toolApprovalFields(c toolApprovalCopy) []channelevents.InteractionField {
 	why := c.Justification
 	if strings.TrimSpace(why) == "" {
 		why = "_(no justification provided)_"
 	}
-	return []channelevents.InteractionField{
-		{Label: "Why", Value: why},
-		{Label: "What", Value: c.What},
-		{Label: "Tool", Value: humanToolName(c.ToolName, c.ToolDescription)},
-		{Label: "Permission", Value: humanPermission(c.Permission, c.ResourceType, c.PermissionTitle)},
+	fields := make([]channelevents.InteractionField, 0, 5)
+	// The changed-page notice leads the card, deliberately: it is the one fact
+	// that distinguishes this ask from the ordinary first-time one the human
+	// may have already clicked through for this exact action, and it is why
+	// they are being asked again.
+	if c.ChangedPageReprompt {
+		fields = append(fields, channelevents.InteractionField{Label: "Note", Value: changedPageRepromptNotice})
 	}
+	// The standing-upgrade disclosure: this card looks like a one-call approval,
+	// but approving it grants acting on this resource for the rest of the session
+	// (upgradeDeclaredSlotGrantToStanding). Say so, next to Why/What, so the human
+	// is consenting to what actually happens.
+	if c.StandingAfterApproval {
+		fields = append(fields, channelevents.InteractionField{Label: "Note", Value: declaredSlotStandingNotice(c.ResourceLabel)})
+	}
+	return append(fields,
+		channelevents.InteractionField{Label: "Why", Value: why},
+		channelevents.InteractionField{Label: "What", Value: c.What},
+		channelevents.InteractionField{Label: "Tool", Value: humanToolName(c.ToolName)},
+		channelevents.InteractionField{Label: "Permission", Value: humanPermission(c.Permission, c.ResourceType, c.PermissionTitle)},
+	)
 }
 
-// humanToolName prefers the tool's own description, else a humanized form of
-// its name. An underscored identifier is still an identifier.
-func humanToolName(name, description string) string {
-	if d := strings.TrimSpace(description); d != "" {
-		return d
-	}
+// humanToolName is a humanized form of the tool's name — an underscored
+// identifier is still an identifier. It deliberately does NOT fall back to
+// the tool's own description: that description is LLM-authoring prose (often
+// several sentences) meant to teach a model when to call the tool, not to
+// summarize a specific call for a human approver. The Why/What/Permission
+// rows already say what this call does and why; a tool's full description
+// here was pure noise, not signal.
+func humanToolName(name string) string {
 	return detokenize(name)
 }
 
@@ -1766,8 +1920,44 @@ func (h *runnerHost) toolCallPostApprove(ctx context.Context, tc *pendingToolCal
 		}
 	}
 
-	// External: schedule one-shot grant cleanup.
-	if tc.perm.StateImpact == authz.External && h.l.GuardianGrantWriter != nil {
+	// External: either upgrade a DECLARED slot's just-written grant to STANDING,
+	// or schedule the one-shot cleanup for an UNDECLARED one.
+	//
+	// SKIPPED entirely for a browser web_action-triggered ask (tc.webActionKey
+	// != ""). tc.perm is always the acting tool's OWN Permission() — web_host
+	// for every browser acting op (Permission() in
+	// pkg/agent/tool/browser/tools.go) — even when THIS card's actual
+	// authorization gap was the per-action web_action layer nested inside
+	// checkExternalSlotGrant (Phase E's E8/E9 gate). Acting on tc.perm's
+	// resource here on a web_action ask would mutate the coarse web_host grant
+	// over an approval that was never about it.
+	//
+	// For a webActionKey=="" ask (the JIT per-call ask raised when no
+	// plan-gate grant already covers the call — see buildToolCallApprovalAsk),
+	// channelsd's toolApprovalHandler (pkg/channels/channelsd/pipeline/
+	// tool_approval_interaction.go) has ALREADY written the slot grant this
+	// approval authorizes, via authz.BindApproved — det.StateImpact=="external"
+	// gives it a flat 30s TTL regardless of whether the type is a declared
+	// slot, because that handler has no PlanGateSlotTypes to consult. Two
+	// shapes reach here with that grant now live:
+	//
+	//   - DECLARED slot (resourceType ∈ h.l.PlanGateSlotTypes, e.g. web_host):
+	//     the type is meant to cover the whole acting phase from ONE approval,
+	//     same as the enforcing/plan-gate path's narrowToApproved
+	//     ("ONE APPROVAL, MANY ACTING CALLS"). Revoking it here — the OLD
+	//     behavior — undid that the instant the first acting call ran, so
+	//     every subsequent call re-prompted. Instead, upgradeDeclaredSlotGrant
+	//     rebinds the SAME grant with the session-length
+	//     authz.SlotGrantExpiry, mirroring narrowToApproved's own
+	//     authz.BindApproved call (same writer, same expiry function — no
+	//     second grant-writer). If that rebind cannot run (h.l.Mem unset) the
+	//     30s grant channelsd wrote is simply left alone and expires on
+	//     schedule — never silently extended, never revoked early.
+	//   - UNDECLARED, one-off External tool (webActionKey=="" is the only ask
+	//     shape this cleanup exists for): the grant is revoked the moment the
+	//     one call it authorized has run, same as before. The 30s expiry
+	//     remains the backstop.
+	if tc.webActionKey == "" && tc.perm.StateImpact == authz.External && h.l.GuardianGrantWriter != nil {
 		if tc.perm.Check != nil {
 			resourceType := tc.perm.Check.ResourceType
 			permission := tc.perm.Check.Permission
@@ -1775,14 +1965,7 @@ func (h *runnerHost) toolCallPostApprove(ctx context.Context, tc *pendingToolCal
 			if resolved, err := authz.ResolveResourceID(*tc.perm.Check, tc.argsMap); err == nil {
 				resourceID = resolved
 			}
-			if resourceType != "" && resourceID != "" && h.l.SlotRevoker != nil {
-				// Revoke the SLOT grant the approval wrote. This used to delete
-				// the session-grant tuple, which the approval flow no longer
-				// writes — so it was deleting nothing, and an external effect's
-				// grant lived until its 30s expiry rather than being withdrawn
-				// the moment the one call it authorized had run.
-				//
-				// The expiry is still the backstop; this is the prompt path.
+			if resourceType != "" && resourceID != "" {
 				binding := authz.SlotBinding{
 					ResourceType: resourceType,
 					// TrustedObjectID: resourceID came from authz.ResolveResourceID
@@ -1791,18 +1974,106 @@ func (h *runnerHost) toolCallPostApprove(ctx context.Context, tc *pendingToolCal
 					ResourceID: authz.TrustedObjectID(resourceID),
 					Permission: permission,
 				}
-				revoker, ref := h.l.SlotRevoker, authz.SessionRef{Namespace: tc.sessNS, Name: tc.sessName}
-				go func() {
-					delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancel()
-					err := authz.RevokeSlots(delCtx, revoker, ref, []authz.SlotBinding{binding})
-					besteffort.Log(slog.Default().Info, "revoke one-shot slot grant", err,
-						"session", sessionRef, "permission", permission, "resource", resourceType+":"+resourceID)
-				}()
+				if slices.Contains(h.l.PlanGateSlotTypes, resourceType) {
+					h.upgradeDeclaredSlotGrantToStanding(ctx, sessionRef, tc.sessNS, tc.sessName, binding)
+				} else if h.l.SlotRevoker != nil {
+					// Revoke the SLOT grant the approval wrote. This used to delete
+					// the session-grant tuple, which the approval flow no longer
+					// writes — so it was deleting nothing, and an external effect's
+					// grant lived until its 30s expiry rather than being withdrawn
+					// the moment the one call it authorized had run.
+					//
+					// The expiry is still the backstop; this is the prompt path.
+					revoker, ref := h.l.SlotRevoker, authz.SessionRef{Namespace: tc.sessNS, Name: tc.sessName}
+					go func() {
+						delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						err := authz.RevokeSlots(delCtx, revoker, ref, []authz.SlotBinding{binding})
+						besteffort.Log(slog.Default().Info, "revoke one-shot slot grant", err,
+							"session", sessionRef, "permission", permission, "resource", resourceType+":"+resourceID)
+					}()
+				}
 			}
 		}
 	}
 	return nil
+}
+
+// willUpgradeDeclaredSlotToStanding reports whether approving a tool_call ask
+// with these fields will rebind its grant to SESSION length
+// (upgradeDeclaredSlotGrantToStanding) instead of authorizing a single call. It
+// is the card-build's advance look at the exact decision toolCallPostApprove
+// makes: a declared-slot (∈ PlanGateSlotTypes), External, non-web_action (empty
+// webActionKey) ask — AND the writer wiring the upgrade actually needs
+// (GuardianGrantWriter gates the post-approve block; Mem + SlotBinder are what
+// BindApproved writes the standing grant through). Gating on the wiring too means
+// the card never discloses standing the runner is not configured to grant. Kept
+// beside the post-approve condition it mirrors — change both together.
+func (h *runnerHost) willUpgradeDeclaredSlotToStanding(webActionKey, stateImpact, resourceType, resourceID string) bool {
+	if webActionKey != "" || stateImpact != string(authz.External) || resourceID == "" {
+		return false
+	}
+	if !slices.Contains(h.l.PlanGateSlotTypes, resourceType) {
+		return false
+	}
+	return h.l.GuardianGrantWriter != nil && h.l.Mem != nil && h.l.SlotBinder != nil
+}
+
+// upgradeDeclaredSlotGrantToStanding rebinds a DECLARED slot's just-approved
+// grant (written moments ago by channelsd's toolApprovalHandler with
+// External's flat 30s TTL) to the session-length expiry
+// authz.SlotGrantExpiry gives the enforcing/plan-gate path's own grant write
+// (narrowToApproved, ~:2866) — the same authz.BindApproved call, same writer
+// (h.l.SlotBinder), same expiry function, so a declared web_host slot becomes
+// STANDING the same way under planGate:disabled as it already is under
+// planGate:enforcing. Reusing BindApproved rather than a bespoke SpiceDB
+// write is deliberate: AGENTS.md's "single source for the binding shape"
+// means this and narrowToApproved must stay the one place a slot grant gets
+// written. Unlike narrowToApproved (whose bindings carry plan-phase Requires),
+// the binding reconstructed here carries NO Requires, so the EnforcePreconditions
+// argument passed below is a no-op — the same situation channelsd's sibling
+// write documents (tool_approval_interaction.go: "No Requires carried, so
+// EnforcePreconditions is a no-op here"). That is safe: a tool_call JIT card
+// only fires after the resource's precondition was Satisfied (or absent) — a
+// Refused precondition routes to the precondition_waiver card, never here — and
+// preconditions are monotonic, so there is nothing left to re-enforce.
+//
+// Best-effort and asynchronous, like the one-shot revoke it replaces for this
+// shape: losing the upgrade costs a re-approval once the 30s TTL lapses, never
+// the current call, which has already been authorized and dispatched by the
+// time this runs. Detached from ctx (a background context with its own
+// timeout) for the same reason the revoke is — this runs after the approval
+// executor's own ctx may already be unwinding.
+//
+// Fail-closed by omission, not by denial: if h.l.Mem is nil, BindApproved's
+// session_scope write would panic on the nil Memory (see bindSlots), so this
+// logs and returns without writing anything, leaving the already-written
+// grant to expire on its original 30s schedule rather than either wrongly
+// extending it or revoking it early.
+func (h *runnerHost) upgradeDeclaredSlotGrantToStanding(ctx context.Context, sessionRef, sessNS, sessName string, binding authz.SlotBinding) {
+	logger := logr.FromContextOrDiscard(ctx)
+	go func() {
+		bindCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if h.l.Mem == nil {
+			slog.Default().Info("host: cannot make declared slot grant standing; memory not wired, grant keeps its short external TTL",
+				"session", sessionRef, "permission", binding.Permission,
+				"resource", binding.ResourceType+":"+binding.ResourceID.String())
+			return
+		}
+		var sessionExpiration time.Duration
+		if h.l.Budget != nil {
+			sessionExpiration = h.l.Budget.cfg.SessionExpiration.Duration
+		}
+		scp := memory.Scope{Kind: "session", ID: sessNS + "/" + sessName}
+		sess := authz.SessionRef{Namespace: sessNS, Name: sessName}
+		writeCtx := memory.WithSystemApproval(bindCtx, "tool_approval")
+		err := authz.BindApproved(writeCtx, h.l.Mem, scp, sess, h.l.SlotBinder, []authz.SlotBinding{binding},
+			authz.EnforcePreconditions, authz.SlotGrantExpiry(time.Now(), sessionExpiration), logger, time.Now)
+		besteffort.Log(slog.Default().Info, "upgrade JIT-approved declared slot grant to standing", err,
+			"session", sessionRef, "permission", binding.Permission,
+			"resource", binding.ResourceType+":"+binding.ResourceID.String())
+	}()
 }
 
 // leakagePostApprove writes SpiceDB leakage grants.

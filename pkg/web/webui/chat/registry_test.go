@@ -140,10 +140,11 @@ type fakeListener struct {
 // able to see which subject's identity reached the Decider, not just that a
 // decision was submitted.
 type decisionCall struct {
-	ext        channelkinds.ExternalIdentity
-	category   string
-	requestRef string
-	actionID   string
+	ext          channelkinds.ExternalIdentity
+	category     string
+	requestRef   string
+	actionID     string
+	responseText string
 }
 
 func (f *fakeListener) SubmitUserMessage(_ context.Context, ext channelkinds.ExternalIdentity, text, _ string) (channelkinds.InboundDecision, error) {
@@ -162,10 +163,10 @@ func (f *fakeListener) SubmitInterrupt(_ context.Context, ext channelkinds.Exter
 	return f.interruptErr
 }
 
-func (f *fakeListener) SubmitDecision(_ context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID string) error {
+func (f *fakeListener) SubmitDecision(_ context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID, responseText string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.decisions = append(f.decisions, decisionCall{ext: ext, category: category, requestRef: requestRef, actionID: actionID})
+	f.decisions = append(f.decisions, decisionCall{ext: ext, category: category, requestRef: requestRef, actionID: actionID, responseText: responseText})
 	return f.decisionErr
 }
 
@@ -421,6 +422,89 @@ func TestRegistry_Adopt_WiringError_ReleasesSlot(t *testing.T) {
 	assert.Contains(t, err.Error(), "boom")
 	assert.Empty(t, fb.built, "a failed wiring must not be recorded as built")
 	assert.Zero(t, liveSlotCount(reg), "a failed wiring must release the reserved slot")
+}
+
+// TestRegistry_FailedAdopt_IsReAdoptableByRehydrate is the #59 regression: a
+// failed Adopt must not deadlock the conversation for reservationTTL (10min).
+//
+// The real trigger is a cold desktop start exceeding sessionReadyTimeout (60s
+// — runnerStartupGrace allows up to 5min for bring-up) or a refresh/navigate
+// canceling the start POST's own context. Either way browserstart.Start's
+// Adopt call fails AFTER Reserve already claimed the slot, and per THAT
+// function's own doc the reservation is deliberately kept ("stays
+// addressable ... will be wired on the next open") because the AgentSession
+// CR already exists and is the viewer's. Before this fix "the next open" was
+// a lie: rehydrate could not tell an abandoned reservation from one actively
+// being wired elsewhere, and refused BOTH with the same permanent
+// ErrSessionNotFound — so every /ws reconnect 404'd until the 10-minute TTL
+// finally reclaimed the slot.
+func TestRegistry_FailedAdopt_IsReAdoptableByRehydrate(t *testing.T) {
+	const owner = "user:alice@example.com"
+	const name = "demo-agent-failedadopt1"
+	key := sessionKey{Namespace: newChatSessionNamespace, Name: name}
+
+	k8s := newFakeK8sClient(t,
+		chatSessionCR(newChatSessionNamespace, name, owner, "demo-agent", "hi",
+			spiceboxv1alpha1.AgentSessionPhaseIdle, time.Now()),
+		chatChannelCR(newChatSessionNamespace, name),
+	)
+	fb := newFakeBuilder()
+	fb.buildErr = errors.New("boom: operator never minted the memory-token secret in time")
+	reg := newRegistryWithBuilder(&fakeDeps{k8s: k8s}, fb.build)
+	t.Cleanup(func() { reg.teardown(key, terminalNotice{Reason: "test"}) })
+
+	// Reserve, as the start flow does before creating the AgentSession CR
+	// (simulated here by the fixture already existing above).
+	_, err := reg.Reserve(newChatSessionNamespace, name, owner)
+	require.NoError(t, err)
+
+	// Adopt, as the start flow does right after creating the CR — scripted to
+	// fail (via the injected builder), exactly as a cold bring-up exceeding
+	// sessionReadyTimeout would. browserstart.Start's own defer does NOT
+	// release the reservation here (sessionCreated is already true by this
+	// point in production), so the slot must survive.
+	err = reg.Adopt(context.Background(), newChatSessionNamespace, name, owner)
+	require.Error(t, err, "the fake builder is scripted to fail this Adopt")
+	assert.Equal(t, 1, liveSlotCount(reg), "a failed Adopt reused from a prior Reserve must leave the reservation in place, not release it")
+
+	// THE FIX: a later attach — exactly what a browser's websocket reconnect
+	// drives through authorize -> rehydrate — finds the reservation IDLE
+	// (inFlight was cleared when Adopt's build call returned) rather than
+	// busy, and retries the wiring itself via the real production
+	// wireExistingSession against the CRs above — rehydrate never goes
+	// through the injected builder seam that just failed.
+	entry, err := reg.rehydrate(context.Background(), key, owner)
+	require.NoError(t, err, "an abandoned reservation left by a failed Adopt must be re-adoptable, not a permanent 404")
+	require.NotNil(t, entry)
+	assert.Equal(t, owner, entry.owner)
+}
+
+// TestRegistry_Adopt_ConcurrentWiring_SecondCallerRefusedNotRaced proves the
+// other half of the #59 fix: a slot genuinely BEING wired right now (not
+// abandoned) must refuse a second concurrent wiring attempt rather than race
+// it. Before inFlight existed, a second Adopt/rehydrate reaching the same
+// reserved-but-not-yet-live slot would run its OWN build and then publish
+// would unconditionally overwrite slot.entry — leaking the first entry's
+// relay subscription and health-watcher goroutine forever (nothing ever
+// stops them).
+func TestRegistry_Adopt_ConcurrentWiring_SecondCallerRefusedNotRaced(t *testing.T) {
+	k8s := newFakeK8sClient(t, validAgentClass("demo-agent"))
+	fb := newFakeBuilder()
+	reg := newRegistryWithBuilder(&fakeDeps{k8s: k8s}, fb.build)
+	const name = "demo-agent-racing1"
+	key := sessionKey{Namespace: newChatSessionNamespace, Name: name}
+
+	// Simulate "a wiring is already in flight" directly: claimForWiring has
+	// already run once (as the first caller's Adopt would have) and marked
+	// the slot inFlight, without yet publishing an entry.
+	reg.mu.Lock()
+	reg.sessions[key] = &liveSlot{subject: "user:first", inFlight: true}
+	reg.mu.Unlock()
+
+	err := reg.Adopt(context.Background(), newChatSessionNamespace, name, "user:second")
+
+	assert.ErrorIs(t, err, ErrSessionUnavailable, "a concurrent wiring must be refused as retryable, never raced")
+	assert.Empty(t, fb.built, "the second caller must never run the builder while another wiring owns the slot")
 }
 
 // TestRegistry_Adopt_IsIdempotent: adopting a key this process already holds a
@@ -689,7 +773,7 @@ func TestRegistry_SubmitDecision_StampsCallingSubjectNotEntryBuilder(t *testing.
 	}}, newFakeBuilder().build)
 	putTestEntry(reg, newChatKey("shared-2222"), entry)
 
-	err := reg.SubmitDecision(context.Background(), newChatKey("shared-2222"), alice, "identity_choice", "req-1", "agent")
+	err := reg.SubmitDecision(context.Background(), newChatKey("shared-2222"), alice, "identity_choice", "req-1", "agent", "")
 	require.NoError(t, err)
 
 	require.Len(t, fl.decisions, 1)

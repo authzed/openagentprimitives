@@ -61,6 +61,9 @@ var sessionWritable = map[string]string{
 	// per-binding authorization on every resolve. Setting one buys the agent
 	// nothing it could not do by calling the tool itself.
 	"ui_view_params": "runner: the agent's own binding-parameter choices, via set_view_params",
+	"web_action_approval": "runner: its own browser web_action acting approvals — what page fingerprint a human approved a mutate against " +
+		"(pkg/agent/runner/host_approval.go). Append-only audit evidence, never read to authorize anything (the caveated grant does that); " +
+		"safe as SessionWritten because it only mirrors the human decision the runner just received.",
 }
 
 // TestEveryKind_DeclaresAKnownWriteAuthority is the drift guard.

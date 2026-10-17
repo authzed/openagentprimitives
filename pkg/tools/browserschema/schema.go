@@ -79,8 +79,23 @@ const (
 // ValueTransforms so every grant-write leg — approval bind, unattended grant —
 // derives the identical id), and C8's unattended fallback. A fresh slice per
 // call so no caller can mutate a shared one.
+//
+// casefold_identity runs FIRST (lowercase, before the escape) because a DNS host
+// is case-insensitive and the two legs that derive a web_host id do NOT agree on
+// case. The CHECK keys the id off Session.CurrentHost(), which
+// browserpolicy.CanonicalHost has already lower-cased; the GRANT WRITE for a
+// plan-gate phase keys it off the FREE-FORM host the planner named in the slot
+// ("AA.com"). Without casefolding, a slot value of "AA.com" is escaped to
+// "AA=2Ecom" while the check looks for "aa=2Ecom", so the grant is never found
+// and the human who approved the phase is silently re-prompted on the first
+// acting call. Folding both legs to lowercase before the escape makes the id a
+// pure function of the host identity, not its spelling. casefold_identity is
+// declared identity-preserving for exactly this (DNS labels, case-insensitive),
+// and running before the INJECTIVE spicedb_escape keeps distinct hosts distinct.
+// Deny-direction only: the pre-fix failure was a spurious re-prompt, never a
+// wrongly-granted call.
 func WebHostValueTransforms() []string {
-	return []string{"spicedb_escape"}
+	return []string{"casefold_identity", "spicedb_escape"}
 }
 
 // Resource is the structured web_host definition, shaped IDENTICALLY to

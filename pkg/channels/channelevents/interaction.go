@@ -323,6 +323,29 @@ type InteractionRequestPayload struct {
 	// Interruptible marks a prompt a mid-turn interrupt may cut short, so a
 	// surface can offer "Interrupt & Send Now" alongside the actions.
 	Interruptible bool `json:"interruptible,omitempty"`
+	// ResponseInput, when set, tells a surface to render a FREE-TEXT input and
+	// carry the typed value back as the decision's ResponseText. Set ONLY for a
+	// login_human_step kind:code ask — the human types an emailed/SMS code that
+	// the runner types into the page for them; nil for confirm/CAPTCHA, which are
+	// button-only. Publisher-authored and TRUSTED copy (a static placeholder,
+	// never untrusted page content). The typed value is a secret: it rides ONLY
+	// the inbound decision submission (surface → runner), never any outbound
+	// broadcast — see pkg/channels/channelkinds/browser/interaction.go.
+	// +optional
+	ResponseInput *InteractionResponseInput `json:"responseInput,omitempty"`
+}
+
+// InteractionResponseInput describes a free-text answer a surface collects
+// alongside the decision's action (today: the login_human_step kind:code login
+// code). A surface renders an input with Placeholder and sends the typed value
+// as InteractionDecisionPayload.ResponseText.
+type InteractionResponseInput struct {
+	// Placeholder is the input's hint text (e.g. "6-digit code"). Trusted copy.
+	Placeholder string `json:"placeholder,omitempty"`
+	// Required, when true, asks the surface to keep the submit disabled until the
+	// input is non-empty. Advisory UX only: the runner already fails closed on an
+	// empty answer (it types nothing and reports the step incomplete).
+	Required bool `json:"required,omitempty"`
 }
 
 // Validate enforces the wire contract. Nil Actions is legal: a read-only

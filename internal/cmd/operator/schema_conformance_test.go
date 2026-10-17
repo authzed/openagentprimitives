@@ -88,11 +88,12 @@ func TestCompileTimeFragmentsCompose(t *testing.T) {
 	toolkitFrags := guardianschema.ToolkitFragments(toolkits.All())
 	compileTime = append(compileTime, toolkitFrags...)
 
-	// The browser toolbox's builtin web_host fragment is part of the same
-	// compile-time baseline the guardian controller composes (schemaBaseline),
-	// so it must compose here too — this is the only net before a bad builtin
-	// fragment reaches a cluster as a startup-time schema freeze.
-	compileTime = append(compileTime, browserschema.Fragment())
+	// The browser toolbox's builtin web_host AND web_action fragments are part of
+	// the same compile-time baseline the guardian controller composes
+	// (schemaBaseline), so they must compose here too — this is the only net
+	// before a bad builtin fragment reaches a cluster as a startup-time schema
+	// freeze.
+	compileTime = append(compileTime, browserschema.Fragment(), browserschema.WebActionFragment())
 
 	out, err := guardianschema.ComposeBase(compileTime)
 	require.NoError(t, err, "every compile-time fragment must compose into the base")
@@ -101,6 +102,8 @@ func TestCompileTimeFragmentsCompose(t *testing.T) {
 		"the Slack fragment is load-bearing: audience resolution reads slack_channel#view")
 	assert.Contains(t, out, "definition web_host",
 		"the browser toolbox's builtin web_host fragment must reach the composed base")
+	assert.Contains(t, out, "definition web_action",
+		"the browser toolbox's builtin web_action fragment (Phase E) must reach the composed base")
 
 	// Every definition a built-in toolkit fragment declares must actually
 	// reach the composed base. Until this loop existed, nothing in this test

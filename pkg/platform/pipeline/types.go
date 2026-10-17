@@ -279,6 +279,33 @@ type ApprovalAsk struct {
 	// separately consider. Only asks that are genuinely THE SAME decision
 	// should set it.
 	CoalesceKey string
+
+	// WebActionKey and WebActionFingerprint carry the browser per-action
+	// revalidation stamps (Phase E, E9) from a DENIED web_action check's Inputs
+	// through to the approval's grant-write effect: on approval of a browser
+	// mutate the runner mints a pagestate_matches-caveated web_action grant keyed
+	// on WebActionKey and pinned to WebActionFingerprint — the page the human
+	// saw — so the subsequent identical acting call passes without re-prompting
+	// (and a changed page re-prompts, via the caveat).
+	//
+	// Carried as DEDICATED FIELDS rather than in Payload precisely so they never
+	// reach the rendered approval card: Payload is the channel-rendering surface,
+	// and the 64-char fingerprint is an internal gate key, not approver-facing
+	// copy. Both empty for every non-browser-mutate ask (which is almost all of
+	// them); the hook stamps them only when inputs.WebActionRequired is set.
+	WebActionKey         string
+	WebActionFingerprint string
+
+	// WebActionChangedPageReprompt marks this ask as a changed-page RE-PROMPT
+	// (Phase E's E10 task): a web_action grant for this instance already
+	// EXISTS — a human already approved this exact action for this session —
+	// but the live page no longer matches what they approved, so the caveat
+	// failed and the call is being asked again. False for an ordinary
+	// first-time ask (no grant at all), which asks a different question and
+	// renders without the changed-page notice. Stamped from the denied check's
+	// authz.Result.ChangedPageReprompt, same as WebActionKey/WebActionFingerprint
+	// above, and empty/false for every non-browser-mutate ask.
+	WebActionChangedPageReprompt bool
 }
 
 // Notice is a user-facing message the executor delivers via the Host.

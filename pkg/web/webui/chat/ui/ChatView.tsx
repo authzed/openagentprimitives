@@ -32,6 +32,7 @@ import type {
   UserMessagePayload,
   UserEchoPayload,
 } from "./types";
+import { sessionRefKey } from "./types";
 import { progressCaption } from "./format";
 import { reduceToolSessions, type ToolSessionMap } from "./toolSession";
 import { useSessionConnState, useSessionFrames } from "./SessionSocket";
@@ -114,10 +115,17 @@ function decayEphemeral(cur: Notice): Notice {
 // artifact. webd serves both this view and /artifact-download, so a relative URL
 // works — gated by the logged-in session + the viewer's CheckView, no signed
 // link needed. Content-Disposition on the endpoint forces the download.
+//
+// sessionRefKey (types.ts, shared with InteractionCard's
+// screenshotDownloadURL) resolves `session`'s namespace tolerating EITHER
+// wire shape a SessionRef-typed field may carry — see SessionRef's own doc.
+// `session` here always rides as browser.SessionRef today, but reading
+// `.namespace` directly is how a future caller handed a
+// channelevents.SessionRef-shaped value (json "ns") silently repeats #55.
 function artifactDownloadURL(session: SessionRef, a: MsgAttachment): string {
   const params = new URLSearchParams({
     artifactId: a.artifactId,
-    sessionRef: `${session.namespace}/${session.name}`,
+    sessionRef: sessionRefKey(session),
     fn: a.filename || a.artifactId,
   });
   return `/artifact-download?${params.toString()}`;

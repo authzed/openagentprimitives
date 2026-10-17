@@ -57,7 +57,7 @@ func blankingFixture(t *testing.T, handler http.Handler) (tools []agenttool.Tool
 	}}
 	ff := &fakeFetcher{}
 	var err error
-	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, true, ff.fetch(), nil, nil)
+	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, true, ff.fetch(), nil, nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools)
 	sess = tools[0].(*browserTool).sess
@@ -71,8 +71,14 @@ func fillUsernameAndPassword(t *testing.T, tools []agenttool.Tool, base string) 
 	t.Helper()
 	require.False(t, run(t, toolBy(t, tools, "navigate"), map[string]any{"url": base + "/"}).IsError)
 
-	userRef = refByName(t, tools, "UsernameField")
-	passRef = refByName(t, tools, "PasswordField")
+	// Both refs from ONE snapshot: refs are generation-scoped and each find/read
+	// re-mints a new generation, so a ref captured from an earlier find would be
+	// stale by the time the second field is located. type does not re-mint, so
+	// both stay live across the two type calls.
+	read := run(t, toolBy(t, tools, "read"), map[string]any{})
+	require.False(t, read.IsError, "read: %s", read.Content)
+	userRef = refForRoleAndName(t, read.Content, "textbox", "UsernameField")
+	passRef = refForRoleAndName(t, read.Content, "textbox", "PasswordField")
 
 	uRes := run(t, toolBy(t, tools, "type"), map[string]any{"ref": userRef, "text": "{{login.site.test.username}}"})
 	require.False(t, uRes.IsError, "type username: %s", uRes.Content)

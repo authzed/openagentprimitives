@@ -884,6 +884,11 @@ type Assertions struct {
 	// Authz asserts on the authz_decision log.
 	Authz *AuthzAssertions `json:"authz,omitempty"`
 
+	// WebActionApprovals asserts on the web_action_approval append-only audit
+	// kind — see WebActionApprovalAssertions' doc for why this, not Authz,
+	// is the place a bundle names a specific per-action web_action key.
+	WebActionApprovals *WebActionApprovalAssertions `json:"webActionApprovals,omitempty"`
+
 	// SpiceDB asserts relationship-derived permissions directly against the
 	// harness's real SpiceDB, fully-consistent — NOT through the authz_decision
 	// log. Authz records only what a DISPATCHED tool call happened to Check; a
@@ -1065,6 +1070,41 @@ type AuthzAssertions struct {
 	// and "never allowed" have the same final outcome only by accident, and a
 	// permission boundary is worth asserting the strong way.
 	NeverAllowed []string `json:"neverAllowed,omitempty"`
+}
+
+// WebActionApprovalAssertions are claims about the web_action_approval
+// append-only audit kind (pkg/memory/kinds/webactionapproval) — the ONE place
+// a bundle can name a SPECIFIC per-action web_action key.
+//
+// The authz_decision log (AuthzAssertions, above) cannot do this: a browser
+// acting call's dispatch-time Permission() is ALWAYS its web_host Check
+// (Phase C) — the per-action web_action layer (Phase E) is a SECOND check
+// layered inside the dispatcher, but the recorded authz_decision entry is
+// always attributed to the OUTER permission's resource type, so it reads
+// "web_host:<host>#act" whether the host layer or the action layer actually
+// decided it. The web_action_approval record is the one place the per-action
+// key (and the page fingerprint it was approved against) is durably recorded,
+// which is exactly what a bundle proving "the gate is scoped per ACTION, not
+// per host" or "the SAME action was re-approved against a changed page"
+// needs to name.
+type WebActionApprovalAssertions struct {
+	// DistinctKeys is the number of DISTINCT RAW web_action keys that have at
+	// least one recorded approval. The proof that the gate is scoped per
+	// ACTION rather than per host: two different mutates on the same host
+	// must mint two different keys, and Phase C's web_host alone could never
+	// tell them apart.
+	DistinctKeys int `json:"distinctKeys,omitempty"`
+
+	// FingerprintsForKey asserts, for a named RAW (un-escaped) web_action key,
+	// the number of DISTINCT ApprovedFingerprint values recorded across its
+	// approval history. The TOCTOU proof: the SAME action approved twice
+	// against two DIFFERENT page states — an initial approval, then a
+	// re-approval after the page changed since — must show 2 distinct
+	// fingerprints for that ONE key, never one fingerprint reused (which
+	// would mean the re-prompt never actually re-captured the live page) or
+	// two different keys (which would mean the "same action" claim is
+	// false).
+	FingerprintsForKey map[string]int `json:"fingerprintsForKey,omitempty"`
 }
 
 // PtTagAssertions are claims about the per-datum provenance tags a run minted.

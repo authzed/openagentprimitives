@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/authzed/openagentprimitives/pkg/authz"
@@ -176,9 +177,13 @@ func (w *RelationWriter) WriteRelationships(ctx context.Context, rels []authz.Re
 	}
 	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
 	for _, r := range rels {
+		rel, err := relationshipFor(r)
+		if err != nil {
+			return fmt.Errorf("write relationships: %w", err)
+		}
 		updates = append(updates, &v1.RelationshipUpdate{
 			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
-			Relationship: relationshipFor(r),
+			Relationship: rel,
 		})
 	}
 	resp, err := w.c.cl.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: updates})
@@ -208,9 +213,18 @@ func (w *RelationWriter) DeleteRelationships(ctx context.Context, rels []authz.R
 	}
 	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
 	for _, r := range rels {
+		// A delete keys on (resource, relation, subject) only — the caveat is not
+		// part of the match — so a caveated grant is removed by the same bare tuple
+		// RevokeSlots builds (CaveatName empty), and relationshipFor never errors
+		// here. The uniform error handling is kept so a future caveated delete path
+		// cannot silently drop a structpb failure.
+		rel, err := relationshipFor(r)
+		if err != nil {
+			return fmt.Errorf("delete relationships: %w", err)
+		}
 		updates = append(updates, &v1.RelationshipUpdate{
 			Operation:    v1.RelationshipUpdate_OPERATION_DELETE,
-			Relationship: relationshipFor(r),
+			Relationship: rel,
 		})
 	}
 	if _, err := w.c.cl.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: updates}); err != nil {
@@ -220,7 +234,12 @@ func (w *RelationWriter) DeleteRelationships(ctx context.Context, rels []authz.R
 }
 
 // relationshipFor renders one authz.Relation as a v1.Relationship.
-func relationshipFor(r authz.Relation) *v1.Relationship {
+//
+// It returns an error ONLY when a caveat context fails to serialize to a
+// structpb.Struct — the uncaveated path (every Relation with an empty
+// CaveatName, which is all of them but a web_action acting grant) never errors
+// and renders exactly as before, with no OptionalCaveat set.
+func relationshipFor(r authz.Relation) (*v1.Relationship, error) {
 	subject := &v1.SubjectReference{
 		Object: &v1.ObjectReference{ObjectType: r.SubjectType, ObjectId: r.SubjectID},
 	}
@@ -235,7 +254,15 @@ func relationshipFor(r authz.Relation) *v1.Relationship {
 	if !r.ExpiresAt.IsZero() {
 		rel.OptionalExpiresAt = timestamppb.New(r.ExpiresAt)
 	}
-	return rel
+	if r.CaveatName != "" {
+		cav, err := structpb.NewStruct(r.CaveatContext)
+		if err != nil {
+			return nil, fmt.Errorf("build caveat context for %s:%s#%s caveat=%s: %w",
+				r.ResourceType, r.ResourceID, r.Relation, r.CaveatName, err)
+		}
+		rel.OptionalCaveat = &v1.ContextualizedCaveat{CaveatName: r.CaveatName, Context: cav}
+	}
+	return rel, nil
 }
 
 var _ authz.RelWriter = (*RelationWriter)(nil)

@@ -1,0 +1,155 @@
+{
+  "name": "browser-consequence-gate",
+  "description": "Task E11's end-to-end proof of the Phase E consequence-acting gate, driven through the REAL browser driver: a browser MUTATE requires its OWN fingerprint-caveated web_action grant on top of the coarse web_host one; an observe/navigate click never touches that second gate at all; two distinct mutates get two distinct per-action grants (proving the gate is scoped per ACTION, not per host); and a mutate whose page changed since its approval is re-prompted rather than silently allowed (the TOCTOU property the whole gate exists for) — then, once re-approved against the new page, a repeat of that SAME click proceeds without asking again.\n\nTHE SITE IS STATEFUL (test/testbrowser.ServeConsequenceGateSite, selected by this bundle's CONSEQUENCE_GATE_SITE marker): /checkout's price line reads \"Total: $342\" on its FIRST GET and \"Total: $402\" on every GET after that. The \"Confirm order\" button, its form action and its page path are IDENTICAL across both loads, so the acting call's web_action KEY (a pure function of op/role/name/action-path/page-path) stays the SAME on the second visit while its live page FINGERPRINT (which also hashes the target container's text) diverges — exactly the TOCTOU case Phase E's pagestate_matches caveat exists to catch.\n\nThe AgentClass declares BOTH web_host AND web_action in spec.authz.slots (unlike Phase C's browser-login-secret-source, which declares web_host alone). Declaring web_action is what the e2e driver's setupBrowserFixture reads to decide this bundle gets a real (deterministic, no-network) ConsequenceJudge wired — see agentClassDeclaresWebActionSlot in test/e2e/threadrun/driver.go — and it is also what puts web_action into authz.Inputs.SlotResourceTypes, the capability flag the dispatch checker (pkg/authz/spicedb/toolcheck) gates its second check on. The judge wired here is judge.NewDeterministic() (pkg/agent/tool/browser/judge) reused as both the cheap fast-path AND the \"model\" tier it falls back to: it never touches a network, and it fails closed to mutate for anything that is not positively a link-follow/search-entry/tab-switch — which a button click never is, so every button in this fixture classifies mutate deterministically and every plain link classifies navigate, with no Haiku call in the loop.\n\nSix acting clicks happen in this run, in order: (1) a benign link follow (\"View details\") that the deterministic judge classifies navigate — it never stamps a web_action key at all, so the second gate is never even consulted and no card is raised for it; (2) \"Confirm order\" on /checkout's FIRST load ($342) — a mutate with no existing web_action grant, denied, approved, and the click then proceeds; (3) \"Cancel subscription\" on /subscription — a DIFFERENT mutate (different role/text/form-action/page-path quadruple), hashing to a DIFFERENT web_action key, denied and approved independently of (2)'s grant — the proof that the gate is per-ACTION, not per-host, since Phase C's web_host alone cannot tell these two targets apart; (4) \"Confirm order\" again on /checkout's SECOND load ($402) — the SAME web_action key as (2), but the existing grant's caveat (approved against the $342 fingerprint) fails against the new $402 one, so the check denies AGAIN and a FRESH approval card (carrying the changed-page notice, E10) is raised before the click is allowed to proceed; (5) the SAME \"Confirm order\" button again, on the SAME still-$402 page — this time the grant (now re-approved against $402) matches the live fingerprint, so the check ALLOWS outright with no new card, proving the re-approval actually stuck rather than needing to be asked on every click.\n\nEverything is asserted on the TOOL RESULT, the recorded authz_decision log and the web_action_approval append-only audit kind — never the reply. The authz_decision log can only ever name \"web_host:<host>#act\" for a browser acting call (every acting tool's dispatch-time Permission() is its web_host Check; the per-action web_action layer is a second check nested inside the dispatcher, and the recorded entry is always attributed to the OUTER permission's resource type) — so it is used here only to confirm the run ends ALLOWED overall (assert.authz.decisions) once click (5)'s repeat succeeds outright. The PER-ACTION proof — that there are two DISTINCT web_action keys, and that the \"Confirm order\" key specifically carries two DISTINCT approved fingerprints (the TOCTOU re-approval) — rests on assert.webActionApprovals, read from the one place that identity is durably recorded: the web_action_approval Kind a human's approval of a browser mutate writes (pkg/memory/kinds/webactionapproval). approvalPrompts stays at 4 across all six clicks (host + 3 distinct mutate asks) precisely because click (5)'s repeat needs none — a regression that re-asked on every call, or that never asked at all, would show up as a different count.",
+
+  "agentDir": "testdata/browser-consequence-gate/manifests",
+  "agentClass": "browser-consequence-gate",
+  "extraManifests": ["01-browser-toolbox"],
+
+  "autoApprove": ["plan_phase", "plan_amendment", "tool_approval"],
+
+  "userTurns": [
+    "please review my account dashboard at http://{{browserSite}}/ and handle anything that needs attention"
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "review" },
+      "reply": [{ "toolUse": { "name": "update_plan", "args": {
+        "name": "main",
+        "items": [{ "id": "s1", "label": "review the dashboard and handle what needs attention", "status": "pending", "phase": "review_phase" }],
+        "phases": [{
+          "id": "review_phase",
+          "label": "Review the account dashboard",
+          "why": "the user asked me to review the dashboard and handle anything pending on it",
+          "permissions": [{ "handle": "perm:act:web_host", "why": "reviewing may require clicking links and buttons on the page" }],
+          "slots": [{ "type": "web_host", "id": "host.docker.internal", "why": "the dashboard is on this host" }]
+        }]
+      } } }]
+    },
+    {
+      "expect": { "lastToolResult": "update_plan" },
+      "reply": [{ "toolUse": { "name": "web_navigate", "args": { "url": "http://{{browserSite}}/" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_navigate", "lastToolResultContains": "loaded" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_read",
+        "lastToolResultContains": "View details",
+        "capture": { "detailsRef": "\\[(e\\d+)\\] link \"View details\"" }
+      },
+      "reply": [{ "toolUse": { "name": "web_click", "args": { "ref": "{{detailsRef}}" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_click", "lastToolResultContains": "clicked" },
+      "reply": [{ "toolUse": { "name": "web_wait_for", "args": { "text": "Order details" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_wait_for", "lastToolResultContains": "found" },
+      "reply": [{ "toolUse": { "name": "web_navigate", "args": { "url": "http://{{browserSite}}/checkout" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_navigate", "lastToolResultContains": "loaded" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_read",
+        "lastToolResultContains": "Total: $342",
+        "capture": { "confirmRef1": "\\[(e\\d+)\\] button \"Confirm order\"" }
+      },
+      "reply": [{ "toolUse": { "name": "web_click", "args": { "ref": "{{confirmRef1}}" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_click", "lastToolResultContains": "clicked" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_read", "lastToolResultContains": "CONFIRMED" },
+      "reply": [{ "toolUse": { "name": "web_navigate", "args": { "url": "http://{{browserSite}}/subscription" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_navigate", "lastToolResultContains": "loaded" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_read",
+        "lastToolResultContains": "Plan: Pro Monthly",
+        "capture": { "cancelRef": "\\[(e\\d+)\\] button \"Cancel subscription\"" }
+      },
+      "reply": [{ "toolUse": { "name": "web_click", "args": { "ref": "{{cancelRef}}" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_click", "lastToolResultContains": "clicked" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_read", "lastToolResultContains": "CANCELLED" },
+      "reply": [{ "toolUse": { "name": "web_navigate", "args": { "url": "http://{{browserSite}}/checkout" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_navigate", "lastToolResultContains": "loaded" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_read",
+        "lastToolResultContains": "Total: $402",
+        "capture": { "confirmRef2": "\\[(e\\d+)\\] button \"Confirm order\"" }
+      },
+      "reply": [{ "toolUse": { "name": "web_click", "args": { "ref": "{{confirmRef2}}" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_click", "lastToolResultContains": "clicked" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "web_read",
+        "lastToolResultContains": "CONFIRMED",
+        "capture": { "confirmRef3": "\\[(e\\d+)\\] button \"Confirm order\"" }
+      },
+      "reply": [{ "toolUse": { "name": "web_click", "args": { "ref": "{{confirmRef3}}" } } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_click", "lastToolResultContains": "clicked" },
+      "reply": [{ "toolUse": { "name": "web_read", "args": {} } }]
+    },
+    {
+      "expect": { "lastToolResult": "web_read", "lastToolResultContains": "CONFIRMED" },
+      "reply": [{ "text": "Reviewed the dashboard and handled the pending items." }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "reviewed the dashboard and handled the confirm/cancel actions" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["Reviewed the dashboard and handled the pending items."],
+    "toolsCalled": ["web_navigate", "web_read", "web_click", "web_wait_for"],
+    "approvalPrompts": 4,
+    "approvalScreenshotAttached": true,
+    "authz": {
+      "decisions": {
+        "web_host:host=2Edocker=2Einternal#act": "allowed"
+      }
+    },
+    "webActionApprovals": {
+      "distinctKeys": 2,
+      "fingerprintsForKey": {
+        "host.docker.internal/click/confirm-order-1662c94f": 2,
+        "host.docker.internal/click/cancel-subscription-7a1e0a25": 1
+      }
+    },
+    "planGate": {
+      "frozenPhases": 1,
+      "gatedAgainstFrozenPlan": true,
+      "approvalPrompts": 4
+    }
+  }
+}

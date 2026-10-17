@@ -35,11 +35,47 @@ func TestToolApprovalFields_UseHumanCopyNotWireNames(t *testing.T) {
 		"the declared title is what a human reads, exactly as the plan-gate card shows it")
 	assert.NotContains(t, by["Tool"], "gitlike_git",
 		"the internal tool id has no business on an approval surface")
-	assert.Contains(t, by["Tool"], "Run git against",
-		"the tool's own description is the human-readable stand-in")
+	assert.Equal(t, "gitlike git", by["Tool"],
+		"the Tool row is the humanized tool NAME, not the tool's own description")
 	for label, v := range by {
 		assert.NotContains(t, v, "`", "no backtick-wrapped wire values remain (%s)", label)
 	}
+}
+
+// The Tool row must stay a concise identity even when the tool carries a
+// long, multi-sentence LLM-facing description — that description is
+// authoring prose for a model, not a one-line summary for a human approver,
+// and the Why/What/Permission rows already say what the call does and why.
+// A desktop review caught this: the card was dumping the entire description
+// (sometimes several sentences) into the Tool row.
+func TestToolApprovalFields_ToolRowIgnoresLongDescription(t *testing.T) {
+	longDescription := "Type text into a focused element on the current page. " +
+		"Use this when a form field, search box, or editable area is already " +
+		"focused and you need to enter text; it does not click or focus the " +
+		"element for you, so call web_click first if nothing is focused yet. " +
+		"Supports an optional delay between keystrokes to mimic human typing " +
+		"and avoid tripping bot-detection heuristics on the target page."
+
+	fields := toolApprovalFields(toolApprovalCopy{
+		ToolName:        "web_type",
+		ToolDescription: longDescription,
+		Permission:      "mutate",
+		ResourceType:    "web_action",
+		Justification:   "filling in the search box",
+		What:            "Type the search query.",
+	})
+
+	by := map[string]string{}
+	for _, f := range fields {
+		by[f.Label] = f.Value
+	}
+
+	assert.Equal(t, "web type", by["Tool"],
+		"the Tool row is the humanized name, never the tool's own description")
+	assert.NotContains(t, by["Tool"], "Supports an optional delay",
+		"the full description must not leak into the Tool row")
+	assert.Less(t, len(by["Tool"]), len(longDescription),
+		"the Tool row must be far shorter than the tool's full description")
 }
 
 // With no declared title, the permission still must not appear raw — it is

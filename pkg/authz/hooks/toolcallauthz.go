@@ -292,6 +292,40 @@ func (h *ToolCallAuthz) Eval(ctx context.Context, in pipeline.Input) pipeline.De
 			if aerr != nil {
 				return pipeline.Decision{Verdict: pipeline.Deny, Reason: aerr.Error()}
 			}
+			// Carry the browser per-action revalidation stamps (Phase E, E9) from
+			// the DENIED check's Inputs onto the ask, so an approval of this mutate
+			// mints a pagestate_matches-caveated web_action grant pinned to the page
+			// the human saw. inputs.WebActionRequired is set ONLY for a browser
+			// mutate (BuildInputs lifted and STRIPPED these off argsMap, so they are
+			// not in the rendered card); carried on the ask's dedicated fields, never
+			// its Payload, so the fingerprint stays out of the approver-facing copy.
+			// ask may be nil only if BuildApprovalAsk returned (nil, nil), which it
+			// does not — but guard anyway so a future builder cannot nil-panic here.
+			//
+			// perm.OwnsWebActionArgs() is a belt-and-suspenders trust gate: BuildInputs
+			// already sets WebActionRequired only for the acting tool, but this stamp
+			// is what ultimately mints the per-action grant, so re-assert the same
+			// server-resolved discriminator here against perm directly — a future
+			// BuildInputs that forgot to gate cannot re-open the injection path.
+			// res.CoarseGrantSatisfied gates the marker to a GENUINE Layer-2 denial
+			// (web_host present, web_action missing/caveat-failed). A MUTATE denied
+			// at Layer 1 — the coarse web_host grant is missing, e.g. the first
+			// acting call on a host is itself a mutate — leaves it false, so this
+			// raises a COARSE web_host ask (WebActionKey == "") instead: channelsd
+			// then WRITES the web_host grant and the runner upgrades it to standing.
+			// Keying on WebActionRequired alone would mis-stamp that Layer-1 ask,
+			// making channelsd SKIP the web_host write and re-denying every later
+			// mutate at Layer 1 (an approval storm) — see Result.CoarseGrantSatisfied.
+			if ask != nil && inputs.WebActionRequired && perm.OwnsWebActionArgs() && res.CoarseGrantSatisfied {
+				ask.WebActionKey = inputs.WebActionKey
+				ask.WebActionFingerprint = inputs.PresentedPageFingerprint
+				// E10: carries whether this is a changed-page RE-PROMPT (a grant
+				// already exists; only the caveat failed) rather than a first-time
+				// ask, so the runner's card-building path can render the two
+				// differently. res is the checker's Result for THIS call, so the
+				// flag always describes the denial that raised this very ask.
+				ask.WebActionChangedPageReprompt = res.ChangedPageReprompt
+			}
 			return pipeline.Decision{Approval: ask}
 		}
 		// No BuildApprovalAsk wired (test path or kubectl-driven without approval)

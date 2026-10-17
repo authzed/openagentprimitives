@@ -189,7 +189,7 @@ func waitForDevtools(t *testing.T, debugPort int) {
 // shared session for teardown.
 func (fx *fixture) synthTools(t *testing.T, acceptsImages bool) []agenttool.Tool {
 	t.Helper()
-	tools, err := Synthesize(fx.rt, fx.gateURL, chromeToken, acceptsImages, nil, nil, nil)
+	tools, err := Synthesize(fx.rt, fx.gateURL, chromeToken, acceptsImages, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools)
 	if bt, ok := tools[0].(*browserTool); ok {
@@ -228,7 +228,7 @@ func TestReadRendersOutlineWithRefs(t *testing.T) {
 	require.False(t, res.IsError, "read: %s", res.Content)
 	assert.Contains(t, res.Content, `heading "Fares"`)
 	assert.Contains(t, res.Content, `link "Book a flight"`)
-	assert.Contains(t, res.Content, "[e", "links must carry an [eN] ref")
+	assert.Contains(t, res.Content, "[s", "links must carry a generation-scoped [s<gen>e<N>] ref")
 }
 
 func TestFollowOnlyLinks(t *testing.T) {
@@ -324,20 +324,21 @@ func TestReadPaginates(t *testing.T) {
 	assert.Contains(t, oob.Content, "page 99 is out of range")
 }
 
-// refForRole extracts the first ref id (e.g. "e3") from an outline line whose
-// rendered role matches role.
+// refForRole extracts the first ref id (e.g. "s1e3") from an outline line whose
+// rendered role matches role. Ref names are generation-scoped ("s<gen>e<N>"), so
+// this matches the opening bracket, not an "e" prefix.
 func refForRole(t *testing.T, outline, role string) string {
 	t.Helper()
 	for _, line := range strings.Split(outline, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "[e") {
+		if !strings.HasPrefix(trimmed, "[") {
 			continue
 		}
 		close := strings.Index(trimmed, "]")
 		if close < 0 {
 			continue
 		}
-		ref := trimmed[1:close] // "eN"
+		ref := trimmed[1:close] // "s<gen>e<N>"
 		rest := strings.TrimSpace(trimmed[close+1:])
 		if strings.HasPrefix(rest, role+" ") {
 			return ref

@@ -43,6 +43,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/toolguardaudit"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 	mcpspec "github.com/authzed/openagentprimitives/pkg/tools/mcp/spec"
 	"github.com/authzed/openagentprimitives/pkg/tools/redact"
 
@@ -437,6 +438,39 @@ func (l *Loop) toolCallAuthzDeps() hooks.ToolCallAuthzDeps {
 				SlotResourceTypes: l.PlanGateSlotTypes,
 				// SessionScope: scope.Scope{} (zero value = identity pass-through)
 			}
+			// Lift the browser per-action revalidation stamps (Phase E's E8 gate)
+			// out of the generic arg map into typed Inputs fields, then DELETE them
+			// from the map. The browser acting tool's NamedArgs stamps these three
+			// keys for a call it classified a MUTATE; carrying them as structured
+			// Inputs is what lets the checker layer a web_action check on top of the
+			// web_host one, and stripping them keeps these internal gate keys (the
+			// 64-char page fingerprint especially) out of the human-facing approval
+			// card and the durable args hash.
+			//
+			// TRUST GATE (perm.OwnsWebActionArgs): honor the stamps ONLY for the
+			// browser acting tool. For an MCP tool the raw model JSON flows straight
+			// through NormalizeArgs (it implements no NamedCallArgs), so a
+			// prompt-injected model could otherwise set these keys and mint a
+			// fabricated web_action grant for a key/fingerprint of its choosing. When
+			// the predicate is false we neither lift NOR strip: the keys stay as
+			// ordinary model args — rendered on the card and passed to Execute — so
+			// an injection attempt is visible rather than silently trusted. For the
+			// acting tool, argsMap is its own fresh NamedArgs copy, so the delete
+			// never touches the model's original args.
+			if perm.OwnsWebActionArgs() {
+				if req, _ := argsMap[browserschema.WebActionRequiredArg].(bool); req {
+					ai.WebActionRequired = true
+					if k, ok := argsMap[browserschema.WebActionKeyArg].(string); ok {
+						ai.WebActionKey = k
+					}
+					if fp, ok := argsMap[browserschema.WebActionFingerprintArg].(string); ok {
+						ai.PresentedPageFingerprint = fp
+					}
+					delete(argsMap, browserschema.WebActionRequiredArg)
+					delete(argsMap, browserschema.WebActionKeyArg)
+					delete(argsMap, browserschema.WebActionFingerprintArg)
+				}
+			}
 			// No session-grant fallback to wire: routeViaSessionGrant is gone and
 			// the fallback with it. The tool's natural Check resolves
 			// post-approval on its own, through the slot grant the approval
@@ -628,6 +662,30 @@ func redactSensitiveArgs(t tool.Tool, argsMap map[string]any, sessionKey, toolNa
 // approver-facing Requester: on a proxy-exec (app-tool) call it is the widget
 // VIEWER (reqSubject); on the LLM path it is the session's LastInbound requester.
 func (l *Loop) buildToolCallApprovalAsk(ctx context.Context, toolName string, argsMap map[string]any, perm authz.Permission, useID, justification string, reqSubject identity.CanonicalUserID, proxyExec bool) (*pipeline.ApprovalAsk, error) {
+	// Lift the browser acting tool's human-readable "what this does" sentence
+	// (NamedArgs' stampWebAction; see pkg/agent/tool/browser/action_descriptor.go)
+	// out of argsMap FIRST, before anything below reads argsMap for the hash,
+	// the displayed args, or the durable record — same reason web_action_key/
+	// fingerprint are lifted out in BuildInputs: this is an internal-gate-derived
+	// presentation value, not a call argument, and it must not leak into
+	// argsHash/ArgsJSON/the args_map payload.
+	//
+	// TRUST GATE (perm.OwnsWebActionArgs): this description becomes the card's
+	// trusted "what this does" Summary verbatim, so it is lifted ONLY for the
+	// browser acting tool. An MCP tool's args reach here as raw model JSON, so a
+	// prompt-injected model could otherwise set web_action_description and spoof
+	// the approver-facing summary. When the predicate is false we leave the key in
+	// argsMap (an ordinary, visible arg) and browserDescription stays "" — the
+	// summary then falls back to the COMPUTED summarizeToolCall line below. A
+	// browser call with no judge wired also never carries this key.
+	var browserDescription string
+	if perm.OwnsWebActionArgs() {
+		if d, ok := argsMap[browserschema.WebActionDescriptionArg].(string); ok {
+			browserDescription = d
+			delete(argsMap, browserschema.WebActionDescriptionArg)
+		}
+	}
+
 	resourceType := ""
 	resourceID := ""
 	permission := ""
@@ -771,12 +829,17 @@ func (l *Loop) buildToolCallApprovalAsk(ctx context.Context, toolName string, ar
 		}
 	}
 
-	// Build summary via the summarizer LLM, from the same redacted args the
-	// card shows: the summarizer is a second LLM whose whole purpose is to
-	// describe the call to a human, so it has no more business seeing a
-	// declared-sensitive value than the human does.
+	// The browser acting tool's own deterministic descriptor wins outright when
+	// present: it is built from the DOM facts the consequence judge already
+	// extracted (role, accessible text, submit-control-ness — never a typed
+	// value, see action_descriptor.go's credential-safety note), so it is both
+	// more accurate and cheaper than asking a second LLM to re-describe
+	// "click ref e13" with no facts of its own to go on. Every other tool call
+	// keeps the existing summarizer path unchanged.
 	var summary string
-	if foundTool != nil {
+	if browserDescription != "" {
+		summary = browserDescription
+	} else if foundTool != nil {
 		summary = l.summarizeToolCall(ctx, foundTool, displayArgs, permission, resourceType, resourceID)
 	}
 
@@ -1400,6 +1463,14 @@ func (e *engineChecker) CheckToolCall(ctx context.Context, p authz.Permission, i
 	if e.l.Engine != nil {
 		return e.l.Engine.CheckToolCall(ctx, p, in)
 	}
+	// toolcheck.Checker's RepromptEscalation field (E10) is left at its zero
+	// value here — Enabled: false, Judge: nil — which is the escape-safe
+	// default: a web_action caveat failure always re-prompts and no model is
+	// consulted. This is the documented seam for wiring it: a future config
+	// path (an AgentClass browser-toolbox setting, an env var) would resolve a
+	// RepromptJudge adapter over pkg/agent/tool/browser/judge's registry
+	// (judge.Get("haiku")) and set RepromptEscalation{Enabled: <config>, Judge:
+	// <adapter>} below, never flipping the default.
 	return toolcheck.Checker{Cli: e.l.AuthzCli, Cache: e.l.AuthzCache}.CheckToolCall(ctx, p, in)
 }
 

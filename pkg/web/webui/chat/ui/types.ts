@@ -78,9 +78,42 @@ export interface MessagesResponse {
 // the background).
 export type ConnState = "connecting" | "connected" | "reconnecting" | "offline";
 
+// SessionRef is the frontend's one session-ref shape, but TWO different Go
+// wire types collapse onto it and they disagree on the namespace field's JSON
+// name: browser.SessionRef (pkg/channels/channelkinds/browser/events.go)
+// marshals it as "namespace" and decodes straight into this shape — every
+// MsgX.Session and the wsFrame's own top-level `session` field ride this way
+// — while channelevents.SessionRef (pkg/channels/channelevents/envelope.go)
+// marshals it as "ns". The THREE `agentSessionRef` fields below
+// (InteractionRequestPayload / InteractionAppliedPayload /
+// InteractionDecisionRejectedPayload) ride as the latter. `ns` is declared
+// here, optional, so the compiler — not just a comment on one call site —
+// carries the real wire shape forward from every agentSessionRef-typed field.
+//
+// Never read `.namespace` directly off a SessionRef that might have come from
+// `agentSessionRef`: it is silently undefined for that shape even though the
+// real namespace IS on the wire, just under `ns`. That silent gap is how a
+// real approval card's screenshot link once built `sessionRef=undefined/<name>`
+// (#55) — use sessionNamespace()/sessionRefKey() below instead, the ONE place
+// this resolution lives.
 export interface SessionRef {
-  namespace: string;
+  namespace?: string;
   name: string;
+  ns?: string;
+}
+
+// sessionNamespace resolves a SessionRef's namespace tolerating BOTH wire
+// shapes a SessionRef-typed field may actually carry (see SessionRef's own
+// doc above) — the one exported seam every consumer routes through rather
+// than re-deriving its own (silently-safe-until-it-isn't) `.namespace` read.
+export function sessionNamespace(ref: SessionRef): string {
+  return ref.namespace ?? ref.ns ?? "";
+}
+
+// sessionRefKey renders a SessionRef as the "<namespace>/<name>" form the
+// server's `sessionRef` download-link query param expects.
+export function sessionRefKey(ref: SessionRef): string {
+  return `${sessionNamespace(ref)}/${ref.name}`;
 }
 
 // MsgAttachment mirrors builtin.MsgAttachment: an artifact the agent attached to
@@ -435,6 +468,16 @@ export interface InteractionScreenshot {
   altText?: string;
 }
 
+// InteractionResponseInput mirrors channelevents.InteractionResponseInput: when
+// present on a request, the card renders a free-text input and sends the typed
+// value as the decision's responseText. Today only a login_human_step kind:code
+// ask carries it (the human types an emailed/SMS login code the runner enters
+// into the page for them).
+export interface InteractionResponseInput {
+  placeholder?: string;
+  required?: boolean;
+}
+
 // InteractionRequestInner mirrors channelevents.InteractionRequestPayload —
 // the semantic request body (Lead/Body/Fields/Excerpt/Actions/Audience) that
 // replaced the per-prompt-type kind families (tool approval, credential
@@ -459,6 +502,10 @@ export interface InteractionRequestInner {
   // interaction whose capture failed (best-effort — see
   // channelevents.InteractionRequestPayload.Screenshot).
   screenshot?: InteractionScreenshot;
+  // responseInput, when set, asks the card to render a free-text input and send
+  // the typed value as the decision's responseText (a login_human_step kind:code
+  // login code). Absent for button-only interactions.
+  responseInput?: InteractionResponseInput;
 }
 
 // InteractionRequestPayload mirrors builtin.MsgInteractionRequest

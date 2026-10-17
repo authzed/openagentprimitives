@@ -93,6 +93,36 @@ func TestBuildLoginHumanStepPending_BuildsInteractionRequest(t *testing.T) {
 	require.NotNil(t, pl.ExpiresAt)
 	assert.True(t, pl.ExpiresAt.After(time.Now()))
 
+	assert.Nil(t, pl.ResponseInput, "a confirm/CAPTCHA ask (no wants_code) must carry no free-text input")
+
+	assert.NoError(t, pl.Validate())
+}
+
+// TestBuildLoginHumanStepPending_CodeAsk_SetsResponseInput proves a kind:code ask
+// (RequestCode stamps "wants_code") carries a ResponseInput, so a surface renders
+// a free-text box and sends the typed login code back as the decision's
+// ResponseText; a confirm ask (above) carries none.
+func TestBuildLoginHumanStepPending_CodeAsk_SetsResponseInput(t *testing.T) {
+	var published channelevents.Envelope
+	l := loginHumanStepLoop(approval.New(), func(_, _ string, env channelevents.Envelope) { published = env })
+	h := newRunnerHost(l, hostSession{Namespace: "ns", Name: "s"})
+
+	codeAsk := pipeline.ApprovalAsk{
+		Kind:    "login_human_step",
+		Summary: "enter the emailed code",
+		Payload: map[string]any{"prompt": "enter the emailed code", "wants_code": true},
+	}
+	reqID, err := h.PublishApproval(context.Background(), codeAsk)
+	require.NoError(t, err)
+	pa, ok := h.pending().m[reqID]
+	require.True(t, ok)
+	require.NoError(t, pa.onPublish(context.Background()))
+
+	var pl channelevents.InteractionRequestPayload
+	require.NoError(t, json.Unmarshal(published.Payload, &pl))
+	require.NotNil(t, pl.ResponseInput, "a kind:code ask must carry a free-text ResponseInput")
+	assert.NotEmpty(t, pl.ResponseInput.Placeholder)
+	assert.True(t, pl.ResponseInput.Required)
 	assert.NoError(t, pl.Validate())
 }
 

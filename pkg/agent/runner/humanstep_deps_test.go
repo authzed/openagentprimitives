@@ -92,7 +92,7 @@ func TestHumanStepRequester_RequestCode_PublishesLoginHumanStepAsk(t *testing.T)
 
 	gotJSON, merr := json.Marshal(host.gotAsk.Payload)
 	require.NoError(t, merr)
-	assert.JSONEq(t, `{"prompt":"enter the emailed code"}`, string(gotJSON))
+	assert.JSONEq(t, `{"prompt":"enter the emailed code","wants_code":true}`, string(gotJSON))
 }
 
 // TestHumanStepRequester_RequestCode_OutcomeMapping is the approve/deny/timeout

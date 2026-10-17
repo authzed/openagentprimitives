@@ -51,6 +51,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/identityadvisor"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
+	browserjudge "github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
@@ -607,6 +608,20 @@ func (h *Harness) SetBrowserFiller(fn func(rt spiceboxv1alpha1.ResolvedBrowserTo
 // before the browser session's first turn.
 func (h *Harness) SetBrowserHumanStep(fn func(loopFn func() *runner.Loop) browsertoolboxsynth.HumanStepRequester) {
 	h.runnerFactory.BrowserHumanStep = fn
+}
+
+// SetBrowserJudge installs the in-process runner factory's per-action
+// (web_action) consequence-judge seam — Phase E's E8 gate. The analogue of
+// SetBrowserFiller/SetBrowserHumanStep for classification: when set, an acting
+// call's NamedArgs stamps the web_action key/fingerprint for anything the judge
+// (after the cheap deterministic fast-path) classifies a mutate, and the
+// dispatch layer's second check requires a per-action grant on top of the
+// coarse web_host one. nil (the default, left unset by every bundle that does
+// not call this) leaves per-action classification OFF — the tool stamps no
+// web_action args and every pre-Phase-E browser bundle is unaffected. Call
+// after Start and before the browser session's first turn.
+func (h *Harness) SetBrowserJudge(fn func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browserjudge.ConsequenceJudge) {
+	h.runnerFactory.BrowserJudge = fn
 }
 
 // SetMinter installs a federation.Minter on the in-process runner

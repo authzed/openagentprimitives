@@ -208,6 +208,40 @@ type Permission struct {
 	ToolName string `json:"toolName,omitempty"`
 }
 
+// webHostResourceType is a literal mirror of
+// pkg/tools/browserschema.WebHostType, duplicated here rather than imported for
+// the same reason webActionResourceType (slot_grant.go) and
+// pkg/authz/plangate/card.go's webHostResourceType are: this is pkg/authz root,
+// and browserschema transitively imports pkg/authz (via pkg/apis/v1alpha1's
+// mcpserver_types.go), so importing it is a cycle. Must stay byte-identical to
+// browserschema.WebHostType; a runner-side test (which MAY import browserschema)
+// pins the two equal so they cannot drift.
+const webHostResourceType = "web_host"
+
+// OwnsWebActionArgs reports whether this RESOLVED permission belongs to the
+// browser ACTING tool — the only tool whose call the runner trusts to carry the
+// web_action control stamps (required / key / fingerprint / description).
+//
+// This is the fail-closed TRUST GATE for those stamps. The acting tool's own
+// NamedArgs classifies a call and stamps the four keys into its parsed view; the
+// runner lifts them into typed Inputs and uses them to mint a per-action,
+// page-fingerprint-caveated web_action grant. But a check reads NAMED args, and
+// an MCP tool implements no NamedCallArgs, so its raw, UNVALIDATED model JSON
+// flows straight through — a prompt-injected model on any MCP call could set
+// those keys and spoof the approval card's "what this does" line or mint a
+// fabricated grant for a model-chosen key/fingerprint. So the stamps are honored
+// ONLY when this predicate holds.
+//
+// The discriminator is the Check's target resource type, resolved SERVER-SIDE
+// from the tool definition and never from model input: the acting tool's coarse
+// per-host check targets web_host. This is the same trusted discriminator the
+// host-approval screenshot gate keys on (see host_approval.go). Fail-closed: a
+// nil Check (a permission that names no per-resource check at all) is not the
+// acting tool, so the keys are ignored.
+func (p Permission) OwnsWebActionArgs() bool {
+	return p.Check != nil && p.Check.ResourceType == webHostResourceType
+}
+
 // PermissionVariant is one branch of a conditional Permission. The
 // dispatcher evaluates each variant's When against the tool-call
 // args in order; the first that returns true wins.
@@ -274,6 +308,42 @@ type Result struct {
 	// would be invisible — the stored verdict would be what explains the denial
 	// while the live one is what caused it.
 	Precondition *PreconditionDenial
+
+	// ChangedPageReprompt marks an External denial that is a browser-mutate
+	// RE-PROMPT (Phase E's E10 task): a web_action per-action grant for this
+	// instance already EXISTS — a human already approved this exact action for
+	// this session — but its pagestate_matches caveat no longer matches the
+	// live page, so the call must be asked again. False for every other
+	// denial, including the ordinary "no grant yet" first-time ask: that one
+	// asks "may I do this?"; this one asks "the page changed since you
+	// approved this — still ok?", and the two read differently on the
+	// approval card (see pkg/agent/runner/host_approval.go's
+	// buildToolCallPending).
+	//
+	// Set ONLY by toolcheck.checkExternalSlotGrant's web_action leg, from a
+	// SEPARATE, uncaveated probe run purely to ANNOTATE the human-facing card
+	// — it is never consulted by the authorization decision itself, which is
+	// already final (Denied) by the time this is computed. A probe failure (a
+	// SpiceDB error, a nil response) defaults to false, the fail-QUIET
+	// direction for a cosmetic signal: at worst a genuine re-prompt renders as
+	// a plain first-time ask, never the reverse.
+	ChangedPageReprompt bool
+
+	// CoarseGrantSatisfied is true when the coarse LAYER-1 capability grant
+	// (web_host#act for a browser acting call) was already present, so this
+	// result — Allowed or Denied — came from or past the per-action LAYER-2
+	// (web_action) arm. It is FALSE on a Layer-1 denial (the coarse grant is
+	// missing). The ToolCallAuthz hook keys the web_action marker (ask.WebActionKey)
+	// on this, NOT on WebActionRequired alone: a MUTATE denied at Layer 1 (e.g.
+	// the first acting call on a host is itself a mutate) must still raise a
+	// COARSE web_host ask so channelsd writes the web_host grant and the runner
+	// upgrades it to standing — stamping WebActionKey there would make channelsd
+	// SKIP the web_host write (the Layer-2 clobber-avoidance), leaving the coarse
+	// grant unwritten and every later mutate re-denying at Layer 1 (an approval
+	// storm). Only a genuine Layer-2 denial (web_host present, web_action
+	// missing/caveat-failed) carries the marker. Set by
+	// toolcheck.checkExternalSlotGrant's web_action arm.
+	CoarseGrantSatisfied bool
 }
 
 // PreconditionDenial is the recomputed slot-precondition verdict behind a
@@ -377,6 +447,42 @@ type Inputs struct {
 	// scope.CheckScopeWithRefs, which has no caller, so SessionScope.Resources
 	// is inert here. See the NOT WIRED note on CheckScopeWithRefs.
 	SessionScope scope.Scope
+
+	// WebActionKey is the RAW (un-escaped) web_action key (E4 ActionKey) the
+	// browser acting tool stamped for a call it classified as a mutate, lifted
+	// here from the normalized arg map by BuildInputs. The web_action second
+	// check escapes it with browserschema.WebActionValueTransforms into the
+	// SpiceDB object id the per-action grant was written on. Empty for every
+	// non-mutate call and for every non-browser tool; consulted ONLY when
+	// WebActionRequired is set. Lifted into a typed field (not left in Args) so
+	// the human-facing approval card and the durable args hash never carry this
+	// internal gate key.
+	WebActionKey string
+
+	// WebActionRequired is the browser mutate flag: set when the acting tool
+	// classified this call as a mutate and so it needs the SECOND, per-action
+	// web_action#act check layered on top of the coarse web_host#act one (Phase
+	// E's E8 gate). The web_action check additionally requires the class to have
+	// DECLARED a web_action slot (web_action ∈ SlotResourceTypes); an
+	// observe/navigate/session call leaves this false and is gated on the host
+	// grant alone, exactly as before Phase E. Lifted from the normalized arg map
+	// by BuildInputs, same as WebActionKey.
+	WebActionRequired bool
+
+	// PresentedPageFingerprint is the deterministic fingerprint of the browser
+	// page AS IT LOOKS AT CALL TIME, presented as the pagestate_matches caveat's
+	// check-time context for a web_action acting check (Phase E's TOCTOU gate).
+	// The acting grant pins the fingerprint approved at bind time; this is the
+	// one the check presents to revalidate it against the live page.
+	//
+	// Consulted ONLY for a web_action check and ignored for every other resource
+	// type. The web_action check ALWAYS supplies the arg, empty or not: an empty
+	// value is a definitive DENY (the caveat's `presented_fingerprint != ""`
+	// guard refuses it), never a CONDITIONAL — only an ABSENT arg would
+	// partial-evaluate to CONDITIONAL, and the checker never omits it. E8 stamps
+	// this from the browser tool's live page state (NamedArgs); for E2 it is set
+	// directly by the caller/test.
+	PresentedPageFingerprint string
 }
 
 // SessionRef is the canonical (namespace, name) coordinate for an
@@ -412,6 +518,23 @@ type Relation struct {
 	// ExpiresAt stamps the tuple's expiry. Zero writes no expiry, which the
 	// schema accepts only for relations that do not declare `with expiration`.
 	ExpiresAt time.Time
+
+	// CaveatName, when non-empty, binds this tuple to the SpiceDB caveat of that
+	// name, carrying CaveatContext as the tuple's stored (partial) context. Empty
+	// is the common case — every uncaveated write — and renders byte-identically
+	// to a tuple with no caveat (the backend sets OptionalCaveat only when this is
+	// set), so no existing grant changes shape. Used today ONLY by a web_action
+	// acting slot grant, whose grant relation the guardian composer emits `with
+	// pagestate_matches and expiration` (Phase E's TOCTOU gate): the stored
+	// context pins the page fingerprint approved at bind time and the acting check
+	// presents the live one.
+	CaveatName string
+	// CaveatContext is the caveat's stored partial context — a map of CEL arg name
+	// to value (e.g. {"approved_fingerprint": "<fp>"}) serialized to a
+	// structpb.Struct at write time. Ignored when CaveatName is empty. A plain Go
+	// map rather than a *structpb.Struct so the backend-neutral Relation stays
+	// free of protobuf; the spicedb backend converts it in relationshipFor.
+	CaveatContext map[string]any
 }
 
 // ErrNotYetMigrated is returned by Engine methods whose implementation lands

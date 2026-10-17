@@ -53,4 +53,5 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/uiviewmodel"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/uiviewparams"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/userpreference"
+	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/webactionapproval"
 )

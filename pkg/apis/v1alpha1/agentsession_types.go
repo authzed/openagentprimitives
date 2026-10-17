@@ -874,6 +874,19 @@ type ResolvedBrowserToolbox struct {
 	// +optional
 	CatalogFingerprint string `json:"catalogFingerprint,omitempty"`
 
+	// CatalogWakeMarker records the wake-requested-at annotation value in
+	// effect when Catalog was most recently (re-)listed -- a wake-generation
+	// marker, not a timestamp to be read for its own sake. resolveBrowserCatalog
+	// compares it to the session's CURRENT wake-requested-at annotation to
+	// decide whether THIS wake has already been listed, so a wake spanning
+	// several reconciles (polling a booting browser pod to Ready) re-lists the
+	// identity backend's catalog at most once, even across reconciles where the
+	// caller's own waking signal has not yet settled back to steady-state.
+	// Empty means "never listed under this scheme" (a toolbox binding no
+	// identity, or a status predating this field).
+	// +optional
+	CatalogWakeMarker string `json:"catalogWakeMarker,omitempty"`
+
 	// BrowserPodName is the per-session browser pod's name.
 	// +optional
 	BrowserPodName string `json:"browserPodName,omitempty"`
@@ -885,8 +898,10 @@ type ResolvedBrowserToolbox struct {
 	// browser pod's gate process.
 	// +optional
 	GatePort int32 `json:"gatePort,omitempty"`
-	// TokenHash is a hash of the resolved per-session gate token; a change
-	// triggers pod replacement.
+	// TokenHash is a hash of the resolved per-session gate token. The token is
+	// read-before-mint (mintBrowserToken) and NEVER rotated, so TokenHash never
+	// changes across a session's reconciles, including reap/wake -- unlike a
+	// sidecar's credential hash, a change here does not trigger pod replacement.
 	// +optional
 	TokenHash string `json:"tokenHash,omitempty"`
 

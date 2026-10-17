@@ -67,6 +67,28 @@ func toolApprovalHandler(p *Pipeline) channelinteractions.DecisionHandler {
 				// loud here rather than let sessionscope.Get crash the handler.
 				return channelinteractions.Outcome{}, fmt.Errorf("tool approval decision: Mem not configured (programming error) (requestRef %q)", d.Payload.RequestRef)
 			}
+			if det.WebActionKey != "" {
+				// Layer-2 (browser mutate) ask: det.ResourceType/ResourceID/
+				// Permission name the ACTING tool's own coarse Permission()
+				// (web_host for every browser acting op — tc.perm in
+				// pkg/agent/runner/host_approval.go is always that, even for a
+				// web_action-triggered ask), not the resource this approval was
+				// actually about. Binding that triple here would TOUCH (replace
+				// the expiration of) an existing session-length web_host grant
+				// down to this ask's 30s external-effect TTL, silently
+				// shortening a standing approval so every later acting call on
+				// that host re-prompts — see ToolApprovalDetails.WebActionKey.
+				//
+				// The runner already mints the real, narrowly-scoped
+				// web_action grant for this ask on approve
+				// (persistWebActionApproval); skip the primary-grant write
+				// here rather than duplicate (and get wrong) it. The decision
+				// still records as Approved so interaction_applied still
+				// resolves the runner's AwaitDecision.
+				logr.FromContextOrDiscard(ctx).Info("tool approval: web_action (layer-2) ask approved; primary-grant write skipped so it cannot shorten the standing web_host grant",
+					"session", d.Session.Namespace+"/"+d.Session.Name, "requestRef", d.Payload.RequestRef, "tool", det.ToolName)
+				return channelinteractions.Outcome{Result: channelevents.OutcomeApproved}, nil
+			}
 			if det.ResourceType == "" || det.ResourceID == "" || det.Permission == "" {
 				// A call that names no instance — a sidecar/workshop tool with no
 				// resource handle (workshop_apply, observed live), an external

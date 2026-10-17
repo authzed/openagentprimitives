@@ -36,7 +36,9 @@ func (l *localListener) SubmitUserMessage(ctx context.Context, text string) (cha
 // without touching cmd/oap's call site; it should go the next time that call
 // site is edited.
 func (l *localListener) SubmitInteractionDecision(ctx context.Context, ns, name, requestRef, category, actionID string) error {
-	return l.Listener.SubmitInteractionDecision(ctx, l.Listener.Ext, ns, name, category, requestRef, actionID)
+	// The local (CLI) surface collects no free-text answer, so responseText is
+	// empty; only the browser chat surface renders a ResponseInput today.
+	return l.Listener.SubmitInteractionDecision(ctx, l.Listener.Ext, ns, name, category, requestRef, actionID, "")
 }
 
 // compile-time interface check.

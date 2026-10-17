@@ -2725,16 +2725,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				EffectiveSites:     DeriveBrowserEffectiveSites(tbSpec, identitySitesParam),
 				Catalog:            catalog,
 				CatalogFingerprint: catalogFingerprint,
-				IdentityName:       identityName,
-				GatePort:           browserGatePort,
+				// Stamped unconditionally, whether resolveBrowserCatalog relisted or
+				// carried forward: on carry-forward it already equals the prior
+				// value (resolveBrowserCatalog's alreadyListedThisWake required that
+				// equality to carry forward), so re-stamping is a no-op; on a fresh
+				// list it records the wake this catalog is now current for, so the
+				// NEXT reconcile of the same wake can carry forward instead of
+				// re-listing (see resolveBrowserCatalog's listing-cadence doc).
+				CatalogWakeMarker: sess.Annotations[spiceboxv1alpha1.AnnotationWakeRequestedAt],
+				IdentityName:      identityName,
+				GatePort:          browserGatePort,
 			}
 			// Read-before-mint: reuse an existing gate token so TokenHash — and the
 			// token the gate pod is injected from — stays byte-stable across
-			// re-reconciles and reap/wake.
+			// re-reconciles and reap/wake. Every error mintBrowserToken returns is a
+			// transient apiserver blip (see its doc comment) — requeue, don't end the
+			// session over a blip reading or creating a Secret on a wake.
 			if err := r.mintBrowserToken(ctx, &sess, &rt); err != nil {
-				return r.markBootFailed(ctx, &sess,
-					spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
-					fmt.Sprintf("mint gate token for browser %q: %v", ref.Ref, err))
+				return ctrl.Result{}, fmt.Errorf("mint gate token for browser %q: %w", ref.Ref, err)
 			}
 			rt.BrowserPodName = BrowserPodName(&sess, rt.Ref)
 			// Persistent toolboxes only: create the per-session state Secret EMPTY so
@@ -2742,12 +2750,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			// captured cookies + localStorage into. Read-before-create and never
 			// overwritten here, exactly like mintBrowserToken, so a re-reconcile and
 			// a reap/wake leave a populated Secret untouched. An ephemeral toolbox
-			// gets no state Secret at all (C-R5, spec §2.3).
+			// gets no state Secret at all (C-R5, spec §2.3). Like mintBrowserToken,
+			// every error here is a transient apiserver blip — requeue.
 			if rt.Spec.State == spiceboxv1alpha1.BrowserStatePersistent {
 				if err := r.ensureBrowserStateSecret(ctx, &sess, rt); err != nil {
-					return r.markBootFailed(ctx, &sess,
-						spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
-						fmt.Sprintf("ensure state Secret for browser %q: %v", ref.Ref, err))
+					return ctrl.Result{}, fmt.Errorf("ensure state Secret for browser %q: %w", ref.Ref, err)
 				}
 			}
 			// Stamp the NetworkPolicy BEFORE the pod exists (an enforcing CNI must
@@ -2761,9 +2768,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			}
 			podState, podErr := r.reconcileBrowserPod(ctx, &sess, rt)
 			if podErr != nil {
-				return r.markBootFailed(ctx, &sess,
-					spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
-					fmt.Sprintf("reconcile browser pod for %q: %v", ref.Ref, podErr))
+				if stderrors.Is(podErr, errBrowserPodTerminal) {
+					// Permanent: a bad pod spec (BuildBrowserPod's own validation).
+					// Retrying never fixes it.
+					return r.markBootFailed(ctx, &sess,
+						spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+						fmt.Sprintf("reconcile browser pod for %q: %v", ref.Ref, podErr))
+				}
+				// Transient: an apiserver Create/Get blip. Requeue instead of ending
+				// the session over a blip on a wake, mirroring resolveBrowserCatalog's
+				// terminal-vs-transient split 20 lines up.
+				return ctrl.Result{}, fmt.Errorf("reconcile browser pod for %q: %w", ref.Ref, podErr)
 			}
 			rt.PodFailure = podState.Failure
 			if podState.Failure != nil {
@@ -2795,8 +2810,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			}
 			resolvedBrowsers = append(resolvedBrowsers, rt)
 		}
-		sess.Status.ResolvedBrowserToolboxes = resolvedBrowsers
 	}
+	// Assigned unconditionally (even at zero browsers), NOT inside the
+	// `len(ac.Spec.BrowserToolboxes) > 0` guard above: resolvedBrowsers is
+	// declared outside that guard and stays an empty slice when the class's
+	// browser list drops to zero, so this clears status to match. Previously
+	// this assignment sat inside the guard, so a class edited down to zero
+	// browser toolboxes left stale ResolvedBrowserToolboxes entries (PodIP,
+	// catalog, token hash) on status forever — cleanupOrphanedBrowserPods below
+	// reaps the pod/netpol/ConfigMap either way, but status itself never
+	// cleared.
+	sess.Status.ResolvedBrowserToolboxes = resolvedBrowsers
 
 	// Reap browser pods whose toolbox ref has left the resolved set — a browser
 	// toolbox removed from the AgentClass mid-session. Runs unconditionally (even

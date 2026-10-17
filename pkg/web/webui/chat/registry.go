@@ -171,10 +171,27 @@ type sessionBuilderFunc func(
 // reservedAt exists only so the reaper can reclaim a slot that never received
 // an entry (see reservationTTL). Never updated: once an entry is published the
 // entry's own idle clock takes over.
+//
+// inFlight is set true for exactly the duration ONE goroutine owns wiring this
+// slot (Adopt's build call, or rehydrate's wireExistingSession call) and
+// cleared whether that wiring succeeds or fails. It is what makes "reserved,
+// entry nil" two DIFFERENT states instead of one: a wiring actively in
+// progress (inFlight=true — a concurrent attempt must back off, not race a
+// second build) versus a reservation a FAILED wiring left behind, abandoned
+// and idle (inFlight=false — safe, and necessary, to retry). Before this
+// field the two were indistinguishable, so rehydrate refused the second case
+// exactly like the first: a websocket reconnect after a failed Adopt got a
+// permanent 404 instead of a retry, for up to reservationTTL (the #59 root
+// cause — see claimForWiring).
+//
+// dropLoggedAt rate-limits acceptsSession's diagnostic log for this slot; see
+// dropLogInterval.
 type liveSlot struct {
-	subject    string
-	entry      *sessionEntry // nil while the in-process wiring is in flight
-	reservedAt time.Time
+	subject      string
+	entry        *sessionEntry // nil while the in-process wiring is in flight or abandoned
+	reservedAt   time.Time
+	inFlight     bool
+	dropLoggedAt time.Time
 }
 
 // Registry is the per-process (webd instance) live-session table for the
@@ -285,16 +302,44 @@ func (r *Registry) startRelay() error {
 	return nil
 }
 
+// dropLogInterval rate-limits acceptsSession's diagnostic log for a known,
+// reserved-but-not-live session so a slow Adopt/rehydrate wiring — or a
+// reservation an earlier failed wiring left behind, now awaiting a retry —
+// produces one line periodically rather than one per envelope on the relay's
+// single dispatch goroutine. During the #59 window every one of those
+// envelopes was dropped with ZERO log output (AGENTS.md no-silent-errors);
+// that silence is what made the stall look like nothing was happening at all.
+const dropLogInterval = 30 * time.Second
+
 // acceptsSession is the relay's pre-Get scope (outbound.Relay.Accept): whether
 // an outbound envelope for (ns, name) could possibly be delivered here. Same
 // fail-closed question entryForSession answers for the resolver methods (see
 // sender_resolver.go), asked one step earlier and off the same live-session
-// table, so the two can never disagree about which conversations exist. A
-// foreign namespace, a torn-down session, or one still mid-wiring (a nil
-// placeholder, which r.lookup reports absent) is rejected before any API call.
+// table, so the two can never disagree about which conversations exist.
+//
+// A foreign namespace or a torn-down session is rejected with no log — the
+// expected, high-volume case (every other kind's session traffic on the same
+// cluster-wide subscription). A session this process KNOWS about but has no
+// live entry for — reserved, wiring in flight, or a reservation an earlier
+// failed wiring abandoned — is ALSO rejected (there is, genuinely, nowhere to
+// deliver to yet) but is diagnosably different: it is logged, rate-limited by
+// dropLogInterval, so that window is visible instead of indistinguishable
+// from foreign traffic.
 func (r *Registry) acceptsSession(ns, name string) bool {
-	_, ok := r.lookup(sessionKey{Namespace: ns, Name: name})
-	return ok
+	key := sessionKey{Namespace: ns, Name: name}
+	r.mu.Lock()
+	slot, known := r.sessions[key]
+	live := known && slot.entry != nil
+	shouldLog := known && !live && r.now().Sub(slot.dropLoggedAt) > dropLogInterval
+	if shouldLog {
+		slot.dropLoggedAt = r.now()
+	}
+	r.mu.Unlock()
+	if shouldLog {
+		r.deps.Logger().Info("chat: dropped an outbound envelope for a reserved-but-not-yet-live session (Adopt/rehydrate wiring in flight, or awaiting a retry)",
+			"session", key.String())
+	}
+	return live
 }
 
 // onTurnActivity forwards a KindTurnActivity signal to the owning session's
@@ -365,6 +410,13 @@ func (r *Registry) reapIdle() {
 // checks, and reports whether THIS call created the reservation (so the caller
 // must release it on failure) and whether the key already holds a live entry.
 //
+// Reserve-only: it never touches inFlight, because Reserve never wires
+// anything — it is the pre-create reservation the start flow takes before it
+// has a cluster object to adopt. A caller that is about to WIRE a slot
+// (Adopt, rehydrate) uses claimForWiring instead, which folds this same
+// reserve-or-reuse decision together with claiming the exclusive right to
+// build, in one locked critical section.
+//
 // The two caps are separate refusals: the per-subject limit is the viewer's
 // own doing and closing a session fixes it; the process ceiling is the server
 // out of room, and nothing the viewer does helps. See
@@ -395,6 +447,81 @@ func (r *Registry) claimSlot(key sessionKey, subject string) (created, live bool
 	}
 	r.sessions[key] = &liveSlot{subject: subject, reservedAt: r.now()}
 	return true, false, nil
+}
+
+// wireClaim is what claimForWiring found/decided, atomically, under ONE lock
+// acquisition — folding "reserve or reuse the slot" and "claim the exclusive
+// right to wire it" into a single critical section so two concurrent callers
+// racing the same key (a rehydrate racing another rehydrate, or racing the
+// start flow's own Adopt) can never both believe they own the build. Without
+// that atomicity a check-then-act gap between claiming the slot and marking it
+// in-flight would let both through.
+type wireClaim struct {
+	created bool // this call created the slot; it alone must release it on failure
+	live    bool // slot already holds a published entry — nothing to wire
+	busy    bool // another goroutine already owns wiring this slot right now
+}
+
+// claimForWiring is claimSlot's counterpart for a caller about to WIRE a slot
+// (Adopt, rehydrate) rather than merely reserve one (Reserve never wires, so
+// it has no need of inFlight and keeps using claimSlot directly).
+//
+// The three wireClaim outcomes:
+//   - live: an entry is already published; the caller has nothing to build.
+//   - busy: the slot is reserved and ANOTHER goroutine is already wiring it
+//     right now (inFlight). The caller must back off rather than race a
+//     second build — see publish's unconditional slot.entry overwrite.
+//   - neither: the slot is either freshly created here (created=true) or was
+//     reserved-but-idle — entry nil, inFlight false, nobody wiring it. This
+//     is the #59 fix's crux: a reservation a FAILED Adopt or rehydrate left
+//     behind lands in EXACTLY this bucket (its own endWiring call already
+//     cleared inFlight), so a later caller finds it idle, not busy, and may
+//     retry the wiring rather than being refused.
+//
+// Marks inFlight=true before returning in the "neither" case; the caller MUST
+// call endWiring(key) exactly once, however the wiring ends.
+func (r *Registry) claimForWiring(key sessionKey, subject string) (wireClaim, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return wireClaim{}, ErrRegistryClosed
+	}
+	if slot, ok := r.sessions[key]; ok {
+		if slot.entry != nil {
+			return wireClaim{live: true}, nil
+		}
+		if slot.inFlight {
+			return wireClaim{busy: true}, nil
+		}
+		slot.inFlight = true
+		return wireClaim{}, nil
+	}
+	mine := 0
+	for _, slot := range r.sessions {
+		if slot.subject == subject {
+			mine++
+		}
+	}
+	if mine >= limits.perSubject {
+		return wireClaim{}, ErrTooManySessionsForSubject
+	}
+	if len(r.sessions) >= limits.total {
+		return wireClaim{}, ErrServerAtCapacity
+	}
+	r.sessions[key] = &liveSlot{subject: subject, reservedAt: r.now(), inFlight: true}
+	return wireClaim{created: true}, nil
+}
+
+// endWiring clears key's in-flight marker, whether its wiring succeeded or
+// failed. A no-op if the slot is gone (publish already removed it on a
+// Shutdown race) — see Adopt/rehydrate for why clearing after a FAILURE,
+// specifically, is what makes an abandoned reservation adoptable again.
+func (r *Registry) endWiring(key sessionKey) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if slot, ok := r.sessions[key]; ok {
+		slot.inFlight = false
+	}
 }
 
 // now is the registry's clock, indirected so a test can age a reservation
@@ -454,25 +581,37 @@ func (r *Registry) Reserve(ns, name, subject string) (release func(), err error)
 // one has the slot claimed here, under the same caps. Adopting a key this
 // process already holds a live entry for is a no-op, so a duplicate adopt
 // cannot produce two Hosts (and two health watchers) for one conversation.
+//
+// A concurrent wiring already in flight for this key (claim.busy) is refused
+// with ErrSessionUnavailable rather than raced: two builds publishing into
+// the same slot would have the second silently overwrite the first's entry at
+// publish, leaking its relay subscription and health-watcher goroutine
+// forever (nothing ever calls their stop()). See claimForWiring/wireClaim.
 func (r *Registry) Adopt(ctx context.Context, ns, name, subject string) error {
 	key := sessionKey{Namespace: ns, Name: name}
-	created, live, err := r.claimSlot(key, subject)
+	claim, err := r.claimForWiring(key, subject)
 	if err != nil {
 		return err
 	}
-	if live {
+	if claim.live {
 		return nil
+	}
+	if claim.busy {
+		return ErrSessionUnavailable
 	}
 	entry, err := r.build(ctx, r.deps, key, subject, func(tn terminalNotice) {
 		r.teardown(key, tn)
 	})
 	if err != nil {
-		if created {
+		r.endWiring(key)
+		if claim.created {
 			r.releaseSlot(key)
 		}
 		return err
 	}
-	return r.publish(key, entry)
+	err = r.publish(key, entry)
+	r.endWiring(key)
+	return err
 }
 
 // publish inserts a freshly-wired entry into its reserved slot.
@@ -624,15 +763,32 @@ func (r *Registry) interactableChatSession(ctx context.Context, key sessionKey, 
 }
 
 // rehydrate re-attaches this process to an existing chat AgentSession — one a
-// previous webd left behind, or one this webd's idle reaper dropped — by
-// rebuilding only the in-process half (Host, listener, health watcher). It
-// creates no cluster objects.
+// previous webd left behind, one this webd's idle reaper dropped, or one
+// whose own Adopt failed and left an abandoned (idle, not in-flight)
+// reservation behind — by rebuilding only the in-process half (Host,
+// listener, health watcher). It creates no cluster objects.
 //
 // Standing comes from interactableChatSession. A terminal phase is refused
 // here and ONLY here: re-attaching a finished conversation would spin up a
 // health watcher that immediately tore it down again. Reading one is a
 // different question, answered by authorizeRead — which is what keeps the
 // sidebar's "ended" rows openable.
+//
+// THE #59 FIX: claimForWiring's "neither live nor busy" bucket covers BOTH a
+// freshly-reserved key AND a reservation a failed Adopt left behind (its own
+// endWiring already cleared inFlight) — so this now retries the wiring
+// instead of refusing. Before, a reserved-but-idle slot was indistinguishable
+// from one genuinely being wired elsewhere, and both hit the SAME
+// ErrSessionNotFound: a cold desktop start exceeding the 60s
+// sessionReadyTimeout (runnerStartupGrace allows up to 5min) or a
+// refresh/navigate canceling the start POST's context both fail Adopt,
+// leaving the reservation behind per browserstart.Start's own doc
+// ("stays addressable ... will be wired on the next open" — which it did not,
+// until now). Every /ws reconnect then rehydrate->404'd, /message and
+// /decision 404'd, and only GET /messages worked (authorizeRead needs no live
+// entry) — recovery only after reservationTTL (10min) reclaimed the slot.
+// Genuinely concurrent wiring (claim.busy) now answers 503/retryable instead
+// of 404/permanent — "no answer yet", not "no such conversation".
 func (r *Registry) rehydrate(ctx context.Context, key sessionKey, subject string) (*sessionEntry, error) {
 	sess, err := r.interactableChatSession(ctx, key, subject)
 	if err != nil {
@@ -642,29 +798,44 @@ func (r *Registry) rehydrate(ctx context.Context, key sessionKey, subject string
 		return nil, ErrSessionNotFound
 	}
 
-	// Reserve the slot before the (slow) wiring, under the same two caps Adopt
-	// uses, so two concurrent requests for the same dormant session cannot each
-	// build a Host and leave two health watchers running against one
-	// conversation. The re-attacher — not the conversation's starter — is who
-	// this slot counts against (see liveSlot.subject).
-	created, live, err := r.claimSlot(key, subject)
+	// Claim the slot (or reuse an existing reservation) AND the exclusive
+	// right to wire it, atomically — under the same two caps Adopt uses — so
+	// two concurrent requests for the same dormant session cannot each build a
+	// Host and leave two health watchers running against one conversation.
+	// The re-attacher — not the conversation's starter — is who this slot
+	// counts against (see liveSlot.subject).
+	claim, err := r.claimForWiring(key, subject)
 	if err != nil {
 		return nil, err
 	}
-	if live {
+	if claim.live {
 		if existing, ok := r.lookup(key); ok {
 			return existing, nil // another goroutine won the race
 		}
 		return nil, ErrSessionNotFound
 	}
-	if !created {
-		return nil, ErrSessionNotFound // a wiring is in flight; let the caller retry
+	if claim.busy {
+		// The slot is reserved and SOMETHING is wiring it right now (another
+		// rehydrate, or the start flow's own Adopt) — not abandoned. That is
+		// "no answer yet", not "no such conversation": retryable, never 404.
+		return nil, ErrSessionUnavailable
 	}
 
 	entry, err := wireExistingSession(r.deps, key, sess, subject,
 		func(tn terminalNotice) { r.teardown(key, tn) })
 	if err != nil {
-		r.releaseSlot(key)
+		r.endWiring(key)
+		// Release ONLY a reservation this call itself created. A reused
+		// reservation (claim.created == false — left by Reserve, or by an
+		// earlier failed Adopt/rehydrate) deliberately survives: the
+		// conversation exists and is the viewer's, so it must keep counting
+		// against them until something re-attaches it or reservationTTL
+		// reclaims it (same rule browserstart.Start documents for Adopt). What
+		// changed is inFlight is now false again, so the NEXT attempt — not
+		// this one — finds it idle and retries, rather than refusing forever.
+		if claim.created {
+			r.releaseSlot(key)
+		}
 		r.deps.Logger().Info("chat: rehydrate failed to wire the session", "session", key.String(), "err", err.Error())
 		// The session EXISTS and the viewer may interact with it; the WIRING
 		// failed (unreadable bound Channel, relay could not subscribe).
@@ -672,8 +843,17 @@ func (r *Registry) rehydrate(ctx context.Context, key sessionKey, subject string
 		// 404 claiming there is no such conversation.
 		return nil, ErrSessionUnavailable
 	}
-	if err := r.publish(key, entry); err != nil {
-		return nil, err
+	// Publish BEFORE clearing inFlight — mirroring Adopt. Once the entry is
+	// published a concurrent claimForWiring sees slot.entry != nil and returns
+	// `live` (it checks entry before inFlight), so no second wiring can start.
+	// Clearing inFlight first would reopen the exact race the marker closes: a
+	// second claimForWiring in the gap would build a duplicate entry whose
+	// health-watcher goroutine publish's slot.entry overwrite then orphans
+	// forever (nothing ever calls its stop()).
+	perr := r.publish(key, entry)
+	r.endWiring(key)
+	if perr != nil {
+		return nil, perr
 	}
 	return entry, nil
 }
@@ -723,7 +903,7 @@ func (r *Registry) SubmitInterrupt(ctx context.Context, key sessionKey, subject,
 // and any future decision-kind category) via the session's browser Listener —
 // the same KindInteractionDecision envelope publish path a Slack interactive
 // click (once wired) would use. Gated exactly like SubmitMessage.
-func (r *Registry) SubmitDecision(ctx context.Context, key sessionKey, subject, category, requestRef, actionID string) error {
+func (r *Registry) SubmitDecision(ctx context.Context, key sessionKey, subject, category, requestRef, actionID, responseText string) error {
 	entry, err := r.authorize(ctx, key, subject)
 	if err != nil {
 		return err
@@ -733,7 +913,7 @@ func (r *Registry) SubmitDecision(ctx context.Context, key sessionKey, subject, 
 		return err
 	}
 	entry.touch()
-	return entry.listener.SubmitDecision(ctx, ext, category, requestRef, actionID)
+	return entry.listener.SubmitDecision(ctx, ext, category, requestRef, actionID, responseText)
 }
 
 // callerIdentity derives the ExternalIdentity to stamp on an outbound submit

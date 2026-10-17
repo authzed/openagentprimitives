@@ -41,6 +41,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
 	"github.com/authzed/openagentprimitives/pkg/agent/runner"
 	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
+	browserjudge "github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
 	sidecartoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/sidecartoolbox"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
@@ -57,11 +58,13 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/pttag"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/userpreference"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/webactionapproval"
 	"github.com/authzed/openagentprimitives/pkg/platform/artifactstore"
 	blobstore "github.com/authzed/openagentprimitives/pkg/platform/artifactstore/blob"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/directcred"
 	"github.com/authzed/openagentprimitives/pkg/tools/browserpolicy"
+	"github.com/authzed/openagentprimitives/pkg/tools/browserschema"
 	"github.com/authzed/openagentprimitives/pkg/tools/sandboxkinds/pod"
 	"github.com/authzed/openagentprimitives/test/e2e"
 	"github.com/authzed/openagentprimitives/test/testbrowser"
@@ -490,6 +493,7 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	checkPlanGate(t, h, b)
 	checkPtTags(t, h, b)
 	checkAuthz(t, h, b)
+	checkWebActionApprovals(t, h, b)
 	checkSpiceDB(t, h, b)
 	checkTranscriptLength(t, h, b)
 	checkToolsCalled(t, h, b)
@@ -984,6 +988,59 @@ func checkAuthz(t *testing.T, h *e2e.Harness, b bt.Bundle) {
 			"%q was allowed at some point; the permission boundary did not hold "+
 				"(sequence: %v)", key, got[key])
 	}
+}
+
+// checkWebActionApprovals evaluates the web_action_approval assertions
+// against the append-only audit kind (pkg/memory/kinds/webactionapproval).
+//
+// Unlike checkAuthz, this reads the actual PER-ACTION identity: see
+// bt.WebActionApprovalAssertions' doc for why the authz_decision log cannot
+// carry it (every browser acting call is recorded under its web_host
+// Permission's resource type, never the per-action web_action one the
+// dispatcher's second check actually evaluated).
+func checkWebActionApprovals(t *testing.T, h *e2e.Harness, b bt.Bundle) {
+	t.Helper()
+	wa := b.Assert.WebActionApprovals
+	if wa == nil {
+		return
+	}
+
+	ns, name := h.SessionRef()
+	ctx := memory.WithSystemApproval(context.Background(), "bronzethread")
+	recs, err := webactionapproval.List(ctx, h.MemStore(), memory.Scope{Kind: "session", ID: ns + "/" + name})
+	require.NoError(t, err, "reading the web_action_approval log")
+
+	byKey := map[string]map[string]struct{}{} // webActionKey -> set of distinct fingerprints
+	for _, r := range recs {
+		set, ok := byKey[r.WebActionKey]
+		if !ok {
+			set = map[string]struct{}{}
+			byKey[r.WebActionKey] = set
+		}
+		set[r.ApprovedFingerprint] = struct{}{}
+	}
+
+	if wa.DistinctKeys > 0 {
+		assert.Len(t, byKey, wa.DistinctKeys,
+			"distinct web_action keys approved (recorded: %v)", keysOfSet(byKey))
+	}
+	for key, want := range wa.FingerprintsForKey {
+		fps, ok := byKey[key]
+		require.True(t, ok, "no web_action_approval recorded for key %q (recorded: %v)", key, keysOfSet(byKey))
+		assert.Len(t, fps, want,
+			"distinct approved fingerprints for web_action key %q", key)
+	}
+}
+
+// keysOfSet returns the sorted keys of a map[string]map[string]struct{}, for
+// a readable failure message.
+func keysOfSet(m map[string]map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func keysOf(m map[string][]string) []string {
@@ -1789,13 +1846,18 @@ func setupBrowserFixture(t *testing.T, dir string, h *e2e.Harness, b bt.Bundle) 
 	// A bundle that carries a LOGIN_SITE marker gets the STATEFUL credentialed
 	// login site (real POST handler, session cookie, cookie-gated protected page)
 	// instead of the static site/ pages — the only way to exercise a real
-	// credentialed sign-in end to end. Every other browser bundle serves its
-	// static site/ dir exactly as before.
+	// credentialed sign-in end to end. A CONSEQUENCE_GATE_SITE marker gets the
+	// Phase E consequence-gate's own stateful site (a mutate page whose content
+	// changes on its second GET, forcing the TOCTOU fingerprint divergence).
+	// Every other browser bundle serves its static site/ dir exactly as before.
 	var hostForPolicy string
 	var port int
-	if loginSiteRequested(dir) {
+	switch {
+	case loginSiteRequested(dir):
 		_, hostForPolicy, port = testbrowser.ServeLoginSite(t)
-	} else {
+	case consequenceGateSiteRequested(dir):
+		_, hostForPolicy, port = testbrowser.ServeConsequenceGateSite(t)
+	default:
 		_, hostForPolicy, port = testbrowser.ServeSite(t, browserSitePages(t, dir))
 	}
 
@@ -1852,6 +1914,28 @@ func setupBrowserFixture(t *testing.T, dir string, h *e2e.Harness, b bt.Bundle) 
 		return fakeBrowserCredentialFetcher
 	})
 
+	// The per-action (web_action) consequence-judge seam (Phase E's E8 gate),
+	// wired ONLY when the AgentClass itself declares a web_action slot
+	// (spec.authz.slots) alongside web_host. Gating on the declared slot — not a
+	// bundle marker file — means the control follows the same capability the
+	// production resolveBrowserConsequenceJudge gate follows (SlotResourceTypes),
+	// and every browser bundle predating Phase E, which declares web_host alone,
+	// is byte-for-byte unaffected: its acting clicks still classify nothing and
+	// are gated on the coarse host grant only, exactly as before.
+	//
+	// The judge is the package's own deterministic, model-free classifier
+	// (judge.NewDeterministic) — reused as BOTH the cheap fast-path (already run
+	// unconditionally inside classifyMutate) and the "model" tier it falls back
+	// to. It never calls out to a model/network, so this is safe in a CI e2e run,
+	// and it fails closed to mutate for anything that is not positively a
+	// link-follow/search-entry/tab-switch — exactly what the gate needs to
+	// classify a confirm/submit/cancel button as a mutate deterministically.
+	if fix.referencesToolbox && agentClassDeclaresWebActionSlot(t, h, b.AgentClass) {
+		h.SetBrowserJudge(func(spiceboxv1alpha1.ResolvedBrowserToolbox) browserjudge.ConsequenceJudge {
+			return browserjudge.NewDeterministic()
+		})
+	}
+
 	// When the AgentClass actually references the toolbox, the reconciler creates
 	// a per-session browser pod and holds the runner until that pod is Ready.
 	// envtest has no kubelet, so the harness fakes that readiness; the reconciler
@@ -1884,6 +1968,16 @@ func loginSiteRequested(dir string) bool {
 	return err == nil
 }
 
+// consequenceGateSiteRequested reports whether the bundle dir carries a
+// CONSEQUENCE_GATE_SITE marker, which selects
+// testbrowser.ServeConsequenceGateSite (the Phase E stateful site whose
+// /checkout page changes content on its second GET) over the static site/
+// pages.
+func consequenceGateSiteRequested(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, "CONSEQUENCE_GATE_SITE"))
+	return err == nil
+}
+
 // agentClassReferencesBrowserToolbox reports whether the named AgentClass
 // declares any spec.browserToolboxes. The manifests are already applied by the
 // time setupBrowserFixture runs, so a direct Get is authoritative. A missing
@@ -1896,6 +1990,29 @@ func agentClassReferencesBrowserToolbox(t *testing.T, h *e2e.Harness, name strin
 		return false
 	}
 	return len(ac.Spec.BrowserToolboxes) > 0
+}
+
+// agentClassDeclaresWebActionSlot reports whether the named AgentClass's
+// spec.authz.slots names the web_action resource type — the per-action
+// revalidation gate (Phase E's E8) alongside the coarse web_host slot. Mirrors
+// agentClassReferencesBrowserToolbox's direct-Get shape; a missing class or
+// unset Authz is treated as "no slot" and left for WaitForAgentClassValid to
+// surface.
+func agentClassDeclaresWebActionSlot(t *testing.T, h *e2e.Harness, name string) bool {
+	t.Helper()
+	var ac spiceboxv1alpha1.AgentClass
+	if err := h.K8s.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, &ac); err != nil {
+		return false
+	}
+	if ac.Spec.Authz == nil {
+		return false
+	}
+	for _, sl := range ac.Spec.Authz.Slots {
+		if sl.ResourceType == browserschema.WebActionType {
+			return true
+		}
+	}
+	return false
 }
 
 // markBrowserFixtureReady stamps each toolbox into the session's status once the

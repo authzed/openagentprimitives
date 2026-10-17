@@ -56,6 +56,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/authfail"
 	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
+	browserjudge "github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
 	mcpdispatch "github.com/authzed/openagentprimitives/pkg/agent/tool/mcp"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta/capability"
@@ -315,6 +316,17 @@ type InProcessRunnerFactory struct {
 	// here (not only in internal/cmd/runner) is the "wire it in both places" rule:
 	// a future persistence bundle sets it, and the control is never silently off.
 	BrowserStateStore func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browsertoolboxsynth.StateStore
+
+	// BrowserJudge, when non-nil, supplies the consequence judge for the
+	// per-action (web_action) acting gate (Phase E's E8) — the test analogue of
+	// production's resolveBrowserConsequenceJudge. nil (the default) leaves
+	// per-action classification OFF: the tool stamps no web_action args and an
+	// acting call is gated on the coarse web_host grant alone, exactly as every
+	// pre-Phase-E browser bundle expects. A scenario that deliberately drives the
+	// per-action gate sets it to a fake (or a real) ConsequenceJudge. Wiring the
+	// seam here (not only in internal/cmd/runner) is the "wire it in both places"
+	// rule: the control is present at both Synthesize sites and never silently off.
+	BrowserJudge func(rt spiceboxv1alpha1.ResolvedBrowserToolbox) browserjudge.ConsequenceJudge
 
 	// ExtraTools, when non-empty, are appended to every spawned runner.Loop's
 	// tool set. Test seam for scenarios that need a tool the CRD-driven
@@ -1917,6 +1929,21 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		return nil, fmt.Errorf("inprocess: resolve whether this session is a delegated child: %w", err)
 	}
 
+	// loopArtifacts backs the Loop's OWN create+poll+finalize consumers
+	// (browser_screenshot.go's awaitScreenshotReady today; applyUIResource's
+	// persistWidget if a scenario ever returns a tool.Result.UIResource — none
+	// do yet). Reuse env.Artifacts when the artifacts capability was already
+	// granted (f.ArtifactStore != nil) so the two consumers share one
+	// *artifacts.Service — and so one lock map — over one memory.Memory;
+	// otherwise build the identical construction fresh, since f.MemStore
+	// (unlike f.ArtifactStore) is always non-nil.
+	loopArtifacts := env.Artifacts
+	if loopArtifacts == nil {
+		loopArtifacts = artifacts.NewService(f.MemStore, f.NewArtifactID,
+			artifacts.WithRenderNameMinter(f.NewRenderName),
+			artifacts.WithRevisionIDMinter(f.NewRevisionID))
+	}
+
 	loop = &runner.Loop{
 		Provider: f.LLM,
 		Memory:   runner.LocalMemoryAdapter(memSigned, memKey),
@@ -2029,19 +2056,29 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		// Client mirrors internal/cmd/runner/main.go's identical field: the real
 		// manager-cached client over this test's envtest apiserver (f.K8s, the
 		// SAME client the placeholder-pod and RunnerEnv.Client wiring above
-		// already use). Wiring it here is scoped to exactly one consumer this
-		// harness previously left dark: browser_screenshot.go's
-		// storeScreenshotArtifact, which fails closed ("no k8s client wired")
-		// and ships every browser approval/human-step card text-only without
-		// it. It does NOT also turn on applyUIResource's widget-persistence
-		// path (loop.go's uiResourceDeps{Client: l.Client, Artifacts:
-		// l.Artifacts, ...}) — that path gates on BOTH deps.Client AND
-		// deps.Artifacts being non-nil, and Artifacts is deliberately left
-		// unset below, so every other e2e scenario's widget behavior is
-		// unchanged by this field. nil only for a factory built directly in a
-		// unit test with no K8s set (f.K8s itself defaults to nil there),
-		// which is exactly today's pre-existing fallback.
+		// already use). Wiring it here (together with Artifacts, below) is
+		// scoped to exactly one consumer this harness previously left dark:
+		// browser_screenshot.go's storeScreenshotArtifact. nil only for a
+		// factory built directly in a unit test with no K8s set (f.K8s itself
+		// defaults to nil there), which is exactly today's pre-existing
+		// fallback.
 		Client: f.K8s,
+		// Artifacts is loopArtifacts, built above. storeScreenshotArtifact
+		// polls the ArtifactRender CR to Ready — driven, for a bronzethread
+		// run, by threadrun's runArtifactRenders controller stand-in (the SAME
+		// real artifactrender.Reconciler internal/cmd/operator runs, polled
+		// against h.K8s — see test/e2e/threadrun/driver.go) — then calls
+		// FinalizeRevision, which is what pkg/memory/spicedbauthorizer.Authorizer
+		// hooks to write the artifact:<id>#parent SpiceDB relationship the chat
+		// UI's /artifact-download fetch needs (Task #54). Without a non-nil
+		// Artifacts here, storeScreenshotArtifact fails closed ("no artifacts
+		// service wired") regardless of Client, and ships every browser
+		// approval/human-step card text-only. This also makes
+		// applyUIResource's widget-persistence path reachable in principle
+		// (it previously was not, Artifacts having been left nil on purpose) —
+		// inert in every scenario today, since none return a
+		// tool.Result.UIResource, so no other e2e behavior changes.
+		Artifacts: loopArtifacts,
 
 		// LabelStore is the same instance threaded into every MCPTool
 		// in buildMCPTools above. The Loop's approval-emit path
@@ -3368,7 +3405,15 @@ func (f *InProcessRunnerFactory) synthBrowserToolbox(sess *spiceboxv1alpha1.Agen
 	if f.BrowserStateStore != nil {
 		store = f.BrowserStateStore(rt)
 	}
-	built, err := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch, humanStep, store)
+	// The consequence judge for the per-action gate: nil unless a scenario wires
+	// the seam, which leaves classification off and the coarse web_host gate alone
+	// (the pre-Phase-E posture every current bundle expects). Same fake/real-seam-
+	// wired-by-test shape as BrowserFiller/BrowserHumanStep/BrowserStateStore.
+	var consequenceJudge browserjudge.ConsequenceJudge
+	if f.BrowserJudge != nil {
+		consequenceJudge = f.BrowserJudge(rt)
+	}
+	built, err := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages, fetch, humanStep, store, consequenceJudge)
 	if err != nil {
 		return nil, fmt.Errorf("buildBrowserTools: browser %q: %w", rt.Ref, err)
 	}

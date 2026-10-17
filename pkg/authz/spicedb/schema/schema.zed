@@ -31,6 +31,21 @@ caveat token_value_matches(presented_value_hash string, authorized_value_hash st
     presented_value_hash == authorized_value_hash
 }
 
+// pagestate_matches authorizes a web_action grant only while the page's
+// deterministic fingerprint still matches the one captured at approval — the
+// TOCTOU revalidation for browser acting (Phase E). The guardian composer emits
+// web_action's slot_grant_act relation as `with pagestate_matches and
+// expiration`, so this must be live at compose time (exactly as check_hash is).
+//
+// The `presented_fingerprint != ""` guard is a SECURITY invariant, not a
+// convenience: a MISSING fingerprint DENIES, never allows. Without it the empty
+// string would match an equally-empty approved fingerprint, silently
+// authorizing acting on a page nobody fingerprinted. Deterministic CEL only;
+// the model judge never lives here.
+caveat pagestate_matches(approved_fingerprint string, presented_fingerprint string) {
+    presented_fingerprint != "" && approved_fingerprint == presented_fingerprint
+}
+
 // infoleakage_resource_match scopes an infoleakage_grant to a specific
 // accessed-resource identity. resource_type / resource_id correspond to the
 // infoleakagetaint memory kind's TaintRecord fields.

@@ -74,6 +74,12 @@ func TestSchemaHasCriticalDefinitions(t *testing.T) {
 		"caveat infoleakage_resource_match",
 		"definition externaltoken {}",
 		"caveat token_value_matches",
+		// pagestate_matches is the TOCTOU revalidation caveat for browser acting
+		// (Phase E): the guardian composer emits web_action's slot_grant_act as
+		// `with pagestate_matches and expiration`, so the caveat MUST be live in
+		// the scaffold or that composed relation references an undefined caveat
+		// and SpiceDB refuses the whole cluster schema at WriteSchema.
+		"caveat pagestate_matches",
 		// github_user binds a GitHub account to a platform user; sole_user is
 		// written only while exactly one platform subject claims that account,
 		// and is what repository roles will traverse (agentsession membership
@@ -102,6 +108,23 @@ func TestSchemaHasCriticalDefinitions(t *testing.T) {
 	} {
 		require.Contains(t, authzschema.Schema, want, "canonical schema missing %q", want)
 	}
+}
+
+// TestSchema_DeclaresPagestateMatchesCaveat pins the pagestate_matches caveat
+// and its exact body. The `presented_fingerprint != ""` guard is a SECURITY
+// invariant, not a convenience: it makes a MISSING fingerprint DENY, never
+// allow — so a web_action grant cannot be exercised when the checker could not
+// produce a page fingerprint at all. Dropping that guard would turn the empty
+// string into a value that an equally-empty approved fingerprint matches,
+// silently authorizing acting on a page nobody fingerprinted. Deterministic CEL
+// only: the model judge never lives here.
+func TestSchema_DeclaresPagestateMatchesCaveat(t *testing.T) {
+	assert.Contains(t, authzschema.Schema,
+		"caveat pagestate_matches(approved_fingerprint string, presented_fingerprint string)",
+		"the caveat signature the guardian composer references must be present with both params")
+	assert.Contains(t, authzschema.Schema,
+		`presented_fingerprint != "" && approved_fingerprint == presented_fingerprint`,
+		"the empty-fingerprint-denies guard is a security invariant — a missing fingerprint must never match")
 }
 
 // TestSchema_DeclaresTheAgentSentinel pins the agent sentinel to the

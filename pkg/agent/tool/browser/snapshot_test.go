@@ -9,6 +9,8 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/authzed/openagentprimitives/pkg/agent/tool/browser/judge"
 )
 
 // axVal builds an AXValue carrying the JSON-encoded string axValueString decodes
@@ -60,8 +62,8 @@ func TestBuildSnapshotSuppressesBlankedSubtree(t *testing.T) {
 	nodes := blankingTree()
 
 	// Blanked: the child's value-bearing line is gone; the input line stays but
-	// redacted; neither secret appears.
-	lines, refs := buildSnapshot(nodes, 0, map[int64]bool{200: true})
+	// redacted; neither secret appears. gen=1 so refs are "s1e1", "s1e2", ...
+	lines, refs := buildSnapshot(nodes, 0, 1, map[int64]bool{200: true})
 	out := renderOutline(lines)
 	assert.NotContains(t, out, "childsecret", "a blanked node's value-child must be suppressed entirely")
 	assert.NotContains(t, out, "ownsecret", "a blanked node's own value must be redacted")
@@ -71,15 +73,64 @@ func TestBuildSnapshotSuppressesBlankedSubtree(t *testing.T) {
 	require.Len(t, lines, 2, "root + the (redacted) input only — the value-child line is gone")
 	assert.True(t, lines[1].blanked)
 	assert.Empty(t, lines[1].value, "a blanked node carries no value")
-	_, hasChildRef := refs["e3"]
+	_, hasChildRef := refs["s1e3"]
 	assert.False(t, hasChildRef, "a suppressed descendant gets no ref")
 
 	// Not blanked: everything renders, both values present.
-	lines2, _ := buildSnapshot(nodes, 0, map[int64]bool{})
+	lines2, _ := buildSnapshot(nodes, 0, 1, map[int64]bool{})
 	out2 := renderOutline(lines2)
 	assert.Contains(t, out2, "ownsecret")
 	assert.Contains(t, out2, "childsecret")
 	assert.Len(t, lines2, 3, "root + input + value-child all render when nothing is blanked")
+}
+
+// TestBuildSnapshotGenerationScopedRefs proves refs carry the generation nonce
+// in their names and that two snapshots of the SAME tree under DIFFERENT
+// generations produce DISJOINT ref names. That disjointness is the structural
+// property behind the concurrent-dispatch fix: a parallel read re-minting refs
+// between a tool call's classify (NamedArgs) and its execute advances the
+// generation, so the model's older ref is simply absent from the current map
+// and resolves stale — never silently rebound to a different element at the
+// same index.
+func TestBuildSnapshotGenerationScopedRefs(t *testing.T) {
+	nodes := blankingTree()
+	_, refs7 := buildSnapshot(nodes, 0, 7, map[int64]bool{})
+	_, refs8 := buildSnapshot(nodes, 0, 8, map[int64]bool{})
+
+	require.NotEmpty(t, refs7)
+	require.Equal(t, len(refs7), len(refs8), "same tree ⇒ same ref count, only the generation prefix differs")
+
+	for name := range refs7 {
+		assert.True(t, strings.HasPrefix(name, "s7e"), "gen-7 ref %q must be s7e-prefixed", name)
+		_, collides := refs8[name]
+		assert.False(t, collides, "gen-7 ref %q must not resolve against the gen-8 map (an older ref can never rebind)", name)
+	}
+	for name := range refs8 {
+		assert.True(t, strings.HasPrefix(name, "s8e"), "gen-8 ref %q must be s8e-prefixed", name)
+	}
+}
+
+// TestInterestingRoleMintsSelectionAndTabRoles proves the role-vocabulary fix:
+// the selection-control roles and tab are ref-minted AND carry their REAL AX
+// role as the display role, so the consequence judge's benign recognizers can
+// fire on them. Before this, interestingRole folded every control into a generic
+// bucket (textbox/button/text), judge.Action.Role could never be radio/checkbox/
+// option/tab, and isSelectionToggle/isTabSwitch were dead code — forcing a model
+// to click a control's LABEL instead of the control and over-gating the toggle.
+func TestInterestingRoleMintsSelectionAndTabRoles(t *testing.T) {
+	// selection roles: display role must equal the AX role AND be exactly what
+	// judge.IsSelectionRole (the descriptor + isSelectionToggle's set) recognizes.
+	for _, role := range []string{"radio", "checkbox", "option", "menuitemradio", "menuitemcheckbox"} {
+		disp, ok := interestingRole(role)
+		require.True(t, ok, "%s must be an interesting (ref-minted) role", role)
+		assert.Equal(t, role, disp, "%s must carry its real AX role, not a folded bucket", role)
+		assert.True(t, judge.IsSelectionRole(disp),
+			"the display role %q must be one the judge treats as a selection toggle", disp)
+	}
+	// tab is minted as "tab" so judge.isTabSwitch (which keys on Role=="tab") fires.
+	disp, ok := interestingRole("tab")
+	require.True(t, ok, "tab must be an interesting (ref-minted) role")
+	assert.Equal(t, "tab", disp)
 }
 
 // TestRenderLineValueFormatting documents the three render forms on one line.

@@ -52,7 +52,7 @@ const newChatSessionNamespace = "default"
 type sessionListener interface {
 	SubmitUserMessage(ctx context.Context, ext channelkinds.ExternalIdentity, text, requestID string) (channelkinds.InboundDecision, error)
 	SubmitInterrupt(ctx context.Context, ext channelkinds.ExternalIdentity, requestID string) error
-	SubmitDecision(ctx context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID string) error
+	SubmitDecision(ctx context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID, responseText string) error
 	SubmitResurface(ctx context.Context) error
 }
 
@@ -65,7 +65,7 @@ type sessionListener interface {
 type channelListener interface {
 	SubmitUserMessage(ctx context.Context, ext channelkinds.ExternalIdentity, text, requestID string) (channelkinds.InboundDecision, error)
 	SubmitInterrupt(ctx context.Context, ext channelkinds.ExternalIdentity, ns, name, requestID string) error
-	SubmitInteractionDecision(ctx context.Context, ext channelkinds.ExternalIdentity, ns, name, category, requestRef, actionID string) error
+	SubmitInteractionDecision(ctx context.Context, ext channelkinds.ExternalIdentity, ns, name, category, requestRef, actionID, responseText string) error
 	SubmitResurface(ctx context.Context, ns, name string) error
 }
 
@@ -88,8 +88,8 @@ func (b *boundListener) SubmitInterrupt(ctx context.Context, ext channelkinds.Ex
 	return b.l.SubmitInterrupt(ctx, ext, b.ns, b.sessionName, requestID)
 }
 
-func (b *boundListener) SubmitDecision(ctx context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID string) error {
-	return b.l.SubmitInteractionDecision(ctx, ext, b.ns, b.sessionName, category, requestRef, actionID)
+func (b *boundListener) SubmitDecision(ctx context.Context, ext channelkinds.ExternalIdentity, category, requestRef, actionID, responseText string) error {
+	return b.l.SubmitInteractionDecision(ctx, ext, b.ns, b.sessionName, category, requestRef, actionID, responseText)
 }
 
 func (b *boundListener) SubmitResurface(ctx context.Context) error {
@@ -556,6 +556,20 @@ func waitForSessionReady(ctx context.Context, k8s client.Client, ns, name string
 // per-session memory-token Secret before giving up; sessionReadyPollInterval
 // is how often it re-checks. Consts rather than the test-tunable vars the
 // watchdog uses below, because no test needs to shrink the readiness wait.
+//
+// This is deliberately SHORTER than runnerStartupGrace (5min) below, which
+// acknowledges a cold bring-up can legitimately take minutes (image pull,
+// scheduling, a refused-then-retried pod). Adopt runs synchronously inside
+// the start route's HTTP request (browserstart.Start), so widening this to
+// match runnerStartupGrace would hold that request — and the browser's own
+// fetch — open for up to 5 minutes, which trades a rare, now-recoverable
+// Adopt failure for a routinely slow one. Instead, a timeout here is no
+// longer a dead end: browserstart.Start's own doc already treats an Adopt
+// failure as expected ("stays addressable ... wired on the next open"), and
+// registry.rehydrate now (the #59 fix) actually DELIVERS that promise — a
+// websocket reconnect finds the abandoned reservation idle, not permanently
+// 404, and retries the wiring itself. So the 60s/5min mismatch costs a brief,
+// bounded retry instead of a correctness bug.
 const (
 	sessionReadyTimeout      = 60 * time.Second
 	sessionReadyPollInterval = 1 * time.Second

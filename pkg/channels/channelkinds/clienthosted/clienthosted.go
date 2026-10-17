@@ -90,7 +90,7 @@ func (l *Listener) SubmitUserMessage(_ context.Context, ext channelkinds.Externa
 // ext is stamped as Decider, supplied per call rather than read from l.Ext. A
 // wrong Decider here is not cosmetic: DeciderPolicy validates standing against
 // it, so it decides whose authority the decision is evaluated under.
-func (l *Listener) SubmitInteractionDecision(_ context.Context, ext channelkinds.ExternalIdentity, ns, name, category, requestRef, actionID string) error {
+func (l *Listener) SubmitInteractionDecision(_ context.Context, ext channelkinds.ExternalIdentity, ns, name, category, requestRef, actionID, responseText string) error {
 	if l.Deps.NATSPublish == nil {
 		return fmt.Errorf("%s listener: no NATS publish wired", l.Kind)
 	}
@@ -99,6 +99,12 @@ func (l *Listener) SubmitInteractionDecision(_ context.Context, ext channelkinds
 		Category:        category,
 		RequestRef:      requestRef,
 		ActionID:        actionID,
+		// ResponseText is the free-text answer the decider typed (a
+		// login_human_step kind:code login code). It rides ONLY this inbound
+		// submission to the runner; it is never broadcast to other tabs (the
+		// outbound applied frame zeroes it — see browser/interaction.go). Empty
+		// for every button-only decision.
+		ResponseText: responseText,
 		Decider: channelevents.ExternalIdentity{
 			Kind:       ext.Kind,
 			ExternalID: ext.ExternalID,

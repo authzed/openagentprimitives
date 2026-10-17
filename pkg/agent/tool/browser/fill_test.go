@@ -45,7 +45,7 @@ func browserFillFixture(t *testing.T) (tools []agenttool.Tool, ff *fakeFetcher, 
 	}}
 	ff = &fakeFetcher{}
 	var err error
-	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, ff.fetch(), nil, nil)
+	tools, err = Synthesize(fx.rt, fx.gateURL, chromeToken, false, ff.fetch(), nil, nil, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, tools)
 	sess = tools[0].(*browserTool).sess
@@ -53,14 +53,14 @@ func browserFillFixture(t *testing.T) (tools []agenttool.Tool, ff *fakeFetcher, 
 	return tools, ff, sess, fx.siteBase
 }
 
-// refByName finds the first [eN] ref whose outline line contains name.
+// refByName finds the first [s<gen>e<N>] ref whose outline line contains name.
 func refByName(t *testing.T, tools []agenttool.Tool, name string) string {
 	t.Helper()
 	res := run(t, toolBy(t, tools, "find"), map[string]any{"text": name})
 	require.False(t, res.IsError, "find %q: %s", name, res.Content)
 	for _, line := range strings.Split(res.Content, "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "[e") {
+		if !strings.HasPrefix(line, "[") {
 			continue
 		}
 		if end := strings.IndexByte(line, ']'); end > 1 {
@@ -75,8 +75,15 @@ func TestTypeFillsCredentialsWithoutLeaking(t *testing.T) {
 	tools, ff, sess, siteBase := browserFillFixture(t)
 	require.False(t, run(t, toolBy(t, tools, "navigate"), map[string]any{"url": siteBase + "/"}).IsError)
 
-	userRef := refByName(t, tools, "UsernameField")
-	passRef := refByName(t, tools, "PasswordField")
+	// Both refs must come from ONE snapshot: refs are generation-scoped, and each
+	// read/find re-mints under a fresh generation, so capturing one ref per find
+	// (two finds) would leave the first stale. A real caller reads once and acts
+	// on every ref from that single generation; type does not re-mint, so both
+	// stay live across the two type calls below.
+	read := run(t, toolBy(t, tools, "read"), map[string]any{})
+	require.False(t, read.IsError, "read: %s", read.Content)
+	userRef := refForRoleAndName(t, read.Content, "textbox", "UsernameField")
+	passRef := refForRoleAndName(t, read.Content, "textbox", "PasswordField")
 
 	typeTool := toolBy(t, tools, "type")
 
