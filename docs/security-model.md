@@ -336,17 +336,19 @@ carries its own gating.
 
 Implemented in: `pkg/agent/tool/meta/capability`
 
-### A separate sandbox for every tool
+### Isolated sandboxes, credentials injected per tool
 
-**Each tool runs in its own sandbox and holds only its own credentials.**
+**Tools run in sandboxes kept independent from the agent, and a credential is
+injected only for the specific tool that needs it. Different tools do not see
+credentials for other tools.**
 
 Credentials are the most valuable thing an attacker can take from an agent, and
-the surest protection is to never put one where it is not needed. Giving each
-tool its own sandbox means a credential lives only beside the code that uses it.
-If one tool is tricked or compromised, the damage stops at what that tool could
-already do; it cannot read another tool's token or reach another system with it.
-The orchestrating agent directs its tools without ever holding their
-credentials.
+the surest protection is to never put one where it is not needed. Each tool runs
+in its own sandbox, separate from the runner, and the broker injects a
+credential only into the calls of the tool that uses it. The model directs its
+tools without ever seeing their credentials. A tool here can be a tool bundle:
+the operations in one bundle talk to the same service, so they share one sandbox
+and the credentials for that service.
 
 Sessions also get network policies. Enforcement is L3/L4: a network mode of
 `none` denies all egress, and `allowlist` permits DNS plus coarse TCP. A
@@ -354,9 +356,9 @@ hostname-level allowlist is recorded on session status for a DNS-aware policy
 controller to consume, and is deliberately not claimed as enforced by OAP
 itself.
 
-| Typical agent platform                                             | OAP                                                        |
-| ------------------------------------------------------------------ | ---------------------------------------------------------- |
-| Tools share one sandbox, so every tool can reach every token in it | Each tool is walled off and cannot borrow another's access |
+| Typical agent platform                                                     | OAP                                                                        |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Tokens sit in the agent's environment, visible to the model and every tool | Each call gets only its own tool's credential, and the model never sees it |
 
 Implemented in: `pkg/tools/sandboxkinds`,
 `pkg/controllers/agentsession/netpol.go`
@@ -624,9 +626,9 @@ Implemented in: `pkg/platform/oap`, `cmd/oap/internal/agentcmd`
 
 To misuse an OAP agent, an attacker has to get past a plan a human approved, a
 slot that cannot be reopened, a tool lens that cannot be widened, an
-authorization check on every call, and a sandbox that never held the credential
-in the first place. No single one of these is sufficient on its own, which is
-the point: each assumes the others may fail.
+authorization check on every call, and a sandbox, while the model itself never
+sees a credential. No single one of these is sufficient on its own, which is the
+point: each assumes the others may fail.
 
 ## Related reading
 

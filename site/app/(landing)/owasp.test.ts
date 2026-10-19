@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { anchorIds } from "@/lib/links";
-import { OWASP, coverageSummary } from "./owasp";
+import { COVERAGE_LABEL, OWASP, coverageSummary } from "./owasp";
 
 // The landing table builds each row's link as /docs/owasp-top10#<id>, which
 // the static link check cannot follow. Pin it here instead.
@@ -27,7 +27,7 @@ describe("coverageSummary", () => {
     expect(coverageSummary(OWASP)).toBe(
       [
         counts.substantial && `${counts.substantial} substantial`,
-        counts.partial && `${counts.partial} partial`,
+        counts.partial && `${counts.partial} in progress`,
         counts.na && `${counts.na} architectural N/A`,
       ]
         .filter(Boolean)
@@ -44,7 +44,7 @@ describe("coverageSummary", () => {
         ["C", "c", "substantial", ""],
         ["D", "d", "partial", ""],
       ],
-      "1 substantial · 2 partial · 1 architectural N/A",
+      "1 substantial · 2 in progress · 1 architectural N/A",
     ],
     [
       "a level with no rows is left out",
@@ -52,10 +52,24 @@ describe("coverageSummary", () => {
         ["A", "a", "substantial", ""],
         ["B", "b", "partial", ""],
       ],
-      "1 substantial · 1 partial",
+      "1 substantial · 1 in progress",
     ],
     ["no rows at all yields an empty caption", [], ""],
   ] as const)("%s", (_name, rows, want) =>
     expect(coverageSummary(rows)).toBe(want),
   );
+});
+
+describe("COVERAGE_LABEL", () => {
+  it("names each level the way the table column shows it", () => {
+    expect(COVERAGE_LABEL).toEqual({
+      substantial: "Substantial",
+      partial: "In progress",
+      na: "Architectural N/A",
+    });
+  });
+
+  it("captions the landing table as 4 substantial · 6 in progress", () => {
+    expect(coverageSummary(OWASP)).toBe("4 substantial · 6 in progress");
+  });
 });
