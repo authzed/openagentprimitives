@@ -338,15 +338,17 @@ Implemented in: `pkg/agent/tool/meta/capability`
 
 ### Isolated sandboxes, credentials injected per tool
 
-**Tools run in sandboxes apart from the agent, and a credential is injected only
-for the tool that needs it.**
+**Tools run in sandboxes kept independent from the agent, and a credential is
+injected only for the specific tool that needs it. Different tools do not see
+credentials for other tools.**
 
 Credentials are the most valuable thing an attacker can take from an agent, and
-the surest protection is to never put one where it is not needed. A session's
-tools run in sandboxes separate from the runner, one per tool bundle, and the
-broker injects a credential only into the call of the tool that uses it. The
-model directs its tools without ever seeing their credentials. Tools in the same
-bundle share a sandbox, so separation between tools is per bundle.
+the surest protection is to never put one where it is not needed. Each tool runs
+in its own sandbox, separate from the runner, and the broker injects a
+credential only into the calls of the tool that uses it. The model directs its
+tools without ever seeing their credentials. A tool here can be a tool bundle:
+the operations in one bundle talk to the same service, so they share one sandbox
+and the credentials for that service.
 
 Sessions also get network policies. Enforcement is L3/L4: a network mode of
 `none` denies all egress, and `allowlist` permits DNS plus coarse TCP. A
