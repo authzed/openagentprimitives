@@ -22,8 +22,10 @@ type artifactViewProps struct {
 	HostURL       string `json:"hostUrl"`
 	ContentURL    string `json:"contentUrl"`    // raw render URL; empty alongside an empty HostURL
 	SandboxOrigin string `json:"sandboxOrigin"` // bare scheme://host; "" means "no bridge"
-	BackLink      string `json:"backLink"`      // deep link back to the originating thread; "" when unsigned
-	ChannelKind   string `json:"channelKind"`   // originating channel kind for the thread icon; "" ⇒ generic
+	// OriginLinks are the "back to origin" links derived from the session's
+	// channel bindings (a GitHub PR, a Slack thread) — one per distinct origin,
+	// input first. Always an array (never null) so the client can map over it.
+	OriginLinks []OriginLink `json:"originLinks"`
 	// Interactions lists the session_views interaction kinds this session's
 	// class grants (e.g. ["user_message"]) — empty when the capability is
 	// absent/inactive. The client shows the chat/annotator only when this is
@@ -45,7 +47,7 @@ type artifactViewProps struct {
 // token, and returns props for the React shell. Failures return a
 // *webui.PageError so the framework renders a styled system page.
 //
-// Every session-scoped lookup below (ChannelKind, ArtifactMeta, SessionViews,
+// Every session-scoped lookup below (OriginLinks, ArtifactMeta, SessionViews,
 // ResolveRender) takes its (ns, sess) from the binding, so the shell's props —
 // including the Ns/Name the client stamps onto its /interact posts — can only
 // ever name the session the artifact actually lives in.
@@ -56,14 +58,22 @@ func shellPageBuild(av Deps) func(context.Context, *http.Request) (any, webui.Pa
 			return nil, webui.PageMeta{}, denial.pageError()
 		}
 		artifactID, ns, sess, sessionRef := b.artifactID, b.ns, b.sess, b.sessionRef()
-		// Best-effort: the thread-link icon depends on the originating channel
-		// kind. A lookup failure is non-fatal — the client falls back to a
-		// generic icon when channelKind is "".
-		channelKind, ckErr := av.ChannelKind(ctx, ns, sess)
-		if ckErr != nil {
-			av.Logger().Error(ckErr, "artifactview page: ChannelKind errored; falling back to generic icon",
-				"sessionRef", sessionRef)
-			channelKind = ""
+		// "Back to origin" links derived from the session's channel bindings are
+		// SESSION-scoped data — a private Slack thread permalink (team/channel
+		// IDs, the fact a DM exists), a private-repo PR URL — so they are gated
+		// exactly like the other session mirrors: only a session PARTICIPANT
+		// (CheckInteract, via mirrorsAllowed) sees them. CheckView admitted this
+		// page, but it is a strict superset of interact, so a platform admin or,
+		// on an org-visible session, any authenticated user reaches it without
+		// being in the conversation — and must not be handed the origin. A
+		// best-effort lookup (OriginLinks never errors), coerced to a non-nil
+		// slice so the bootstrap JSON is always an array the client can map over.
+		var originLinks []OriginLink
+		if b.mirrorsAllowed(ctx, av, webui.SubjectFromContext(ctx)) {
+			originLinks = av.OriginLinks(ctx, ns, sess)
+		}
+		if originLinks == nil {
+			originLinks = []OriginLink{}
 		}
 		title, description := artifactID, ""
 		if name, desc, merr := av.ArtifactMeta(ctx, ns, sess, artifactID); merr != nil {
@@ -112,8 +122,7 @@ func shellPageBuild(av Deps) func(context.Context, *http.Request) (any, webui.Pa
 			// it must be the bare scheme://host — and "" when the configured value
 			// is not one, which the client reads as "no bridge", not "any origin".
 			SandboxOrigin: sandboxOrigin(av),
-			BackLink:      b.backLink,
-			ChannelKind:   channelKind,
+			OriginLinks:   originLinks,
 			Interactions:  interactions,
 			Ns:            ns,
 			Name:          sess,

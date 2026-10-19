@@ -21,7 +21,7 @@ func TestMinter_DownloadLink(t *testing.T) {
 	base := "https://webd.example.com"
 	m := &Minter{Signer: signer, WebdBaseURL: func() string { return base }}
 
-	u, err := m.MintArtifactDownloadLink("art-abc", "default/sess-1", identity.RawSubject("user:alice"), "")
+	u, err := m.MintArtifactDownloadLink("art-abc", "default/sess-1", identity.RawSubject("user:alice"))
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(u, base+"/artifact-download?d="), "must point at the download endpoint")
 	assert.Contains(t, u, "&sig=")
@@ -42,7 +42,7 @@ func TestMinter_DownloadLink(t *testing.T) {
 // external origin is wired yet.
 func TestMinter_DownloadLink_EmptyBaseSkips(t *testing.T) {
 	m := &Minter{Signer: passthroughlink.New(make([]byte, 32)), WebdBaseURL: func() string { return "" }}
-	u, err := m.MintArtifactDownloadLink("art-abc", "default/sess-1", identity.RawSubject("user:alice"), "")
+	u, err := m.MintArtifactDownloadLink("art-abc", "default/sess-1", identity.RawSubject("user:alice"))
 	require.NoError(t, err)
 	assert.Empty(t, u)
 }
@@ -65,8 +65,7 @@ func TestMinter_HappyPath(t *testing.T) {
 	sessionRef := "default/sess-1"
 	subject := identity.RawSubject("user:alice")
 
-	backLink := "https://example.slack.com/archives/C1/p170?thread_ts=170&cid=C1"
-	u, err := m.MintArtifactViewLink(artifactID, sessionRef, subject, backLink)
+	u, err := m.MintArtifactViewLink(artifactID, sessionRef, subject)
 	require.NoError(t, err, "MintArtifactViewLink should succeed")
 	assert.True(t, strings.HasPrefix(u, base+"/artifact-view?"), "URL must start with base+/artifact-view?")
 	assert.Contains(t, u, "d=", "URL must contain d= query param")
@@ -90,7 +89,6 @@ func TestMinter_HappyPath(t *testing.T) {
 	// Explicit aud assertion: the minter must set aud=webd even though the
 	// signer was constructed with WithAudience(AudienceIdentityd).
 	assert.Equal(t, passthroughlink.AudienceWebd, p.Audience, "Audience must be webd, not identityd")
-	assert.Equal(t, backLink, p.BackLink, "BackLink round-trips through the minted link")
 }
 
 // TestMinter_SubjectVerified_VerifiedEmail verifies that minting with a
@@ -105,7 +103,7 @@ func TestMinter_SubjectVerified_VerifiedEmail(t *testing.T) {
 	}
 
 	principal := identity.VerifiedEmail("alice@example.com", "")
-	u, err := m.MintArtifactViewLink("art-1", "ns/sess-1", principal, "")
+	u, err := m.MintArtifactViewLink("art-1", "ns/sess-1", principal)
 	require.NoError(t, err)
 
 	after, ok := strings.CutPrefix(u, base+"/artifact-view?d=")
@@ -133,7 +131,7 @@ func TestMinter_SubjectVerified_Unverified(t *testing.T) {
 	}
 
 	principal := identity.FromExternal("local", "", "alice", "").AllowSynthetic()
-	u, err := m.MintArtifactViewLink("art-1", "ns/sess-1", principal, "")
+	u, err := m.MintArtifactViewLink("art-1", "ns/sess-1", principal)
 	require.NoError(t, err)
 
 	after, ok := strings.CutPrefix(u, base+"/artifact-view?d=")
@@ -156,7 +154,7 @@ func TestMinter_EmptyBaseURL(t *testing.T) {
 		WebdBaseURL: func() string { return "" },
 	}
 
-	u, err := m.MintArtifactViewLink("art-1", "ns/sess", identity.RawSubject(""), "")
+	u, err := m.MintArtifactViewLink("art-1", "ns/sess", identity.RawSubject(""))
 	require.NoError(t, err, "empty base URL must return nil error (clean skip)")
 	assert.Empty(t, u, "empty base URL must return empty URL string")
 }
@@ -170,7 +168,7 @@ func TestMinter_TrailingSlash(t *testing.T) {
 		WebdBaseURL: func() string { return "https://webd.example.com/" },
 	}
 
-	u, err := m.MintArtifactViewLink("art-1", "ns/sess", identity.RawSubject("").AllowSynthetic(), "")
+	u, err := m.MintArtifactViewLink("art-1", "ns/sess", identity.RawSubject("").AllowSynthetic())
 	require.NoError(t, err)
 	assert.False(t, strings.Contains(u, "//artifact-view"), "double-slash must be stripped; got %q", u)
 }
@@ -184,7 +182,7 @@ func TestMinter_EmptyArtifactID(t *testing.T) {
 		WebdBaseURL: func() string { return "https://webd.example.com" },
 	}
 
-	_, err := m.MintArtifactViewLink("", "ns/sess", identity.RawSubject(""), "")
+	_, err := m.MintArtifactViewLink("", "ns/sess", identity.RawSubject(""))
 	require.Error(t, err, "empty artifactID must return an error")
 	assert.Contains(t, err.Error(), "artifactID")
 }

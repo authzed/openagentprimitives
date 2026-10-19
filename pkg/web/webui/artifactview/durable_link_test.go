@@ -47,9 +47,9 @@ func durableLinkRequest(t *testing.T, sessionRef, artifactID string) *http.Reque
 func TestDurableLink_ComposedURLResolvesForAnAuthorizedViewer(t *testing.T) {
 	av := fakeAV()
 	var verifyLinkCalled bool
-	av.verifyLink = func(raw string) (string, string, string, error) {
+	av.verifyLink = func(raw string) (string, string, error) {
 		verifyLinkCalled = true
-		return "", "", "", assert.AnError
+		return "", "", assert.AnError
 	}
 	var gotArtifactID, gotSubject string
 	av.checkView = func(ctx context.Context, artifactID, subject string) (bool, error) {

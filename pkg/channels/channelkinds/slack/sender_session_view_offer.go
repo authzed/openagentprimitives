@@ -80,9 +80,9 @@ func (s *sessionViewOfferSender) Send(ctx context.Context, sess channelkinds.Ses
 	// No per-viewer identity is available in this proactive path (unlike
 	// live_view_offer's click handler, which mints fresh per clicker): the
 	// session-view page enforces its own CheckInteract at open time, so the
-	// subject/backLink args below are accepted for interface parity only and
-	// have no bearing on who may actually open the link.
-	url, err := s.minter.MintSessionViewLink(p.SessionRef, identity.Principal{}, "")
+	// subject arg below is accepted for interface parity only and has no
+	// bearing on who may actually open the link.
+	url, err := s.minter.MintSessionViewLink(p.SessionRef, identity.Principal{})
 	if err != nil {
 		return channelkinds.SubChannelSendResult{}, fmt.Errorf("session_view_offer sender: mint link: %w", err)
 	}

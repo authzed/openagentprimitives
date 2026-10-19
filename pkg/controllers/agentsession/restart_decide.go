@@ -200,11 +200,19 @@ func BuildChildSession(parent *spiceboxv1alpha1.AgentSession, pr *spiceboxv1alph
 // forkChildBinding derives a restart-fork child's copy of one ChannelBinding.
 // Returns nil for a nil binding. The child gets its own subject prefix and
 // records its predecessor via InheritFrom. On a branching fork (restart-from-
-// here) thread_ts is dropped from a deep-copied External so the Slack sender
-// posts at channel level and the returned ts becomes the new thread root
-// (first-send capture); every other External key survives. An inherit fork
-// keeps thread_ts so the child resumes the same thread. Shared by the input and
-// output bindings — both branch the same way.
+// here) thread_ts AND permalink are dropped from a deep-copied External so the
+// Slack sender posts at channel level and the returned ts becomes the new
+// thread root (first-send capture); every other External key survives. An
+// inherit fork keeps them so the child resumes the same thread. Shared by the
+// input and output bindings — both branch the same way.
+//
+// permalink is dropped alongside thread_ts because it is the canonical link to
+// the PARENT thread (resolved when that thread was first rooted). A branching
+// child lives in a different thread, so carrying the parent's permalink would
+// make the child's artifact-view "back to origin" link point at the wrong
+// conversation until — and, if the child's first-send getPermalink fails,
+// permanently past — its own first send. Dropping it lets OriginLink fall back
+// to reconstructing the child's own thread deep-link from the new thread_ts.
 func forkChildBinding(cb *spiceboxv1alpha1.ChannelBinding, parentName, childSubjectPrefix string, branchesThread bool) *spiceboxv1alpha1.ChannelBinding {
 	if cb == nil {
 		return nil
@@ -215,7 +223,7 @@ func forkChildBinding(cb *spiceboxv1alpha1.ChannelBinding, parentName, childSubj
 	if branchesThread && len(copied.External) > 0 {
 		ext := make(map[string]string, len(copied.External))
 		for k, v := range copied.External {
-			if k != "thread_ts" {
+			if k != "thread_ts" && k != "permalink" {
 				ext[k] = v
 			}
 		}

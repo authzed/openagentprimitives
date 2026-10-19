@@ -25,6 +25,6 @@ func newWebdSessionViewMinter(trustedURLGet func() string) *webdSessionViewMinte
 	return &webdSessionViewMinter{trustedURLGet: trustedURLGet}
 }
 
-func (m *webdSessionViewMinter) MintSessionViewLink(sessionRef string, _ identity.Principal, _ string) (string, error) {
+func (m *webdSessionViewMinter) MintSessionViewLink(sessionRef string, _ identity.Principal) (string, error) {
 	return channelkinds.ComposeSessionViewURL(m.trustedURLGet(), sessionRef)
 }

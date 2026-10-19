@@ -36,7 +36,7 @@ type stubSessionViewMinter struct {
 	err error
 }
 
-func (m *stubSessionViewMinter) MintSessionViewLink(_ string, _ identity.Principal, _ string) (string, error) {
+func (m *stubSessionViewMinter) MintSessionViewLink(_ string, _ identity.Principal) (string, error) {
 	return m.url, m.err
 }
 

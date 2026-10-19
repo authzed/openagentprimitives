@@ -1065,6 +1065,18 @@ func (r *Relay) patchOutputChannel(ctx context.Context, sess *spiceboxv1alpha1.A
 		return nil
 	}
 	key := fmt.Sprintf("thread:%s:%s", channelID, threadTS)
+	// The canonical thread permalink (chat.getPermalink), when the Sender
+	// resolved one on this first-root send, rides the same patch as the
+	// thread_ts it is derived from — webd reads it off the binding for the
+	// artifact-view "back to origin" link. Omitted (never written empty) when
+	// resolution failed: this patch runs once per thread root (the thread_ts
+	// guard above blocks re-patching the same thread), so a failed permalink is
+	// not backfilled for this thread — the artifact view falls back to a thread
+	// link reconstructed from channel_id/thread_ts instead.
+	extPatch := map[string]string{"channel_id": channelID, "thread_ts": threadTS}
+	if pl := captured["permalink"]; pl != "" {
+		extPatch["permalink"] = pl
+	}
 	// Patch BOTH spec.outputChannel.{key,external} AND
 	// metadata.labels[LabelOutputChannelKey] in a single MergePatch so
 	// the index label is in sync with the spec atomically — there is no
@@ -1079,11 +1091,8 @@ func (r *Relay) patchOutputChannel(ctx context.Context, sess *spiceboxv1alpha1.A
 		},
 		"spec": map[string]any{
 			"outputChannel": map[string]any{
-				"key": key,
-				"external": map[string]string{
-					"channel_id": channelID,
-					"thread_ts":  threadTS,
-				},
+				"key":      key,
+				"external": extPatch,
 			},
 		},
 	}
@@ -1112,6 +1121,9 @@ func (r *Relay) patchOutputChannel(ctx context.Context, sess *spiceboxv1alpha1.A
 	}
 	mergedExternal["channel_id"] = channelID
 	mergedExternal["thread_ts"] = threadTS
+	if pl := captured["permalink"]; pl != "" {
+		mergedExternal["permalink"] = pl
+	}
 	sess.Spec.OutputChannel.External = mergedExternal
 	sess.Spec.OutputChannel.Key = key
 
@@ -1172,6 +1184,10 @@ func (r *Relay) patchInputChannelThreadTS(ctx context.Context, sess *spiceboxv1a
 		return nil
 	}
 	key := fmt.Sprintf("thread:%s:%s", channelID, threadTS)
+	extPatch := map[string]string{"channel_id": channelID, "thread_ts": threadTS}
+	if pl := captured["permalink"]; pl != "" {
+		extPatch["permalink"] = pl
+	}
 	// Patch spec.inputChannel.external AND LabelChannelKey atomically so
 	// the inbound pipeline's label lookup sees the new thread root without
 	// a window where the key is set but the label isn't (or vice versa).
@@ -1183,11 +1199,8 @@ func (r *Relay) patchInputChannelThreadTS(ctx context.Context, sess *spiceboxv1a
 		},
 		"spec": map[string]any{
 			"inputChannel": map[string]any{
-				"key": key,
-				"external": map[string]string{
-					"channel_id": channelID,
-					"thread_ts":  threadTS,
-				},
+				"key":      key,
+				"external": extPatch,
 			},
 		},
 	}

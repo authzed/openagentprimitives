@@ -9,7 +9,7 @@ import (
 // Deps is the artifact viewer's dependency interface. internal/cmd/webd's concrete deps
 // value implements it; the WebUI casts webui.Deps to this.
 type Deps interface {
-	VerifyLink(raw string) (artifactID, sessionRef, backLink string, err error)
+	VerifyLink(raw string) (artifactID, sessionRef string, err error)
 	CheckView(ctx context.Context, artifactID, subject string) (bool, error)
 	// CheckInteract is agentsession#interact — session MEMBERSHIP, which
 	// CheckView is a strict superset of (`view = parent->interact +
@@ -25,10 +25,14 @@ type Deps interface {
 	// agent-supplied title/summary). Both empty (with nil error) when the head
 	// has no name/description — the shell falls back to the artifact id.
 	ArtifactMeta(ctx context.Context, ns, sess, artifactID string) (name, description string, err error)
-	// ChannelKind returns the AgentSession's input-channel kind (e.g. "slack"),
-	// used to pick the thread-link icon in the live-view toolbar. Returns ""
-	// (with nil error) when the kind is unknown.
-	ChannelKind(ctx context.Context, ns, sess string) (string, error)
+	// OriginLinks returns the de-duplicated, input-first set of "back to origin"
+	// links for the session — a GitHub pull request, a Slack thread — each
+	// derived from a channel binding by that kind's OriginLinkProvider. Empty for
+	// a kubectl-driven session, or one whose bound kinds expose no origin link.
+	// Never errors: a lookup failure degrades to fewer links and is logged by the
+	// implementation. Read at page build so it reflects whatever the session's
+	// bindings currently carry, rather than anything baked into a link.
+	OriginLinks(ctx context.Context, ns, sess string) []OriginLink
 	// SessionViews returns the granted session_views.interactions for the
 	// session's AgentClass — the interaction kinds a browser view of this session
 	// may submit (e.g. "user_message"). Nil when the capability is absent,
@@ -115,6 +119,18 @@ type Deps interface {
 	TrustedOrigin() string
 	SandboxBaseURL() string
 	Logger() logr.Logger
+}
+
+// OriginLink is one "back to where this came from" link shown in the
+// artifact-view toolbar: the Href to open, the Label the UI renders as its
+// tooltip, and an Icon key naming the glyph. Label and Icon are supplied by the
+// originating kind's OriginLinkProvider — the artifactview package and its UI
+// never branch on the channel kind, they render what the kind chose. Built by
+// Deps.OriginLinks from the session's channel bindings.
+type OriginLink struct {
+	Href  string `json:"href"`
+	Label string `json:"label"`
+	Icon  string `json:"icon"`
 }
 
 // StatusSnapshot mirrors the session's presentation status for the live-view.

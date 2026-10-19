@@ -195,6 +195,19 @@ type TriggerOwnerProvider interface {
 	TriggerOwnerSubject(ch *spiceboxv1alpha1.Channel, event string, body []byte) (subject string, ok bool, err error)
 }
 
+// TriggerOriginURLProvider is an OPTIONAL WebhookReceiver capability — the same
+// type-assertion shape as TriggerOwnerProvider — that derives a human-facing
+// origin URL from a VERIFIED delivery (a pull request's html_url), so the
+// session's input binding can record where the trigger came from and webd's
+// artifact-view page can link back to it. The URL is a provider-supplied
+// STRUCTURAL field (GitHub's own html_url), host-correct for GitHub Enterprise
+// where reconstructing a github.com URL would be wrong. Best-effort: ok=false
+// when the delivery names no such URL, and the channelsd inbound handler starts
+// the session without the link rather than failing.
+type TriggerOriginURLProvider interface {
+	TriggerOriginURL(ch *spiceboxv1alpha1.Channel, event string, body []byte) (url string, ok bool, err error)
+}
+
 // TriggerSlotInstance is one resource id a verified webhook delivery names,
 // paired with the resource type a class slot's fillFrom must match it
 // against. A slot binds it only when the slot's own resourceType agrees —

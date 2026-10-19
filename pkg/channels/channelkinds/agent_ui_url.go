@@ -45,8 +45,8 @@ func ComposeAgentUIURL(base, sessionRef string) (string, error) {
 // NO signed capability and NO TTL: the shell authorizes at open time, so the
 // link is durable and safe to bake into a message at post time.
 //
-// It takes only the sessionRef — a subject and backLink would be embedded
-// nowhere. Nil means webd is not configured for this process; senders decide
+// It takes only the sessionRef — a subject would be embedded nowhere. Nil
+// means webd is not configured for this process; senders decide
 // whether that is a quiet skip or a loud failure, per how central the offer is
 // to their surface.
 type AgentUIMinter interface {

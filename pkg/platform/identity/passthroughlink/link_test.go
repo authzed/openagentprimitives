@@ -218,32 +218,6 @@ func TestMintVerify_ArtifactViewLink(t *testing.T) {
 	assert.Equal(t, PurposeArtifactView, p.Purpose)
 }
 
-// TestMintVerify_BackLinkRoundTrips guards the optional, opaque BackLink
-// claim used by artifact_view links to carry a "back to origin" URL.
-func TestMintVerify_BackLinkRoundTrips(t *testing.T) {
-	s := New(make([]byte, 32))
-	const back = "https://example.slack.com/archives/C1/p1700000000000100?thread_ts=1700000000.000100&cid=C1"
-	raw, err := s.Mint(Payload{
-		Purpose:    PurposeArtifactView,
-		ArtifactID: "art-1",
-		SessionRef: "ns/sess",
-		BackLink:   back,
-		ExpiresAt:  time.Now().Add(time.Hour).Unix(),
-	})
-	require.NoError(t, err, "Mint")
-
-	p, err := s.Verify(raw)
-	require.NoError(t, err, "Verify")
-	assert.Equal(t, back, p.BackLink, "BackLink round-trips through Mint→Verify")
-
-	// Empty BackLink must be omitted from the wire (omitempty).
-	raw2, err := s.Mint(Payload{ExpiresAt: time.Now().Add(time.Hour).Unix()})
-	require.NoError(t, err, "Mint without BackLink")
-	p2, err := s.Verify(raw2)
-	require.NoError(t, err, "Verify without BackLink")
-	assert.Empty(t, p2.BackLink, "absent BackLink decodes to empty string")
-}
-
 // TestVerify_RejectsMissingJTI guards that a signed token whose payload lacks
 // a jti is rejected. Mint always sets jti, so a jti-less token cannot have come
 // from a legitimate minter (a buggy/forged minter, or a hand-rolled token). We

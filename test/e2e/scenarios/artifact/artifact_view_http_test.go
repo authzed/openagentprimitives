@@ -407,20 +407,20 @@ type composedAVDeps struct {
 // VerifyLink — real: verify the channelsd→webd link (iss=channelsd, aud=webd),
 // require the artifact_view purpose + artifactId/sessionRef. Mirrors
 // internal/cmd/webd/main.go's artifactViewDeps.VerifyLink.
-func (d *composedAVDeps) VerifyLink(raw string) (string, string, string, error) {
+func (d *composedAVDeps) VerifyLink(raw string) (string, string, error) {
 	p, err := d.cookieSigner.Verify(raw,
 		passthroughlink.WithExpectedIssuer(passthroughlink.IssuerChannelsd),
 		passthroughlink.WithExpectedAudience(passthroughlink.AudienceWebd))
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	if p.Purpose != passthroughlink.PurposeArtifactView {
-		return "", "", "", errLinkPurpose
+		return "", "", errLinkPurpose
 	}
 	if p.ArtifactID == "" || p.SessionRef == "" {
-		return "", "", "", errLinkMissingRefs
+		return "", "", errLinkMissingRefs
 	}
-	return p.ArtifactID, p.SessionRef, p.BackLink, nil
+	return p.ArtifactID, p.SessionRef, nil
 }
 
 // CheckView — real: the exact gate internal/cmd/webd calls. Strips the user: prefix
@@ -442,8 +442,8 @@ func (d *composedAVDeps) CheckInteract(ctx context.Context, ns, sess, subject st
 func (d *composedAVDeps) ArtifactMeta(_ context.Context, _, _, _ string) (string, string, error) {
 	return "", "", nil // no name → shell falls back to the artifact id
 }
-func (d *composedAVDeps) ChannelKind(_ context.Context, _, _ string) (string, error) {
-	return "", nil // no thread-link icon needed for this auth test
+func (d *composedAVDeps) OriginLinks(_ context.Context, _, _ string) []artifactview.OriginLink {
+	return nil // no origin links needed for this auth test
 }
 func (d *composedAVDeps) ResolveRender(_ context.Context, _, _, _ string) (string, error) {
 	return "ar-1", nil

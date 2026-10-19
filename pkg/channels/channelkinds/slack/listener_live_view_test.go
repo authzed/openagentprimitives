@@ -17,21 +17,21 @@ import (
 // recordingMinter implements channelkinds.ArtifactViewMinter, recording the
 // args it was called with and returning canned results.
 type recordingMinter struct {
-	gotArtifact, gotSession, gotBackLink string
-	gotSubject                           identity.Subject
-	gotSubjectVerified                   bool
-	url                                  string
-	err                                  error
-	called                               bool
+	gotArtifact, gotSession string
+	gotSubject              identity.Subject
+	gotSubjectVerified      bool
+	url                     string
+	err                     error
+	called                  bool
 }
 
-func (m *recordingMinter) MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal, backLink string) (string, error) {
+func (m *recordingMinter) MintArtifactViewLink(artifactID, sessionRef string, subject identity.Principal) (string, error) {
 	m.called = true
 	subj, err := subject.Subject()
 	if err != nil {
 		return "", err
 	}
-	m.gotArtifact, m.gotSession, m.gotSubject, m.gotBackLink = artifactID, sessionRef, subj, backLink
+	m.gotArtifact, m.gotSession, m.gotSubject = artifactID, sessionRef, subj
 	m.gotSubjectVerified = subject.EmailVerified()
 	return m.url, m.err
 }
@@ -93,53 +93,32 @@ func TestHandleLiveViewClick(t *testing.T) {
 		value            liveViewButtonValue
 		minter           *recordingMinter
 		nilMinter        bool
-		permalink        string
-		permErr          error
 		postEphemeralErr error
 		check            func(t *testing.T, l *slackListener, c *fakeSlackClient, m *recordingMinter, handled bool, err error)
 	}{
 		{
-			name:      "happy path: mints fresh, posts ephemeral Open button with back-link",
-			value:     goodValue(),
-			minter:    &recordingMinter{url: freshURL},
-			permalink: "https://example.slack.com/archives/C01/p170?thread_ts=170&cid=C01",
+			name:   "happy path: mints fresh, posts ephemeral Open button",
+			value:  goodValue(),
+			minter: &recordingMinter{url: freshURL},
 			check: func(t *testing.T, l *slackListener, c *fakeSlackClient, m *recordingMinter, handled bool, err error) {
 				require.NoError(t, err)
 				assert.True(t, handled, "click must be handled")
 				require.True(t, m.called, "minter must be called")
 				assert.Equal(t, "art-1", m.gotArtifact)
 				assert.Equal(t, "default/sess-1", m.gotSession)
-				assert.Equal(t, "https://example.slack.com/archives/C01/p170?thread_ts=170&cid=C01", m.gotBackLink, "fresh mint carries the permalink back-link")
-				require.Len(t, c.getPermalinkCalls, 1, "getPermalink called once")
-				assert.Equal(t, "C01", c.getPermalinkCalls[0].Channel)
-				assert.Equal(t, "1700000000.000100", c.getPermalinkCalls[0].Ts, "permalink uses the thread ts")
 				require.Len(t, c.postEphemeralCalls, 1, "one ephemeral to the clicker")
 				assert.Equal(t, "U_CLICKER", c.postEphemeralCalls[0].userID)
 				assert.Equal(t, "C01", c.postEphemeralCalls[0].channelID)
 			},
 		},
 		{
-			name:    "permalink failure: still mints with empty back-link",
-			value:   goodValue(),
-			minter:  &recordingMinter{url: freshURL},
-			permErr: errors.New("channel_not_found"),
-			check: func(t *testing.T, l *slackListener, c *fakeSlackClient, m *recordingMinter, handled bool, err error) {
-				require.NoError(t, err)
-				assert.True(t, handled)
-				require.True(t, m.called, "mint still happens")
-				assert.Empty(t, m.gotBackLink, "back-link omitted when getPermalink fails")
-				require.Len(t, c.postEphemeralCalls, 1, "Open button still posted")
-			},
-		},
-		{
-			name:   "no thread_ts: skips permalink, mints, posts ephemeral",
+			name:   "no thread_ts: still mints, posts ephemeral",
 			value:  liveViewButtonValue{V: "live_view", A: "art-1", S: "default/sess-1", C: "C01", T: ""},
 			minter: &recordingMinter{url: freshURL},
 			check: func(t *testing.T, l *slackListener, c *fakeSlackClient, m *recordingMinter, handled bool, err error) {
 				require.NoError(t, err)
 				assert.True(t, handled)
-				assert.Empty(t, c.getPermalinkCalls, "no permalink call without a thread ts")
-				assert.Empty(t, m.gotBackLink)
+				require.True(t, m.called)
 				require.Len(t, c.postEphemeralCalls, 1)
 			},
 		},
@@ -198,7 +177,7 @@ func TestHandleLiveViewClick(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &fakeSlackClient{getPermalinkResult: tc.permalink, getPermalinkErr: tc.permErr, postEphemeralErr: tc.postEphemeralErr}
+			c := &fakeSlackClient{postEphemeralErr: tc.postEphemeralErr}
 			deps := channelkinds.Deps{}
 			if !tc.nilMinter {
 				deps.ArtifactViewMinter = tc.minter

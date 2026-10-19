@@ -14,7 +14,7 @@ import (
 // caller maps it to the same 403 "link invalid or expired" as a bad signature.
 var errNoViewParams = errors.New("artifactview: no signed link and no artifactId+sessionRef params")
 
-// resolveViewParams resolves the (artifactID, sessionRef, backLink) for an
+// resolveViewParams resolves the (artifactID, sessionRef) for an
 // artifact-view request from EITHER of the two ways this page can be
 // addressed:
 //
@@ -33,10 +33,9 @@ var errNoViewParams = errors.New("artifactview: no signed link and no artifactId
 //
 // On the signed path a bad signature is a hard error — it does NOT fall through
 // to the durable path. Otherwise both artifactId and sessionRef must be
-// non-empty; backLink is "" for the durable path, which names no originating
-// thread. Every caller still runs CheckView on the result before serving
+// non-empty. Every caller still runs CheckView on the result before serving
 // anything.
-func resolveViewParams(av Deps, q url.Values) (artifactID, sessionRef, backLink string, err error) {
+func resolveViewParams(av Deps, q url.Values) (artifactID, sessionRef string, err error) {
 	// A genuine signed link ALWAYS carries both d and sig, so require both to
 	// select the signed branch. A stray/partial d-or-sig on an otherwise-durable
 	// request then falls through to the artifactId/sessionRef params (still
@@ -46,9 +45,9 @@ func resolveViewParams(av Deps, q url.Values) (artifactID, sessionRef, backLink 
 	}
 	artifactID, sessionRef = q.Get("artifactId"), q.Get("sessionRef")
 	if artifactID == "" || sessionRef == "" {
-		return "", "", "", errNoViewParams
+		return "", "", errNoViewParams
 	}
-	return artifactID, sessionRef, "", nil
+	return artifactID, sessionRef, nil
 }
 
 // urlsFor mints ONE content-capability token for a render and returns both the
