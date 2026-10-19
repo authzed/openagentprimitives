@@ -350,6 +350,43 @@ func TestEngineRefreshFarNameListsAvailableWithoutGuessing(t *testing.T) {
 	assert.Equal(t, 0, flow.called)
 }
 
+// TestEngineRefreshNonInteractiveRejected: --refresh re-runs an interactive
+// flow, which --non-interactive forbids — the combination is rejected up front
+// rather than reaching the flow and failing with a false "not set up yet".
+func TestEngineRefreshNonInteractiveRejected(t *testing.T) {
+	builtins.Reset()
+	flow := &recordingFlow{}
+	builtins.Register(flow)
+	c := newClient(t)
+
+	out := &strings.Builder{}
+	req := newRunRequest("my-bot", []string{"cli:gh"}, strings.NewReader(""), out)
+	req.RefreshCredential = "github-token"
+	req.NonInteractive = true
+	err := setup.Run(context.Background(), c, req)
+	require.Error(t, err, "--refresh + --non-interactive must be rejected")
+	assert.Contains(t, err.Error(), "--non-interactive")
+	assert.Equal(t, 0, flow.called, "rejected before any flow runs")
+}
+
+// TestEngineForceNonInteractiveRejected: --force is the same contradiction with
+// --non-interactive and gets the same up-front guard.
+func TestEngineForceNonInteractiveRejected(t *testing.T) {
+	builtins.Reset()
+	flow := &recordingFlow{}
+	builtins.Register(flow)
+	c := newClient(t)
+
+	out := &strings.Builder{}
+	req := newRunRequest("my-bot", []string{"cli:gh"}, strings.NewReader(""), out)
+	req.Force = true
+	req.NonInteractive = true
+	err := setup.Run(context.Background(), c, req)
+	require.Error(t, err, "--force + --non-interactive must be rejected")
+	assert.Contains(t, err.Error(), "--non-interactive")
+	assert.Equal(t, 0, flow.called, "rejected before any flow runs")
+}
+
 func TestEngineMaskedTokenInOutput(t *testing.T) {
 	// Run engine against cli:gh with a stub builtin that stores a
 	// sufficiently long bearer token. Assert stdout contains the masked form.

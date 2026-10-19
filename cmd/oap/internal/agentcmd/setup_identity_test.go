@@ -201,9 +201,10 @@ func TestAgentSetupIdentity_RefreshUnknownNameSuggests(t *testing.T) {
 	assert.Contains(t, err.Error(), "github-token", "the suggestion names the real credential")
 }
 
-// TestAgentSetupIdentity_OnlyFilterSkipsNonMatching verifies that --only
-// filters the target list so unmatched entries are skipped (no-op).
-func TestAgentSetupIdentity_OnlyFilterSkipsNonMatching(t *testing.T) {
+// TestAgentSetupIdentity_OnlyMatchesNoTargetErrors verifies that an --only
+// value matching no target is reported as an error (almost always a typo),
+// naming the valid targets, rather than exiting cleanly having done nothing.
+func TestAgentSetupIdentity_OnlyMatchesNoTargetErrors(t *testing.T) {
 	browsertest.Record(t)
 
 	ts := makeGhToolspec("gh-readonly")
@@ -211,16 +212,16 @@ func TestAgentSetupIdentity_OnlyFilterSkipsNonMatching(t *testing.T) {
 	c := aptest.IdentityClientBuilder(t).WithObjects(ac, ts).Build()
 
 	var out strings.Builder
-	// --only with a non-matching value → all targets filtered out → success with no credentials created.
-	require.NoError(t,
-		runAgentSetupIdentity(context.Background(), &out, io.Discard,
-			strings.NewReader("ghp_xxxx\n"), c, "default", "my-class", "",
-			"toolspec:does-not-exist", "", false, identitycmd.SetupOptions{}),
-		"runAgentSetupIdentity")
+	err := runAgentSetupIdentity(context.Background(), &out, io.Discard,
+		strings.NewReader("ghp_xxxx\n"), c, "default", "my-class", "",
+		"toolspec:does-not-exist", "", false, identitycmd.SetupOptions{})
+	require.Error(t, err, "an --only value matching no target must error, not silently no-op")
+	assert.Contains(t, err.Error(), "matched no target")
+	assert.Contains(t, err.Error(), "toolspec:gh-readonly", "the error names the valid target(s)")
 
-	// No AgentIdentity should have been created (nothing was processed).
+	// Nothing should have been created.
 	var ai spiceboxv1alpha1.AgentIdentity
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "my-bot"}, &ai); err == nil {
-		assert.Empty(t, ai.Spec.Credentials, "expected no credentials when --only filter matched nothing")
+	if gerr := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "my-bot"}, &ai); gerr == nil {
+		assert.Empty(t, ai.Spec.Credentials, "expected no credentials when --only matched no target")
 	}
 }

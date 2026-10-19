@@ -151,20 +151,45 @@ func Run(ctx context.Context, c client.Client, req RunRequest) error {
 	// command supplies it; this only substitutes plain text for a caller with none.
 	req.Theme = req.styles()
 
+	// --refresh and --force both re-run a credential's interactive setup flow,
+	// which --non-interactive forbids the prompts for. The combinations
+	// contradict, so reject them up front: otherwise the run reaches the flow,
+	// the non-interactive presenter refuses the first unanswered screen, and the
+	// user sees "<name> is not set up yet" — false for a credential being
+	// force-re-run — with a non-zero exit instead of a clear reason.
+	if req.NonInteractive && req.RefreshCredential != "" {
+		return fmt.Errorf("setup: --refresh re-runs %q's interactive setup, which --non-interactive forbids; "+
+			"drop --non-interactive", req.RefreshCredential)
+	}
+	if req.NonInteractive && req.Force {
+		return errors.New("setup: --force re-runs setup flows interactively, which --non-interactive forbids; drop one of them")
+	}
+
 	// A single credential is often required by several targets. seen dedups by
 	// credential across the whole run, so each one is provisioned — and printed —
 	// exactly once, not once per referencing target.
 	seen := map[string]bool{}
 	// --refresh scoping. Inert (every method a no-op, errors nil) when the flag
-	// was not given, so a run without it behaves exactly as before.
-	refresh := &refreshFilter{want: req.RefreshCredential}
+	// was not given, so a run without it behaves exactly as before. only is
+	// carried so an unmatched --refresh error can name the --only scope that
+	// narrowed the candidates.
+	refresh := &refreshFilter{want: req.RefreshCredential, only: req.OnlyMatch}
+	onlyMatched := false
 	for _, t := range req.Targets {
 		if req.OnlyMatch != "" && t != req.OnlyMatch {
 			continue
 		}
+		onlyMatched = true
 		if err := runOne(ctx, c, req, t, seen, refresh); err != nil {
 			return err
 		}
+	}
+	// An --only that matched no target is almost always a typo: fail naming the
+	// valid targets rather than exit cleanly having silently done nothing. Checked
+	// before the --refresh error below, because a mistyped --only is the root
+	// cause when both would otherwise fire.
+	if req.OnlyMatch != "" && !onlyMatched {
+		return fmt.Errorf("setup: --only %q matched no target; targets are %s", req.OnlyMatch, strings.Join(req.Targets, ", "))
 	}
 	// A --refresh that named no credential the run actually iterated is a typo,
 	// not a no-op: fail with the nearest matches so the user learns nothing was

@@ -27,6 +27,7 @@ import (
 // and records whether that name was ever seen.
 type refreshFilter struct {
 	want       string
+	only       string          // the --only scope that narrowed candidates, for error context
 	matched    bool
 	candidates []string        // distinct credential names seen, in encounter order
 	seen       map[string]bool // dedups candidates by name
@@ -36,9 +37,16 @@ type refreshFilter struct {
 func (f *refreshFilter) active() bool { return f != nil && f.want != "" }
 
 // consider records name as a candidate (deduped) and reports whether this
-// credential's flow should run: true only for the one named — and, because the
-// filter is active, that one is then forced. When the filter is inert it
-// records nothing and returns true, so a run without --refresh is unchanged.
+// credential's flow should run: true only for the FIRST requirement matching
+// the named credential — and, because the filter is active, that one is then
+// forced. When the filter is inert it records nothing and returns true, so a
+// run without --refresh is unchanged.
+//
+// The engine dedups requirements on name|provider, so the same credential name
+// required through two different providers reaches consider twice. Only the
+// first is run: without --refresh the second would be skipped as already set up
+// by the first, so returning false here keeps --refresh from prompting twice
+// and having the second store overwrite the first.
 func (f *refreshFilter) consider(name string) bool {
 	if !f.active() {
 		return true
@@ -51,6 +59,9 @@ func (f *refreshFilter) consider(name string) bool {
 		f.candidates = append(f.candidates, name)
 	}
 	if name == f.want {
+		if f.matched {
+			return false // already handled under the first provider; don't prompt again
+		}
 		f.matched = true
 		return true
 	}
@@ -66,12 +77,19 @@ func (f *refreshFilter) unmatchedErr() error {
 	if !f.active() || f.matched {
 		return nil
 	}
+	// Name the --only scope when set: it narrowed the candidate set before this
+	// filter saw any credential, so a correct --refresh name can still land here
+	// because --only filtered out the target that carried it.
+	scope := ""
+	if f.only != "" {
+		scope = fmt.Sprintf(" within --only %q", f.only)
+	}
 	if len(f.candidates) == 0 {
-		return fmt.Errorf("setup: --refresh %q: this identity's setup requires no credentials", f.want)
+		return fmt.Errorf("setup: --refresh %q: no credentials to refresh%s", f.want, scope)
 	}
 	avail := append([]string(nil), f.candidates...)
 	sort.Strings(avail)
-	msg := fmt.Sprintf("setup: no credential named %q to refresh", f.want)
+	msg := fmt.Sprintf("setup: no credential named %q to refresh%s", f.want, scope)
 	if near := nearestNames(f.want, f.candidates); len(near) > 0 {
 		msg += "; did you mean " + joinQuotedOr(near) + "?"
 	}
