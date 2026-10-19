@@ -55,7 +55,7 @@ func TestTriggerFactsCoDeriveSubjectsAndForkness(t *testing.T) {
 			// boolean. Nothing here is derived from a second source that could
 			// disagree with the first.
 			assert.ElementsMatch(t, tc.wantSubjects, got[0].Subjects)
-			assert.Equal(t, map[string]any{"head_is_fork": tc.wantFork}, got[0].Facts)
+			assert.Equal(t, map[string]any{"head_is_fork": tc.wantFork, "review_allowed": !tc.wantFork}, got[0].Facts)
 		})
 	}
 }
@@ -197,8 +197,8 @@ func TestTriggerFactsCarriesNoSubmitterAuthoredText(t *testing.T) {
 	// laundered" can only be reported about an observation that exists.
 	require.NotEmpty(t, got[0].Facts, "the observation must carry facts for this test to mean anything")
 	require.NotEmpty(t, got[0].Subjects, "the observation must carry subjects for this test to mean anything")
-	assert.Equal(t, map[string]any{"head_is_fork": true}, got[0].Facts,
-		"the derived boolean is the fact, and it is the fork one")
+	assert.Equal(t, map[string]any{"head_is_fork": true, "review_allowed": false}, got[0].Facts,
+		"only fork status and eligibility become facts, never submitter-authored text")
 	assert.Equal(t, "demo-org/demo-repo#6", subjectID(t, got[0].Subjects, "github_pr"),
 		"the pull request is keyed by the BASE repository from the envelope, not the submitter-named head")
 

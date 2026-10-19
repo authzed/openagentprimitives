@@ -1,0 +1,28 @@
+{
+  "action": "opened",
+  "number": 4,
+  "pull_request": {
+    "title": "Update README.md",
+    "html_url": "https://github.example.invalid/demo-org/demo-repo/pull/4",
+    "draft": false,
+    "user": {
+      "login": "demo-contributor",
+      "id": 9906581
+    },
+    "head": {
+      "sha": "0000000000000000000000000000000000000000",
+      "repo": {
+        "fork": true,
+        "full_name": "demo-contributor/demo-repo"
+      }
+    },
+    "base": {
+      "sha": "ecc9b6ebcd0d6ef275121a55557a3e7283e59d14"
+    },
+    "changed_files": 1,
+    "author_association": "MEMBER"
+  },
+  "repository": {
+    "full_name": "demo-org/demo-repo"
+  }
+}

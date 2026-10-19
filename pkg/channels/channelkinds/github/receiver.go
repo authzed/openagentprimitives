@@ -99,6 +99,11 @@ type prEvent struct {
 		Title   string `json:"title"`
 		HTMLURL string `json:"html_url"`
 		Draft   bool   `json:"draft"`
+		// AuthorAssociation is GitHub's classification of the PR AUTHOR's
+		// relationship to the base repository, authenticated by Verify. MEMBER
+		// means membership in the organization that owns that repository;
+		// COLLABORATOR also admits outsiders and must not clear the fork gate.
+		AuthorAssociation string `json:"author_association"`
 		// NodeID is GitHub's GraphQL node id for the pull request.
 		// TriggerSlotInstances reads it; nothing else here does.
 		NodeID string `json:"node_id"`
@@ -165,8 +170,8 @@ func (receiver) Translate(_ context.Context, ch *spiceboxv1alpha1.Channel, r cha
 		return nil, nil
 	}
 	// Fork PRs are NOT filtered here. Declining an interesting PR is different
-	// from ignoring an uninteresting event: the agent declines a fork visibly,
-	// with a Check Run explaining why, which a silent filter could never do.
+	// from ignoring an uninteresting event: the agent declines an ineligible
+	// fork visibly, with a Check Run explaining why.
 	// renderPrompt says so in the prompt for exactly that reason.
 
 	return &channelkinds.WebhookInbound{
@@ -185,12 +190,12 @@ func (receiver) Translate(_ context.Context, ch *spiceboxv1alpha1.Channel, r cha
 // TriggerFacts derives what the signed envelope asserts about this pull request.
 //
 // It re-decodes the same narrow prEvent Translate reads, and uses only fields
-// already there — so prEvent's "a payload change upstream cannot alter behavior
-// here without a code change" property still holds.
+// explicitly decoded there — so a payload change upstream cannot alter
+// behavior here without a code change.
 //
-// WHAT BECOMES A FACT: the head-is-fork boolean, keyed to the pull request AND
-// to its head commit, because those are the two objects the tools that act on
-// this PR can name (`git fetch origin pull/<n>/head`, `git checkout <sha>`).
+// WHAT BECOMES A FACT: fork status and review eligibility, keyed to the pull
+// request AND its head commit, because those are the two objects the tools
+// acting on this PR can name (`git fetch origin pull/<n>/head`, `git checkout <sha>`).
 // The head repository's NAME does NOT: it is submitter-chosen, renderPrompt
 // already handles it as untrusted text inside the delimited block, and a gate
 // input is a strictly worse place for attacker-authored bytes than a prompt is.
@@ -211,8 +216,21 @@ func (receiver) TriggerFacts(ch *spiceboxv1alpha1.Channel, event string, body []
 			{ResourceType: "git_commit", ResourceID: ev.PullRequest.Head.SHA},
 			{ResourceType: "github_pr", ResourceID: formatPRSubjectID(ev.Repository.FullName, ev.Number)},
 		},
-		Facts: map[string]any{"head_is_fork": ev.PullRequest.Head.Repo.Fork},
+		Facts: map[string]any{
+			"head_is_fork":   ev.PullRequest.Head.Repo.Fork,
+			"review_allowed": reviewAllowed(ev),
+		},
 	}}, nil
+}
+
+// reviewAllowed permits same-repository heads and forks authored by a member
+// of the base repository's organization. Only GitHub's signed PR association
+// can grant the exception: neither the sender (who may merely be pushing),
+// contributor history, nor submitter-authored metadata establishes membership.
+// Missing and future association values fail closed for forks. OWNER denotes
+// a repository owner, not organization membership, so it is not an exception.
+func reviewAllowed(ev prEvent) bool {
+	return !ev.PullRequest.Head.Repo.Fork || ev.PullRequest.AuthorAssociation == "MEMBER"
 }
 
 // TriggerOwnerSubject names the pull request's AUTHOR as a github_user
@@ -223,7 +241,7 @@ func (receiver) TriggerFacts(ch *spiceboxv1alpha1.Channel, event string, body []
 // change" property still holds.
 //
 // Deliberately UNIFORM across fork and same-repo pull requests: the session
-// exists either way (forks deliver and the agent declines them visibly), the
+// exists either way (ineligible forks are declined visibly), the
 // subject pays off only through a verified attested edge for the author's own
 // account, and the author seeing why their PR was declined is the point of
 // the visible refusal.
@@ -389,6 +407,11 @@ func renderPrompt(ev prEvent) string {
 	fmt.Fprintf(&b, "Changed files: %d\n", ev.PullRequest.ChangedFiles)
 	if ev.PullRequest.Head.Repo.Fork {
 		fmt.Fprintf(&b, "The head branch is on a FORK of this repository.\n")
+		if reviewAllowed(ev) {
+			fmt.Fprintln(&b, "Fork review eligibility: allowed (GitHub verified the PR author as an organization member).")
+		} else {
+			fmt.Fprintln(&b, "Fork review eligibility: denied (GitHub did not verify the PR author as an organization member).")
+		}
 	}
 
 	fmt.Fprintf(&b, "\n%s\n%s\n", untrustedPreamble, untrustedOpen)

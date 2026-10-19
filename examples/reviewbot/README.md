@@ -229,9 +229,23 @@ already reviewed this commit?") has a single Check Run history to read.
 deliberately delivered like any other PR — declining an interesting PR is
 different from ignoring an uninteresting event, and only the former can be made
 visible. The AgentClass's system prompt (step 0, the "fork gate") recognizes a
-fork head branch and declines to check out or run its code, concluding the
-trigger `could_not_finish` with an explanation, plus a one-line note to the
-Slack thread — never a silent drop.
+fork head branch and permits review only when the verified event's structural
+preamble says `Fork review eligibility: allowed`. The GitHub receiver computes
+that result from the signed `pull_request.author_association`: `MEMBER` means
+the PR author belongs to the organization that owns the base repository. An org
+member's fork is reviewed normally, fetching the PR head from the base
+repository rather than cloning the fork. Outside collaborators and previous
+contributors do not qualify; missing or unknown associations fail closed. Other
+forks are declined without checking out or running their code, concluding the
+trigger `could_not_finish` with an explanation and a one-line note to the Slack
+thread — never a silent drop.
+
+This uses GitHub's membership classification, independently of Actions workflow
+approval settings. No additional App permissions or directory-sync setup are
+needed. The receiver also records `review_allowed` alongside `head_is_fork` as
+an envelope fact on the PR and its head commit, for authorization preconditions.
+The shipped example's fork gate is a system-prompt policy; computing and
+recording facts does not by itself install a sandbox execution guard.
 
 ### Why `demo-reviewbot-gh` is not a free choice
 
@@ -375,11 +389,11 @@ included — at the next reconcile.
 
 5. It concludes with `conclude_trigger_status`, supplying only a judgement —
    `clean` when nothing blocking was found, `problems_found` when something was,
-   `could_not_finish` when it could not review at all (fork PR, clone failure,
-   wedged tests, budget exhausted). That is the whole call: the published
-   summary and details link are composed for it, per the outcome, never
-   model-written. The github kind maps the outcome onto the Check Run's own
-   conclusion and records the reviewed commit in its `external_id`. When the
+   `could_not_finish` when it could not review at all (ineligible fork PR, clone
+   failure, wedged tests, budget exhausted). That is the whole call: the
+   published summary and details link are composed for it, per the outcome,
+   never model-written. The github kind maps the outcome onto the Check Run's
+   own conclusion and records the reviewed commit in its `external_id`. When the
    outcome is `could_not_finish`, the reason is always posted to the Slack
    thread as well — the thread, not the check run, is where it is visible.
 

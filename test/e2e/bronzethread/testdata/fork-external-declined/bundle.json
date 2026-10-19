@@ -1,0 +1,100 @@
+{
+  "name": "fork-external-declined",
+  "description": "A signed fork PR webhook carries GitHub author association COLLABORATOR. Verify that the production receiver delivers the computed eligibility to the runner, and that the session can record a visible could_not_finish result. This tests classification and Check Run delivery; the scripted model does not prove prompt compliance or sandbox execution enforcement.",
+  "agentDir": "testdata/agent-reviewbot",
+  "agentClass": "demo-reviewbot",
+  "trigger": {
+    "channel": "demo-reviewbot-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#4",
+    "headSHA": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+    "statusName": "demo-reviewbot"
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Fork review eligibility: denied",
+        "toolOffered": "claim_trigger_status"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "claim_trigger_status",
+            "args": {}
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "claim_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"already_concluded\":false"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "conclude_trigger_status",
+            "args": {
+              "outcome": "could_not_finish",
+              "summary": "Fork reviews require verified membership in the base repository organization."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "conclude_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "could_not_finish"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Fork reviews require verified membership in the base repository organization."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Fork reviews require verified membership in the base repository organization."
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "triggerStatus": {
+      "status": "completed",
+      "conclusion": "neutral",
+      "externalID": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+      "summaryContains": [
+        "Fork reviews require verified membership in the base repository organization."
+      ],
+      "creates": 1,
+      "updates": 1
+    },
+    "channel": {
+      "postsContain": [
+        "Fork reviews require verified membership in the base repository organization."
+      ],
+      "threadRootedByFirstPost": true,
+      "postCount": 2
+    }
+  }
+}

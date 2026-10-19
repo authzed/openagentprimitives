@@ -1,0 +1,100 @@
+{
+  "name": "fork-org-member-review",
+  "description": "A signed fork PR webhook carries GitHub author association MEMBER. Verify that the production receiver delivers the computed eligibility to the runner, and that the session can record a visible clean result. This tests classification and Check Run delivery; the scripted model does not prove prompt compliance or sandbox execution enforcement.",
+  "agentDir": "testdata/agent-reviewbot",
+  "agentClass": "demo-reviewbot",
+  "trigger": {
+    "channel": "demo-reviewbot-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#4",
+    "headSHA": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+    "statusName": "demo-reviewbot"
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Fork review eligibility: allowed",
+        "toolOffered": "claim_trigger_status"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "claim_trigger_status",
+            "args": {}
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "claim_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"already_concluded\":false"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "conclude_trigger_status",
+            "args": {
+              "outcome": "clean",
+              "summary": "Eligible organization member fork."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "conclude_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "clean"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Eligible organization member fork."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Eligible organization member fork."
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "triggerStatus": {
+      "status": "completed",
+      "conclusion": "success",
+      "externalID": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+      "summaryContains": [
+        "Eligible organization member fork."
+      ],
+      "creates": 1,
+      "updates": 1
+    },
+    "channel": {
+      "postsContain": [
+        "Eligible organization member fork."
+      ],
+      "threadRootedByFirstPost": true,
+      "postCount": 2
+    }
+  }
+}
