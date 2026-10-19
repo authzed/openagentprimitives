@@ -343,7 +343,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 			// reply: retry the bubble update as plain text so the user still
 			// sees the answer — degraded, logged.
 			logger.Info("slack: streaming-bubble blocks rejected; retrying chat.update as plain text (degraded)",
-				"session", sess.Name, "channelID", channelID, "bubbleTS", ts, "err", err.Error())
+				"session", sess.Name, "channelID", channelID, "bubbleTS", ts, "err", err.Error(), "slackDetail", blocksRejectionDetail(err))
 			_, _, _, err = s.client.UpdateMessageContext(ctx, channelID, ts,
 				slackapi.MsgOptionText(responseReadyEmoji+" "+degradedPlainText(replyText, pl.Components, sess.Channel.RoutingMode), false))
 		}
@@ -420,7 +420,7 @@ func (s *slackSender) Send(ctx context.Context, sess channelkinds.SessionInfo, e
 		// (no Show-settings button), but delivered. Logged loudly so the
 		// degraded path is visible in operator logs.
 		logger.Info("slack: user_message blocks rejected; retrying as plain text (degraded, no Show-settings button)",
-			"session", sess.Name, "channelID", channelID, "err", err.Error())
+			"session", sess.Name, "channelID", channelID, "err", err.Error(), "slackDetail", blocksRejectionDetail(err))
 		usedBlocks = false
 		plainOpts := []slackapi.MsgOption{slackapi.MsgOptionText(degradedPlainText(replyText, pl.Components, sess.Channel.RoutingMode), false)}
 		if threadTS != "" {

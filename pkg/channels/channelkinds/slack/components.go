@@ -37,6 +37,18 @@ const (
 	maxTablesPerMessage  = 1
 	maxTableRows         = 100
 	maxTableColumns      = 20
+
+	// data_visualization per-chart limits. Slack enforces these at post time;
+	// slack-go's block_data_visualization.go documents them (verified against
+	// the live API). Validating them here turns an over-dense chart — e.g. a
+	// time series with one point per minute — into a precise, correctable error
+	// instead of a post-time invalid_blocks that silently degrades the ENTIRE
+	// reply to plain text (sender.go).
+	maxDataVizSeries       = 6  // bar/area/line: 1–6 series
+	maxDataVizSegments     = 6  // pie: 1–6 segments
+	maxDataVizCategories   = 20 // bar/area/line: 1–20 x-axis categories (one point per category)
+	maxDataVizLabelLen     = 20 // category labels, series names, point/segment labels
+	maxDataVizAxisLabelLen = 50 // x_label / y_label
 )
 
 // componentFormattingInstructions is the model-facing authoring guide for the
@@ -55,8 +67,9 @@ const componentFormattingInstructions = `This channel can render structured Bloc
 	`"markdown" (a standard-markdown block, ≤12000 chars); ` +
 	`"table" (rows of rich_text cells; one table per message, ≤100 rows, ≤20 columns); ` +
 	`"data_visualization" (a chart; REQUIRES a "title" ≤50 chars and a "chart" object. ` +
-	`pie: {"type":"pie","segments":[{"label":"Organic","value":60}]}. ` +
-	`bar/area/line: {"type":"bar","series":[{"name":"Signups","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon","Tue"]}} — note each series uses "data" (not "data_points") and axis_config.categories is required; ≤2 charts per message); ` +
+	`pie: {"type":"pie","segments":[{"label":"Organic","value":60}]} — 1–6 segments. ` +
+	`bar/area/line: {"type":"bar","series":[{"name":"Signups","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon","Tue"]}} — each series uses "data" (not "data_points") and axis_config.categories is required. ` +
+	`Slack caps every chart: 1–6 series; 1–20 x-axis categories with EXACTLY one data point per category (bucket long time ranges into ≤20 points — do not emit a point per minute); all category labels, series names, and point labels ≤20 chars; ≤2 charts per message); ` +
 	`"plan" and "task_card" (task lists); ` +
 	`"card" (title/subtitle/body/subtext — NO action buttons, NO images yet); ` +
 	`"container" (groups 1–10 read-only child blocks in "child_blocks"; REQUIRES a "title" or "rich_text_title"). ` +
@@ -356,7 +369,13 @@ func validateDataViz(loc string, dv *slackapi.DataVisualizationBlock) error {
 		if len(c.Segments) == 0 {
 			return blockErrf(loc, "data_visualization", "pie chart requires a non-empty \"segments\" array of {label,value}")
 		}
+		if len(c.Segments) > maxDataVizSegments {
+			return blockErrf(loc, "data_visualization", "pie chart has %d segments; Slack renders at most %d segments per chart", len(c.Segments), maxDataVizSegments)
+		}
 		for _, seg := range c.Segments {
+			if n := runeLen(seg.Label); n > maxDataVizLabelLen {
+				return blockErrf(loc, "data_visualization", "pie segment label %q is %d characters; Slack limits segment labels to %d", seg.Label, n, maxDataVizLabelLen)
+			}
 			if err := checkBroadcast(loc, "data_visualization", seg.Label); err != nil {
 				return err
 			}
@@ -377,8 +396,47 @@ func validateVizSeries(loc, kind string, series []slackapi.DataVisualizationData
 	if len(series) == 0 {
 		return blockErrf(loc, "data_visualization", "%s chart requires a non-empty \"series\" array; each series is {\"name\":…,\"data\":[{\"label\":…,\"value\":…}]}", kind)
 	}
+	if len(series) > maxDataVizSeries {
+		return blockErrf(loc, "data_visualization", "%s chart has %d series; Slack renders at most %d series per chart", kind, len(series), maxDataVizSeries)
+	}
 	if len(axis.Categories) == 0 {
 		return blockErrf(loc, "data_visualization", "%s chart requires \"axis_config\":{\"categories\":[…]} naming the x-axis categories", kind)
+	}
+	if len(axis.Categories) > maxDataVizCategories {
+		return blockErrf(loc, "data_visualization", "%s chart has %d x-axis categories; Slack renders at most %d per chart — aggregate into fewer buckets", kind, len(axis.Categories), maxDataVizCategories)
+	}
+	for _, cat := range axis.Categories {
+		if n := runeLen(cat); n > maxDataVizLabelLen {
+			return blockErrf(loc, "data_visualization", "x-axis category %q is %d characters; Slack limits category labels to %d", cat, n, maxDataVizLabelLen)
+		}
+	}
+	// Slack requires exactly one data point per category, unique series names,
+	// and ≤20-char labels. validateComponents only sees non-emptiness without
+	// these, so an over-dense or misaligned series reaches Slack and is rejected
+	// whole as invalid_blocks.
+	seen := make(map[string]struct{}, len(series))
+	for _, s := range series {
+		if n := runeLen(s.Name); n > maxDataVizLabelLen {
+			return blockErrf(loc, "data_visualization", "series name %q is %d characters; Slack limits series names to %d", s.Name, n, maxDataVizLabelLen)
+		}
+		if _, dup := seen[s.Name]; dup {
+			return blockErrf(loc, "data_visualization", "series name %q appears more than once; Slack requires unique series names", s.Name)
+		}
+		seen[s.Name] = struct{}{}
+		if len(s.Data) != len(axis.Categories) {
+			return blockErrf(loc, "data_visualization", "series %q has %d data point(s) but axis_config.categories names %d; Slack requires exactly one point per category", s.Name, len(s.Data), len(axis.Categories))
+		}
+		for _, p := range s.Data {
+			if n := runeLen(p.Label); n > maxDataVizLabelLen {
+				return blockErrf(loc, "data_visualization", "data point label %q is %d characters; Slack limits point labels to %d", p.Label, n, maxDataVizLabelLen)
+			}
+		}
+	}
+	if n := runeLen(axis.XLabel); n > maxDataVizAxisLabelLen {
+		return blockErrf(loc, "data_visualization", "x-axis label is %d characters; Slack limits it to %d", n, maxDataVizAxisLabelLen)
+	}
+	if n := runeLen(axis.YLabel); n > maxDataVizAxisLabelLen {
+		return blockErrf(loc, "data_visualization", "y-axis label is %d characters; Slack limits it to %d", n, maxDataVizAxisLabelLen)
 	}
 	for _, s := range series {
 		if err := checkBroadcast(loc, "data_visualization", s.Name); err != nil {

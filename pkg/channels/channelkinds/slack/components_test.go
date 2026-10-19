@@ -1,12 +1,41 @@
 package slack
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// vizLineChart builds a line-chart data_visualization block with `points`
+// x-axis categories and one series carrying exactly one aligned point each —
+// the shape a time-series answer produces. Used to exercise Slack's 1–20
+// category/point cap.
+func vizLineChart(points int) string {
+	cats := make([]string, points)
+	data := make([]string, points)
+	for i := range cats {
+		cats[i] = fmt.Sprintf(`"t%d"`, i)
+		data[i] = fmt.Sprintf(`{"label":"t%d","value":%d}`, i, i)
+	}
+	return `[{"type":"data_visualization","title":"p95","chart":{"type":"line",` +
+		`"series":[{"name":"p95","data":[` + strings.Join(data, ",") + `]}],` +
+		`"axis_config":{"categories":[` + strings.Join(cats, ",") + `]}}}]`
+}
+
+// vizManySeries builds a bar chart with `n` single-point series over one
+// category, to exercise Slack's 1–6 series-per-chart cap.
+func vizManySeries(n int) string {
+	series := make([]string, n)
+	for i := range series {
+		series[i] = fmt.Sprintf(`{"name":"s%d","data":[{"label":"Mon","value":%d}]}`, i, i)
+	}
+	return `[{"type":"data_visualization","title":"x","chart":{"type":"bar",` +
+		`"series":[` + strings.Join(series, ",") + `],` +
+		`"axis_config":{"categories":["Mon"]}}}]`
+}
 
 func repeatBlock(block string, n int) string {
 	parts := make([]string, n)
@@ -186,6 +215,21 @@ func TestValidateComponents(t *testing.T) {
 		{name: "table of 100 rows x 20 columns: accepted", json: `[` + rawTextTable(100, 20) + `]`, wantErr: ""},
 		{name: "table of 101 rows: rejected", json: `[` + rawTextTable(101, 1) + `]`, wantErr: "101 rows"},
 		{name: "table row of 21 cells: rejected", json: `[` + rawTextTable(1, 21) + `]`, wantErr: "21 cells"},
+
+		// --- data_visualization per-chart limits (Slack caps; slack-go
+		// block_data_visualization.go documents 1–6 series/segments, 1–20
+		// categories with exactly one point per category, ≤20-char labels) ---
+		{name: "line chart with 20 points: accepted at the cap", json: vizLineChart(20), wantErr: ""},
+		{name: "line chart with 21 points: rejected over cap", json: vizLineChart(21), wantErr: "aggregate into fewer buckets"},
+		{name: "bar chart with 6 series: accepted at the cap", json: vizManySeries(6), wantErr: ""},
+		{name: "bar chart with 7 series: rejected over cap", json: vizManySeries(7), wantErr: "series per chart"},
+		{name: "series point count != categories: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"bar","series":[{"name":"S","data":[{"label":"Mon","value":1},{"label":"Tue","value":2}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "one point per category"},
+		{name: "category label over 20 chars: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"line","series":[{"name":"S","data":[{"label":"x","value":1}]}],"axis_config":{"categories":["` + strings.Repeat("c", 21) + `"]}}}]`, wantErr: "category labels to"},
+		{name: "series name over 20 chars: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"bar","series":[{"name":"` + strings.Repeat("s", 21) + `","data":[{"label":"Mon","value":1}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "series names to"},
+		{name: "data point label over 20 chars: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"line","series":[{"name":"S","data":[{"label":"` + strings.Repeat("p", 21) + `","value":1}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "point labels to"},
+		{name: "duplicate series names: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"bar","series":[{"name":"S","data":[{"label":"Mon","value":1}]},{"name":"S","data":[{"label":"Mon","value":2}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "unique series names"},
+		{name: "pie chart with 7 segments: rejected over cap", json: `[{"type":"data_visualization","title":"x","chart":{"type":"pie","segments":[{"label":"a","value":1},{"label":"b","value":1},{"label":"c","value":1},{"label":"d","value":1},{"label":"e","value":1},{"label":"f","value":1},{"label":"g","value":1}]}}]`, wantErr: "segments per chart"},
+		{name: "pie segment label over 20 chars: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"pie","segments":[{"label":"` + strings.Repeat("a", 21) + `","value":1}]}}]`, wantErr: "segment labels to"},
 
 		// --- structurally empty blocks Slack rejects ---
 		{name: "header without text: rejected", json: `[{"type":"header"}]`, wantErr: "header"},
