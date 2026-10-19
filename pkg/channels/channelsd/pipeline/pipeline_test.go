@@ -770,7 +770,7 @@ func TestSessionOpen_RecordsEnvelopeFacts(t *testing.T) {
 			assert.Equal(t, "github", got.Kind)
 			assert.Equal(t, "pull_request", got.Event)
 			require.Len(t, got.Facts, 1)
-			assert.Equal(t, map[string]any{"head_is_fork": true}, got.Facts[0].Facts)
+			assert.Equal(t, map[string]any{"head_is_fork": true, "review_allowed": false}, got.Facts[0].Facts)
 			assert.Len(t, got.Facts[0].Subjects, 2, "the PR and its head commit")
 		})
 	}
