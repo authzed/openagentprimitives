@@ -79,7 +79,7 @@ func makeGhToolspec(name string) *spiceboxv1alpha1.SpiceboxToolspec {
 func TestAgentSetupIdentity_NotFound(t *testing.T) {
 	c := aptest.IdentityClientBuilder(t).Build()
 	err := runAgentSetupIdentity(context.Background(), io.Discard, io.Discard,
-		strings.NewReader(""), c, "default", "nonexistent", "", "", false, identitycmd.SetupOptions{})
+		strings.NewReader(""), c, "default", "nonexistent", "", "", "", false, identitycmd.SetupOptions{})
 	require.Error(t, err, "missing AgentClass should error")
 	assert.Contains(t, err.Error(), "get AgentClass", "error should mention 'get AgentClass'")
 }
@@ -92,7 +92,7 @@ func TestAgentSetupIdentity_NoIdentity(t *testing.T) {
 	c := aptest.IdentityClientBuilder(t).WithObjects(ac).Build()
 
 	err := runAgentSetupIdentity(context.Background(), io.Discard, io.Discard,
-		strings.NewReader(""), c, "default", "my-class", "", "", false, identitycmd.SetupOptions{})
+		strings.NewReader(""), c, "default", "my-class", "", "", "", false, identitycmd.SetupOptions{})
 	require.Error(t, err, "missing agentIdentity should error")
 	assert.Contains(t, err.Error(), "no spec.agentIdentity", "error should mention 'no spec.agentIdentity'")
 }
@@ -109,7 +109,7 @@ func TestAgentSetupIdentity_IdentityOverride(t *testing.T) {
 	// No toolspecs/MCPs → "nothing to set up" early return.
 	require.NoError(t,
 		runAgentSetupIdentity(context.Background(), &out, io.Discard,
-			strings.NewReader(""), c, "default", "my-class", "override-identity", "", false, identitycmd.SetupOptions{}),
+			strings.NewReader(""), c, "default", "my-class", "override-identity", "", "", false, identitycmd.SetupOptions{}),
 		"runAgentSetupIdentity")
 	assert.Contains(t, out.String(), "nothing to set up", "output should report nothing to set up")
 }
@@ -123,7 +123,7 @@ func TestAgentSetupIdentity_NothingToSetUp(t *testing.T) {
 	var out strings.Builder
 	require.NoError(t,
 		runAgentSetupIdentity(context.Background(), &out, io.Discard,
-			strings.NewReader(""), c, "default", "my-class", "", "", false, identitycmd.SetupOptions{}),
+			strings.NewReader(""), c, "default", "my-class", "", "", "", false, identitycmd.SetupOptions{}),
 		"runAgentSetupIdentity")
 	assert.Contains(t, out.String(), "nothing to set up", "output should report nothing to set up")
 }
@@ -160,7 +160,7 @@ func TestAgentSetupIdentity_HappyPath(t *testing.T) {
 
 	require.NoErrorf(t,
 		runAgentSetupIdentity(context.Background(), &out, io.Discard,
-			stdin, c, "default", "my-class", "", "", false, identitycmd.SetupOptions{}),
+			stdin, c, "default", "my-class", "", "", "", false, identitycmd.SetupOptions{}),
 		"runAgentSetupIdentity; output: %s", out.String())
 
 	// AgentIdentity should have been created.
@@ -182,6 +182,25 @@ func TestAgentSetupIdentity_HappyPath(t *testing.T) {
 	}
 }
 
+// TestAgentSetupIdentity_RefreshUnknownNameSuggests verifies --refresh is wired
+// through the command end-to-end and that a wrong credential name fails with a
+// "did you mean?" pointer instead of a silent no-op. The engine errors while
+// enumerating requirements, before any flow runs, so no token/browser is needed.
+func TestAgentSetupIdentity_RefreshUnknownNameSuggests(t *testing.T) {
+	browsertest.Record(t)
+
+	ts := makeGhToolspec("gh-readonly")
+	ac := makeAgentSetupClass("default", "my-class", "my-bot", []string{"gh-readonly"}, nil)
+	c := aptest.IdentityClientBuilder(t).WithObjects(ac, ts).Build()
+
+	var out strings.Builder
+	err := runAgentSetupIdentity(context.Background(), &out, io.Discard,
+		strings.NewReader(""), c, "default", "my-class", "", "", "github-tokn", false, identitycmd.SetupOptions{})
+	require.Error(t, err, "an unknown --refresh name must error")
+	assert.Contains(t, err.Error(), "did you mean", "a near-miss name gets a suggestion")
+	assert.Contains(t, err.Error(), "github-token", "the suggestion names the real credential")
+}
+
 // TestAgentSetupIdentity_OnlyFilterSkipsNonMatching verifies that --only
 // filters the target list so unmatched entries are skipped (no-op).
 func TestAgentSetupIdentity_OnlyFilterSkipsNonMatching(t *testing.T) {
@@ -196,7 +215,7 @@ func TestAgentSetupIdentity_OnlyFilterSkipsNonMatching(t *testing.T) {
 	require.NoError(t,
 		runAgentSetupIdentity(context.Background(), &out, io.Discard,
 			strings.NewReader("ghp_xxxx\n"), c, "default", "my-class", "",
-			"toolspec:does-not-exist", false, identitycmd.SetupOptions{}),
+			"toolspec:does-not-exist", "", false, identitycmd.SetupOptions{}),
 		"runAgentSetupIdentity")
 
 	// No AgentIdentity should have been created (nothing was processed).
