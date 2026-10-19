@@ -1,6 +1,7 @@
 package identityd
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/passthroughlink"
 )
 
@@ -19,6 +21,34 @@ func newTestServer(t *testing.T) *Server {
 		K8s:             c,
 		LinkSigner:      passthroughlink.New([]byte("test-key")),
 		ExternalBaseURL: func() string { return "https://example.org" },
+	})
+}
+
+// stubConsentDeps is the test double for ConsentDeps: fixed classes/err per
+// test, so the OAuth authorization-server's authorize/consent handlers (Task
+// 7) can be exercised without SpiceDB.
+type stubConsentDeps struct {
+	classes []ConsentClass
+	err     error
+}
+
+func (d stubConsentDeps) ConsentClasses(_ context.Context, _ identity.CanonicalUserID) ([]ConsentClass, error) {
+	return d.classes, d.err
+}
+
+// newTestServerWithConsent is newTestServer plus a stub ConsentDeps, so the
+// AS routes gated on Deps.Consent != nil (metadata, register, authorize,
+// consent) are mounted.
+func newTestServerWithConsent(t *testing.T) *Server {
+	t.Helper()
+	c := fake.NewClientBuilder().Build()
+	return NewServer(Deps{
+		K8s:             c,
+		LinkSigner:      passthroughlink.New([]byte("test-key")),
+		ExternalBaseURL: func() string { return "https://example.org" },
+		Consent: stubConsentDeps{classes: []ConsentClass{
+			{ID: "default/demo-agent", DisplayName: "Demo"},
+		}},
 	})
 }
 
