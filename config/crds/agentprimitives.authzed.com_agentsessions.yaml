@@ -2832,6 +2832,189 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              resolvedBrowserToolboxes:
+                description: |-
+                  ResolvedBrowserToolboxes snapshots each referenced BrowserToolbox at
+                  session start, frozen for the session lifetime exactly like
+                  ResolvedSidecarToolboxes. Empty when AgentClass.spec.browserToolboxes
+                  is empty.
+                items:
+                  description: |-
+                    ResolvedBrowserToolbox snapshots one BrowserToolbox CR for a running
+                    AgentSession, mirroring ResolvedSidecarToolbox's shape: the LLM-facing
+                    prefix, the frozen spec, and the operator-allocated pod/gate the runner
+                    uses to reach the per-session browser.
+                  properties:
+                    browserPodIP:
+                      description: |-
+                        BrowserPodIP is the per-session browser pod's IP, reflected once Ready;
+                        the runner reaches its gate at http://<BrowserPodIP>:<GatePort>.
+                      type: string
+                    browserPodName:
+                      description: BrowserPodName is the per-session browser pod's
+                        name.
+                      type: string
+                    effectiveSites:
+                      description: |-
+                        EffectiveSites is the resolved site list the running browser's egress
+                        is actually evaluated against -- in Phase A, a straight carry-through
+                        of Spec.Access.Sites with Source "explicit".
+                      items:
+                        description: |-
+                          BrowserEffectiveSite is one resolved site entry in a ResolvedBrowserToolbox's
+                          EffectiveSites. Source records where the entry came from: Phase A only ever
+                          writes "explicit" (a BrowserAccess.Sites entry carried through verbatim);
+                          "identity" is a Phase B addition once a bound identity can contribute its
+                          own sites to the effective set.
+                        properties:
+                          exact:
+                            description: Exact mirrors BrowserSite.Exact for this
+                              entry.
+                            type: boolean
+                          host:
+                            description: Host is the resolved hostname, matched exactly
+                              as BrowserSite.Host.
+                            type: string
+                          source:
+                            description: |-
+                              Source is where this entry came from. "explicit" only in Phase A;
+                              "identity" arrives in Phase B.
+                            type: string
+                        required:
+                        - host
+                        - source
+                        type: object
+                      type: array
+                    gatePort:
+                      description: |-
+                        GatePort is the operator-allocated port the runner uses to reach the
+                        browser pod's gate process.
+                      format: int32
+                      type: integer
+                    name:
+                      description: |-
+                        Name is the LLM-facing prefix (the `name` field from
+                        AgentClassBrowserToolboxRef).
+                      type: string
+                    podFailure:
+                      description: |-
+                        PodFailure records a TERMINAL container state on the browser pod
+                        (CrashLoopBackOff, ImagePullBackOff) -- reuses SidecarPodFailure's shape
+                        exactly; see that type's doc comment for why it carries no timestamp.
+                      properties:
+                        exitCode:
+                          description: |-
+                            ExitCode is the container's last terminated exit code. Nil when the
+                            container never ran (e.g. the image could not be pulled).
+                          format: int32
+                          type: integer
+                        message:
+                          description: |-
+                            Message is the most actionable text available: the container's last
+                            terminated message when present — the crashing container's log tail,
+                            thanks to the pod's FallbackToLogsOnError policy — otherwise the
+                            kubelet's waiting message. Preferring the log tail is what makes the
+                            field worth surfacing; the waiting message alone is content-free for a
+                            crash loop ("back-off Ns restarting failed container=…").
+                          type: string
+                        reason:
+                          description: |-
+                            Reason is the kubelet's terminal container Waiting reason, e.g.
+                            "CrashLoopBackOff" or "ImagePullBackOff".
+                          type: string
+                      required:
+                      - reason
+                      type: object
+                    ref:
+                      description: |-
+                        Ref is the BrowserToolbox CR name (the `ref` field from
+                        AgentClassBrowserToolboxRef).
+                      type: string
+                    spec:
+                      description: Spec is the BrowserToolbox spec snapshot at session-start
+                        time.
+                      properties:
+                        access:
+                          description: |-
+                            Access is the site allowlist/blocklist the browser's egress is
+                            evaluated against.
+                          properties:
+                            mode:
+                              description: |-
+                                Mode is "allowlist" (only Sites are reachable) or "blocklist" (every
+                                site except Sites is reachable).
+                              enum:
+                              - allowlist
+                              - blocklist
+                              type: string
+                            sites:
+                              description: |-
+                                Sites is the set of hosts Mode interprets. Matching is suffix-by-label
+                                unless Exact is set: a Site with Host "example.com" also matches
+                                "www.example.com" and "a.b.example.com", but never a lookalike like
+                                "notexample.com" -- pkg/tools/browserpolicy.Match does label-boundary
+                                comparison, not a raw string suffix check. Exact pins the entry to the
+                                literal host only.
+                              items:
+                                description: BrowserSite is one host entry in a BrowserAccess
+                                  list.
+                                properties:
+                                  exact:
+                                    description: |-
+                                      Exact pins this entry to the literal Host only, disabling the default
+                                      suffix-by-label subdomain match.
+                                    type: boolean
+                                  host:
+                                    description: |-
+                                      Host is the DNS hostname this entry covers, matched suffix-by-label
+                                      (see BrowserAccess.Sites) unless Exact is set.
+                                    maxLength: 253
+                                    pattern: ^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?)*$
+                                    type: string
+                                required:
+                                - host
+                                type: object
+                              type: array
+                              x-kubernetes-list-map-keys:
+                              - host
+                              x-kubernetes-list-type: map
+                          required:
+                          - mode
+                          type: object
+                        interaction:
+                          default: act
+                          description: |-
+                            Interaction gates whether the LLM may act on the page (click, type,
+                            navigate) or only read its rendered content.
+                              act      -- full interaction.
+                              readonly -- observation only; no mutating actions are dispatched.
+                          enum:
+                          - act
+                          - readonly
+                          type: string
+                        state:
+                          default: ephemeral
+                          description: |-
+                            State selects how the browser's session state (cookies, storage) is
+                            retained across turns.
+                            Phase A: ephemeral is the only state; persistent arrives with identities (Phase C).
+                          enum:
+                          - ephemeral
+                          type: string
+                      required:
+                      - access
+                      type: object
+                    tokenHash:
+                      description: |-
+                        TokenHash is a hash of the resolved per-session gate token; a change
+                        triggers pod replacement.
+                      type: string
+                  required:
+                  - name
+                  - ref
+                  - spec
+                  type: object
+                type: array
               resolvedContentGuardDetectors:
                 description: |-
                   ResolvedContentGuardDetectors snapshots the detector sidecars injected for

@@ -133,6 +133,22 @@ func TestEveryKindImplementsTheFullStrategy(t *testing.T) {
 	}
 }
 
+// TestBrowserChromeSandboxReasonIsAlwaysSet guards the Phase A posture: every
+// registered kind must report a non-empty Reason, regardless of Sandboxed —
+// the browser-pod builder (a later task) logs Reason at startup, and a silent
+// empty string there would mean the operator logged nothing about why Chrome
+// is (or is not) sandboxed on this cluster.
+func TestBrowserChromeSandboxReasonIsAlwaysSet(t *testing.T) {
+	keys := cloud.RegisteredKeys()
+	require.NotEmpty(t, keys, "the registry must not be empty — a missing blank import would make this loop vacuous")
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			s := cloud.MustFor(key)
+			assert.NotEmpty(t, s.BrowserChromeSandbox().Reason)
+		})
+	}
+}
+
 func TestNeedsBundledPostgresMatchesTheProfile(t *testing.T) {
 	keys := cloud.RegisteredKeys()
 	require.NotEmpty(t, keys, "the registry must not be empty — a missing blank import would make this loop vacuous")

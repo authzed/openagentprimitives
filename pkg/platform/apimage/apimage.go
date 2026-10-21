@@ -52,9 +52,10 @@ func (i Image) DigestRef(reg, digest string) string {
 	return i.RegistryRef(reg) + "@" + digest
 }
 
-// The eleven first-party platform images. The nine Go services share one
+// The twelve first-party platform images. The nine Go services share one
 // builder stage in Dockerfile.services and select their own final stage with
-// --target; sandbox and the detector have Dockerfiles of their own.
+// --target; sandbox, the detector, and the browser toolbox have Dockerfiles of
+// their own.
 var (
 	Operator   = Image{Target: "operator", Name: "spicebox-operator", Dockerfile: "Dockerfile.services", Context: ".", Stage: "operator"}
 	Sandbox    = Image{Target: "sandbox", Name: "spicebox-sandbox", Dockerfile: "Dockerfile.sandbox", Context: "."}
@@ -96,6 +97,17 @@ var (
 	// only for a session whose SidecarToolbox names it, never a standing
 	// Deployment.
 	Websearchd = Image{Target: "websearchd", Name: "ap-websearchd", Dockerfile: "Dockerfile.services", Context: ".", Stage: "websearchd"}
+	// Browser is the browser toolbox image: chromium plus apbrowsergate
+	// (internal/cmd/apbrowsergate), the policy-enforcing/token-authenticating
+	// gate that fronts it. A later pod builder runs TWO containers from this
+	// ONE image — Chrome and the gate — setting each container's Command
+	// explicitly, so the image needs no ENTRYPOINT contract beyond both
+	// binaries existing on PATH as a non-root user. Own Dockerfile (own apt
+	// dependency graph, not a thin stage over the shared Go builder), like
+	// Sandbox and Detector. Opt-in like Workshop, APIAdapter and Websearchd —
+	// pulled only for a session that requests a browser, never a standing
+	// Deployment.
+	Browser = Image{Target: "browser", Name: "ap-browser", Dockerfile: "images/browser/Dockerfile", Context: "."}
 )
 
 // GoServices are the first-party images whose binaries are Go commands in this
@@ -108,7 +120,7 @@ var (
 var GoServices = []Image{Operator, Runner, Channelsd, Webd, Authzd, Extractord, Workshop, APIAdapter, Websearchd}
 
 // All is the canonical ordered list of every first-party image.
-var All = []Image{Operator, Sandbox, Runner, Channelsd, Webd, Authzd, Extractord, Detector, Workshop, APIAdapter, Websearchd}
+var All = []Image{Operator, Sandbox, Runner, Channelsd, Webd, Authzd, Extractord, Detector, Workshop, APIAdapter, Websearchd, Browser}
 
 // WorkshopSidecarImages are the first-party images a WORKSHOP-authored
 // SidecarToolbox may name in spec.source.image. It is the single source of
@@ -122,13 +134,14 @@ var WorkshopSidecarImages = []Image{Workshop, APIAdapter}
 // regardless of which optional features are enabled — All minus the images
 // that are pulled only when a user opts into a feature.
 //
-// Four opt-in first-party images exist: the prompt-injection Detector (off by
+// Five opt-in first-party images exist: the prompt-injection Detector (off by
 // default; started only when enabled via the settings wizard), the
 // agent-builder Workshop sidecar (started only for a session whose class is
 // sanctioned via ClusterAgentSettings — see pkg/controllers/agentsession/workshop_hook.go),
-// the declarative HTTP→MCP APIAdapter sidecar, and the search+fetch
-// Websearchd sidecar (both started only for a session whose SidecarToolbox
-// names them). Every other image in All backs an always-present part of a
+// the declarative HTTP→MCP APIAdapter sidecar, the search+fetch Websearchd
+// sidecar, and the Browser toolbox image (all four of these sidecars are
+// started only for a session whose SidecarToolbox, or equivalent, names
+// them). Every other image in All backs an always-present part of a
 // session: the control plane (Operator/Runner/Channelsd/Webd/Authzd/Extractord)
 // and Sandbox, the operator's --sandbox-image default used by any
 // SpiceboxClass that does not pin spec.image.
@@ -139,7 +152,7 @@ var WorkshopSidecarImages = []Image{Workshop, APIAdapter}
 // ErrImagePull the instant a session starts: drop Sandbox and every agent chat
 // hangs on a sandbox pod pulling a tag that exists on no registry.
 func AlwaysOnImages() []Image {
-	optIn := map[string]bool{Detector.Name: true, Workshop.Name: true, APIAdapter.Name: true, Websearchd.Name: true} // see doc above
+	optIn := map[string]bool{Detector.Name: true, Workshop.Name: true, APIAdapter.Name: true, Websearchd.Name: true, Browser.Name: true} // see doc above
 	out := make([]Image, 0, len(All))
 	for _, im := range All {
 		if optIn[im.Name] {

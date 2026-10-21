@@ -360,6 +360,29 @@ Status is controller-owned (observed state).
 | `status.progress.outputTokens` | `integer (int64)` | OutputTokens is cumulative completion tokens returned by the provider. |
 | `status.progress.toolCallCount` | `integer (int32)` | ToolCallCount is how many tool calls the agent has issued. |
 | `status.progress.turnCount` | `integer (int32)` | TurnCount is how many agent turns have completed. |
+| `status.resolvedBrowserToolboxes` | `[]object` | ResolvedBrowserToolboxes snapshots each referenced BrowserToolbox at session start, frozen for the session lifetime exactly like ResolvedSidecarToolboxes. Empty when AgentClass.spec.browserToolboxes is empty. |
+| `status.resolvedBrowserToolboxes[].browserPodIP` | `string` | BrowserPodIP is the per-session browser pod's IP, reflected once Ready; the runner reaches its gate at http://&lt;BrowserPodIP&gt;:&lt;GatePort&gt;. |
+| `status.resolvedBrowserToolboxes[].browserPodName` | `string` | BrowserPodName is the per-session browser pod's name. |
+| `status.resolvedBrowserToolboxes[].effectiveSites` | `[]object` | EffectiveSites is the resolved site list the running browser's egress is actually evaluated against -- in Phase A, a straight carry-through of Spec.Access.Sites with Source "explicit". |
+| `status.resolvedBrowserToolboxes[].effectiveSites[].exact` | `boolean` | Exact mirrors BrowserSite.Exact for this entry. |
+| `status.resolvedBrowserToolboxes[].effectiveSites[].host` \* | `string` | Host is the resolved hostname, matched exactly as BrowserSite.Host. |
+| `status.resolvedBrowserToolboxes[].effectiveSites[].source` \* | `string` | Source is where this entry came from. "explicit" only in Phase A; "identity" arrives in Phase B. |
+| `status.resolvedBrowserToolboxes[].gatePort` | `integer (int32)` | GatePort is the operator-allocated port the runner uses to reach the browser pod's gate process. |
+| `status.resolvedBrowserToolboxes[].name` \* | `string` | Name is the LLM-facing prefix (the `name` field from AgentClassBrowserToolboxRef). |
+| `status.resolvedBrowserToolboxes[].podFailure` | `object` | PodFailure records a TERMINAL container state on the browser pod (CrashLoopBackOff, ImagePullBackOff) -- reuses SidecarPodFailure's shape exactly; see that type's doc comment for why it carries no timestamp. |
+| `status.resolvedBrowserToolboxes[].podFailure.exitCode` | `integer (int32)` | ExitCode is the container's last terminated exit code. Nil when the container never ran (e.g. the image could not be pulled). |
+| `status.resolvedBrowserToolboxes[].podFailure.message` | `string` | Message is the most actionable text available: the container's last terminated message when present — the crashing container's log tail, thanks to the pod's FallbackToLogsOnError policy — otherwise the kubelet's waiting message. Preferring the log tail is what makes the field worth surfacing; the waiting message alone is content-free for a crash loop ("back-off Ns restarting failed container=…"). |
+| `status.resolvedBrowserToolboxes[].podFailure.reason` \* | `string` | Reason is the kubelet's terminal container Waiting reason, e.g. "CrashLoopBackOff" or "ImagePullBackOff". |
+| `status.resolvedBrowserToolboxes[].ref` \* | `string` | Ref is the BrowserToolbox CR name (the `ref` field from AgentClassBrowserToolboxRef). |
+| `status.resolvedBrowserToolboxes[].spec` \* | `object` | Spec is the BrowserToolbox spec snapshot at session-start time. |
+| `status.resolvedBrowserToolboxes[].spec.access` \* | `object` | Access is the site allowlist/blocklist the browser's egress is evaluated against. |
+| `status.resolvedBrowserToolboxes[].spec.access.mode` \* | `string` | Mode is "allowlist" (only Sites are reachable) or "blocklist" (every site except Sites is reachable). _(enum: allowlist \| blocklist)_ |
+| `status.resolvedBrowserToolboxes[].spec.access.sites` | `[]object` | Sites is the set of hosts Mode interprets. Matching is suffix-by-label unless Exact is set: a Site with Host "example.com" also matches "www.example.com" and "a.b.example.com", but never a lookalike like "notexample.com" -- pkg/tools/browserpolicy.Match does label-boundary comparison, not a raw string suffix check. Exact pins the entry to the literal host only. |
+| `status.resolvedBrowserToolboxes[].spec.access.sites[].exact` | `boolean` | Exact pins this entry to the literal Host only, disabling the default suffix-by-label subdomain match. |
+| `status.resolvedBrowserToolboxes[].spec.access.sites[].host` \* | `string` | Host is the DNS hostname this entry covers, matched suffix-by-label (see BrowserAccess.Sites) unless Exact is set. |
+| `status.resolvedBrowserToolboxes[].spec.interaction` | `string` | Interaction gates whether the LLM may act on the page (click, type, navigate) or only read its rendered content. act -- full interaction. readonly -- observation only; no mutating actions are dispatched. _(enum: act \| readonly; default: act)_ |
+| `status.resolvedBrowserToolboxes[].spec.state` | `string` | State selects how the browser's session state (cookies, storage) is retained across turns. Phase A: ephemeral is the only state; persistent arrives with identities (Phase C). _(enum: ephemeral; default: ephemeral)_ |
+| `status.resolvedBrowserToolboxes[].tokenHash` | `string` | TokenHash is a hash of the resolved per-session gate token; a change triggers pod replacement. |
 | `status.resolvedContentGuardDetectors` | `[]object` | ResolvedContentGuardDetectors snapshots the detector sidecars injected for content-guard inspectors (e.g. prompt-injection). Empty ⇒ none. |
 | `status.resolvedContentGuardDetectors[].healthPath` | `string` | HealthPath is the readiness path; empty means the pod has no probe path. |
 | `status.resolvedContentGuardDetectors[].image` \* | `string` | Image is the detector container image. |

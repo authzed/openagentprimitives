@@ -112,6 +112,35 @@ type Strategy interface {
 	// rather than halfway through a bring-up that leaves a crash-looping
 	// cluster behind.
 	Validate(ctx context.Context, p ValidateParams) error
+
+	// BrowserChromeSandbox decides whether the browser-pod builder (a later
+	// task) may drop Chrome's own --no-sandbox flag in favor of its native
+	// seccomp/userns sandbox on this cluster kind.
+	//
+	// Phase A posture: every registered kind returns Sandboxed=false — no kind
+	// has yet verified unprivileged user namespaces are available on its nodes,
+	// which Chrome's sandbox requires. Reason is always non-empty; the browser
+	// pod builder logs it at startup regardless of Sandboxed, and the operator
+	// relies on that log line to say why Chrome is running unsandboxed. The
+	// per-kind flip to a verified seccomp-userns profile is spec §9's open
+	// item — it lands here, one kind at a time, without touching any consumer
+	// (the browser-pod builder reads this method, never a kind switch).
+	BrowserChromeSandbox() BrowserChromeSandbox
+}
+
+// BrowserChromeSandbox is a cloud.Strategy's answer to whether Chrome's own
+// sandbox (seccomp + unprivileged user namespaces) is safe to rely on inside
+// the browser pod, on this cluster kind.
+type BrowserChromeSandbox struct {
+	// Sandboxed is true only once this kind has verified unprivileged user
+	// namespaces are available on its nodes. False means the browser pod
+	// builder runs Chrome with --no-sandbox, relying on the pod boundary and
+	// the authorization gate instead.
+	Sandboxed bool
+	// Reason is always non-empty — it is recorded and logged by the browser-pod
+	// builder/operator at startup regardless of Sandboxed, so there is always a
+	// line in the log explaining the posture.
+	Reason string
 }
 
 var registry = struct {

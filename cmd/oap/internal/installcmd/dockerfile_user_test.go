@@ -28,7 +28,13 @@ import (
 // runner and sandbox are intentionally exempt: the operator synthesizes their
 // Pods with an explicit numeric runAsUser (1000) that overrides the image USER,
 // and their workspace UID story is deliberately 1000. The detector image is
-// exempt too (no fixed runAsNonRoot Deployment in the install bundle).
+// exempt too (no fixed runAsNonRoot Deployment in the install bundle). The
+// browser toolbox image's exemption is purely STRUCTURAL: this test requires
+// an explicit --target stage and the browser Dockerfile has exactly one
+// runtime stage with no Stage selector, so there is nothing for the stage
+// scanner to look up. Its USER is nonetheless numeric (`USER 65532`,
+// images/browser/Dockerfile) for the same kubelet reason this test exists —
+// the exemption skips the structural requirement, not the invariant.
 //
 // This is an EXEMPTION set, not an inclusion set: TestServiceImagesUseNumericUser
 // iterates apimage.All (the long-lived platform Deployments) and requires a
@@ -43,6 +49,7 @@ var imagesExemptFromNumericUser = map[string]bool{
 	apimage.Runner.Target:   true,
 	apimage.Sandbox.Target:  true,
 	apimage.Detector.Target: true,
+	apimage.Browser.Target:  true,
 }
 
 var numericUserRe = regexp.MustCompile(`^[0-9]+(:[0-9]+)?$`)

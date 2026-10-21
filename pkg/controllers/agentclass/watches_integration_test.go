@@ -524,6 +524,47 @@ func TestAgentClass_ReReconcilesOnSpiceboxToolkitChange(t *testing.T) {
 	eventuallyValid(t, env.Client, "ac-tk-watch", metav1.ConditionTrue, "", 10*time.Second)
 }
 
+// TestAgentClass_ReReconcilesOnBrowserToolboxCreate exercises the
+// BrowserToolbox watch. The referenced BrowserToolbox does not exist yet, so
+// the AgentClass lands Valid=False reason=AgentClassBrowserToolboxMissing;
+// creating the BrowserToolbox must re-reconcile the AgentClass through a
+// watch. Unlike the SidecarToolbox/AgentUI watch tests, Phase A validation
+// never reads a Valid condition on the BrowserToolbox (there is no
+// BrowserToolbox reconciler yet), so existence alone must flip the class to
+// Valid=True. Fails (times out) when SetupWithManager does not register a
+// watch on BrowserToolbox.
+func TestAgentClass_ReReconcilesOnBrowserToolboxCreate(t *testing.T) {
+	env := testenv.Shared(t)
+	startManager(t, env)
+	ctx := context.Background()
+
+	require.NoError(t, env.Client.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "llm-creds", Namespace: "default"},
+		Data:       map[string][]byte{"api-key": []byte("sk")},
+	}), "create llm-creds")
+
+	ac := newClass("ac-btb-watch")
+	ac.Spec.BrowserToolboxes = []spiceboxv1alpha1.AgentClassBrowserToolboxRef{
+		{Name: "web", Ref: "btb-watch"},
+	}
+	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass before its BrowserToolbox")
+	eventuallyValid(t, env.Client, "ac-btb-watch", metav1.ConditionFalse,
+		spiceboxv1alpha1.ReasonAgentClassBrowserToolboxMissing, 5*time.Second)
+
+	btb := &spiceboxv1alpha1.BrowserToolbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "btb-watch", Namespace: "default"},
+		Spec: spiceboxv1alpha1.BrowserToolboxSpec{
+			Access: spiceboxv1alpha1.BrowserAccess{
+				Mode:  "allowlist",
+				Sites: []spiceboxv1alpha1.BrowserSite{{Host: "example.com"}},
+			},
+		},
+	}
+	require.NoError(t, env.Client.Create(ctx, btb), "create BrowserToolbox")
+
+	eventuallyValid(t, env.Client, "ac-btb-watch", metav1.ConditionTrue, "", 5*time.Second)
+}
+
 // TestAgentClass_ReReconcilesOnAgentUIStatusChange exercises the AgentUI
 // watch. The referenced AgentUI exists but has no Valid condition yet (the
 // same install-ordering race as the toolspec and sidecar-toolbox cases), so

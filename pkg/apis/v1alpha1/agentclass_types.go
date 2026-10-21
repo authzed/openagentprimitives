@@ -150,6 +150,12 @@ type AgentClassSpec struct {
 	// +optional
 	SidecarToolboxes []AgentClassSidecarToolboxRef `json:"sidecarToolboxes,omitempty"`
 
+	// BrowserToolboxes references BrowserToolbox CRs in the same namespace
+	// whose per-session browser each session gets. Each ref's Name is the
+	// LLM-facing prefix; pattern [a-z0-9_-]{1,32}.
+	// +optional
+	BrowserToolboxes []AgentClassBrowserToolboxRef `json:"browserToolboxes,omitempty"`
+
 	// WorkspaceSource optionally binds a single WorkspaceSource whose
 	// materialized base seeds each session's /workspace as a per-session
 	// copy-on-write overlay. The referenced CR must be Valid. A single source
@@ -999,6 +1005,15 @@ type AgentClassSidecarToolboxRef struct {
 	// Name is the LLM-prefix; pattern [a-z0-9_-]{1,32}.
 	Name string `json:"name"`
 	// Ref names the SidecarToolbox CR in the same namespace.
+	Ref string `json:"ref"`
+}
+
+// AgentClassBrowserToolboxRef references a BrowserToolbox CR in the same namespace.
+type AgentClassBrowserToolboxRef struct {
+	// Name is the LLM-visible tool prefix; pattern [a-z0-9_-]{1,32}.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9_-]{1,32}$`
+	Name string `json:"name"`
+	// Ref names the BrowserToolbox CR in the same namespace.
 	Ref string `json:"ref"`
 }
 

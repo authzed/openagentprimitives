@@ -164,21 +164,31 @@ func modeEgressRules(mode spiceboxv1alpha1.NetworkMode) []networkingv1.NetworkPo
 // BuildRunnerNetworkPolicy isolates the session's runner pod: all
 // ingress denied (probes and pods/exec are kubelet/apiserver-mediated
 // and unaffected), egress restricted to DNS, the control-plane
-// services, separate-pod sidecar MCP servers, and external TCP
-// 443/6443 (LLM / remote MCP / apiserver — no portable apiserver
-// selector exists; see config/networkpolicy/egress-external.yaml for
-// the same rationale). In-pod sidecar containers share the runner
-// pod's network namespace, so their upstream HTTPS calls ride the
-// external rule.
+// services, separate-pod sidecar MCP servers, this session's browser
+// pod(s), and external TCP 443/6443 (LLM / remote MCP / apiserver — no
+// portable apiserver selector exists; see
+// config/networkpolicy/egress-external.yaml for the same rationale).
+// In-pod sidecar containers share the runner pod's network namespace,
+// so their upstream HTTPS calls ride the external rule.
 //
-// Separate-pod sidecar toolbox pods carry the same
-// agentprimitives.authzed.com/agentsession label as the runner pod
-// (plus agentprimitives.authzed.com/sidecartoolbox). The policy's
-// PodSelector excludes them via a DoesNotExist expression on the
-// sidecartoolbox label so that this policy does not deny their ingress.
-// A dedicated egress rule allows runner→sidecar traffic on all ports
-// (port numbers are allocated dynamically by AllocatePorts and are not
-// statically known at policy-build time).
+// Separate-pod sidecar toolbox pods AND per-session browser pods carry the same
+// agentprimitives.authzed.com/agentsession label as the runner pod (plus their
+// own agentprimitives.authzed.com/sidecartoolbox or
+// agentprimitives.authzed.com/browsertoolbox label). The policy's PodSelector
+// excludes BOTH via DoesNotExist expressions so that this runner policy — with
+// its full egress to the operator, SpiceDB, NATS and external 443/6443 — never
+// unions onto a per-toolbox pod. Omitting the browser exclusion would let a
+// hostile page driving Chrome inherit the runner's entire egress; see the
+// matching exclusion in cosidecar.BuildNetworkPolicy's ingress peer. A dedicated
+// egress rule allows runner→sidecar traffic on all ports (port numbers are
+// allocated dynamically by AllocatePorts and are not statically known at
+// policy-build time). A second dedicated egress rule allows runner→browser
+// traffic on exactly browserGatePort (9223): unlike a sidecar's dynamically
+// allocated MCP port, the browser gate's port is fixed, so (unlike the sidecar
+// rule) it can and does name the port. Without this rule the runner's own dial
+// to http://<BrowserPodIP>:9223 (pkg/agent/tool/browser) is denied by its own
+// egress policy on an enforcing CNI — NetworkPolicy is the AND of both ends,
+// and BuildBrowserNetworkPolicy's ingress rule alone is not sufficient.
 func BuildRunnerNetworkPolicy(sess *spiceboxv1alpha1.AgentSession, cfg NetpolConfig) *networkingv1.NetworkPolicy {
 	egress := []networkingv1.NetworkPolicyEgressRule{
 		netpolrule.DNSEgress(),
@@ -214,6 +224,24 @@ func BuildRunnerNetworkPolicy(sess *spiceboxv1alpha1.AgentSession, cfg NetpolCon
 			},
 		}},
 	})
+	// This session's per-session browser pod(s), same namespace (no
+	// namespaceSelector), on exactly the browser gate's fixed port
+	// (browserGatePort — never dynamically allocated like a sidecar's MCP
+	// port, so unlike the sidecar rule above this one CAN and does name the
+	// port). Mirrors BuildBrowserNetworkPolicy's ingress rule, which allows
+	// exactly this port from the runner peer. Selects nothing when the
+	// session has no browser toolbox.
+	egress = append(egress, networkingv1.NetworkPolicyEgressRule{
+		To: []networkingv1.NetworkPolicyPeer{{
+			PodSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"agentprimitives.authzed.com/agentsession": sess.Name},
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key: labelBrowserToolbox, Operator: metav1.LabelSelectorOpExists,
+				}},
+			},
+		}},
+		Ports: []networkingv1.NetworkPolicyPort{netpolrule.Port(corev1.ProtocolTCP, browserGatePort)},
+	})
 	egress = append(egress, networkingv1.NetworkPolicyEgressRule{
 		To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0"}}},
 		Ports: []networkingv1.NetworkPolicyPort{
@@ -235,9 +263,10 @@ func BuildRunnerNetworkPolicy(sess *spiceboxv1alpha1.AgentSession, cfg NetpolCon
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
 				MatchLabels: map[string]string{"agentprimitives.authzed.com/agentsession": sess.Name},
-				MatchExpressions: []metav1.LabelSelectorRequirement{{
-					Key: labelSidecarToolbox, Operator: metav1.LabelSelectorOpDoesNotExist,
-				}},
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: labelSidecarToolbox, Operator: metav1.LabelSelectorOpDoesNotExist},
+					{Key: labelBrowserToolbox, Operator: metav1.LabelSelectorOpDoesNotExist},
+				},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
 			Egress:      egress,
@@ -391,6 +420,108 @@ func BuildSidecarNetworkPolicy(sess *spiceboxv1alpha1.AgentSession, rt spiceboxv
 		)
 	}
 	return np
+}
+
+// browserEgressExceptCIDRs excludes RFC1918 private ranges, link-local
+// (169.254.0.0/16 -- which also covers the cloud-metadata address
+// 169.254.169.254), and the CGNAT shared-address space (100.64.0.0/10) from
+// the browser pod's "anywhere" TCP 80/443 egress rule.
+//
+// This is deliberately not the same literal set any Go-side check already
+// covers: browsergate's own dialer (pkg/tools/browsergate) refuses a
+// resolved private/metadata/loopback address but has no CGNAT carve-out
+// (RFC 6598 space is not "private" in net/netip's sense) -- this
+// NetworkPolicy except-list is the layer that closes that specific gap, at
+// the CNI level, for every destination the gate's own guard does not
+// already deny.
+var browserEgressExceptCIDRs = []string{
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"169.254.0.0/16",
+	"100.64.0.0/10",
+}
+
+// BuildBrowserNetworkPolicy isolates one per-session browser pod (spec
+// §2.2).
+//
+// Egress: DNS to the cluster resolver (same shape as BuildRunnerNetworkPolicy's
+// own DNS rule), then TCP 80+443 to 0.0.0.0/0 EXCEPT the private/link-local/
+// CGNAT ranges in browserEgressExceptCIDRs. Hostnames are not expressible in
+// vanilla NetworkPolicy, so rt.EffectiveSites remains the source of truth for
+// a DNS-aware CNI to narrow further, same as every other allowlist-mode
+// egress rule in this package.
+//
+// Ingress: only from this session's runner pod -- agentsession label
+// present, with NEITHER sidecartoolbox NOR browsertoolbox present. Excluding
+// BOTH labels (not just browsertoolbox) is what distinguishes the runner
+// from every per-toolbox pod sharing its namespace, including this
+// toolbox's own browser-pod siblings -- on exactly the gate's fixed port
+// (browserGatePort, never dynamically allocated like a sidecar's MCP port).
+//
+// Returns nil when cfg.Enabled is false, matching every other builder's
+// disabled behavior in this package. Unlike BuildRunnerNetworkPolicy/
+// BuildSidecarNetworkPolicy (whose Enabled check lives only in their
+// ensure*NetworkPolicy wrapper), that check lives IN this builder so it
+// stays callable, and testable, as a pure function with no fake client.
+func BuildBrowserNetworkPolicy(sess *spiceboxv1alpha1.AgentSession, rt spiceboxv1alpha1.ResolvedBrowserToolbox, cfg NetpolConfig) *networkingv1.NetworkPolicy {
+	if !cfg.Enabled {
+		return nil
+	}
+
+	except := make([]string, len(browserEgressExceptCIDRs))
+	copy(except, browserEgressExceptCIDRs)
+
+	egress := []networkingv1.NetworkPolicyEgressRule{
+		netpolrule.DNSEgress(),
+		{
+			To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{
+				CIDR:   "0.0.0.0/0",
+				Except: except,
+			}}},
+			Ports: []networkingv1.NetworkPolicyPort{
+				netpolrule.Port(corev1.ProtocolTCP, 80),
+				netpolrule.Port(corev1.ProtocolTCP, 443),
+			},
+		},
+	}
+
+	ingress := []networkingv1.NetworkPolicyIngressRule{{
+		From: []networkingv1.NetworkPolicyPeer{{
+			PodSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"agentprimitives.authzed.com/agentsession": sess.Name},
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: labelSidecarToolbox, Operator: metav1.LabelSelectorOpDoesNotExist},
+					{Key: labelBrowserToolbox, Operator: metav1.LabelSelectorOpDoesNotExist},
+				},
+			},
+		}},
+		Ports: []networkingv1.NetworkPolicyPort{netpolrule.Port(corev1.ProtocolTCP, browserGatePort)},
+	}}
+
+	return &networkingv1.NetworkPolicy{
+		TypeMeta: metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "NetworkPolicy"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      BrowserNetworkPolicyName(sess, rt.Ref),
+			Namespace: sess.Namespace,
+			Labels: map[string]string{
+				"agentprimitives.authzed.com/agentsession": sess.Name,
+				labelBrowserToolbox:                        rt.Ref,
+			},
+			OwnerReferences: sessionOwnerRef(sess),
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"agentprimitives.authzed.com/agentsession": sess.Name,
+					labelBrowserToolbox:                        rt.Ref,
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+			Ingress:     ingress,
+			Egress:      egress,
+		},
+	}
 }
 
 // NamespaceDefaultDenyName is the fixed name of the per-namespace floor. It

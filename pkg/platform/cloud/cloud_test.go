@@ -51,6 +51,9 @@ func (fakeStrategy) ResolveClusterIdentity(context.Context, ClusterIdentityParam
 }
 func (fakeStrategy) InstallProfile() InstallProfile                 { return ProductionProfile }
 func (fakeStrategy) Validate(context.Context, ValidateParams) error { return nil }
+func (f fakeStrategy) BrowserChromeSandbox() BrowserChromeSandbox {
+	return BrowserChromeSandbox{Sandboxed: false, Reason: "fakeStrategy " + f.key + ": test fixture, not sandboxed"}
+}
 
 // resetRegistry clears the shared registry before a test runs so the test can
 // register its own fakeStrategy fixtures against a blank slate, then restores

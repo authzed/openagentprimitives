@@ -43,6 +43,7 @@ var crGroupVersionResources = []schema.GroupVersionResource{
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "useridentities"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "sessionuseridentities"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "sidecartoolboxes"},
+	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "browsertoolboxes"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "clusteragentsettings"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "agentsettings"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "skills"},

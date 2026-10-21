@@ -104,6 +104,16 @@ func (s Strategy) Validate(ctx context.Context, p cloud.ValidateParams) error {
 	return cloud.ValidateManagedPrefix(ctx, s, p)
 }
 
+// BrowserChromeSandbox returns the Phase A posture: unsandboxed, pod boundary
+// + gate only. EKS has not verified unprivileged user namespaces on its
+// nodes.
+func (Strategy) BrowserChromeSandbox() cloud.BrowserChromeSandbox {
+	return cloud.BrowserChromeSandbox{
+		Sandboxed: false,
+		Reason:    "unprivileged user namespaces not verified on EKS; Chrome runs --no-sandbox behind the pod boundary and the gate",
+	}
+}
+
 // eksWorkspaceStorage is the EKS cloud.WorkspaceStorage implementation.
 type eksWorkspaceStorage struct{}
 

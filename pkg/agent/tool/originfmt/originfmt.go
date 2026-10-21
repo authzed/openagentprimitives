@@ -39,6 +39,9 @@ const (
 	// KindSidecarToolbox is the origin kind of a tool served by a
 	// SidecarToolbox CR's sidecar MCP server.
 	KindSidecarToolbox = "sidecartoolbox"
+	// KindBrowserToolbox is the origin kind of a tool served by a
+	// BrowserToolbox CR's per-session browser (reached through the gate).
+	KindBrowserToolbox = "browsertoolbox"
 )
 
 // The three composers below are the ONLY places a caller should build an origin
@@ -89,4 +92,16 @@ func ForSidecar(rt spiceboxv1alpha1.ResolvedSidecarToolbox) string {
 		return ""
 	}
 	return KindSidecarToolbox + "/" + rt.Ref
+}
+
+// ForBrowser mirrors browser.browserTool's Origin(). Like ForSidecar it takes
+// the whole resolved entry so the call site cannot pick Name (the LLM-facing
+// prefix) where Ref (the BrowserToolbox CR name, which Origin() uses) is meant.
+// All of one toolbox's tools share this origin so toolguard's circuit breaker
+// treats them as one origin.
+func ForBrowser(rt spiceboxv1alpha1.ResolvedBrowserToolbox) string {
+	if rt.Ref == "" {
+		return ""
+	}
+	return KindBrowserToolbox + "/" + rt.Ref
 }

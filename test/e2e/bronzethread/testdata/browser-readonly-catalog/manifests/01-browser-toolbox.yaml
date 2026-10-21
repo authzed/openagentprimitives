@@ -1,0 +1,30 @@
+# The BrowserToolbox CR this bundle exercises — interaction: readonly.
+#
+# Named in bundle.json's extraManifests (as "01-browser-toolbox") as well as
+# being applied through agentDir like every other file in this directory; see
+# browser-blocked-host/manifests/01-browser-toolbox.yaml's header for the full
+# rationale (same driver, same reason) — short version: the threadrun driver's
+# browserToolboxSpecs reads the RAW TEXT of every extraManifests-named file to
+# find a `kind: BrowserToolbox` document, because this AgentClass never
+# references the toolbox and so nothing ever resolves it live from the API.
+#
+# Phase A offers the identical observation tool set regardless of
+# interaction (pkg/agent/tool/browser/synthesize.go's Synthesize says so
+# explicitly) — click/type do not exist as ops at all yet, for any toolbox.
+# So this bundle's toolNotOffered: web_click / web_type assertions pass today
+# independent of this readonly setting; they exist as the standing guard for
+# Phase C, when acting tools arrive and readonly must keep excluding them.
+#
+# access.sites names an unrelated placeholder host, exactly as in
+# browser-blocked-host: the real test site's host is appended automatically
+# by setupBrowserFixture for an allowlist-mode toolbox.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: BrowserToolbox
+metadata: {name: web, namespace: default}
+spec:
+  access:
+    mode: allowlist
+    sites:
+      - host: example.com
+  interaction: readonly
+  state: ephemeral

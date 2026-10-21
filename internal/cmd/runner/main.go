@@ -71,6 +71,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/session/state/plans"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/authfail"
+	browsertoolboxsynth "github.com/authzed/openagentprimitives/pkg/agent/tool/browser"
 	mcpdispatch "github.com/authzed/openagentprimitives/pkg/agent/tool/mcp"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta/capability"
@@ -130,6 +131,7 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/slack" // register slack kind
 	"github.com/authzed/openagentprimitives/pkg/channels/notice"
 	"github.com/authzed/openagentprimitives/pkg/cli/clikit"
+	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/httpclient"
 	_ "github.com/authzed/openagentprimitives/pkg/memory/kinds/all"
@@ -1473,6 +1475,100 @@ func run(cfg *config) error {
 		bootSynthedSidecars[rt.Name] = rt.SidecarPodIP
 	}
 
+	// Build browser-toolbox tools.
+	//
+	// Mirrors the sidecar block above: the operator creates the runner pod and
+	// any per-session browser pods in parallel, so at runner boot a browser
+	// pod may not yet be Ready — its BrowserPodIP is empty in the session
+	// status snapshot (`sess`) read earlier in run(). Poll the AgentSession
+	// until the IP is reflected, bounded by browserPodIPTimeout (same wait
+	// shape/constants as sidecarPodIPTimeout/sidecarPodIPPollInterval).
+	const browserPodIPTimeout = 120 * time.Second
+	const browserPodIPPollInterval = 2 * time.Second
+
+	browserTools := []tool.Tool{}
+	for _, rt := range sess.Status.ResolvedBrowserToolboxes {
+		if rt.BrowserPodIP == "" {
+			slog.Info("browser toolbox IP not yet reflected; polling",
+				"browser", rt.Name, "timeout", browserPodIPTimeout)
+			deadline := time.Now().Add(browserPodIPTimeout)
+			for time.Now().Before(deadline) && rt.BrowserPodIP == "" {
+				select {
+				case <-rootCtx.Done():
+					return rootCtx.Err()
+				case <-time.After(browserPodIPPollInterval):
+				}
+				var refreshed spiceboxv1alpha1.AgentSession
+				if rerr := c.Get(rootCtx, sessKey, &refreshed); rerr != nil {
+					return fmt.Errorf("poll AgentSession for browser toolbox %q IP: %w", rt.Name, rerr)
+				}
+				for _, rrt := range refreshed.Status.ResolvedBrowserToolboxes {
+					if rrt.Name == rt.Name {
+						rt = rrt
+						break
+					}
+				}
+			}
+			if rt.BrowserPodIP == "" {
+				// Browser pod created but never became Ready within the
+				// timeout — treat as boot failure, same as the sidecar case.
+				if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+					fmt.Sprintf("browser toolbox %q: BrowserPodIP not reflected after %s", rt.Name, browserPodIPTimeout)); werr != nil {
+					return werr
+				}
+				return nil
+			}
+		}
+
+		// Read the per-session gate token Secret the operator minted
+		// (mintBrowserToken) — the runner's per-session Role is pinned to
+		// exactly this Secret's deterministic name. The Secret's one data key
+		// is "token" (pkg/controllers/agentsession's browserTokenSecretKey is
+		// unexported, so the literal is duplicated here deliberately).
+		var tokenSecret corev1.Secret
+		if gerr := c.Get(rootCtx, client.ObjectKey{Namespace: ns, Name: agentsession.BrowserTokenSecretName(&sess, rt.Ref)}, &tokenSecret); gerr != nil {
+			if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+				fmt.Sprintf("browser toolbox %q: get token secret: %v", rt.Name, gerr)); werr != nil {
+				return werr
+			}
+			return nil
+		}
+		token := string(tokenSecret.Data["token"])
+		if token == "" {
+			// The operator always writes the "token" key (mintBrowserToken),
+			// so an empty value means the Secret was tampered with or the
+			// contract drifted. Fail the boot loudly rather than letting
+			// every browser call die later on an opaque gate 401.
+			if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+				fmt.Sprintf("browser toolbox %q: token secret %q has an empty %q key", rt.Name, tokenSecret.Name, "token")); werr != nil {
+				return werr
+			}
+			return nil
+		}
+
+		// acceptsImages gates the screenshot observation tool (spec §3.2). The
+		// browser gate's screenshot op returns a PNG (synthesize.go's
+		// screenshotOp), so the predicate is exactly "does this session's
+		// resolved model accept a native image/png content block" —
+		// llm.Provider.NativeInputMIMEs(model), the same cheap/no-network
+		// provider method that resolves modelCaps a bit further down in this
+		// function, just asked about MIME support instead of Capability
+		// flags. Fail-closed: an unknown model yields an empty MIMESet, so
+		// Has returns false and the screenshot tool is withheld rather than
+		// offered to a model that cannot consume it.
+		acceptsImages := provider.NativeInputMIMEs(sess.Status.EffectiveSettings.Model.Name).Has("image/png")
+		gateURL := fmt.Sprintf("http://%s:%d", rt.BrowserPodIP, rt.GatePort)
+		built, serr := browsertoolboxsynth.Synthesize(rt, gateURL, token, acceptsImages)
+		if serr != nil {
+			if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionBrowserBootFailed,
+				fmt.Sprintf("browser toolbox %q: %v", rt.Name, serr)); werr != nil {
+				return werr
+			}
+			return nil
+		}
+		browserTools = append(browserTools, built...)
+	}
+
 	// Resolve opted-in skills for this agent class. The ceiling enforcement
 	// (AllowedSkills/DeniedSkills) is already done upstream by the webhook and
 	// controller; the runner trusts class.Spec.Skills as validated. Fail-closed:
@@ -1944,7 +2040,7 @@ func run(cfg *config) error {
 		Session:      &sess,
 		Binding:      bindingOrNil,
 		Env:          env,
-		NonMetaTools: append(append(append([]tool.Tool{}, sandboxTools...), mcpTools...), sidecarTools...),
+		NonMetaTools: append(append(append(append([]tool.Tool{}, sandboxTools...), mcpTools...), sidecarTools...), browserTools...),
 		Logger:       logr.FromSlogHandler(slog.Default().Handler()),
 	})
 	mergedTools := assembled.Tools
