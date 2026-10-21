@@ -273,6 +273,120 @@ func TestEngineExpiredOAuthSuggestRefresh(t *testing.T) {
 	assert.Contains(t, out.String(), "oap identity refresh")
 }
 
+// TestEngineRefreshForcesNamedCredential: --refresh <name> re-runs the named
+// credential's flow even though it is already present and valid — the force
+// that the plain idempotency check (TestEngineSkipsWhenCredentialPrePopulated)
+// would otherwise skip. This is the expired-static-key case: present, valid-
+// looking, but stale, so the user asks for it specifically.
+func TestEngineRefreshForcesNamedCredential(t *testing.T) {
+	builtins.Reset()
+	flow := &recordingFlow{}
+	builtins.Register(flow)
+
+	preID := &spiceboxv1alpha1.AgentIdentity{
+		ObjectMeta: metav1.ObjectMeta{Name: "pm-tools", Namespace: "default"},
+		Spec: spiceboxv1alpha1.AgentIdentitySpec{
+			Credentials: []spiceboxv1alpha1.AgentCredential{{
+				Name: "github-token", Type: "static",
+				Static: &spiceboxv1alpha1.StaticCredentialSource{
+					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "github-token", Key: "token"},
+				},
+			}},
+		},
+	}
+	preSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "github-token", Namespace: "default"},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{"token": []byte("ghp_already_provisioned")},
+	}
+	c := newClient(t, preID, preSec)
+
+	out := &strings.Builder{}
+	req := newRunRequest("pm-tools", []string{"cli:gh"}, strings.NewReader(""), out)
+	req.RefreshCredential = "github-token"
+	require.NoError(t, setup.Run(context.Background(), c, req), "Run\n%s", out.String())
+	assert.Equal(t, 1, flow.called,
+		"flow called %d times; want 1 (--refresh forces past the present-and-valid short-circuit)\noutput:\n%s",
+		flow.called, out.String())
+	assert.NotContains(t, out.String(), "already set up",
+		"--refresh re-runs the flow; it must not report the credential as already set up")
+}
+
+// TestEngineRefreshUnknownNameSuggests: a --refresh value that matches no
+// credential in the run's requirements is a hard error carrying the nearest
+// name — a typo gets a pointer, not a clean exit that refreshed nothing.
+func TestEngineRefreshUnknownNameSuggests(t *testing.T) {
+	builtins.Reset()
+	flow := &recordingFlow{}
+	builtins.Register(flow)
+	c := newClient(t)
+
+	out := &strings.Builder{}
+	req := newRunRequest("my-bot", []string{"cli:gh"}, strings.NewReader(""), out)
+	req.RefreshCredential = "github-tokn" // one deletion away from github-token
+	err := setup.Run(context.Background(), c, req)
+	require.Error(t, err, "a --refresh value matching no credential must fail, not no-op")
+	assert.Contains(t, err.Error(), "did you mean")
+	assert.Contains(t, err.Error(), "github-token")
+	assert.Equal(t, 0, flow.called, "nothing is refreshed when the name matches no credential")
+}
+
+// TestEngineRefreshFarNameListsAvailableWithoutGuessing: a name too far from any
+// credential still fails and lists what is available, but offers no "did you
+// mean?" — the threshold keeps a wild typo from fuzzy-matching an unrelated key.
+func TestEngineRefreshFarNameListsAvailableWithoutGuessing(t *testing.T) {
+	builtins.Reset()
+	flow := &recordingFlow{}
+	builtins.Register(flow)
+	c := newClient(t)
+
+	out := &strings.Builder{}
+	req := newRunRequest("my-bot", []string{"cli:gh"}, strings.NewReader(""), out)
+	req.RefreshCredential = "zzz"
+	err := setup.Run(context.Background(), c, req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "available: github-token")
+	assert.NotContains(t, err.Error(), "did you mean", "a far-off name must not fuzzy-suggest")
+	assert.Equal(t, 0, flow.called)
+}
+
+// TestEngineRefreshNonInteractiveRejected: --refresh re-runs an interactive
+// flow, which --non-interactive forbids — the combination is rejected up front
+// rather than reaching the flow and failing with a false "not set up yet".
+func TestEngineRefreshNonInteractiveRejected(t *testing.T) {
+	builtins.Reset()
+	flow := &recordingFlow{}
+	builtins.Register(flow)
+	c := newClient(t)
+
+	out := &strings.Builder{}
+	req := newRunRequest("my-bot", []string{"cli:gh"}, strings.NewReader(""), out)
+	req.RefreshCredential = "github-token"
+	req.NonInteractive = true
+	err := setup.Run(context.Background(), c, req)
+	require.Error(t, err, "--refresh + --non-interactive must be rejected")
+	assert.Contains(t, err.Error(), "--non-interactive")
+	assert.Equal(t, 0, flow.called, "rejected before any flow runs")
+}
+
+// TestEngineForceNonInteractiveRejected: --force is the same contradiction with
+// --non-interactive and gets the same up-front guard.
+func TestEngineForceNonInteractiveRejected(t *testing.T) {
+	builtins.Reset()
+	flow := &recordingFlow{}
+	builtins.Register(flow)
+	c := newClient(t)
+
+	out := &strings.Builder{}
+	req := newRunRequest("my-bot", []string{"cli:gh"}, strings.NewReader(""), out)
+	req.Force = true
+	req.NonInteractive = true
+	err := setup.Run(context.Background(), c, req)
+	require.Error(t, err, "--force + --non-interactive must be rejected")
+	assert.Contains(t, err.Error(), "--non-interactive")
+	assert.Equal(t, 0, flow.called, "rejected before any flow runs")
+}
+
 func TestEngineMaskedTokenInOutput(t *testing.T) {
 	// Run engine against cli:gh with a stub builtin that stores a
 	// sufficiently long bearer token. Assert stdout contains the masked form.

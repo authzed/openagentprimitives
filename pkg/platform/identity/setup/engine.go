@@ -41,6 +41,15 @@ type RunRequest struct {
 	Force bool
 	// OnlyMatch, when non-empty, filters Targets to entries that exactly equal it.
 	OnlyMatch string
+	// RefreshCredential, when non-empty, scopes the run to the single credential
+	// of that name — the SuggestedName printed in the "already set up: <name>"
+	// line — re-running just that credential's flow forced past the idempotency
+	// check ("refresh this one, even though it looks fine") and skipping every
+	// other credential. A value matching no credential in the run's requirements
+	// is a hard error carrying the nearest matches, never a silent no-op. Set by
+	// the --refresh flag. Unlike OnlyMatch it selects by CREDENTIAL name, not by
+	// target entity, which is what a user reading that status line actually has.
+	RefreshCredential string
 
 	Stdin  io.Reader
 	Stdout io.Writer
@@ -142,22 +151,56 @@ func Run(ctx context.Context, c client.Client, req RunRequest) error {
 	// command supplies it; this only substitutes plain text for a caller with none.
 	req.Theme = req.styles()
 
+	// --refresh and --force both re-run a credential's interactive setup flow,
+	// which --non-interactive forbids the prompts for. The combinations
+	// contradict, so reject them up front: otherwise the run reaches the flow,
+	// the non-interactive presenter refuses the first unanswered screen, and the
+	// user sees "<name> is not set up yet" — false for a credential being
+	// force-re-run — with a non-zero exit instead of a clear reason.
+	if req.NonInteractive && req.RefreshCredential != "" {
+		return fmt.Errorf("setup: --refresh re-runs %q's interactive setup, which --non-interactive forbids; "+
+			"drop --non-interactive", req.RefreshCredential)
+	}
+	if req.NonInteractive && req.Force {
+		return errors.New("setup: --force re-runs setup flows interactively, which --non-interactive forbids; drop one of them")
+	}
+
 	// A single credential is often required by several targets. seen dedups by
 	// credential across the whole run, so each one is provisioned — and printed —
 	// exactly once, not once per referencing target.
 	seen := map[string]bool{}
+	// --refresh scoping. Inert (every method a no-op, errors nil) when the flag
+	// was not given, so a run without it behaves exactly as before. only is
+	// carried so an unmatched --refresh error can name the --only scope that
+	// narrowed the candidates.
+	refresh := &refreshFilter{want: req.RefreshCredential, only: req.OnlyMatch}
+	onlyMatched := false
 	for _, t := range req.Targets {
 		if req.OnlyMatch != "" && t != req.OnlyMatch {
 			continue
 		}
-		if err := runOne(ctx, c, req, t, seen); err != nil {
+		onlyMatched = true
+		if err := runOne(ctx, c, req, t, seen, refresh); err != nil {
 			return err
 		}
+	}
+	// An --only that matched no target is almost always a typo: fail naming the
+	// valid targets rather than exit cleanly having silently done nothing. Checked
+	// before the --refresh error below, because a mistyped --only is the root
+	// cause when both would otherwise fire.
+	if req.OnlyMatch != "" && !onlyMatched {
+		return fmt.Errorf("setup: --only %q matched no target; targets are %s", req.OnlyMatch, strings.Join(req.Targets, ", "))
+	}
+	// A --refresh that named no credential the run actually iterated is a typo,
+	// not a no-op: fail with the nearest matches so the user learns nothing was
+	// refreshed and what they likely meant, rather than seeing a clean exit.
+	if err := refresh.unmatchedErr(); err != nil {
+		return err
 	}
 	return nil
 }
 
-func runOne(ctx context.Context, c client.Client, req RunRequest, matchStr string, seen map[string]bool) error {
+func runOne(ctx context.Context, c client.Client, req RunRequest, matchStr string, seen map[string]bool, refresh *refreshFilter) error {
 	kind, suffix, err := registry.ParseBindingMatch(matchStr)
 	if err != nil {
 		return fmt.Errorf("setup: %s: %w", matchStr, err)
@@ -172,7 +215,7 @@ func runOne(ctx context.Context, c client.Client, req RunRequest, matchStr strin
 		return nil
 	}
 	for _, r := range reqs {
-		if err := runRequirement(ctx, c, req, kind, target, matchStr, r, seen); err != nil {
+		if err := runRequirement(ctx, c, req, kind, target, matchStr, r, seen, refresh); err != nil {
 			return err
 		}
 	}
@@ -182,7 +225,7 @@ func runOne(ctx context.Context, c client.Client, req RunRequest, matchStr strin
 func runRequirement(
 	ctx context.Context, c client.Client, req RunRequest,
 	kind authkind.Kind, target authkind.Target, matchStr string,
-	r authkind.CredentialRequirement, seen map[string]bool,
+	r authkind.CredentialRequirement, seen map[string]bool, refresh *refreshFilter,
 ) error {
 	// Skip silently on repeat, before the separator below, so a credential shared
 	// by several targets is never printed or prompted twice.
@@ -192,11 +235,21 @@ func runRequirement(
 	}
 	seen[dedupKey] = true
 
+	// --refresh scoping: record this credential as a candidate (so a wrong
+	// --refresh value can be answered with a "did you mean?") and skip every
+	// credential except the one named. The named credential falls through and is
+	// forced past the idempotency check below. consider is a no-op returning true
+	// when --refresh was not given.
+	if !refresh.consider(r.SuggestedName) {
+		return nil
+	}
+
 	// Trailing blank line between requirements for visual separation.
 	defer fmt.Fprintln(req.Stdout)
 
-	// Idempotency check.
-	if !req.Force {
+	// Idempotency check — skipped for --force and for the --refresh target, both
+	// of which mean "re-run this flow even though the credential looks set up".
+	if !req.Force && !refresh.active() {
 		ok, why, err := isAlreadySetUp(ctx, c, req.Namespace, req.IdentityName, r)
 		if err != nil {
 			return err

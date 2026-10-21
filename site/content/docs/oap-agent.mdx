@@ -242,6 +242,10 @@ If the AgentIdentity (spec.agentIdentity, or --identity override) does
 not exist, prompts to create it.
 
 --only &lt;prefix&gt;:&lt;name&gt;    run setup for one entity only (e.g. --only mcp:linear)
+--refresh &lt;credential&gt;    re-run setup for just one credential by name, the name
+                          shown in the "already set up: &lt;name&gt;" line, forcing past
+                          the idempotency check (e.g. --refresh tailscale-authkey);
+                          shows a "did you mean?" on an unknown name
 --identity &lt;name&gt;         override AgentClass.spec.agentIdentity
 --force                   re-run flows even when the credential is already set up
 
@@ -252,6 +256,7 @@ Flags:
 --identity string  Override AgentClass.spec.agentIdentity
 --non-interactive  Never prompt: verify credentials that are already provisioned and fail on any that are not
 --only string      Run setup for one entity only (e.g. mcp:linear)
+--refresh string   Re-run setup for just one credential by name (the name shown in 'already set up: <name>'), forcing past the idempotency check (e.g. --refresh tailscale-authkey)
 ```
 
 ## `oap agent show <name>`
