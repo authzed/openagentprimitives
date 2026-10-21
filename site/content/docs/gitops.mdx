@@ -1,0 +1,134 @@
+export const meta = {
+  title: 'GitOps with Argo CD / Flux',
+  section: 'Guides',
+  group: 'Operations',
+  order: 130,
+  description: 'Render the install as a kustomize overlay, commit it, and let Argo CD or Flux reconcile the cluster — instead of oap install mutating it directly.',
+}
+
+# GitOps with Argo CD / Flux
+
+`oap install` brings a cluster up imperatively. If instead you run GitOps — the
+desired state lives in git and a controller (Argo CD or Flux) reconciles the
+cluster toward it — use `oap render` to produce a committable kustomize overlay,
+and `oap check` to verify a synced cluster.
+
+## Render the overlay
+
+```bash
+oap render --cluster-kind gke --output-dir deploy/oap \
+  --image-registry <your-registry> \
+  --with-postgres
+```
+
+`oap render` never mutates a cluster. Its only remote call is read-only image
+digest resolution (skip it with `--no-digest-pin`). It writes a self-contained
+overlay:
+
+```
+deploy/oap/
+  kustomization.yaml       # resources + patches + components
+  base/
+    install.yaml           # the core bundle (operator, webd, authzd, spicedb-operator, CRDs)
+    channelsd.yaml         # channelsd (applied separately by oap install; included here)
+    nats.yaml              # nats
+  patches/
+    cluster-kind.yaml      # AP_CLUSTER_KIND stamped on operator + webd
+  components/              # postgres — only when --with-postgres is set
+  routing.yaml             # Gateway + HTTPRoute(s) — only when --trusted-hostname is set
+```
+
+Only `--with-postgres` is offered today: its token is minted by the overlay, so
+the component works end to end. The Graphiti/Neo4j memory backends need a
+user-supplied LLM API key the overlay cannot mint, so their GitOps support is a
+follow-up; use `oap install` for them in the meantime.
+
+The output is a pure function of the flags: re-rendering identical inputs is
+byte-identical, so Argo CD shows no phantom drift. Commit the directory and
+point an Argo CD `Application` (or a Flux `Kustomization`) at it.
+
+`oap render` refuses a memory-datastore cluster kind (`local` / `desktop`):
+those run an ephemeral, single-replica SpiceDB that seeds its schema at startup,
+which is fatal against the durable, multi-replica datastore a GitOps install
+targets.
+
+## Secrets
+
+Agent Primitives' secrets are **app-internal** — none are API keys you supply.
+The overlay includes a **pre-start bootstrap Job** (named
+`spicebox-bootstrap-secrets-<hash>`, running the operator image's
+`bootstrap-secrets` entrypoint) that mints them idempotently before the operator
+and data-plane start, so every component mounts its Secret cleanly at first boot.
+Nothing secret lands in git, and nothing is ever rotated. The Job's name carries
+a hash of its pod template, so an operator-image upgrade produces a new Job
+object (the controller prunes the old one) rather than failing against the
+immutable pod template of the existing Job.
+
+The Job mints: the three memory tokens, the admind token, the passthrough signing
+key, the NATS identity/TLS/client credentials, and — unless you bring your own
+instance — `spicebox-spicedb-token` and `spicebox-postgres-token`.
+
+The operator's webhook serving cert (`spicebox-webhook-tls`) is provisioned by an
+emitted **cert-manager** `Certificate` (a self-signed `Issuer` + the ca-injector
+annotation on the webhook configuration). This makes **cert-manager a dependency**
+of the rendered bundle. On a cluster without it, pass `--external-webhook-tls` and
+provide `spicebox-webhook-tls` + the webhook `caBundle` yourself.
+
+- **External SpiceDB / Postgres:** pass `--external-spicedb` / `--external-postgres`
+  so the Job does **not** mint that token; you provide it (e.g. via the External
+  Secrets Operator or a sealed secret).
+- **Link an existing memory token:** use the per-component
+  `--channelsd-/--webd-/--authzd-memory-token-secret` flags (one Secret each). The
+  webd token **must name a different Secret** than the channelsd/authzd tokens:
+  webd is browser-facing and its token is read-only, while the channelsd/authzd
+  tokens can write the audit log — sharing one value would hand webd that write
+  capability, so render refuses it.
+- **Nothing else to provide by default:** every internal Secret is provisioned by
+  the overlay (the Job + the cert-manager webhook Certificate). `oap render
+  --validate` reports nothing to provide unless you opted an instance external via
+  `--external-spicedb`, `--external-postgres`, or `--external-webhook-tls` — then
+  it lists exactly those.
+
+## Validate before you commit
+
+```bash
+oap render --cluster-kind gke --output-dir deploy/oap --validate
+```
+
+`--validate` builds the overlay in-process and checks that it will sync: every
+non-optional Secret reference has a creator (shipped, operator-minted, or
+linked), `AP_CLUSTER_KIND` is stamped, and first-party images are pinned. It
+prints the app-internal secrets you still need to provide. It cannot verify that
+a *linked* or externally-provided Secret actually exists in the cluster — that is
+a cluster-state fact `oap check` reports after the sync.
+
+## Verify the synced cluster
+
+After Argo CD / Flux reports synced, confirm the install is healthy with the
+same command the imperative path uses:
+
+```bash
+oap check
+```
+
+`oap check` is provenance-agnostic — it verifies live cluster state by name, so
+it works identically whether the cluster came up via `oap install` or a GitOps
+sync. It includes a check that the memory-token Secrets are present; their
+absence is the signal that the bootstrap Job never minted them (wrong image, its
+backoff was exhausted, or the operator ServiceAccount is missing Secret RBAC).
+
+## First-sync notes
+
+- The **bootstrap Job mints every internal Secret before the operator and
+  data-plane start** — there is no first-sync operator mint-and-roll step. The
+  Job and the workloads are applied together; the Job retries (its
+  `backoffLimit`) until the namespace and operator ServiceAccount it depends on
+  exist, and the operator crash-loops until the Secrets it mounts at startup
+  appear. Both are designed-for, self-healing cold-start states, not drift.
+- During that window the workloads whose token mounts are required sit in
+  `CreateContainerConfigError` — expected, and cleared the moment the Job
+  completes. No pod-template annotation is written, so after the Job finishes the
+  bundle is at rest and Argo CD / Flux report `Synced` with no phantom drift.
+- The one roll that can happen later is unrelated to first sync: if the webd
+  NATS publish-grant drifts, the operator re-mints the client credentials and
+  rolls the mounting Deployments once to remount them.

@@ -1,0 +1,14 @@
+export const meta = {
+  title: 'oap render',
+  section: 'Reference',
+  group: 'CLI',
+  order: 2940,
+  description: 'Render the install as a GitOps-ready kustomize overlay (no cluster mutation)',
+}
+
+# oap render
+
+Render the Agent Primitives install as a self-contained kustomize overlay for Argo CD / Flux.
+
+Unlike `oap install`, render never mutates a cluster (its only remote call is read-only image-digest resolution, skipped with --no-digest-pin). Commit the output directory and point your GitOps controller at it. The overlay provisions every internal Secret: a pre-start Job mints the tokens/NATS material before the operator starts, and a cert-manager Certificate populates the webhook cert (so cert-manager is a dependency). Use --external-spicedb/--external-postgres/--external-webhook-tls to provide any of those yourself, or link an existing memory token with the per-component --*-memory-token-secret flags. Verify a synced cluster with `oap check`.
+
