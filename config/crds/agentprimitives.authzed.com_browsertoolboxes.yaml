@@ -69,19 +69,42 @@ spec:
             type: object
           spec:
             description: |-
-              BrowserToolboxSpec is deliberately not annotated with a CEL XValidation
-              rule: this type is embedded by value into AgentSession's
-              status.resolvedBrowserToolboxes snapshot (see ResolvedBrowserToolbox.Spec),
-              and a CEL rule reachable from a status path both trips the status-CEL guard
-              and risks the apiserver's CRD rule-cost budget across that unbounded status
-              array -- the same reasoning SidecarToolboxSpec documents. Field-level
-              markers (Enum, Pattern, default) are the validation surface here.
+              Two Phase B rules live here rather than on BrowserToolboxSpec/BrowserAccess
+              (see that type's doc comment for why): this field is the ONE place a CRD
+              validation marker is legal, because BrowserToolboxSpec is also embedded
+              by value into AgentSession.status.resolvedBrowserToolboxes[].Spec, and a
+              rule reachable from a status path trips both the status-CEL guard and the
+              apiserver's rule-cost budget across that unbounded array. Precedent:
+              workshop_types.go:44-66 attaches its XValidation rules the same way, on
+              the field, not the type.
             properties:
               access:
                 description: |-
                   Access is the site allowlist/blocklist the browser's egress is
                   evaluated against.
                 properties:
+                  identity:
+                    description: |-
+                      Identity is the name of an AgentIdentity (in this BrowserToolbox's
+                      namespace) carrying a directCredentials credential this browser binds
+                      to -- a Phase B addition. Allowlist-only: the two XValidation rules on
+                      BrowserToolbox.Spec refuse it under Mode=blocklist, because a
+                      general-access browser has no legitimate use for a credential
+                      reference. Identity name syntax and existence are not checked here --
+                      that is the Task 7 BrowserToolbox reconciler's job (Valid=False when
+                      the reference is missing or has no directCredentials credential).
+                    type: string
+                  identitySites:
+                    default: false
+                    description: |-
+                      IdentitySites, when true, folds every host Identity's directCredentials
+                      catalog lists into this allowlist, alongside any explicit Sites -- a
+                      Phase B addition. Requires Identity to be set (enforced by the second
+                      XValidation rule on BrowserToolbox.Spec). This field only records the
+                      bit; deriving the actual host names from the identity's source happens
+                      in the AgentSession reconciler (DeriveBrowserEffectiveSites, Task 7) and
+                      is recorded onto status, not here.
+                    type: boolean
                   mode:
                     description: |-
                       Mode is "allowlist" (only Sites are reachable) or "blocklist" (every
@@ -147,6 +170,13 @@ spec:
             required:
             - access
             type: object
+            x-kubernetes-validations:
+            - message: a blocklist (general-access) browser cannot carry an identity
+                or identitySites
+              rule: self.access.mode != 'blocklist' || (!has(self.access.identity)
+                && !self.access.identitySites)
+            - message: identitySites requires identity
+              rule: '!self.access.identitySites || has(self.access.identity)'
           status:
             description: |-
               BrowserToolboxStatus is intentionally minimal in Phase A: a condition set

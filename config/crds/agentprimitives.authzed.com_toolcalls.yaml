@@ -165,6 +165,7 @@ spec:
                           - oauth
                           - federated
                           - githubApp
+                          - directCredentials
                           type: string
                       required:
                       - name

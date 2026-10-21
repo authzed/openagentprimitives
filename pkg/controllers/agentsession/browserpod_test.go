@@ -16,6 +16,7 @@ import (
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/directcred"
 )
 
 // browserToolboxSpec builds a minimal BrowserToolboxSpec for tests.
@@ -35,7 +36,7 @@ func resolvedBrowserToolbox(ref string, spec spiceboxv1alpha1.BrowserToolboxSpec
 		Name:           ref,
 		Ref:            ref,
 		Spec:           spec,
-		EffectiveSites: agentsession.DeriveBrowserEffectiveSites(spec),
+		EffectiveSites: agentsession.DeriveBrowserEffectiveSites(spec, nil),
 		GatePort:       9223,
 	}
 }
@@ -106,7 +107,7 @@ func TestDeriveBrowserEffectiveSites(t *testing.T) {
 		spiceboxv1alpha1.BrowserSite{Host: "exact.example.com", Exact: true},
 	)
 
-	got := agentsession.DeriveBrowserEffectiveSites(spec)
+	got := agentsession.DeriveBrowserEffectiveSites(spec, nil)
 	require.Len(t, got, 2, "1:1 with spec.Access.Sites")
 
 	assert.Equal(t, "aa.com", got[0].Host, "host canonicalized (lowercased)")
@@ -119,13 +120,31 @@ func TestDeriveBrowserEffectiveSites(t *testing.T) {
 
 	// Deterministic: repeated calls on the same input produce an identical
 	// result -- this is what makes the status write idempotent.
-	again := agentsession.DeriveBrowserEffectiveSites(spec)
+	again := agentsession.DeriveBrowserEffectiveSites(spec, nil)
 	assert.Equal(t, got, again)
+}
+
+// TestDeriveBrowserEffectiveSites_IdentityHostsAppended proves the Phase B
+// merge: identity hosts land AFTER the explicit ones, canonicalized, Source
+// "identity"; explicit entries keep Source "explicit" and their order.
+func TestDeriveBrowserEffectiveSites_IdentityHostsAppended(t *testing.T) {
+	spec := browserToolboxSpec("allowlist",
+		spiceboxv1alpha1.BrowserSite{Host: "explicit.example.com"},
+	)
+	got := agentsession.DeriveBrowserEffectiveSites(spec, []directcred.Host{
+		{Name: "App.Example.com"},                // canonicalized to lowercase
+		{Name: "exact.example.net", Exact: true}, // Exact preserved
+	})
+	assert.Equal(t, []spiceboxv1alpha1.BrowserEffectiveSite{
+		{Host: "explicit.example.com", Source: "explicit"},
+		{Host: "app.example.com", Source: "identity"},
+		{Host: "exact.example.net", Exact: true, Source: "identity"},
+	}, got, "explicit first, then identity hosts canonicalized in order")
 }
 
 func TestDeriveBrowserEffectiveSites_Empty(t *testing.T) {
 	spec := browserToolboxSpec("allowlist")
-	assert.Empty(t, agentsession.DeriveBrowserEffectiveSites(spec))
+	assert.Empty(t, agentsession.DeriveBrowserEffectiveSites(spec, nil))
 }
 
 // TestDeriveBrowserEffectiveSites_DropsUncanonicalizableHost proves the
@@ -142,7 +161,7 @@ func TestDeriveBrowserEffectiveSites_DropsUncanonicalizableHost(t *testing.T) {
 		spiceboxv1alpha1.BrowserSite{Host: "EXAMPLE.org."}, // valid: lowercased + trailing dot stripped
 	)
 
-	got := agentsession.DeriveBrowserEffectiveSites(spec)
+	got := agentsession.DeriveBrowserEffectiveSites(spec, nil)
 	assert.Equal(t, []spiceboxv1alpha1.BrowserEffectiveSite{
 		{Host: "aa.com", Source: "explicit"},
 		{Host: "example.org", Source: "explicit"},

@@ -13,8 +13,12 @@ package agentidentity
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +39,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind"
 	credkindregistry "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/registry"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credresolve"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/directcred"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/passthroughcatalog"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/provider"
 	"github.com/authzed/openagentprimitives/pkg/tools/adoptkit"
@@ -243,10 +248,19 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, a *spiceboxv1alpha1.Ag
 	// Step 3: resolve every credentials[*].secretRef. Existence + key presence
 	// only — never read or store the value bytes. Each Secret is adopted before
 	// being read so the adoptguard SecretReader permits the access.
+	//
+	// A type=directCredentials/onepassword credential additionally has its
+	// backing token VERIFIED against the declared vault here (set once per
+	// token); priorPins threads the last-committed pins in so an unchanged token
+	// carries its pin forward without re-hitting the backend. See
+	// checkCredentialSecret / verifyDirectCredential.
 	ownerRef := types.NamespacedName{Namespace: a.Namespace, Name: a.Name}
 	resolved := make(map[string]bool, len(a.Spec.Credentials))
+	priorPins := indexPinnedVaults(prior.Status.PinnedVaults)
+	var pins []spiceboxv1alpha1.PinnedVault
 	for _, c := range a.Spec.Credentials {
-		if err := r.checkCredentialSecret(ctx, a.Namespace, ownerRef, c); err != nil {
+		pin, err := r.checkCredentialSecret(ctx, a.Namespace, ownerRef, c, priorPins[c.Name])
+		if err != nil {
 			switch {
 			case errors.Is(err, credresolve.ErrSecretMissing):
 				return r.setInvalidAndRetry(ctx, a, prior, spiceboxv1alpha1.ReasonSecretMissing,
@@ -259,11 +273,20 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, a *spiceboxv1alpha1.Ag
 				return r.setInvalid(ctx, a, prior, spiceboxv1alpha1.ReasonAgentCredentialExpired, fmt.Sprintf("credentials[%s]: %v", c.Name, err))
 			case errors.Is(err, errCredentialShapeMismatch):
 				return r.setInvalid(ctx, a, prior, spiceboxv1alpha1.ReasonCredentialShapeMismatch, fmt.Sprintf("credentials[%s]: %v", c.Name, err))
+			case errors.Is(err, errDirectCredentialInvalid):
+				// A verify failure leaves a.Status.PinnedVaults untouched (the
+				// local `pins` slice is only committed in step 4, which this
+				// early return never reaches), so an existing pin is PRESERVED
+				// rather than erased when a rotated token stops verifying.
+				return r.setInvalid(ctx, a, prior, spiceboxv1alpha1.ReasonAgentIdentityDirectCredentialInvalid, fmt.Sprintf("credentials[%s]: %v", c.Name, err))
 			default:
 				return ctrl.Result{}, err // transient (API error) — requeue
 			}
 		}
 		resolved[c.Name] = true
+		if pin != nil {
+			pins = append(pins, *pin)
+		}
 	}
 
 	// Step 4: compute status.
@@ -274,6 +297,12 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, a *spiceboxv1alpha1.Ag
 			a.Status.ResolvedCredentials = append(a.Status.ResolvedCredentials, c.Name)
 		}
 	}
+	// Sorted by credential name so an unchanged pin set re-writes byte-identically
+	// (the DeepEqual below then drops the no-op patch). nil when no credential pins.
+	slices.SortFunc(pins, func(x, y spiceboxv1alpha1.PinnedVault) int {
+		return strings.Compare(x.Credential, y.Credential)
+	})
+	a.Status.PinnedVaults = pins
 	conditions.SetTrue(a, &a.Status.Conditions,
 		spiceboxv1alpha1.AgentIdentityConditionValid, spiceboxv1alpha1.ReasonAllReferencesResolve)
 	if equality.Semantic.DeepEqual(prior.Status, a.Status) {
@@ -351,15 +380,25 @@ func (r *Reconciler) ensurePlatformLink(ctx context.Context, a *spiceboxv1alpha1
 // checkCredentialSecret adopts the credential's referenced Secret and reads it
 // via SecretReader, then validates existence, key presence, and (for oauth)
 // expiry. Returns credresolve sentinel errors so callers can map to conditions.
+//
+// For a type=directCredentials credential it additionally proves, via the
+// directcred source's Verify, which vault the token resolves to, returning the
+// PinnedVault to record on status — set once per token (priorPin threads the
+// last-committed pin in so an unchanged token skips the backend call). A nil
+// pin means "nothing to pin" (not a directCredentials credential, or a source
+// with no vault concept); a non-nil pin is appended to status.pinnedVaults by
+// the caller. errDirectCredentialInvalid is returned when Verify fails — or
+// when the named source is not even registered (fail closed; see
+// verifyDirectCredential).
 func (r *Reconciler) checkCredentialSecret(ctx context.Context, ns string, ownerRef types.NamespacedName,
-	cred spiceboxv1alpha1.AgentCredential) error {
+	cred spiceboxv1alpha1.AgentCredential, priorPin *spiceboxv1alpha1.PinnedVault) (*spiceboxv1alpha1.PinnedVault, error) {
 	k, err := credkindregistry.Get(cred.Type)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ref := k.SecretRef(cred)
 	if ref == nil {
-		return nil // nothing stored; nothing to adopt or key-check
+		return nil, nil // nothing stored; nothing to adopt or key-check
 	}
 	secretName := ref.Name
 
@@ -372,16 +411,16 @@ func (r *Reconciler) checkCredentialSecret(ctx context.Context, ns string, owner
 	// pre-check produced — without silently minting an empty Secret via the SSA apply.
 	if err := adoptkit.AdoptSecret(ctx, r.SecretReader.Reader, r.Client, secretRef, ownerRef, "AgentIdentity"); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("%w: %s/%s", credresolve.ErrSecretMissing, ns, secretName)
+			return nil, fmt.Errorf("%w: %s/%s", credresolve.ErrSecretMissing, ns, secretName)
 		}
-		return fmt.Errorf("%w: %s/%s (adopt: %v)", credresolve.ErrSecretMissing, ns, secretName, err)
+		return nil, fmt.Errorf("%w: %s/%s (adopt: %v)", credresolve.ErrSecretMissing, ns, secretName, err)
 	}
 	sec, err := r.SecretReader.Get(ctx, secretRef)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("%w: %s/%s", credresolve.ErrSecretMissing, ns, secretName)
+			return nil, fmt.Errorf("%w: %s/%s", credresolve.ErrSecretMissing, ns, secretName)
 		}
-		return err
+		return nil, err
 	}
 
 	// Expiry is a fact about whether a STORED value is still usable, not
@@ -392,7 +431,7 @@ func (r *Reconciler) checkCredentialSecret(ctx context.Context, ns string, owner
 		if exp, ok := sec.Data["expires_at"]; ok && len(exp) > 0 {
 			t, perr := time.Parse(time.RFC3339, string(exp))
 			if perr == nil && !t.After(time.Now()) {
-				return fmt.Errorf("%w: %s/%s", credresolve.ErrExpired, ns, secretName)
+				return nil, fmt.Errorf("%w: %s/%s", credresolve.ErrExpired, ns, secretName)
 			}
 		}
 	}
@@ -416,14 +455,124 @@ func (r *Reconciler) checkCredentialSecret(ctx context.Context, ns string, owner
 	for _, key := range k.RequiredSecretKeys(cred) {
 		val, ok := sec.Data[key]
 		if !ok {
-			return keyErr(credresolve.ErrSecretKeyMissing, key)
+			return nil, keyErr(credresolve.ErrSecretKeyMissing, key)
 		}
 		if len(val) == 0 {
-			return keyErr(credresolve.ErrSecretValueEmpty, key)
+			return nil, keyErr(credresolve.ErrSecretValueEmpty, key)
 		}
 	}
 
-	return r.checkCredentialShape(ctx, ns, k, cred)
+	if err := r.checkCredentialShape(ctx, ns, k, cred); err != nil {
+		return nil, err
+	}
+	// Last, because it is the only step that reaches an external backend: prove
+	// the token's vault for a type=directCredentials credential (no-op for every
+	// other type). ref carries the Secret key holding the token value.
+	return r.verifyDirectCredential(ctx, cred, ref, sec.Data, priorPin)
+}
+
+// verifyDirectCredential proves, for a type=directCredentials credential, which
+// vault its backing token resolves to, returning the PinnedVault to record.
+//
+//   - A non-directCredentials credential returns (nil, nil): nothing to verify.
+//   - The pin is SET ONCE per token: an unchanged TokenFingerprint carries
+//     priorPin forward WITHOUT calling the backend, so a steady-state reconcile
+//     makes no external call and writes nothing new.
+//   - On a changed/first token it calls the source's Verify. A verify error maps
+//     to errDirectCredentialInvalid (its text names vaults/counts, never the
+//     token — every directcred source scrubs it). A source with no vault concept
+//     (secret) returns a zero Pin and pins nothing.
+//   - An UNREGISTERED source FAILS CLOSED, mirroring credkindregistry.Get: the
+//     identity must not report Valid=True while the vault-pin gate silently
+//     cannot run — the pin is the whole defense against a rotated token
+//     quietly resolving to a different vault, and "healthy but unguarded" is
+//     the exact failure it exists to prevent. The CRD enum admits only known
+//     source names, so this branch is reachable only in the
+//     enum-updated-without-blank-import window (the same window
+//     TestEveryCRDEnumValueHasARegisteredKind guards for credkinds; the
+//     directcred twin lives in pkg/platform/identity/directcred's
+//     enum_invariant_test.go).
+func (r *Reconciler) verifyDirectCredential(ctx context.Context, cred spiceboxv1alpha1.AgentCredential,
+	ref *credkind.SecretRef, secretData map[string][]byte, priorPin *spiceboxv1alpha1.PinnedVault) (*spiceboxv1alpha1.PinnedVault, error) {
+	dc := cred.DirectCredentials
+	if dc == nil {
+		return nil, nil
+	}
+	src, ok := directcred.Get(dc.Source)
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: no directcred source registered for source kind %q (registered: %s); the binary may be missing its blank import of the source's package under pkg/platform/identity/directcred/",
+			errDirectCredentialInvalid, dc.Source, registeredDirectCredKinds())
+	}
+
+	// ref.Key names the Secret key holding the token the source authenticates
+	// with ("token" for onepassword; "" for secret, which has no single token
+	// and never pins). The fingerprint is a digest, never the value.
+	fprint := tokenFingerprint(secretData[ref.Key])
+	if priorPin != nil && priorPin.TokenFingerprint == fprint {
+		carried := *priorPin
+		return &carried, nil
+	}
+
+	pin, err := src.Verify(ctx, directcred.Config{SecretData: secretData, Vault: dc.Vault})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errDirectCredentialInvalid, err)
+	}
+	if pin.VaultID == "" {
+		return nil, nil // source has no vault concept (secret): nothing to pin
+	}
+	return &spiceboxv1alpha1.PinnedVault{
+		Credential:       cred.Name,
+		VaultID:          pin.VaultID,
+		VaultName:        pin.VaultName,
+		TokenFingerprint: fprint,
+	}, nil
+}
+
+// errDirectCredentialInvalid marks a type=directCredentials credential whose
+// token could not be proven to resolve to its declared vault. Package-local: it
+// carries the verdict from verifyDirectCredential up to the one switch that maps
+// it onto ReasonAgentIdentityDirectCredentialInvalid.
+var errDirectCredentialInvalid = errors.New("direct credential vault verification failed")
+
+// registeredDirectCredKinds names every registered directcred source kind for
+// the fail-closed error above — the same "(registered: ...)" style
+// credkindregistry.Get uses, so the two registries' wiring failures read alike.
+func registeredDirectCredKinds() string {
+	all := directcred.All()
+	if len(all) == 0 {
+		return "none"
+	}
+	kinds := make([]string, len(all))
+	for i, s := range all {
+		kinds[i] = s.Kind()
+	}
+	return strings.Join(kinds, ", ")
+}
+
+// tokenFingerprint is a hex sha256 digest of a token value — the set-once key
+// for a vault pin. Same three-line shape (and reasoning) as the per-kind
+// tokenFingerprint helpers under pkg/channels/channelkinds/*: a small local
+// helper over a speculative shared extraction. Never stores or compares the
+// token itself.
+func tokenFingerprint(tok []byte) string {
+	sum := sha256.Sum256(tok)
+	return hex.EncodeToString(sum[:])
+}
+
+// indexPinnedVaults keys the committed pins by credential name so a reconcile
+// can find the prior pin for a credential in O(1). The pointers alias the
+// caller's slice (the pre-mutation snapshot), so callers must treat them as
+// read-only.
+func indexPinnedVaults(pins []spiceboxv1alpha1.PinnedVault) map[string]*spiceboxv1alpha1.PinnedVault {
+	if len(pins) == 0 {
+		return nil
+	}
+	m := make(map[string]*spiceboxv1alpha1.PinnedVault, len(pins))
+	for i := range pins {
+		m[pins[i].Credential] = &pins[i]
+	}
+	return m
 }
 
 // errCredentialShapeMismatch marks a credential whose stored value does not

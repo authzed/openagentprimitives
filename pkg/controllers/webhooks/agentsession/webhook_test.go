@@ -89,6 +89,16 @@ func session(muts ...func(*spiceboxv1alpha1.AgentSession)) *spiceboxv1alpha1.Age
 			},
 			PassthroughCredHashes:    map[string]string{"linear-oauth": "sha256:abcd"},
 			ResolvedSidecarToolboxes: []spiceboxv1alpha1.ResolvedSidecarToolbox{{Ref: "k8s-proxy", SecretTokenHash: "sha256:beef"}},
+			// One browser entry with a catalog, so a case can perturb the
+			// EXISTING carry-forward inputs (catalog hosts, fingerprint) — the
+			// realistic forgery — rather than only appending an entry a rebuild
+			// would drop.
+			ResolvedBrowserToolboxes: []spiceboxv1alpha1.ResolvedBrowserToolbox{{
+				Name: "web", Ref: "demo-browser", IdentityName: "demo-identity",
+				EffectiveSites:     []spiceboxv1alpha1.BrowserEffectiveSite{{Host: "app.example.com", Source: "identity"}},
+				Catalog:            []spiceboxv1alpha1.BrowserLoginRef{{ID: "app.example.com", Label: "app.example.com", Hosts: []spiceboxv1alpha1.BrowserLoginHost{{Host: "app.example.com"}}}},
+				CatalogFingerprint: "sha256:cafe",
+			}},
 			// A non-nil allowedToolkits is the admin ceiling in force; nilling it
 			// is what ToolkitAllowed reads as "unconstrained".
 			EffectiveSettings: &spiceboxv1alpha1.EffectiveSettings{
@@ -669,6 +679,28 @@ func TestRunnerCannotForgeSessionIdentity(t *testing.T) {
 			},
 		},
 		{
+			// The carry-forward reads the persisted catalog back on every
+			// steady-state reconcile and derives the identity half of
+			// effectiveSites from its hosts, which BuildBrowserPolicyDoc turns
+			// into the gate's policy ConfigMap — so an injected host widens the
+			// browser's egress allowlist past the ConfigMap write the runner
+			// Role deliberately withholds.
+			name: "runner injects a host into its browser login catalog: denied (the carry-forward folds it into the gate's egress allowlist)",
+			sub:  "status",
+			mut: func(s *spiceboxv1alpha1.AgentSession) {
+				s.Status.ResolvedBrowserToolboxes[0].Catalog = append(
+					s.Status.ResolvedBrowserToolboxes[0].Catalog,
+					spiceboxv1alpha1.BrowserLoginRef{ID: "evil", Label: "evil", Hosts: []spiceboxv1alpha1.BrowserLoginHost{{Host: "exfil.example.net"}}})
+			},
+		},
+		{
+			name: "runner rewrites its browser catalogFingerprint: denied (a matching forged digest suppresses the re-list that would correct a forged catalog)",
+			sub:  "status",
+			mut: func(s *spiceboxv1alpha1.AgentSession) {
+				s.Status.ResolvedBrowserToolboxes[0].CatalogFingerprint = "sha256:f0rged"
+			},
+		},
+		{
 			// One patch, any non-empty string. ReconcileRestart's first test is
 			// `SupersededBy != ""` → clearPendingRestart, so from here on EVERY
 			// marker channelsd writes onto this session is nil'd with no
@@ -809,6 +841,17 @@ func TestLegitimateAgentSessionWritesAreAllowed(t *testing.T) {
 			sub:  "status",
 			mut: func(s *spiceboxv1alpha1.AgentSession) {
 				s.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseRunning
+			},
+		},
+		{
+			// The fixture carries a populated resolvedBrowserToolboxes entry, so
+			// this proves the browser pin compares and passes an UNCHANGED entry
+			// — a runner's legitimate writes elsewhere in status keep working.
+			name: "runner writes progress with resolvedBrowserToolboxes populated and untouched: allowed (the pin refuses changes, not presence)",
+			user: attacker,
+			sub:  "status",
+			mut: func(s *spiceboxv1alpha1.AgentSession) {
+				s.Status.Progress = &spiceboxv1alpha1.AgentSessionProgress{TurnCount: 3}
 			},
 		},
 		{

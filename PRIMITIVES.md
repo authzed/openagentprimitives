@@ -94,6 +94,12 @@ MCP servers, validated against a toolspec.
   `pkg/tools/browserpolicy/` is the shared site-matching decision both the gate
   and the tool's own pre-check consult. No dedicated controller yet (Phase A) —
   identity-scoped sites and acting tools (click/type) arrive in later phases.
+  Phase B adds identity-bound login catalogs: the `directCredentials` credential
+  type (`pkg/platform/identity/directcred/`, sources `onepassword` and `secret`)
+  lets a BrowserToolbox bind an AgentIdentity and list its logins as
+  `{id, label, hosts}` onto `AgentSession.status` — the username/password/OTP
+  itself never reaches the model, the broker (`Resolve` errors unconditionally
+  for this type), or status.
 - **Binaries:** `internal/cmd/streamclient/` (claims a streaming ToolCall via
   the gateway); tool execution is otherwise driven from `internal/cmd/runner/`
 

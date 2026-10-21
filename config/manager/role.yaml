@@ -118,6 +118,7 @@ rules:
   - agentsettings/status
   - agentuis/status
   - artifactrenders/status
+  - browsertoolboxes/status
   - channels/status
   - clusteragentsettings/status
   - clusteridentityproviders/status
@@ -163,6 +164,7 @@ rules:
   resources:
   - agentsessions/finalizers
   - artifactrenders/finalizers
+  - browsertoolboxes/finalizers
   - credentialupdaterequests/finalizers
   - publicendpoints/finalizers
   - sidecartoolboxes/finalizers

@@ -38,7 +38,7 @@ supplied through spec.env are rejected rather than passed through.
 | `spec.credentials[].source.resource` | `string` | Resource / ResourceServerURL / Scopes are set only for type=federated and drive the ID-JAG mint. |
 | `spec.credentials[].source.resourceServerURL` | `string` |  |
 | `spec.credentials[].source.scopes` | `[]string` |  |
-| `spec.credentials[].source.type` \* | `string` | Type drives the read and expiry rules; see the type doc. _(enum: static \| oauth \| federated \| githubApp)_ |
+| `spec.credentials[].source.type` \* | `string` | Type drives the read and expiry rules; see the type doc. _(enum: static \| oauth \| federated \| githubApp \| directCredentials)_ |
 | `spec.env` | `map[string]string` | Env is non-secret configuration for the tool process. Use a bound AgentIdentity for any secret material; supplying secrets here is an error — the operator rejects keys whose name matches the well-known secret-name pattern. |
 | `spec.idleTimeout` | `string` | IdleTimeout (interactive mode only) ends the session after this much wall-clock with no activity — no tool output and no human input. The runner-side bridge enforces it. Zero means a system default applies. |
 | `spec.inputArtifacts` | `[]object` | InputArtifacts are stored payloads materialized into the pod before exec. |

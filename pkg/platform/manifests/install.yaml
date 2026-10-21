@@ -4098,6 +4098,49 @@ spec:
                       items:
                         type: string
                       type: array
+                    directCredentials:
+                      description: |-
+                        DirectCredentials is populated when type=directCredentials: a website
+                        login the browser toolbox fills at use time. It never flows through the
+                        broker — Resolve errors unconditionally — so it never projects into an
+                        env var or header the way every other block here does. Valid ONLY on
+                        AgentIdentity: the credential is authored on the bot's own identity,
+                        not passed through from a human.
+                      properties:
+                        secretRef:
+                          description: |-
+                            SecretRef names the source's token Secret (key "token", onepassword)
+                            or the host-keyed login Secret (secret).
+                          properties:
+                            key:
+                              description: Key is the data key within the Secret holding
+                                the value.
+                              type: string
+                            name:
+                              description: Name is the Secret's name, in the referring
+                                object's own namespace.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        source:
+                          description: |-
+                            Source names the login backend: onepassword resolves through a
+                            1Password Connect token; secret reads a host-keyed login Secret
+                            written directly.
+                          enum:
+                          - onepassword
+                          - secret
+                          type: string
+                        vault:
+                          description: Vault is the 1Password vault NAME; required
+                            iff source is onepassword.
+                          type: string
+                      required:
+                      - secretRef
+                      - source
+                      type: object
                     federated:
                       description: |-
                         Federated is populated when type=federated. The credential is MINTED
@@ -4219,6 +4262,7 @@ spec:
                       - oauth
                       - federated
                       - githubApp
+                      - directCredentials
                       type: string
                   required:
                   - name
@@ -4362,6 +4406,57 @@ spec:
                   reflects.
                 format: int64
                 type: integer
+              pinnedVaults:
+                description: |-
+                  PinnedVaults records, for each type=directCredentials credential whose
+                  source has a vault concept (onepassword), the vault its backing token was
+                  PROVEN to resolve to. The validity reconciler calls the directcred source's
+                  Verify on first sight and records the vault id + name here; it re-verifies
+                  only when the token changes (TokenFingerprint differs), so a rotated token
+                  that now resolves to a DIFFERENT vault surfaces loudly as
+                  Valid=False/DirectCredentialInvalid instead of silently listing another
+                  vault's logins at the browser toolbox. A source with no vault concept
+                  (secret) is never recorded here.
+
+                  Operator-owned and derived: sorted by credential name and set once per
+                  (credential, token) pair, so an unchanged token re-writes nothing and the
+                  MergeFrom patch is a no-op. TokenFingerprint is a sha256 digest of the
+                  token value, never the value itself.
+                items:
+                  description: |-
+                    PinnedVault is one entry of an identity's status.pinnedVaults — the vault a
+                    type=directCredentials credential's token was proven to resolve to, pinned
+                    once per token so a later rotation that redirects to a different vault is
+                    caught rather than silently followed. Never carries the token value, only a
+                    digest of it.
+                  properties:
+                    credential:
+                      description: Credential is the credential name from spec.credentials[].name.
+                      type: string
+                    tokenFingerprint:
+                      description: |-
+                        TokenFingerprint is a hex sha256 digest of the backing token value at the
+                        time the pin was written. It is the set-once key: a reconcile whose token
+                        still hashes to this value carries the pin forward without re-verifying,
+                        and a changed token forces a fresh Verify. It is a digest, never the token.
+                      type: string
+                    vaultID:
+                      description: |-
+                        VaultID is the backend's stable identifier for the pinned vault, as
+                        returned by the source's Verify.
+                      type: string
+                    vaultName:
+                      description: |-
+                        VaultName is the human-readable vault name the backend confirmed. May
+                        differ in case/whitespace from the credential's declared vault.
+                      type: string
+                  required:
+                  - credential
+                  - tokenFingerprint
+                  - vaultID
+                  - vaultName
+                  type: object
+                type: array
               resolvedCredentials:
                 description: ResolvedCredentials lists credential names whose Secret
                   + key resolved.
@@ -7435,18 +7530,80 @@ spec:
                       description: BrowserPodName is the per-session browser pod's
                         name.
                       type: string
+                    catalog:
+                      description: |-
+                        Catalog is the bound identity's directCredentials login references,
+                        listed once per session start and again on wake and carried forward in
+                        between (CatalogFingerprint gates a re-list on a rotated backing token).
+                        Each entry carries only {id, label, hosts} -- never a username, password,
+                        or OTP. Empty when the toolbox binds no identity.
+                      items:
+                        description: |-
+                          BrowserLoginRef is one login the bound identity's directcred source lists,
+                          snapshotted onto status so Phase C's form filler can offer it to a human.
+                          It carries NOTHING from the login item's fields -- only the opaque ID, a
+                          display label, and the hosts it matches (directcred.Ref's own security
+                          contract). No username, password, OTP, or seed ever appears here, which is
+                          what lets the whole status be logged and shown in a UI.
+                        properties:
+                          hosts:
+                            description: Hosts is the set of hostname patterns this
+                              login applies to.
+                            items:
+                              description: |-
+                                BrowserLoginHost is one hostname pattern a BrowserLoginRef is scoped to --
+                                the status-plane projection of a directcred.Host. A deliberately minimal
+                                {Host, Exact} pair: distinct from BrowserSite (whose user-input
+                                Pattern/MaxLength markers do not belong on an operator-derived status field)
+                                and from BrowserEffectiveSite (which additionally carries a Source).
+                              properties:
+                                exact:
+                                  description: |-
+                                    Exact is true when Host must match the page host exactly; false when it
+                                    also matches subdomains.
+                                  type: boolean
+                                host:
+                                  description: Host is the canonical hostname this
+                                    login applies to.
+                                  type: string
+                              required:
+                              - host
+                              type: object
+                            type: array
+                          id:
+                            description: |-
+                              ID is opaque to everyone but the directcred Source that issued it;
+                              callers must not parse or infer structure from it.
+                            type: string
+                          label:
+                            description: Label is the display name shown to a human
+                              picking a login.
+                            type: string
+                        required:
+                        - id
+                        type: object
+                      type: array
+                    catalogFingerprint:
+                      description: |-
+                        CatalogFingerprint is the hex SHA-256 of the credential's token-Secret
+                        value at the time Catalog was listed -- the set-once-per-token key the
+                        carry-forward uses to re-list only when the backing token rotates. A
+                        vault-less secret source has no token key, so this is constant there and
+                        the catalog carries forward until a wake. It is a digest, never the token.
+                      type: string
                     effectiveSites:
                       description: |-
                         EffectiveSites is the resolved site list the running browser's egress
-                        is actually evaluated against -- in Phase A, a straight carry-through
-                        of Spec.Access.Sites with Source "explicit".
+                        is actually evaluated against: Spec.Access.Sites (Source "explicit")
+                        unioned with the bound identity's catalog hosts (Source "identity") when
+                        spec.access.identitySites is set.
                       items:
                         description: |-
                           BrowserEffectiveSite is one resolved site entry in a ResolvedBrowserToolbox's
-                          EffectiveSites. Source records where the entry came from: Phase A only ever
-                          writes "explicit" (a BrowserAccess.Sites entry carried through verbatim);
-                          "identity" is a Phase B addition once a bound identity can contribute its
-                          own sites to the effective set.
+                          EffectiveSites. Source records where the entry came from: "explicit" for a
+                          BrowserAccess.Sites entry carried through verbatim, "identity" for a host
+                          folded in from the bound identity's directCredentials catalog (only when
+                          spec.access.identitySites is set).
                         properties:
                           exact:
                             description: Exact mirrors BrowserSite.Exact for this
@@ -7458,8 +7615,8 @@ spec:
                             type: string
                           source:
                             description: |-
-                              Source is where this entry came from. "explicit" only in Phase A;
-                              "identity" arrives in Phase B.
+                              Source is where this entry came from: "explicit" (spec.access.sites) or
+                              "identity" (a host from the bound identity's login catalog).
                             type: string
                         required:
                         - host
@@ -7472,6 +7629,12 @@ spec:
                         browser pod's gate process.
                       format: int32
                       type: integer
+                    identityName:
+                      description: |-
+                        IdentityName is the AgentIdentity (spec.access.identity) whose
+                        directCredentials credential produced Catalog -- Phase C's form filler
+                        reads it to know whose logins these are. Empty when no identity is bound.
+                      type: string
                     name:
                       description: |-
                         Name is the LLM-facing prefix (the `name` field from
@@ -7520,6 +7683,28 @@ spec:
                             Access is the site allowlist/blocklist the browser's egress is
                             evaluated against.
                           properties:
+                            identity:
+                              description: |-
+                                Identity is the name of an AgentIdentity (in this BrowserToolbox's
+                                namespace) carrying a directCredentials credential this browser binds
+                                to -- a Phase B addition. Allowlist-only: the two XValidation rules on
+                                BrowserToolbox.Spec refuse it under Mode=blocklist, because a
+                                general-access browser has no legitimate use for a credential
+                                reference. Identity name syntax and existence are not checked here --
+                                that is the Task 7 BrowserToolbox reconciler's job (Valid=False when
+                                the reference is missing or has no directCredentials credential).
+                              type: string
+                            identitySites:
+                              default: false
+                              description: |-
+                                IdentitySites, when true, folds every host Identity's directCredentials
+                                catalog lists into this allowlist, alongside any explicit Sites -- a
+                                Phase B addition. Requires Identity to be set (enforced by the second
+                                XValidation rule on BrowserToolbox.Spec). This field only records the
+                                bit; deriving the actual host names from the identity's source happens
+                                in the AgentSession reconciler (DeriveBrowserEffectiveSites, Task 7) and
+                                is recorded onto status, not here.
+                              type: boolean
                             mode:
                               description: |-
                                 Mode is "allowlist" (only Sites are reachable) or "blocklist" (every
@@ -11417,19 +11602,42 @@ spec:
             type: object
           spec:
             description: |-
-              BrowserToolboxSpec is deliberately not annotated with a CEL XValidation
-              rule: this type is embedded by value into AgentSession's
-              status.resolvedBrowserToolboxes snapshot (see ResolvedBrowserToolbox.Spec),
-              and a CEL rule reachable from a status path both trips the status-CEL guard
-              and risks the apiserver's CRD rule-cost budget across that unbounded status
-              array -- the same reasoning SidecarToolboxSpec documents. Field-level
-              markers (Enum, Pattern, default) are the validation surface here.
+              Two Phase B rules live here rather than on BrowserToolboxSpec/BrowserAccess
+              (see that type's doc comment for why): this field is the ONE place a CRD
+              validation marker is legal, because BrowserToolboxSpec is also embedded
+              by value into AgentSession.status.resolvedBrowserToolboxes[].Spec, and a
+              rule reachable from a status path trips both the status-CEL guard and the
+              apiserver's rule-cost budget across that unbounded array. Precedent:
+              workshop_types.go:44-66 attaches its XValidation rules the same way, on
+              the field, not the type.
             properties:
               access:
                 description: |-
                   Access is the site allowlist/blocklist the browser's egress is
                   evaluated against.
                 properties:
+                  identity:
+                    description: |-
+                      Identity is the name of an AgentIdentity (in this BrowserToolbox's
+                      namespace) carrying a directCredentials credential this browser binds
+                      to -- a Phase B addition. Allowlist-only: the two XValidation rules on
+                      BrowserToolbox.Spec refuse it under Mode=blocklist, because a
+                      general-access browser has no legitimate use for a credential
+                      reference. Identity name syntax and existence are not checked here --
+                      that is the Task 7 BrowserToolbox reconciler's job (Valid=False when
+                      the reference is missing or has no directCredentials credential).
+                    type: string
+                  identitySites:
+                    default: false
+                    description: |-
+                      IdentitySites, when true, folds every host Identity's directCredentials
+                      catalog lists into this allowlist, alongside any explicit Sites -- a
+                      Phase B addition. Requires Identity to be set (enforced by the second
+                      XValidation rule on BrowserToolbox.Spec). This field only records the
+                      bit; deriving the actual host names from the identity's source happens
+                      in the AgentSession reconciler (DeriveBrowserEffectiveSites, Task 7) and
+                      is recorded onto status, not here.
+                    type: boolean
                   mode:
                     description: |-
                       Mode is "allowlist" (only Sites are reachable) or "blocklist" (every
@@ -11495,6 +11703,13 @@ spec:
             required:
             - access
             type: object
+            x-kubernetes-validations:
+            - message: a blocklist (general-access) browser cannot carry an identity
+                or identitySites
+              rule: self.access.mode != 'blocklist' || (!has(self.access.identity)
+                && !self.access.identitySites)
+            - message: identitySites requires identity
+              rule: '!self.access.identitySites || has(self.access.identity)'
           status:
             description: |-
               BrowserToolboxStatus is intentionally minimal in Phase A: a condition set
@@ -16739,6 +16954,49 @@ spec:
                       items:
                         type: string
                       type: array
+                    directCredentials:
+                      description: |-
+                        DirectCredentials is populated when type=directCredentials: a website
+                        login the browser toolbox fills at use time. It never flows through the
+                        broker — Resolve errors unconditionally — so it never projects into an
+                        env var or header the way every other block here does. Valid ONLY on
+                        AgentIdentity: the credential is authored on the bot's own identity,
+                        not passed through from a human.
+                      properties:
+                        secretRef:
+                          description: |-
+                            SecretRef names the source's token Secret (key "token", onepassword)
+                            or the host-keyed login Secret (secret).
+                          properties:
+                            key:
+                              description: Key is the data key within the Secret holding
+                                the value.
+                              type: string
+                            name:
+                              description: Name is the Secret's name, in the referring
+                                object's own namespace.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        source:
+                          description: |-
+                            Source names the login backend: onepassword resolves through a
+                            1Password Connect token; secret reads a host-keyed login Secret
+                            written directly.
+                          enum:
+                          - onepassword
+                          - secret
+                          type: string
+                        vault:
+                          description: Vault is the 1Password vault NAME; required
+                            iff source is onepassword.
+                          type: string
+                      required:
+                      - secretRef
+                      - source
+                      type: object
                     federated:
                       description: |-
                         Federated is populated when type=federated. The credential is MINTED
@@ -16860,6 +17118,7 @@ spec:
                       - oauth
                       - federated
                       - githubApp
+                      - directCredentials
                       type: string
                   required:
                   - name
@@ -23932,6 +24191,7 @@ spec:
                           - oauth
                           - federated
                           - githubApp
+                          - directCredentials
                           type: string
                       required:
                       - name
@@ -24379,6 +24639,49 @@ spec:
                       items:
                         type: string
                       type: array
+                    directCredentials:
+                      description: |-
+                        DirectCredentials is populated when type=directCredentials: a website
+                        login the browser toolbox fills at use time. It never flows through the
+                        broker — Resolve errors unconditionally — so it never projects into an
+                        env var or header the way every other block here does. Valid ONLY on
+                        AgentIdentity: the credential is authored on the bot's own identity,
+                        not passed through from a human.
+                      properties:
+                        secretRef:
+                          description: |-
+                            SecretRef names the source's token Secret (key "token", onepassword)
+                            or the host-keyed login Secret (secret).
+                          properties:
+                            key:
+                              description: Key is the data key within the Secret holding
+                                the value.
+                              type: string
+                            name:
+                              description: Name is the Secret's name, in the referring
+                                object's own namespace.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        source:
+                          description: |-
+                            Source names the login backend: onepassword resolves through a
+                            1Password Connect token; secret reads a host-keyed login Secret
+                            written directly.
+                          enum:
+                          - onepassword
+                          - secret
+                          type: string
+                        vault:
+                          description: Vault is the 1Password vault NAME; required
+                            iff source is onepassword.
+                          type: string
+                      required:
+                      - secretRef
+                      - source
+                      type: object
                     federated:
                       description: |-
                         Federated is populated when type=federated. The credential is MINTED
@@ -24500,6 +24803,7 @@ spec:
                       - oauth
                       - federated
                       - githubApp
+                      - directCredentials
                       type: string
                   required:
                   - name
@@ -26140,6 +26444,7 @@ rules:
   - agentsettings/status
   - agentuis/status
   - artifactrenders/status
+  - browsertoolboxes/status
   - channels/status
   - clusteragentsettings/status
   - clusteridentityproviders/status
@@ -26185,6 +26490,7 @@ rules:
   resources:
   - agentsessions/finalizers
   - artifactrenders/finalizers
+  - browsertoolboxes/finalizers
   - credentialupdaterequests/finalizers
   - publicendpoints/finalizers
   - sidecartoolboxes/finalizers
