@@ -97,6 +97,16 @@ const (
 	// UserPreferenceConfirm asks the turn author (the addressee) to confirm
 	// saving a user preference. The session is parked until the addressee decides.
 	UserPreferenceConfirm = "user_preference_confirm"
+
+	// LoginHumanStep asks a person to complete a sign-in step the agent cannot do
+	// itself — a browser toolbox's request_human_step. The confirm half (a push
+	// approval the person presses Done on) is a pure approve/deny the RUNNER acts
+	// on, so it gates on the session approve-set (DecideApprovers), writes no
+	// grant, and resumes request_human_step's block off the interaction_applied
+	// bridge — exactly like content_inspection. The emailed/SMS-code half rides a
+	// free-text carrier added in a later slice; its decision still resumes through
+	// this same Resume policy.
+	LoginHumanStep = "login_human_step"
 )
 
 // registerPrompts registers every prompt category. Kept out of init for the
@@ -356,6 +366,29 @@ func registerPrompts() {
 		// a shared thread the affected user, not the session owner, decides.
 		// DecideRequester also refuses synthetic subjects, fail-closed.
 		Deciders:  channelinteractions.DecideRequester,
+		Resurface: channelinteractions.ResurfaceCached,
+	})
+	channelinteractions.Register(channelinteractions.Category{
+		Name: LoginHumanStep,
+		// Routine, like tool_approval and user_preference_confirm: completing a
+		// sign-in factor is an ordinary part of the login flow, not an alarming
+		// event. The strong tones stay reserved for hostile input and dead
+		// sessions so they keep meaning something.
+		Tone: channelinteractions.ToneRoutine,
+		// The runner blocks request_human_step on this decision; omit Resume and
+		// the applied envelope is dropped and the session waits out its full
+		// approval timeout (category.go's Resume doc).
+		Resume:           channelinteractions.ResumeApproval,
+		Park:             v1alpha1.AgentSessionPhaseAwaitingDecision,
+		PendingCondition: v1alpha1.AgentSessionConditionLoginHumanStepPending,
+		// DecideApprovers, same as content_inspection and plan_phase: a sign-in
+		// step names no external resource counterparty to route consent to, so the
+		// session approve-set (the owner-derived approvers) is the right standing
+		// gate. Unlike tool_approval there is no grant write, so DecideResourceOwners
+		// is neither needed nor applicable.
+		Deciders: channelinteractions.DecideApprovers,
+		// The prompt content is fixed for the life of the request, so a
+		// re-interacting approver gets the cached envelope republished verbatim.
 		Resurface: channelinteractions.ResurfaceCached,
 	})
 }

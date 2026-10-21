@@ -16,7 +16,7 @@ func onePasswordCred(name, secretName string) spiceboxv1alpha1.AgentCredential {
 		Name: name, Type: "directCredentials",
 		DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 			Source:    "onepassword",
-			SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: secretName, Key: "token"},
+			SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: secretName, Key: "token"},
 			Vault:     "Engineering",
 		},
 	}
@@ -27,7 +27,7 @@ func secretCred(name, secretName string) spiceboxv1alpha1.AgentCredential {
 		Name: name, Type: "directCredentials",
 		DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 			Source:    "secret",
-			SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: secretName},
+			SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: secretName},
 		},
 	}
 }
@@ -83,7 +83,7 @@ func TestValidateSpec(t *testing.T) {
 			cred: spiceboxv1alpha1.AgentCredential{Name: "demo-dc-cred", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    "ldap",
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "demo-dc-secret"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "demo-dc-secret"},
 				}},
 			wantErr:        "source must be",
 			wantNotContain: "ldap",
@@ -101,7 +101,7 @@ func TestValidateSpec(t *testing.T) {
 			cred: spiceboxv1alpha1.AgentCredential{Name: "demo-dc-cred", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    "onepassword",
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "demo-dc-secret"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "demo-dc-secret"},
 				}},
 			wantErr: "vault required when source=onepassword",
 		},
@@ -110,7 +110,7 @@ func TestValidateSpec(t *testing.T) {
 			cred: spiceboxv1alpha1.AgentCredential{Name: "demo-dc-cred", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    "secret",
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "demo-dc-secret"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "demo-dc-secret"},
 					Vault:     "Engineering",
 				}},
 			wantErr:        "vault must be empty when source=secret",
@@ -124,7 +124,7 @@ func TestValidateSpec(t *testing.T) {
 			cred: spiceboxv1alpha1.AgentCredential{Name: "demo-dc-cred", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    "onepassword",
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "demo-dc-secret", Key: "credential-value"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "demo-dc-secret", Key: "credential-value"},
 					Vault:     "Engineering",
 				}},
 			wantErr:        "secretRef.key must be",
@@ -135,7 +135,7 @@ func TestValidateSpec(t *testing.T) {
 			cred: spiceboxv1alpha1.AgentCredential{Name: "demo-dc-cred", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    "secret",
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "demo-dc-secret", Key: "token"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "demo-dc-secret", Key: "token"},
 				}},
 			wantErr:        "secretRef.key must be empty when source=secret",
 			wantNotContain: "token",
@@ -149,7 +149,7 @@ func TestValidateSpec(t *testing.T) {
 			cred: spiceboxv1alpha1.AgentCredential{Name: "demo-dc-cred", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    "onepassword",
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "demo-dc-secret"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "demo-dc-secret"},
 					Vault:     "Engineering",
 				}},
 		},

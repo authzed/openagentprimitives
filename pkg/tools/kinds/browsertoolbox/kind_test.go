@@ -317,6 +317,159 @@ state: ephemeral
 				assert.Empty(t, diags)
 			},
 		},
+		{
+			// Mirrors the third CEL rule on BrowserToolbox.Spec (C8): an
+			// unattended site requires allowlist mode — a blocklist (general
+			// access) browser cannot stand up a session-start grant with no
+			// per-site allowlist at all.
+			name: "unattended site under blocklist: errors",
+			body: `
+access:
+  mode: blocklist
+  sites:
+    - host: aa.com
+      unattended: true
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				d, ok := findDiag(diags, "access.sites[0].unattended")
+				require.True(t, ok, "expected a diagnostic at path access.sites[0].unattended, got %+v", diags)
+				assert.Equal(t, "error", d.Severity)
+				assert.Contains(t, d.Message, "allowlist")
+			},
+		},
+		{
+			// Mirrors the third CEL rule on BrowserToolbox.Spec (C8): an
+			// unattended site requires access.identity -- the unattended grant is
+			// written for a bound identity's browsing session, and there is no
+			// standing approver to ask if the identity binding is missing.
+			name: "unattended site under allowlist without identity: errors",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: aa.com
+      unattended: true
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				d, ok := findDiag(diags, "access.sites[0].unattended")
+				require.True(t, ok, "expected a diagnostic at path access.sites[0].unattended, got %+v", diags)
+				assert.Equal(t, "error", d.Severity)
+				assert.Contains(t, d.Message, "identity")
+			},
+		},
+		{
+			name: "unattended site under allowlist with identity: clean",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: aa.com
+      unattended: true
+  identity: joey-airlines
+interaction: act
+state: ephemeral
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				assert.Empty(t, diags)
+			},
+		},
+		{
+			// C9 behavior (c): mirrors the field-scoped CEL rule on
+			// BrowserToolbox.Spec — an EXPLICIT state=persistent requires identity.
+			name: "explicit persistent without identity: errors at state",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: example.com
+state: persistent
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				d, ok := findDiag(diags, "state")
+				require.True(t, ok, "expected a diagnostic at path state, got %+v", diags)
+				assert.Equal(t, "error", d.Severity)
+				assert.Contains(t, d.Message, "identity")
+			},
+		},
+		{
+			// C9: explicit persistent WITH an identity is legitimate.
+			name: "explicit persistent with identity: clean",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: example.com
+  identity: joey-airlines
+state: persistent
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				assert.Empty(t, diags)
+			},
+		},
+		{
+			// C9 behavior (d): an explicit ephemeral is honored even with an
+			// identity bound — no persistence rule applies to it.
+			name: "explicit ephemeral with identity: clean",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: example.com
+  identity: joey-airlines
+state: ephemeral
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				assert.Empty(t, diags)
+			},
+		},
+		{
+			// C9 behaviors (a)/(b): an UNSET state is left to the AgentSession
+			// snapshot to default; authoring-time validation accepts it in both the
+			// identity-bound and identity-less shapes.
+			name: "unset state with identity: clean (snapshot defaults it)",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: example.com
+  identity: joey-airlines
+interaction: act
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				assert.Empty(t, diags)
+			},
+		},
+		{
+			name: "unset state without identity: clean (snapshot defaults it)",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: example.com
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				// An allowlist with sites and no identity has no errors; the only
+				// finding would be the zero-sites warning, which does not apply here.
+				_, hasStateDiag := findDiag(diags, "state")
+				assert.False(t, hasStateDiag, "an unset state must not be flagged, got %+v", diags)
+			},
+		},
+		{
+			name: "invalid state value: errors at state",
+			body: `
+access:
+  mode: allowlist
+  sites:
+    - host: example.com
+state: sticky
+`,
+			check: func(t *testing.T, diags []contract.Diagnostic) {
+				d, ok := findDiag(diags, "state")
+				require.True(t, ok, "expected a diagnostic at path state, got %+v", diags)
+				assert.Equal(t, "error", d.Severity)
+				assert.Contains(t, d.Message, "sticky")
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

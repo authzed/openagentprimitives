@@ -256,12 +256,26 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 		MintedURL:       out.MintedURL,
 		DecidedBy:       &pl.Decider,
 		ResponseRef:     pl.ResponseRef,
+		// ResponseText is a SECRET on the code path (login_human_step kind:code).
+		// It must ride the OUTBOUND applied envelope, because THAT is the one the
+		// runner resumes off (interactionAppliedSubject → SubjectOut), captures, and
+		// types into the page. It is stripped from the IN copy below: the IN envelope
+		// is consumed only by channelsd's own HandleInteractionApplied (pending-queue
+		// + condition cleanup), which never needs the code, so there is no reason to
+		// spread the secret onto a leg that does not use it. Neither envelope is
+		// model-visible, and no surface renderer reads ResponseText.
+		ResponseText: out.ResponseText,
 	}
+	// The IN (channelsd self-cleanup) copy drops ResponseText: only the outbound
+	// leg the runner resumes off needs the code. Minimizing which legs carry the
+	// secret keeps it off the pending-cleanup consumer that has no use for it.
+	appliedIn := applied
+	appliedIn.ResponseText = ""
 	// Publish first (runner resume + surface edit), THEN clear the pending
 	// prompt — the ordering contract shared with identity_choice.go: a clear
 	// before a failed publish would strand the session with nothing left to
 	// re-surface.
-	if err := channelevents.PublishIn(p.NATS.Publish, ns, name, channelevents.KindInteractionApplied, applied); err != nil {
+	if err := channelevents.PublishIn(p.NATS.Publish, ns, name, channelevents.KindInteractionApplied, appliedIn); err != nil {
 		return fmt.Errorf("interaction decision: publish applied (in) failed (session %s): %w", ref, err)
 	}
 	if err := channelevents.PublishOut(p.NATS.Publish, ns, name, channelevents.KindInteractionApplied, applied); err != nil {

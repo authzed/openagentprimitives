@@ -1,0 +1,112 @@
+# Fixture agent for the browser-login-secret-source bronze bundle — the
+# headline Phase C proof: a credentialed sign-in driven through the REAL browser
+# driver, the credential filled from a `secret` directCredentials source without
+# the value ever reaching the model, acting gated on a web_host#act plan-gate
+# slot, and ONE approval covering the whole acting phase.
+#
+# Unlike the Phase A/B browser fixtures (browser-readonly-catalog,
+# browser-human-step-code), THIS AgentClass DOES reference the BrowserToolbox in
+# spec.browserToolboxes. That is mandatory and deliberate: a web_host acting slot
+# can only be declared (and so get slot_grant_act composed into the schema plus
+# the spicedb_escape transform published onto status.resolvedSlots) when the
+# class references a toolbox — see pkg/controllers/agentclass/browser_slot.go.
+# The reference makes the AgentSession reconciler create a per-session browser
+# pod and hold the runner until it is Ready; the e2e harness fakes that readiness
+# (MarkBrowserPodsReady — no kubelet in envtest) and the runner reaches the real
+# in-process gate through the BrowserConnect seam.
+#
+# The reconciler, not a hand-stamp, owns status.resolvedBrowserToolboxes here: it
+# resolves the login catalog from the `secret` directCredentials identity itself
+# (the "secret" directcred.Source is blank-imported by the e2e binary), so the
+# filler's host→login catalog is production-derived rather than stamped.
+apiVersion: v1
+kind: Secret
+metadata: {name: browser-login-secret-source-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: browser-login-secret-source-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+# The host-keyed login the `secret` directCredentials source reads. The keys are
+# "<host>.username" / "<host>.password" for the FIXTURE host (host.docker.internal
+# — testbrowser's loopback-reachable host). The values are MADE-UP fixture
+# credentials (test/testbrowser's LoginUser / LoginPassword), never a real
+# credential. The password VALUE must NEVER appear in the transcript: the filler
+# substitutes it strictly inside the type tool, after the raw {{login...}}
+# placeholder has already been recorded.
+apiVersion: v1
+kind: Secret
+metadata: {name: browser-login-site-login, namespace: default}
+type: Opaque
+stringData:
+  host.docker.internal.username: "demo"
+  host.docker.internal.password: "s3cr3t-fixture"
+---
+# The AgentIdentity whose directCredentials `secret` source backs the login
+# catalog. Its Valid condition gates the BrowserToolbox, which gates the
+# AgentClass, so WaitForAgentClassValid transitively waits for this whole chain.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: browser-login-identity, namespace: default}
+spec:
+  description: "E2E fixture: a host-keyed website login read from a plain Secret."
+  credentials:
+    - name: site-login
+      type: directCredentials
+      directCredentials:
+        source: secret
+        secretRef: {name: browser-login-site-login}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: browser-login-secret-source, namespace: default}
+spec:
+  displayName: BrowserLoginBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: browser-login-secret-source-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You have a browser toolbox named `web`, in act mode, bound to an identity
+      with a stored login. To sign in: declare a plan phase naming the host as a
+      web_host slot, navigate to the sign-in page, read it, then type the stored
+      login using {{login.<host>.username}} and {{login.<host>.password}}
+      placeholders — you never see the credential values — and submit.
+  # The AgentClass references the browser toolbox. This is what lets it declare
+  # the web_host acting slot below; it also makes the operator stand up a
+  # per-session browser pod (the harness fakes its readiness in envtest).
+  browserToolboxes:
+    - {name: web, ref: web}
+  authz:
+    # The web_host acting slot. Declaring it makes guardian's ComposeSlots inject
+    # `slot_grant_act` onto web_host and publish the spicedb_escape transform onto
+    # status.resolvedSlots[web_host] — both are what the plan-gate approval needs
+    # to WRITE the grant on the escaped host id the acting tool's Check resolves.
+    slots:
+      - resourceType: web_host
+        description: "A web host the browser may act on (click, type, submit)"
+        permission: act
+    # Enforcing: every acting call is gated against the frozen plan. One approval
+    # of the phase that names this host binds the slot, and the acting calls that
+    # follow run uninterrupted on that grant.
+    planGate:
+      mode: enforcing
+  budget: {maxTurns: 25, maxTokens: 50000, maxDuration: 5m}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: browser-login-secret-source-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: browser-login-secret-source
+  credentialsRef: {secretName: browser-login-secret-source-fake-creds}
+  fake: {echo: false}

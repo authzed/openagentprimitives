@@ -46,6 +46,17 @@ type Decision struct {
 	// ColdStart action. Empty for mid-session approvals and tool-call
 	// approvals, where Approved alone determines the outcome.
 	Action string
+
+	// ResponseText is a FREE-TEXT answer the human typed, distinct from the closed
+	// Action (which names a declared choice). Today only login_human_step kind:code
+	// sets it — the emailed/SMS code the person entered — which the runner types
+	// into the page element the agent named.
+	//
+	// SECURITY: a secret on the code path. It reaches the blocked gate ONLY through
+	// FromApplied's ResumeApproval arm and is consumed by the runner's human-step
+	// handler; it is NEVER returned as a tool result, logged, written to the
+	// transcript, or shown to the model. Empty for every approve/deny/timeout.
+	ResponseText string
 }
 
 // Request describes a single approval pause. RequestID is the unique

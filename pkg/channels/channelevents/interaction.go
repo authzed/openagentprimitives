@@ -422,6 +422,22 @@ type InteractionAppliedPayload struct {
 	// ResponseRef is the surface-opaque handle for editing the clicker's
 	// artifact (Slack: response_url). Round-tripped from the decision.
 	ResponseRef string `json:"responseRef,omitempty"`
+	// ResponseText is a FREE-TEXT answer the decider typed, distinct from the
+	// closed OutcomeText (which only ever carries a chosen action id). It is the
+	// carrier for a human-supplied login code (login_human_step kind:code): the
+	// person types the emailed/SMS code into the card, it rides here on the OUTBOUND
+	// applied envelope — the one the runner resumes off (interactionAppliedSubject →
+	// SubjectOut) — and the runner captures it and types it into the page element the
+	// agent named. The model never sees it.
+	//
+	// SECURITY: this is a SECRET on the code path. The decision pipe places it on the
+	// OUTBOUND applied ONLY (stripped from the IN channelsd-cleanup copy); no surface
+	// renderer reads it, and it is NEVER echoed to the model, written to the
+	// transcript, or logged. The runner captures it, types it into the page, and
+	// returns a status only — see pkg/agent/tool/browser's requestHumanStep and
+	// approval.FromApplied's ResumeApproval arm. Empty for every other outcome
+	// (every confirm/approve/deny resolves with no ResponseText).
+	ResponseText string `json:"responseText,omitempty"`
 }
 
 func (p InteractionAppliedPayload) Validate() error {
@@ -456,6 +472,18 @@ type InteractionDecisionPayload struct {
 	// ResponseRef is the surface-opaque handle for editing this clicker's own
 	// artifact (Slack: response_url); round-tripped onto the applied echo.
 	ResponseRef string `json:"responseRef,omitempty"`
+	// ResponseText is a FREE-TEXT answer the decider typed, distinct from the
+	// closed ActionID (which only ever names a declared button). It is the carrier
+	// for a human-supplied login code (login_human_step kind:code): the surface
+	// collects the emailed/SMS code the person typed and sends it here alongside
+	// the "approve" ActionID.
+	//
+	// SECURITY: this is a SECRET on the code path. The decision pipe copies it onto
+	// the OUTBOUND applied envelope (the one the runner resumes off), stripped from
+	// the IN channelsd-cleanup copy; it is never logged, never echoed to the model,
+	// and never rendered by a surface. See the matching doc on
+	// InteractionAppliedPayload.ResponseText. Empty for every button-only decision.
+	ResponseText string `json:"responseText,omitempty"`
 }
 
 func (p InteractionDecisionPayload) Validate() error {

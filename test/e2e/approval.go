@@ -1054,6 +1054,10 @@ func (h *Harness) decideInteraction(prompt fakekind.InteractionPrompt, actionID 
 			ExternalID: identity.RawExternalID(cfg.user),
 			Email:      identity.Email(cfg.user),
 		},
+		// Free-text answer carrier (login_human_step kind:code): the human's typed
+		// login code the runner types into the page. Empty for every button-only
+		// decision, so this is a no-op there.
+		ResponseText: cfg.responseText,
 	}
 	if err := channelevents.PublishIn(
 		func(subj string, b []byte) error { return h.nc.Publish(subj, b) },

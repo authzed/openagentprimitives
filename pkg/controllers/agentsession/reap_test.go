@@ -279,3 +279,80 @@ func TestReapSessionPodsPreservesPVC(t *testing.T) {
 	assert.True(t, f.detectorGone(t), "detector pod deleted")
 	assert.True(t, f.pvcExists(t), "AgentSession-owned workspace PVC preserved")
 }
+
+// deleteOrderRecorder wraps a client and records the name of every object passed
+// to Delete, in call order, so a test can assert the reap sequence.
+type deleteOrderRecorder struct {
+	client.Client
+	order *[]string
+}
+
+func (d *deleteOrderRecorder) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	*d.order = append(*d.order, obj.GetName())
+	return d.Client.Delete(ctx, obj, opts...)
+}
+
+// TestReapStopsRunnerBeforeBrowserPod pins Review Focus 4: reap stops the runner
+// pod BEFORE it deletes the per-session browser pod, so the runner's graceful-stop
+// browser-state capture precedes the browser pod's loss. The ordering is
+// structural in reapSessionPods (RunnerFactory.Stop at step 2, browser cleanup at
+// step 4); this records the live Delete sequence through a wrapping client and
+// asserts the runner pod is deleted before the browser pod.
+func TestReapStopsRunnerBeforeBrowserPod(t *testing.T) {
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	finishedAt := metav1.NewTime(now.Add(-2 * time.Hour))
+	sess := &spiceboxv1alpha1.AgentSession{
+		ObjectMeta: metav1.ObjectMeta{Name: "s1", Namespace: "default", UID: "uid-ord"},
+		Spec:       spiceboxv1alpha1.AgentSessionSpec{Class: "cls"},
+		Status: spiceboxv1alpha1.AgentSessionStatus{
+			Phase:      spiceboxv1alpha1.AgentSessionPhaseSucceeded,
+			FinishedAt: &finishedAt,
+		},
+	}
+	runnerPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: RunnerPodName(sess), Namespace: "default"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "runner", Image: "runner:dev"}}},
+	}
+	browserPodName := BrowserPodName(sess, "web")
+	browserPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: browserPodName, Namespace: "default",
+			Labels: map[string]string{
+				"agentprimitives.authzed.com/agentsession": sess.Name,
+				labelBrowserToolbox:                        "web",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "chrome", Image: "ap-browser:dev"}}},
+	}
+
+	base := buildFakeClient(t, sess, runnerPod, browserPod)
+	var order []string
+	rec := &deleteOrderRecorder{Client: base, order: &order}
+	r := &Reconciler{
+		Client:                 rec,
+		APIReader:              rec,
+		Tokens:                 tokens.NewRegistry(),
+		Memory:                 memory.NewLocal(inmem.NewBackend()),
+		Now:                    func() time.Time { return now },
+		FailedSandboxReapGrace: time.Minute,
+		RunnerFactory:          &PodRunnerFactory{Client: rec, RunnerImage: "runner:dev", OperatorURL: "http://op:8082", NATSURL: "nats://nats:4222"},
+	}
+
+	_, err := r.reapSessionPods(memory.WithSystemApproval(context.Background(), "test"), sess)
+	require.NoError(t, err)
+
+	idx := func(name string) int {
+		for i, n := range order {
+			if n == name {
+				return i
+			}
+		}
+		return -1
+	}
+	runnerIdx := idx(RunnerPodName(sess))
+	browserIdx := idx(browserPodName)
+	require.GreaterOrEqual(t, runnerIdx, 0, "runner pod must have been deleted; order=%v", order)
+	require.GreaterOrEqual(t, browserIdx, 0, "browser pod must have been deleted; order=%v", order)
+	assert.Less(t, runnerIdx, browserIdx,
+		"reap must stop the runner BEFORE deleting the browser pod so the graceful-stop capture precedes the loss; order=%v", order)
+}

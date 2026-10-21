@@ -1,0 +1,30 @@
+# The BrowserToolbox CR this bundle exercises — interaction: act.
+#
+# Named in bundle.json's extraManifests (as "01-browser-toolbox") as well as
+# being applied through agentDir; see browser-readonly-catalog's
+# 01-browser-toolbox.yaml header for the full rationale — short version: the
+# threadrun driver's browserToolboxSpecs reads the RAW TEXT of every
+# extraManifests-named file to find a `kind: BrowserToolbox` document, because
+# this AgentClass never references the toolbox and so nothing ever resolves it
+# live from the API.
+#
+# act mode is what offers request_human_step (it is part of the login flow,
+# offered only in act mode). The ops this bundle actually uses — navigate, read,
+# request_human_step — are all non-slot-gated (navigate/read are observations;
+# request_human_step is Stateless, its human card IS its gate), so no web_host
+# approval is needed. The code is typed into the page by the RUNNER on the human's
+# behalf, never by a model acting call.
+#
+# access.sites names an unrelated placeholder host, exactly as in
+# browser-readonly-catalog: the real test site's host is appended automatically
+# by setupBrowserFixture for an allowlist-mode toolbox.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: BrowserToolbox
+metadata: {name: web, namespace: default}
+spec:
+  access:
+    mode: allowlist
+    sites:
+      - host: example.com
+  interaction: act
+  state: ephemeral

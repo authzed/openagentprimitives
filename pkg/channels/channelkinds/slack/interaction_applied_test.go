@@ -57,6 +57,73 @@ func approvedToolCallApplied() channelevents.InteractionAppliedPayload {
 	}
 }
 
+// approvedLoginHumanStepCodeApplied is the OUTBOUND applied envelope a
+// login_human_step kind:code card produces on approve — the exact leg the Slack
+// interaction sender consumes to edit the card. It CARRIES the human's typed code
+// in ResponseText, because that is the real wire shape the renderer is handed (the
+// pipe puts the code on the outbound applied so the runner can resume off it). The
+// renderer must never surface it.
+func approvedLoginHumanStepCodeApplied() channelevents.InteractionAppliedPayload {
+	return channelevents.InteractionAppliedPayload{
+		AgentSessionRef: channelevents.SessionRef{Namespace: "agents", Name: "demo"},
+		Category:        "login_human_step",
+		RequestRef:      "req-login-1",
+		Outcome:         channelevents.OutcomeApproved,
+		ResponseText:    "123456", // the SECRET the renderer must not leak
+		DecidedBy: &channelevents.ExternalIdentity{
+			Kind: identity.KindSlack, ExternalID: identity.RawExternalID("U_APPROVER"),
+		},
+	}
+}
+
+// loginHumanStepRequest is the original code card, passed as the cached request so
+// the resolved render is realistic (lead + the model-authored prompt in Excerpt).
+func loginHumanStepRequest() channelevents.InteractionRequestPayload {
+	return channelevents.InteractionRequestPayload{
+		AgentSessionRef: channelevents.SessionRef{Namespace: "agents", Name: "demo"},
+		Category:        "login_human_step",
+		RequestRef:      "req-login-1",
+		Lead:            "A sign-in step needs you",
+		Excerpt: &channelevents.InteractionExcerpt{
+			Label:   "What the agent is asking you to do",
+			Content: "enter the 6-digit code we emailed you",
+		},
+		Actions: []channelevents.InteractionAction{
+			{ID: "approve", Label: "Approve", Style: channelevents.ActionStylePrimary, Kind: channelevents.ActionKindDecision},
+			{ID: "deny", Label: "Deny", Style: channelevents.ActionStyleDanger, Kind: channelevents.ActionKindDecision},
+		},
+	}
+}
+
+// TestBuildInteractionAppliedBlocks_NeverLeaksTheHumanStepCode is the C7
+// defense-in-depth guard (Review Focus 3, renderer leg): the Slack interaction
+// renderer is handed the OUTBOUND login_human_step applied payload WITH the human's
+// typed code in ResponseText, and the rendered output — the FULL marshaled block
+// payload that would go to Slack, not just its visible text — must not contain the
+// code anywhere. No renderer reads ResponseText today; this pins that invariant so a
+// future renderer that serialized the whole payload (or added a debug dump into a
+// block_id/value field) fails CI instead of silently posting the code to the channel.
+func TestBuildInteractionAppliedBlocks_NeverLeaksTheHumanStepCode(t *testing.T) {
+	req := loginHumanStepRequest()
+	applied := approvedLoginHumanStepCodeApplied()
+	require.Equal(t, "123456", applied.ResponseText, "fixture must carry the code the renderer is tempted to leak")
+
+	blocks := buildInteractionAppliedBlocks(applied, &req)
+
+	// The FULL wire payload, not just visible text: a leak into a block_id, an
+	// action value, or any serialized field is caught here even if it never renders
+	// as human-readable copy.
+	wire, err := json.Marshal(blocks)
+	require.NoError(t, err)
+	assert.NotContains(t, string(wire), "123456",
+		"the typed login code must never reach the Slack block payload — no renderer may serialize ResponseText")
+
+	// And the visible text, belt-and-suspenders, still names the outcome/decider.
+	text := concatBlockText(blocks)
+	assert.NotContains(t, text, "123456", "the code must not render as visible copy")
+	assert.Contains(t, text, "<@U_APPROVER>", "the resolved card still names who approved")
+}
+
 // A resolved decision must render as the same house container every other
 // interaction uses. It was a bare section, so a resolved approval was the one
 // message in a thread that spoke no part of the shared vocabulary.

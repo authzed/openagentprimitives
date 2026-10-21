@@ -47,7 +47,7 @@ func TestScreenshotOfferedOnlyWithImages(t *testing.T) {
 	}
 
 	hasScreenshot := func(acceptsImages bool) bool {
-		tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", acceptsImages)
+		tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", acceptsImages, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("Synthesize: %v", err)
 		}
@@ -63,9 +63,10 @@ func TestScreenshotOfferedOnlyWithImages(t *testing.T) {
 	assert.True(t, hasScreenshot(true), "screenshot must be offered when the model accepts images")
 }
 
-// TestInteractionActOffersSameSetInPhaseA proves the act/readonly branch offers
-// the identical observation set in Phase A (acting tools arrive in Phase C).
-func TestInteractionActOffersSameSetInPhaseA(t *testing.T) {
+// TestActingToolsOfferedOnlyInActMode proves the acting tools
+// (click/press/select/submit) are offered in act mode and ABSENT in readonly,
+// while the observation set is identical across both.
+func TestActingToolsOfferedOnlyInActMode(t *testing.T) {
 	base := spiceboxv1alpha1.ResolvedBrowserToolbox{
 		Name: "demo",
 		Ref:  "demo-browser",
@@ -79,9 +80,45 @@ func TestInteractionActOffersSameSetInPhaseA(t *testing.T) {
 	act := base
 	act.Spec.Interaction = "act"
 
-	ro, err := Synthesize(readonly, "http://127.0.0.1:1", "tok", true)
+	ro, err := Synthesize(readonly, "http://127.0.0.1:1", "tok", true, nil, nil, nil)
 	assert.NoError(t, err)
-	ac, err := Synthesize(act, "http://127.0.0.1:1", "tok", true)
+	ac, err := Synthesize(act, "http://127.0.0.1:1", "tok", true, nil, nil, nil)
 	assert.NoError(t, err)
-	assert.Equal(t, toolNames(ro), toolNames(ac), "act and readonly offer the same set in Phase A")
+
+	actingSuffixes := []string{"_type", "_click", "_press", "_select", "_submit", "_request_human_step"}
+	for _, suf := range actingSuffixes {
+		assert.False(t, hasSuffix(toolNames(ro), suf), "readonly must NOT offer %s", suf)
+		assert.True(t, hasSuffix(toolNames(ac), suf), "act must offer %s", suf)
+	}
+
+	// Removing the acting tools from the act set must leave exactly the
+	// readonly (observation) set — nothing else differs between the two modes.
+	assert.Equal(t, toolNames(ro), withoutSuffixes(toolNames(ac), actingSuffixes),
+		"act = readonly observation set plus exactly the acting tools")
+}
+
+func hasSuffix(names []string, suffix string) bool {
+	for _, n := range names {
+		if strings.HasSuffix(n, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutSuffixes(names, suffixes []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		drop := false
+		for _, s := range suffixes {
+			if strings.HasSuffix(n, s) {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			out = append(out, n)
+		}
+	}
+	return out
 }

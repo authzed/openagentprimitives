@@ -201,6 +201,49 @@ func TestHandleInteractionDecision_HappyPath_AppliedBothSubjectsAndClearsPending
 		"pending prompt must be cleared once Applied is published")
 }
 
+// TestHandleInteractionDecision_ResponseTextOnOUTOnly is the C7 pipe-level carrier
+// test: a handler that returns a free-text ResponseText (the human's login code)
+// must have it land on the OUTBOUND applied envelope — the one the runner resumes
+// off (interactionAppliedSubject → SubjectOut), captures, and types into the page —
+// and be STRIPPED from the IN (channelsd self-cleanup) copy, which has no use for
+// it. Neither envelope is model-visible.
+func TestHandleInteractionDecision_ResponseTextOnOUTOnly(t *testing.T) {
+	registerInteractionCategory(t, channelinteractions.DecideApprovers)
+	calls := 0
+	channelinteractions.Bind(fixtureInteractionCategory, trackingHandler(&calls, channelinteractions.Outcome{
+		Result:       channelevents.OutcomeApproved,
+		ResponseText: "123456",
+	}, nil))
+
+	cli := newFakeK8sClientWithExistingSession(t, "U_ALICE")
+	sessKey := sessKeyForFixture()
+	authz := &fakeAuthz{checkApproveResult: true}
+	natsRec := &fakeNATS{}
+	p := newTestPipeline(t, cli, authz, natsRec)
+	mem := newTestMemory(t)
+	p.Mem = mem
+	approver := channelevents.ExternalIdentity{Kind: "slack", ExternalID: "U_ALICE", Email: "alice@example.com"}
+	notePendingInteractionRequest(t, mem, sessKey, fixtureInteractionCategory, "req-1", approversFixtureRequest(approver))
+
+	env := mustBuildInteractionDecision(t, sessKey, fixtureInteractionCategory, "req-1", "approve", approver)
+	require.NoError(t, p.HandleInteractionDecision(context.Background(), env), "HandleInteractionDecision")
+
+	outPL := findInteractionAppliedPayload(t, natsRec, ".out")
+	assert.Equal(t, "123456", outPL.ResponseText, "the outbound leg the runner resumes off MUST carry the typed code")
+
+	inPL := findInteractionAppliedPayload(t, natsRec, ".in")
+	assert.Empty(t, inPL.ResponseText, "the channelsd self-cleanup (IN) leg must NOT carry the code")
+
+	// And nothing leaks the code into any OTHER published payload on any subject.
+	for i, raw := range natsRec.payloads {
+		if strings.HasSuffix(natsRec.subjects[i], ".out."+string(channelevents.KindInteractionApplied)) {
+			continue // the OUT applied is the ONE place the code is allowed (runner resume)
+		}
+		assert.NotContains(t, string(raw), "123456",
+			"the typed code must not appear on subject %s", natsRec.subjects[i])
+	}
+}
+
 // Case 2: second decision for the same requestRef — handler NOT called
 // again; no second Applied; spectator (idempotent).
 func TestHandleInteractionDecision_SecondDecision_IsSpectator(t *testing.T) {

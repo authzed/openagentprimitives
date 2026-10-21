@@ -43,6 +43,15 @@ func TestBuildCard_ResourceLineCarriesDeclaredDisplay(t *testing.T) {
 	assert.Equal(t, line.Detail, line.Href, "text == href: the two must be byte-identical")
 }
 
+// knownIcons is a CLOSED registry; the browser toolbox's web_host declares the
+// generic "globe" mark, so it must be registered or the card renders no icon.
+func TestKnownIcon_WebHostGlobeIsRegistered(t *testing.T) {
+	assert.Equal(t, "globe", knownIcon("globe"),
+		"web_host's display icon must be a known icon, or its instance line renders nothing")
+	// Still closed: an unregistered name renders nothing, never a guess.
+	assert.Equal(t, "", knownIcon("not_a_real_icon"))
+}
+
 // A LOOKALIKE host derives the identical label as the real one — the
 // canonical value is the only thing that differs, and it must still be
 // present and still be the actual link target. This is invariant 3 made

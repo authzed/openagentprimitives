@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<head><title>Sign-in code</title></head>
+<body>
+<h1>Enter your sign-in code</h1>
+<form>
+<input type="text" aria-label="CodeField"
+  oninput="if(this.value==='123456'){document.getElementById('status').textContent='CODE-ACCEPTED-SIGNED-IN';}">
+</form>
+<p id="status">AWAITING-CODE</p>
+</body>
+</html>

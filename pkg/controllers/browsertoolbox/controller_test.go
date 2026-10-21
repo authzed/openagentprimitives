@@ -151,7 +151,7 @@ func directCredsIdentity(t *testing.T, env *testenv.Env, name string, validStatu
 				Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    "secret",
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "dummy", Key: "password"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "dummy", Key: "password"},
 				},
 			}},
 		},
@@ -236,4 +236,74 @@ func TestBrowserToolbox_IdentityNoValidConditionYet_Invalid(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, cond.Status, "Valid status")
 	assert.Equal(t, spiceboxv1alpha1.ReasonBrowserToolboxIdentityUnusable, cond.Reason, "Valid reason")
 	assert.Contains(t, cond.Message, "no Valid condition yet", "message should say the condition is absent")
+}
+
+// TestBrowserToolbox_Unattended_RejectedByAPIServer proves the REAL,
+// regenerated CRD enforces the third field-scoped XValidation rule on
+// BrowserToolbox.Spec (C8) -- not just its ValidateFile mirror
+// (pkg/tools/kinds/browsertoolbox). An unattended site needs both
+// access.mode=allowlist and access.identity set; Create() must be refused by
+// the apiserver's own CEL evaluation before this reconciler ever sees the
+// object.
+func TestBrowserToolbox_Unattended_RejectedByAPIServer(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		btb  *spiceboxv1alpha1.BrowserToolbox
+	}{
+		{
+			name: "unattended site under blocklist",
+			btb: &spiceboxv1alpha1.BrowserToolbox{
+				ObjectMeta: metav1.ObjectMeta{Name: "btb-unattended-blocklist", Namespace: "default"},
+				Spec: spiceboxv1alpha1.BrowserToolboxSpec{
+					Access: spiceboxv1alpha1.BrowserAccess{
+						Mode:  "blocklist",
+						Sites: []spiceboxv1alpha1.BrowserSite{{Host: "example.com", Unattended: true}},
+					},
+				},
+			},
+		},
+		{
+			name: "unattended site under allowlist with no identity",
+			btb: &spiceboxv1alpha1.BrowserToolbox{
+				ObjectMeta: metav1.ObjectMeta{Name: "btb-unattended-no-identity", Namespace: "default"},
+				Spec: spiceboxv1alpha1.BrowserToolboxSpec{
+					Access: spiceboxv1alpha1.BrowserAccess{
+						Mode:  "allowlist",
+						Sites: []spiceboxv1alpha1.BrowserSite{{Host: "example.com", Unattended: true}},
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := env.Client.Create(ctx, tc.btb)
+			require.Error(t, err, "the apiserver must refuse this spec via CEL")
+			assert.Contains(t, err.Error(), "unattended",
+				"the refusal should be the C8 XValidation rule, not an unrelated error")
+		})
+	}
+}
+
+// TestBrowserToolbox_Unattended_AllowlistWithIdentity_AcceptedByAPIServer is
+// the clean counterpart: the same rule must NOT refuse the combination it
+// requires.
+func TestBrowserToolbox_Unattended_AllowlistWithIdentity_AcceptedByAPIServer(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := context.Background()
+
+	btb := &spiceboxv1alpha1.BrowserToolbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "btb-unattended-valid", Namespace: "default"},
+		Spec: spiceboxv1alpha1.BrowserToolboxSpec{
+			Access: spiceboxv1alpha1.BrowserAccess{
+				Mode:     "allowlist",
+				Sites:    []spiceboxv1alpha1.BrowserSite{{Host: "example.com", Unattended: true}},
+				Identity: "some-identity",
+			},
+		},
+	}
+	require.NoError(t, env.Client.Create(ctx, btb), "a valid unattended declaration must be accepted")
 }

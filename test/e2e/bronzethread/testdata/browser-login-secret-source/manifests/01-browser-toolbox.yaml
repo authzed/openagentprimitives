@@ -1,0 +1,32 @@
+# The BrowserToolbox this bundle exercises — interaction: act, state: persistent,
+# bound to the directCredentials identity whose `secret` source carries the
+# fixture login.
+#
+# Named in bundle.json's extraManifests (as "01-browser-toolbox") AND applied via
+# agentDir, like every other browser fixture: the threadrun driver reads the raw
+# text of each extraManifests-named file to find the BrowserToolbox doc so it can
+# boot the gate with this spec's egress policy. UNLIKE the Phase A/B fixtures, the
+# AgentClass here DOES reference this toolbox (spec.browserToolboxes), so the
+# AgentSession reconciler also resolves it live — creating the per-session pod,
+# resolving the login catalog from the identity, and owning status.
+#
+# access.sites names host.docker.internal EXPLICITLY — the fixed hostname the
+# testbrowser site is always reached as (the dynamic port is not part of the
+# host). It must be in the applied CR so the reconciler-derived EffectiveSites
+# admits it for the runner's navigate pre-check; the driver independently appends
+# it to the in-process gate's egress policy.
+#
+# state: persistent requires a bound identity (CRD CEL rule); it is bound here, so
+# the operator provisions an empty per-session state Secret and the resolved
+# effective state is persistent.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: BrowserToolbox
+metadata: {name: web, namespace: default}
+spec:
+  access:
+    mode: allowlist
+    identity: browser-login-identity
+    sites:
+      - host: host.docker.internal
+  interaction: act
+  state: persistent

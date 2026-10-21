@@ -8,12 +8,12 @@
 # find a `kind: BrowserToolbox` document, because this AgentClass never
 # references the toolbox and so nothing ever resolves it live from the API.
 #
-# Phase A offers the identical observation tool set regardless of
-# interaction (pkg/agent/tool/browser/synthesize.go's Synthesize says so
-# explicitly) — click/type do not exist as ops at all yet, for any toolbox.
-# So this bundle's toolNotOffered: web_click / web_type assertions pass today
-# independent of this readonly setting; they exist as the standing guard for
-# Phase C, when acting tools arrive and readonly must keep excluding them.
+# Phase C ships the acting tool set (web_type, web_click, web_press,
+# web_select, web_submit, web_request_human_step), synthesized ONLY when
+# interaction: act (pkg/agent/tool/browser/synthesize.go's Synthesize appends
+# them behind that gate). This toolbox is readonly, so it must keep excluding
+# them: this bundle's toolNotOffered: web_click / web_type / web_submit
+# assertions are the live guard that the readonly gate withholds the acting set.
 #
 # access.sites names an unrelated placeholder host, exactly as in
 # browser-blocked-host: the real test site's host is appended automatically

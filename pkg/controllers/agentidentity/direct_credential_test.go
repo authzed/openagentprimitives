@@ -115,7 +115,7 @@ func directCredAI(name, tokenSecret, vault string) *spiceboxv1alpha1.AgentIdenti
 				Name: "logins", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    directcred.SourceOnePassword,
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: tokenSecret, Key: "token"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: tokenSecret, Key: "token"},
 					Vault:     vault,
 				},
 			}},
@@ -306,7 +306,7 @@ func TestDirectCredential_UnregisteredSourceFailsClosed(t *testing.T) {
 				Name: "logins-secret", Type: "directCredentials",
 				DirectCredentials: &spiceboxv1alpha1.DirectCredentialsSource{
 					Source:    directcred.SourceSecret, // enum-valid, unregistered HERE
-					SecretRef: spiceboxv1alpha1.SecretKeyRef{Name: "login-secret-unreg"},
+					SecretRef: spiceboxv1alpha1.DirectCredentialSecretRef{Name: "login-secret-unreg"},
 				},
 			}},
 		},

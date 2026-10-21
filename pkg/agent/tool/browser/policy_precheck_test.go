@@ -53,7 +53,7 @@ func toolNames(tools []agenttool.Tool) []string {
 // must be refused BEFORE any Chrome connection is attempted.
 func execNavigate(t *testing.T, rt spiceboxv1alpha1.ResolvedBrowserToolbox, url string) agenttool.Result {
 	t.Helper()
-	tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", false)
+	tools, err := Synthesize(rt, "http://127.0.0.1:1", "tok", false, nil, nil, nil)
 	require.NoError(t, err)
 	nav := toolBySuffix(t, tools, "navigate")
 	args, err := json.Marshal(map[string]any{"url": url})

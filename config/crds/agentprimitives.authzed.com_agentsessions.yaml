@@ -3061,6 +3061,26 @@ spec:
                                     maxLength: 253
                                     pattern: ^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?)*$
                                     type: string
+                                  unattended:
+                                    default: false
+                                    description: |-
+                                      Unattended marks this site's web_host#act grant as operator-approved: the
+                                      AgentSession reconciler's runner writes the slot_grant_act relationship
+                                      for this host at session cold start, unconditionally, with no human
+                                      plan-gate card -- the operator's declaration of Unattended IS the
+                                      authorization, exactly as an approved card would be. A Phase C addition;
+                                      the third field-scoped XValidation rule on BrowserToolbox.Spec requires
+                                      access.mode=allowlist and access.identity whenever any site sets this, so
+                                      an unattended grant is always for a specific, bound-identity session and
+                                      never for a general-access (blocklist) browser.
+
+                                      The default marker below lands a structural default on every site, even
+                                      one that omits the field entirely -- without it, the third XValidation
+                                      rule's `s.unattended` on a plain site with no explicit value errors
+                                      evaluation ("no such key: unattended") instead of reading false, and
+                                      CEL's fail-closed-on-error semantics then refuse EVERY BrowserToolbox
+                                      create, not just an unattended one.
+                                    type: boolean
                                 required:
                                 - host
                                 type: object
@@ -3083,13 +3103,22 @@ spec:
                           - readonly
                           type: string
                         state:
-                          default: ephemeral
                           description: |-
                             State selects how the browser's session state (cookies, storage) is
-                            retained across turns.
-                            Phase A: ephemeral is the only state; persistent arrives with identities (Phase C).
+                            retained across turns: "persistent" captures cookies + localStorage for the
+                            effective sites into a per-session Secret and re-injects them across reap and
+                            wake (spec §1.4); "ephemeral" keeps a clean profile every pod boot and
+                            captures nothing. An explicit "persistent" requires access.identity (the
+                            field-scoped XValidation rule on BrowserToolbox.Spec).
+
+                            DELIBERATELY NOT DEFAULTED at admission. An unset value is resolved in code
+                            at the AgentSession snapshot (controller.go) to "persistent" when an identity
+                            is bound and "ephemeral" otherwise -- a static kubebuilder default would mask
+                            that identity-driven default, so the field is left omitempty and
+                            enum-but-not-defaulted so an unset field stays distinguishably empty.
                           enum:
                           - ephemeral
+                          - persistent
                           type: string
                       required:
                       - access

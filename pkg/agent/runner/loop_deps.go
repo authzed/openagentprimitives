@@ -744,6 +744,16 @@ type Loop struct {
 	// link — exactly the pre-existing behavior.
 	PlanGateResourceDisplays map[string]plangate.ResourceDisplay
 
+	// PlanGateWebHostIdentityLabels maps a web_host slot's host to the bound
+	// identity login's display label, from
+	// AgentSession.status.resolvedBrowserToolboxes[].Catalog (see
+	// BrowserHostIdentityLabels). Display only: the plan gate threads it
+	// straight into every card so the browser toolbox's acting line can name
+	// the signing identity ("act on aa.com, signing in as <label>" — C8). A
+	// host absent from this map has no matching login, and the line omits the
+	// clause rather than guessing one.
+	PlanGateWebHostIdentityLabels map[string]string
+
 	// SpiceDBHasOnResource reports whether a subject holds `permission` on the
 	// ONE resource named — the plan gate's approver-standing question for a slot
 	// whose phase named its instance.

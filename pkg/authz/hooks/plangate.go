@@ -144,6 +144,15 @@ type PlanGateDeps struct {
 	// declared for that type.
 	ResourceDisplays map[string]plangate.ResourceDisplay
 
+	// WebHostIdentityLabels maps a web_host slot's host to the bound
+	// identity login's display label (the SAME map the runner holds —
+	// Loop.PlanGateWebHostIdentityLabels, from
+	// runner.BrowserHostIdentityLabels). Display only: threaded into every
+	// card so the browser toolbox's acting line can name the signing
+	// identity ("act on aa.com, signing in as <label>" — C8). Absent (nil, or
+	// a host missing from it) renders the line with no signing-in clause.
+	WebHostIdentityLabels map[string]string
+
 	Resolve  HandleResolver
 	Recorder PlanGateRecorder
 	Logger   PlanGateLogger
@@ -364,17 +373,18 @@ func (h *PlanGate) Eval(ctx context.Context, in pipeline.Input) pipeline.Decisio
 		rec.Severity = string(sev)
 
 		card := plangate.BuildCard(plangate.CardInput{
-			Plan:                 h.activePlan(),
-			PhaseIndex:           h.deps.ActivePhase,
-			Severity:             sev,
-			Surface:              h.deps.Surface,
-			Approvers:            h.deps.Approvers,
-			MaxSingleCardHandles: h.deps.MaxSingleCardHandles,
-			SlotStanding:         h.deps.SlotStanding,
-			SlotPermissions:      h.deps.SlotPermissions,
-			SlotValueTransforms:  h.deps.SlotValueTransforms,
-			PermissionTitles:     h.deps.PermissionTitles,
-			ResourceDisplays:     h.deps.ResourceDisplays,
+			Plan:                  h.activePlan(),
+			PhaseIndex:            h.deps.ActivePhase,
+			Severity:              sev,
+			Surface:               h.deps.Surface,
+			Approvers:             h.deps.Approvers,
+			MaxSingleCardHandles:  h.deps.MaxSingleCardHandles,
+			SlotStanding:          h.deps.SlotStanding,
+			SlotPermissions:       h.deps.SlotPermissions,
+			SlotValueTransforms:   h.deps.SlotValueTransforms,
+			PermissionTitles:      h.deps.PermissionTitles,
+			ResourceDisplays:      h.deps.ResourceDisplays,
+			WebHostIdentityLabels: h.deps.WebHostIdentityLabels,
 		})
 		if js, err := card.JSON(); err != nil {
 			h.logf("plan_gate: rendering the approval card failed",
@@ -642,19 +652,20 @@ func (h *PlanGate) raiseAmendment(
 	})
 
 	card := plangate.BuildCard(plangate.CardInput{
-		Plan:                 h.activePlan(),
-		PhaseIndex:           activePhase,
-		Severity:             sev,
-		Surface:              h.deps.Surface,
-		Approvers:            h.deps.Approvers,
-		MaxSingleCardHandles: h.deps.MaxSingleCardHandles,
-		AddedHandles:         []string{rec.Handle},
-		AgentJustification:   in.Tool.Justification,
-		SlotStanding:         h.deps.SlotStanding,
-		SlotPermissions:      h.deps.SlotPermissions,
-		SlotValueTransforms:  h.deps.SlotValueTransforms,
-		PermissionTitles:     h.deps.PermissionTitles,
-		ResourceDisplays:     h.deps.ResourceDisplays,
+		Plan:                  h.activePlan(),
+		PhaseIndex:            activePhase,
+		Severity:              sev,
+		Surface:               h.deps.Surface,
+		Approvers:             h.deps.Approvers,
+		MaxSingleCardHandles:  h.deps.MaxSingleCardHandles,
+		AddedHandles:          []string{rec.Handle},
+		AgentJustification:    in.Tool.Justification,
+		SlotStanding:          h.deps.SlotStanding,
+		SlotPermissions:       h.deps.SlotPermissions,
+		SlotValueTransforms:   h.deps.SlotValueTransforms,
+		PermissionTitles:      h.deps.PermissionTitles,
+		ResourceDisplays:      h.deps.ResourceDisplays,
+		WebHostIdentityLabels: h.deps.WebHostIdentityLabels,
 	})
 
 	rec.Event = plangateaudit.EventAmendmentRequested
@@ -875,14 +886,15 @@ func (h *PlanGate) requestPhaseApproval(
 	cardIn := plangate.CardInput{
 		Plan: plan, PhaseIndex: activePhase, Severity: sev,
 		Surface: h.deps.Surface, Approvers: h.deps.Approvers,
-		MaxSingleCardHandles: h.deps.MaxSingleCardHandles,
-		AddedHandles:         added,
-		AddedSlots:           addedSlots,
-		SlotStanding:         h.deps.SlotStanding,
-		SlotPermissions:      h.deps.SlotPermissions,
-		SlotValueTransforms:  h.deps.SlotValueTransforms,
-		PermissionTitles:     h.deps.PermissionTitles,
-		ResourceDisplays:     h.deps.ResourceDisplays,
+		MaxSingleCardHandles:  h.deps.MaxSingleCardHandles,
+		AddedHandles:          added,
+		AddedSlots:            addedSlots,
+		SlotStanding:          h.deps.SlotStanding,
+		SlotPermissions:       h.deps.SlotPermissions,
+		SlotValueTransforms:   h.deps.SlotValueTransforms,
+		PermissionTitles:      h.deps.PermissionTitles,
+		ResourceDisplays:      h.deps.ResourceDisplays,
+		WebHostIdentityLabels: h.deps.WebHostIdentityLabels,
 	}
 	if wholePlan {
 		// Severity is left for the card to derive, and that is the whole point of
