@@ -60,7 +60,7 @@ func TestPreflight(t *testing.T) {
 		{
 			name: "unknown oapFormatVersion major: error via Validate",
 			mutate: func(b *oap.Bundle) {
-				b.Manifest.OapFormatVersion = "2"
+				b.Manifest.OapFormatVersion = "999"
 			},
 			clusterApVersion: "1.3.0",
 			wantErr:          "newer than this oap supports",

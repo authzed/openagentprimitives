@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"slices"
 	"strings"
 	"unicode"
@@ -25,7 +26,7 @@ import (
 // error from Verify becomes a 401 there (see that package's handle doc), so
 // every path here fails closed — there is no "no secret configured, so
 // allow" branch, and no error shape that means "probably fine".
-type receiver struct{}
+type receiver struct{ k8sClient client.Client }
 
 var _ channelkinds.WebhookReceiver = receiver{}
 var _ channelkinds.TriggerFactProvider = receiver{}
@@ -96,6 +97,7 @@ type prEvent struct {
 	Action      string `json:"action"`
 	Number      int    `json:"number"`
 	PullRequest struct {
+		State   string `json:"state"`
 		Title   string `json:"title"`
 		HTMLURL string `json:"html_url"`
 		Draft   bool   `json:"draft"`
@@ -135,6 +137,9 @@ type prEvent struct {
 // when the delivery is genuine but uninteresting — a 204 at the route, never
 // an error, because retrying would produce the same answer.
 func (receiver) Translate(_ context.Context, ch *spiceboxv1alpha1.Channel, r channelkinds.WebhookRequest) (*channelkinds.WebhookInbound, error) {
+	if ch.Spec.GitHub != nil && ch.Spec.GitHub.Trigger != nil {
+		return translateWorkflow(ch, r)
+	}
 	if r.Headers.Get("X-GitHub-Event") != "pull_request" {
 		return nil, nil // ping and every other event type: verified, not interesting
 	}
@@ -159,7 +164,11 @@ func (receiver) Translate(_ context.Context, ch *spiceboxv1alpha1.Channel, r cha
 		return nil, fmt.Errorf("github: pull_request payload has no repository or number (Channel %s/%s)", ch.Namespace, ch.Name)
 	}
 
-	if !slices.Contains(cfg.Events, ev.Action) {
+	events := cfg.Events
+	if cfg.Trigger == nil && len(events) == 0 {
+		events = []string{"opened", "synchronize", "reopened", "ready_for_review"}
+	}
+	if !slices.Contains(events, ev.Action) {
 		return nil, nil
 	}
 	// nil means true - see the field's doc comment.

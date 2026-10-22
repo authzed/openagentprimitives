@@ -1,0 +1,147 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: webhookadmissions.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: WebhookAdmission
+    listKind: WebhookAdmissionList
+    plural: webhookadmissions
+    shortNames:
+    - wha
+    singular: webhookadmission
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.channelName
+      name: Channel
+      type: string
+    - jsonPath: .spec.recordType
+      name: Type
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          WebhookAdmission durably records a verified webhook delivery or an atomic
+          provider-cohort claim before creating an AgentSession. It contains no secret
+          credential. Provider admission workers update only status; the delivery body
+          and Channel incarnation are immutable evidence.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: WebhookAdmissionSpec is immutable after creation.
+            properties:
+              body:
+                description: |-
+                  Body is the authenticated webhook payload, never an installation token.
+                  Keep the wire encoding as a plain base64 string: Kubernetes 1.30 CEL
+                  byte conversion rejects the standard +/ alphabet in immutable-spec checks.
+                  The Go JSON decoder still enforces base64 and preserves exact bytes.
+                  MaxLength bounds the base64 representation of a 512 KiB delivery.
+                maxLength: 699052
+                type: string
+              channelName:
+                description: ChannelName names the input Channel in this namespace.
+                maxLength: 253
+                minLength: 1
+                type: string
+              channelUID:
+                description: ChannelUID pins the Channel incarnation across deletion
+                  and recreation.
+                maxLength: 128
+                minLength: 1
+                type: string
+              enqueuedAt:
+                description: EnqueuedAt starts the bounded retention period independently
+                  of retries.
+                format: date-time
+                type: string
+              event:
+                description: Event is the verified provider event name.
+                maxLength: 128
+                type: string
+              recordType:
+                description: RecordType separates raw deliveries from deduplicated
+                  CI-cohort claims.
+                enum:
+                - delivery
+                - cohort
+                type: string
+            required:
+            - channelName
+            - channelUID
+            - enqueuedAt
+            - recordType
+            type: object
+            x-kubernetes-validations:
+            - message: webhook admission evidence is immutable
+              rule: self == oldSelf
+          status:
+            description: WebhookAdmissionStatus holds the durable worker lease and
+              admission result.
+            properties:
+              leaseUntil:
+                description: |-
+                  LeaseUntil serializes workers using status resource-version comparisons
+                  and acts as retry-not-before after a transient provider or delivery error.
+                format: date-time
+                type: string
+              phase:
+                description: Phase is pending until the delivery or cohort was processed
+                  conclusively.
+                enum:
+                - pending
+                - done
+                type: string
+              reason:
+                description: Reason records deferral, expiry, provider failure, or
+                  supersession evidence.
+                type: string
+              retryCount:
+                description: RetryCount counts consecutive transient failures for
+                  bounded retry backoff.
+                format: int32
+                minimum: 0
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

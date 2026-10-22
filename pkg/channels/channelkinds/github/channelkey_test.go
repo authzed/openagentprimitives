@@ -53,3 +53,16 @@ func TestParseChannelKey_RefusesWhatIsNotAPullRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestChannelKey_CohortSuffix(t *testing.T) {
+	suffix := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	owner, repo, n, err := parseChannelKey("pr:synthetic/unit#17@" + suffix)
+	require.NoError(t, err)
+	assert.Equal(t, "synthetic", owner)
+	assert.Equal(t, "unit", repo)
+	assert.Equal(t, 17, n)
+	for _, key := range []string{"pr:synthetic/unit#17@", "pr:synthetic/unit#17@bad", "pr:synthetic/unit#17@" + suffix + "@" + suffix} {
+		_, _, _, err := parseChannelKey(key)
+		require.Error(t, err)
+	}
+}

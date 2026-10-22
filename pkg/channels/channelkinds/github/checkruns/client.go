@@ -181,6 +181,51 @@ func (c *Client) FindByName(ctx context.Context, token string, repo Repo, sha, n
 	return nil, nil
 }
 
+// FindByIdentity finds one immutable CI-cohort run, including earlier runs at
+// the same SHA. A same-name run belonging to another cohort is never reused.
+func (c *Client) FindByIdentity(ctx context.Context, token string, repo Repo, sha, name, externalID string) (*Run, error) {
+	if sha == "" || name == "" || externalID == "" {
+		return nil, fmt.Errorf("check-run identity needs revision, name and external ID")
+	}
+	var found *Run
+	for page := 1; page <= 10; page++ {
+		endpoint := "/repos/" + repo.String() + "/commits/" + sha + "/check-runs?check_name=" + url.QueryEscape(name) + "&filter=all&per_page=100&page=" + strconv.Itoa(page)
+		var response struct {
+			Total int `json:"total_count"`
+			Runs  []struct {
+				ID         int64  `json:"id"`
+				Name       string `json:"name"`
+				HeadSHA    string `json:"head_sha"`
+				ExternalID string `json:"external_id"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+			} `json:"check_runs"`
+		}
+		if err := c.do(ctx, http.MethodGet, endpoint, token, nil, &response); err != nil {
+			return nil, err
+		}
+		if response.Total > 1000 {
+			return nil, fmt.Errorf("check-run lookup exceeds bounded page limit")
+		}
+		for _, r := range response.Runs {
+			if r.Name != name || r.ExternalID != externalID {
+				continue
+			}
+			if r.ID <= 0 || (r.HeadSHA != "" && r.HeadSHA != sha) {
+				return nil, fmt.Errorf("check-run provider identity mismatch")
+			}
+			if found != nil {
+				return nil, fmt.Errorf("ambiguous check runs for CI cohort")
+			}
+			found = &Run{ID: r.ID, Status: r.Status, Conclusion: r.Conclusion}
+		}
+		if page*100 >= response.Total {
+			return found, nil
+		}
+	}
+	return nil, fmt.Errorf("check-run lookup exceeds bounded page limit")
+}
+
 // Create opens a new check run and returns it.
 func (c *Client) Create(ctx context.Context, token string, repo Repo, w Write) (*Run, error) {
 	path := "/repos/" + repo.String() + "/check-runs"

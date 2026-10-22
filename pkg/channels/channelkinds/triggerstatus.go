@@ -3,6 +3,7 @@ package channelkinds
 import (
 	"context"
 	"fmt"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"slices"
 	"strings"
 
@@ -149,6 +150,8 @@ func (s TriggerProviderState) Merge(other TriggerProviderState) TriggerProviderS
 // call somewhere else, nothing below this line is testable against anything
 // but the real provider.
 type TriggerStatusOptions struct {
+	// K8sClient enables live configuration and target generation validation.
+	K8sClient client.Client
 	// ProviderAPIBaseURL overrides the provider's API host (a test's
 	// stand-in server, or a self-hosted instance). Empty means the
 	// implementation's real default. Production leaves it empty.

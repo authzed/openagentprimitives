@@ -538,7 +538,7 @@ func (w channelWiring) prepareDeclaredChannels(
 			credentialPreflights = append(credentialPreflights, preflight)
 		}
 		run, _, err := channelwizard.PrepareRun(ctx, kind.Wizard(), channelkinds.WizardInput{
-			Namespace: w.kube.Namespace, Seeded: p.Seeded, WorkingDir: ".", OperatorShell: true,
+			Namespace: w.kube.Namespace, Config: p.Required.Config, Seeded: p.Seeded, WorkingDir: ".", OperatorShell: true,
 		}, p.Required.Kind, tui.NewState(), p.Required.Role, channelWizardSeeds(p), map[string]bool{
 			wizardkeys.KeyExternalBaseURL: endpoint.NeedsReadyURL(),
 		}, w.runOptions(p))
@@ -1067,6 +1067,7 @@ func (w channelWiring) drive(ctx context.Context, kind channelkinds.Kind, o *cha
 	} else {
 		w.announce(p)
 		wizIn := channelkinds.WizardInput{
+			Config:    p.Required.Config,
 			K8s:       w.kube.Controller,
 			Namespace: w.kube.Namespace,
 			// The SAME map the driver consults to decide which questions to drop,
@@ -1219,6 +1220,9 @@ func (w channelWiring) finishCommand(p channelplan.ChannelPlan) string {
 		p.Required.Kind, strings.TrimSpace(p.Required.Name), w.kube.Namespace)
 	if role := strings.TrimSpace(p.Required.Role); role != "" {
 		cmd += " --role " + role
+	}
+	if len(p.Required.Config) > 0 {
+		cmd += " --handler-config '" + strings.ReplaceAll(string(p.Required.Config), "'", "'\"'\"'") + "'"
 	}
 	return cmd
 }

@@ -111,7 +111,8 @@ func (triggerStatusCapability) Offer(o OfferContext) ([]tool.Tool, *SkipReason) 
 	}
 
 	cfg := meta.TriggerStatusConfig{
-		KindName: o.Binding.Kind,
+		Artifacts: o.Env.Artifacts,
+		KindName:  o.Binding.Kind,
 		// The kind's own words for what it reports on, so the prompt text
 		// lands with the kind rather than being restated here — the same rule
 		// artifact renderers' Instructions() follow.

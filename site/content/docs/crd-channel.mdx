@@ -46,9 +46,14 @@ Connected condition and patches it through the status subresource.
 | `spec.fake.orgScoped` | `boolean` | OrgScoped makes the fake kind attribute org membership on this channel, so a scenario can exercise the session-start gate: injected identities carry their OrgMembership stamp verbatim, and an unstamped one reads as guest at the pipeline (fail-closed). |
 | `spec.github` | `object` | GitHub carries kind-specific config for kind="github". |
 | `spec.github.appSlug` \* | `string` | AppSlug is the GitHub App's slug, recorded so the wizard and the drift check can build install and settings URLs. The App's identity and keys live in the credentialsRef Secret, never in spec. |
-| `spec.github.events` | `[]string` | Events are the pull_request actions that become a review. _(default: ["opened","synchronize","reopened","ready_for_review"])_ |
+| `spec.github.events` | `[]string` | Events are the pull_request actions that become a review. |
 | `spec.github.repositories` | `[]string` | Repositories optionally narrows which repos produce reviews. Empty means every repository the App installation grants. |
 | `spec.github.skipDrafts` | `boolean` | SkipDrafts drops draft pull requests. Nil means true: drafts are skipped unless the Channel opts in with an explicit `skipDrafts: false`. A *bool with no default marker, NOT a bool with +kubebuilder:default=true. That combination is unsettable: `false` is the zero value, omitempty elides it, the API server sees an absent field and the defaulter restores true - so the one value a user reaches for when they DO want draft PRs reviewed is the one value the field cannot hold. Same shape as ChannelMetaagentSpec.Enabled in this file. |
+| `spec.github.trigger` | `object` | Trigger is opt-in; absent preserves legacy pull_request behavior. |
+| `spec.github.trigger.actions` | `[]string` |  |
+| `spec.github.trigger.event` \* | `string` |  |
+| `spec.github.trigger.readiness` | `string` |  |
+| `spec.github.trigger.workflows` | `map[string][]string` | Workflows maps owner/repository to required workflow paths. |
 | `spec.kind` \* | `string` | Kind selects the kind impl. "fake" is an in-process test kind; "slack" and "bento" are channelsd-hosted; "local" is the client-hosted TUI kind driven by `oap agent chat`; "browser" is the client-hosted kind for a session a browser is looking at; "github" is received by webhook at webd rather than relayed by channelsd; "agent" is the channelsd-hosted kind whose counterparty is another AgentSession in this cluster, not an external surface. _(enum: fake \| slack \| bento \| local \| browser \| github \| agent)_ |
 | `spec.metaagent` | `object` | Metaagent overrides scope-management behavior for this channel. When the bound AgentClass has spec.authz.scope.enabled=true, the AgentSession controller auto-invites the metaagent bot to this channel unless this override sets Enabled=false. Pointer-bool so the absence of the field is distinguishable from explicit false. |
 | `spec.metaagent.enabled` | `boolean` | Enabled forces metaagent membership on (true) or off (false). When nil, the AgentSession controller follows the AgentClass's scope.enabled flag. |

@@ -3,6 +3,7 @@
 package oap
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -13,7 +14,7 @@ import (
 )
 
 // SupportedFormatMajor is the highest oapFormatVersion major this build understands.
-const SupportedFormatMajor = 1
+const SupportedFormatMajor = 2
 
 // OCI media types backing a .oap. Copied verbatim into manifests and registries.
 const (
@@ -211,6 +212,8 @@ type Pin struct {
 // config, not portable content. This declares that one is REQUIRED, so install
 // can create it from answers.
 type RequiredChannel struct {
+	// Config contains arguments owned and validated by the registered channel kind.
+	Config json.RawMessage `json:"config,omitempty"`
 	// Kind is a registered channelkinds name: "github", "slack", …
 	Kind string `json:"kind"`
 	// Role is "input", "output", "both" or "monitoring", matching
@@ -257,6 +260,11 @@ func (m *Manifest) Validate() error {
 	}
 	if major > SupportedFormatMajor {
 		return fmt.Errorf("oapFormatVersion %q is newer than this oap supports (max major %d); upgrade oap", m.OapFormatVersion, SupportedFormatMajor)
+	}
+	for i, channel := range m.Requires.Channels {
+		if len(channel.Config) > 0 && major < 2 {
+			return fmt.Errorf("requires.channels[%d].config requires oapFormatVersion 2 or newer", i)
+		}
 	}
 	if m.Agent.Name == "" {
 		return fmt.Errorf("agent.name is required")

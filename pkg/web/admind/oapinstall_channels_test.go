@@ -881,3 +881,13 @@ func TestDeclaredChannelForm_AFailedPlanIsSurfacedNotSwallowed(t *testing.T) {
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "AgentClass")
 }
+
+func TestHandlerConfigReachesPreviewAndSubmittedWizard(t *testing.T) {
+	raw := json.RawMessage(`{"trigger":{"event":"workflow_run","actions":["completed"],"readiness":"all_completed"}}`)
+	required := oap.RequiredChannel{Kind: "github", Role: "input", Name: "synthetic-input", Config: raw}
+	preview := previewWizardInput("synthetic-ns", channelplan.ChannelPlan{Required: required})
+	require.JSONEq(t, string(raw), string(preview.Config))
+	admin := &Admind{}
+	submitted := admin.channelWizardInput(&pendingChannelSetup{namespace: "synthetic-ns", required: required}, nil)
+	require.JSONEq(t, string(raw), string(submitted.Config))
+}

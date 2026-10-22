@@ -420,14 +420,17 @@ func (r *Reconciler) validate(ctx context.Context, ch *spiceboxv1alpha1.Channel)
 	// 6. A role=input Channel delivers its reply into a DIFFERENT Channel; that
 	// target must resolve now, not at 09:00 on a Monday when the cron fires.
 	// role=both is self-contained (both origin and destination) and asserts
-	// nothing here.
+	// nothing here. Inputs with an intrinsic report surface may omit the
+	// conversational output, but validate it when one is installed.
 	if ch.Spec.Role == spiceboxv1alpha1.ChannelRoleInput {
-		outCh, err := outputbind.Resolve(ctx, r.Client, ch.Namespace, ch.Spec.AgentClass)
+		outCh, err := outputbind.ResolveForInput(ctx, r.Client, ch)
 		if err != nil {
 			return spiceboxv1alpha1.ReasonChannelOutputBindingUnresolvable, err.Error(), false, class.UID
 		}
-		if _, _, err := outputbind.Anchor(outCh); err != nil {
-			return spiceboxv1alpha1.ReasonChannelOutputBindingUnresolvable, err.Error(), false, class.UID
+		if outCh != nil {
+			if _, _, err := outputbind.Anchor(outCh); err != nil {
+				return spiceboxv1alpha1.ReasonChannelOutputBindingUnresolvable, err.Error(), false, class.UID
+			}
 		}
 	}
 

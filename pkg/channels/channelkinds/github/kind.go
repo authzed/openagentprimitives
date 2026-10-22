@@ -99,6 +99,9 @@ func (k Kind) ValidateSpec(ch *spiceboxv1alpha1.Channel) error {
 	if ch.Spec.GitHub == nil {
 		return fmt.Errorf("github channel %q: spec.github is required", ch.Name)
 	}
+	if err := validatePersistedTrigger(ch.Spec.GitHub); err != nil {
+		return fmt.Errorf("github channel %q: %w", ch.Name, err)
+	}
 	if ch.Spec.Slack != nil {
 		return fmt.Errorf("github channel %q: must not set spec.slack", ch.Name)
 	}
@@ -262,8 +265,8 @@ func (Kind) WebAuthenticator(channelkinds.WebAuthDeps) channelkinds.WebAuthentic
 
 // WebhookReceiver returns the kind's inbound-HTTP receiver. github IS
 // webhook-routable — this is its real inbound surface. See receiver.go.
-func (Kind) WebhookReceiver(channelkinds.Deps) channelkinds.WebhookReceiver {
-	return receiver{}
+func (Kind) WebhookReceiver(deps channelkinds.Deps) channelkinds.WebhookReceiver {
+	return receiver{k8sClient: deps.K8sClient}
 }
 
 // Wizard returns the github setup flow (wizard_data.go): pick an AgentClass,

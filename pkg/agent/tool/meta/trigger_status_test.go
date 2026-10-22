@@ -530,11 +530,11 @@ func tsComposedConfig(kindName string) meta.TriggerStatusConfig {
 	return cfg
 }
 
-// TestConcludeTriggerStatus_ComposedMode_OffersOnlyTheOutcome: in composed
+// TestConcludeTriggerStatus_ComposedMode_OffersOutcomeAndPreparedArtifact: in composed
 // mode the model is never ASKED for text — the schema is the prompt, and a
 // summary field left in it would invite the exact bytes this mode exists to
 // keep off the surface.
-func TestConcludeTriggerStatus_ComposedMode_OffersOnlyTheOutcome(t *testing.T) {
+func TestConcludeTriggerStatus_ComposedMode_OffersOutcomeAndPreparedArtifact(t *testing.T) {
 	tl := meta.NewConcludeTriggerStatus(tsComposedConfig("faketrigger-composed-schema"))
 	var schema struct {
 		Properties map[string]json.RawMessage `json:"properties"`
@@ -542,7 +542,8 @@ func TestConcludeTriggerStatus_ComposedMode_OffersOnlyTheOutcome(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(tl.InputSchema(), &schema))
 	assert.Equal(t, []string{"outcome"}, schema.Required)
-	require.Len(t, schema.Properties, 1)
+	require.Len(t, schema.Properties, 2)
+	assert.Contains(t, schema.Properties, "artifact_id")
 	assert.Contains(t, schema.Properties, "outcome")
 
 	// The enum is still the seam's closed set, derived, never retyped.

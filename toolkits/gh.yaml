@@ -75,6 +75,9 @@ spicedbSchema:
       standing: session-only
       relations:
         - {name: owner, subjectType: user}
+        # Explicit memory-only standing for an unattended scheduler. The slot
+        # composer consults this ONLY for write_memory, never read/write/admin.
+        - {name: memory_writer, subjectType: service}
         # The bridge. One tuple per URL, written by the directory sync, tying
         # the URL an agent typed to the repository the forge enumerated.
         - {name: repo, subjectType: github_repo}
@@ -123,6 +126,9 @@ spicedbSchema:
         - {name: write,       expr: "owner + repo->can_write", title: "Change the project on GitHub, including direct API calls"}
         - {name: admin,       expr: "owner + repo->can_admin", title: "Merge pull requests"}
         - {name: create_repo, expr: owner,                     title: "Create a new repository"}
+        # Pool readership is independent of session slot grants. Do not slot
+        # this permission: write_memory slots open the pool without widening it.
+        - {name: view_memory, expr: "owner + repo->can_read"}
 
     - name: github_pull_request
       # Still session-only, for the same reason github_repo_url above is: who
@@ -243,6 +249,7 @@ spicedbSchema:
         permission can_write    = can_maintain + write
         permission can_triage   = can_write + triage
         permission can_read     = can_triage + reader + org->member
+        permission view_memory = can_read
     }
 
 subcommands:

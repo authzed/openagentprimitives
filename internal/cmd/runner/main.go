@@ -572,6 +572,10 @@ func run(cfg *config) error {
 	if err != nil {
 		return fmt.Errorf("resolve system prompt: %w", err)
 	}
+	systemPrompt, err = promptWithClassConfig(systemPrompt, class.Spec.Config)
+	if err != nil {
+		return err
+	}
 	userPrompt, err := runner.ResolvePrompt(rootCtx, c, ns, sess.Spec.Prompt)
 	if err != nil {
 		return fmt.Errorf("resolve user prompt: %w", err)

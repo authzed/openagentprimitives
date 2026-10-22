@@ -18,6 +18,8 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	chregistry "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
+	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/platform/artifacts"
 )
 
 // TriggerStatusConfig wires the two trigger-status tools to the session's INPUT
@@ -30,6 +32,9 @@ import (
 // the agent's to carry, and a config that accepted them would put them back
 // within reach of a mistake.
 type TriggerStatusConfig struct {
+	// Artifacts resolves prepared artifact IDs in this session before publication.
+	Artifacts *artifacts.Service
+
 	// KindName is the input binding's denormalized channel kind, resolved
 	// through the channel-kind registry at CALL time. A name rather than a
 	// resolved Kind so tool assembly need not hold one, and so the two tools
@@ -187,7 +192,8 @@ func (t *concludeTriggerStatusTool) Description() string {
 		return "Record how this round of work turned out, on the event that started this session — " +
 			t.cfg.SurfaceKind + ". Whoever is watching that event sees this as the answer, so call it once " +
 			"you have delivered your result and not before: what is recorded here is what a person reads " +
-			"instead of waiting. You supply only the outcome; the published summary and details link are composed " +
+			"instead of waiting. Supply an optional prepared HTML artifact_id to publish the report here; " +
+			"otherwise deliver the result first. You supply only the outcome; the published summary and details link are composed " +
 			"for you, and nothing you write reaches the surface. Which event, and where its status " +
 			"lives, come from the event itself."
 	}
@@ -212,6 +218,7 @@ func (t *concludeTriggerStatusTool) InputSchema() json.RawMessage {
 		// produce one rather than degrade quietly.
 		panic("meta: rendering the trigger-outcome enum: " + err.Error())
 	}
+	artifactProp := `"artifact_id": {"type":"string","description":"Optional prepared HTML artifact ID from this session. Publishes its authenticated report link and records delivery only after the provider succeeds."}`
 	outcomeProp := `"outcome": {
 			"type": "string",
 			"enum": ` + string(enum) + `,
@@ -222,7 +229,7 @@ func (t *concludeTriggerStatusTool) InputSchema() json.RawMessage {
 		"type": "object",
 		"additionalProperties": false,
 		"properties": {
-			` + outcomeProp + `
+			` + outcomeProp + `,` + artifactProp + `
 		},
 		"required": ["outcome"]
 	}`)
@@ -231,7 +238,7 @@ func (t *concludeTriggerStatusTool) InputSchema() json.RawMessage {
 		"type": "object",
 		"additionalProperties": false,
 		"properties": {
-			` + outcomeProp + `,
+			` + outcomeProp + `,` + artifactProp + `,
 			"summary": {
 				"type": "string",
 				"description": "A short summary a person reads on the event itself. Required. Write it for someone who will not open the full result: say what you found, or why you could not finish."
@@ -250,6 +257,7 @@ func (t *concludeTriggerStatusTool) Execute(ctx context.Context, args json.RawMe
 		Outcome    string `json:"outcome"`
 		Summary    string `json:"summary"`
 		DetailsURL string `json:"details_url,omitempty"`
+		ArtifactID string `json:"artifact_id,omitempty"`
 	}
 	example := `{"outcome": "problems_found", "summary": "Two findings in the auth path.", "details_url": "https://example.test/thread/1"}`
 	if t.cfg.ComposedTextOnly {
@@ -293,7 +301,25 @@ func (t *concludeTriggerStatusTool) Execute(ctx context.Context, args json.RawMe
 		}
 		detailsURL = ""
 	}
-	if detailsURL == "" {
+	var publication *deliveries.Item
+	if in.ArtifactID != "" {
+		item, link, err := t.cfg.preparedResultLink(ctx, sess, in.ArtifactID)
+		if err != nil {
+			return failed(t.Name(), err.Error()), nil
+		}
+		publication = &item
+		detailsURL = link
+		if t.cfg.ComposedTextOnly {
+			switch outcome {
+			case channelkinds.TriggerOutcomeClean:
+				summary = "This round concluded clean: the work finished and found nothing blocking. Open the full authenticated report for details."
+			case channelkinds.TriggerOutcomeProblemsFound:
+				summary = "This round concluded with findings that need attention. Open the full authenticated report for details."
+			case channelkinds.TriggerOutcomeCouldNotFinish:
+				summary = "This round could not be finished. Open the full authenticated report for the reason."
+			}
+		}
+	} else if detailsURL == "" {
 		detailsURL = t.cfg.deliveredResultLink(ctx, sess)
 	}
 	if err := surface.Conclude(ctx, channelkinds.TriggerConclusion{
@@ -307,6 +333,12 @@ func (t *concludeTriggerStatusTool) Execute(ctx context.Context, args json.RawMe
 	// written ahead of the call would tell the completion gate a pull request
 	// was answered when the publish had failed.
 	recordConcluded(ctx, sess, outcome, t.Name())
+	if publication != nil {
+		store, _ := deliveries.TryFrom(sess) // verified before publication
+		if err := store.Record(ctx, *publication); err != nil {
+			return failed(t.Name(), fmt.Sprintf("conclusion published but recording artifact delivery failed: %v", err)), nil
+		}
+	}
 
 	// The PARSED outcome, not the raw argument: what the result reports is what
 	// was actually published, and echoing the input would let the two differ if
@@ -465,7 +497,7 @@ func (cfg TriggerStatusConfig) resolve(ctx context.Context, toolName string, ses
 	}
 
 	surface, err := reporter.TriggerSurface(&ch, cfg.Binding, channelkinds.WebhookSecrets{Data: sec.Data},
-		channelkinds.TriggerStatusOptions{ProviderAPIBaseURL: cfg.ProviderAPIBaseURL})
+		channelkinds.TriggerStatusOptions{ProviderAPIBaseURL: cfg.ProviderAPIBaseURL, K8sClient: c})
 	if err != nil {
 		return nil, failed(toolName, err.Error()), false
 	}
@@ -496,4 +528,53 @@ func (cfg TriggerStatusConfig) resolve(ctx context.Context, toolName string, ses
 // answer its trigger for reasons the model could not see.
 func failed(toolName, msg string) tool.Result {
 	return tool.Result{Content: toolName + ": " + msg, IsError: true, Trusted: true}
+}
+
+// preparedResultLink validates the session's own prepared report before any
+// provider write. The URL carries no authority; webd authorizes every viewer.
+func (cfg TriggerStatusConfig) preparedResultLink(ctx context.Context, sess *tool.SessionContext, artifactID string) (deliveries.Item, string, error) {
+	fail := func(err error) (deliveries.Item, string, error) { return deliveries.Item{}, "", err }
+	if cfg.Artifacts == nil {
+		return fail(fmt.Errorf("artifact publication service is unavailable"))
+	}
+	if _, ok := deliveries.TryFrom(sess); !ok {
+		return fail(fmt.Errorf("artifact publication requires delivery state"))
+	}
+	if cfg.WebdBaseURL == nil {
+		return fail(fmt.Errorf("artifact publication requires an external webd URL"))
+	}
+	scope := memory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}
+	name, err := cfg.Artifacts.ResolveToRender(ctx, scope, artifactID)
+	if err != nil {
+		return fail(fmt.Errorf("resolve prepared artifact: %w", err))
+	}
+	c, ok := sess.K8sClient.(client.Client)
+	if !ok || c == nil {
+		return fail(fmt.Errorf("artifact publication requires a Kubernetes client"))
+	}
+	var cr spiceboxv1alpha1.ArtifactRender
+	if err := c.Get(ctx, client.ObjectKey{Namespace: sess.Namespace, Name: name}, &cr); err != nil {
+		return fail(fmt.Errorf("read prepared artifact: %w", err))
+	}
+	if !tool.OwnedBySession(cr.OwnerReferences, sess) {
+		return fail(fmt.Errorf("prepared artifact is not owned by this session"))
+	}
+	if cr.Status.Phase != spiceboxv1alpha1.ArtifactRenderPhaseReady {
+		return fail(fmt.Errorf("prepared artifact is not Ready"))
+	}
+	if cr.Spec.Kind != "html" || cr.Status.OutputMIME != "text/html" {
+		return fail(fmt.Errorf("prepared artifact must be HTML"))
+	}
+	id := cr.Labels[artifacts.LabelArtifactID]
+	if id == "" || id != artifactID {
+		return fail(fmt.Errorf("prepared artifact ID does not match its render"))
+	}
+	link, err := channelkinds.ComposeArtifactViewURL(cfg.WebdBaseURL(), scope.ID, id)
+	if err != nil {
+		return fail(fmt.Errorf("compose prepared artifact link: %w", err))
+	}
+	if link == "" {
+		return fail(fmt.Errorf("artifact publication requires an external webd URL"))
+	}
+	return deliveries.Item{RenderName: cr.Name, ArtifactID: id}, link, nil
 }

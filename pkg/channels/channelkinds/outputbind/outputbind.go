@@ -63,6 +63,20 @@ func Resolve(ctx context.Context, c client.Client, namespace, agentClass string)
 	return found, nil
 }
 
+// ResolveForInput binds an installed output even when the input can publish its
+// own trigger report. Only an absent output is optional in that case; ambiguous
+// outputs and API failures remain configuration errors.
+func ResolveForInput(ctx context.Context, c client.Client, input *spiceboxv1alpha1.Channel) (*spiceboxv1alpha1.Channel, error) {
+	if input == nil {
+		return nil, fmt.Errorf("outputbind: input Channel is required")
+	}
+	out, err := Resolve(ctx, c, input.Namespace, input.Spec.AgentClass)
+	if errors.Is(err, ErrNoOutputChannel) && registry.PublishesTriggerReports(input) {
+		return nil, nil
+	}
+	return out, err
+}
+
 // Anchor derives the initial outbound routing key and metadata from ch by
 // delegating to its kind's optional OutboundAnchorProvider. Kind-specific
 // config (slack's outputDefaults, and any future kind's equivalent) is read

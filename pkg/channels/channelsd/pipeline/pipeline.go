@@ -1451,52 +1451,56 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 	// its own nopSender and the reply is undeliverable.
 	//
 	// role=both is both origin and destination, so the nil-OutputChannel
-	// fallback is correct for it and it skips this deliberately.
+	// fallback is correct for it and it skips this deliberately. An input with
+	// its own trigger-report surface may omit this conversational output, but
+	// binds one when installed (for summaries and preference-controlled mentions).
 	var outBinding *spiceboxv1alpha1.ChannelBinding
 	var outKeyHash string
 	// sessionOpening is the line that will occupy the thread root of that
 	// destination — see the SessionOpening call below.
 	var sessionOpening string
 	if ev.Channel.Spec.Role == spiceboxv1alpha1.ChannelRoleInput {
-		outCh, err := outputbind.Resolve(ctx, p.K8s, ev.Channel.Namespace, ev.Channel.Spec.AgentClass)
+		outCh, err := outputbind.ResolveForInput(ctx, p.K8s, ev.Channel)
 		if err != nil {
 			log.FromContext(ctx).Info("outbound binding unresolvable; refusing to create an undeliverable session",
 				"channel", ev.Channel.Namespace+"/"+ev.Channel.Name,
 				"agentClass", ev.Channel.Spec.AgentClass, "err", err.Error())
 			return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
 		}
-		outKey, outExternal, err := outputbind.Anchor(outCh)
-		if err != nil {
-			log.FromContext(ctx).Info("outbound anchor unavailable; refusing to create an undeliverable session",
-				"channel", ev.Channel.Namespace+"/"+ev.Channel.Name,
-				"outputChannel", outCh.Name, "err", err.Error())
-			return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
-		}
-		outBinding = &spiceboxv1alpha1.ChannelBinding{
-			Name:              outCh.Name,
-			Kind:              outCh.Spec.Kind,
-			Key:               outKey,
-			Capabilities:      bindingCaps(p.Capabilities(outCh.Spec.Kind)),
-			NATSSubjectPrefix: prefix,
-			External:          outExternal,
-		}
-		outKeyHash = channelkey.LabelValue(outKey)
-		// For a thread-per-session destination the anchor above can only name
-		// the channel; the thread ROOT is whatever lands there first. This
-		// inbound may have carried no human — a webhook payload, a cron tick —
-		// in which case there is no message of the user's to be that first
-		// thing, and the thread would open on whatever the agent happened to
-		// emit (a plan checklist, a status caption) with nothing saying what it
-		// is about. Ask the trigger's own kind to describe itself and carry the
-		// answer on the session; channelsd's outbound relay posts it ahead of
-		// the first output and takes the root from that send.
-		//
-		// Derived HERE because this is where the input Channel is in hand, and
-		// it is the only object that can answer whether this session's inbound
-		// carried a human. An empty answer is the common case and means the
-		// session behaves exactly as it does today.
-		if opening, ok := outputbind.SessionOpening(ev.Channel, ev.ChannelKey, ev.DeliveryEvent, ev.RawDelivery); ok {
-			sessionOpening = opening
+		if outCh != nil {
+			outKey, outExternal, err := outputbind.Anchor(outCh)
+			if err != nil {
+				log.FromContext(ctx).Info("outbound anchor unavailable; refusing to create an undeliverable session",
+					"channel", ev.Channel.Namespace+"/"+ev.Channel.Name,
+					"outputChannel", outCh.Name, "err", err.Error())
+				return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
+			}
+			outBinding = &spiceboxv1alpha1.ChannelBinding{
+				Name:              outCh.Name,
+				Kind:              outCh.Spec.Kind,
+				Key:               outKey,
+				Capabilities:      bindingCaps(p.Capabilities(outCh.Spec.Kind)),
+				NATSSubjectPrefix: prefix,
+				External:          outExternal,
+			}
+			outKeyHash = channelkey.LabelValue(outKey)
+			// For a thread-per-session destination the anchor above can only name
+			// the channel; the thread ROOT is whatever lands there first. This
+			// inbound may have carried no human — a webhook payload, a cron tick —
+			// in which case there is no message of the user's to be that first
+			// thing, and the thread would open on whatever the agent happened to
+			// emit (a plan checklist, a status caption) with nothing saying what it
+			// is about. Ask the trigger's own kind to describe itself and carry the
+			// answer on the session; channelsd's outbound relay posts it ahead of
+			// the first output and takes the root from that send.
+			//
+			// Derived HERE because this is where the input Channel is in hand, and
+			// it is the only object that can answer whether this session's inbound
+			// carried a human. An empty answer is the common case and means the
+			// session behaves exactly as it does today.
+			if opening, ok := outputbind.SessionOpening(ev.Channel, ev.ChannelKey, triggerEvent(ev), triggerBody(ev)); ok {
+				sessionOpening = opening
+			}
 		}
 	}
 
@@ -1852,7 +1856,7 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 		// stateless receiver) never reads it.
 		if k, ok := chregistry.Get(ev.Channel.Spec.Kind); ok {
 			if fp, ok := k.WebhookReceiver(channelkinds.Deps{}).(channelkinds.TriggerFactProvider); ok {
-				facts, ferr := fp.TriggerFacts(ev.Channel, ev.DeliveryEvent, ev.RawDelivery)
+				facts, ferr := fp.TriggerFacts(ev.Channel, triggerEvent(ev), triggerBody(ev))
 				if ferr != nil {
 					// Fail-closed for the gate, not fatal for the delivery: with
 					// no facts, every precondition over them reads undetermined

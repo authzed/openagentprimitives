@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/go-logr/logr"
@@ -111,14 +112,17 @@ func (s *CompositeSearcher) Search(ctx context.Context, req memory.SearchRequest
 
 	perProvider := make(map[string]memory.SearchResult)
 	var errs []error
+	var failedProviders []string
 	for pr := range ch {
 		if pr.err != nil {
+			failedProviders = append(failedProviders, pr.name)
 			errs = append(errs, fmt.Errorf("provider %s: %w", pr.name, pr.err))
 			continue
 		}
 		perProvider[pr.name] = pr.res
 	}
 
+	sort.Strings(failedProviders)
 	if len(perProvider) == 0 {
 		return memory.MergedSearchResult{}, errors.Join(errs...)
 	}
@@ -176,8 +180,10 @@ func (s *CompositeSearcher) Search(ctx context.Context, req memory.SearchRequest
 	}
 
 	return memory.MergedSearchResult{
-		Entries:     ranked,
-		PerProvider: perProvider,
-		Truncated:   truncated,
+		Entries:         ranked,
+		PerProvider:     perProvider,
+		Partial:         len(failedProviders) > 0,
+		FailedProviders: failedProviders,
+		Truncated:       truncated,
 	}, nil
 }

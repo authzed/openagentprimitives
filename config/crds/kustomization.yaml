@@ -31,6 +31,7 @@ resources:
   - agentprimitives.authzed.com_subagentrequests.yaml
   - agentprimitives.authzed.com_toolcalls.yaml
   - agentprimitives.authzed.com_useridentities.yaml
+  - agentprimitives.authzed.com_webhookadmissions.yaml
   - agentprimitives.authzed.com_workshops.yaml
   - agentprimitives.authzed.com_workshopprobes.yaml
   - agentprimitives.authzed.com_workspacesources.yaml

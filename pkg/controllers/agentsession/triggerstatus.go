@@ -77,7 +77,7 @@ func (r *Reconciler) concludeTriggerStatusOnBootFailure(
 	// No ProviderAPIBaseURL override: the operator talks to the real provider,
 	// and the tests below drive a registered fixture kind that ignores it.
 	surface, err := reporter.TriggerSurface(&ch, b, channelkinds.WebhookSecrets{Data: sec.Data},
-		channelkinds.TriggerStatusOptions{})
+		channelkinds.TriggerStatusOptions{K8sClient: r.Client})
 	if err != nil {
 		logger.Info("trigger status: this session's trigger could not be addressed",
 			"session", sessRef, "kind", b.Kind, "err", err.Error())

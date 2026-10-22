@@ -2,6 +2,7 @@ package search_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -203,4 +204,25 @@ func TestCompositeSearcher_DefaultLimit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.LessOrEqual(t, len(res.Entries), 20, "default limit is 20")
+}
+
+// Empty success from one provider must not hide an outage of the history store.
+func TestCompositeSearcher_ReportsPartialProviderFailures(t *testing.T) {
+	s := search.New(search.WithProviders(
+		&fakeProvider{name: "z-history", err: errors.New("database unavailable")},
+		&fakeProvider{name: "a-history", err: errors.New("database unavailable")},
+		&fakeProvider{name: "lexical", results: memory.SearchResult{}},
+	))
+	res, err := s.Search(memory.WithSystemApproval(context.Background(), "test"), memory.SearchRequest{Scopes: []memory.Scope{{Kind: "session", ID: "ns/run"}}})
+	require.NoError(t, err)
+	assert.Empty(t, res.Entries)
+	raw, err := json.Marshal(res)
+	require.NoError(t, err)
+	var got struct {
+		Partial         bool     `json:"partial"`
+		FailedProviders []string `json:"failedProviders"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.True(t, got.Partial, "empty result is incomplete when any provider failed")
+	assert.Equal(t, []string{"a-history", "z-history"}, got.FailedProviders)
 }

@@ -50,6 +50,12 @@ type SearchResult struct {
 
 // MergedSearchResult is what the composite searcher returns to a caller.
 type MergedSearchResult struct {
+	// Partial reports incomplete retrieval (provider or pool discovery failure).
+	// An empty partial result must not be treated as proof of absent history.
+	Partial bool `json:"partial"`
+	// FailedProviders names failed providers without relaying upstream errors.
+	FailedProviders []string `json:"failedProviders,omitempty"`
+
 	// Entries are the ranked, authorization-filtered hits across all providers.
 	Entries []ScoredEntry `json:"entries"`
 	// PerProvider keeps each provider's raw answer for diagnosis; a provider

@@ -27,15 +27,16 @@ Interactive wizard: create a Channel via the kind's installation flow.
 Flags:
 
 ```text
---answer stringArray  Pre-answer a wizard question as key=value (repeatable); commas separate a multi-select's values. Avoid passing credentials this way — flags land in shell history and in the process table
---apply               Apply the generated manifests after the wizard. --apply=false withholds only the Kubernetes objects; anything the wizard creates outside the cluster (a Slack app, when you ask oap to create one) is still created (default "true")
---kind string         Kind to create (e.g., slack, fake)
---monitoring          Create a monitoring channel — one that posts framework events and binds to no agent
---name string         Name for the Channel resource (default: derived from your answers)
---non-interactive     Never prompt: answer every question with --answer/--name, or fail
---role string         Role for the Channel: input, output, both (default: whatever this kind's setup produces). Use --monitoring for a monitoring channel
---timeout duration    How long to watch the Channel for when --wait is true (default "1m0s")
---wait                Watch the Channel after applying it and report whether it connected before returning (default "true")
+--answer stringArray     Pre-answer a wizard question as key=value (repeatable); commas separate a multi-select's values. Avoid passing credentials this way — flags land in shell history and in the process table
+--apply                  Apply the generated manifests after the wizard. --apply=false withholds only the Kubernetes objects; anything the wizard creates outside the cluster (a Slack app, when you ask oap to create one) is still created (default "true")
+--handler-config string  Kind-owned handler arguments as a JSON object
+--kind string            Kind to create (e.g., slack, fake)
+--monitoring             Create a monitoring channel — one that posts framework events and binds to no agent
+--name string            Name for the Channel resource (default: derived from your answers)
+--non-interactive        Never prompt: answer every question with --answer/--name, or fail
+--role string            Role for the Channel: input, output, both (default: whatever this kind's setup produces). Use --monitoring for a monitoring channel
+--timeout duration       How long to watch the Channel for when --wait is true (default "1m0s")
+--wait                   Watch the Channel after applying it and report whether it connected before returning (default "true")
 ```
 
 ## `oap channel delete <name>`

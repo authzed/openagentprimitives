@@ -1038,6 +1038,11 @@ type InboundEvent struct {
 	// correct.
 	RawDelivery []byte
 
+	// TriggerContext is provider-verified API context for a deferred trigger.
+	// RawDelivery remains the original signed body for the audit record.
+	TriggerContext      []byte
+	TriggerContextEvent string
+
 	// DeliveryEvent is the provider's event-type header value for that same
 	// webhook. Named separately because the receiver dispatches on it and the
 	// body does not carry it.
@@ -1357,4 +1362,13 @@ func ScopesFor(k Kind, features []channelfeatures.Feature) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TriggerPayload returns verified trigger context when admission normalized a
+// provider event; audit writers must continue using RawDelivery/DeliveryEvent.
+func (ev InboundEvent) TriggerPayload() (string, []byte) {
+	if len(ev.TriggerContext) > 0 {
+		return ev.TriggerContextEvent, ev.TriggerContext
+	}
+	return ev.DeliveryEvent, ev.RawDelivery
 }

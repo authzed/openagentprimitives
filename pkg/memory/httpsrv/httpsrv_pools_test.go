@@ -500,3 +500,17 @@ func TestSearch_ResolvesPoolsOncePerRequest(t *testing.T) {
 	assert.Equal(t, 1, reader.calls,
 		"a request that both mints pool approvals and expands the search scope list must read SpiceDB once, not twice")
 }
+
+// Serving a session-only fallback must not masquerade as a complete pool search.
+func TestPoolDiscoveryFailureMarksSearchPartial(t *testing.T) {
+	srv, spy, _, reg := newPoolsHarness(t, &poolFakeReader{err: errors.New("discovery unavailable")})
+	reg.Set(memory.NamespacedName{Namespace: poolsTestNS, Name: poolsTestSess}, poolsTestTok, "")
+	resp, _ := doSessionSearch(t, srv, spy, poolsTestTok)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got struct {
+		Partial bool `json:"partial"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	assert.True(t, got.Partial, "an empty fallback search cannot establish a first baseline")
+}

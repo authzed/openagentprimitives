@@ -477,6 +477,7 @@ func (a *Admind) channelWizardInput(rec *pendingChannelSetup, seeded map[string]
 		Namespace: rec.namespace,
 		Seeded:    seeded,
 		Role:      rec.required.Role,
+		Config:    rec.required.Config,
 	}
 }
 

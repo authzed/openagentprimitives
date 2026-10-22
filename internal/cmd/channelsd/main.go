@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/authzed/openagentprimitives/pkg/channels/webhookqueue"
 	"os"
 	"os/signal"
 	runtimedebug "runtime/debug"
@@ -775,6 +776,23 @@ func run(rootCtx context.Context, cfg *config) error {
 		func(m *nats.Msg) { webhookInboundHandler(rootCtx, cli, pl, logger, m) }); err != nil {
 		return fmt.Errorf("subscribe %s: %w", channelevents.WebhookInboundSubject, err)
 	}
+
+	// Durable pre-session admission is provider-owned and independent of the
+	// NATS delivery subscription. It also repairs missed completion events by
+	// polling pending records until all configured dependencies are terminal.
+	deferredQueue := &webhookqueue.Queue{Client: cli, Logger: logger,
+		Deliver: func(ctx context.Context, ev channelkinds.InboundEvent) error {
+			decision, err := pl.Deliver(ctx, ev)
+			if err != nil {
+				return err
+			}
+			if decision.Outcome != channelkinds.OutcomeRouted {
+				return fmt.Errorf("deferred webhook pipeline: %s", decision.Outcome)
+			}
+			return nil
+		},
+	}
+	go deferredQueue.Run(rootCtx)
 
 	// Status watchdog: tracks "last setStatus emission" per session and
 	// fires warning/timeout messages when the agent goes silent. Listeners

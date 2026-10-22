@@ -25,6 +25,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/github/appprovision"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/wizardkeys"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/githubapp"
 )
 
 // The answer keys this wizard declares or derives. Stable strings: a caller
@@ -129,7 +130,9 @@ type converter interface {
 // on a value no Inputs call ever touched, so per-run state on the receiver is
 // exactly what channelkinds.Wizard.Result rules out.
 type wizard struct {
-	convert converter
+	convert         converter
+	workflowCatalog workflowCatalog
+	workflowMinter  githubapp.Minter
 }
 
 // requiredGithubAnswers reads and validates the ten answers Result needs,

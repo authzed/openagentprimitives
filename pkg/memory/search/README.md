@@ -35,3 +35,11 @@ Rank Fusion, and post-filters through SpiceDB.
 - **Providers are chosen by DI in `internal/cmd/operator`**, gated on
   `POSTGRES_URI` / `EMBEDDING_ENDPOINT` / `GRAPHITI_ENDPOINT` — there is no
   registry here.
+
+Merged results expose `partial` and the sorted `failedProviders` names when some
+providers fail. Successful providers still contribute results; failure of every
+provider remains an error. Callers deciding that something does not exist (for
+example, a coverage baseline) must reject partial results. The HTTP layer also
+marks a search partial when resource-pool discovery failed and it could search
+only the session's own scope. This preserves useful fallback results without
+presenting them as a complete history.

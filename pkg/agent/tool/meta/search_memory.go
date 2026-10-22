@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/authz"
@@ -36,7 +37,8 @@ func (*searchMemoryTool) PermissionVariants() []authz.PermissionVariant { return
 func (*searchMemoryTool) Description() string {
 	return "Search memory using natural language. Combines full-text search, " +
 		"vector similarity, and structured filters across search providers. " +
-		"Results are ranked by relevance. " +
+		"The response partial=true or nonempty failed_providers means retrieval was incomplete; never infer absent history from it. " +
+		"Results are ranked by relevance. Use `since` (inclusive) and `until` (exclusive), RFC3339 timestamps, to search a bounded history window. " +
 		"Results may include entries from resource pools this session has access to, " +
 		"alongside this session's own entries; every entry reports the `scope` it came from, " +
 		"so you can say which resource a fact belongs to. " +
@@ -68,6 +70,14 @@ func (*searchMemoryTool) InputSchema() json.RawMessage {
 				"items":{"type":"string"},
 				"description":"Require all listed tags (AND semantics)"
 			},
+            "since":{
+                "type":"string",
+                "description":"Inclusive created_at lower bound, RFC3339 (e.g. 2026-10-01T00:00:00Z)."
+            },
+            "until":{
+                "type":"string",
+                "description":"Exclusive created_at upper bound, RFC3339. Must be after since when both are set."
+            },
 			"scopes":{
 				"type":"array",
 				"items":{"type":"string"},
@@ -85,6 +95,8 @@ func (*searchMemoryTool) InputSchema() json.RawMessage {
 }
 
 type searchMemoryArgs struct {
+	Since  string   `json:"since"`
+	Until  string   `json:"until"`
 	Text   string   `json:"text"`
 	Kinds  []string `json:"kinds"`
 	Tags   []string `json:"tags"`
@@ -93,6 +105,9 @@ type searchMemoryArgs struct {
 }
 
 type searchMemoryResult struct {
+	Partial         bool     `json:"partial"`
+	FailedProviders []string `json:"failed_providers,omitempty"`
+
 	Entries []searchMemoryEntry `json:"entries"`
 	Count   int                 `json:"count"`
 	// Truncated reports that `limit` ended this page before the matches did.
@@ -178,7 +193,7 @@ func SplitSearchResultByScope(result string) ([]SearchResultScope, error) {
 			// Truncated is carried verbatim: it is a fact about the ranking
 			// this slice came out of, and a slice of a truncated search is
 			// just as incomplete as the search was.
-			grouped[e.Scope] = &searchMemoryResult{Truncated: parsed.Truncated}
+			grouped[e.Scope] = &searchMemoryResult{Truncated: parsed.Truncated, Partial: parsed.Partial, FailedProviders: parsed.FailedProviders, DroppedFilters: parsed.DroppedFilters}
 		}
 		g := grouped[e.Scope]
 		g.Entries = append(g.Entries, e)
@@ -209,6 +224,26 @@ func (t *searchMemoryTool) Execute(ctx context.Context, raw json.RawMessage, ses
 		a.Limit = 100
 	}
 
+	var since, until *time.Time
+	for _, bound := range []struct {
+		name, value string
+		dst         **time.Time
+	}{
+		{"since", a.Since, &since}, {"until", a.Until, &until},
+	} {
+		if bound.value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, bound.value)
+		if err != nil {
+			return tool.Result{Content: fmt.Sprintf("search_memory: %s must be an RFC3339 timestamp: %v", bound.name, err), IsError: true, Trusted: true}, nil
+		}
+		*bound.dst = &parsed
+	}
+	if since != nil && until != nil && !since.Before(*until) {
+		return tool.Result{Content: "search_memory: since must be before until", IsError: true, Trusted: true}, nil
+	}
+
 	sessionScope := memory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}
 	scopes := []memory.Scope{sessionScope}
 	for _, s := range a.Scopes {
@@ -224,6 +259,8 @@ func (t *searchMemoryTool) Execute(ctx context.Context, raw json.RawMessage, ses
 		Kinds:  a.Kinds,
 		Tags:   a.Tags,
 		Limit:  a.Limit,
+		Since:  since,
+		Until:  until,
 	}
 
 	res, err := sess.Mem.Search(ctx, req)
@@ -246,7 +283,7 @@ func (t *searchMemoryTool) Execute(ctx context.Context, raw json.RawMessage, ses
 		return recallError(t.Name(), err), nil
 	}
 
-	out := searchMemoryResult{Count: len(res.Entries), Truncated: res.Truncated}
+	out := searchMemoryResult{Count: len(res.Entries), Truncated: res.Truncated, Partial: res.Partial, FailedProviders: res.FailedProviders}
 	// Flattened in ascending PROVIDER NAME order, not in map-iteration order.
 	//
 	// res.PerProvider is a Go map, so ranging it directly put the dropped

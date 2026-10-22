@@ -55,3 +55,14 @@ rest.
 ## See also
 
 - [`pkg/agent/tool`](../) — the `Tool` interface and the three kinds.
+
+`search_memory` accepts RFC3339 `since` (inclusive) and `until` (exclusive)
+creation-time bounds. These narrow the existing authorized session/resource pool
+search; they do not grant access to another scope. Invalid timestamps and
+empty/reversed intervals are refused before querying. Results still rank by
+relevance: use each entry's `created_at` and handle `truncated` when selecting a
+historical baseline, and check `dropped_filters` before relying on time filters.
+
+The tool reports `partial` and `failed_providers` for degraded retrieval; an
+empty partial result does not prove that no earlier observation exists. The same
+incompleteness metadata follows each scope slice used for provenance.

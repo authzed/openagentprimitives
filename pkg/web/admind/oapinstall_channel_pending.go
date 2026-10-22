@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -404,7 +405,7 @@ func samePendingChannelSetup(existing, proposed *pendingChannelSetup) bool {
 		return false
 	}
 	if existing.graphBinding != nil || proposed.graphBinding != nil {
-		return existing.graphBinding != nil && proposed.graphBinding != nil && *existing.graphBinding == *proposed.graphBinding && existing.owner == proposed.owner
+		return existing.graphBinding != nil && proposed.graphBinding != nil && reflect.DeepEqual(*existing.graphBinding, *proposed.graphBinding) && existing.owner == proposed.owner
 	}
 	return existing.namespace == proposed.namespace && existing.agentClass == proposed.agentClass &&
 		existing.required.Kind == proposed.required.Kind && existing.required.Name == proposed.required.Name
@@ -414,7 +415,7 @@ func (s *channelSetupStore) completeGraph(token string, owner identity.Canonical
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.byToken[token]
-	if !ok || p.owner != owner || p.graphBinding == nil || *p.graphBinding != binding {
+	if !ok || p.owner != owner || p.graphBinding == nil || !reflect.DeepEqual(*p.graphBinding, binding) {
 		return errNoPendingSetup
 	}
 	if p.graphState != graphSetupResolving {
@@ -586,7 +587,7 @@ func (s *channelSetupStore) graphReady(token string, owner identity.CanonicalUse
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.byToken[token]
-	if !ok || p.owner != owner || p.graphBinding == nil || *p.graphBinding != binding {
+	if !ok || p.owner != owner || p.graphBinding == nil || !reflect.DeepEqual(*p.graphBinding, binding) {
 		return false, errNoPendingSetup
 	}
 	return p.graphState == graphSetupComplete, nil
@@ -595,7 +596,7 @@ func (s *channelSetupStore) graphReady(token string, owner identity.CanonicalUse
 func (s *channelSetupStore) claimGraph(token string, owner identity.CanonicalUserID, binding channelSetupBinding) (*claimedChannelSetup, error) {
 	s.mu.Lock()
 	p, ok := s.byToken[token]
-	if !ok || p.owner != owner || p.graphBinding == nil || *p.graphBinding != binding {
+	if !ok || p.owner != owner || p.graphBinding == nil || !reflect.DeepEqual(*p.graphBinding, binding) {
 		s.mu.Unlock()
 		return nil, errNoPendingSetup
 	}

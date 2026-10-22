@@ -161,6 +161,11 @@ in-channel.
   `historyresp/`, `e2e/`), `pkg/channels/channelevents/` (the envelope + event
   model), `pkg/channels/channelinteractions/` (semantic interaction categories),
   `pkg/channels/channelkey/`, `pkg/channels/interact/`, `pkg/channels/notice/`
+- **Deferred webhook admission:** `pkg/channels/webhookqueue/` persists
+  `WebhookAdmission` deliveries and cohort claims before session creation;
+  optional receiver admission capabilities keep provider readiness in each kind.
+  GitHub workflow inputs select prerequisite workflows during installation and
+  bind Check Run publication to immutable PR revisions and run attempts.
 - **Asset renderers:** `pkg/channels/channelassets/` — `Renderer` interface +
   `registry/`, with renderers `html/`, `css/`, `svg/`, `image/`, and the
   operator-only `mcpui/`

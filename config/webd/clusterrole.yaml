@@ -147,3 +147,9 @@ rules:
   - apiGroups: ["agentprimitives.authzed.com"]
     resources: ["agentidentities"]
     verbs: ["get"]
+
+  # Persist only authenticated deferred webhook evidence. A dedicated resource
+  # avoids granting the browser-facing pod arbitrary ConfigMap creation.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["webhookadmissions"]
+    verbs: ["create", "get"]

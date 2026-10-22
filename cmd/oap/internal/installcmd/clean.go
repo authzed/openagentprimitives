@@ -36,6 +36,7 @@ var crGroupVersionResources = []schema.GroupVersionResource{
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "spiceboxtoolspecs"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "spiceboxclasses"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "mcpservers"},
+	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "webhookadmissions"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "channels"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "artifactrenders"},
 	{Group: "agentprimitives.authzed.com", Version: "v1alpha1", Resource: "agentsessiongrants"},

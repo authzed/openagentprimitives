@@ -25,6 +25,7 @@ package channelcmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
@@ -60,6 +61,7 @@ import (
 // as one struct so runChannelCreate has a single parameter to grow, and so the
 // `oap init` monitoring offer can call the same function with the same shape.
 type channelCreateOptions struct {
+	handlerConfig string
 	// kind is the channel kind to build. Empty prompts for one, which a
 	// non-interactive run refuses.
 	kind string
@@ -125,6 +127,7 @@ func newChannelCreateCmd(g *apcmd.Globals) *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&opts.kind, "kind", "", "Kind to create (e.g., slack, fake)")
+	f.StringVar(&opts.handlerConfig, "handler-config", "", "Kind-owned handler arguments as a JSON object")
 	// The caveat is spelled out because --apply=false reads like a dry run and
 	// is not one on every route: a kind whose flow creates something OUTSIDE
 	// the cluster — the Slack wizard's "create the app for me" route mints a
@@ -215,6 +218,13 @@ func runChannelCreate(ctx context.Context, in io.Reader, out io.Writer, g *apcmd
 		return fmt.Errorf("unknown kind %q (registered: %v)", kindName, KindNames())
 	}
 
+	var handlerConfig json.RawMessage
+	if opts.handlerConfig != "" {
+		handlerConfig = json.RawMessage(opts.handlerConfig)
+		if err := registry.ValidateHandlerConfig(kindName, handlerConfig); err != nil {
+			return err
+		}
+	}
 	// Flags are read into State before anything runs: a screen whose answer is
 	// already there asks nothing, which is what makes both pre-filling and
 	// --non-interactive work off one mechanism.
@@ -273,6 +283,7 @@ func runChannelCreate(ctx context.Context, in io.Reader, out io.Writer, g *apcmd
 	// nobody is watching, and this contract gives it no per-question hook to
 	// find out later.
 	wizIn := channelkinds.WizardInput{
+		Config:         handlerConfig,
 		K8s:            cli,
 		Namespace:      ns,
 		Seeded:         seeded.Values,

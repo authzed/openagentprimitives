@@ -178,3 +178,50 @@ func TestSearchMemoryTool_EntriesCarryCreatedAt(t *testing.T) {
 	assert.Equal(t, "2026-09-16T14:05:06Z", out.Entries[0].CreatedAt,
 		"same layout query_memory emits, so the two tools' envelopes agree and either is string-sortable")
 }
+
+// Missing time bounds would let an old, highly ranked run displace the latest baseline.
+func TestSearchMemoryTool_TimeWindow(t *testing.T) {
+	fm := &fakeMemSearcher{}
+	res, err := meta.NewSearchMemory().Execute(context.Background(), json.RawMessage(`{"since":"2026-10-01T00:00:00-04:00","until":"2026-10-08T04:00:00Z","tags":["coverage-success"]}`), &tool.SessionContext{Namespace: "default", Name: "coverage", Mem: fm})
+	require.NoError(t, err)
+	require.False(t, res.IsError, res.Content)
+	require.NotNil(t, fm.lastReq.Since)
+	require.NotNil(t, fm.lastReq.Until)
+	assert.True(t, fm.lastReq.Since.Equal(time.Date(2026, 10, 1, 4, 0, 0, 0, time.UTC)))
+	assert.True(t, fm.lastReq.Until.Equal(time.Date(2026, 10, 8, 4, 0, 0, 0, time.UTC)))
+	assert.Equal(t, []string{"coverage-success"}, fm.lastReq.Tags)
+}
+
+func TestSearchMemoryTool_InvalidTimeWindow(t *testing.T) {
+	for _, tt := range []struct{ name, args, want string }{
+		{"bad since", `{"since":"yesterday"}`, "since"},
+		{"bad until", `{"until":"2026-10-01"}`, "until"},
+		{"equal bounds", `{"since":"2026-10-01T00:00:00Z","until":"2026-10-01T00:00:00Z"}`, "before"},
+		{"reversed bounds", `{"since":"2026-10-08T00:00:00Z","until":"2026-10-01T00:00:00Z"}`, "before"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fm := &fakeMemSearcher{}
+			res, err := meta.NewSearchMemory().Execute(context.Background(), json.RawMessage(tt.args), &tool.SessionContext{Namespace: "default", Name: "coverage", Mem: fm})
+			require.NoError(t, err)
+			require.True(t, res.IsError, res.Content)
+			assert.True(t, res.Trusted)
+			assert.Contains(t, res.Content, tt.want)
+			assert.Empty(t, fm.lastReq.Scopes, "invalid bounds must never reach the backend")
+		})
+	}
+}
+
+func TestSearchMemoryTool_ReportsIncompleteHistory(t *testing.T) {
+	fm := &fakeMemSearcher{}
+	require.NoError(t, json.Unmarshal([]byte(`{"partial":true,"failedProviders":["history"]}`), &fm.result))
+	res, err := meta.NewSearchMemory().Execute(context.Background(), json.RawMessage(`{}`), &tool.SessionContext{Namespace: "default", Name: "run", Mem: fm})
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var got struct {
+		Partial         bool     `json:"partial"`
+		FailedProviders []string `json:"failed_providers"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(res.Content), &got))
+	assert.True(t, got.Partial)
+	assert.Equal(t, []string{"history"}, got.FailedProviders)
+}
