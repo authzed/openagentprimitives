@@ -601,6 +601,7 @@ func previewWizardInput(namespace string, p channelplan.ChannelPlan) channelkind
 		Namespace: namespace,
 		Seeded:    p.Seeded,
 		Role:      p.Required.Role,
+		Config:    p.Required.Config,
 	}
 }
 

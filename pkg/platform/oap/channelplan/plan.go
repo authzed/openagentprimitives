@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/wizardkeys"
 	"github.com/authzed/openagentprimitives/pkg/platform/oap"
 	"github.com/authzed/openagentprimitives/pkg/x/externalurl"
@@ -469,6 +470,9 @@ func conflictWith(existing *spiceboxv1alpha1.Channel, rc oap.RequiredChannel, ag
 		return report(fmt.Sprintf(
 			"a Channel named %q already exists in this namespace but is bound to %s, and this install wants it bound to %q",
 			existing.Name, bound, agentClass))
+	}
+	if err := registry.HandlerConfigMatches(rc.Kind, rc.Config, existing); err != nil {
+		return report(fmt.Sprintf("Channel %q handler configuration requires reconfiguration: %v", existing.Name, err))
 	}
 	return nil
 }

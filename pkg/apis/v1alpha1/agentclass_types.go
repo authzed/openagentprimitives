@@ -274,7 +274,8 @@ type AgentClassSpec struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Capabilities map[string]apiextensionsv1.JSON `json:"capabilities,omitempty"`
 
-	// Config is a map of installer-bound values exposed to this class's
+	// Config is a map of non-secret installer-bound values exposed to the
+	// agent model as JSON data in its system prompt and to this class's
 	// toolspec constraint CEL as the `config` root (see the toolspec
 	// validator). It is generic and toolkit-agnostic: it never mentions repos
 	// or any tool-specific shape — a constraint decides what a value means.

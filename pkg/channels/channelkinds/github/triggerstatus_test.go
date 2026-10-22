@@ -465,3 +465,51 @@ func TestTriggerSurface_SurfaceNamesSomethingAReaderCanGoLookAt(t *testing.T) {
 	assert.Contains(t, got, fxOwner+"/"+fxRepo+"#42")
 	assert.Empty(t, g.requests, "naming the surface must cost no provider call")
 }
+
+func TestTriggerSurface_CohortPinsClaimAndConclusion(t *testing.T) {
+	g := newFakeGitHub(t)
+	cohort := strings.Repeat("a", 64)
+	pinned := strings.Repeat("b", 40)
+	b := fixtureBinding()
+	b.Key += "@" + cohort
+	b.External = map[string]string{"trigger_revision": pinned, "trigger_cohort": cohort}
+	surface, err := github.Kind{}.TriggerSurface(fixtureChannel(), b, fixtureSecrets(t), channelkinds.TriggerStatusOptions{ProviderAPIBaseURL: g.srv.URL})
+	require.NoError(t, err)
+	_, err = surface.Claim(context.Background())
+	require.NoError(t, err)
+	// The provider's current PR head remains fxHeadSHA, different from the pinned
+	// event revision. Neither claim nor conclusion may move to that newer head.
+	g.existing = []map[string]any{{"id": 9001, "name": fxAppSlug, "head_sha": pinned, "external_id": cohort, "status": "in_progress"}}
+	err = surface.Conclude(context.Background(), channelkinds.TriggerConclusion{Outcome: channelkinds.TriggerOutcomeClean, Summary: "Synthetic analysis complete"})
+	require.NoError(t, err)
+	writes := g.writes()
+	require.Len(t, writes, 2)
+	assert.Equal(t, pinned, writes[0].Body["head_sha"])
+	assert.Equal(t, cohort, writes[0].Body["external_id"])
+	assert.Equal(t, http.MethodPatch, writes[1].Method)
+	assert.Equal(t, cohort, writes[1].Body["external_id"])
+	for _, r := range g.requests {
+		assert.NotContains(t, r.Path, "/pulls/")
+		if strings.Contains(r.Path, "/commits/") {
+			assert.Contains(t, r.Path, pinned)
+			assert.Contains(t, r.Query, "filter=all")
+		}
+	}
+}
+func TestTriggerSurface_RerunAtSameSHACreatesSeparateCohortCheck(t *testing.T) {
+	g := newFakeGitHub(t)
+	oldCohort := strings.Repeat("a", 64)
+	newCohort := strings.Repeat("c", 64)
+	g.existing = []map[string]any{{"id": 18, "name": fxAppSlug, "external_id": oldCohort, "status": "completed", "conclusion": "success", "head_sha": fxHeadSHA}}
+	b := fixtureBinding()
+	b.Key += "@" + newCohort
+	b.External = map[string]string{"trigger_revision": fxHeadSHA, "trigger_cohort": newCohort}
+	surface, err := github.Kind{}.TriggerSurface(fixtureChannel(), b, fixtureSecrets(t), channelkinds.TriggerStatusOptions{ProviderAPIBaseURL: g.srv.URL})
+	require.NoError(t, err)
+	claim, err := surface.Claim(context.Background())
+	require.NoError(t, err)
+	assert.False(t, claim.Concluded)
+	writes := g.writes()
+	require.Len(t, writes, 1)
+	assert.Equal(t, newCohort, writes[0].Body["external_id"])
+}

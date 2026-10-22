@@ -1,0 +1,62 @@
+oapFormatVersion: "2"
+agent:
+  version: "2.0.0"
+compat:
+  minApVersion: "0.9.0"
+  crdApiVersion: agentprimitives.authzed.com/v1alpha1
+requires:
+  images:
+    - ref: codecovbot-tool:2.0.0
+      build:
+        dockerfile: coverage-tool/Dockerfile
+        context: coverage-tool
+  channels:
+    - kind: github
+      role: input
+      name: codecovbot-gh
+      purpose: "Waits for the install-selected PR workflows, then publishes a separate coverage Check Run."
+      config:
+        trigger:
+          event: workflow_run
+          actions: [completed]
+          readiness: all_completed
+questions:
+  - name: repositories
+    type: resourceList
+    prompt: "Which repositories may coverage analysis read? (lowercase owner/repo)"
+    validation: "args.repositories.size() > 0 && args.repositories.all(r, r.matches('^[a-z0-9_.-]+/[a-z0-9_.-]+$'))"
+    binding:
+      - target: "AgentClass/codecovbot#spec.config.allowedRepos[]"
+  - name: coverageWorkflow
+    type: string
+    prompt: "Which selected prerequisite workflow produces coverage? (workflow path)"
+    description: "Must belong to the GitHub input's selected prerequisites for this repository. Use one installation per producer selection."
+    binding:
+      - target: "AgentClass/codecovbot#spec.config.coverageWorkflow"
+  - name: artifactName
+    type: string
+    prompt: "What is the CI coverage artifact name?"
+    default: "coverage-report"
+    binding:
+      - target: "AgentClass/codecovbot#spec.config.artifactName"
+  - name: coveragePolicyPrompt
+    type: string
+    prompt: "How should this installation define functional coverage?"
+    description: "Defines which whole coverage blocks are non-functional and should be excluded. Customize the policy for your project, or retain all statements. Every custom exclusion is source-bound and recorded with its reason."
+    default: "Exclude only pure error-propagation returns; retain meaningful validation, logging, wrapping, cleanup, fallback and side effects."
+    binding:
+      - target: "AgentClass/codecovbot#spec.config.coveragePolicyPrompt"
+  - name: preferredMetric
+    type: string
+    prompt: "Which metric should regression gating use?"
+    enum: [functional, raw]
+    default: "functional"
+    binding:
+      - target: "AgentClass/codecovbot#spec.config.preferredMetric"
+  - name: decreaseThreshold
+    type: string
+    prompt: "Warn at a decrease of how many absolute percentage points?"
+    default: "2"
+    validation: 'args.decreaseThreshold.matches("^(100(\\.0+)?|[0-9]{1,2}(\\.[0-9]+)?)$")'
+    binding:
+      - target: "AgentClass/codecovbot#spec.config.decreaseThreshold"

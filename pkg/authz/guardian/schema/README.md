@@ -64,3 +64,11 @@ Composes the live SpiceDB schema. Onto the code-owned scaffold in
   tie. This is the one place a cold reader needs to learn the tier rule without
   reading `partition.go`'s own comment: an earlier-sorting tenant-authored
   fragment never displaces a later-sorting operator-authored one on key alone.
+
+For unattended resource-memory writers, a fragment may declare `memory_writer`.
+When composing **only** a `write_memory` slot, the composer includes that member
+alongside the session grant and optional `owner` standing. Other slot
+permissions never inherit it. The GitHub URL resource admits explicitly granted
+`service` principals there, enabling scheduled runs to bind repository-memory
+defaults without granting repository ownership or code-write rights.
+`view_memory` remains an independent, unslottable audience permission.

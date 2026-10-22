@@ -275,11 +275,25 @@ type BentoGenerateConfig struct {
 	Count int64 `json:"count,omitempty"`
 }
 
+// GitHubTriggerConfig selects the GitHub input event and optional CI readiness gate.
+type GitHubTriggerConfig struct {
+	Event     string   `json:"event"`
+	Actions   []string `json:"actions,omitempty"`
+	Readiness string   `json:"readiness,omitempty"`
+	// Workflows maps owner/repository to required workflow paths.
+	// +optional
+	Workflows map[string][]string `json:"workflows,omitempty"`
+}
+
 // GitHubChannelConfig carries kind-specific config for kind="github".
 // It is deliberately INGRESS-ONLY. The Check Run name is not here because the
 // agent writes the Check Run; Slack settings are not here because the output
 // surface is a separate Channel CR.
 type GitHubChannelConfig struct {
+	// Trigger is opt-in; absent preserves legacy pull_request behavior.
+	// +optional
+	Trigger *GitHubTriggerConfig `json:"trigger,omitempty"`
+
 	// AppSlug is the GitHub App's slug, recorded so the wizard and the
 	// drift check can build install and settings URLs. The App's identity
 	// and keys live in the credentialsRef Secret, never in spec.
@@ -291,7 +305,6 @@ type GitHubChannelConfig struct {
 	Repositories []string `json:"repositories,omitempty"`
 
 	// Events are the pull_request actions that become a review.
-	// +kubebuilder:default={"opened","synchronize","reopened","ready_for_review"}
 	// +optional
 	Events []string `json:"events,omitempty"`
 

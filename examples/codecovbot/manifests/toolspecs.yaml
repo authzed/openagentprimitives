@@ -1,0 +1,78 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: codecovbot-git-ro
+spec:
+  name: codecovbot-git-ro
+  version: "1"
+  intent: "git, read-only: clone a repo and inspect coverage changes"
+  toolkit:
+    name: git
+    revision: "2026-04-24"
+  # No push, commit, add, reset, tag or remote. codecovbot reads code; it never
+  # changes any. The App also grants only contents:read, so this is the inner
+  # of two independent rings.
+  allowSubcommands: [clone, fetch, checkout, diff, log, status, show]
+  constraints:
+    - cel: "call.subcommand != 'clone' || !call.positional['repository'].contains('@')"
+      message: "Do not embed credentials in the clone URL. Auth is supplied automatically via GIT_TOKEN — clone with a plain URL such as https://github.com/owner/repo."
+    - cel: "!call.hasFlag('c') || call.flags['c'].all(v, v.startsWith('user.name=') || v.startsWith('user.email='))"
+      message: "git -c may only set user.name= or user.email=. Any other -c key — core.sshCommand, url.*.insteadOf, http.*.extraHeader, credential.helper, alias.*, include.path — is rejected."
+    # The repository allowlist RING (third of three — see the file header). Every
+    # call that names a repository (clone/fetch resolve call.resourceId to the
+    # canonical https://github.com/OWNER/REPO via the toolkit's github_repo_id
+    # transform) must match an entry in config.allowedRepos, bound by the
+    # operator at install (spec.config.allowedRepos on the AgentClass). A
+    # local/workspace op (status/diff/log/show) resolves call.resourceId to ""
+    # and is not gated. A non-github or off-allowlist remote matches nothing and
+    # is refused — closing the "clone any public URL" hole. Empty allowlist ⇒
+    # exists() over [] is false ⇒ every repo refused (fail-closed).
+    - cel: "call.resourceId == '' || config.allowedRepos.exists(r, glob.match('https://github.com/' + r, call.resourceId))"
+      message: "This repository is not in codecovbot's allowlist (spec.config.allowedRepos, set by the operator at install). codecovbot may only clone and read repositories that were approved."
+  sensitive:
+    env: [GIT_TOKEN]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: codecovbot-gh-ro
+spec:
+  name: codecovbot-gh-ro
+  version: "1"
+  intent: "Read repository-scoped PR/run/artifact provenance; no API writes."
+  toolkit: {name: gh, revision: "2026-05-01"}
+  allowSubcommands: [api]
+  constraints:
+    - cel: "!call.hasFlag('method') && !call.hasFlag('field') && !call.hasFlag('raw-field') && !call.hasFlag('input') && !call.hasFlag('hostname') && !call.positional['endpoint'].matches('(^|/)[.][.]?(/|$)') && call.positional['endpoint'].matches('^repos/[^/]+/[^/]+(/pulls/[0-9]+(/commits)?|/actions/(runs|workflows)(/[A-Za-z0-9_.-]+)*([?][A-Za-z0-9_=&.-]+)?)?$')"
+      message: "Only repository-scoped PR/Actions GET metadata. No request method, body, hostname, arbitrary URL or traversal."
+    - cel: "config.allowedRepos.exists(r, glob.match('https://github.com/' + r, call.resourceId))"
+      message: "Repository must be explicitly configured."
+  sensitive:
+    env: [GITHUB_TOKEN]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: codecovbot-fetch
+spec:
+  name: codecovbot-fetch
+  version: "1"
+  intent: "Download bounded, validated GitHub Actions coverage evidence."
+  toolkit: {name: codecovbot-coverage, revision: "2026-10-22"}
+  allowSubcommands: [fetch-artifact]
+  constraints:
+    - cel: "config.allowedRepos.exists(r, glob.match('https://github.com/' + r, call.resourceId))"
+      message: "Artifact repository must be explicitly configured."
+  sensitive:
+    env: [GITHUB_TOKEN]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: codecovbot-analyze
+spec:
+  name: codecovbot-analyze
+  version: "1"
+  intent: "Analyze an existing Go profile statically, without test execution or network access."
+  toolkit: {name: codecovbot-analysis, revision: "2026-10-22"}
+  allowSubcommands: [describe-blocks, analyze]

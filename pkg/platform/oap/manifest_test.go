@@ -115,7 +115,7 @@ func TestManifestValidate_Errors(t *testing.T) {
 		want string
 	}{
 		{"missing format version: error", "agent:\n  name: a\n  version: \"1\"\n", "oapFormatVersion is required"},
-		{"future major: upgrade oap", "oapFormatVersion: \"2\"\nagent:\n  name: a\n  version: \"1\"\n", "newer than this oap supports"},
+		{"future major: upgrade oap", "oapFormatVersion: \"3\"\nagent:\n  name: a\n  version: \"1\"\n", "newer than this oap supports"},
 		{"non-integer major: error", "oapFormatVersion: \"x\"\nagent:\n  name: a\n  version: \"1\"\n", "major must be an integer"},
 		{"missing agent.name: error", "oapFormatVersion: \"1\"\nagent:\n  version: \"1\"\n", "agent.name is required"},
 		{"missing agent.version: error", "oapFormatVersion: \"1\"\nagent:\n  name: a\n", "agent.version is required"},

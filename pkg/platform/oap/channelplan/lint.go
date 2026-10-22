@@ -265,6 +265,9 @@ func lintDeliveryTarget(declared []oap.RequiredChannel) []oap.RequirementFinding
 	for i, rc := range declared {
 		switch effectiveRole(rc) {
 		case spiceboxv1alpha1.ChannelRoleInput:
+			if registry.ConfigPublishesTriggerReports(rc.Kind, rc.Config) {
+				continue
+			}
 			if firstInput < 0 {
 				firstInput = i
 			}
@@ -345,6 +348,11 @@ func lintDeclarations(declared []oap.RequiredChannel) []oap.RequirementFinding {
 		}
 
 		kind, kindRegistered := registry.Get(rc.Kind)
+		if kindRegistered {
+			if err := registry.ValidateHandlerConfig(rc.Kind, rc.Config); err != nil {
+				findings = append(findings, declarationFinding(path+".config", err.Error()))
+			}
+		}
 		if !kindRegistered {
 			findings = append(findings, declarationFinding(path+".kind", fmt.Sprintf(
 				"%q is not a registered channel kind; this build has %s",

@@ -943,3 +943,11 @@ func TestUntrustedDelimitersDeriveFromOneName(t *testing.T) {
 		"the pattern must neutralize the very tag this code emits")
 	assert.True(t, untrustedDelimiterPattern.MatchString(untrustedClose))
 }
+
+func TestTranslateLegacyActionsDefaultWhenEventsUnset(t *testing.T) {
+	ch := testChannel(t)
+	ch.Spec.GitHub.Events = nil
+	got, err := receiver{}.Translate(context.Background(), ch, channelkinds.WebhookRequest{Headers: prHeaders("pull_request"), Body: fixtureBody(t, "pull_request_synchronize.json")})
+	require.NoError(t, err)
+	require.NotNil(t, got, "legacy omitted actions must preserve synchronize default after API default removal")
+}

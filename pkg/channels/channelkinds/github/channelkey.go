@@ -2,6 +2,7 @@ package github
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -69,9 +70,19 @@ func parseChannelKey(key string) (owner, repo string, number int, err error) {
 	if !ok || owner == "" || repo == "" {
 		return "", "", 0, fmt.Errorf("channel key %q does not name an owner/repository", key)
 	}
+	if before, suffix, hasCohort := strings.Cut(num, "@"); hasCohort {
+		if !checkCohortPattern.MatchString(suffix) {
+			return "", "", 0, fmt.Errorf("channel key %q has an invalid CI cohort", key)
+		}
+		num = before
+	}
 	number, err = strconv.Atoi(num)
 	if err != nil || number <= 0 {
 		return "", "", 0, fmt.Errorf("channel key %q does not name a positive pull request number", key)
 	}
 	return owner, repo, number, nil
 }
+
+// CI cohorts are immutable SHA-256 identities, separated from the PR number.
+var checkCohortPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var checkRevisionPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)

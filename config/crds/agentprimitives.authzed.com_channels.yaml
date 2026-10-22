@@ -254,11 +254,6 @@ spec:
                       and keys live in the credentialsRef Secret, never in spec.
                     type: string
                   events:
-                    default:
-                    - opened
-                    - synchronize
-                    - reopened
-                    - ready_for_review
                     description: Events are the pull_request actions that become a
                       review.
                     items:
@@ -283,6 +278,29 @@ spec:
                       reviewed is the one value the field cannot hold. Same shape as
                       ChannelMetaagentSpec.Enabled in this file.
                     type: boolean
+                  trigger:
+                    description: Trigger is opt-in; absent preserves legacy pull_request
+                      behavior.
+                    properties:
+                      actions:
+                        items:
+                          type: string
+                        type: array
+                      event:
+                        type: string
+                      readiness:
+                        type: string
+                      workflows:
+                        additionalProperties:
+                          items:
+                            type: string
+                          type: array
+                        description: Workflows maps owner/repository to required workflow
+                          paths.
+                        type: object
+                    required:
+                    - event
+                    type: object
                 required:
                 - appSlug
                 type: object

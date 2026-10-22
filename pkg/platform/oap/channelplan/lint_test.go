@@ -539,3 +539,11 @@ requires:
 	assert.Equal(t, "requires.channels[0].name", findings[0].Path)
 	assert.Contains(t, findings[0].Reason, "name is required")
 }
+
+func TestLintWorkflowReportInputDoesNotRequireConversationalOutput(t *testing.T) {
+	bundle := bundleWith(t, `requires: {channels: [{kind: github, role: input, name: synthetic-ci, config: {trigger: {event: workflow_run, actions: [completed], readiness: all_completed}}}]}`)
+	bundle.Manifest.OapFormatVersion = "2"
+	findings, err := channelplan.LintRequiredChannels(bundle)
+	require.NoError(t, err)
+	require.Empty(t, findings)
+}

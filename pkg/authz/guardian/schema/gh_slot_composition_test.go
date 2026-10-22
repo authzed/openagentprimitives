@@ -80,7 +80,7 @@ func TestComposeSlots_ErasesTheGhForgeTraversal(t *testing.T) {
 	assert.Contains(t, block,
 		"permission read = "+schema.SlotGrantRelationName("read")+"->interact + owner",
 		"the composer owns the line and writes its own expression")
-	assert.NotContains(t, block, "repo->can_read",
+	assert.NotContains(t, block, "permission read = owner + repo->can_read",
 		"KNOWN LIMITATION: a slot erases the forge traversal on the permission it names. "+
 			"If this now passes, read this test's doc comment before deleting it")
 

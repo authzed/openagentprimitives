@@ -253,6 +253,18 @@ func composeOneSlot(src string, s SlotPair) (string, bool, bool, error) {
 	}
 
 	want := "    permission " + s.Permission + " = " + slotPermissionExpr(s.Permission, hasOwner)
+	// Unattended services may be explicitly authorized to write observations
+	// without becoming repository owners. This standing applies ONLY to the
+	// pool-write permission; it never changes code permissions or readership.
+	if s.Permission == "write_memory" {
+		hasWriter, err := definitionDeclaresName(strings.Join(probeLines, "\n"), s.ResourceType, "memory_writer")
+		if err != nil {
+			return src, false, false, fmt.Errorf("slot %s/%s: check for memory_writer: %w", s.ResourceType, s.Permission, err)
+		}
+		if hasWriter {
+			want += " + memory_writer"
+		}
+	}
 
 	for _, line := range strings.Split(block, "\n") {
 		trimmed := strings.TrimSpace(line)

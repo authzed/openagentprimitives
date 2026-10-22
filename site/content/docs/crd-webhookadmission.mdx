@@ -1,0 +1,43 @@
+export const meta = {
+  title: 'WebhookAdmission',
+  section: 'Reference',
+  group: 'CRD reference',
+  order: 3310,
+  description: 'WebhookAdmission durably records a verified webhook delivery or an atomic',
+}
+
+# WebhookAdmission
+
+**Group** `agentprimitives.authzed.com` · **Scope** Namespaced · **Short names** `wha`
+
+WebhookAdmission durably records a verified webhook delivery or an atomic
+provider-cohort claim before creating an AgentSession. It contains no secret
+credential. Provider admission workers update only status; the delivery body
+and Channel incarnation are immutable evidence.
+
+## Spec
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `spec.body` | `string` | Body is the authenticated webhook payload, never an installation token. Keep the wire encoding as a plain base64 string: Kubernetes 1.30 CEL byte conversion rejects the standard +/ alphabet in immutable-spec checks. The Go JSON decoder still enforces base64 and preserves exact bytes. MaxLength bounds the base64 representation of a 512 KiB delivery. |
+| `spec.channelName` \* | `string` | ChannelName names the input Channel in this namespace. |
+| `spec.channelUID` \* | `string` | ChannelUID pins the Channel incarnation across deletion and recreation. |
+| `spec.enqueuedAt` \* | `string (date-time)` | EnqueuedAt starts the bounded retention period independently of retries. |
+| `spec.event` | `string` | Event is the verified provider event name. |
+| `spec.recordType` \* | `string` | RecordType separates raw deliveries from deduplicated CI-cohort claims. _(enum: delivery \| cohort)_ |
+
+<small>\* required</small>
+
+## Status
+
+Status is controller-owned (observed state).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status.leaseUntil` | `string (date-time)` | LeaseUntil serializes workers using status resource-version comparisons and acts as retry-not-before after a transient provider or delivery error. |
+| `status.phase` | `string` | Phase is pending until the delivery or cohort was processed conclusively. _(enum: pending \| done)_ |
+| `status.reason` | `string` | Reason records deferral, expiry, provider failure, or supersession evidence. |
+| `status.retryCount` | `integer (int32)` | RetryCount counts consecutive transient failures for bounded retry backoff. _(min 0)_ |
+
+<small>\* required</small>
+

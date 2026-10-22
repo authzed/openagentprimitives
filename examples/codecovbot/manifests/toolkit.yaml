@@ -1,0 +1,91 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolkit
+metadata:
+  name: codecovbot-coverage
+spec:
+  name: codecovbot-coverage
+  version: "1"
+  toolkitRevision: "2026-10-22"
+  target:
+    binary: codecovbot-tool
+  parser: {kind: declarative}
+  env:
+    allowed:
+      - {name: GITHUB_TOKEN, description: "Repository-scoped Actions read token", sensitive: true, credential: github-token}
+  subcommands:
+    - path: [fetch-artifact]
+      description: "Validate and download one exact run's bounded coverage artifact."
+      flags:
+        - {long: repository, type: string}
+        - {long: run-id, type: string}
+        - {long: attempt, type: string}
+        - {long: artifact-name, type: string}
+        - {long: output, type: path}
+        - {long: expected-sha, type: string}
+      permission:
+        stateImpact: readwrite
+        check:
+          resourceType: github_repo_url
+          permission: read
+          resourceIDTemplate: "{repository}"
+          resourceIDTransforms: [github_repo_url_id]
+      effects:
+        destructive: false
+        reads: [network]
+        writes: [filesystem]
+        network: {destinations: [api.github.com, '*.blob.core.windows.net', '*.actions.githubusercontent.com']}
+        filesystem: {paths: ['{flag:output}']}
+        creds: {required: [GITHUB_TOKEN], writes: []}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolkit
+metadata:
+  name: codecovbot-analysis
+spec:
+  name: codecovbot-analysis
+  version: "1"
+  toolkitRevision: "2026-10-22"
+  target:
+    binary: codecovbot-tool
+  parser: {kind: declarative}
+  env: {allowed: []}
+  subcommands:
+    - path: [describe-blocks]
+      description: "List exact source-bound block identities without test hit counts for class-policy classification."
+      flags:
+        - {long: profile, type: path}
+        - {long: source, type: path}
+        - {long: file, type: string}
+        - {long: offset, type: string}
+        - {long: limit, type: string}
+      permission: {stateImpact: stateless}
+      effects:
+        destructive: false
+        reads: [filesystem]
+        writes: []
+        network: {destinations: []}
+        filesystem: {paths: ['{flag:profile}', '{flag:source}']}
+        creds: {required: [], writes: []}
+    - path: [analyze]
+      description: "Compute exact raw and functional statement counts from static source."
+      flags:
+        - {long: profile, type: path}
+        - {long: source, type: path}
+        - {long: policy, type: path}
+        - {long: policy-text, type: string}
+        - {long: policy-json, type: string}
+        - {long: exclusions-json, type: string}
+        - {long: base-report, type: path}
+        - {long: preferred-metric, type: string}
+        - {long: threshold, type: string}
+        - {long: exclusions, type: path}
+        - {long: output, type: path}
+      # Computes local scratch files only; no remote resource is mutated.
+      permission: {stateImpact: stateless}
+      effects:
+        destructive: false
+        reads: [filesystem]
+        writes: [filesystem]
+        network: {destinations: []}
+        filesystem: {paths: ['{flag:profile}', '{flag:source}', '{flag:policy}', '{flag:exclusions}', '{flag:base-report}', '{flag:output}']}
+        creds: {required: [], writes: []}

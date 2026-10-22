@@ -2,6 +2,7 @@ package channelkinds
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -426,6 +427,8 @@ func (w unavailableWizard) Result(WizardInput, map[string]string) (WizardOutput,
 }
 
 type WizardInput struct {
+	// Config is the portable declaration of kind-owned handler arguments.
+	Config    json.RawMessage
 	K8s       client.Client
 	Namespace string
 	// Role is the ChannelSpec.Role the CALLER decided this Channel must have —

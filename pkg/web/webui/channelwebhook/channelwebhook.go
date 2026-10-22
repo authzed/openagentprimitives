@@ -26,6 +26,7 @@ package channelwebhook
 import (
 	"encoding/json"
 	"errors"
+	"github.com/authzed/openagentprimitives/pkg/channels/webhookqueue"
 	"io"
 	"net/http"
 
@@ -229,6 +230,18 @@ func (u *UI) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	if inb == nil {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Deferred receivers persist before acknowledging; provider API work runs
+	// in channelsd and may wait across process restarts without an agent.
+	if deferred, ok := rcv.(channelkinds.DeferredWebhookReceiver); ok && deferred.DeferWebhook(&ch, inb.Event) {
+		if err := webhookqueue.Enqueue(ctx, u.k8s, &ch, inb.Event, body); err != nil {
+			logger.Info("webhook: durable admission failed", "ns", ns, "channel", chName, "err", err.Error())
+			http.Error(w, "durable admission unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 

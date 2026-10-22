@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -373,4 +374,63 @@ func SessionRelationLinks() []string {
 	}
 	sort.Strings(links)
 	return links
+}
+
+// ValidateHandlerConfig dispatches kind-owned schema validation. Kinds without
+// configurable handlers refuse supplied arguments rather than dropping them.
+func ValidateHandlerConfig(name string, config json.RawMessage) error {
+	k, ok := Get(name)
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrUnknownKind, name)
+	}
+	if len(config) == 0 {
+		return nil
+	}
+	if validator, ok := k.(interface{ ValidateHandlerConfig(json.RawMessage) error }); ok {
+		return validator.ValidateHandlerConfig(config)
+	}
+	return fmt.Errorf("channel kind %q does not support handler config", name)
+}
+
+// HandlerConfigMatches checks whether an installed handler satisfies the bundle
+// declaration. Install answers omitted from the declaration remain operator-owned.
+func HandlerConfigMatches(name string, config json.RawMessage, existing *spiceboxv1alpha1.Channel) error {
+	if len(config) == 0 {
+		return nil
+	}
+	if err := ValidateHandlerConfig(name, config); err != nil {
+		return err
+	}
+	k, _ := Get(name)
+	if matcher, ok := k.(interface {
+		HandlerConfigMatches(json.RawMessage, *spiceboxv1alpha1.Channel) error
+	}); ok {
+		return matcher.HandlerConfigMatches(config, existing)
+	}
+	return fmt.Errorf("channel kind %q cannot compare installed handler config", name)
+}
+
+// PublishesTriggerReports reports whether this installed input can publish a
+// final report through its verified trigger without a separate output Channel.
+func PublishesTriggerReports(ch *spiceboxv1alpha1.Channel) bool {
+	if ch == nil {
+		return false
+	}
+	k, ok := Get(ch.Spec.Kind)
+	if !ok {
+		return false
+	}
+	publisher, ok := k.(channelkinds.TriggerReportPublisher)
+	return ok && publisher.PublishesTriggerReports(ch)
+}
+
+// ConfigPublishesTriggerReports is the portable declaration counterpart used
+// during bundle lint; interpretation belongs to the kind.
+func ConfigPublishesTriggerReports(name string, config json.RawMessage) bool {
+	k, ok := Get(name)
+	if !ok {
+		return false
+	}
+	publisher, ok := k.(channelkinds.TriggerReportConfigPublisher)
+	return ok && publisher.ConfigPublishesTriggerReports(config)
 }

@@ -16,6 +16,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -167,6 +168,11 @@ func (w *wizard) Inputs(ctx context.Context, in channelkinds.WizardInput) ([]oap
 	}
 
 	qs := []oap.Question{classQ}
+	workflowQs, err := workflowQuestions(in)
+	if err != nil {
+		return nil, err
+	}
+	qs = append(qs, workflowQs...)
 
 	// ASKED ONLY WHEN IT IS STILL AN OPEN QUESTION. A run whose flags already
 	// carry the App's credentials has demonstrated the answer — it has the
@@ -256,6 +262,10 @@ func (w *wizard) Handoff(_ context.Context, in channelkinds.WizardInput) (*chann
 	// that a method writes nothing to the receiver, and an exception that is
 	// safe only because of how the one caller happens to behave is the kind
 	// that stops being safe silently.
+	workflow, err := workflowMode(in)
+	if err != nil {
+		return nil, err
+	}
 	namespace, workingDir, convert := in.Namespace, in.WorkingDir, w.convert
 	if convert == nil {
 		convert = appprovision.NewHTTPClient()
@@ -272,6 +282,7 @@ func (w *wizard) Handoff(_ context.Context, in channelkinds.WizardInput) (*chann
 			// and a handoff that left it empty would create the App and never
 			// come back.
 			params.RedirectURL = callbackURL
+			params.WorkflowRun = workflow
 			manifest, err := appprovision.BuildManifest(params)
 			if err != nil {
 				return channelkinds.HandoffStart{}, fmt.Errorf("build the github app manifest: %w", err)
@@ -369,7 +380,7 @@ func (w *wizard) Handoff(_ context.Context, in channelkinds.WizardInput) (*chann
 		// meant for the next question.
 		SatisfiedBy: map[string]string{keyPrivateKeyPath: keyPrivateKeyPEM},
 		FallbackGuidance: func(answers map[string]string) (string, error) {
-			return fallbackSteps(namespace, workingDir, answers)
+			return fallbackSteps(namespace, workingDir, answers, workflow)
 		},
 	}, nil
 }
@@ -385,7 +396,25 @@ func (w *wizard) Handoff(_ context.Context, in channelkinds.WizardInput) (*chann
 //
 // Nothing to do on the automated route, where the exchange returned the key
 // itself, or on a run that seeded it.
-func (w *wizard) Resolve(_ context.Context, _ channelkinds.WizardInput, answers map[string]string) (map[string]string, error) {
+func (w *wizard) Resolve(ctx context.Context, in channelkinds.WizardInput, answers map[string]string) (map[string]string, error) {
+	resolved, err := w.resolvePrivateKey(answers)
+	if err != nil {
+		return nil, err
+	}
+	merged := make(map[string]string, len(answers)+len(resolved))
+	for k, v := range answers {
+		merged[k] = v
+	}
+	for k, v := range resolved {
+		merged[k] = v
+	}
+	if err := w.validateWorkflowSelection(ctx, in, merged); err != nil {
+		return nil, err
+	}
+	return resolved, nil
+}
+
+func (w *wizard) resolvePrivateKey(answers map[string]string) (map[string]string, error) {
 	if strings.TrimSpace(answers[keyPrivateKeyPEM]) != "" {
 		return nil, nil
 	}
@@ -469,7 +498,25 @@ func (w *wizard) Result(in channelkinds.WizardInput, answers map[string]string) 
 		metav1.SetMetaDataAnnotation(&out.ChannelManifest.ObjectMeta,
 			channelkinds.AnnotationAppProvisionedBy, channelkinds.AppProvisionedByOAP)
 	}
+	cfg, err := effectiveHandlerConfig(in, answers)
+	if err != nil {
+		return channelkinds.WizardOutput{}, err
+	}
+	cfg.AppSlug = resolved[keySlug]
+	out.ChannelManifest.Spec.GitHub = cfg
 	out.Summary = githubSummary(resolved, externalBaseURL)
+	if cfg.Trigger != nil {
+		owner, err := workflowSessionOwner(in, answers)
+		if err != nil {
+			return channelkinds.WizardOutput{}, err
+		}
+		out.ChannelManifest.Spec.Owner = owner
+		selected, err := json.Marshal(cfg.Trigger.Workflows)
+		if err != nil {
+			return channelkinds.WizardOutput{}, fmt.Errorf("describe installed workflow selections: %w", err)
+		}
+		out.Summary = append(out.Summary, channelkinds.SummaryNote{Label: "Trigger", Value: "workflow_run.completed (all_completed)"}, channelkinds.SummaryNote{Label: "Required workflows", Value: string(selected)})
+	}
 	return out, nil
 }
 
@@ -630,7 +677,7 @@ func manifestParams(namespace string, answers map[string]string) (appprovision.P
 // permissions, the events — which nobody can guess, plus a copy on disk,
 // because this text is the whole product of that detour and the terminal it
 // is printed into scrolls away.
-func fallbackSteps(namespace, workingDir string, answers map[string]string) (string, error) {
+func fallbackSteps(namespace, workingDir string, answers map[string]string, workflowMode ...bool) (string, error) {
 	if appCredsAnswered(answers) {
 		return installationSteps(installURLFor(answers[keySlug])), nil
 	}
@@ -647,6 +694,9 @@ func fallbackSteps(namespace, workingDir string, answers map[string]string) (str
 	params, err := manifestParams(namespace, answers)
 	if err != nil {
 		return "", err
+	}
+	if len(workflowMode) > 0 {
+		params.WorkflowRun = workflowMode[0]
 	}
 	manifestJSON, err := appprovision.BuildManifest(params)
 	if err != nil {

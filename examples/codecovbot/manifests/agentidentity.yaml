@@ -1,0 +1,12 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: codecovbot
+spec:
+  description: "Repository-scoped GitHub App installation credential for reading CI evidence."
+  credentials:
+    - name: github-app
+      type: githubApp
+      githubApp:
+        secretRef:
+          name: codecovbot-gh-creds

@@ -862,6 +862,10 @@ func tokenIDFor(token string) string {
 // about which pools the session holds.
 type poolReadScopesKey struct{}
 
+// Discovery failure is distinct from a successfully empty pool set. Other
+// session-only routes keep working, while search marks its fallback incomplete.
+type poolDiscoveryFailedKey struct{}
+
 // withPoolReadScopes stashes the session's resolved read-pool scopes for a
 // later handler on the SAME request to pick up via poolReadScopesFrom. Called
 // only from mintPoolApprovals, and only once per request.
@@ -949,6 +953,9 @@ func (h *handler) mintPoolApprovals(ctx context.Context, ns, name, token string,
 	if err != nil {
 		log.FromContext(ctx).Info("memory: resource pool discovery failed; serving session scope only",
 			"ns", ns, "sess", name, "err", err.Error())
+		if perm == memory.ReadMemory {
+			return context.WithValue(ctx, poolDiscoveryFailedKey{}, true)
+		}
 		return ctx
 	}
 	switch perm {
@@ -1287,6 +1294,9 @@ func (h *handler) handleSearch(w http.ResponseWriter, r *http.Request, scope mem
 		// agrees on it.
 		failRequest(w, r, scope, "search", err)
 		return
+	}
+	if failed, _ := r.Context().Value(poolDiscoveryFailedKey{}).(bool); failed {
+		res.Partial = true
 	}
 	writeJSON(w, r, http.StatusOK, res)
 }

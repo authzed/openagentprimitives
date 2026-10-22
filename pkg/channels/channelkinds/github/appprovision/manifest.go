@@ -24,6 +24,8 @@ import (
 // Params names the App this manifest requests and where its webhook and
 // setup redirect land.
 type Params struct {
+	// WorkflowRun requests Actions read and workflow_run exclusively.
+	WorkflowRun bool
 	// Name is the App's display name. GitHub App names are unique across all
 	// of github.com, so the caller (the wizard, next task) is responsible for
 	// picking one that doesn't collide.
@@ -118,6 +120,10 @@ func BuildManifest(p Params) (string, error) {
 			URL:    WebhookURL(p),
 			Active: true,
 		},
+	}
+	if p.WorkflowRun {
+		doc.DefaultEvents = []string{"workflow_run"}
+		doc.DefaultPerms["actions"] = "read"
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {

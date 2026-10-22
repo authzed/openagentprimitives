@@ -1,0 +1,12 @@
+name: scheduled-coverage-gh-ro
+version: "1"
+intent: "Read repository metadata, commits, comparisons, and contributor identities."
+toolkit: {name: gh, revision: "2026-05-01"}
+allowSubcommands: [api]
+constraints:
+  - cel: "!call.hasFlag('method') && !call.hasFlag('field') && !call.hasFlag('raw-field') && !call.hasFlag('input') && !call.hasFlag('hostname') && !call.positional['endpoint'].matches('(^|/)[.][.]?(/|$)') && call.positional['endpoint'].matches('^repos/[^/]+/[^/]+(/commits(/[0-9a-f]+)?|/compare/[0-9a-f]+[.][.][.][0-9a-f]+)?$')"
+    message: "Only GET repository metadata, commits, and comparisons. Do not pass method/body/hostname flags; GitHub defaults to GET."
+  - cel: "config.allowedRepos.exists(r, glob.match('https://github.com/' + r, call.resourceId))"
+    message: "The repository must be one of codecovbot's configured test targets."
+sensitive:
+  env: [GITHUB_TOKEN]

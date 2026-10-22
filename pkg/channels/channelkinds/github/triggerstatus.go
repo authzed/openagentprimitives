@@ -3,8 +3,11 @@ package github
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +63,13 @@ func (Kind) TriggerSurface(
 		return nil, fmt.Errorf("github: Channel %s/%s: %w", ch.Namespace, ch.Name, err)
 	}
 
+	revision, cohort := b.External["trigger_revision"], b.External["trigger_cohort"]
+	_, keyCohort, hasCohort := strings.Cut(b.Key, "@")
+	if hasCohort || revision != "" || cohort != "" {
+		if !hasCohort || !checkCohortPattern.MatchString(cohort) || cohort != keyCohort || !checkRevisionPattern.MatchString(revision) {
+			return nil, fmt.Errorf("github: CI-cohort binding needs matching cohort key and immutable revision")
+		}
+	}
 	appID := string(secrets.Data["app-id"])
 	privateKey := secrets.Data["private-key"]
 	installationID := string(secrets.Data["installation-id"])
@@ -81,10 +91,20 @@ func (Kind) TriggerSurface(
 			ch.Namespace, ch.Name, strings.Join(missing, ", "))
 	}
 
+	var revalidate func(context.Context, string) error
+	if cohort != "" && opts.K8sClient != nil {
+		bindingCopy := *b
+		revalidate = func(ctx context.Context, token string) error {
+			return revalidateWorkflowCohort(ctx, opts.K8sClient, client.ObjectKeyFromObject(ch), &bindingCopy, &httpWorkflowProvider{token: token, baseURL: providerAPIBaseURL(opts), client: &http.Client{Timeout: 30 * time.Second}})
+		}
+	}
 	return &checkRunSurface{
 		repo:           checkruns.Repo{Owner: owner, Name: repo},
 		number:         number,
 		name:           checkRunName(ch),
+		revision:       revision,
+		cohort:         cohort,
+		revalidate:     revalidate,
 		appID:          appID,
 		privateKey:     privateKey,
 		installationID: installationID,
@@ -119,9 +139,12 @@ func checkRunName(ch *spiceboxv1alpha1.Channel) string {
 
 // checkRunSurface is one pull request's check run, as this kind reports on it.
 type checkRunSurface struct {
-	repo   checkruns.Repo
-	number int
-	name   string
+	revalidate func(context.Context, string) error
+	repo       checkruns.Repo
+	number     int
+	name       string
+	revision   string
+	cohort     string
 
 	appID          string
 	privateKey     []byte
@@ -140,8 +163,8 @@ func (s *checkRunSurface) Surface() string {
 	return fmt.Sprintf("the GitHub check run on %s#%d", s.repo, s.number)
 }
 
-// Claim opens the check run for this pull request's current head, or reports
-// the answer already on it.
+// Claim opens the check run for the immutable cohort revision when configured,
+// or the current PR head for a legacy binding, and reuses only that identity.
 //
 // The ordering matters and is not cosmetic. It reads first: a completed run for
 // this commit means the pull request was already reviewed at this SHA and the
@@ -167,10 +190,11 @@ func (s *checkRunSurface) Claim(ctx context.Context) (channelkinds.TriggerClaim,
 	}
 
 	run, err := s.api.Create(ctx, token, s.repo, checkruns.Write{
-		Name:      s.name,
-		HeadSHA:   sha,
-		Status:    "in_progress",
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		Name:       s.name,
+		HeadSHA:    sha,
+		Status:     "in_progress",
+		StartedAt:  time.Now().UTC().Format(time.RFC3339),
+		ExternalID: s.cohort,
 	})
 	if err != nil {
 		return channelkinds.TriggerClaim{}, fmt.Errorf("github: open check run on %s#%d: %w", s.repo, s.number, err)
@@ -200,6 +224,15 @@ func (s *checkRunSurface) Conclude(ctx context.Context, c channelkinds.TriggerCo
 	if err != nil {
 		return err
 	}
+	if s.revalidate != nil {
+		if err := s.revalidate(ctx, token); err != nil {
+			// A stale claim may be closed neutrally without linking a superseded report.
+			if c.Outcome != channelkinds.TriggerOutcomeCouldNotFinish || c.DetailsURL != "" {
+				return fmt.Errorf("github: cohort no longer current: %w", err)
+			}
+			log.FromContext(ctx).Info("Closing superseded GitHub cohort claim neutrally without publishing a report", "repository", s.repo.String(), "pullRequest", s.number, "cohort", s.cohort, "err", err.Error())
+		}
+	}
 	write := checkruns.Write{
 		Status:      "completed",
 		Conclusion:  conclusion,
@@ -208,7 +241,7 @@ func (s *checkRunSurface) Conclude(ctx context.Context, c channelkinds.TriggerCo
 		// The commit this answer is about, recorded by the kind. A later round
 		// reads it back to diff against what was already reviewed — a fact the
 		// agent used to have to carry and restate.
-		ExternalID: sha,
+		ExternalID: s.externalID(sha),
 		Output: &checkruns.Output{
 			Title:   titleFor(c.Outcome),
 			Summary: boundSummary(c.Summary),
@@ -228,10 +261,9 @@ func (s *checkRunSurface) Conclude(ctx context.Context, c channelkinds.TriggerCo
 	return nil
 }
 
-// locate mints a token, resolves the pull request's current head, and finds
-// this kind's own check run on it. Shared by Claim and Conclude so both address
-// the SAME commit by the same route — a conclusion landing on a different SHA
-// than the claim would silently answer for a commit nobody reviewed.
+// locate mints a token and resolves this binding's check-run identity. Cohort
+// bindings always use their authenticated revision and cohort, even after a new
+// push or rerun. Legacy bindings preserve their current-head lookup behavior.
 func (s *checkRunSurface) locate(ctx context.Context) (token, sha string, existing *checkruns.Run, err error) {
 	minted, err := s.minter.Mint(ctx, githubapp.MintRequest{
 		AppID:          s.appID,
@@ -246,11 +278,16 @@ func (s *checkRunSurface) locate(ctx context.Context) (token, sha string, existi
 	// redacts, and unwrapping it early would give that up for the whole surface.
 	token = string(minted.AccessToken.UnderlyingValue())
 
-	sha, err = s.api.PullRequestHeadSHA(ctx, token, s.repo, s.number)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("github: read head commit of %s#%d: %w", s.repo, s.number, err)
+	if s.cohort != "" {
+		sha = s.revision
+		existing, err = s.api.FindByIdentity(ctx, token, s.repo, sha, s.name, s.cohort)
+	} else {
+		sha, err = s.api.PullRequestHeadSHA(ctx, token, s.repo, s.number)
+		if err != nil {
+			return "", "", nil, fmt.Errorf("github: read head commit of %s#%d: %w", s.repo, s.number, err)
+		}
+		existing, err = s.api.FindByName(ctx, token, s.repo, sha, s.name)
 	}
-	existing, err = s.api.FindByName(ctx, token, s.repo, sha, s.name)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("github: read check runs on %s#%d: %w", s.repo, s.number, err)
 	}
@@ -422,4 +459,11 @@ func boundSummary(s string) string {
 		return s
 	}
 	return string([]rune(s)[:maxSummaryRunes]) + fmt.Sprintf(summaryTruncationMarker, maxSummaryRunes, n)
+}
+
+func (s *checkRunSurface) externalID(sha string) string {
+	if s.cohort != "" {
+		return s.cohort
+	}
+	return sha
 }

@@ -771,6 +771,8 @@ func webdComponent() component {
 			{ns: "agentprimitives-system", name: "spicebox-webd-builder"},
 		},
 		required: []req{
+			// Dedicated durable webhook queue; no ConfigMap write grant.
+			g("webhookadmissions", "create"), g("webhookadmissions", "get"),
 			g("useridentities", "get"), g("useridentities", "list"), g("useridentities", "create"),
 			g("useridentities", "update"), g("useridentities", "patch"),
 			g("agentsessions", "get"),
@@ -924,6 +926,11 @@ func channelsdComponent() component {
 		// channelsd is a NATS consumer with NO informers — it Gets/Lists via the
 		// client and Patches status. These are the verbs its code actually uses.
 		required: []req{
+			// Durable webhook delivery/cohort records and status-only leases.
+			g("webhookadmissions", "get"), g("webhookadmissions", "list"), g("webhookadmissions", "watch"), g("webhookadmissions", "create"), g("webhookadmissions", "delete"),
+			{group: apGroup, resource: "webhookadmissions", subresource: "status", verb: "get"},
+			{group: apGroup, resource: "webhookadmissions", subresource: "status", verb: "update"},
+			{group: apGroup, resource: "webhookadmissions", subresource: "status", verb: "patch"},
 			g("channels", "get"), g("channels", "list"),
 			{group: apGroup, resource: "channels", subresource: "status", verb: "patch"},
 			g("agentclasses", "get"),

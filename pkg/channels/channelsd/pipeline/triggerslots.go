@@ -166,7 +166,7 @@ func (p *Pipeline) BindTriggerSlots(
 	var kindInstances []channelkinds.TriggerSlotInstance
 	if k, ok := chregistry.Get(ev.Channel.Spec.Kind); ok {
 		if sp, ok := k.WebhookReceiver(channelkinds.Deps{}).(channelkinds.TriggerSlotProvider); ok {
-			instances, ierr := sp.TriggerSlotInstances(ev.Channel, ev.DeliveryEvent, ev.RawDelivery)
+			instances, ierr := sp.TriggerSlotInstances(ev.Channel, triggerEvent(ev), triggerBody(ev))
 			if ierr != nil {
 				logger.Info("trigger slot binding: kind instance derivation failed; only expression-backed slots may bind",
 					"session", sess.Namespace+"/"+sess.Name, "kind", ev.Channel.Spec.Kind, "err", ierr.Error())

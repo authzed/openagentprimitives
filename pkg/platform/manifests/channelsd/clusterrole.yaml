@@ -91,3 +91,14 @@ rules:
     verbs: ["get"]
     resourceNames:
       - spicebox-webd-external-url
+
+  # Read durable webhook bodies and create/delete provider-cohort claims. These
+  # grants affect only queue records, leaving ConfigMap mutation unavailable.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["webhookadmissions"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Lease and result writes are confined to the queue's status subresource;
+  # immutable provider evidence in spec cannot be rewritten by a worker.
+  - apiGroups: ["agentprimitives.authzed.com"]
+    resources: ["webhookadmissions/status"]
+    verbs: ["get", "update", "patch"]

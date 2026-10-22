@@ -3,6 +3,7 @@ package channelwizard
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/url"
@@ -136,7 +137,7 @@ func TestRunChannelWizard_AnswerForAKindsOwnInputIsAccepted(t *testing.T) {
 	require.NoError(t, err, "Seed")
 
 	_, answered, err := Run(context.Background(), w,
-		channelkinds.WizardInput{Namespace: "default"}, "demo-kind", st, "", seeded,
+		channelkinds.WizardInput{Namespace: "default", Config: json.RawMessage(`{"synthetic":"handler"}`)}, "demo-kind", st, "", seeded,
 		scriptedOptions("demo-team\n"))
 	require.NoError(t, err,
 		"--answer naming one of this kind's own declared inputs must be accepted, not refused as a key it does not ask")
@@ -144,6 +145,7 @@ func TestRunChannelWizard_AnswerForAKindsOwnInputIsAccepted(t *testing.T) {
 	require.True(t, w.resulted, "the run must have reached Result")
 	assert.Equal(t, map[string]string{"org": "demo-org", "team": "demo-team"}, w.gotAnswers,
 		"Result must receive the seeded answer and the asked one alike")
+	assert.JSONEq(t, `{"synthetic":"handler"}`, string(w.gotIn.Config))
 	assert.Equal(t, "default", w.gotIn.Namespace,
 		"Result must receive the same WizardInput Inputs was given")
 	assert.Empty(t, answered.Notes(),

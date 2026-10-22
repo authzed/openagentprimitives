@@ -458,3 +458,26 @@ func TestHandle_BodyExactlyAtCap_IsNotRejected(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, rec.Code)
 	assert.Equal(t, 5<<20, sawLen, "a body exactly at the cap must reach Verify byte-for-byte, not truncated")
 }
+
+type deferredReceiver struct{ fakeReceiver }
+
+func (*deferredReceiver) DeferWebhook(*spiceboxv1alpha1.Channel, string) bool { return true }
+func (*deferredReceiver) AdmitWebhook(context.Context, *spiceboxv1alpha1.Channel, channelkinds.WebhookSecrets, string, []byte) (channelkinds.WebhookAdmission, error) {
+	panic("provider admission must run asynchronously")
+}
+func TestDeferredWebhookIsDurableBeforeAcceptance(t *testing.T) {
+	receiver := &deferredReceiver{fakeReceiver{translate: &channelkinds.WebhookInbound{Event: "completion"}}}
+	withKind(t, fakeKind{name: "deferred", receiver: receiver})
+	ch := testChannel(t, "default", "ci-input", "deferred")
+	cli := newFakeClient(t, ch, testSecret(t, "default", "ci-input-creds"))
+	published := false
+	handler := newHandlerOverClient(t, cli, func(string, []byte) error { published = true; return errors.New("bus unavailable") })
+	raw := []byte(`{"run":17}`)
+	response := doPost(t, handler, "deferred", "default", "ci-input", raw)
+	require.Equal(t, http.StatusAccepted, response.Code)
+	require.False(t, published, "durable admission must not depend on volatile bus handoff")
+	var records spiceboxv1alpha1.WebhookAdmissionList
+	require.NoError(t, cli.List(context.Background(), &records))
+	require.Len(t, records.Items, 1)
+	require.Equal(t, raw, records.Items[0].Spec.Body)
+}
