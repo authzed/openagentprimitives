@@ -46,6 +46,12 @@ const restorePollInterval = 5 * time.Second
 // EnsureChildSession creates the deterministic child AgentSession
 // from BuildChildSession. Idempotent: on AlreadyExists, the existing
 // child is re-fetched and returned. Used by the restart reconciler.
+//
+// The child is created with the AgentSession finalizer already present, so
+// its own first reconcile skips the admission sweep that would otherwise
+// delete the slot grants and pin step 6c copies onto it. Only the operator's
+// service account may create a session that way (the finalizer admission
+// policy), which is why this create must stay on the operator's client.
 func EnsureChildSession(ctx context.Context, c client.Client, parent *spiceboxv1alpha1.AgentSession, pr *spiceboxv1alpha1.PendingRestart) (*spiceboxv1alpha1.AgentSession, error) {
 	desired := BuildChildSession(parent, pr)
 	if err := c.Create(ctx, desired); err != nil {
@@ -632,6 +638,12 @@ func (r *Reconciler) ReconcileRestart(ctx context.Context, sess *spiceboxv1alpha
 	// Runs after 6a/6b for the reason those are ordered: a slot grant resolves
 	// through slot_grant->interact, so it must not go live ahead of the
 	// membership (and blocklist) it resolves against.
+	//
+	// The copy survives the child's first reconcile only because
+	// BuildChildSession pre-stamps the AgentSession finalizer: a session whose
+	// finalizer is absent at first reconcile gets the admission sweep
+	// (DeleteSlotGrants on its ns/name), which would delete everything copied
+	// here.
 	//
 	// Best-effort: a failure here costs the child a re-approval, so it must not
 	// abort a fork whose memory and participants are already in place.

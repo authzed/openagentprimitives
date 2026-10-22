@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# No `namespace:` here, deliberately. ValidatingAdmissionPolicy and its binding
+# are cluster-scoped, but kustomize's namespace transformer does not know that
+# and would stamp agentprimitives-system onto them (as it does for everything
+# under config/manager), which `oap install` would then send to a
+# cluster-scoped endpoint.
+resources:
+  - agentsession-finalizer-policy.yaml

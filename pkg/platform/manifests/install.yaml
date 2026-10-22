@@ -4707,6 +4707,12 @@ spec:
               a rule that only refuses REMOVING parent still lets it be repointed at a
               different session, which silently moves a running session's approval and
               transcript-read standing to a different set of humans.
+
+              forkedFrom is pinned harder than parent: it may be neither added, removed nor
+              repointed after create, because only the operator's fork path sets it, and
+              only at create (BuildChildSession). A field-level rule cannot express this —
+              it never runs when the field is absent on either side — hence the spec-level
+              transition rule comparing presence as well as value.
             properties:
               agentIdentity:
                 description: |-
@@ -4779,7 +4785,10 @@ spec:
               forkedFrom:
                 description: |-
                   ForkedFrom names the prior AgentSession (same namespace) this
-                  session was forked from via Restart-from-here. Immutable.
+                  session was forked from via Restart-from-here. Immutable after
+                  create (CEL rule on AgentSessionSpec). Whoever creates the CR picks
+                  the value and nothing verifies that the named session exists, so it
+                  must never gate anything security-relevant.
                   Distinct from ChannelBinding.InheritFrom (set on auto-inherit
                   after archive); ForkedFrom is set on explicit user-triggered
                   restart.
@@ -4976,6 +4985,10 @@ spec:
             x-kubernetes-validations:
             - message: spec.parent is immutable once set
               rule: '!has(oldSelf.parent) || (has(self.parent) && self.parent == oldSelf.parent)'
+            - message: 'spec.forkedFrom is immutable: it cannot be added, removed
+                or changed after create'
+              rule: has(self.forkedFrom) == has(oldSelf.forkedFrom) && (!has(self.forkedFrom)
+                || self.forkedFrom == oldSelf.forkedFrom)
           status:
             properties:
               activeWidgets:
@@ -30984,6 +30997,46 @@ spec:
           defaultMode: 420
           name: update-graph
         name: config
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: agentsession-finalizer.agentprimitives.authzed.com
+spec:
+  failurePolicy: Fail
+  matchConditions:
+  - expression: has(object.metadata.finalizers) && 'agentsession.agentprimitives.authzed.com/finalizer'
+      in object.metadata.finalizers && (request.operation == 'CREATE' || !has(oldObject.metadata.finalizers)
+      || !('agentsession.agentprimitives.authzed.com/finalizer' in oldObject.metadata.finalizers))
+    name: adds-agentsession-finalizer
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - agentprimitives.authzed.com
+      apiVersions:
+      - '*'
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - agentsessions
+  validations:
+  - expression: request.userInfo.username in [ 'system:serviceaccount:agentprimitives-system:spicebox-operator',
+      'system:serviceaccount:agentprimitives-system:spicebox-channelsd']
+    messageExpression: '''only the agentprimitives operator and channelsd may add
+      the agentsession.agentprimitives.authzed.com/finalizer finalizer; '' + request.userInfo.username
+      + '' may not. Create the AgentSession without it and the operator adds it after
+      sweeping stale slot grants.'''
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: agentsession-finalizer.agentprimitives.authzed.com
+spec:
+  policyName: agentsession-finalizer.agentprimitives.authzed.com
+  validationActions:
+  - Deny
 ---
 apiVersion: agentprimitives.authzed.com/v1alpha1
 kind: SpiceboxToolchain

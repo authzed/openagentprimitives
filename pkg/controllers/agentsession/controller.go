@@ -1168,24 +1168,33 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// with a leftover pin live under its name. A sweep that succeeds followed by
 	// a failed finalizer write just sweeps again, which is idempotent.
 	//
-	// EXCEPT a fork child. The parent's ReconcileRestart copies the parent's
-	// slot grants AND pin onto the child's (ns, name) — authz.CopySlotGrants,
-	// restart.go step 6c — and BuildChildSession creates the child with no
-	// finalizer, so that copy lands BEFORE this reconcile runs. Sweeping here
-	// would be the last writer and would silently strip every non-takeover fork
-	// of its inherited authority (and could double-pin under the PVC-restore
-	// requeue, wedging EnsurePin's one-pin read). The sweep guards against a
-	// stale write from a dead predecessor REUSING this name; a fork child's name
-	// is generated (PendingRestart.TargetSessionName), so that reuse cannot
-	// happen to it, and the tuples already present under its name are
-	// legitimate by construction. ForkedFrom is the same signal
-	// BuildChildSession stamps on every restart child.
+	// The ONLY skip is a finalizer already present at first reconcile, which
+	// means a TRUSTED creator pre-stamped it and owns the sweep itself:
 	//
-	// A channelsd mint pre-stamps the finalizer and runs this same sweep itself,
-	// synchronously ahead of its mint-time binds (pipeline.go), so it never
-	// reaches this branch.
+	//   - channelsd's mint pre-stamps the finalizer and runs this same sweep
+	//     synchronously, ahead of its mint-time binds (pipeline.go), so sweeping
+	//     again here would wipe the pin and grants it just wrote.
+	//   - the operator's own fork path (BuildChildSession) pre-stamps it on every
+	//     restart child, because the parent's ReconcileRestart copies the
+	//     parent's slot grants AND pin onto the child's (ns, name) right after
+	//     creating it (restart.go step 6c) — before this reconcile runs. Sweeping
+	//     here would be the last writer and silently strip the fork of its
+	//     inherited authority. A fork child's name is generated
+	//     (PendingRestart.TargetSessionName), so the dead-predecessor reuse the
+	//     sweep guards against does not apply to it.
+	//
+	// That skip is unforgeable only because config/admission/
+	// agentsession-finalizer-policy.yaml (a ValidatingAdmissionPolicy) refuses
+	// any create or update that ADDS this finalizer unless the caller is the
+	// operator or channelsd service account. Without it, anyone able to create
+	// an AgentSession could pre-stamp the finalizer in their manifest and
+	// inherit a dead predecessor's never-expiring slot_pin — slot tuples are
+	// keyed by (ns, name), not UID. Nothing user-writable gates the sweep:
+	// spec.forkedFrom once did, but it is CR-creator controlled and nothing
+	// verifies the parent it names, so a forkedFrom session created without a
+	// pre-stamped finalizer is swept like any other.
 	if !controllerutil.ContainsFinalizer(&sess, spiceboxv1alpha1.FinalizerAgentSession) &&
-		r.SpiceDBDeleter != nil && sess.Spec.ForkedFrom == "" {
+		r.SpiceDBDeleter != nil {
 		if err := r.SpiceDBDeleter.DeleteSlotGrants(ctx, sess.Namespace, sess.Name); err != nil {
 			log.FromContext(ctx).Error(err, "admission sweep: delete stale slot grants/pins failed",
 				"session", sess.Namespace+"/"+sess.Name)

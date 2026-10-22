@@ -192,6 +192,10 @@ func resolveGVR(gvk schemaGVK) (schemaGVR, bool, error) {
 		return schemaGVR{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}, false, nil
 	case "MutatingWebhookConfiguration":
 		return schemaGVR{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}, false, nil
+	case "ValidatingAdmissionPolicy":
+		return schemaGVR{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicies"}, false, nil
+	case "ValidatingAdmissionPolicyBinding":
+		return schemaGVR{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicybindings"}, false, nil
 	case "StorageClass":
 		return schemaGVR{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}, false, nil
 	}

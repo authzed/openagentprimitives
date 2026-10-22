@@ -1630,15 +1630,46 @@ func TestReconcile_AdmissionSweepRetriesAfterFailure(t *testing.T) {
 	assert.Contains(t, got.Finalizers, spiceboxv1alpha1.FinalizerAgentSession)
 }
 
+// TestReconcile_AdmissionSweepRunsForAnUnverifiedForkedFrom is the reviewer's
+// repro for the sweep bypass. spec.forkedFrom is written by whoever creates the
+// CR and nothing verifies the parent it names, so it must not suppress the
+// sweep: a session created with forkedFrom pointing at a session that does not
+// exist, and no pre-stamped finalizer, must still have the stale pin and grants
+// a dead predecessor left under its (ns, name) wiped.
+func TestReconcile_AdmissionSweepRunsForAnUnverifiedForkedFrom(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+
+	deleter := &fakeSpiceDBDeleter{}
+	r := newReconciler(t, env)
+	r.SpiceDBDeleter = deleter
+
+	ac := validClass("ac-forkedfrom-sweep")
+	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass")
+	markValid(t, env, ac)
+
+	sess := validSession("sess-forkedfrom-sweep", "ac-forkedfrom-sweep")
+	sess.Spec.ForkedFrom = "no-such-parent"
+	require.NoError(t, env.Client.Create(ctx, sess), "create AgentSession claiming a fork parent")
+	// The stale pin + grant a dead predecessor with this same name left behind.
+	deleter.seedStaleSlotTuples(sess.Namespace, sess.Name)
+
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sess)})
+	require.NoError(t, err, "Reconcile (admission)")
+
+	assert.Equal(t, 1, deleter.slotGrantsCalls,
+		"a self-declared forkedFrom must not skip the admission sweep")
+	assert.False(t, deleter.hasStaleSlotTuples(sess.Namespace, sess.Name),
+		"the predecessor's stale slot_pin/slot_grant_* tuples must be gone")
+}
+
 // TestReconcile_AdmissionSweepSparesAForkChildsCopiedTuples: the parent's
 // ReconcileRestart copies slot grants + pin onto the fork child's (ns, name)
-// BEFORE the child's own first reconcile runs (BuildChildSession creates the
-// child with no finalizer). If the admission sweep ran on the child, it would
-// be the LAST writer and wipe that copied authority: every clean-path
-// non-takeover fork would come back unpinned with its inherited grants
-// deleted. A fork child's name is generated (PendingRestart.TargetSessionName),
-// so the dead-predecessor name-reuse the sweep guards against cannot happen
-// to it — the sweep must skip any session whose spec marks it forked.
+// right after creating it, BEFORE the child's own first reconcile runs. If the
+// admission sweep ran on the child it would be the LAST writer and wipe that
+// copied authority. What prevents it is the finalizer BuildChildSession
+// pre-stamps — not spec.forkedFrom, which a CR creator controls — so this
+// builds the child exactly as the restart path does.
 func TestReconcile_AdmissionSweepSparesAForkChildsCopiedTuples(t *testing.T) {
 	env := testenv.Shared(t)
 	ctx := memory.WithSystemApproval(context.Background(), "test")
@@ -1651,8 +1682,14 @@ func TestReconcile_AdmissionSweepSparesAForkChildsCopiedTuples(t *testing.T) {
 	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass")
 	markValid(t, env, ac)
 
-	child := validSession("sess-fork-no-sweep-child", "ac-fork-no-sweep")
-	child.Spec.ForkedFrom = "sess-fork-no-sweep-parent" // what BuildChildSession stamps on every restart child
+	parent := validSession("sess-fork-no-sweep-parent", "ac-fork-no-sweep")
+	child := agentsession.BuildChildSession(parent, &spiceboxv1alpha1.PendingRestart{
+		Mode:              spiceboxv1alpha1.PendingRestartModeInherit,
+		NewUserText:       "continue",
+		TargetSessionName: "sess-fork-no-sweep-child",
+	})
+	require.Contains(t, child.Finalizers, spiceboxv1alpha1.FinalizerAgentSession,
+		"fixture sanity: BuildChildSession pre-stamps the finalizer")
 	require.NoError(t, env.Client.Create(ctx, child), "create fork-child AgentSession")
 
 	// These stand in for the grants + pin the parent's ReconcileRestart
@@ -1660,10 +1697,7 @@ func TestReconcile_AdmissionSweepSparesAForkChildsCopiedTuples(t *testing.T) {
 	// stale leftover.
 	deleter.seedStaleSlotTuples(child.Namespace, child.Name)
 
-	// The child's first reconcile adds the finalizer; the admission sweep
-	// must NOT fire for a fork child.
-	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(child)})
-	require.NoError(t, err, "Reconcile (fork child admission)")
+	_, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(child)})
 
 	assert.Zero(t, deleter.slotGrantsCalls,
 		"the admission sweep must not run for a fork child — it would wipe the authority the parent's restart just copied")
@@ -1676,9 +1710,10 @@ func TestReconcile_AdmissionSweepSparesAForkChildsCopiedTuples(t *testing.T) {
 // itself, synchronously, before its mint-time binds. So when the operator first
 // reconciles such a session the finalizer is ALREADY present: EnsureFinalizer
 // returns added=false, the added=true branch (and its admission sweep) never
-// runs, and the operator must NOT wipe the tuples channelsd just wrote. This is
-// the restart-variant of the sweep guard — a session that already carries the
-// finalizer at first reconcile must take the added=false path.
+// runs, and the operator must NOT wipe the tuples channelsd just wrote. Only
+// the operator and channelsd may create a session that way; the admission
+// policy enforcing that is tested in pkg/platform/manifests
+// (TestAgentSessionFinalizerPolicy). envtest here does not load it.
 func TestReconcile_AdmissionSweepSkippedWhenFinalizerPreStamped(t *testing.T) {
 	env := testenv.Shared(t)
 	ctx := memory.WithSystemApproval(context.Background(), "test")

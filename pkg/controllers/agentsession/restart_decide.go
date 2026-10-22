@@ -184,6 +184,14 @@ func BuildChildSession(parent *spiceboxv1alpha1.AgentSession, pr *spiceboxv1alph
 			Namespace:   parent.Namespace,
 			Labels:      childLabels,
 			Annotations: childAnnotations,
+			// Pre-stamped so the child's first reconcile skips the admission
+			// sweep: ReconcileRestart copies the parent's slot grants AND pin
+			// onto this (ns, name) right after creating it (restart.go step
+			// 6c), and a sweep on the child's first reconcile would wipe them.
+			// Only the operator and channelsd service accounts may add this
+			// finalizer (config/admission/agentsession-finalizer-policy.yaml);
+			// the operator creates this child, so the policy admits it.
+			Finalizers: []string{spiceboxv1alpha1.FinalizerAgentSession},
 		},
 		Spec: spiceboxv1alpha1.AgentSessionSpec{
 			Class:         parent.Spec.Class,
