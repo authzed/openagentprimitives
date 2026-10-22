@@ -2775,6 +2775,7 @@ func run(cfg *config) {
 		APIReader:                 mgr.GetAPIReader(),
 		Scheme:                    mgr.GetScheme(),
 		Authz:                     spiceDBClient,
+		SlotSweeper:               spiceDBClient,
 		WorkshopBuild:             spiceDBClient,
 		MaxDelegationDepth:        3,
 		DefaultMaxDelegatedAgents: 8,

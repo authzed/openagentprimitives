@@ -1333,6 +1333,7 @@ func (h *Harness) startManager(t *testing.T, env *testenv.Env, spdbCli *spicedb.
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),
 		Authz:                     spdbCli,
+		SlotSweeper:               spdbCli,
 		MaxDelegationDepth:        3,
 		DefaultMaxDelegatedAgents: 8,
 		// Grader, publisher and source lookup mirror internal/cmd/operator.
