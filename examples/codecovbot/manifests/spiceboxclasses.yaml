@@ -1,0 +1,46 @@
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: codecovbot-git
+spec:
+  image: codecovbot-tool:2.0.0
+  resources:
+    cpu: "500m"
+    memory: "512Mi"
+    ephemeralStorage: "2Gi"
+    pidsLimit: 64
+  network:
+    mode: allowlist
+    allowedHosts: [github.com, api.github.com, codeload.github.com, objects.githubusercontent.com, '*.blob.core.windows.net', '*.actions.githubusercontent.com']
+  tools:
+    - {name: git, command: [/usr/bin/git], expectedDuration: short}
+    - {name: gh, command: [/usr/bin/gh], expectedDuration: short}
+    - {name: codecovbot-coverage, command: [/usr/local/bin/codecovbot-tool], expectedDuration: long}
+  toolspecs:
+    - {name: codecovbot-git-ro}
+    - {name: codecovbot-gh-ro}
+    - {name: codecovbot-fetch}
+  # Explicitly clear the old platform overlay when upgrading an earlier install.
+  toolchains: []
+  sessionDefaults: {idleTTL: 1h, maxDuration: 1h}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: codecovbot-analysis
+spec:
+  image: codecovbot-tool:2.0.0
+  resources:
+    cpu: "1"
+    memory: "1Gi"
+    ephemeralStorage: "1Gi"
+    pidsLimit: 64
+  network:
+    mode: none
+  tools:
+    - {name: codecovbot-analysis, command: [/usr/local/bin/codecovbot-tool], expectedDuration: short}
+  toolspecs:
+    - {name: codecovbot-analyze}
+  # Explicitly clear the old platform overlay when upgrading an earlier install.
+  toolchains: []
+  sessionDefaults: {idleTTL: 1h, maxDuration: 1h}

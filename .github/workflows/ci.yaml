@@ -148,3 +148,20 @@ jobs:
           go-version-file: go.mod
       - run: go install github.com/magefile/mage@v1.17.2 && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: mage build:toolchains
+
+  # This example owns its program and dependencies; it is not part of OAP's
+  # module, CLI, image catalog, or default installation.
+  codecovbot-example:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: examples/codecovbot/coverage-tool
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: examples/codecovbot/coverage-tool/go.mod
+          cache-dependency-path: examples/codecovbot/coverage-tool/go.sum
+      - run: go test -race ./...
+      - run: docker build -t codecovbot-tool:2.0.0 .
