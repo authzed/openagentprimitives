@@ -193,7 +193,7 @@ func (c *Client) CopySlotTuples(ctx context.Context, child authz.SessionRef, rel
 	if err == nil {
 		return nil
 	}
-	if status.Code(err) == codes.FailedPrecondition {
+	if status.Code(err) == codes.FailedPrecondition && !isSchemaDefinitionAbsent(err) {
 		return fmt.Errorf("copy slot tuples to %s: the child pinned a copied type concurrently: %w", child, authz.ErrSlotPinned)
 	}
 	return fmt.Errorf("copy slot tuples to %s: %w", child, err)
@@ -240,6 +240,13 @@ func (c *Client) DeleteSlotGrants(ctx context.Context, ns, name string) error {
 	// filter — so the read is what identifies the slot grants and pins, and the
 	// delete names exactly those.
 	pins, err := c.ListSlotPins(ctx, ns, name)
+	if isSchemaDefinitionAbsent(err) {
+		// No schema has been composed yet (no class has ever become valid), so
+		// no session can have bound anything: there is nothing to sweep. The
+		// mint and admission sweeps meet this state on a fresh install, and
+		// failing closed there would refuse every first session.
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("delete slot grants %s/%s: list pins: %w", ns, name, err)
 	}

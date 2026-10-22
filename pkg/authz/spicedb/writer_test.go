@@ -59,6 +59,8 @@ type recordingWriteServer struct {
 	// SpiceDB's filter evaluation.
 	readRels []*v1.Relationship
 	readReqs []*v1.ReadRelationshipsRequest
+	// readErr, when non-nil, is returned by every ReadRelationships call.
+	readErr error
 }
 
 func (s *recordingWriteServer) WriteRelationships(_ context.Context, req *v1.WriteRelationshipsRequest) (*v1.WriteRelationshipsResponse, error) {
@@ -86,7 +88,11 @@ func (s *recordingWriteServer) ReadRelationships(req *v1.ReadRelationshipsReques
 	s.readReqs = append(s.readReqs, req)
 	rels := make([]*v1.Relationship, len(s.readRels))
 	copy(rels, s.readRels)
+	readErr := s.readErr
 	s.mu.Unlock()
+	if readErr != nil {
+		return readErr
+	}
 	for _, rel := range rels {
 		if err := stream.Send(&v1.ReadRelationshipsResponse{Relationship: rel}); err != nil {
 			return err

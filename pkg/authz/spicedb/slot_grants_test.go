@@ -265,3 +265,36 @@ func TestDeleteSlotGrants_DeletesPinsBeforeListingAndRevokingGrants(t *testing.T
 	require.Len(t, writes[1].Updates, 1)
 	assert.Equal(t, "slot_grant_contact_access", writes[1].Updates[0].Relationship.GetRelation())
 }
+
+// Before any class has become valid, SpiceDB has no agentsession definition at
+// all, so the reads behind a sweep fail FailedPrecondition. Nothing can have
+// been granted against a definition that does not exist, so both sweeps are
+// trivially satisfied — failing closed there refused every first session on a
+// fresh install. Any other read failure still fails the sweep.
+func TestSweeps_AbsentSchemaDefinitionIsNothingToDelete(t *testing.T) {
+	absent := status.Error(codes.FailedPrecondition, "object definition `agentsession` not found")
+	cases := []struct {
+		name    string
+		readErr error
+		wantErr bool
+	}{
+		{name: "definition absent: nothing to sweep, no error", readErr: absent},
+		{name: "store down: the sweep fails closed", readErr: status.Error(codes.Unavailable, "down"), wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cl, srv := newRecordingWriterClient(t)
+			c := &Client{cl: cl}
+			srv.readErr = tc.readErr
+			for _, sweep := range []func(context.Context, string, string) error{c.DeleteSlotGrants, c.DeleteDataSlotGrants} {
+				err := sweep(context.Background(), "ns", "s")
+				if tc.wantErr {
+					assert.Error(t, err)
+				} else {
+					assert.NoError(t, err)
+				}
+			}
+			assert.Empty(t, srv.recordedWrites())
+		})
+	}
+}
