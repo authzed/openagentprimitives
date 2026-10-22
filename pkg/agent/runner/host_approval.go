@@ -2518,9 +2518,9 @@ func (h *runnerHost) narrowToApproved(ctx context.Context, rec plangateaudit.Con
 	sess := authz.SessionRef{Namespace: h.l.SessionKey.Namespace, Name: h.l.SessionKey.Name}
 	// Loop carries no bare SessionExpiration field; the same wall-clock cap the
 	// JIT tool-approval path re-reads off the AgentSession status
-	// (pkg/channelsd/pipeline/tool_approval_interaction.go's sessionExpirationOf)
+	// (pkg/channels/channelsd/pipeline/tool_approval_interaction.go's sessionExpirationOf)
 	// is already resident here on Budget, loaded once at loop start
-	// (cmd/runner/main.go), so read it from there instead of a second fetch.
+	// (internal/cmd/runner/main.go), so read it from there instead of a second fetch.
 	var sessionExpiration time.Duration
 	if h.l.Budget != nil {
 		sessionExpiration = h.l.Budget.cfg.SessionExpiration.Duration
@@ -2697,28 +2697,26 @@ func (h *runnerHost) planGateSlotOccupancy() map[string]slotOccupancy {
 }
 
 // slotOccupancyByType returns the occupancy/rebind pair per resource type the
-// class declares.
+// class declares, read straight off the spec slots — the same plain fields
+// slotOccupancyRebindFor reads, so the plan gate and the tool-approval raise
+// path cannot disagree.
 //
-// Derived from the SAME boundEntitySpecsForAutofill → slotspec.FromClass source
-// as planGateSlotPreconditions, so occupancy reaches the bind through the one
-// converter that owns the AuthzSlot→BoundEntitySpec mapping — never a second
-// hand-rolled read of the spec. A compile failure in the class's preconditions
-// leaves the map empty (single/default for every type) and is logged, because
-// that silently treats a multi-occupancy slot as single; the case is
-// unreachable for a class that passed admission.
+// Deliberately NOT derived through boundEntitySpecsForAutofill: that converter
+// also compiles each slot's preconditions, and a compile failure would empty
+// this map — reading every slot as single with the DEFAULT rebind, which offers
+// and executes a move on a `rebind: never` slot. Occupancy and rebind need no
+// compile, so nothing here can fail open.
 func (l *Loop) slotOccupancyByType() map[string]slotOccupancy {
 	if l == nil || l.AgentClass == nil {
 		return nil
 	}
-	specs, err := boundEntitySpecsForAutofill(l.AgentClass)
-	if err != nil {
-		slog.Default().Info("slot occupancy: the class's slot declarations did not compile; "+
-			"every slot is treated as single-occupancy with the default rebind",
-			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "err", err.Error())
-		return nil
-	}
-	out := make(map[string]slotOccupancy, len(specs))
-	for _, s := range specs {
+	out := map[string]slotOccupancy{}
+	seen := map[string]bool{}
+	for _, s := range l.AgentClass.Spec.GetSlots() {
+		if seen[s.ResourceType] {
+			continue // first declaration answers, as in slotOccupancyRebindFor
+		}
+		seen[s.ResourceType] = true
 		if s.Occupancy != "" || s.Rebind != "" {
 			out[s.ResourceType] = slotOccupancy{Occupancy: s.Occupancy, Rebind: s.Rebind}
 		}

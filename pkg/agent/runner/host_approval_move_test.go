@@ -26,6 +26,7 @@ import (
 type moveTrackingBinder struct {
 	pinnedTo  string
 	moveCalls int
+	wrote     []authz.Relation
 }
 
 func (*moveTrackingBinder) WriteRelationships(context.Context, []authz.Relation) error  { return nil }
@@ -37,7 +38,8 @@ func (b *moveTrackingBinder) EnsurePin(_ context.Context, _, resourceID string, 
 	}
 	return true, b.pinnedTo, nil
 }
-func (*moveTrackingBinder) WriteGrantsPinned(context.Context, []authz.Relation, string, string, authz.SessionRef) error {
+func (b *moveTrackingBinder) WriteGrantsPinned(_ context.Context, rels []authz.Relation, _, _ string, _ authz.SessionRef) error {
+	b.wrote = append(b.wrote, rels...)
 	return nil
 }
 func (b *moveTrackingBinder) MovePin(_ context.Context, _, fromID, toID string, _ []authz.Relation, _ authz.SessionRef) error {
@@ -282,6 +284,9 @@ func TestNarrowToApproved_firstFillDoesNotRaiseAMoveFailure(t *testing.T) {
 	driveDecision(t, h, mem, ask, true)
 
 	assert.Zero(t, binder.moveCalls, "a first-fill must never attempt a move")
+	require.Len(t, binder.wrote, 1, "the first-fill must actually bind")
+	assert.Equal(t, "repoB", binder.wrote[0].ResourceID)
+	assert.Equal(t, authz.SlotGrantRelationName("push"), binder.wrote[0].Relation)
 	for _, env := range published {
 		assert.NotEqual(t, categories.InternalError, decodeInteractionRequest(t, env).Category,
 			"a first-fill names no prior pin, so it never attempts a move and never fails one")
@@ -404,7 +409,7 @@ func TestRecordPlanGateDecision_twoMoveTargetsForOnePinAreRefusedWhole(t *testin
 	require.Len(t, notices, 1, "exactly one notice")
 	pl := notices[0]
 	assert.Equal(t, categories.SlotBindRefused, pl.Category, "an unhonorable plan is an answer, not a fault")
-	assert.Contains(t, pl.Lead, "more than one target")
+	assert.Contains(t, pl.Lead, "can be committed to only one")
 	assert.Contains(t, pl.NextStep, "revise the plan")
 }
 
@@ -446,4 +451,47 @@ func approvalFailureNotices(t *testing.T, published []channelevents.Envelope) []
 		}
 	}
 	return out
+}
+
+// The audit's case: pinned to repoA, phase 0 stays on repoA and phase 1 moves
+// to repoB. Bound phase by phase, phase 1's move revoked phase 0's fresh repoA
+// grant with no notice. Counting every instance, not only the moving ones,
+// refuses the approval whole.
+func TestRecordPlanGateDecision_stayBesideMoveIsRefusedWhole(t *testing.T) {
+	mem := memory.NewLocal(inmem.NewBackend())
+	var published []channelevents.Envelope
+	h := planGateHost(t, &channelevents.Envelope{})
+	h.l.Mem = mem
+	binder := &movingBinder{pinned: map[string]string{"git_repo": "repoA"}}
+	h.l.SlotBinder = binder
+	h.l.PlanGateSlotPermissionSets = map[string][]string{"git_repo": {"push"}}
+	h.l.InteractionRequestPublish = func(_ context.Context, _, _ string, env channelevents.Envelope) error {
+		published = append(published, env)
+		return nil
+	}
+
+	driveDecision(t, h, mem, coveredPushPhases(t,
+		plangateaudit.SlotRef{Type: "git_repo", ID: "repoA"},
+		plangateaudit.SlotRef{Type: "git_repo", ID: "repoB", MovedFrom: "repoA"},
+	), true)
+
+	assert.Zero(t, binder.moveCalls)
+	assert.Empty(t, binder.wrote)
+	notices := approvalFailureNotices(t, published)
+	require.Len(t, notices, 1)
+	assert.Equal(t, categories.SlotBindRefused, notices[0].Category)
+}
+
+// Occupancy and rebind are plain spec fields. A class whose slot preconditions
+// do not compile must still report rebind:never — reading it through the
+// precondition compiler used to empty the map, so the plan gate offered and
+// executed a move on a slot the class declared unmovable.
+func TestSlotRebindByType_survivesAPreconditionCompileFailure(t *testing.T) {
+	class := classWithGatedCompany("this is not CEL ((")
+	class.Spec.Authz.Slots[0].Rebind = authz.SlotRebindNever
+	_, err := boundEntitySpecsForAutofill(class)
+	require.Error(t, err, "the fixture must not compile, or the test proves nothing")
+
+	l := &Loop{AgentClass: class}
+	assert.Equal(t, map[string]string{"crm_company": authz.SlotRebindNever}, l.slotRebindByType())
 }

@@ -143,19 +143,19 @@ func mirrorSlotPinsFromSpiceDB(
 	}
 }
 
-// mirrorApprovedSlotPins reflects a nil-error authz.BindApproved onto
-// status.slotPins: every single-occupancy type the approved bindings name is
-// re-read from SpiceDB and mirrored as found. A binding carrying a non-zero
-// PriorID asked to MOVE the pin — GrantSlots executes that move in the type's
-// own per-type handling inside BindApproved, so on the nil-error path the move
-// already landed — and its type gets MovedBy (planGateApprovalRef(rec)) and
-// MovedAt stamped, but only when the read-back pin equals the move's target.
+// mirrorApprovedSlotPins reflects an authz.BindApproved onto status.slotPins:
+// every single-occupancy type the approved bindings name is re-read from
+// SpiceDB and mirrored as found. A binding carrying a non-zero PriorID asked to
+// MOVE the pin — GrantSlots executes that move in the type's own per-type
+// handling inside BindApproved — and its type gets MovedBy
+// (planGateApprovalRef(rec)) and MovedAt stamped, but only when the read-back
+// pin equals the move's target.
 //
-// Deliberately NOT called on BindApproved's error paths: a non-nil error can
-// leave SpiceDB mid-way (a move landed, a later type refused), and the
-// existing error handling already treats that as "did not narrow the session"
-// without accounting per type. status.slotPins is display-only and may lag;
-// the next successful bind or move catches it up.
+// Called after per-type failures too, on purpose: GrantSlots resolves each type
+// on its own, so a call that failed for one type may still have moved or
+// pinned another, and a committed move changed the pin even though its grant
+// failed. Reading the pin back is what keeps this honest either way.
+// status.slotPins is display-only and may lag; the next bind catches it up.
 func mirrorApprovedSlotPins(
 	ctx context.Context, sp *StatusPatcher, binder authz.RelWriter, sess authz.SessionRef,
 	rec plangateaudit.Content, bindings []authz.SlotBinding, now time.Time,

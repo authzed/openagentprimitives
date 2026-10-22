@@ -902,6 +902,13 @@ func (h *PlanGate) requestPhaseApproval(
 	sess := authz.SessionRef{Namespace: in.Session.Namespace, Name: in.Session.Name}
 	h.stampMovedFrom(ctx, sess, covered)
 	addedSlots = threadMovedFrom(addedSlots, covered)
+	if len(added) > 0 || len(addedSlots) > 0 {
+		// An amendment card renders ONLY its delta, but the move is stamped on
+		// every covered ref — including an unchanged, already-approved slot whose
+		// pin has since moved elsewhere. Approving executes that move and revokes
+		// the current instance, so it must be on the card the human approves.
+		addedSlots = withUnshownPinChanges(addedSlots, covered)
+	}
 
 	cardIn := plangate.CardInput{
 		// The plan's own slots carry the move too: a first approval or a
@@ -1285,6 +1292,32 @@ func threadMovedFrom(slots []plangate.Slot, covered []plangateaudit.Content) []p
 		}
 		if pi, ok := immovable[key]; ok {
 			out[i].PinnedImmovable = pi
+		}
+	}
+	return out
+}
+
+// withUnshownPinChanges appends to an amendment's delta every covered slot ref
+// that carries a pin change (MovedFrom or PinnedImmovable) the delta does not
+// already show, so the card renders every move and block its approval
+// executes. Returns a copy; slots is never mutated.
+func withUnshownPinChanges(slots []plangate.Slot, covered []plangateaudit.Content) []plangate.Slot {
+	shown := map[string]struct{}{}
+	for _, s := range slots {
+		shown[s.Type+"\x00"+s.ID] = struct{}{}
+	}
+	out := append([]plangate.Slot(nil), slots...)
+	for _, rec := range covered {
+		for _, ref := range rec.SlotRefs {
+			if ref.ID == "" || (ref.MovedFrom == "" && ref.PinnedImmovable == "") {
+				continue
+			}
+			key := ref.Type + "\x00" + ref.ID
+			if _, ok := shown[key]; ok {
+				continue
+			}
+			shown[key] = struct{}{}
+			out = append(out, plangate.Slot{Type: ref.Type, ID: ref.ID, MovedFrom: ref.MovedFrom, PinnedImmovable: ref.PinnedImmovable})
 		}
 	}
 	return out

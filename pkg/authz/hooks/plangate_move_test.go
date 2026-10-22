@@ -236,3 +236,29 @@ func TestThreadMovedFrom_carriesPinnedImmovable(t *testing.T) {
 	assert.Empty(t, out[1].PinnedImmovable)
 	assert.Empty(t, in[0].PinnedImmovable, "the input delta must not be mutated")
 }
+
+// An amendment card renders only its delta, but a move can be stamped on a
+// covered ref the delta does not contain — an unchanged slot whose pin has since
+// moved elsewhere. Approving executes that move, so the card must show it: an
+// amendment that adds only a handle still renders "<pinned> → <named>".
+func TestWithUnshownPinChanges_amendmentShowsEveryMoveItExecutes(t *testing.T) {
+	covered := []plangateaudit.Content{{SlotRefs: []plangateaudit.SlotRef{
+		{Type: "crm_company", ID: "4299", MovedFrom: "4210"}, // unchanged slot, pin moved
+		{Type: "git_repo", ID: "repoB", PinnedImmovable: "repoA"},
+		{Type: "crm_contact", ID: "c1"}, // no pin change: stays off the delta
+	}}}
+	in := []plangate.Slot{{Type: "git_repo", ID: "repoB", PinnedImmovable: "repoA"}} // already shown
+
+	out := withUnshownPinChanges(in, covered)
+
+	require.Len(t, out, 2, "the unshown move is added; the shown block and the unchanged slot are not")
+	assert.Equal(t, plangate.Slot{Type: "crm_company", ID: "4299", MovedFrom: "4210"}, out[1])
+	assert.Len(t, in, 1, "the input delta must not be mutated")
+
+	card := plangate.BuildCard(plangate.CardInput{
+		Plan:         plangate.Plan{Phases: []plangate.Phase{{Label: "edit"}}},
+		AddedHandles: []string{"perm:read:crm_contact"},
+		AddedSlots:   out,
+	})
+	assert.Contains(t, card.What, "4210 → 4299", "the move the approval executes is on the card")
+}

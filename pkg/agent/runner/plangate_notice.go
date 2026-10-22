@@ -242,26 +242,33 @@ const (
 // each, and could contradict itself — a "move committed but not granted" from
 // phase 1 beside a later phase whose same-instance bind then wrote that grant.
 //
-// Merge rule, in phase order: a refusal is sticky (the instance it named was
-// not granted, whatever a later phase did); otherwise the LATEST outcome for
-// the type wins, so a later successful bind supersedes an earlier fault or
-// committed-move.
+// Merge rule, per (type, permission) in phase order: a refusal is sticky (the
+// instance it named was not granted, whatever a later phase did); otherwise the
+// LATEST outcome wins, so a later successful bind of the same grant supersedes
+// an earlier fault or committed-move. A failure covers every permission its type
+// was bound with in that phase — a type's grants land together or not at all.
 //
 // A type held out by a precondition (BindApproved drops it without error) reads
 // as bound here; it escalates to the waiver card on its own, which is the
 // notice it needs.
 type approvalOutcome struct {
-	order  []string
-	byType map[string]slotOutcome
+	order  []outcomeKey
+	byKey  map[outcomeKey]slotOutcome
 	causes []error
 }
+
+// outcomeKey is one grant an approval asked for. Keyed by permission as well as
+// type because each covered phase binds its own permissions: a later phase that
+// writes `push` on a type must not paper over an earlier phase whose `read` on
+// the same type failed.
+type outcomeKey struct{ resourceType, permission string }
 
 // record folds one phase's BindApproved result in. It reports false when err
 // carries no per-type slot outcome at all (a session_scope write failure before
 // GrantSlots ran); the caller keeps that log-only, as before.
 func (o *approvalOutcome) record(bindings []authz.SlotBinding, err error) bool {
-	if o.byType == nil {
-		o.byType = map[string]slotOutcome{}
+	if o.byKey == nil {
+		o.byKey = map[outcomeKey]slotOutcome{}
 	}
 	failures := authz.SlotBindFailures(err)
 	if err != nil && len(failures) == 0 {
@@ -270,10 +277,7 @@ func (o *approvalOutcome) record(bindings []authz.SlotBinding, err error) bool {
 	if err != nil {
 		o.causes = append(o.causes, err)
 	}
-	this := map[string]slotOutcome{}
-	for _, b := range bindings {
-		this[b.ResourceType] = slotBound
-	}
+	failed := map[string]slotOutcome{}
 	for _, f := range failures {
 		k := slotFault
 		switch f.Kind {
@@ -284,35 +288,37 @@ func (o *approvalOutcome) record(bindings []authz.SlotBinding, err error) bool {
 		case authz.SlotFailureFault, authz.SlotFailureDrifted:
 		}
 		for _, rt := range f.ResourceTypes {
-			this[rt] = k
+			failed[rt] = k
 		}
 	}
 	for _, b := range bindings {
-		o.merge(b.ResourceType, this[b.ResourceType])
-		delete(this, b.ResourceType)
-	}
-	for rt, k := range this { // a failure naming a type no binding did (defensive)
-		o.merge(rt, k)
+		k, ok := failed[b.ResourceType]
+		if !ok {
+			k = slotBound
+		}
+		o.merge(outcomeKey{b.ResourceType, b.Permission}, k)
 	}
 	return true
 }
 
-func (o *approvalOutcome) merge(rt string, k slotOutcome) {
-	prev, seen := o.byType[rt]
+func (o *approvalOutcome) merge(key outcomeKey, k slotOutcome) {
+	prev, seen := o.byKey[key]
 	if !seen {
-		o.order = append(o.order, rt)
+		o.order = append(o.order, key)
 	}
 	if seen && prev == slotRefused {
 		return
 	}
-	o.byType[rt] = k
+	o.byKey[key] = k
 }
 
+// typesWith lists, once each and in first-seen order, the types holding at
+// least one grant with outcome k.
 func (o *approvalOutcome) typesWith(k slotOutcome) []string {
 	var out []string
-	for _, rt := range o.order {
-		if o.byType[rt] == k {
-			out = append(out, rt)
+	for _, key := range o.order {
+		if o.byKey[key] == k && !slices.Contains(out, key.resourceType) {
+			out = append(out, key.resourceType)
 		}
 	}
 	return out
@@ -387,17 +393,27 @@ func (o *approvalOutcome) notice() (approvalNotice, bool) {
 func typeList(types []string) string { return strings.Join(types, ", ") }
 
 // conflictingMoveTargets returns, per single-occupancy resource type, the
-// distinct instances an approval would MOVE the pin to when there is more than
-// one. A plan whose phases move one pin to two different instances cannot be
-// honored — a session holds one — and executing it phase by phase commits the
-// first move (revoking the prior instance) and then fails the second, so the
-// approval must be refused whole, before anything is written.
+// distinct instances an approval would bind when it MOVES that type's pin and
+// names more than one instance of it across its covered phases. Such a plan
+// cannot be honored — a session holds one — and executing it phase by phase
+// goes wrong whichever way round it lands: two moves commit the first (revoking
+// the prior instance) and then fail the second; a phase that stays on the
+// pinned instance beside one that moves off it binds the first, then the move
+// revokes that fresh grant with no notice at all. Every binding counts, moving
+// or staying, so the approval is refused whole before anything is written.
+//
+// A type with no move among its bindings is left to GrantSlots, which refuses
+// the extra instance per type with its own notice.
 func conflictingMoveTargets(phases [][]authz.SlotBinding) map[string][]string {
 	targets := map[string][]string{}
+	moving := map[string]bool{}
 	for _, bindings := range phases {
 		for _, b := range bindings {
-			if b.PriorID.IsZero() || b.Occupancy == authz.SlotOccupancyMulti {
+			if b.Occupancy == authz.SlotOccupancyMulti {
 				continue
+			}
+			if !b.PriorID.IsZero() {
+				moving[b.ResourceType] = true
 			}
 			id := b.ResourceID.String()
 			if !slices.Contains(targets[b.ResourceType], id) {
@@ -406,7 +422,7 @@ func conflictingMoveTargets(phases [][]authz.SlotBinding) map[string][]string {
 		}
 	}
 	for rt, ids := range targets {
-		if len(ids) < 2 {
+		if len(ids) < 2 || !moving[rt] {
 			delete(targets, rt)
 		}
 	}
@@ -428,8 +444,8 @@ func moveConflictNotice(conflict map[string][]string) approvalNotice {
 	slices.Sort(types)
 	return approvalNotice{
 		category: categories.SlotBindRefused,
-		lead: "This plan moves " + typeList(types) + " to more than one target, but a session can be " +
-			"committed to only one, so your approval was not applied and nothing was granted.",
+		lead: "This plan moves " + typeList(types) + " to a new target but also names another one, and a " +
+			"session can be committed to only one, so your approval was not applied and nothing was granted.",
 		nextStep: "Ask the agent to revise the plan so it works on one target per session, or split the " +
 			"work across separate sessions. Re-approving this card will not change it.",
 	}

@@ -569,4 +569,3 @@ func BindApproved(
 	// out on the joined error GrantSlots already returns.
 	return bindSlots(ctx, mem, memScope, sess, w, scope.SourceApproved, logger, now, expiresAt, bound)
 }
-

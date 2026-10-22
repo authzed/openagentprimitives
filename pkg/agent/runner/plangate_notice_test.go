@@ -3,6 +3,7 @@ package runner
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -182,10 +183,15 @@ func TestApprovalOutcome_Notice(t *testing.T) {
 		types    []string
 		failures []*authz.SlotBindFailure
 	}
+	// A type may be written "type/permission"; a bare type binds "read".
 	bindingsOf := func(types ...string) []authz.SlotBinding {
 		out := make([]authz.SlotBinding, 0, len(types))
 		for _, rt := range types {
-			out = append(out, authz.SlotBinding{ResourceType: rt})
+			perm := "read"
+			if i := strings.IndexByte(rt, '/'); i >= 0 {
+				rt, perm = rt[:i], rt[i+1:]
+			}
+			out = append(out, authz.SlotBinding{ResourceType: rt, Permission: perm})
 		}
 		return out
 	}
@@ -245,6 +251,13 @@ func TestApprovalOutcome_Notice(t *testing.T) {
 				{types: []string{"git_repo"}, failures: []*authz.SlotBindFailure{fault("git_repo")}},
 				{types: []string{"git_repo"}},
 			}},
+		{name: "a later phase binding a different permission does not hide an earlier committed move",
+			phases: []phase{
+				{types: []string{"git_repo/read"}, failures: []*authz.SlotBindFailure{committed("git_repo")}},
+				{types: []string{"git_repo/push"}},
+			},
+			wantNotice: true, wantCategory: categories.InternalError,
+			leadHas: []string{"removed its access"}},
 		{name: "a refusal is sticky across a later phase's bind",
 			phases: []phase{
 				{types: []string{"git_repo"}, failures: []*authz.SlotBindFailure{refused("git_repo", "")}},
@@ -317,4 +330,8 @@ func TestConflictingMoveTargets(t *testing.T) {
 		{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("repoB")},
 		{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("repoC")},
 	}}), "first-fills are not moves; GrantSlots refuses that per type")
+	stay := authz.SlotBinding{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("repoA")}
+	assert.Equal(t, map[string][]string{"git_repo": {"repoA", "repoB"}},
+		conflictingMoveTargets([][]authz.SlotBinding{{stay}, {move("git_repo", "repoB", "repoA")}}),
+		"a phase staying on the pin beside one moving off it is a conflict: the move would revoke the stay's grant")
 }
