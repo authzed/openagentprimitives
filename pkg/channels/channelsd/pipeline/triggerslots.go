@@ -273,9 +273,8 @@ func (p *Pipeline) BindTriggerSlots(
 			"session", sess.Namespace+"/"+sess.Name, "bindings", len(bindings), "err", err.Error())
 		// A single-occupancy pin refusal is an answer, not a transient failure:
 		// the delivery named a target this session cannot switch to. Record a
-		// session-visible notice, beyond the operator log above. Pass the bindings
-		// so the notice routes its NextStep by the refused slot's rebind policy.
-		p.publishSlotBindRefusedNotice(ctx, sess, bindings, err)
+		// session-visible notice, beyond the operator log above.
+		p.publishSlotBindRefusedNotice(ctx, sess, err)
 		return
 	}
 	logger.Info("trigger slot binding: bound the instances a verified delivery named",

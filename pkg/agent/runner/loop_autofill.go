@@ -2,7 +2,6 @@ package runner
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -377,22 +376,22 @@ func (l *Loop) promoteObservedSlots(ctx context.Context) {
 	}
 	if err := l.Engine.PromoteObservedSlots(ctx, l.bindingScope(), l.authzSessionRef(),
 		specs, l.AuthSubject()); err != nil {
-		if errors.Is(err, authz.ErrSlotPinned) && !errors.Is(err, authz.ErrSlotStore) {
+		if refusals := authz.SlotPinRefusals(err); len(refusals) > 0 {
 			// An authorization outcome, not a hiccup: a single-occupancy pin
-			// refused this instance. Warn (louder than a mechanism error), keep
-			// the Info-trail grep key below for an operator, and record the
-			// refusal so the next gated call on this type explains itself to the
-			// model rather than reading as a bare denial.
+			// refused an instance. Warn (louder than a mechanism error) with the
+			// FULL error for an operator — including any store fault on another
+			// type beside it — and record ONLY the refusals so the next gated call
+			// on a refused type explains itself to the model rather than reading
+			// as a bare denial. A co-occurring fault must neither hide the refusal
+			// nor leak its store detail into model-facing text.
 			slog.Default().Warn("promoting observed slot candidates refused by a single-occupancy pin; surfacing to the model",
 				"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "err", err.Error())
-			l.recordSlotPinRefusal(ctx, specs, err.Error())
+			l.recordSlotPinRefusals(ctx, specs, refusals)
 			return
 		}
-		// Either a plain mechanism error, or a pin refusal errors.Join'd with a
-		// TRANSIENT store fault (ErrSlotStore). The latter must NOT be recorded as
-		// a model-facing refusal: its text carries raw store detail and a retry may
-		// yet bind the type that blipped, so it is logged and left unbound rather
-		// than surfaced as a final ruling.
+		// A plain mechanism error or a transient store fault: logged and left
+		// unbound, never surfaced to the model as a ruling — its text carries raw
+		// store detail and a retry may yet bind.
 		slog.Default().Info("promoting observed slot candidates failed; any gated call stays unbound",
 			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "err", err.Error())
 		return
@@ -610,6 +609,15 @@ func (l *Loop) recordSlotPinRefusal(ctx context.Context, specs []authz.BoundEnti
 		}
 		l.slotPinRefusals[et.ResourceType] = ref // newest wins
 		l.slotPinRefusalMu.Unlock()
+	}
+}
+
+// recordSlotPinRefusals records each refusal against the declared spec types it
+// names. Recorded one refusal at a time, so a type is handed only its OWN
+// refusal's text rather than every refused type's.
+func (l *Loop) recordSlotPinRefusals(ctx context.Context, specs []authz.BoundEntitySpec, refusals []*authz.SlotBindFailure) {
+	for _, r := range refusals {
+		l.recordSlotPinRefusal(ctx, specs, r.Error())
 	}
 }
 

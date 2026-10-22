@@ -60,7 +60,7 @@ func TestBindTriggerSlots_PinRefusal_RecordsNotice(t *testing.T) {
 	reqs := TriggerSlotRequestsFor(context.Background(), class)
 	require.Len(t, reqs, 1)
 
-	az := &fakeAuthz{grantSlotsErr: fmt.Errorf("%s: %w", refusal, authz.ErrSlotPinned)}
+	az := &fakeAuthz{grantSlotsErr: pinRefusal(refusal, "", "github_pull_request")}
 	natsRec := &fakeNATS{}
 	p := &Pipeline{Authz: az, NATS: natsRec}
 	ch := newGitHubChannel("gh-in", "service:demo")
@@ -99,7 +99,7 @@ func TestSeedThreadSlots_PinRefusal_RecordsNotice(t *testing.T) {
 		AllowSynthetic().Canonical()
 	require.NoError(t, err, "canonicalise requester")
 
-	az := &fakeAuthz{grantSlotsErr: fmt.Errorf("%s: %w", refusal, authz.ErrSlotPinned)}
+	az := &fakeAuthz{grantSlotsErr: pinRefusal(refusal, authz.SlotRebindNever, "web_target")}
 	natsRec := &fakeNATS{}
 	p := &Pipeline{Authz: az, NATS: natsRec}
 
@@ -162,13 +162,12 @@ func TestBindTriggerSlots_TransientError_NoNotice(t *testing.T) {
 		"a transient failure is not a pin ruling and must not be announced as one")
 }
 
-// TestBindTriggerSlots_PinRefusalWithStoreFault_NoNotice is the leak guard: when
-// GrantSlots joins a genuine pin refusal (ErrSlotPinned) with a transient store
-// fault (ErrSlotStore) for a different type, errors.Is(err, ErrSlotPinned) is
-// true — the condition that used to publish — yet the refusal text now carries
-// raw store endpoints and gRPC status. That detail is operator-only; the notice
-// must be suppressed rather than quoting the wrapped store cause to the session.
-func TestBindTriggerSlots_PinRefusalWithStoreFault_NoNotice(t *testing.T) {
+// TestBindTriggerSlots_PinRefusalWithStoreFault_NoticeQuotesOnlyTheRefusal:
+// GrantSlots can join a genuine pin refusal for one type with a transient store
+// fault for another. The refusal is still an answer the session must hear — the
+// fault must not suppress it — but only the refusal's own text may be quoted:
+// the fault's raw store endpoints and gRPC status are operator-only.
+func TestBindTriggerSlots_PinRefusalWithStoreFault_NoticeQuotesOnlyTheRefusal(t *testing.T) {
 	class := classWithSlots(spiceboxv1alpha1.AuthzSlot{
 		ResourceType: "github_pull_request", Permission: "write_memory",
 		FillFrom: []string{"trigger"},
@@ -177,10 +176,11 @@ func TestBindTriggerSlots_PinRefusalWithStoreFault_NoNotice(t *testing.T) {
 	require.Len(t, reqs, 1)
 
 	joined := errors.Join(
-		fmt.Errorf("slot already pinned to a different instance: pinned to github_pull_request:acme/original: %w", authz.ErrSlotPinned),
-		fmt.Errorf("%w: write slot grants: spicedb unavailable: dial tcp 10.0.0.1:50051", authz.ErrSlotStore),
+		pinRefusal("slot already pinned to a different instance: pinned to github_pull_request:acme/original", "", "github_pull_request"),
+		authz.NewSlotBindFailure(authz.SlotFailureFault, "",
+			fmt.Errorf("%w: write slot grants: spicedb unavailable: dial tcp 10.0.0.1:50051", authz.ErrSlotStore), "label"),
 	)
-	az := &fakeAuthz{grantSlotsErr: joined}
+	az := &fakeAuthz{grantSlotsErr: fmt.Errorf("spicedb: grant slots: %w", joined)}
 	natsRec := &fakeNATS{}
 	p := &Pipeline{Authz: az, NATS: natsRec}
 	ch := newGitHubChannel("gh-in", "service:demo")
@@ -194,6 +194,47 @@ func TestBindTriggerSlots_PinRefusalWithStoreFault_NoNotice(t *testing.T) {
 		triggerTestSession(),
 		ev, reqs, time.Now())
 
-	assert.Empty(t, slotBindRefusedNotices(t, natsRec),
-		"a pin refusal joined with a transient store fault must stay operator-only, not leak store detail")
+	notices := slotBindRefusedNotices(t, natsRec)
+	require.Len(t, notices, 1, "a store fault on another type must not suppress the refusal")
+	require.NotNil(t, notices[0].Excerpt)
+	assert.Contains(t, notices[0].Excerpt.Content, "github_pull_request:acme/original")
+	assert.NotContains(t, notices[0].Excerpt.Content, "dial tcp", "store detail must stay operator-only")
+	assert.NotContains(t, notices[0].Excerpt.Content, "spicedb", "store detail must stay operator-only")
+}
+
+// The NextStep routes by the REFUSED types' rebind policy, not every binding in
+// the call: a rebind:never refusal must route to a new conversation only, never
+// to an amendment GrantSlots would refuse every time.
+func TestSlotBindRefusedNotice_RebindNeverRefusalRoutesToNewConversation(t *testing.T) {
+	class := classWithSlots(spiceboxv1alpha1.AuthzSlot{
+		ResourceType: "github_pull_request", Permission: "write_memory",
+		FillFrom: []string{"trigger"},
+	})
+	reqs := TriggerSlotRequestsFor(context.Background(), class)
+	require.Len(t, reqs, 1)
+
+	az := &fakeAuthz{grantSlotsErr: pinRefusal("slot already pinned to a different instance: this session is pinned to "+
+		"github_pull_request:acme/original for its lifetime", authz.SlotRebindNever, "github_pull_request")}
+	natsRec := &fakeNATS{}
+	p := &Pipeline{Authz: az, NATS: natsRec}
+	ch := newGitHubChannel("gh-in", "service:demo")
+	ev := channelkinds.InboundEvent{
+		Channel: ch, DeliveryEvent: "pull_request",
+		RawDelivery: []byte(`{"action":"opened","number":7,"repository":{"full_name":"acme/widgets"},` +
+			`"pull_request":{"node_id":"PR_x"}}`),
+	}
+
+	p.BindTriggerSlots(context.Background(), triggerTestSession(), ev, reqs, time.Now())
+
+	notices := slotBindRefusedNotices(t, natsRec)
+	require.Len(t, notices, 1)
+	assert.Contains(t, notices[0].NextStep, "start a new conversation")
+	assert.NotContains(t, notices[0].NextStep, "propose an updated plan")
+}
+
+// pinRefusal is the per-type refusal GrantSlots produces, as the channelsd
+// pipeline receives it.
+func pinRefusal(text, rebind, resourceType string) error {
+	return authz.NewSlotBindFailure(authz.SlotFailureRefused, rebind,
+		fmt.Errorf("%s: %w", text, authz.ErrSlotPinned), resourceType)
 }

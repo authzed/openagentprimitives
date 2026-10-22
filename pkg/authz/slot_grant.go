@@ -172,23 +172,28 @@ func occupancyOf(b SlotBinding) string {
 	return b.Occupancy
 }
 
-// AllRebindNever reports whether EVERY binding in a refused set declares
-// rebind:never — the one case whose only route out is a NEW SESSION, with no
-// re-plan/amendment route. An empty Rebind reads as the default ("approval"),
-// which DOES have the amendment route, so any approval/unset binding flips this
-// false. Empty bindings → false: default to naming the re-plan route (which also
-// names the new-session fallback) rather than foreclosing it.
+// AllRebindNever reports whether EVERY refusal is for a rebind:never slot — the
+// one case whose only route out is a NEW SESSION, with no re-plan/amendment
+// route. An empty Rebind reads as the default ("approval"), which DOES have the
+// amendment route, so any approval/unset refusal flips this false. No refusals
+// → false: default to naming the re-plan route (which also names the
+// new-session fallback) rather than foreclosing it.
+//
+// Takes the REFUSALS (SlotPinRefusals), not the bindings the call was handed: a
+// call that bound a default-rebind type and was refused on a never type must
+// route to a new session, and the bindings alone cannot say which types were
+// refused.
 //
 // Shared by every surface that phrases a pin refusal — the channelsd mint-time
 // notice and the runner's plan-gate approval notice — so the "new session only"
 // vs "amendment or new session" split is decided in ONE place and the two
 // surfaces cannot drift.
-func AllRebindNever(bindings []SlotBinding) bool {
-	if len(bindings) == 0 {
+func AllRebindNever(refusals []*SlotBindFailure) bool {
+	if len(refusals) == 0 {
 		return false
 	}
-	for _, b := range bindings {
-		if b.Rebind != SlotRebindNever {
+	for _, r := range refusals {
+		if r.Rebind != SlotRebindNever {
 			return false
 		}
 	}
@@ -302,26 +307,32 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 		}
 	}
 
-	// refusals accumulates EVERY per-type refusal and store failure (and, below, a failed plain
-	// write) so the remaining types still land and NO refusal is silently
+	// refusals accumulates EVERY per-type refusal and fault (and, below, a failed
+	// plain write) so the remaining types still land and NO refusal is silently
 	// dropped. Keeping only the first would hide a second single-occupancy type's
 	// refusal behind the first — the model would be told about one blocked target
-	// and left to rediscover the next by trying it. errors.Join at the end keeps
-	// every errors.Is(…, ErrSlotPinned) reachable for the dispatchers that route
-	// on the sentinel.
+	// and left to rediscover the next by trying it. Each entry is a
+	// *SlotBindFailure naming its type and kind, so a reader can separate the
+	// refusals (user-facing) from the faults (log-only) after the errors.Join
+	// below — see SlotBindFailures.
 	var refusals []error
+	fail := func(kind SlotFailureKind, grp *typeGroup, rt string, err error) {
+		refusals = append(refusals, NewSlotBindFailure(kind, grp.rebind, err, rt))
+	}
 	var plainRels []Relation
+	var plainTypes []string
 	for _, rt := range order {
 		grp := groups[rt]
 		if !grp.single {
 			plainRels = append(plainRels, grp.rels...)
+			plainTypes = append(plainTypes, rt)
 			continue
 		}
 		// Single-occupancy type. More than one distinct instance arriving in one
 		// set cannot be reconciled to a single occupant, so it is refused outright
 		// — nothing is pinned and nothing is granted for this type.
 		if len(grp.ids) > 1 {
-			refusals = append(refusals, fmt.Errorf("%w: slot type %s cannot hold %d distinct instances at once; it is single-occupancy",
+			fail(SlotFailureRefused, grp, rt, fmt.Errorf("%w: slot type %s cannot hold %d distinct instances at once; it is single-occupancy",
 				ErrSlotPinned, rt, len(grp.ids)))
 			continue
 		}
@@ -330,7 +341,7 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 			// A plain RelWriter cannot express the pin's precondition, so writing
 			// the grant through it would silently drop the single-occupancy
 			// guarantee. Refuse this type rather than write it unpinned.
-			refusals = append(refusals, fmt.Errorf("authz: single-occupancy slot type %s needs a SlotPinner-capable writer, got %T", rt, g))
+			fail(SlotFailureFault, grp, rt, fmt.Errorf("authz: single-occupancy slot type %s needs a SlotPinner-capable writer, got %T", rt, g))
 			continue
 		}
 		id := grp.firstID
@@ -350,7 +361,7 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 				// rebind: never — the class declared this slot unmovable, so no
 				// approval may retarget it. Refuse with the new-session route; the
 				// pin stays on the prior instance and nothing is revoked.
-				refusals = append(refusals, fmt.Errorf("%w: this session is pinned to %s:%s for its lifetime; start a new session to target %s:%s",
+				fail(SlotFailureRefused, grp, rt, fmt.Errorf("%w: this session is pinned to %s:%s for its lifetime; start a new session to target %s:%s",
 					ErrSlotPinned, rt, grp.priorID, rt, id))
 				continue
 			}
@@ -359,7 +370,7 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 			// not re-name is not left behind — the asymmetric-permission leak.
 			revoke, err := pinner.ListGrantsFor(ctx, rt, grp.priorID, scope)
 			if err != nil {
-				refusals = append(refusals, fmt.Errorf("%w: list prior grants for %s:%s to revoke on move: %w", ErrSlotStore, rt, grp.priorID, err))
+				fail(SlotFailureFault, grp, rt, fmt.Errorf("%w: list prior grants for %s:%s to revoke on move: %w", ErrSlotStore, rt, grp.priorID, err))
 				continue
 			}
 			if err := pinner.MovePin(ctx, rt, grp.priorID, id, revoke, scope); err != nil {
@@ -368,9 +379,9 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 					// card showed nor the target (MovePin's own no-op already
 					// absorbed the already-at-target case). Nothing moved, nothing
 					// revoked; re-approving rebuilds the card from the current pin.
-					refusals = append(refusals, fmt.Errorf("%w: %w: execute approved slot move for %s", ErrSlotMoveDrifted, err, rt))
+					fail(SlotFailureDrifted, grp, rt, fmt.Errorf("%w: %w: execute approved slot move for %s", ErrSlotMoveDrifted, err, rt))
 				} else {
-					refusals = append(refusals, fmt.Errorf("%w: execute approved slot move for %s: %w", ErrSlotStore, rt, err))
+					fail(SlotFailureFault, grp, rt, fmt.Errorf("%w: execute approved slot move for %s: %w", ErrSlotStore, rt, err))
 				}
 				continue
 			}
@@ -380,7 +391,7 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 			// access is already revoked but the new grant did not land — the one
 			// case the approver must be told changed access, not "nothing happened".
 			if err := pinner.WriteGrantsPinned(ctx, grp.rels, rt, id, scope); err != nil {
-				refusals = append(refusals, fmt.Errorf("%w: %w", ErrSlotMoveCommitted, err))
+				fail(SlotFailureMoveCommitted, grp, rt, fmt.Errorf("%w: %w", ErrSlotMoveCommitted, err))
 			}
 			continue
 		}
@@ -393,7 +404,7 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 			// a reader can tell this transient fault from an ErrSlotPinned ruling
 			// it may be joined with — otherwise the join makes the whole error
 			// read as a final refusal and leaks the raw cause to users.
-			refusals = append(refusals, fmt.Errorf("%w: ensure pin for %s:%s: %w", ErrSlotStore, rt, id, err))
+			fail(SlotFailureFault, grp, rt, fmt.Errorf("%w: ensure pin for %s:%s: %w", ErrSlotStore, rt, id, err))
 			continue
 		}
 		if held && pinnedID != id {
@@ -402,10 +413,10 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 			// pinned instance and the route out, chosen by the slot's rebind mode.
 			switch grp.rebind {
 			case SlotRebindNever:
-				refusals = append(refusals, fmt.Errorf("%w: this session is pinned to %s:%s for its lifetime; start a new session to target %s:%s",
+				fail(SlotFailureRefused, grp, rt, fmt.Errorf("%w: this session is pinned to %s:%s for its lifetime; start a new session to target %s:%s",
 					ErrSlotPinned, rt, pinnedID, rt, id))
 			default: // "approval" and unset
-				refusals = append(refusals, fmt.Errorf("%w: this session is pinned to %s:%s; to work on %s:%s, propose an updated plan naming it — an approved plan moves the pin",
+				fail(SlotFailureRefused, grp, rt, fmt.Errorf("%w: this session is pinned to %s:%s; to work on %s:%s, propose an updated plan naming it — an approved plan moves the pin",
 					ErrSlotPinned, rt, pinnedID, rt, id))
 			}
 			continue
@@ -418,7 +429,7 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 			// ruling. A pin that EnsurePin just wrote stays: it names the instance
 			// this call meant to bind, so a retry is a same-instance bind, not a
 			// refusal.
-			refusals = append(refusals, fmt.Errorf("%w: write pinned slot grants for %s:%s: %w", ErrSlotStore, rt, id, err))
+			fail(SlotFailureFault, grp, rt, fmt.Errorf("%w: write pinned slot grants for %s:%s: %w", ErrSlotStore, rt, id, err))
 			continue
 		}
 	}
@@ -431,7 +442,8 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 			// the single-occupancy refusal that stood beside it. Tagged
 			// ErrSlotStore: a failed multi-occupancy write is a transient fault,
 			// so a reader must not read the joined error as a final pin refusal.
-			refusals = append(refusals, fmt.Errorf("%w: write slot grants: %w", ErrSlotStore, err))
+			refusals = append(refusals, NewSlotBindFailure(SlotFailureFault, "",
+				fmt.Errorf("%w: write slot grants: %w", ErrSlotStore, err), plainTypes...))
 		}
 	}
 	return errors.Join(refusals...)

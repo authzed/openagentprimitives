@@ -15,6 +15,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/inmem"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
+	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
 )
 
 // moveTrackingBinder is a SlotBinder for the approved-move path. `pinnedTo`
@@ -120,11 +121,10 @@ func (b *movingBinder) wroteGrant(resourceType, resourceID, permission string) b
 var _ authz.SlotPinner = (*movingBinder)(nil)
 
 // A move the human approved that cannot execute — the pin drifted since the
-// card — is a BROKEN PROMISE, not an operator-log footnote. narrowToApproved
-// must surface it as a failed approval (the InternalError notice that tells the
-// approver to try again and that nothing was granted), the same mechanism a
-// discarded-approval uses, rather than swallowing the ErrSlotPinned in a
-// slog.Info the approver never sees.
+// card — is a BROKEN PROMISE, not an operator-log footnote. The approval must
+// surface it to the approver as a fault (InternalError), rather than swallowing
+// it in a slog.Info the approver never sees — and without claiming nothing was
+// granted, since the decision is recorded and other types may have bound.
 func TestNarrowToApproved_approvedMoveFailureTellsTheApprover(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	var published []channelevents.Envelope
@@ -163,11 +163,12 @@ func TestNarrowToApproved_approvedMoveFailureTellsTheApprover(t *testing.T) {
 		pl := decodeInteractionRequest(t, env)
 		if pl.Category == categories.InternalError {
 			told = true
-			// A DRIFTED MOVE is a recoverable fault: the "fault on our side, try
-			// once more" copy, not the committed-elsewhere refusal copy.
+			// A DRIFTED MOVE is a fault, not the committed-elsewhere refusal.
 			assert.Contains(t, pl.Lead, "fault on our side",
 				"a drifted move is a fault, not a refusal")
-			assert.Contains(t, pl.NextStep, "Try approving once more")
+			assert.NotContains(t, pl.Lead, "nothing was granted",
+				"the decision is recorded; the copy must not claim nothing was granted")
+			assert.Contains(t, pl.NextStep, "ask again")
 			assert.NotContains(t, pl.Lead, "already committed",
 				"a drifted move must not read as a plain pinned refusal")
 		}
@@ -241,37 +242,6 @@ func TestNarrowToApproved_plainPinnedRefusalSaysCommittedElsewhere(t *testing.T)
 		}
 	}
 	assert.True(t, told, "a plain pinned refusal must tell the approver (under the slot-bind-refused category) why their approval did not bind this instance")
-}
-
-// A pinned refusal whose every refused slot is `rebind: never` must route to a
-// NEW SESSION only: no amendment can move a commitment fixed for the session's
-// life, so the amendment copy would lead the approver into widenings refused
-// every time. The notice says the commitment cannot be moved and to start a new
-// session — never the amendment route.
-func TestPublishPlanGateApprovalFailed_rebindNeverRoutesToNewSessionOnly(t *testing.T) {
-	var published []channelevents.Envelope
-	h := planGateHost(t, &channelevents.Envelope{})
-	h.l.InteractionRequestPublish = func(_ context.Context, _, _ string, env channelevents.Envelope) error {
-		published = append(published, env)
-		return nil
-	}
-	cause := fmt.Errorf("pinned to git_repo:repoA: %w", authz.ErrSlotPinned)
-
-	h.publishPlanGateApprovalFailed(context.Background(), cause, approvalPinnedRefusal, true)
-
-	var told bool
-	for _, env := range published {
-		pl := decodeInteractionRequest(t, env)
-		if pl.Category != categories.SlotBindRefused {
-			continue
-		}
-		told = true
-		assert.Contains(t, pl.NextStep, "cannot be moved", "a never slot's commitment cannot be moved")
-		assert.Contains(t, pl.NextStep, "Start a new session", "the only route is a new session")
-		assert.NotContains(t, pl.NextStep, "amendment",
-			"a never slot must not be pointed at an amendment that can never succeed")
-	}
-	assert.True(t, told, "a never pinned refusal must still tell the approver, under the slot-bind-refused category")
 }
 
 // The control: the SAME binding WITHOUT a recorded move (a first-fill) does not
@@ -376,4 +346,104 @@ func TestRecordPlanGateDecision_multiPhaseMoveBindsEveryCoveredPhase(t *testing.
 		assert.NotEqual(t, categories.InternalError, decodeInteractionRequest(t, env).Category,
 			"a successful multi-phase move must not report an approval failure to the approver")
 	}
+}
+
+// coveredPushPhases builds a plan-scoped ask whose covered phases each name one
+// git_repo instance (and optionally a MovedFrom) under the push ceiling.
+func coveredPushPhases(t *testing.T, refs ...plangateaudit.SlotRef) pipeline.ApprovalAsk {
+	t.Helper()
+	pushHandle, err := permsurface.NewPermHandle("push", "git_repo")
+	require.NoError(t, err)
+	ask := planPhaseAsk()
+	ask.Payload["phaseKey"] = "p0"
+	ask.Payload["ceiling"] = []string{pushHandle.String()}
+	covered := make([]plangateaudit.Content, 0, len(refs))
+	for i, ref := range refs {
+		idx := int32(i)
+		covered = append(covered, plangateaudit.Content{
+			Event: plangateaudit.EventPhaseApproved, PhaseKey: fmt.Sprintf("p%d", i), PhaseIndex: &idx,
+			Ceiling: []string{pushHandle.String()}, Slots: []string{"git_repo"},
+			SlotRefs: []plangateaudit.SlotRef{ref},
+		})
+	}
+	ask.Payload["covered"] = covered
+	return ask
+}
+
+// One approval whose phases MOVE the same pin to two different instances
+// (phase 0 → repoB, phase 1 → repoC, pinned to repoA) cannot be honored. Bound
+// phase by phase it used to commit the first move — revoking repoA, granting
+// repoB — then drift-fail the second and tell the approver "nothing was
+// granted". It must be refused whole, before any move or grant, with a notice
+// that says why, and no phase recorded as approved.
+func TestRecordPlanGateDecision_twoMoveTargetsForOnePinAreRefusedWhole(t *testing.T) {
+	mem := memory.NewLocal(inmem.NewBackend())
+	var published []channelevents.Envelope
+	h := planGateHost(t, &channelevents.Envelope{})
+	h.l.Mem = mem
+	binder := &movingBinder{pinned: map[string]string{"git_repo": "repoA"}}
+	h.l.SlotBinder = binder
+	h.l.PlanGateSlotPermissionSets = map[string][]string{"git_repo": {"push"}}
+	h.l.InteractionRequestPublish = func(_ context.Context, _, _ string, env channelevents.Envelope) error {
+		published = append(published, env)
+		return nil
+	}
+
+	recs := driveDecision(t, h, mem, coveredPushPhases(t,
+		plangateaudit.SlotRef{Type: "git_repo", ID: "repoB", MovedFrom: "repoA"},
+		plangateaudit.SlotRef{Type: "git_repo", ID: "repoC", MovedFrom: "repoA"},
+	), true)
+
+	assert.Zero(t, binder.moveCalls, "no move may run when the approval as a whole cannot be honored")
+	assert.Empty(t, binder.wrote, "no grant may be written")
+	assert.Equal(t, "repoA", binder.pinned["git_repo"], "the pin stays where it was")
+	for _, r := range recs {
+		assert.NotEqual(t, plangateaudit.EventPhaseApproved, r.Event, "an approval refused whole records no approved phase")
+	}
+	notices := approvalFailureNotices(t, published)
+	require.Len(t, notices, 1, "exactly one notice")
+	pl := notices[0]
+	assert.Equal(t, categories.SlotBindRefused, pl.Category, "an unhonorable plan is an answer, not a fault")
+	assert.Contains(t, pl.Lead, "more than one target")
+	assert.Contains(t, pl.NextStep, "revise the plan")
+}
+
+// A plan-scoped approval binds once per covered phase; a failure must still
+// reach the approver ONCE. Three phases each naming a refused instance used to
+// publish three identical refusals.
+func TestRecordPlanGateDecision_refusalIsPublishedOncePerApproval(t *testing.T) {
+	mem := memory.NewLocal(inmem.NewBackend())
+	var published []channelevents.Envelope
+	h := planGateHost(t, &channelevents.Envelope{})
+	h.l.Mem = mem
+	h.l.SlotBinder = &moveTrackingBinder{pinnedTo: "repoA"}
+	h.l.PlanGateSlotPermissionSets = map[string][]string{"git_repo": {"push"}}
+	h.l.InteractionRequestPublish = func(_ context.Context, _, _ string, env channelevents.Envelope) error {
+		published = append(published, env)
+		return nil
+	}
+
+	driveDecision(t, h, mem, coveredPushPhases(t,
+		plangateaudit.SlotRef{Type: "git_repo", ID: "repoB"},
+		plangateaudit.SlotRef{Type: "git_repo", ID: "repoB"},
+		plangateaudit.SlotRef{Type: "git_repo", ID: "repoB"},
+	), true)
+
+	notices := approvalFailureNotices(t, published)
+	require.Len(t, notices, 1, "one approval, one notice")
+	assert.Equal(t, categories.SlotBindRefused, notices[0].Category)
+}
+
+// approvalFailureNotices filters published envelopes to the approval-failure
+// notices, leaving out the plan card the ask itself published.
+func approvalFailureNotices(t *testing.T, published []channelevents.Envelope) []channelevents.InteractionRequestPayload {
+	t.Helper()
+	var out []channelevents.InteractionRequestPayload
+	for _, env := range published {
+		pl := decodeInteractionRequest(t, env)
+		if pl.Category == categories.SlotBindRefused || pl.Category == categories.InternalError {
+			out = append(out, pl)
+		}
+	}
+	return out
 }

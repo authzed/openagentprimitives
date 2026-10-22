@@ -11,6 +11,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 )
 
 // A read and an irreversible push must not look identical on the card: the
@@ -156,34 +157,164 @@ func TestPlanGateItems_PinnedImmovableCarriesABlockedLine(t *testing.T) {
 	assert.Equal(t, channelevents.ToneExternal, items[0].Items[1].Tone)
 }
 
-// Each BindApproved failure maps onto the approver copy that is true for it.
-// The order matters: a committed move wraps whatever failed after it, and a
-// drifted move also wraps ErrSlotPinned.
-func TestClassifyApprovalBindFailure(t *testing.T) {
+// The approver gets ONE notice per approval, and it must be true for every type
+// the approval covered: GrantSlots resolves each type on its own, so one call can
+// bind one type, refuse another and blip on a third. Each case folds one or more
+// phases' outcomes, the way recordPlanGateDecision does, and checks the copy.
+func TestApprovalOutcome_Notice(t *testing.T) {
+	refused := func(rt, rebind string) *authz.SlotBindFailure {
+		return authz.NewSlotBindFailure(authz.SlotFailureRefused, rebind,
+			fmt.Errorf("%w: this session is pinned to %s:A", authz.ErrSlotPinned, rt), rt)
+	}
+	fault := func(rt string) *authz.SlotBindFailure {
+		return authz.NewSlotBindFailure(authz.SlotFailureFault, "",
+			fmt.Errorf("%w: ensure pin: dial tcp 10.0.0.1:50051: Unavailable", authz.ErrSlotStore), rt)
+	}
+	committed := func(rt string) *authz.SlotBindFailure {
+		return authz.NewSlotBindFailure(authz.SlotFailureMoveCommitted, "",
+			fmt.Errorf("%w: write failed", authz.ErrSlotMoveCommitted), rt)
+	}
+	drifted := func(rt string) *authz.SlotBindFailure {
+		return authz.NewSlotBindFailure(authz.SlotFailureDrifted, "",
+			fmt.Errorf("%w: %w", authz.ErrSlotMoveDrifted, authz.ErrSlotPinned), rt)
+	}
+	type phase struct {
+		types    []string
+		failures []*authz.SlotBindFailure
+	}
+	bindingsOf := func(types ...string) []authz.SlotBinding {
+		out := make([]authz.SlotBinding, 0, len(types))
+		for _, rt := range types {
+			out = append(out, authz.SlotBinding{ResourceType: rt})
+		}
+		return out
+	}
 	cases := []struct {
-		name   string
-		err    error
-		want   approvalFailure
-		wantOK bool
+		name         string
+		phases       []phase
+		wantNotice   bool
+		wantCategory string
+		leadHas      []string
+		leadNot      []string
+		nextHas      []string
+		nextNot      []string
 	}{
-		{"committed move wrapping a later pin refusal: move-committed",
-			fmt.Errorf("%w: %w", authz.ErrSlotMoveCommitted, authz.ErrSlotPinned), approvalMoveCommitted, true},
-		{"drifted move (also ErrSlotPinned): retryable fault",
-			fmt.Errorf("%w: %w", authz.ErrSlotMoveDrifted, authz.ErrSlotPinned), approvalFault, true},
-		{"plain pin refusal: pinned-refusal",
-			fmt.Errorf("wrap: %w", authz.ErrSlotPinned), approvalPinnedRefusal, true},
-		{"store fault joined with a pin refusal: retryable fault, not a final refusal",
-			errors.Join(fmt.Errorf("wrap: %w", authz.ErrSlotStore), fmt.Errorf("wrap: %w", authz.ErrSlotPinned)), approvalFault, true},
-		{"store fault alone: retryable fault",
-			fmt.Errorf("wrap: %w", authz.ErrSlotStore), approvalFault, true},
-		{"unrelated store error: not a slot-pin outcome",
-			errors.New("spicedb unavailable"), approvalFault, false},
+		{name: "every type bound: no notice",
+			phases: []phase{{types: []string{"git_repo", "label"}}}},
+		{name: "partial store fault: names the faulted type and never claims nothing was granted",
+			phases:     []phase{{types: []string{"git_repo", "label"}, failures: []*authz.SlotBindFailure{fault("label")}}},
+			wantNotice: true, wantCategory: categories.InternalError,
+			leadHas: []string{"could not be fully applied", "label", "fault on our side"},
+			leadNot: []string{"nothing was granted", "git_repo", "dial tcp"},
+			nextHas: []string{"ask again"}, nextNot: []string{"nothing has been granted"}},
+		{name: "drifted move: a fault, never a refusal",
+			phases:     []phase{{types: []string{"git_repo"}, failures: []*authz.SlotBindFailure{drifted("git_repo")}}},
+			wantNotice: true, wantCategory: categories.InternalError,
+			leadHas: []string{"fault on our side"}, leadNot: []string{"already committed"}},
+		{name: "store fault beside a refusal: refusal copy, the fault named separately, no store text",
+			phases: []phase{{types: []string{"git_repo", "label"},
+				failures: []*authz.SlotBindFailure{refused("git_repo", ""), fault("label")}}},
+			wantNotice: true, wantCategory: categories.SlotBindRefused,
+			leadHas: []string{"already committed to a different target for git_repo", "Other instances"},
+			leadNot: []string{"dial tcp"},
+			nextHas: []string{"approved amendment moves the commitment", "Separately, access to label", "fault on our side"},
+			nextNot: []string{"dial tcp"}},
+		{name: "refused rebind:never beside a bound default type: new session only",
+			phases: []phase{{types: []string{"ticket", "git_repo"},
+				failures: []*authz.SlotBindFailure{refused("git_repo", authz.SlotRebindNever)}}},
+			wantNotice: true, wantCategory: categories.SlotBindRefused,
+			nextHas: []string{"cannot be moved", "Start a new session"}, nextNot: []string{"amendment"}},
+		{name: "refused never and refused movable: the amendment route stays open",
+			phases: []phase{{types: []string{"ticket", "git_repo"},
+				failures: []*authz.SlotBindFailure{refused("git_repo", authz.SlotRebindNever), refused("ticket", "")}}},
+			wantNotice: true, wantCategory: categories.SlotBindRefused,
+			nextHas: []string{"approved amendment"}},
+		{name: "committed move with a fault elsewhere: says what was revoked, names the fault",
+			phases: []phase{{types: []string{"git_repo", "label"},
+				failures: []*authz.SlotBindFailure{committed("git_repo"), fault("label")}}},
+			wantNotice: true, wantCategory: categories.InternalError,
+			leadHas: []string{"moved this session to the new target for git_repo", "removed its access"},
+			nextHas: []string{"Separately, access to label"}},
+		{name: "a later phase's bind supersedes an earlier committed move: no notice",
+			phases: []phase{
+				{types: []string{"git_repo"}, failures: []*authz.SlotBindFailure{committed("git_repo")}},
+				{types: []string{"git_repo"}},
+			}},
+		{name: "a later phase's bind supersedes an earlier fault: no notice",
+			phases: []phase{
+				{types: []string{"git_repo"}, failures: []*authz.SlotBindFailure{fault("git_repo")}},
+				{types: []string{"git_repo"}},
+			}},
+		{name: "a refusal is sticky across a later phase's bind",
+			phases: []phase{
+				{types: []string{"git_repo"}, failures: []*authz.SlotBindFailure{refused("git_repo", "")}},
+				{types: []string{"git_repo"}},
+			},
+			wantNotice: true, wantCategory: categories.SlotBindRefused},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := classifyApprovalBindFailure(tc.err)
-			assert.Equal(t, tc.wantOK, ok)
-			assert.Equal(t, tc.want, got)
+			var o approvalOutcome
+			for _, ph := range tc.phases {
+				var err error
+				if len(ph.failures) > 0 {
+					errs := make([]error, 0, len(ph.failures))
+					for _, f := range ph.failures {
+						errs = append(errs, f)
+					}
+					err = fmt.Errorf("bindSlots(approved): grant slots: %w", errors.Join(errs...))
+				}
+				require.True(t, o.record(bindingsOf(ph.types...), err))
+			}
+			n, ok := o.notice()
+			require.Equal(t, tc.wantNotice, ok)
+			if !ok {
+				return
+			}
+			assert.Equal(t, tc.wantCategory, n.category)
+			for _, want := range tc.leadHas {
+				assert.Contains(t, n.lead, want)
+			}
+			for _, not := range tc.leadNot {
+				assert.NotContains(t, n.lead, not)
+			}
+			for _, want := range tc.nextHas {
+				assert.Contains(t, n.nextStep, want)
+			}
+			for _, not := range tc.nextNot {
+				assert.NotContains(t, n.nextStep, not)
+			}
 		})
 	}
+}
+
+// An error raised before GrantSlots ran (a session_scope write) carries no
+// per-type outcome; record says so and the caller keeps it log-only.
+func TestApprovalOutcome_RecordRejectsANonSlotError(t *testing.T) {
+	var o approvalOutcome
+	assert.False(t, o.record([]authz.SlotBinding{{ResourceType: "git_repo"}}, errors.New("write session_scope: conflict")))
+	_, ok := o.notice()
+	assert.False(t, ok)
+}
+
+// Two phases moving one pin to two different instances is detected before any
+// write; the same move repeated across phases (idempotent at the target) and a
+// multi-occupancy type are not conflicts.
+func TestConflictingMoveTargets(t *testing.T) {
+	move := func(rt, id, prior string) authz.SlotBinding {
+		return authz.SlotBinding{ResourceType: rt, ResourceID: authz.TrustedObjectID(id), PriorID: authz.TrustedObjectID(prior)}
+	}
+	assert.Equal(t, map[string][]string{"git_repo": {"repoB", "repoC"}},
+		conflictingMoveTargets([][]authz.SlotBinding{{move("git_repo", "repoB", "repoA")}, {move("git_repo", "repoC", "repoA")}}))
+	assert.Nil(t, conflictingMoveTargets([][]authz.SlotBinding{{move("git_repo", "repoB", "repoA")}, {move("git_repo", "repoB", "repoA")}}),
+		"the same move in every phase is one move")
+	multi := move("label", "b", "a")
+	multi.Occupancy = authz.SlotOccupancyMulti
+	multi2 := move("label", "c", "a")
+	multi2.Occupancy = authz.SlotOccupancyMulti
+	assert.Nil(t, conflictingMoveTargets([][]authz.SlotBinding{{multi}, {multi2}}), "a multi-occupancy slot holds no pin to conflict over")
+	assert.Nil(t, conflictingMoveTargets([][]authz.SlotBinding{{
+		{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("repoB")},
+		{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("repoC")},
+	}}), "first-fills are not moves; GrantSlots refuses that per type")
 }

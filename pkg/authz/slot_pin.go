@@ -3,6 +3,8 @@ package authz
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 )
 
 // SlotPinRelationName is the relation a single-occupancy slot writes to record
@@ -56,16 +58,130 @@ var ErrSlotMoveCommitted = errors.New("approved slot move committed but the new 
 //     for a DIFFERENT type in the same call, so errors.Is(err, ErrSlotPinned)
 //     turns true and the refusal would be reported as final ("re-approving will
 //     not move it") when a retry would in fact bind the type that timed out.
-//     Callers that route on the outcome check ErrSlotStore FIRST and treat it as
-//     a recoverable fault.
+//     Callers that route on the outcome walk the per-type SlotBindFailures
+//     rather than testing the sentinels on the joined error, so the refusal
+//     and the fault are each reported for their own type.
 //   - The store cause carries raw endpoints and gRPC status text (dial tcp …,
 //     Unavailable), which is operator detail, not something a model or a chat
-//     reader can act on. User-facing surfaces check ErrSlotStore and stay
-//     operator-log-only rather than quoting the wrapped text.
+//     reader can act on. User-facing surfaces quote only SlotPinRefusals and
+//     leave the faults to the operator log.
 //
 // The raw cause is still wrapped (operators read it in logs); the sentinel only
 // lets a reader tell "we could not reach the store" from "this is the answer".
 var ErrSlotStore = errors.New("slot grant store failure")
+
+// SlotFailureKind is what went wrong for one resource type inside GrantSlots.
+type SlotFailureKind int
+
+const (
+	// SlotFailureRefused is an authorization RULING (wraps ErrSlotPinned): the
+	// type is single-occupancy and committed elsewhere, or the call named two
+	// instances of it. Its text is written for users and the model — it names the
+	// pinned instance and the route out — and retrying will not change it.
+	SlotFailureRefused SlotFailureKind = iota
+	// SlotFailureFault is a fault on our side: a store error (wraps ErrSlotStore)
+	// or a writer that cannot pin. Its text carries operator detail (endpoints,
+	// gRPC status) and must stay in logs; a later attempt may succeed.
+	SlotFailureFault
+	// SlotFailureDrifted is an approved move whose MUST_MATCH failed because the
+	// pin changed since the card was shown (wraps ErrSlotMoveDrifted). Nothing
+	// moved and nothing was revoked.
+	SlotFailureDrifted
+	// SlotFailureMoveCommitted is an approved move that landed — the displaced
+	// instance's grants are revoked — whose new grant then failed (wraps
+	// ErrSlotMoveCommitted).
+	SlotFailureMoveCommitted
+)
+
+// SlotBindFailure is ONE resource type's failed outcome inside GrantSlots.
+// GrantSlots resolves each type independently and errors.Joins the failures, so
+// a single call can carry a permanent refusal for one type beside a transient
+// fault for another. The sentinels alone cannot tell a reader WHICH type each
+// belongs to, or keep the fault's raw store text out of the refusal a user is
+// shown; this type does both. Walk a returned error with SlotBindFailures.
+//
+// Error() is the wrapped cause's text unchanged, and Unwrap exposes it, so
+// errors.Is against the sentinels keeps working for every existing reader.
+type SlotBindFailure struct {
+	// ResourceTypes the failure covers: exactly one for a single-occupancy
+	// outcome; every multi-occupancy type in the call for a failed plain write.
+	ResourceTypes []string
+	// Rebind is the type's declared rebind mode ("" reads as the default,
+	// "approval"). Meaningful for a refusal: it decides whether the route out is
+	// an approved amendment or only a new session.
+	Rebind string
+	Kind   SlotFailureKind
+	err    error
+}
+
+// NewSlotBindFailure builds one per-type failure. GrantSlots is the producer;
+// this exists for writers and test doubles that stand in for it.
+func NewSlotBindFailure(kind SlotFailureKind, rebind string, err error, resourceTypes ...string) *SlotBindFailure {
+	return &SlotBindFailure{ResourceTypes: resourceTypes, Rebind: rebind, Kind: kind, err: err}
+}
+
+func (f *SlotBindFailure) Error() string {
+	if f.err == nil {
+		return fmt.Sprintf("slot bind failure on %s", strings.Join(f.ResourceTypes, ", "))
+	}
+	return f.err.Error()
+}
+func (f *SlotBindFailure) Unwrap() error { return f.err }
+
+// SlotBindFailures returns every per-type failure in err's tree, in the order
+// GrantSlots recorded them. Empty when err is nil or carries none (an error
+// raised before GrantSlots ran, such as a session_scope write).
+func SlotBindFailures(err error) []*SlotBindFailure {
+	var out []*SlotBindFailure
+	var walk func(error)
+	walk = func(e error) {
+		if e == nil {
+			return
+		}
+		if f, ok := e.(*SlotBindFailure); ok {
+			// A failure is a leaf for this walk: its own cause chain can hold an
+			// ErrSlotPinned from the store (a drifted move) that is not a second
+			// failure.
+			out = append(out, f)
+			return
+		}
+		switch u := e.(type) {
+		case interface{ Unwrap() []error }:
+			for _, c := range u.Unwrap() {
+				walk(c)
+			}
+		case interface{ Unwrap() error }:
+			walk(u.Unwrap())
+		}
+	}
+	walk(err)
+	return out
+}
+
+// SlotPinRefusals returns only the refusals (SlotFailureRefused) in err's tree:
+// the part of a GrantSlots error that is a final answer a user or model can act
+// on. Faults beside them stay out, so their raw store text never reaches a
+// user-facing surface and they never mask a refusal.
+func SlotPinRefusals(err error) []*SlotBindFailure {
+	var out []*SlotBindFailure
+	for _, f := range SlotBindFailures(err) {
+		if f.Kind == SlotFailureRefused {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// SlotRefusalText renders refusals for a user- or model-facing surface: each
+// refusal's own text, one per line. Never pass a whole GrantSlots error to such
+// a surface — it may carry a fault's store detail beside the refusals.
+func SlotRefusalText(refusals []*SlotBindFailure) string {
+	parts := make([]string, 0, len(refusals))
+	for _, r := range refusals {
+		parts = append(parts, r.Error())
+	}
+	return strings.Join(parts, "\n")
+}
 
 // SlotPinner is the precondition-capable surface the single-occupancy gate
 // needs and plain RelWriter cannot express. A non-nil RelWriter that does not

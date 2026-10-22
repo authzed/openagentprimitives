@@ -3,6 +3,7 @@ package authz_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -494,6 +495,19 @@ func TestGrantSlots_StoreFaultJoinedWithPinRefusalCarriesBothSentinels(t *testin
 	assert.ErrorIs(t, err, authz.ErrSlotPinned, "the genuine pin refusal must remain visible")
 	assert.ErrorIs(t, err, authz.ErrSlotStore, "the co-occurring store blip must be taggable so it is not read as a final ruling")
 	assert.Contains(t, err.Error(), "acme/other", "the refusal still names the pinned instance for an operator")
+
+	// Per type, the two separate cleanly — through a caller's own wrapping —
+	// so a surface can quote the refusal without the store detail beside it.
+	failures := authz.SlotBindFailures(fmt.Errorf("bindSlots(approved): grant slots: %w", err))
+	require.Len(t, failures, 2)
+	refusals := authz.SlotPinRefusals(err)
+	require.Len(t, refusals, 1, "only the ruling is a refusal")
+	assert.Equal(t, []string{"git_repo"}, refusals[0].ResourceTypes)
+	text := authz.SlotRefusalText(refusals)
+	assert.Contains(t, text, "pinned to git_repo:acme/other")
+	assert.NotContains(t, text, "dial tcp", "store detail must not reach the user-facing text")
+	assert.Equal(t, authz.SlotFailureFault, failures[1].Kind)
+	assert.Equal(t, []string{"label"}, failures[1].ResourceTypes)
 }
 
 // A plain RelWriter that is not a SlotPinner cannot express the pin's
@@ -525,17 +539,28 @@ func TestGrantSlots_MultiOccupancy_BindsAsetWithoutPinning(t *testing.T) {
 }
 
 // AllRebindNever decides "new session only" vs "amendment or new session" for
-// every pin-refusal surface, so its edges are load-bearing: a single
-// non-never (or unset) binding has the amendment route and must flip it false,
-// and an empty set must NOT foreclose the amendment route.
+// every pin-refusal surface, so it must be computed over the REFUSED types, not
+// every binding in the call: a default-rebind type that bound fine beside a
+// refused rebind:never type must not flip the route to "amend the plan", which
+// GrantSlots would refuse every time. A single refused movable (or unset) type
+// flips it false, and no refusals must NOT foreclose the amendment route.
 func TestAllRebindNever(t *testing.T) {
-	never := authz.SlotBinding{ResourceType: "git_repo", Rebind: authz.SlotRebindNever}
-	approval := authz.SlotBinding{ResourceType: "git_repo", Rebind: "approval"}
-	unset := authz.SlotBinding{ResourceType: "git_repo"}
+	scope := testScope()
+	w := &pinningFake{}
+	w.seedPin(scope, "git_repo", "acme/pinned")
+	err := authz.GrantSlots(context.Background(), w, scope, []authz.SlotBinding{
+		{ResourceType: "ticket", ResourceID: authz.TrustedObjectID("T-1"), Permission: "edit"},
+		{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("acme/other"), Permission: "push", Rebind: authz.SlotRebindNever},
+	}, testExpiry())
+	require.Error(t, err)
+	refusals := authz.SlotPinRefusals(err)
+	require.Len(t, refusals, 1, "only git_repo is refused; ticket binds")
+	assert.True(t, authz.AllRebindNever(refusals), "the only refused type is never → new session only")
 
-	assert.True(t, authz.AllRebindNever([]authz.SlotBinding{never, never}), "every binding never → true")
-	assert.False(t, authz.AllRebindNever([]authz.SlotBinding{never, approval}), "any movable binding → false")
-	assert.False(t, authz.AllRebindNever([]authz.SlotBinding{never, unset}), "unset reads as approval → false")
+	movable := authz.NewSlotBindFailure(authz.SlotFailureRefused, "approval", authz.ErrSlotPinned, "ticket")
+	unset := authz.NewSlotBindFailure(authz.SlotFailureRefused, "", authz.ErrSlotPinned, "ticket")
+	assert.False(t, authz.AllRebindNever(append(refusals, movable)), "any movable refusal → false")
+	assert.False(t, authz.AllRebindNever(append(refusals, unset)), "unset reads as approval → false")
 	assert.False(t, authz.AllRebindNever(nil), "empty must not foreclose the amendment route")
 }
 

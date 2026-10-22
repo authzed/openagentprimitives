@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
@@ -262,9 +261,8 @@ func (p *Pipeline) seedThreadSlots(
 			"session", sess.Namespace+"/"+sess.Name, "bindings", len(bindings), "err", err.Error())
 		// A single-occupancy pin refusal is an answer, not a transient failure:
 		// the thread named a target this session cannot switch to. Tell the
-		// people in it, beyond the operator log above. Pass the bindings so the
-		// notice routes its NextStep by the refused slot's rebind policy.
-		p.publishSlotBindRefusedNotice(ctx, sess, bindings, err)
+		// people in it, beyond the operator log above.
+		p.publishSlotBindRefusedNotice(ctx, sess, err)
 		return
 	}
 	logger.Info("thread slot seeding: bound values a trusted author put in the thread",
@@ -277,35 +275,28 @@ func (p *Pipeline) seedThreadSlots(
 // different one — a fact that otherwise lived only in the operator log beside
 // each call site.
 //
-// Scoped to the pin ruling: errors.Is(err, authz.ErrSlotPinned) also covers the
-// multi-arrival "cannot hold N distinct instances at once" refusal, which wraps
-// the same sentinel. A transient SpiceDB failure is NOT a user-actionable
-// commitment and stays operator-only — the agent retries or asks, and announcing
-// an outage as a pin would be a lie.
+// Scoped to the pin RULINGS in err — authz.SlotPinRefusals, which also covers
+// the multi-arrival "cannot hold N distinct instances at once" refusal. A
+// transient SpiceDB fault is NOT a user-actionable commitment and stays
+// operator-only — the agent retries or asks, and announcing an outage as a pin
+// would be a lie. When both arrive in one call (one type refused, another
+// blipped), the refusal is still announced and only its own text is quoted: the
+// fault must neither suppress it nor leak its store detail into the notice.
 //
 // Best-effort: the grants this explains were advisory (a refused thread-seed or
 // trigger bind costs an approval, not the session), so a publish failure is
 // logged (no-silent-errors) and never propagated. Shared by both mint-time
-// paths — thread seed (above) and trigger bind (triggerslots.go).
-func (p *Pipeline) publishSlotBindRefusedNotice(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, bindings []authz.SlotBinding, err error) {
-	if err == nil || !errors.Is(err, authz.ErrSlotPinned) {
-		return
-	}
-	if errors.Is(err, authz.ErrSlotStore) {
-		// A transient store fault was errors.Join'd with the pin refusal (one type
-		// refused, another blipped against SpiceDB). The refusal text then carries
-		// raw endpoints and gRPC status, which is operator detail — not a
-		// user-actionable commitment. Stay operator-only, exactly as this notice
-		// already does for a bare transient failure; the agent retries or asks.
-		log.FromContext(ctx).Info("slot bind refused alongside a transient store fault; the user-facing notice is suppressed to avoid leaking store detail",
-			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
-		return
-	}
-	if p.NATS == nil {
+// paths — thread seed (above) and trigger bind (triggerslots.go). The caller
+// has already logged err in full.
+func (p *Pipeline) publishSlotBindRefusedNotice(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, err error) {
+	refusals := authz.SlotPinRefusals(err)
+	if len(refusals) == 0 || p.NATS == nil {
 		return
 	}
 	ref := channelevents.SessionRef{Namespace: sess.Namespace, Name: sess.Name}
-	if perr := slotBindRefusedNotice(err.Error(), authz.AllRebindNever(bindings)).Publish(p.NATS.Publish, ref, mintRequestID()); perr != nil {
+	// The route follows the REFUSED types' rebind policy only: a type that bound
+	// beside a refused rebind:never type must not reopen the amendment route.
+	if perr := slotBindRefusedNotice(authz.SlotRefusalText(refusals), authz.AllRebindNever(refusals)).Publish(p.NATS.Publish, ref, mintRequestID()); perr != nil {
 		log.FromContext(ctx).Info("slot bind refused: publishing the user-facing notice failed; the refusal remains in the operator log only",
 			"session", sess.Namespace+"/"+sess.Name, "err", perr.Error())
 	}

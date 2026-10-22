@@ -2378,10 +2378,18 @@ func (h *runnerHost) recordPlanGateDecision(
 		//
 		// A standing-lookup blip is a recoverable FAULT, not a pin refusal, so the
 		// "fault on our side, try once more" copy is the honest one here.
-		h.publishPlanGateApprovalFailed(ctx, err, approvalFault, false)
+		h.publishPlanGateApprovalFailed(ctx, err, discardedApprovalNotice())
 		return
 	}
 
+	// Every covered phase's bindings are resolved BEFORE any is written, so the
+	// approval can be judged as a whole (conflictingMoveTargets) and its outcome
+	// reported once (approvalOutcome) rather than once per phase.
+	type phaseBind struct {
+		rec      plangateaudit.Content
+		bindings []authz.SlotBinding
+	}
+	var phases []phaseBind
 	for _, rec := range approvedPhaseRecords(pg) {
 		rec.Event = plangateaudit.EventPhaseApproved
 		rec.PlanDigest = pg.planDigest
@@ -2413,20 +2421,53 @@ func (h *runnerHost) recordPlanGateDecision(
 			rec.SlotRefs = granted
 		}
 
+		// Resolved per record, from THIS record's own refs, so the bindings
+		// reflect both the DELEGABLE subset (a request the approver could not
+		// speak for is not bound to, because binding an instance nobody granted
+		// would deny the type outright) and THIS PHASE'S instance — a plan-scoped
+		// card can cover two phases that bind the same resource type to two
+		// different instances (clone from upstream/repo, push to fork/repo), and
+		// each must get its own grant, not just whichever phase raised the card.
+		phases = append(phases, phaseBind{rec: rec, bindings: h.approvedBindings(rec, pg, requested, granted, delegable)})
+	}
+
+	// A plan whose phases MOVE one single-occupancy pin to two different
+	// instances cannot be honored: bound phase by phase, the first move commits
+	// (revoking the prior instance) and the second then fails against the moved
+	// pin. Refuse the whole approval before anything is written or recorded, and
+	// say why — the card will be asked again and conflict again until the plan
+	// changes.
+	all := make([][]authz.SlotBinding, 0, len(phases))
+	for _, ph := range phases {
+		all = append(all, ph.bindings)
+	}
+	if conflict := conflictingMoveTargets(all); conflict != nil {
+		cause := fmt.Errorf("plan moves a single-occupancy slot to more than one instance: %v", conflict)
+		slog.Default().Info("plan_gate: refusing an approval whose phases move one pin to different instances; "+
+			"recording no approval and telling the approver",
+			"session", h.sess.Namespace+"/"+h.sess.Name,
+			"approver", approverIDOf(approver), "phase", pg.phaseIndex, "conflict", conflict)
+		h.publishPlanGateApprovalFailed(ctx, cause, moveConflictNotice(conflict))
+		return
+	}
+
+	var outcome approvalOutcome
+	for _, ph := range phases {
 		// Writes the instance-scoped SpiceDB grant that makes the approved
 		// instance the permitted one (a call against a DIFFERENT instance of
 		// the same type has no grant to succeed on) and records the matching
 		// session_scope entry alongside it — see narrowToApproved's doc comment
-		// for what each half currently does and does not enforce. Written per
-		// record, from THIS record's own refs, so it reflects both the
-		// DELEGABLE subset (a request the approver could not speak for is not
-		// bound to, because binding an instance nobody granted would deny the
-		// type outright) and THIS PHASE'S instance — a plan-scoped card can
-		// cover two phases that bind the same resource type to two different
-		// instances (clone from upstream/repo, push to fork/repo), and each
-		// must get its own grant, not just whichever phase raised the card.
-		h.narrowToApproved(ctx, rec, pg, requested, granted, delegable)
-		h.writePlanGateDecision(ctx, rec)
+		// for what each half currently does and does not enforce.
+		h.narrowToApproved(ctx, ph.rec, ph.bindings, &outcome)
+		h.writePlanGateDecision(ctx, ph.rec)
+	}
+	// ONE notice for the whole approval, true for every type it covered.
+	if n, ok := outcome.notice(); ok {
+		slog.Default().Info("plan_gate: an approved slot bind did not fully apply; telling the approver",
+			"session", h.sess.Namespace+"/"+h.sess.Name,
+			"committed", outcome.typesWith(slotMoveCommitted), "refused", outcome.typesWith(slotRefused),
+			"faulted", outcome.typesWith(slotFault), "err", outcome.cause().Error())
+		h.publishPlanGateApprovalFailed(ctx, outcome.cause(), n)
 	}
 }
 
@@ -2453,7 +2494,7 @@ func (h *runnerHost) recordPlanGateDecision(
 // narrower and still real: the instance-scoped grant is the thing a
 // different instance has none of.
 //
-// granted is THIS RECORD's own delegable slot requests — the instance each
+// bindings are THIS RECORD's own (approvedBindings) — the instance each
 // covered phase itself named, already filtered by what the approver may
 // speak for. Per record rather than per card because a plan-scoped card
 // covers several phases, and two of them can legitimately bind the SAME
@@ -2462,20 +2503,98 @@ func (h *runnerHost) recordPlanGateDecision(
 // phase raised the card and silently deny the others' already-approved
 // calls.
 //
-// requested is the same record's unfiltered set, carried only so the log
-// below can say what the human's yes was asked to cover against what it
-// actually bought.
-//
 // Best-effort by the same rule as the audit write — losing it must not take
 // down the turn — but never silent: an approval that grants nothing at all
 // is exactly the gap this change exists to close, so both a failure here and
 // a yes that bound nothing have to be findable in the log.
-func (h *runnerHost) narrowToApproved(
-	ctx context.Context, rec plangateaudit.Content, pg *pendingPlanGate, requested, granted []plangateaudit.SlotRef,
-	delegable map[plangateaudit.SlotRef]map[string]struct{},
-) {
-	if h.l.Mem == nil {
+//
+// The per-type outcome is folded into outcome rather than published here: a plan-scoped approval calls this once
+// per covered phase, and the approver gets one notice for the whole approval.
+func (h *runnerHost) narrowToApproved(ctx context.Context, rec plangateaudit.Content, bindings []authz.SlotBinding, outcome *approvalOutcome) {
+	if h.l.Mem == nil || len(bindings) == 0 {
 		return
+	}
+	scp := memory.Scope{Kind: "session", ID: h.l.SessionKey.Namespace + "/" + h.l.SessionKey.Name}
+	sess := authz.SessionRef{Namespace: h.l.SessionKey.Namespace, Name: h.l.SessionKey.Name}
+	// Loop carries no bare SessionExpiration field; the same wall-clock cap the
+	// JIT tool-approval path re-reads off the AgentSession status
+	// (pkg/channelsd/pipeline/tool_approval_interaction.go's sessionExpirationOf)
+	// is already resident here on Budget, loaded once at loop start
+	// (cmd/runner/main.go), so read it from there instead of a second fetch.
+	var sessionExpiration time.Duration
+	if h.l.Budget != nil {
+		sessionExpiration = h.l.Budget.cfg.SessionExpiration.Duration
+	}
+	// bindSlots reads session_scope through l.Mem directly (not over the
+	// bearer-token HTTP path), so it needs the same system approval every
+	// other direct l.Mem call in this file mints — see PlanGateRecords
+	// (pipeline_wiring.go) for the sibling read on the same "plan_gate"
+	// component.
+	writeCtx := memory.WithSystemApproval(ctx, "plan_gate")
+	// logr.FromContextOrDiscard, not logr.Discard: bindSlots' nil-writer branch
+	// returns SUCCESS having granted nothing, and says so only via
+	// logger.Info — discarding it would mean an approval can narrow scope with
+	// no grant written and no trace of why, on top of the error path already
+	// logged below.
+	// EnforcePreconditions, never waived: a plan-phase approval consents to the
+	// phase, not to the risk a slot precondition guards. Each binding carries its
+	// type's compiled Requires (via planGateBindings), so an instance the phase
+	// named whose gate is Refused is dropped here rather than bound — it stays
+	// unbound and escalates to the human waiver card at its next tool call, which
+	// is the one card that asks for risk consent. An instance with no precondition
+	// (the overwhelmingly common phase) binds exactly as it did before.
+	err := authz.BindApproved(writeCtx, h.l.Mem, scp, sess, h.l.SlotBinder, bindings,
+		authz.EnforcePreconditions,
+		authz.SlotGrantExpiry(time.Now(), sessionExpiration), logr.FromContextOrDiscard(ctx), time.Now)
+	if !outcome.record(bindings, err) {
+		// Not a per-type slot outcome: the bind failed before GrantSlots ran.
+		slog.Default().Info("plan_gate: the approval was recorded but did not narrow the session; "+
+			"the approved instance is permitted and others are not excluded",
+			"session", scp.ID, "bindings", len(bindings), "err", err.Error())
+		return
+	}
+	// Every type that bound — possibly by a MOVE — supersedes any recorded
+	// promotion refusal for it: a refusal that said "pinned to A" must not be
+	// appended to a later denial after an approved A→B move, where it would name
+	// a pin that no longer exists. A type that failed keeps its refusal.
+	h.l.clearSlotPinRefusals(boundResourceTypes(bindings, err))
+	// Mirror what SpiceDB now holds onto status.slotPins — display-only,
+	// best-effort, derived from a ReadPin per involved type rather than from
+	// `bindings` (which BindApproved may have partially dropped, or partially
+	// failed, and a committed move changed the pin even on error); see
+	// mirrorApprovedSlotPins' doc comment.
+	mirrorApprovedSlotPins(ctx, h.l.Status, h.l.SlotBinder, sess, rec, bindings, time.Now())
+}
+
+// boundResourceTypes is bindingResourceTypes minus every type err reports a
+// per-type failure for.
+func boundResourceTypes(bindings []authz.SlotBinding, err error) []string {
+	failed := map[string]struct{}{}
+	for _, f := range authz.SlotBindFailures(err) {
+		for _, rt := range f.ResourceTypes {
+			failed[rt] = struct{}{}
+		}
+	}
+	var out []string
+	for _, rt := range bindingResourceTypes(bindings) {
+		if _, ok := failed[rt]; !ok {
+			out = append(out, rt)
+		}
+	}
+	return out
+}
+
+// approvedBindings resolves one covered record into the slot bindings its
+// approval writes: THIS record's delegable refs, each paired with the
+// permissions the approver was verified for and the instance it resolves to.
+// Empty when the approval binds nothing (logged; the phase still runs and each
+// named instance escalates on its own).
+func (h *runnerHost) approvedBindings(
+	rec plangateaudit.Content, pg *pendingPlanGate, requested, granted []plangateaudit.SlotRef,
+	delegable map[plangateaudit.SlotRef]map[string]struct{},
+) []authz.SlotBinding {
+	if h.l.Mem == nil {
+		return nil
 	}
 	// The permissions the approver actually holds, keyed by type+id — what
 	// planGateBindings filters each binding against, so a permission the
@@ -2518,80 +2637,9 @@ func (h *runnerHost) narrowToApproved(
 				"phase", phaseIndexOf(rec), "phaseKey", rec.PhaseKey,
 				"requested", slotRefLabels(requested), "granted", slotRefLabels(granted))
 		}
-		return
+		return nil
 	}
-	scp := memory.Scope{Kind: "session", ID: h.l.SessionKey.Namespace + "/" + h.l.SessionKey.Name}
-	sess := authz.SessionRef{Namespace: h.l.SessionKey.Namespace, Name: h.l.SessionKey.Name}
-	// Loop carries no bare SessionExpiration field; the same wall-clock cap the
-	// JIT tool-approval path re-reads off the AgentSession status
-	// (pkg/channelsd/pipeline/tool_approval_interaction.go's sessionExpirationOf)
-	// is already resident here on Budget, loaded once at loop start
-	// (cmd/runner/main.go), so read it from there instead of a second fetch.
-	var sessionExpiration time.Duration
-	if h.l.Budget != nil {
-		sessionExpiration = h.l.Budget.cfg.SessionExpiration.Duration
-	}
-	// bindSlots reads session_scope through l.Mem directly (not over the
-	// bearer-token HTTP path), so it needs the same system approval every
-	// other direct l.Mem call in this file mints — see PlanGateRecords
-	// (pipeline_wiring.go) for the sibling read on the same "plan_gate"
-	// component.
-	writeCtx := memory.WithSystemApproval(ctx, "plan_gate")
-	// logr.FromContextOrDiscard, not logr.Discard: bindSlots' nil-writer branch
-	// returns SUCCESS having granted nothing, and says so only via
-	// logger.Info — discarding it would mean an approval can narrow scope with
-	// no grant written and no trace of why, on top of the error path already
-	// logged below.
-	// EnforcePreconditions, never waived: a plan-phase approval consents to the
-	// phase, not to the risk a slot precondition guards. Each binding carries its
-	// type's compiled Requires (via planGateBindings), so an instance the phase
-	// named whose gate is Refused is dropped here rather than bound — it stays
-	// unbound and escalates to the human waiver card at its next tool call, which
-	// is the one card that asks for risk consent. An instance with no precondition
-	// (the overwhelmingly common phase) binds exactly as it did before.
-	if err := authz.BindApproved(writeCtx, h.l.Mem, scp, sess, h.l.SlotBinder, bindings,
-		authz.EnforcePreconditions,
-		authz.SlotGrantExpiry(time.Now(), sessionExpiration), logr.FromContextOrDiscard(ctx), time.Now); err != nil {
-		if kind, ok := classifyApprovalBindFailure(err); ok {
-			// Three different facts the approver needs told apart:
-			//
-			//   - a MOVE committed and the new grant then failed: the displaced
-			//     instance's access is gone, so "nothing was granted" would hide
-			//     a revocation the approver just caused.
-			//   - a MOVE the card promised could not execute (its MUST_MATCH
-			//     failed: the pin drifted since the card was shown). Nothing
-			//     moved, and re-approving rebuilds the card from the current pin.
-			//     A fault, not a refusal.
-			//   - a plain pinned REFUSAL: a binding named a different instance of a
-			//     slot already pinned to another, with no approvable move (none
-			//     was shown, the slot is `rebind: never`, or the approval would
-			//     leave two instances in it). GrantSlots is per-type partitioned,
-			//     so OTHER types may well have bound, and re-approving changes
-			//     nothing.
-			slog.Default().Info("plan_gate: an approved slot bind did not fully apply; telling the approver",
-				"session", scp.ID, "bindings", len(bindings), "failure", kind.String(), "err", err.Error())
-			// A pinned refusal whose every refused binding is `rebind: never` can
-			// only be worked in a new session — no amendment moves it — so the
-			// notice must route there, not to a widening that would be refused
-			// every time. Same split channelsd makes.
-			h.publishPlanGateApprovalFailed(ctx, err, kind, authz.AllRebindNever(bindings))
-			return
-		}
-		slog.Default().Info("plan_gate: the approval was recorded but did not narrow the session; "+
-			"the approved instance is permitted and others are not excluded",
-			"session", scp.ID, "bindings", len(bindings), "err", err.Error())
-		return
-	}
-	// A successful approved bind — possibly a MOVE — supersedes any recorded
-	// promotion refusal for these types: a refusal that said "pinned to A" must
-	// not be appended to a later denial after an approved A→B move, where it
-	// would name a pin that no longer exists.
-	h.l.clearSlotPinRefusals(bindingResourceTypes(bindings))
-	// Mirror what SpiceDB now holds onto status.slotPins — display-only,
-	// best-effort, derived from a ReadPin per involved type rather than from
-	// `bindings` (which BindApproved may have partially dropped and still
-	// returned nil); see mirrorApprovedSlotPins' doc comment.
-	mirrorApprovedSlotPins(ctx, h.l.Status, h.l.SlotBinder, sess, rec, bindings, time.Now())
+	return bindings
 }
 
 // planGateSlotPreconditions returns the compiled precondition set per resource
