@@ -90,14 +90,29 @@ type channelManager struct {
 	// and paging the monitoring Channel each time) on every 5s reconcile tick.
 	// Nil disables pacing (struct-literal test managers).
 	restarts *flowcontrol.Backoff
+	// failedInputs records, per key, the listenerInputs the last failure ran
+	// with. A retry with different inputs — a rotated token, a spec edit, a
+	// Channel deleted and recreated under the same name — is a fresh attempt,
+	// not another round of the same failure, so it skips the backoff. Without
+	// this, the operator who fixed a revoked token would watch the Channel sit
+	// detached for up to listenerRestartMax and conclude the fix did not work.
+	// Its keys are also how reconcile finds failing Channels that have since
+	// vanished, since a Channel whose Start keeps failing is never in
+	// m.listeners.
+	failedInputs map[string]string
 }
 
 // Listener restart pacing: the first retry comes after ~listenerRestartInitial,
 // doubling up to listenerRestartMax. A Channel that goes 2*listenerRestartMax
-// without a failure starts over from the initial delay (flowcontrol's expiry).
+// without a failure starts over from the initial delay (flowcontrol's expiry),
+// and so does one whose transport stayed up for listenerHealthyAfter before it
+// was lost: that is a new outage, not the same one flapping. Resetting at Start
+// instead would defeat the backoff for a token that authenticates and is then
+// rejected moments later.
 const (
 	listenerRestartInitial = 5 * time.Second
 	listenerRestartMax     = 5 * time.Minute
+	listenerHealthyAfter   = time.Minute
 )
 
 // wiringSet is a bitmask of the optional, late-wired collaborators a listener
@@ -342,6 +357,9 @@ func (m *channelManager) reconcile(ctx context.Context, logger logr.Logger) {
 				m.patchConnected(ctx, ch, false, spiceboxv1alpha1.ReasonChannelSocketDetached, "Channel no longer Valid")
 			}
 			m.stopListener(logger, key)
+			// Whatever failed before the detach says nothing about the Channel
+			// that comes back Valid; it gets a prompt first attempt.
+			m.clearRestartBackoff(key)
 			continue
 		}
 		// An invalid-but-viable Channel falls through to startListener on
@@ -370,7 +388,9 @@ func (m *channelManager) reconcile(ctx context.Context, logger logr.Logger) {
 		m.reconcileBento(ctx, key, ch)
 		m.refreshListenerScopes(ctx, key, ch)
 	}
-	// Stop listeners for Channels that no longer exist.
+	// Stop listeners for Channels that no longer exist, and drop the restart
+	// backoff of any that were failing — including ones whose Start never
+	// succeeded, which are in failedInputs but not m.listeners.
 	m.mu.Lock()
 	var gone []string
 	for k := range m.listeners {
@@ -378,9 +398,15 @@ func (m *channelManager) reconcile(ctx context.Context, logger logr.Logger) {
 			gone = append(gone, k)
 		}
 	}
+	for k := range m.failedInputs {
+		if !seen[k] && m.listeners[k] == nil {
+			gone = append(gone, k)
+		}
+	}
 	m.mu.Unlock()
 	for _, k := range gone {
 		m.stopListener(logger, k)
+		m.clearRestartBackoff(k)
 	}
 }
 
@@ -394,17 +420,9 @@ func (m *channelManager) startListener(ctx context.Context, key string, ch *spic
 	if exists && !isClosed(done) {
 		return // already running
 	}
-	if m.inRestartBackoff(key) {
-		// A dead listener stays registered until its backoff elapses. That is
-		// harmless — its context is cancelled — and keeps "dead, waiting to
-		// retry" distinct from "never started".
-		return
-	}
-	if exists {
-		logger.Info("restarting listener whose transport was lost", "channel", key)
-		m.stopListener(logger, key)
-	}
 
+	// Resolved before the backoff check, not after: whether the Secret changed
+	// since the last failure is what decides if the backoff still applies.
 	sec, k, err := resolve.ForChannel(ctx, m.cli, ch)
 	if err != nil {
 		logger.Error(err, "resolve channel", "channel", key)
@@ -418,6 +436,17 @@ func (m *channelManager) startListener(ctx context.Context, key string, ch *spic
 		logger.Info("listener skipped: client-hosted kind", "channel", key, "kind", k.Name())
 		return
 	}
+	inputs := listenerInputs(ch, sec)
+	if m.inRestartBackoff(key, inputs) {
+		// A dead listener stays registered until its backoff elapses. That is
+		// harmless — its context is cancelled — and keeps "dead, waiting to
+		// retry" distinct from "never started".
+		return
+	}
+	if exists {
+		logger.Info("restarting listener whose transport was lost", "channel", key)
+		m.stopListener(logger, key)
+	}
 	// Build the Deps and record which optional collaborators they carried in
 	// ONE critical section, so the recorded set is exactly what the listener
 	// got. Reading them separately would let a Set* land between the two and
@@ -429,13 +458,14 @@ func (m *channelManager) startListener(ctx context.Context, key string, ch *spic
 	m.mu.Unlock()
 
 	listenerCtx, cancel := context.WithCancel(ctx)
+	attempt := listenerAttempt{key: key, inputs: inputs, at: m.now()}
 	deps.TransportLost = func(err error) {
-		m.transportLost(ctx, listenerCtx, cancel, key, ch, err)
+		m.transportLost(ctx, listenerCtx, cancel, attempt, ch, err)
 	}
 	listener := k.NewListener(deps)
 	if err := listener.Start(listenerCtx); err != nil {
 		cancel()
-		retry := m.noteListenerFailure(key)
+		retry := m.noteListenerFailure(key, inputs)
 		logger.Error(err, "start listener", "channel", key, "retryIn", retry.String())
 		m.patchConnected(ctx, ch, false, spiceboxv1alpha1.ReasonChannelListenerStartFailed, err.Error())
 		return
@@ -473,11 +503,15 @@ func (m *channelManager) startListener(ctx context.Context, key string, ch *spic
 // before startListener has registered the listener, and the closed Done
 // channel is what tells a later tick to replace it, once the restart backoff
 // allows.
-func (m *channelManager) transportLost(ctx, listenerCtx context.Context, cancel context.CancelFunc, key string, ch *spiceboxv1alpha1.Channel, err error) {
+func (m *channelManager) transportLost(ctx, listenerCtx context.Context, cancel context.CancelFunc, attempt listenerAttempt, ch *spiceboxv1alpha1.Channel, err error) {
 	if listenerCtx.Err() != nil {
 		return // already stopped or shutting down; not a loss
 	}
-	retry := m.noteListenerFailure(key)
+	key := attempt.key
+	if m.restarts != nil && m.now().Sub(attempt.at) >= listenerHealthyAfter {
+		m.restarts.Reset(key) // it was healthy; this is a new outage
+	}
+	retry := m.noteListenerFailure(key, attempt.inputs)
 	log.FromContext(ctx).WithName("channelmanager").Info("listener transport lost; restarting after backoff",
 		"channel", key, "err", err.Error(), "retryIn", retry.String())
 	m.patchConnected(ctx, ch, false, spiceboxv1alpha1.ReasonChannelTransportLost,
@@ -485,20 +519,74 @@ func (m *channelManager) transportLost(ctx, listenerCtx context.Context, cancel 
 	cancel()
 }
 
+// listenerAttempt is what transportLost needs to know about the start it is
+// reporting on.
+type listenerAttempt struct {
+	key    string
+	inputs string    // listenerInputs at start
+	at     time.Time // when the start was attempted
+}
+
+// listenerInputs fingerprints what a listener is built from: the Channel's
+// identity and spec, and its credentials Secret's content. Any of them
+// changing means a previous failure no longer predicts the next attempt.
+func listenerInputs(ch *spiceboxv1alpha1.Channel, sec *corev1.Secret) string {
+	secretRV := ""
+	if sec != nil {
+		secretRV = sec.ResourceVersion
+	}
+	return fmt.Sprintf("%s/%d/%s", ch.UID, ch.Generation, secretRV)
+}
+
+func (m *channelManager) now() time.Time {
+	if m.restarts == nil {
+		return time.Now()
+	}
+	return m.restarts.Clock.Now()
+}
+
 // noteListenerFailure records a failed start or a lost transport for key and
 // returns how long until the next attempt is allowed.
-func (m *channelManager) noteListenerFailure(key string) time.Duration {
+func (m *channelManager) noteListenerFailure(key, inputs string) time.Duration {
 	if m.restarts == nil {
 		return 0
 	}
-	m.restarts.Next(key, m.restarts.Clock.Now())
+	m.mu.Lock()
+	if m.failedInputs == nil {
+		m.failedInputs = map[string]string{}
+	}
+	m.failedInputs[key] = inputs
+	m.mu.Unlock()
+	m.restarts.Next(key, m.now())
 	return m.restarts.Get(key)
 }
 
-// inRestartBackoff reports whether key failed recently enough that a restart
-// must wait.
-func (m *channelManager) inRestartBackoff(key string) bool {
-	return m.restarts != nil && m.restarts.IsInBackOffSinceUpdate(key, m.restarts.Clock.Now())
+// inRestartBackoff reports whether key failed recently enough, with these same
+// inputs, that a restart must wait. A change of inputs clears the backoff.
+func (m *channelManager) inRestartBackoff(key, inputs string) bool {
+	if m.restarts == nil {
+		return false
+	}
+	m.mu.Lock()
+	failedWith, failed := m.failedInputs[key]
+	m.mu.Unlock()
+	if failed && failedWith != inputs {
+		m.clearRestartBackoff(key)
+		return false
+	}
+	return m.restarts.IsInBackOffSinceUpdate(key, m.now())
+}
+
+// clearRestartBackoff forgets key's failure history, so its next attempt runs
+// immediately and a later failure starts again from listenerRestartInitial.
+func (m *channelManager) clearRestartBackoff(key string) {
+	if m.restarts == nil {
+		return
+	}
+	m.mu.Lock()
+	delete(m.failedInputs, key)
+	m.mu.Unlock()
+	m.restarts.Reset(key)
 }
 
 func isClosed(ch <-chan struct{}) bool {

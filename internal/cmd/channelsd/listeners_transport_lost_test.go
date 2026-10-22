@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/flowcontrol"
 	clocktesting "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
@@ -215,4 +216,88 @@ func TestTransportLostAfterStopIsIgnored(t *testing.T) {
 
 	assert.Equal(t, metav1.ConditionTrue, connected().Status,
 		"a transport that dies because channelsd stopped it is not a loss")
+}
+
+func withFakeBackoff(m *channelManager) *clocktesting.FakeClock {
+	clk := clocktesting.NewFakeClock(time.Now())
+	m.restarts = flowcontrol.NewFakeBackOff(listenerRestartInitial, listenerRestartMax, clk)
+	return clk
+}
+
+// TestRestartBackoffSkippedWhenInputsChange pins that fixing what failed — here
+// a rotated credentials Secret — gets an immediate retry rather than waiting
+// out a backoff earned by the old inputs.
+func TestRestartBackoffSkippedWhenInputsChange(t *testing.T) {
+	m, ch, connected := newLostManager(t)
+	withFakeBackoff(m)
+	ctx := context.Background()
+	lostListenerHook = func(channelkinds.Deps) error { return errors.New("auth.test: invalid_auth") }
+
+	m.startListener(ctx, lostKey, ch)
+	built := lostListenerCount()
+	m.startListener(ctx, lostKey, ch)
+	require.Equal(t, built, lostListenerCount(), "precondition: same inputs wait out the backoff")
+
+	var sec corev1.Secret
+	require.NoError(t, m.cli.Get(ctx, client.ObjectKey{Namespace: "demo-ns", Name: "demo-creds"}, &sec))
+	sec.Data = map[string][]byte{"token": []byte("rotated")}
+	require.NoError(t, m.cli.Update(ctx, &sec))
+	lostListenerHook = nil
+
+	m.startListener(ctx, lostKey, ch)
+	assert.Equal(t, built+1, lostListenerCount(), "a changed Secret retries inside the old window")
+	assert.Equal(t, metav1.ConditionTrue, connected().Status)
+}
+
+// TestRestartBackoffResetsAfterHealthyRun pins that a loss after a healthy run
+// starts over at the initial delay instead of inheriting an earlier outage's.
+func TestRestartBackoffResetsAfterHealthyRun(t *testing.T) {
+	m, ch, connected := newLostManager(t)
+	clk := withFakeBackoff(m)
+	ctx := context.Background()
+
+	m.startListener(ctx, lostKey, ch)
+	lastLostListener(t).deps.TransportLost(errors.New("invalid_auth"))
+	clk.Step(listenerRestartInitial)
+	m.startListener(ctx, lostKey, ch)
+	lastLostListener(t).deps.TransportLost(errors.New("invalid_auth"))
+	require.Contains(t, connected().Message, "in about 10s", "precondition: a quick second loss doubles the window")
+
+	clk.Step(2 * listenerRestartInitial)
+	m.startListener(ctx, lostKey, ch)
+	require.Equal(t, metav1.ConditionTrue, connected().Status)
+	clk.Step(listenerHealthyAfter)
+	lastLostListener(t).deps.TransportLost(errors.New("token_revoked"))
+	assert.Contains(t, connected().Message, "in about 5s", "a loss after a healthy run is a new outage")
+}
+
+// TestRestartBackoffClearedWhenChannelDetaches pins that a Channel which stops
+// being served — deleted, or detached as invalid — loses its failure history,
+// so the Channel that comes back attaches on the next tick. Both cases use a
+// Start that never succeeded, which is never in m.listeners.
+func TestRestartBackoffClearedWhenChannelDetaches(t *testing.T) {
+	for name, detach := range map[string]func(context.Context, client.Client) error{
+		"Channel deleted: backoff cleared": func(ctx context.Context, c client.Client) error {
+			return c.Delete(ctx, &spiceboxv1alpha1.Channel{ObjectMeta: metav1.ObjectMeta{Namespace: "demo-ns", Name: "demo-channel"}})
+		},
+		"credentials Secret deleted, Channel detached as invalid: backoff cleared": func(ctx context.Context, c client.Client) error {
+			return c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "demo-ns", Name: "demo-creds"}})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, ch, _ := newLostManager(t)
+			clk := withFakeBackoff(m)
+			ctx := context.Background()
+			lostListenerHook = func(channelkinds.Deps) error { return errors.New("auth.test: invalid_auth") }
+
+			m.startListener(ctx, lostKey, ch)
+			require.True(t, m.restarts.IsInBackOffSinceUpdate(lostKey, clk.Now()), "precondition: the failed Start is backing off")
+
+			require.NoError(t, detach(ctx, m.cli))
+			m.reconcile(ctx, logr.Discard())
+
+			assert.False(t, m.restarts.IsInBackOffSinceUpdate(lostKey, clk.Now()))
+			assert.Empty(t, m.failedInputs)
+		})
+	}
 }
