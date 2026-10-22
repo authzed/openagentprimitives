@@ -594,10 +594,35 @@ func (l *slackListener) run(ctx context.Context) {
 		}
 	}()
 
-	// RunContext blocks and handles reconnection internally.
-	// We ignore the error — on ctx.Done() it returns a context error, which
-	// is expected. Genuine disconnects are reconnected by socketmode internally.
-	_ = l.src.RunContext(ctx)
+	// RunContext blocks and handles transient disconnects internally. It
+	// returns for good only on shutdown (ctx cancelled) or on an error it
+	// deems fatal — invalid_auth, token_revoked, account_inactive, not_authed,
+	// or a 404 from apps.connections.open — and emits NO socketmode event for
+	// most of those. Slack can answer that way transiently while degraded, so
+	// the return value is the only signal: discarding it once left a listener
+	// registered, Connected=True, and deaf until channelsd was restarted.
+	err := l.src.RunContext(ctx)
+	if ctx.Err() != nil || l.stopped() {
+		return
+	}
+	if err == nil {
+		err = fmt.Errorf("socket mode loop exited without an error")
+	}
+	log.FromContext(ctx).Info("slack listener: socket mode connection lost and not reconnecting",
+		"channel", l.deps.Channel.Namespace+"/"+l.deps.Channel.Name, "err", err.Error())
+	if l.deps.TransportLost != nil {
+		l.deps.TransportLost(fmt.Errorf("slack socket mode: %w", err))
+	}
+}
+
+// stopped reports whether Stop has been called.
+func (l *slackListener) stopped() bool {
+	select {
+	case <-l.stop:
+		return true
+	default:
+		return false
+	}
 }
 
 // handle dispatches a single socketmode event.
