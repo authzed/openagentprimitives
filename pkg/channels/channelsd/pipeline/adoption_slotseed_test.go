@@ -166,9 +166,9 @@ func TestMint_sweepsStaleSlotTuplesBeforeBinding(t *testing.T) {
 	deliverAdoptionMention(t, p, ch)
 
 	assert.Equal(t, 1, az.deleteSlotGrantsCalls, "the mint must sweep exactly once before binding")
-	require.GreaterOrEqual(t, len(az.slotCallOrder), 2, "both the sweep and the bind must have run")
-	assert.Equal(t, "sweep", az.slotCallOrder[0], "the sweep must run BEFORE the first bind")
-	assert.Equal(t, "grant", az.slotCallOrder[1], "the bind follows the sweep")
+	require.GreaterOrEqual(t, len(az.slotCallOrder), 3, "both sweeps and the bind must have run")
+	assert.Equal(t, []string{"sweep", "dataSweep", "grant"}, az.slotCallOrder[:3],
+		"the slot and data-slot sweeps must run BEFORE the first bind")
 
 	require.Len(t, az.grantedSlots, 1, "the stale binding was swept; only the fresh thread-seed bind survives")
 	assert.Equal(t, seededID(t, "https://ci.example/job/7"), az.grantedSlots[0].ResourceID,

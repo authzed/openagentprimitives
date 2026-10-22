@@ -9,12 +9,15 @@ package spicedb
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/authzed/openagentprimitives/pkg/authz"
 )
@@ -86,7 +89,7 @@ func TestCopySlotTuples_WritesEveryRelationAsOneBatchedTouch(t *testing.T) {
 			SubjectType: "agentsession", SubjectID: "ns/child", ExpiresAt: exp},
 	}
 
-	require.NoError(t, c.CopySlotTuples(context.Background(), rels))
+	require.NoError(t, c.CopySlotTuples(context.Background(), authz.SessionRef{Namespace: "ns", Name: "child"}, rels, nil))
 
 	writes := srv.recordedWrites()
 	require.Len(t, writes, 1, "every relation copies in ONE batched RPC")
@@ -178,4 +181,87 @@ func TestDeleteSlotGrants_PinOnlyStillDeletes(t *testing.T) {
 		}
 	}
 	assert.True(t, sawPinDelete, "an orphaned pin with no live grant must still be deleted")
+}
+
+// TestCopySlotTuples_GuardsEveryCopiedTypeOnTheChildBeingUnpinned: the fork
+// copy re-runs on every ReconcileRestart pass while the child's runner may be
+// live, so each copied type must ride a MUST_NOT_MATCH on the CHILD holding any
+// pin of that type — the same any-instance filter EnsurePin first-fills under —
+// in the same RPC as the TOUCH.
+func TestCopySlotTuples_GuardsEveryCopiedTypeOnTheChildBeingUnpinned(t *testing.T) {
+	cl, srv := newRecordingWriterClient(t)
+	c := &Client{cl: cl}
+	child := authz.SessionRef{Namespace: "ns", Name: "child"}
+	rels := []authz.Relation{authz.SlotPinRelation("git_repo", "acme/app", child)}
+
+	require.NoError(t, c.CopySlotTuples(context.Background(), child, rels, []string{"git_repo", "crm_company"}))
+
+	writes := srv.recordedWrites()
+	require.Len(t, writes, 1)
+	pre := writes[0].GetOptionalPreconditions()
+	require.Len(t, pre, 2, "one precondition per copied type")
+	var guarded []string
+	for _, p := range pre {
+		assert.Equal(t, v1.Precondition_OPERATION_MUST_NOT_MATCH, p.GetOperation())
+		f := p.GetFilter()
+		assert.Empty(t, f.GetOptionalResourceId(), "any instance of the type, not just the copied one")
+		assert.Equal(t, authz.SlotPinRelationName, f.GetOptionalRelation())
+		assert.Equal(t, "agentsession", f.GetOptionalSubjectFilter().GetSubjectType())
+		assert.Equal(t, child.String(), f.GetOptionalSubjectFilter().GetOptionalSubjectId(),
+			"the guard is on the CHILD's pin, not the parent's")
+		guarded = append(guarded, f.GetResourceType())
+	}
+	assert.ElementsMatch(t, []string{"git_repo", "crm_company"}, guarded)
+}
+
+// TestCopySlotTuples_ChildPinnedConcurrentlyWrapsErrSlotPinned: a precondition
+// failure means the child committed a pin of a copied type after the caller
+// read the child's pins; it must surface as ErrSlotPinned so the next pass
+// re-reads and skips that type, and anything else stays a plain error.
+func TestCopySlotTuples_ChildPinnedConcurrentlyWrapsErrSlotPinned(t *testing.T) {
+	child := authz.SessionRef{Namespace: "ns", Name: "child"}
+	rels := []authz.Relation{authz.SlotPinRelation("git_repo", "acme/app", child)}
+	cases := []struct {
+		name       string
+		writeErr   error
+		wantPinned bool
+	}{
+		{name: "precondition failure: wraps ErrSlotPinned", writeErr: status.Error(codes.FailedPrecondition, "pinned"), wantPinned: true},
+		{name: "backend failure: plain error, not ErrSlotPinned", writeErr: status.Error(codes.Unavailable, "down"), wantPinned: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cl, srv := newRecordingWriterClient(t)
+			c := &Client{cl: cl}
+			srv.writeErr = tc.writeErr
+
+			err := c.CopySlotTuples(context.Background(), child, rels, []string{"git_repo"})
+			require.Error(t, err)
+			assert.Equal(t, tc.wantPinned, errors.Is(err, authz.ErrSlotPinned))
+		})
+	}
+}
+
+// TestDeleteSlotGrants_DeletesPinsBeforeListingAndRevokingGrants: once the pin
+// is gone, every racing WriteGrantsPinned fails its MUST_MATCH, so the grant
+// list read AFTER the pin delete is final. Revoking grants first left a window
+// for a pinned write to land unlisted and outlive the teardown.
+func TestDeleteSlotGrants_DeletesPinsBeforeListingAndRevokingGrants(t *testing.T) {
+	cl, srv := newRecordingWriterClient(t)
+	c := &Client{cl: cl}
+	scope := authz.SessionRef{Namespace: "ns", Name: "s"}
+	srv.readRels = []*v1.Relationship{
+		grantTuple("crm_company", "acme", "contact_access", scope),
+		pinTuple("git_repo", "acme/app", scope),
+	}
+
+	require.NoError(t, c.DeleteSlotGrants(context.Background(), "ns", "s"))
+
+	writes := srv.recordedWrites()
+	require.Len(t, writes, 2, "one pin delete, then one grant revoke")
+	require.Len(t, writes[0].Updates, 1)
+	assert.Equal(t, authz.SlotPinRelationName, writes[0].Updates[0].Relationship.GetRelation(),
+		"the pin delete must come first")
+	require.Len(t, writes[1].Updates, 1)
+	assert.Equal(t, "slot_grant_contact_access", writes[1].Updates[0].Relationship.GetRelation())
 }

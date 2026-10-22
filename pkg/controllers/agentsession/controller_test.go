@@ -1527,12 +1527,14 @@ func TestFinalize_DeletesSpiceDBRelationships(t *testing.T) {
 	// `granted_to` is not a `slot_grant_<perm>` relation (so the slot sweep
 	// drops it client-side). Without this call a child that was handed data
 	// keeps `access` on those tags for as long as the retained CR exists.
-	assert.Equal(t, 1, deleter.dataSlotsCalls, "finalize must also collect the session's data slot grants")
+	// Two, like slot grants: the admission sweep removes a dead predecessor's
+	// data-slot grants under this name too.
+	assert.Equal(t, 2, deleter.dataSlotsCalls, "the admission sweep and finalize must each collect the session's data slot grants")
 	assert.Equal(t, "default", deleter.dataSlotsNS, "DeleteDataSlotGrants called with namespace")
 	assert.Equal(t, "sess-spicedb", deleter.dataSlotsName, "DeleteDataSlotGrants called with name")
 
-	assert.Equal(t, []string{"slots", "slots", "dataSlots", "session"}, deleter.order,
-		"the admission sweep's slot-grant call lands first (during bootstrap); at finalize, grants that sit on "+
+	assert.Equal(t, []string{"slots", "dataSlots", "slots", "dataSlots", "session"}, deleter.order,
+		"the admission sweep's slot + data-slot calls land first (during bootstrap); at finalize, grants that sit on "+
 			"OTHER objects still go first — authority then data — because they are the half that outlives the session")
 
 	// Finalizer should be removed.
@@ -1580,6 +1582,9 @@ func TestReconcile_AdmissionSweepsStaleSlotTuples(t *testing.T) {
 	assert.Equal(t, 1, deleter.slotGrantsCalls, "the admission sweep must call DeleteSlotGrants exactly once")
 	assert.Equal(t, sess.Namespace, deleter.slotGrantsNS)
 	assert.Equal(t, sess.Name, deleter.slotGrantsName)
+	assert.Equal(t, 1, deleter.dataSlotsCalls,
+		"the admission sweep must also remove data-slot grants — they are keyed by (ns, name) like slot grants")
+	assert.Equal(t, sess.Name, deleter.dataSlotsName)
 	assert.False(t, deleter.hasStaleSlotTuples(sess.Namespace, sess.Name),
 		"the stale slot_pin/slot_grant_* tuples must be gone after admission")
 
@@ -1703,6 +1708,43 @@ func TestReconcile_AdmissionSweepSparesAForkChildsCopiedTuples(t *testing.T) {
 		"the admission sweep must not run for a fork child — it would wipe the authority the parent's restart just copied")
 	assert.True(t, deleter.hasStaleSlotTuples(child.Namespace, child.Name),
 		"the copied grant+pin tuples must survive the child's first reconcile")
+}
+
+// TestReconcile_AdmissionSweepRunsForATakeoverChild: a takeover copies no slot
+// grants, so BuildChildSession does not pre-stamp its finalizer and the child
+// takes the ordinary admission sweep. Takeover is the mode where a DIFFERENT
+// user inherits the name, so a dead predecessor's pin and grants under that
+// deterministic name must not survive into it.
+func TestReconcile_AdmissionSweepRunsForATakeoverChild(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+
+	deleter := &fakeSpiceDBDeleter{}
+	r := newReconciler(t, env)
+	r.SpiceDBDeleter = deleter
+
+	ac := validClass("ac-takeover-sweep")
+	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass")
+	markValid(t, env, ac)
+
+	parent := validSession("sess-takeover-sweep-parent", "ac-takeover-sweep")
+	child := agentsession.BuildChildSession(parent, &spiceboxv1alpha1.PendingRestart{
+		Mode:              spiceboxv1alpha1.PendingRestartModeTakeover,
+		NewUserText:       "taking over",
+		TargetSessionName: "sess-takeover-sweep-child",
+	})
+	require.NotContains(t, child.Finalizers, spiceboxv1alpha1.FinalizerAgentSession,
+		"fixture sanity: a takeover child is not pre-stamped")
+	require.NoError(t, env.Client.Create(ctx, child), "create takeover-child AgentSession")
+	deleter.seedStaleSlotTuples(child.Namespace, child.Name)
+
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(child)})
+	require.NoError(t, err, "Reconcile (admission)")
+
+	assert.Equal(t, 1, deleter.slotGrantsCalls, "a takeover child must take the admission sweep")
+	assert.Equal(t, 1, deleter.dataSlotsCalls, "including its data-slot grants")
+	assert.False(t, deleter.hasStaleSlotTuples(child.Namespace, child.Name),
+		"a predecessor's tuples under the takeover child's name must be gone")
 }
 
 // TestReconcile_AdmissionSweepSkippedWhenFinalizerPreStamped: a channelsd mint

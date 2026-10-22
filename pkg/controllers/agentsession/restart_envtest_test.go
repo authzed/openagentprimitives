@@ -484,11 +484,20 @@ func (c *recordingSlotCopier) ListSlotGrants(_ context.Context, _, _ string) ([]
 	return c.held, nil
 }
 
-func (c *recordingSlotCopier) ListSlotPins(_ context.Context, _, _ string) ([]authz.Relation, error) {
-	return c.pins, nil
+// ListSlotPins returns the pins naming ns/name as their subject: CopySlotGrants
+// reads the CHILD's pins too, and a fake that answered the parent's pins for
+// every session would make the child look already pinned.
+func (c *recordingSlotCopier) ListSlotPins(_ context.Context, ns, name string) ([]authz.Relation, error) {
+	var out []authz.Relation
+	for _, p := range c.pins {
+		if p.SubjectID == ns+"/"+name {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
-func (c *recordingSlotCopier) CopySlotTuples(_ context.Context, rels []authz.Relation) error {
+func (c *recordingSlotCopier) CopySlotTuples(_ context.Context, _ authz.SessionRef, rels []authz.Relation, _ []string) error {
 	c.copied = append(c.copied, rels...)
 	return nil
 }
@@ -646,11 +655,36 @@ func TestEnvtest_Inherit_CarriesSlotGrantsToTheChild(t *testing.T) {
 		ForkNoticePublish: func(_ context.Context, _, _, _, _ string) error { return nil },
 	}
 
+	// A dead predecessor's tuples under the child's deterministic name.
+	deleter := &fakeSpiceDBDeleter{}
+	deleter.seedStaleSlotTuples(ns, "parent-inherit-slots-child")
+	r.SpiceDBDeleter = deleter
+
+	// Captured before the first pass so the re-run below still carries the
+	// PendingRestart marker and walks the full path to the child lookup.
+	rerun := parent.DeepCopy()
+
 	_, _, err := r.ReconcileRestart(ctx, parent)
 	require.NoError(t, err)
 
+	assert.Equal(t, 1, deleter.slotGrantsCalls, "the child's name must be swept before the child is created")
+	assert.Equal(t, "parent-inherit-slots-child", deleter.slotGrantsName)
+	assert.Equal(t, 1, deleter.dataSlotsCalls, "the pre-create sweep covers data-slot grants too")
+	assert.False(t, deleter.hasStaleSlotTuples(ns, "parent-inherit-slots-child"),
+		"a reused fork name must not hand the child a predecessor's pin")
 	require.Len(t, copier.copied, len(copier.held),
 		"the same-owner continuation must receive the parent's bound instances")
+
+	// A re-run finds the child and must NOT sweep it: the child is live by now
+	// and its tuples (the copy above, and anything its runner bound) are its own.
+	copier.copied = nil
+	if _, _, rerr := r.ReconcileRestart(ctx, rerun); rerr != nil {
+		// The stale copy may lose a later status write; only the sweep count is
+		// under test here.
+		t.Logf("re-run ReconcileRestart: %v", rerr)
+	}
+	assert.Equal(t, 1, deleter.slotGrantsCalls, "a re-run must never sweep a live child")
+	assert.NotEmpty(t, copier.copied, "fixture sanity: the re-run reached step 6c, past the child lookup")
 	childScope := authz.SessionRef{Namespace: ns, Name: "parent-inherit-slots-child"}
 	for _, rel := range copier.copied {
 		assert.Equal(t, childScope.String(), rel.SubjectID, "a copied grant must be re-pointed at the child")

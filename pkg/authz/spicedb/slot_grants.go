@@ -9,6 +9,8 @@ import (
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/authzed/openagentprimitives/pkg/authz"
@@ -158,11 +160,43 @@ func (c *Client) ListSlotPins(ctx context.Context, ns, name string) ([]authz.Rel
 // re-targeted every relation's SubjectID at the child and, for a grant,
 // stamped the child's expiry; a pin tuple carries none, exactly as EnsurePin
 // writes it, so this never adds one.
-func (c *Client) CopySlotTuples(ctx context.Context, rels []authz.Relation) error {
-	if err := c.Relations().WriteRelationships(ctx, rels); err != nil {
-		return fmt.Errorf("copy slot tuples: %w", err)
+//
+// For every type in unpinnedTypes the RPC carries a MUST_NOT_MATCH
+// precondition that child holds no slot_pin of that type — the same
+// any-instance filter EnsurePin guards its first-fill with. SpiceDB evaluates
+// the preconditions and the TOUCH atomically, so a pin the child's own runner
+// committed after CopySlotGrants read the child's pins refuses the whole copy
+// rather than landing a second pin beside it (which ReadPin would then fail
+// closed on forever). A refusal wraps authz.ErrSlotPinned.
+func (c *Client) CopySlotTuples(ctx context.Context, child authz.SessionRef, rels []authz.Relation, unpinnedTypes []string) error {
+	if len(rels) == 0 {
+		return nil
 	}
-	return nil
+	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
+	for _, r := range rels {
+		updates = append(updates, &v1.RelationshipUpdate{
+			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
+			Relationship: relationshipFor(r),
+		})
+	}
+	preconditions := make([]*v1.Precondition, 0, len(unpinnedTypes))
+	for _, t := range unpinnedTypes {
+		preconditions = append(preconditions, &v1.Precondition{
+			Operation: v1.Precondition_OPERATION_MUST_NOT_MATCH,
+			Filter:    pinFilter(t, "", child),
+		})
+	}
+	_, err := c.cl.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{
+		Updates:               updates,
+		OptionalPreconditions: preconditions,
+	})
+	if err == nil {
+		return nil
+	}
+	if status.Code(err) == codes.FailedPrecondition {
+		return fmt.Errorf("copy slot tuples to %s: the child pinned a copied type concurrently: %w", child, authz.ErrSlotPinned)
+	}
+	return fmt.Errorf("copy slot tuples to %s: %w", child, err)
 }
 
 // DeleteSlotGrants removes every slot grant AND pin held by this session.
@@ -189,6 +223,15 @@ func (c *Client) CopySlotTuples(ctx context.Context, rels []authz.Relation) erro
 // builder call at all. Both failures are returned, never swallowed — a
 // dropped pin delete is the permanent leak above.
 //
+// PINS FIRST, then grants are listed and revoked. A single-occupancy grant is
+// written by WriteGrantsPinned under a MUST_MATCH precondition on the pin, so
+// once the pin is gone every racing pinned write fails instead of landing.
+// Listing the grants only AFTER that delete means the grant read sees every
+// pinned write that could still succeed. Revoking grants first (as this once
+// did) left a window in which a pinned write landed after the grant list was
+// read and before the pin was deleted — an orphaned grant that outlived the
+// teardown until it expired.
+//
 // Idempotent: succeeds when the session holds no grants or pins.
 func (c *Client) DeleteSlotGrants(ctx context.Context, ns, name string) error {
 	// Listed then deleted, rather than swept by one filter. A subject-only
@@ -196,25 +239,22 @@ func (c *Client) DeleteSlotGrants(ctx context.Context, ns, name string) error {
 	// per-permission relation names cannot be expressed as one server-side
 	// filter — so the read is what identifies the slot grants and pins, and the
 	// delete names exactly those.
-	held, err := c.ListSlotGrants(ctx, ns, name)
-	if err != nil {
-		return fmt.Errorf("delete slot grants %s/%s: %w", ns, name, err)
-	}
 	pins, err := c.ListSlotPins(ctx, ns, name)
 	if err != nil {
 		return fmt.Errorf("delete slot grants %s/%s: list pins: %w", ns, name, err)
 	}
-	if len(held) == 0 && len(pins) == 0 {
-		return nil
+	if len(pins) > 0 {
+		if err := c.Relations().DeleteRelationships(ctx, pins); err != nil {
+			return fmt.Errorf("delete slot grants %s/%s: delete pins: %w", ns, name, err)
+		}
+	}
+	held, err := c.ListSlotGrants(ctx, ns, name)
+	if err != nil {
+		return fmt.Errorf("delete slot grants %s/%s: %w", ns, name, err)
 	}
 	if len(held) > 0 {
 		if err := authz.RevokeSlots(ctx, c.Relations(), authz.SessionRef{Namespace: ns, Name: name}, held); err != nil {
 			return fmt.Errorf("delete slot grants %s/%s: %w", ns, name, err)
-		}
-	}
-	if len(pins) > 0 {
-		if err := c.Relations().DeleteRelationships(ctx, pins); err != nil {
-			return fmt.Errorf("delete slot grants %s/%s: delete pins: %w", ns, name, err)
 		}
 	}
 	return nil

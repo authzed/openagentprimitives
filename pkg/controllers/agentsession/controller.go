@@ -513,6 +513,27 @@ type SpiceDBDeleter interface {
 	DeleteDataSlotGrants(ctx context.Context, ns, name string) error
 }
 
+// sweepStaleSlotTuples removes every slot grant, slot pin AND data-slot grant
+// held under (ns, name) — the subject-side tuples finalize() removes on
+// teardown, minus the agentsession-as-resource relations. Run BEFORE a session
+// with this name can write its own: the admission sweep, and ReconcileRestart
+// just before it creates a non-takeover fork child. All three kinds are keyed
+// by (ns, name), not UID, so a reused name otherwise inherits a dead
+// predecessor's never-expiring pin and its still-live grants. Both errors are
+// returned; the caller fails closed. A nil SpiceDBDeleter is a no-op.
+func (r *Reconciler) sweepStaleSlotTuples(ctx context.Context, ns, name string) error {
+	if r.SpiceDBDeleter == nil {
+		return nil
+	}
+	if err := r.SpiceDBDeleter.DeleteSlotGrants(ctx, ns, name); err != nil {
+		return fmt.Errorf("sweep slot grants/pins %s/%s: %w", ns, name, err)
+	}
+	if err := r.SpiceDBDeleter.DeleteDataSlotGrants(ctx, ns, name); err != nil {
+		return fmt.Errorf("sweep data-slot grants %s/%s: %w", ns, name, err)
+	}
+	return nil
+}
+
 // ScopeDeleter is the controller's narrow view of memory teardown, retained for
 // an ephemeral retention GC. The finalizer deliberately deletes NONE of a
 // session's memory: the tamper-evident audit log is PERMANENT and a session
@@ -1172,16 +1193,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// means a TRUSTED creator pre-stamped it and owns the sweep itself:
 	//
 	//   - channelsd's mint pre-stamps the finalizer and runs this same sweep
-	//     synchronously, ahead of its mint-time binds (pipeline.go), so sweeping
-	//     again here would wipe the pin and grants it just wrote.
-	//   - the operator's own fork path (BuildChildSession) pre-stamps it on every
-	//     restart child, because the parent's ReconcileRestart copies the
-	//     parent's slot grants AND pin onto the child's (ns, name) right after
-	//     creating it (restart.go step 6c) — before this reconcile runs. Sweeping
-	//     here would be the last writer and silently strip the fork of its
-	//     inherited authority. A fork child's name is generated
-	//     (PendingRestart.TargetSessionName), so the dead-predecessor reuse the
-	//     sweep guards against does not apply to it.
+	//     itself, before it creates the session and so ahead of its mint-time
+	//     binds (sweepBeforeMint, pipeline.go); sweeping again here would wipe
+	//     the pin and grants it wrote after the Create.
+	//   - the operator's own fork path (BuildChildSession) pre-stamps it on a
+	//     restart or inherit child, because the parent's ReconcileRestart copies
+	//     the parent's slot grants AND pin onto the child's (ns, name) right
+	//     after creating it (restart.go step 6c) — before this reconcile runs.
+	//     Sweeping here would be the last writer and silently strip the fork of
+	//     its inherited authority. A fork child's name is NOT fresh: it is a
+	//     deterministic hash (deterministicForkName / deterministicInheritName in
+	//     restart_publish.go), so repeating a restart after the child was
+	//     deleted reuses it. ReconcileRestart therefore runs this same sweep on
+	//     the target name itself, just before it creates the child — the
+	//     operator still owns the sweep for these children, it just runs it
+	//     earlier, ahead of the copy. A TAKEOVER child is not pre-stamped: it
+	//     copies no grants, so it takes this sweep like any other new session.
 	//
 	// That skip is unforgeable only because config/admission/
 	// agentsession-finalizer-policy.yaml (a ValidatingAdmissionPolicy) refuses
@@ -1195,8 +1222,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// pre-stamped finalizer is swept like any other.
 	if !controllerutil.ContainsFinalizer(&sess, spiceboxv1alpha1.FinalizerAgentSession) &&
 		r.SpiceDBDeleter != nil {
-		if err := r.SpiceDBDeleter.DeleteSlotGrants(ctx, sess.Namespace, sess.Name); err != nil {
-			log.FromContext(ctx).Error(err, "admission sweep: delete stale slot grants/pins failed",
+		if err := r.sweepStaleSlotTuples(ctx, sess.Namespace, sess.Name); err != nil {
+			log.FromContext(ctx).Error(err, "admission sweep: delete stale slot tuples failed",
 				"session", sess.Namespace+"/"+sess.Name)
 			return ctrl.Result{}, err
 		}

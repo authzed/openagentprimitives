@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -576,16 +577,21 @@ func TestSlotGrantExpiry(t *testing.T) {
 		"a negative cap is nonsense and must not produce a past expiry")
 }
 
-// fakeSlotCopier records what a fork carried. held/pins are the parent's
-// state the fake hands back; copied is every relation CopySlotGrants asked it
-// to write, verbatim — the single seam the gate-bypassing copy writes through.
+// fakeSlotCopier records what a fork carried. held is the parent's grants;
+// pins is every pin in the store, parent's and child's alike, answered per
+// subject the way SpiceDB's subject filter would. copied is every relation
+// CopySlotGrants asked it to write, verbatim — the single seam the
+// gate-bypassing copy writes through. A successful copy lands its pins in
+// pins (so a second pass sees them) and honors unpinnedTypes the way the
+// MUST_NOT_MATCH precondition does.
 type fakeSlotCopier struct {
-	held    []authz.SlotBinding
-	pins    []authz.Relation
-	listErr error
-	pinsErr error
-	copyErr error
-	copied  []authz.Relation
+	held          []authz.SlotBinding
+	pins          []authz.Relation
+	listErr       error
+	pinsErr       error
+	copyErr       error
+	copied        []authz.Relation
+	unpinnedTypes []string
 }
 
 func (f *fakeSlotCopier) ListSlotGrants(_ context.Context, ns, name string) ([]authz.SlotBinding, error) {
@@ -599,14 +605,31 @@ func (f *fakeSlotCopier) ListSlotPins(_ context.Context, ns, name string) ([]aut
 	if f.pinsErr != nil {
 		return nil, f.pinsErr
 	}
-	return f.pins, nil
+	var out []authz.Relation
+	for _, p := range f.pins {
+		if p.SubjectID == ns+"/"+name {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
-func (f *fakeSlotCopier) CopySlotTuples(_ context.Context, rels []authz.Relation) error {
+func (f *fakeSlotCopier) CopySlotTuples(_ context.Context, child authz.SessionRef, rels []authz.Relation, unpinnedTypes []string) error {
 	if f.copyErr != nil {
 		return f.copyErr
 	}
+	f.unpinnedTypes = unpinnedTypes
+	for _, p := range f.pins {
+		if p.SubjectID == child.String() && slices.Contains(unpinnedTypes, p.ResourceType) {
+			return fmt.Errorf("fake copy: child pinned %s: %w", p.ResourceType, authz.ErrSlotPinned)
+		}
+	}
 	f.copied = append(f.copied, rels...)
+	for _, r := range rels {
+		if r.Relation == authz.SlotPinRelationName {
+			f.pins = append(f.pins, r)
+		}
+	}
 	return nil
 }
 
@@ -619,9 +642,9 @@ func TestCopySlotGrants_RePointsTheParentsGrantsAtTheChild(t *testing.T) {
 	childRef := authz.SessionRef{Namespace: "ns", Name: "child"}
 	exp := testExpiry()
 
-	n, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, exp)
+	res, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, exp)
 	require.NoError(t, err)
-	assert.Equal(t, 2, n)
+	assert.Equal(t, 2, res.Grants)
 	require.Len(t, c.copied, 2)
 	for _, rel := range c.copied {
 		assert.Equal(t, "ns/child", rel.SubjectID,
@@ -635,14 +658,14 @@ func TestCopySlotGrants_NoGrantsAndNilCopierAreNoOps(t *testing.T) {
 	parent := authz.SessionRef{Namespace: "ns", Name: "parent"}
 	childRef := authz.SessionRef{Namespace: "ns", Name: "child"}
 
-	n, err := authz.CopySlotGrants(context.Background(), nil, parent, childRef, testExpiry())
+	res, err := authz.CopySlotGrants(context.Background(), nil, parent, childRef, testExpiry())
 	require.NoError(t, err)
-	assert.Zero(t, n)
+	assert.Zero(t, res)
 
 	empty := &fakeSlotCopier{}
-	n, err = authz.CopySlotGrants(context.Background(), empty, parent, childRef, testExpiry())
+	res, err = authz.CopySlotGrants(context.Background(), empty, parent, childRef, testExpiry())
 	require.NoError(t, err)
-	assert.Zero(t, n)
+	assert.Zero(t, res)
 	assert.Empty(t, empty.copied, "nothing held and no pin means nothing written")
 }
 
@@ -661,10 +684,13 @@ func TestCopySlotGrants_CopiesThePinVerbatim(t *testing.T) {
 		pins: []authz.Relation{authz.SlotPinRelation("git_repo", "acme/app", parent)},
 	}
 
-	n, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, exp)
+	res, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, exp)
 	require.NoError(t, err)
-	assert.Equal(t, 1, n)
+	assert.Equal(t, 1, res.Grants)
+	assert.Equal(t, 1, res.Pins)
 	require.Len(t, c.copied, 2, "the grant and the pin both copy in the same call")
+	assert.Equal(t, []string{"git_repo"}, c.unpinnedTypes,
+		"the copied type must be guarded on the child still holding no pin of it")
 
 	var gotPin, gotGrant *authz.Relation
 	for i := range c.copied {
@@ -706,15 +732,126 @@ func TestCopySlotGrants_TwoInstancesOfOneTypeCopyVerbatimWithoutGating(t *testin
 		{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("acme/other"), Permission: "push"},
 	}}
 
-	n, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, exp)
+	res, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, exp)
 	require.NoError(t, err, "a verbatim copy must not re-gate occupancy")
-	assert.Equal(t, 2, n)
+	assert.Equal(t, 2, res.Grants)
 	require.Len(t, c.copied, 2)
 	for _, rel := range c.copied {
 		assert.NotEqual(t, authz.SlotPinRelationName, rel.Relation, "two legacy/multi instances must pin nothing")
 		assert.Equal(t, childRef.String(), rel.SubjectID)
 	}
 	assert.ElementsMatch(t, []string{"acme/app", "acme/other"}, []string{c.copied[0].ResourceID, c.copied[1].ResourceID})
+}
+
+// failingChildPinsCopier fails only the CHILD's pin read — the parent's reads
+// succeed, so the failure under test is the one the child-pins-win rule adds.
+type failingChildPinsCopier struct{ fakeSlotCopier }
+
+func (f *failingChildPinsCopier) ListSlotPins(ctx context.Context, ns, name string) ([]authz.Relation, error) {
+	if name == "child" {
+		return nil, errors.New("child pins boom")
+	}
+	return f.fakeSlotCopier.ListSlotPins(ctx, ns, name)
+}
+
+// TestCopySlotGrants_ChildAlreadyPinnedKeepsItsOwnPinForThatType: step 6c
+// re-runs on every ReconcileRestart pass while the restore Jobs are pending,
+// and the child's runner can be live by then. A child that has already pinned
+// (or moved) git_repo on its own must receive NEITHER the parent's git_repo
+// pin — two pins would wedge ReadPin fail-closed forever — NOR the parent's
+// git_repo grants, which would hand back authority the child's move revoked.
+// Every other type still copies, guarded.
+func TestCopySlotGrants_ChildAlreadyPinnedKeepsItsOwnPinForThatType(t *testing.T) {
+	parent := authz.SessionRef{Namespace: "ns", Name: "parent"}
+	childRef := authz.SessionRef{Namespace: "ns", Name: "child"}
+	exp := testExpiry()
+
+	c := &fakeSlotCopier{
+		held: []authz.SlotBinding{
+			{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("acme/app"), Permission: "push"},
+			{ResourceType: "crm_company", ResourceID: authz.TrustedObjectID("acme"), Permission: "contact_access"},
+		},
+		pins: []authz.Relation{
+			authz.SlotPinRelation("git_repo", "acme/app", parent),
+			authz.SlotPinRelation("crm_company", "acme", parent),
+			// The child's own runner moved git_repo to a different instance.
+			authz.SlotPinRelation("git_repo", "acme/other", childRef),
+		},
+	}
+
+	res, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, exp)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Grants, "only the crm_company grant copies")
+	assert.Equal(t, 1, res.Pins, "only the crm_company pin copies")
+	assert.Equal(t, []string{"git_repo"}, res.SkippedTypes)
+	assert.Equal(t, []string{"crm_company"}, c.unpinnedTypes, "the copied type is guarded; the skipped one is not written at all")
+
+	for _, rel := range c.copied {
+		assert.NotEqual(t, "git_repo", rel.ResourceType,
+			"no parent git_repo tuple may land on a child that already pins git_repo")
+		assert.Equal(t, childRef.String(), rel.SubjectID)
+	}
+	childPins, err := c.ListSlotPins(context.Background(), childRef.Namespace, childRef.Name)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []authz.Relation{
+		authz.SlotPinRelation("git_repo", "acme/other", childRef),
+		authz.SlotPinRelation("crm_company", "acme", childRef),
+	}, childPins, "exactly one pin per type: the child's own git_repo and the copied crm_company")
+}
+
+// TestCopySlotGrants_ReRunAfterACleanCopyWritesNothingPinned: the second
+// ReconcileRestart pass finds the child holding the pin the first pass landed,
+// so it skips that type rather than re-touching it.
+func TestCopySlotGrants_ReRunAfterACleanCopyWritesNothingPinned(t *testing.T) {
+	parent := authz.SessionRef{Namespace: "ns", Name: "parent"}
+	childRef := authz.SessionRef{Namespace: "ns", Name: "child"}
+	c := &fakeSlotCopier{
+		held: []authz.SlotBinding{{ResourceType: "git_repo", ResourceID: authz.TrustedObjectID("acme/app"), Permission: "push"}},
+		pins: []authz.Relation{authz.SlotPinRelation("git_repo", "acme/app", parent)},
+	}
+
+	first, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, testExpiry())
+	require.NoError(t, err)
+	assert.Equal(t, 1, first.Pins)
+	c.copied = nil
+
+	second, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, testExpiry())
+	require.NoError(t, err)
+	assert.Zero(t, second.Grants)
+	assert.Zero(t, second.Pins)
+	assert.Equal(t, []string{"git_repo"}, second.SkippedTypes)
+	assert.Empty(t, c.copied, "a re-run must not re-touch a type the child already pins")
+}
+
+// TestCopySlotGrants_ChildPinsBetweenReadAndWriteRefusesTheCopy: the guard
+// closes the read-then-write window — a child pin that lands after the read
+// refuses the write (ErrSlotPinned) instead of creating a second pin.
+func TestCopySlotGrants_ChildPinsBetweenReadAndWriteRefusesTheCopy(t *testing.T) {
+	parent := authz.SessionRef{Namespace: "ns", Name: "parent"}
+	childRef := authz.SessionRef{Namespace: "ns", Name: "child"}
+	c := &racingChildPinCopier{fakeSlotCopier: fakeSlotCopier{
+		pins: []authz.Relation{authz.SlotPinRelation("git_repo", "acme/app", parent)},
+	}, childPin: authz.SlotPinRelation("git_repo", "acme/other", childRef)}
+
+	_, err := authz.CopySlotGrants(context.Background(), c, parent, childRef, testExpiry())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, authz.ErrSlotPinned)
+	assert.Empty(t, c.copied)
+}
+
+// racingChildPinCopier commits childPin right after the child's pins are read,
+// standing in for the child's runner winning the race against the copy.
+type racingChildPinCopier struct {
+	fakeSlotCopier
+	childPin authz.Relation
+}
+
+func (f *racingChildPinCopier) ListSlotPins(ctx context.Context, ns, name string) ([]authz.Relation, error) {
+	out, err := f.fakeSlotCopier.ListSlotPins(ctx, ns, name)
+	if name == "child" {
+		f.pins = append(f.pins, f.childPin)
+	}
+	return out, err
 }
 
 func TestCopySlotGrants_SurfacesEveryFailure(t *testing.T) {
@@ -724,12 +861,13 @@ func TestCopySlotGrants_SurfacesEveryFailure(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		copier  *fakeSlotCopier
+		copier  authz.SlotGrantCopier
 		wantMsg string
 	}{
 		{name: "listing the parent's grants fails", copier: &fakeSlotCopier{listErr: errors.New("list boom")}, wantMsg: "list boom"},
 		{name: "listing the parent's pins fails", copier: &fakeSlotCopier{held: binding, pinsErr: errors.New("pins boom")}, wantMsg: "pins boom"},
 		{name: "the copy write fails", copier: &fakeSlotCopier{held: binding, copyErr: errors.New("copy boom")}, wantMsg: "copy boom"},
+		{name: "listing the child's pins fails", copier: &failingChildPinsCopier{fakeSlotCopier: fakeSlotCopier{held: binding}}, wantMsg: "child pins boom"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -53,9 +53,13 @@ type fakeAuthz struct {
 	deleteSlotGrantsCalls int
 	deleteSlotGrantsErr   error
 	slotCallOrder         []string
-	checkResult         bool
-	checkErr            error
-	checkInteractFn     func(canonicalID string) (bool, error)
+	// deleteDataSlotGrantsCalls / deleteDataSlotGrantsErr back
+	// DeleteDataSlotGrants — the data-slot half of the same sweep.
+	deleteDataSlotGrantsCalls int
+	deleteDataSlotGrantsErr   error
+	checkResult               bool
+	checkErr                  error
+	checkInteractFn           func(canonicalID string) (bool, error)
 
 	// delegations models the SpiceDB lineage that agentsession#converse
 	// resolves over: one entry per delegation edge, "<parentNS>/<parentName>"
@@ -267,6 +271,13 @@ func (f *fakeAuthz) DeleteSlotGrants(_ context.Context, _, _ string) error {
 	f.grantedSlots = nil
 	f.grantedSlotsSession = ""
 	return nil
+}
+
+// DeleteDataSlotGrants models the data-slot half of the mint admission sweep.
+func (f *fakeAuthz) DeleteDataSlotGrants(_ context.Context, _, _ string) error {
+	f.deleteDataSlotGrantsCalls++
+	f.slotCallOrder = append(f.slotCallOrder, "dataSweep")
+	return f.deleteDataSlotGrantsErr
 }
 
 // Relations satisfies pipeline.Authz for tests that never approve a JIT tool

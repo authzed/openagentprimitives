@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/authzed/openagentprimitives/pkg/authz/precondition"
@@ -286,10 +288,13 @@ func GrantSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []S
 		if occupancyOf(b) != SlotOccupancyMulti {
 			grp.single = true
 		}
-		if grp.rebind == "" {
+		// rebind: never wins over any other mode in the same call, for the same
+		// fail-closed reason: a producer that disagrees with itself must not
+		// make an unmovable slot movable.
+		if grp.rebind == "" || b.Rebind == SlotRebindNever {
 			grp.rebind = b.Rebind
 		}
-		if !b.PriorID.IsZero() {
+		if !b.PriorID.IsZero() && grp.priorID == "" {
 			// A move source. First non-zero wins; a single-occupancy group that
 			// reaches the move path holds one instance, so every move binding of
 			// it names the same prior instance.
@@ -472,19 +477,38 @@ func RevokeSlots(ctx context.Context, g RelWriter, scope SessionRef, bindings []
 // bound instances onto its child. *spicedb.Client satisfies it.
 type SlotGrantCopier interface {
 	ListSlotGrants(ctx context.Context, ns, name string) ([]SlotBinding, error)
-	// ListSlotPins returns every pin the parent holds, verbatim — resource and
-	// subject only, no derived occupancy. See SlotPinRelation.
+	// ListSlotPins returns every pin a session holds, verbatim — resource and
+	// subject only, no derived occupancy. See SlotPinRelation. CopySlotGrants
+	// reads it for BOTH sides: the parent's pins to copy, and the child's pins
+	// to decide which types it has already committed to on its own.
 	ListSlotPins(ctx context.Context, ns, name string) ([]Relation, error)
 	// CopySlotTuples writes rels in one batched TOUCH — no gate, no expiry
 	// stamping of its own. The caller (CopySlotGrants) has already re-targeted
 	// each relation's SubjectID at the child and, for a grant, stamped the
 	// child's expiry; a pin tuple carries none, matching how EnsurePin writes
 	// it.
-	CopySlotTuples(ctx context.Context, rels []Relation) error
+	//
+	// The write is atomically guarded: for every type in unpinnedTypes it
+	// carries a precondition that child holds NO slot_pin of that type, so a
+	// pin the child's own runner commits between CopySlotGrants's read of the
+	// child's pins and this write makes the whole write refuse (wrapping
+	// ErrSlotPinned) instead of landing a second pin beside it.
+	CopySlotTuples(ctx context.Context, child SessionRef, rels []Relation, unpinnedTypes []string) error
+}
+
+// SlotCopyResult reports what CopySlotGrants carried onto a child.
+type SlotCopyResult struct {
+	// Grants and Pins count the tuples written.
+	Grants, Pins int
+	// SkippedTypes names, sorted, every resource type the parent held grants
+	// or a pin for that was NOT copied because the child already holds a pin
+	// of that type — its own commitment, or this same copy landed by an
+	// earlier pass.
+	SkippedTypes []string
 }
 
 // CopySlotGrants re-points the parent's slot grants AND pins at the child,
-// VERBATIM, returning how many grants were carried.
+// VERBATIM.
 //
 // VERBATIM, not re-gated through GrantSlots: a lifecycle clone is not a new
 // arrival. GrantSlots enforces single-occupancy from a SlotBinding's declared
@@ -494,9 +518,32 @@ type SlotGrantCopier interface {
 // GrantSlots would therefore refuse outright any restart of a multi-occupancy
 // slot currently holding two or more instances, and any legacy two-instance
 // session recorded before single-occupancy pinning existed — copying NOTHING
-// for that type on every such restart. The pin invariant still holds: a pin is
-// listed from the parent and copied as-is onto the child, which starts with no
-// pin of its own, so there is nothing for the copied pin to conflict with.
+// for that type on every such restart.
+//
+// THE CHILD'S OWN PIN WINS. The caller (restart.go step 6c) runs this on EVERY
+// ReconcileRestart pass, and the parent requeues every few seconds while the
+// workspace snapshot/restore Jobs run. The child's CR already exists by then
+// and its own reconcile does not wait for the parent's PendingRestart to clear,
+// so the child's runner can be live and can first-fill or MOVE a pin in the
+// meantime. Re-touching the parent's pin on top of that would leave the child
+// holding two pins for one type — ReadPin fails closed on two forever, and the
+// pin never expires — and re-touching the parent's grants would hand back
+// authority a move just revoked. So the child's pins are read first, and for
+// every type the child already pins, NEITHER the parent's pin NOR the parent's
+// grants of that type are copied. A re-run after a clean first pass finds the
+// child holding the parent's own copied pin and likewise skips the type —
+// there is nothing left to carry.
+//
+// The read-then-write window is closed atomically, not just narrowed: every
+// type that IS copied is passed to CopySlotTuples as unpinnedTypes, which
+// guards the write on the child still holding no pin of that type. A pin the
+// child commits in between refuses the whole write (ErrSlotPinned); the next
+// pass re-reads and skips that type. RESIDUAL: a type with no pin anywhere —
+// multi-occupancy — is guarded only against a pin appearing, so a grant the
+// child REVOKED on such a type between two passes is re-touched by the next
+// one. Revocation of a multi-occupancy grant within the seconds-long restore
+// window of a fresh fork is the only exposure, and the grant still carries the
+// child's expiry.
 //
 // A grant names the SESSION as its subject, so a child session inherits nothing
 // automatically — without this, a continuation would silently lose every
@@ -520,38 +567,65 @@ type SlotGrantCopier interface {
 // resolves through slot_grant->interact, so it must never go live ahead of the
 // membership it resolves against — the same window restart.go documents for
 // copying denied before participants.
-func CopySlotGrants(ctx context.Context, c SlotGrantCopier, parent, child SessionRef, expiresAt time.Time) (int, error) {
+func CopySlotGrants(ctx context.Context, c SlotGrantCopier, parent, child SessionRef, expiresAt time.Time) (SlotCopyResult, error) {
+	var res SlotCopyResult
 	if c == nil {
-		return 0, nil
+		return res, nil
 	}
 	held, err := c.ListSlotGrants(ctx, parent.Namespace, parent.Name)
 	if err != nil {
-		return 0, fmt.Errorf("authz: list parent slot grants %s: %w", parent, err)
+		return res, fmt.Errorf("authz: list parent slot grants %s: %w", parent, err)
 	}
 	pins, err := c.ListSlotPins(ctx, parent.Namespace, parent.Name)
 	if err != nil {
-		return 0, fmt.Errorf("authz: list parent slot pins %s: %w", parent, err)
+		return res, fmt.Errorf("authz: list parent slot pins %s: %w", parent, err)
 	}
 	if len(held) == 0 && len(pins) == 0 {
-		return 0, nil
+		return res, nil
+	}
+	childPins, err := c.ListSlotPins(ctx, child.Namespace, child.Name)
+	if err != nil {
+		return res, fmt.Errorf("authz: list child slot pins %s: %w", child, err)
+	}
+	childPinned := make(map[string]bool, len(childPins))
+	for _, p := range childPins {
+		childPinned[p.ResourceType] = true
 	}
 
+	skipped := map[string]bool{}
+	copiedTypes := map[string]bool{}
 	rels := make([]Relation, 0, len(held)+len(pins))
 	for _, b := range held {
+		if childPinned[b.ResourceType] {
+			skipped[b.ResourceType] = true
+			continue
+		}
 		rel := SlotGrantRelation(b.ResourceType, b.ResourceID.String(), b.Permission, child)
 		rel.ExpiresAt = expiresAt
 		rels = append(rels, rel)
+		copiedTypes[b.ResourceType] = true
+		res.Grants++
 	}
 	for _, p := range pins {
+		if childPinned[p.ResourceType] {
+			skipped[p.ResourceType] = true
+			continue
+		}
 		// The pin is otherwise copied byte-for-byte; only the subject moves.
 		p.SubjectID = child.String()
 		rels = append(rels, p)
+		copiedTypes[p.ResourceType] = true
+		res.Pins++
+	}
+	res.SkippedTypes = slices.Sorted(maps.Keys(skipped))
+	if len(rels) == 0 {
+		return res, nil
 	}
 
-	if err := c.CopySlotTuples(ctx, rels); err != nil {
-		return 0, fmt.Errorf("authz: copy slot tuples to child %s: %w", child, err)
+	if err := c.CopySlotTuples(ctx, child, rels, slices.Sorted(maps.Keys(copiedTypes))); err != nil {
+		return SlotCopyResult{}, fmt.Errorf("authz: copy slot tuples to child %s: %w", child, err)
 	}
-	return len(held), nil
+	return res, nil
 }
 
 // SlotRevokeChecker is the standing gate for removing a slot grant.

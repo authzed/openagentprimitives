@@ -70,7 +70,7 @@ func EnsureChildSession(ctx context.Context, c client.Client, parent *spiceboxv1
 // not exist yet. A present child means the fork's seeding phase already
 // committed, so ReconcileRestart must resume at the idempotent tail rather than
 // replaying writes into a scope the child's runner now owns.
-func findChildSession(ctx context.Context, c client.Client, ns, name string) (*spiceboxv1alpha1.AgentSession, error) {
+func findChildSession(ctx context.Context, c client.Reader, ns, name string) (*spiceboxv1alpha1.AgentSession, error) {
 	var child spiceboxv1alpha1.AgentSession
 	err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &child)
 	switch {
@@ -588,6 +588,40 @@ func (r *Reconciler) ReconcileRestart(ctx context.Context, sess *spiceboxv1alpha
 			return false, ctrl.Result{}, fmt.Errorf("ReconcileRestart: lineage: %w", err)
 		}
 
+		// Step 5a: sweep the target name before the child exists. A
+		// non-takeover child is created with the AgentSession finalizer
+		// pre-stamped (BuildChildSession), so its own first reconcile skips
+		// the admission sweep — it must, or it would wipe the grants step 6c
+		// copies. But the child's name is a deterministic hash, not a fresh
+		// one: repeating a restart after the child was deleted reuses it, and a
+		// dead predecessor's never-expiring pin (and live grants) would then
+		// sit under the new child unswept. Sweeping HERE, only while the child
+		// does not exist yet, covers that without ever sweeping a live child:
+		// a re-run of this reconcile finds the child and skips this block. A
+		// takeover child is not pre-stamped and takes the ordinary admission
+		// sweep instead. Fail closed: an unswept name must not be handed to a
+		// child.
+		//
+		// The child == nil above came from the CACHED client, which can lag a
+		// child this reconcile created on an earlier pass. Re-check uncached
+		// (APIReader, when wired) so a cache blink can never sweep a live
+		// child's own pins and grants.
+		if !takeover {
+			live := client.Reader(r.Client)
+			if r.APIReader != nil {
+				live = r.APIReader
+			}
+			existing, ferr := findChildSession(ctx, live, sess.Namespace, pr.TargetSessionName)
+			if ferr != nil {
+				return false, ctrl.Result{}, fmt.Errorf("ReconcileRestart: confirm child absent before sweep: %w", ferr)
+			}
+			if existing == nil {
+				if err := r.sweepStaleSlotTuples(ctx, sess.Namespace, pr.TargetSessionName); err != nil {
+					return false, ctrl.Result{}, fmt.Errorf("ReconcileRestart: sweep child name: %w", err)
+				}
+			}
+		}
+
 		// Step 5: ensure child session exists. Created AFTER its memory is
 		// seeded so a freshly-started runner cannot race the copy above.
 		child, err = EnsureChildSession(ctx, r.Client, sess, pr)
@@ -640,10 +674,10 @@ func (r *Reconciler) ReconcileRestart(ctx context.Context, sess *spiceboxv1alpha
 	// membership (and blocklist) it resolves against.
 	//
 	// The copy survives the child's first reconcile only because
-	// BuildChildSession pre-stamps the AgentSession finalizer: a session whose
-	// finalizer is absent at first reconcile gets the admission sweep
-	// (DeleteSlotGrants on its ns/name), which would delete everything copied
-	// here.
+	// BuildChildSession pre-stamps the AgentSession finalizer on a non-takeover
+	// child: a session whose finalizer is absent at first reconcile gets the
+	// admission sweep on its ns/name, which would delete everything copied
+	// here. Step 5a swept that name before the child was created instead.
 	//
 	// Best-effort: a failure here costs the child a re-approval, so it must not
 	// abort a fork whose memory and participants are already in place.
@@ -656,12 +690,18 @@ func (r *Reconciler) ReconcileRestart(ctx context.Context, sess *spiceboxv1alpha
 			authz.SessionRef{Namespace: sess.Namespace, Name: sess.Name},
 			authz.SessionRef{Namespace: child.Namespace, Name: child.Name},
 			authz.SlotGrantExpiry(time.Now(), sessionExpiration))
-		if cerr != nil {
+		switch {
+		case cerr != nil:
 			log.FromContext(ctx).Info("ReconcileRestart: slot grants not carried to the child; it will re-ask",
 				"session", sess.Namespace+"/"+sess.Name, "child", child.Name, "err", cerr.Error())
-		} else if copied > 0 {
+		case copied.Grants > 0 || copied.Pins > 0 || len(copied.SkippedTypes) > 0:
+			// SkippedTypes is expected on every pass after the first (the child
+			// holds the pin this copy landed earlier), and on any pass after the
+			// child's own runner committed a pin of its own — see
+			// authz.CopySlotGrants for why the child's pin wins.
 			log.FromContext(ctx).Info("ReconcileRestart: carried slot grants to the child",
-				"session", sess.Namespace+"/"+sess.Name, "child", child.Name, "grants", copied)
+				"session", sess.Namespace+"/"+sess.Name, "child", child.Name,
+				"grants", copied.Grants, "pins", copied.Pins, "skippedTypes", copied.SkippedTypes)
 		}
 	}
 
