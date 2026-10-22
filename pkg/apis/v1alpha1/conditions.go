@@ -742,6 +742,7 @@ const (
 	ReasonChannelSocketDetached          = "SocketDetached"          // set by channelsd on Connected=False
 	ReasonChannelDependenciesUnavailable = "DependenciesUnavailable" // memory or SpiceDB unreachable
 	ReasonChannelListenerStartFailed     = "ListenerStartFailed"     // set by channelsd when listener.Start fails
+	ReasonChannelTransportLost           = "TransportLost"           // set by channelsd when a running listener's transport died without recovering
 	ReasonChannelScopesGranted           = "ScopesGranted"           // set by channelsd on ScopesValid=True
 	ReasonChannelMissingScopes           = "MissingScopes"           // set by channelsd on ScopesValid=False; message lists the missing scopes
 	ReasonChannelDeliverySucceeded       = "DeliverySucceeded"       // set by channelsd's relay on Deliverable=True

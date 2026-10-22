@@ -589,6 +589,16 @@ type Deps struct {
 	// 0 ⇒ DefaultApproverFanoutLimit. Set from channelsd's
 	// --approver-fanout-limit.
 	ApproverFanoutLimit int
+
+	// TransportLost is called by a running Listener whose transport has died
+	// and will NOT recover on its own — e.g. a Slack Socket Mode loop that
+	// exited on a fatal error instead of reconnecting. Without it such a
+	// listener is a silent zombie: still registered, Connected still True, no
+	// inbound ever again. channelsd stamps Connected=False (which the
+	// monitoring watchers surface) and replaces the listener on its next
+	// reconcile tick. Must not be called for a Stop- or ctx-initiated
+	// shutdown. May be called before Start returns. Optional; nil-safe.
+	TransportLost func(err error)
 }
 
 // DefaultApproverFanoutLimit is the default for Deps.ApproverFanoutLimit:
