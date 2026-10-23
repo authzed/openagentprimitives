@@ -42,6 +42,8 @@ func TestGenerate(t *testing.T) {
 	require.NoError(t, err)
 	fam := string(famB)
 	assert.Contains(t, fam, "title: 'oap agent'")
+	assert.Contains(t, fam, "description: 'oap agent: Manage agents. Every subcommand, flag, and example, generated from the CLI.'",
+		"description names the command and what the page holds")
 	assert.Contains(t, fam, "`oap agent run <agent-class>`", "usage heading is backtick-wrapped so <args> stay literal")
 	assert.Contains(t, fam, "--prompt string", "local flag rendered")
 	assert.Contains(t, fam, "oap agent run pirate", "example rendered")

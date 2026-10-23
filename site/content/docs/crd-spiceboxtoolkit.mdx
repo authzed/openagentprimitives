@@ -3,7 +3,7 @@ export const meta = {
   section: 'Reference',
   group: 'CRD reference',
   order: 3260,
-  description: 'SpiceboxToolkit is the machine-readable description of one CLI a sandbox',
+  description: 'SpiceboxToolkit is the machine-readable description of one CLI a sandbox tool can be built from: its subcommands, flags, env, parser config and default…',
 }
 
 # SpiceboxToolkit
@@ -23,6 +23,7 @@ onto status.
 
 | Field | Type | Description |
 | --- | --- | --- |
+| `spec.costTreatment` | `string` | CostTreatment declares how this toolkit's provider-reported cost counts toward session spend. "metered" (default) is real billed money and counts; "subscription-equivalent" is a flat-rate estimate (e.g. a Claude Max OAuth run) that is recorded and shown but EXCLUDED from the session total, so it cannot inflate spend or trip cost alerts. Mirrors pkg/tools/toolspec/toolkit.Toolkit.CostTreatment. _(enum: metered \| subscription-equivalent)_ |
 | `spec.docs` | `string` | Docs is prose about the CLI, surfaced to authors. |
 | `spec.env` \* | `object` | Env describes the environment variables the binary reads. It documents and wires them — notably which are sensitive — and is not a filter on the environment the binary actually receives. Mirrors pkg/tools/toolspec/toolkit.Toolkit.Env. |
 | `spec.env.allowed` \* | `[]object` | Allowed DESCRIBES the environment variables the binary reads. It is not an enforcement boundary: nothing strips a variable for being absent here. The environment a tool call runs with is composed by the ToolCall controller from the broker-resolved credentials, ToolCall.spec.env, SpiceboxSession.spec.defaultEnv, this toolkit's envDefaults and the sandbox container's own env. What an entry drives is keyed off Sensitive: redaction wherever the call is surfaced, which credential a setup flow must obtain, and which names a SpiceboxClass may not shadow through its own envDefaults. Adding a variable here documents and wires it; omitting one does not keep it out of the binary's environment. |

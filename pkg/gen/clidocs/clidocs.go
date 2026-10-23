@@ -92,7 +92,7 @@ func overviewPage(root *cobra.Command, fams []*cobra.Command) string {
 func familyPage(fam *cobra.Command, order int) string {
 	var b bytes.Buffer
 	title := "oap " + fam.Name()
-	b.WriteString(mdxutil.Frontmatter(title, section, group, order, mdxutil.FirstLine(fam.Short)))
+	b.WriteString(mdxutil.Frontmatter(title, section, group, order, familyDescription(fam)))
 	fmt.Fprintf(&b, "# %s\n\n", title)
 	if d := describe(fam); d != "" {
 		b.WriteString(d + "\n\n")
@@ -100,6 +100,17 @@ func familyPage(fam *cobra.Command, order int) string {
 	// Every command in the subtree, depth-first, deepest headings capped at h4.
 	writeCommandTree(&b, fam, 2)
 	return b.String()
+}
+
+// familyDescription is a family page's meta description. cobra's Short alone
+// ("Manage AgentClass resources") names neither the command nor what the page
+// holds, so a search result built from it reads as a fragment.
+func familyDescription(fam *cobra.Command) string {
+	short := strings.TrimSuffix(mdxutil.FirstLine(fam.Short), ".")
+	if short != "" {
+		short = strings.ToUpper(short[:1]) + short[1:] + ". "
+	}
+	return fmt.Sprintf("oap %s: %sEvery subcommand, flag, and example, generated from the CLI.", fam.Name(), short)
 }
 
 // writeCommandTree renders each visible subcommand of cmd as a heading section
