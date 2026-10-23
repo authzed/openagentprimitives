@@ -25,6 +25,7 @@ export function SiteFooter() {
         <a href="/docs/cli-reference">CLI reference</a>
         <a href="/#owasp">OWASP coverage</a>
         <a href={DISCORD_URL}>Community</a>
+        <a href="/llms.txt">llms.txt</a>
       </div>
       <div className="site-footer-bottom">
         <p className="site-footer-credit">

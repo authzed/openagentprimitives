@@ -6,6 +6,7 @@ package mdxutil
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Frontmatter renders the `export const meta = {…}` block every generated doc
@@ -42,6 +43,40 @@ func FirstLine(s string) string {
 		s = s[:i]
 	}
 	return strings.TrimSpace(s)
+}
+
+// summaryMax is the longest Summary returns: about what a search result shows
+// of a meta description before it truncates.
+const summaryMax = 160
+
+// Summary turns a doc comment into a page's meta description: the first
+// sentence of its first paragraph, with the comment's hard line wraps joined.
+// FirstLine is wrong for this: Go doc comments wrap at ~80 columns, so their
+// first line stops mid-sentence. A sentence over summaryMax is cut at a word
+// boundary and ends in an ellipsis.
+func Summary(s string) string {
+	para, _, _ := strings.Cut(strings.TrimSpace(s), "\n\n")
+	para = strings.Join(strings.Fields(para), " ")
+	for i := 0; i+2 < len(para); i++ {
+		// A sentence ends at ". " before a capital, which skips "e.g. x".
+		if para[i] == '.' && para[i+1] == ' ' && 'A' <= para[i+2] && para[i+2] <= 'Z' {
+			para = para[:i+1]
+			break
+		}
+	}
+	if len(para) <= summaryMax {
+		return para
+	}
+	cut := strings.LastIndexByte(para[:summaryMax], ' ')
+	if cut <= 0 {
+		// No space to break at: cut at the limit, backed off to a rune
+		// boundary so a multi-byte character is never split.
+		cut = summaryMax
+		for cut > 0 && !utf8.RuneStart(para[cut]) {
+			cut--
+		}
+	}
+	return strings.TrimRight(para[:cut], " ,;:-") + "…"
 }
 
 // TableText makes a string safe for a single markdown table cell: first line

@@ -4,6 +4,9 @@ import "./not-found.css";
 
 export const metadata: Metadata = {
   title: { absolute: "Page not found · Open Agent Primitives" },
+  // Next adds its own noindex here, but the root layout's index/follow would
+  // otherwise render beside it as a second, contradicting robots tag.
+  robots: { index: false, follow: true },
 };
 
 // Every unknown path lands here, including stale /docs/<slug> bookmarks, so

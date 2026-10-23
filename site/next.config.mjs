@@ -52,7 +52,28 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      { source: "/:path*", headers: securityHeaders },
+      // A docs URL answers with HTML or Markdown depending on Accept (see
+      // rewrites), so a cache must key on it.
+      { source: "/docs/:slug", headers: [{ key: "Vary", value: "Accept" }] },
+    ];
+  },
+  // Each guide's Markdown rendition (app/md/[slug]) lives beside its HTML
+  // page: /docs/<slug>.md, or /docs/<slug> asked for as text/markdown, the
+  // content negotiation agents use. beforeFiles, so it wins over the
+  // prerendered HTML.
+  async rewrites() {
+    return {
+      beforeFiles: [
+        { source: "/docs/:slug.md", destination: "/md/:slug" },
+        {
+          source: "/docs/:slug",
+          has: [{ type: "header", key: "accept", value: ".*text/markdown.*" }],
+          destination: "/md/:slug",
+        },
+      ],
+    };
   },
   pageExtensions: ["ts", "tsx", "mdx"],
   turbopack: { root: repoRoot },

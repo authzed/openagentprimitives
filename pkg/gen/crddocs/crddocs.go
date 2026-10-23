@@ -142,7 +142,7 @@ func overviewPage(crds []crdInfo) string {
 
 func crdPage(c crdInfo, order int) string {
 	var b bytes.Buffer
-	b.WriteString(mdxutil.Frontmatter(c.kind, section, group, order, mdxutil.FirstLine(c.desc)))
+	b.WriteString(mdxutil.Frontmatter(c.kind, section, group, order, mdxutil.Summary(c.desc)))
 	fmt.Fprintf(&b, "# %s\n\n", c.kind)
 	fmt.Fprintf(&b, "**Group** `%s` · **Scope** %s", c.apiGroup, c.scope)
 	if len(c.shortNames) > 0 {

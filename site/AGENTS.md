@@ -62,6 +62,13 @@ Capture stills and clips with the `showcase/` engine (see
 `site/public/media/`, add an entry to `site/content/_manifest.json`, and
 reference it from a page with `<Clip name="…" />` or `<Screenshot name="…" />`.
 
+### Add an MDX component
+
+`lib/markdown.ts` turns guides into the Markdown served to agents
+(`/docs/<slug>.md`, `/llms.txt`, `/llms-full.txt`). A new component or HTML tag
+needs a rule there, or `lib/markdown.test.ts` fails on the first guide that uses
+it.
+
 ## Rules (non-negotiable)
 
 - **Real-not-drift.** Prefer captured fixtures and generated reference over

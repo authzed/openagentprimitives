@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -42,6 +43,8 @@ func TestGenerate(t *testing.T) {
 	require.NoError(t, err)
 	fam := string(famB)
 	assert.Contains(t, fam, "title: 'oap agent'")
+	assert.Contains(t, fam, "description: 'oap agent: Manage agents. Every subcommand, flag, and example, generated from the CLI.'",
+		"description names the command and what the page holds")
 	assert.Contains(t, fam, "`oap agent run <agent-class>`", "usage heading is backtick-wrapped so <args> stay literal")
 	assert.Contains(t, fam, "--prompt string", "local flag rendered")
 	assert.Contains(t, fam, "oap agent run pirate", "example rendered")
@@ -50,4 +53,25 @@ func TestGenerate(t *testing.T) {
 
 	_, statErr := os.Stat(filepath.Join(dir, "oap-secret.mdx"))
 	assert.True(t, os.IsNotExist(statErr), "no page for a hidden family")
+}
+
+func TestFamilyDescription(t *testing.T) {
+	const tail = "Every subcommand, flag, and example, generated from the CLI."
+	cases := []struct {
+		name  string
+		short string
+		want  string
+	}{
+		{name: "lowercase: first letter capitalized", short: "verify the install", want: "oap x: Verify the install. " + tail},
+		{name: "trailing period: not doubled", short: "Manage agents.", want: "oap x: Manage agents. " + tail},
+		{name: "leading multi-byte rune: capitalized whole", short: "élan mode", want: "oap x: Élan mode. " + tail},
+		{name: "empty Short: command and tail only", short: "", want: "oap x: " + tail},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := familyDescription(&cobra.Command{Use: "x", Short: tc.short})
+			assert.Equal(t, tc.want, got)
+			assert.True(t, utf8.ValidString(got), "valid UTF-8")
+		})
+	}
 }

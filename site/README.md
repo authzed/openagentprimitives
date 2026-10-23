@@ -41,6 +41,29 @@ so treat it as possibly stale until you rebuild.
   build, the generated `_pagefind/` search index
 - `scripts/` — `check.ts`, the validator behind `pnpm check`
 
+## Search engines and agents
+
+- **Metadata.** Site-wide defaults are in `lib/site.ts` and `app/layout.tsx`;
+  each guide's title and `description` become its `<title>`, meta description,
+  and Open Graph tags. `pnpm check` fails a guide with no description.
+- **Share cards.** `app/opengraph-image.tsx` is the site card;
+  `app/docs/[slug]/opengraph-image.tsx` renders one per guide. Both use
+  `components/OgCard.tsx`.
+- **Structured data.** JSON-LD from `lib/structured-data.ts`: Organization,
+  WebSite and SoftwareSourceCode on every page, plus TechArticle and
+  BreadcrumbList on guides.
+- **Sitemap and robots.** `app/sitemap.ts` and `app/robots.ts`.
+- **Markdown for agents.** Every guide is also served as Markdown at
+  `/docs/<slug>.md`, and at `/docs/<slug>` for a request sending
+  `Accept: text/markdown` (rewrites in `next.config.mjs` to `app/md/[slug]`).
+  `/llms.txt` indexes them; `/llms-full.txt` is every guide in one file. The
+  MDX-to-Markdown transform is `lib/markdown.ts`; its test fails if a guide uses
+  a component the transform does not translate.
+- **Copy page.** `components/CopyPage.tsx` sits beside each guide's title: it
+  copies the page's Markdown to the clipboard, views it, or opens ChatGPT or
+  Claude prefilled with a prompt to read it (the URLs are in
+  `lib/copy-page.ts`).
+
 ## Analytics
 
 The site records page views and page leaves through PostHog's cookieless mode,

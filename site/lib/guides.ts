@@ -1,5 +1,5 @@
 import "server-only";
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { cache, type ComponentType } from "react";
 import { normalizeGuide, sortGuides, type Guide, type GuideMeta } from "./nav";
@@ -34,3 +34,12 @@ export const allGuides = cache(async (): Promise<Guide[]> => {
   );
   return sortGuides(guides);
 });
+
+// The guide's raw MDX, for the Markdown renditions (lib/markdown.ts). The
+// slug becomes a file path, so it must name an existing guide: this checks
+// for itself rather than trusting every caller to have checked first.
+export async function guideSource(slug: string): Promise<string> {
+  if (!(await guideSlugs()).includes(slug))
+    throw new Error(`guideSource: no guide named ${JSON.stringify(slug)}`);
+  return readFile(path.join(GUIDES_DIR, `${slug}.mdx`), "utf8");
+}

@@ -5,8 +5,20 @@ export const SITE_URL = "https://openap.org";
 
 export const SITE_NAME = "Open Agent Primitives";
 
+// Mirrors the landing hero (app/(landing)/Landing.tsx). Change them together.
 export const SITE_DESCRIPTION =
-  "Building blocks for running enterprise AI agents in your own cluster. The AI never decides what it's allowed to do: OAP checks every action before it runs.";
+  "Open-source building blocks for running enterprise AI agents in your own Kubernetes cluster, on the models you choose. OAP checks every action before it runs.";
+
+// The landing page's <title>, which is also its share-card headline.
+export const SITE_TITLE =
+  "Open Agent Primitives: a secure way to run enterprise AI agents";
+
+export const REPO_URL = "https://github.com/authzed/openagentprimitives";
+
+export const PUBLISHER = {
+  name: "AuthZed",
+  url: "https://authzed.com",
+} as const;
 
 // The build-time share card (app/opengraph-image.tsx). A page that sets its
 // own openGraph replaces the inherited one wholesale, image included, so
