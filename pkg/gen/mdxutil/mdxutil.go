@@ -6,6 +6,7 @@ package mdxutil
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Frontmatter renders the `export const meta = {…}` block every generated doc
@@ -68,7 +69,12 @@ func Summary(s string) string {
 	}
 	cut := strings.LastIndexByte(para[:summaryMax], ' ')
 	if cut <= 0 {
+		// No space to break at: cut at the limit, backed off to a rune
+		// boundary so a multi-byte character is never split.
 		cut = summaryMax
+		for cut > 0 && !utf8.RuneStart(para[cut]) {
+			cut--
+		}
 	}
 	return strings.TrimRight(para[:cut], " ,;:-") + "…"
 }

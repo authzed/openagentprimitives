@@ -35,7 +35,11 @@ export const allGuides = cache(async (): Promise<Guide[]> => {
   return sortGuides(guides);
 });
 
-// The guide's raw MDX, for the Markdown renditions (lib/markdown.ts).
-export function guideSource(slug: string): Promise<string> {
+// The guide's raw MDX, for the Markdown renditions (lib/markdown.ts). The
+// slug becomes a file path, so it must name an existing guide: this checks
+// for itself rather than trusting every caller to have checked first.
+export async function guideSource(slug: string): Promise<string> {
+  if (!(await guideSlugs()).includes(slug))
+    throw new Error(`guideSource: no guide named ${JSON.stringify(slug)}`);
   return readFile(path.join(GUIDES_DIR, `${slug}.mdx`), "utf8");
 }

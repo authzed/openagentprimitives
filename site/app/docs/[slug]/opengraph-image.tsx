@@ -11,6 +11,10 @@ export const size = OG_SIZE;
 export const contentType = "image/png";
 export const alt = "An Open Agent Primitives docs page title and summary";
 
+// Like the page and its Markdown route: an unknown slug is a 404, not a
+// failed import and a 500.
+export const dynamicParams = false;
+
 export async function generateStaticParams() {
   return (await guideSlugs()).map((slug) => ({ slug }));
 }

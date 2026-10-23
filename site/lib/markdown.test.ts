@@ -39,6 +39,15 @@ describe("guideToMarkdown", () => {
     );
   });
 
+  it("a body that is only the title line: title once, header under it", () => {
+    const md = guideToMarkdown(
+      guide,
+      "export const meta = {\n  title: 'Demo',\n}\n\n# Demo",
+      ctx,
+    );
+    expect(md).toBe(`# Demo\n\n> A demo page.\n\nSource: ${SITE}/docs/demo\n`);
+  });
+
   it.each([
     [
       "lede div: unwrapped and dedented",

@@ -158,9 +158,12 @@ export function guideToMarkdown(
     .filter(Boolean)
     .join("\n\n");
   // The body opens with the page's own `# Title`; the header goes under it.
-  const firstBreak = md.indexOf("\n");
-  if (md.startsWith("# ") && firstBreak > 0)
-    return `${md.slice(0, firstBreak)}\n\n${head}${md.slice(firstBreak)}\n`;
+  // A body that is only the title line has nothing after it.
+  if (md.startsWith("# ")) {
+    const br = md.indexOf("\n");
+    const [title, rest] = br < 0 ? [md, ""] : [md.slice(0, br), md.slice(br)];
+    return `${title}\n\n${head}${rest}\n`;
+  }
   return `# ${guide.title}\n\n${head}\n\n${md}\n`;
 }
 

@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -107,8 +109,8 @@ func familyPage(fam *cobra.Command, order int) string {
 // holds, so a search result built from it reads as a fragment.
 func familyDescription(fam *cobra.Command) string {
 	short := strings.TrimSuffix(mdxutil.FirstLine(fam.Short), ".")
-	if short != "" {
-		short = strings.ToUpper(short[:1]) + short[1:] + ". "
+	if r, size := utf8.DecodeRuneInString(short); size > 0 {
+		short = string(unicode.ToUpper(r)) + short[size:] + ". "
 	}
 	return fmt.Sprintf("oap %s: %sEvery subcommand, flag, and example, generated from the CLI.", fam.Name(), short)
 }
