@@ -57,8 +57,8 @@ so treat it as possibly stale until you rebuild.
   `/docs/<slug>.md`, and at `/docs/<slug>` for a request sending
   `Accept: text/markdown` (rewrites in `next.config.mjs` to `app/md/[slug]`).
   `/llms.txt` indexes them; `/llms-full.txt` is every guide in one file. The
-  MDX-to-Markdown transform is `lib/markdown.ts`; its test fails if a guide
-  uses a component the transform does not translate.
+  MDX-to-Markdown transform is `lib/markdown.ts`; its test fails if a guide uses
+  a component the transform does not translate.
 - **Copy page.** `components/CopyPage.tsx` sits beside each guide's title: it
   copies the page's Markdown to the clipboard, views it, or opens ChatGPT or
   Claude prefilled with a prompt to read it (the URLs are in
