@@ -55,8 +55,9 @@ const componentFormattingInstructions = `This channel can render structured Bloc
 	`"markdown" (a standard-markdown block, ≤12000 chars); ` +
 	`"table" (rows of rich_text cells; one table per message, ≤100 rows, ≤20 columns); ` +
 	`"data_visualization" (a chart; REQUIRES a "title" ≤50 chars and a "chart" object. ` +
-	`pie: {"type":"pie","segments":[{"label":"Organic","value":60}]}. ` +
-	`bar/area/line: {"type":"bar","series":[{"name":"Signups","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon","Tue"]}} — note each series uses "data" (not "data_points") and axis_config.categories is required; ≤2 charts per message); ` +
+	`pie: {"type":"pie","segments":[{"label":"Organic","value":60}]} — 1–6 segments. ` +
+	`bar/area/line: {"type":"bar","series":[{"name":"Signups","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon","Tue"]}} — each series uses "data" (not "data_points") and axis_config.categories is required. ` +
+	`Slack caps every chart: 1–6 series; 1–20 x-axis categories, all distinct; EXACTLY one data point per category per series, and each point's "label" must be the identical string as its category (not a reformatted date); bucket long time ranges into ≤20 points — do not emit a point per minute; all category labels, series names, and point labels 1–20 chars; pie segment values must be > 0 (omit zero buckets); ≤2 charts per message); ` +
 	`"plan" and "task_card" (task lists); ` +
 	`"card" (title/subtitle/body/subtext — NO action buttons, NO images yet); ` +
 	`"container" (groups 1–10 read-only child blocks in "child_blocks"; REQUIRES a "title" or "rich_text_title"). ` +
@@ -329,11 +330,14 @@ func validateTable(loc string, t *slackapi.TableBlock) error {
 }
 
 // validateDataViz enforces the data_visualization schema Slack's chat.postMessage
-// requires (verified empirically against the live API): a non-empty title ≤50
-// chars, a chart of a known type, and the per-type data shape — pie needs
-// segments, bar/area/line need series plus axis_config.categories. Enforcing it
-// here turns a would-be post-time invalid_blocks (which degrades the whole reply
-// to plain text) into a precise error the agent can correct.
+// requires by delegating to slack-go's DataVisualizationBlock.Validate, which
+// models Slack's per-chart rules (verified against the live API): 1–6 series or
+// pie segments, 1–20 unique categories, exactly one point per category whose
+// label matches it, 1–20-char labels, pie values > 0, and the title/axis-label
+// caps. Enforcing it here turns a would-be post-time invalid_blocks (which
+// degrades the whole reply to plain text, sender.go) into a located error the
+// agent can correct. The only rule kept locally is a whitespace-only title,
+// which Validate's length check lets through.
 //
 // It also runs the no-mass-notification guard over EVERY free-form chart string
 // — the title plus segment labels, series names, data-point labels, axis
@@ -345,60 +349,54 @@ func validateDataViz(loc string, dv *slackapi.DataVisualizationBlock) error {
 	if strings.TrimSpace(dv.Title) == "" {
 		return blockErrf(loc, "data_visualization", "requires a non-empty \"title\" (≤%d chars)", maxDataVizTitleLen)
 	}
-	if n := runeLen(dv.Title); n > maxDataVizTitleLen {
-		return blockErrf(loc, "data_visualization", "title is %d characters; Slack limits it to %d", n, maxDataVizTitleLen)
+	if err := dv.Validate(); err != nil {
+		return blockErrf(loc, "data_visualization", "%v. %s", err, dataVizLimitsHint)
 	}
 	if err := checkBroadcast(loc, "data_visualization", dv.Title); err != nil {
 		return err
 	}
+	var labels []string
 	switch c := dv.Chart.(type) {
 	case *slackapi.DataVisualizationPieChart:
-		if len(c.Segments) == 0 {
-			return blockErrf(loc, "data_visualization", "pie chart requires a non-empty \"segments\" array of {label,value}")
-		}
 		for _, seg := range c.Segments {
-			if err := checkBroadcast(loc, "data_visualization", seg.Label); err != nil {
-				return err
-			}
+			labels = append(labels, seg.Label)
 		}
 	case *slackapi.DataVisualizationBarChart:
-		return validateVizSeries(loc, "bar", c.Series, c.AxisConfig)
+		labels = vizSeriesStrings(c.Series, c.AxisConfig)
 	case *slackapi.DataVisualizationAreaChart:
-		return validateVizSeries(loc, "area", c.Series, c.AxisConfig)
+		labels = vizSeriesStrings(c.Series, c.AxisConfig)
 	case *slackapi.DataVisualizationLineChart:
-		return validateVizSeries(loc, "line", c.Series, c.AxisConfig)
+		labels = vizSeriesStrings(c.Series, c.AxisConfig)
 	default:
 		return blockErrf(loc, "data_visualization", "requires a \"chart\" object whose \"type\" is one of pie, bar, area, line")
+	}
+	for _, l := range labels {
+		if err := checkBroadcast(loc, "data_visualization", l); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func validateVizSeries(loc, kind string, series []slackapi.DataVisualizationDataSeries, axis slackapi.DataVisualizationAxisConfig) error {
-	if len(series) == 0 {
-		return blockErrf(loc, "data_visualization", "%s chart requires a non-empty \"series\" array; each series is {\"name\":…,\"data\":[{\"label\":…,\"value\":…}]}", kind)
-	}
-	if len(axis.Categories) == 0 {
-		return blockErrf(loc, "data_visualization", "%s chart requires \"axis_config\":{\"categories\":[…]} naming the x-axis categories", kind)
-	}
+// dataVizLimitsHint is appended to a Validate failure so the model gets the
+// whole rule set, not just the first rule its chart broke.
+const dataVizLimitsHint = `Slack chart rules: 1–6 series (pie: 1–6 segments, each value > 0); ` +
+	`1–20 unique axis_config.categories (bucket long time ranges into ≤20 points); ` +
+	`each series has exactly one point per category, and each point's label must equal its category string; ` +
+	`every category, series name, and label is 1–20 characters`
+
+// vizSeriesStrings collects the free-form strings of a bar/area/line chart for
+// the broadcast guard.
+func vizSeriesStrings(series []slackapi.DataVisualizationDataSeries, axis slackapi.DataVisualizationAxisConfig) []string {
+	out := make([]string, 0, len(axis.Categories)+2)
 	for _, s := range series {
-		if err := checkBroadcast(loc, "data_visualization", s.Name); err != nil {
-			return err
-		}
+		out = append(out, s.Name)
 		for _, p := range s.Data {
-			if err := checkBroadcast(loc, "data_visualization", p.Label); err != nil {
-				return err
-			}
+			out = append(out, p.Label)
 		}
 	}
-	for _, cat := range axis.Categories {
-		if err := checkBroadcast(loc, "data_visualization", cat); err != nil {
-			return err
-		}
-	}
-	if err := checkBroadcast(loc, "data_visualization", axis.XLabel); err != nil {
-		return err
-	}
-	return checkBroadcast(loc, "data_visualization", axis.YLabel)
+	out = append(out, axis.Categories...)
+	return append(out, axis.XLabel, axis.YLabel)
 }
 
 func validateContainer(loc string, c *slackapi.ContainerBlock) error {
