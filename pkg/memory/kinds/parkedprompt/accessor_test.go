@@ -3,6 +3,8 @@ package parkedprompt_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -175,4 +177,40 @@ func TestOutstanding_EmptyScope(t *testing.T) {
 func TestKind_IsNotAppendOnly(t *testing.T) {
 	assert.False(t, parkedprompt.Kind{}.Retention().AppendOnly,
 		"parked prompts are working state, not audit evidence — Resolve must be able to overwrite")
+}
+
+func TestConcurrentResolutionAndReparkKeepFirstOutcome(t *testing.T) {
+	ctx, mem := testCtx(), newMem(t)
+	original := prompt("concurrent")
+	require.NoError(t, parkedprompt.Note(ctx, mem, scope, original))
+	start := make(chan struct{})
+	results := make(chan parkedprompt.Content, 32)
+	errors := make(chan error, 64)
+	var workers sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		workers.Add(2)
+		go func(i int) {
+			defer workers.Done()
+			<-start
+			content, err := parkedprompt.ResolveWithOutcome(ctx, mem, scope, original.RequestRef, []byte(fmt.Sprintf("outcome-%d", i)))
+			results <- content
+			errors <- err
+		}(i)
+		go func() { defer workers.Done(); <-start; errors <- parkedprompt.Note(ctx, mem, scope, original) }()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	close(errors)
+	for err := range errors {
+		require.NoError(t, err)
+	}
+	winner, found, err := parkedprompt.Find(ctx, mem, scope, original.RequestRef)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, winner.Resolved)
+	require.NotEmpty(t, winner.Resolution)
+	for result := range results {
+		require.Equal(t, winner.Resolution, result.Resolution)
+	}
 }

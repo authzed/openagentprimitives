@@ -1,6 +1,7 @@
 package plangate
 
 import (
+	"reflect"
 	"sort"
 
 	"github.com/authzed/openagentprimitives/pkg/authz/permsurface"
@@ -14,6 +15,7 @@ import (
 // proposal than one reading "adds X" — but dropping reach can never need
 // consent, so it never gates.
 type PhaseDelta struct {
+	ConsentsChanged bool
 	// Index is the phase's position in the NEW plan. Identity is positional
 	// (PhaseRef{digest,index}), never the agent's phase name.
 	Index int
@@ -81,7 +83,7 @@ type PhaseDelta struct {
 // direction — and it is the direction nobody notices, because the gate keeps
 // working and simply stops asking.
 func (d PhaseDelta) Widens() bool {
-	return len(d.Added) > 0 ||
+	return d.ConsentsChanged || len(d.Added) > 0 ||
 		d.MaxNow > d.MaxWas ||
 		len(d.RequiresDropped) > 0 ||
 		len(d.SlotsAdded) > 0 ||
@@ -194,13 +196,15 @@ func DiffPhase(granted, current Phase, index int) (PhaseDelta, bool) {
 	dropped := droppedRequires(granted.Requires, current.Requires)
 	slotsAdded, slotsRemoved := diffSlots(granted.Slots, current.Slots)
 	budgetChanged := granted.Budget.Calls != current.Budget.Calls
+	consentsChanged := !reflect.DeepEqual(granted.Consents, current.Consents)
 
 	if len(added) == 0 && len(removed) == 0 &&
 		granted.Max.Count == current.Max.Count && len(dropped) == 0 &&
-		len(slotsAdded) == 0 && len(slotsRemoved) == 0 && !budgetChanged {
+		len(slotsAdded) == 0 && len(slotsRemoved) == 0 && !budgetChanged && !consentsChanged {
 		return PhaseDelta{}, false
 	}
 	return PhaseDelta{
+		ConsentsChanged: consentsChanged,
 		Index:           index,
 		Label:           current.Label,
 		Added:           sortedHandles(added),

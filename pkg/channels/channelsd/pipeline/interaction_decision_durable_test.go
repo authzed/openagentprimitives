@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -121,8 +122,15 @@ func TestHandleInteractionDecision_AfterTimeoutApplied_IsSpectator(t *testing.T)
 
 	assert.Equal(t, 0, calls,
 		"the bound handler must NOT run after the gate timed out — the grant would outlive a request the runner already denied")
-	assert.False(t, sawPublishedKind(natsRec, channelevents.KindInteractionApplied),
-		"no interaction_applied(approved) contradicting the timeout")
+	for _, published := range natsRec.payloads {
+		var envelope channelevents.Envelope
+		require.NoError(t, json.Unmarshal(published, &envelope))
+		if envelope.Kind == channelevents.KindInteractionApplied {
+			var applied channelevents.InteractionAppliedPayload
+			require.NoError(t, json.Unmarshal(envelope.Payload, &applied))
+			assert.Equal(t, channelevents.OutcomeExpired, applied.Outcome)
+		}
+	}
 	rej := findInteractionDecisionRejected(t, natsRec)
 	assert.Equal(t, "already_resolved", rej.Class, "the post-timeout click is a spectator")
 }

@@ -126,6 +126,13 @@ type ArchiveSweep struct{ baseEvent }
 // that already reached Succeeded/Failed).
 type Expired struct{ baseEvent }
 
+// GoalRunConcluded finishes a goal execution session whose run the goal
+// dispatcher has retained: the run ended and every runner pod succeeded, but
+// the runner's last word was an Idle yield, so nothing else would move the
+// session off Idle. Unlike ArchiveSweep it does NOT set Archived: a goal run is
+// finished, not parked, and must never be woken back into a new turn.
+type GoalRunConcluded struct{ baseEvent }
+
 // Sleep scales an Idle channel session's compute to zero: the operator reaps all
 // its pods but keeps the AgentSession Idle and wakeable. Only Idle sleeps; the
 // fold is a no-op on any other phase (a stale sweep). Analogous to ArchiveSweep.

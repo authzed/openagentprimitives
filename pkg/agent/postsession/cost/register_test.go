@@ -28,6 +28,8 @@ func TestCostHook_GatedBySetting(t *testing.T) {
 	require.Len(t, on, 1)
 	assert.Equal(t, "session_cost", on[0].Name())
 
+	accounting := f.Build(&runner.Loop{RecordSessionCost: true, Provider: fake.New(nil)})
+	require.Len(t, accounting, 1, "goal accounting remains available when notices are disabled")
 	off := f.Build(&runner.Loop{ReportSessionCost: false, Provider: fake.New(nil)})
 	assert.Empty(t, off, "setting off ⇒ no cost hook")
 

@@ -114,4 +114,16 @@ func TestTransitionTerminal(t *testing.T) {
 		got, _ := Transition(State{Phase: PhaseSucceeded}.OrDefault(), Expired{})
 		assert.Equal(t, PhaseSucceeded, got.Phase)
 	})
+	t.Run("goal run concluded: Idle → Succeeded, not archived (never wakeable)", func(t *testing.T) {
+		got, _ := Transition(State{Phase: PhaseIdle, Region: RegionOperatorPost}.OrDefault(), GoalRunConcluded{})
+		assert.Equal(t, PhaseSucceeded, got.Phase)
+		assert.False(t, got.Archived)
+		woken, _ := Transition(got, WakeRequested{})
+		assert.Equal(t, PhaseSucceeded, woken.Phase, "a concluded goal run stays terminal on wake")
+	})
+	t.Run("goal run concluded on already-Failed: sticky, untouched", func(t *testing.T) {
+		got, _ := Transition(State{Phase: PhaseFailed, FailureReason: "X"}.OrDefault(), GoalRunConcluded{})
+		assert.Equal(t, PhaseFailed, got.Phase)
+		assert.Equal(t, "X", got.FailureReason)
+	})
 }

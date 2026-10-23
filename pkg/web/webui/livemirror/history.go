@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -19,6 +20,8 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/httpclient"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/interactionhistory"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/replydelivery"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/turn"
 )
 
@@ -29,10 +32,15 @@ import (
 var ErrNoMemoryAccess = errors.New("no operator memory access; cannot replay history")
 
 // TimelineEntry is one ordered item of a resumed conversation: a message or a
-// plan card. Mirrors the client's TimelineItem (types.ts).
+// plan or interaction card. Mirrors the client's TimelineItem (types.ts).
 type TimelineEntry struct {
-	// Kind is "message" or "plan".
-	Kind string `json:"kind"`
+	InteractionRequest *channelevents.InteractionRequestPayload `json:"interactionRequest,omitempty"`
+	InteractionApplied *channelevents.InteractionAppliedPayload `json:"interactionApplied,omitempty"`
+	OperationID        string                                   `json:"operationID,omitempty"`
+	// Kind is "message", "plan", "interaction", or a surface-authored "notice".
+	Kind    string                        `json:"kind"`
+	Notice  *channelevents.NoticeWire     `json:"notice,omitempty"`
+	Opening *channelevents.SessionOpening `json:"opening,omitempty"`
 	// Role is the chat-timeline role for a "message" entry: "user" (a human
 	// message — a runner "user" turn or a channelsd "inbox" turn) or "agent"
 	// (a runner "assistant" turn). Unset for "plan" entries.
@@ -86,6 +94,74 @@ func ReadHistory(ctx context.Context, baseURL, token, ns, name string, logger lo
 	if err != nil {
 		return History{}, fmt.Errorf("read transcript turns: %w", err)
 	}
+	replies, err := mem.Query(ctx, memory.Query{Scope: scope, Kinds: []string{replydelivery.KindName}})
+	if err != nil {
+		return History{}, fmt.Errorf("read accepted replies: %w", err)
+	}
+	accepted := make(map[string]replydelivery.Content)
+	for _, entry := range replies.Entries {
+		if entry.Kind != replydelivery.KindName {
+			continue
+		}
+		if entry.Provenance == nil || entry.Provenance.Publisher != "system:operator" {
+			return History{}, fmt.Errorf("accepted reply has no operator provenance")
+		}
+		var c replydelivery.Content
+		if err := json.Unmarshal(entry.Content, &c); err != nil {
+			return History{}, err
+		}
+		if c.Intent.Session.Namespace != ns || c.Intent.Session.Name != name {
+			return History{}, fmt.Errorf("accepted reply session mismatch")
+		}
+		if c.Closed {
+			if err := c.Intent.Validate(); err != nil {
+				return History{}, err
+			}
+			continue
+		}
+		if err := c.Receipt.Validate(c.Intent); err != nil {
+			return History{}, err
+		}
+		accepted[c.Intent.Payload.Delivery.ToolUseID] = c
+	}
+	// Tool-use turns are persisted before approval and execution. Their reply
+	// arguments are proposals, not visible messages. Legacy publication notes
+	// establish that a live reply was sent; durable receipts remain authoritative
+	// even when a crash prevents writing that note.
+	published := make(map[string]bool)
+	for _, t := range turns {
+		if t.Role != "system_note" {
+			continue
+		}
+		for _, block := range t.Content {
+			if block.Type != "text" {
+				continue
+			}
+			var note struct {
+				Delivered []string `json:"delivered"`
+			}
+			if err := json.Unmarshal([]byte(block.Text), &note); err != nil {
+				continue // Other system notes are not JSON publication notes.
+			}
+			for _, id := range note.Delivered {
+				published[id] = true
+			}
+		}
+	}
+	// Suppress unconfirmed proposals and replace accepted proposals with the
+	// exact wire body below. Retain tool blocks so internal preambles stay hidden.
+	for ti := range turns {
+		for bi := range turns[ti].Content {
+			block := &turns[ti].Content[bi]
+			if block.ToolUse != nil && block.ToolUse.Name == "respond_to_user" {
+				if _, ok := accepted[block.ToolUse.ID]; ok || !published[block.ToolUse.ID] {
+					copy := *block.ToolUse
+					copy.Name = "reply_proposal"
+					block.ToolUse = &copy
+				}
+			}
+		}
+	}
 	items := turn.VisibleTimeline(turns)
 	out := make([]TimelineEntry, 0, len(items))
 	for _, it := range items {
@@ -111,5 +187,18 @@ func ReadHistory(ctx context.Context, baseURL, token, ns, name string, logger lo
 		}
 		out = append(out, TimelineEntry{Kind: "message", Role: it.Message.Role, Text: it.Message.Text, CreatedAt: it.Message.CreatedAt})
 	}
+	for _, c := range accepted {
+		out = append(out, TimelineEntry{Kind: "message", Role: turn.VisibleRoleAgent, Text: c.Intent.Payload.Text, OperationID: c.Receipt.OperationID, CreatedAt: c.Receipt.AcceptedAt})
+	}
+	interactionRecords, err := mem.Query(ctx, memory.Query{Scope: scope, Kinds: []string{interactionhistory.KindName}})
+	if err != nil {
+		return History{}, fmt.Errorf("read interaction history: %w", err)
+	}
+	interactionItems, err := replayInteractions(interactionRecords.Entries)
+	if err != nil {
+		return History{}, fmt.Errorf("replay interaction history: %w", err)
+	}
+	out = append(out, interactionItems...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return History{Timeline: out, HasOpeningTurn: turn.HasOpeningTurn(turns)}, nil
 }

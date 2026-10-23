@@ -3,6 +3,7 @@ package outbound
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,32 @@ import (
 )
 
 const demoOpening = "Picked up pull request demo-org/demo-repo#2."
+
+func TestRelay_GenericSummaryCarriesInspectableInstructions(t *testing.T) {
+	for _, threaded := range []bool{false, true} {
+		t.Run(fmt.Sprint(threaded), func(t *testing.T) {
+			nc := connectNATS(t)
+			external := map[string]string{"channel_id": "C_OUT"}
+			if threaded {
+				external["thread_ts"] = "existing"
+			}
+			sess := webhookSession("async", "", external)
+			sess.Spec.OpeningSummary = "Session created to review the nightly report"
+			sess.Spec.Prompt.Inline = "  exact original instructions\n<@not-a-mention> "
+			cli := fakeClientWith(t, sess)
+			sndr := &threadRootSender{}
+			startRelay(t, nc, cli, &fixedResolver{s: sndr})
+			publishOut(t, nc, "default", "async", "plan_update", planUpdate(t, "async"))
+			require.True(t, waitUntil(t, 2*time.Second, func() bool { return sndr.count() >= 2 }))
+			envs, _ := sndr.snapshot()
+			var payload channelevents.OutboundUserMessagePayload
+			require.NoError(t, json.Unmarshal(envs[0].Payload, &payload))
+			require.NotNil(t, payload.Opening)
+			require.Equal(t, sess.Spec.OpeningSummary, payload.Opening.Summary)
+			require.Equal(t, sess.Spec.Prompt.Inline, payload.Opening.Instructions)
+		})
+	}
+}
 
 // threadRootSender is slack's first-send shape: the very first Send lands in a
 // channel with no thread yet and reports the root it created; every later Send

@@ -123,6 +123,9 @@ const (
 	KindIdP   Kind = "idp"
 	KindFake  Kind = "fake"
 	KindBento Kind = "bento"
+	// KindCLI is a decider asserted by `oap session approve`: an approver
+	// email the caller supplies, not one a transport authenticated.
+	KindCLI Kind = "cli"
 )
 
 // TeamScope is a workspace/team scope (e.g. a Slack team id). Values are

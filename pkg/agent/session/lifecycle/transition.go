@@ -296,6 +296,15 @@ func transitionTerminal(s State, e Event) (State, []Effect) {
 		// no-ops this for terminal sessions.
 		return fail(s, "SessionExpired", e)
 
+	case GoalRunConcluded:
+		// The goal dispatcher already proved the run ended cleanly, so this is a
+		// completion, not a park: Succeeded without Archived. The sticky guard
+		// at the top of Transition no-ops it for a session the runner finished
+		// itself.
+		s.Phase = PhaseSucceeded
+		s.Region = RegionOperatorPost
+		return s, project(e)
+
 	case Revoked:
 		// In-flight: policy revocation is recorded and the operator is notified, but
 		// the runner controls its own phase — no phase change here.

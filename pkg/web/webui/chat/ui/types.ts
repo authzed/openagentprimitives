@@ -60,11 +60,19 @@ export interface SessionDetail {
 }
 
 // TimelineItem is one ordered entry of a replayed conversation from
-// GET .../messages: a user/agent message or a plan-card snapshot. Mirrors
+// GET .../messages: a message, plan-card snapshot, or session notice. Mirrors
 // chat's timelineEntry (Go).
 export type TimelineItem =
-  | { kind: "message"; role: "user" | "agent"; text: string; createdAt: string }
+  | { kind: "interaction"; interactionRequest: InteractionRequestInner; interactionApplied?: InteractionAppliedInner; createdAt: string }
+  | { kind: "opening"; opening: SessionOpening; createdAt: string }
+  | { kind: "notice"; notice: NoticeWire; createdAt: string }
+  | { kind: "message"; role: "user" | "agent"; text: string; createdAt: string; operationID?: string }
   | { kind: "plan"; plan: PlanUpdateInner; createdAt: string };
+
+export interface SessionOpening {
+  summary: string;
+  instructions: string;
+}
 
 // MessagesResponse is the GET .../messages response body: the ordered timeline
 // replayed when a conversation is opened or resynced after a reconnect.
@@ -96,6 +104,7 @@ export interface MsgAttachment {
 // reply (the runner's respond_to_user), NOT a user send — the name is a
 // historical artifact of the builtin render-event vocabulary.
 export interface UserMessagePayload {
+  delivery?: { id: string };
   session: SessionRef;
   text: string;
   attachments?: MsgAttachment[];
@@ -435,6 +444,7 @@ export interface InteractionRequestInner {
   excerpt?: InteractionExcerpt;
   actions?: InteractionAction[];
   details?: unknown;
+  consents?: InteractionRequestInner[];
   audience: { scope: string };
   expiresAt?: string;
   interruptible?: boolean;
@@ -516,6 +526,7 @@ export interface InteractionDecisionRejectedPayload {
 // arrive as the fallback variant below and are ignored (not an error: they're
 // simply outside v1's rendered vocabulary, not a malformed frame).
 export type ChatFrame =
+  | { type: "session_opening"; session: SessionRef; payload: { session: SessionRef; opening: SessionOpening } }
   | { type: "user_message"; session: SessionRef; payload: UserMessagePayload }
   | { type: "user_echo"; session: SessionRef; payload: UserEchoPayload }
   | { type: "notification"; session: SessionRef; payload: NotificationPayload }
@@ -548,9 +559,11 @@ export type ChatLineRole =
   | "plan"
   | "interaction"
   | "notice"
+  | "opening"
   | "toolSession";
 
 export interface ChatLine {
+  operationId?: string;
   id: string;
   role: ChatLineRole;
   text: string;
@@ -578,6 +591,7 @@ export interface ChatLine {
   // tone-styled card. Unlike `interactionRequest` it is never updated in place
   // — a notice is terminal by construction (nothing decides it).
   notice?: NoticeWire;
+  opening?: SessionOpening;
   // queued is set on a role==="user" line sent while the agent was already
   // working the current turn: it POSTed immediately (the P1a backend holds it
   // server-side), but MessageList renders it grayed with a "Queued" label

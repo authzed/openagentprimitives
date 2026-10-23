@@ -545,9 +545,22 @@ type ScopeDeleter interface {
 }
 
 // Reconciler reconciles AgentSession objects.
+type GoalSessionValidator interface {
+	// GoalSessionConcluded reports whether the session is the one its occurrence
+	// attached and that run has ended. A concluded session gets terminal
+	// reconciles only; it is never validated for activation. retained further
+	// reports that the dispatcher confirmed a clean end (every runner pod
+	// succeeded) and is keeping the session for inspection, which is what lets
+	// the reconciler finish a session the runner left Idle.
+	GoalSessionConcluded(context.Context, *spiceboxv1alpha1.AgentSession) (concluded, retained bool, err error)
+	ValidateGoalSession(context.Context, *spiceboxv1alpha1.AgentSession) error
+	ConstrainGoalSettings(context.Context, *spiceboxv1alpha1.AgentSession, *spiceboxv1alpha1.EffectiveSettings) error
+}
+
 type Reconciler struct {
-	Client    client.Client
-	APIReader client.Reader
+	GoalValidator GoalSessionValidator
+	Client        client.Client
+	APIReader     client.Reader
 
 	// UsesLocalDevImages mirrors the resolved cloud kind's
 	// InstallProfile().UsesLocalDevImages(): true on local/desktop clusters,
@@ -1168,6 +1181,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if !sess.DeletionTimestamp.IsZero() {
 		return r.finalize(ctx, &sess)
 	}
+	// A goal session is validated against its occurrence before anything reads
+	// credentials or starts a pod. Once the run has ended, validation refuses by
+	// design, yet the dispatcher keeps the session through its inspection window
+	// and it still needs the terminal reconciles below (chain-head anchoring,
+	// reap, GC). goalConcluded routes it through those and returns before the
+	// AgentClass resolve, so nothing past that point — credentials, sandboxes,
+	// wake, the runner pod — can run for it.
+	goalConcluded, goalRetained := false, false
+	if sess.Spec.GoalExecution != nil {
+		if r.GoalValidator == nil {
+			return ctrl.Result{}, fmt.Errorf("goal session validator unavailable")
+		}
+		concluded, retained, err := r.GoalValidator.GoalSessionConcluded(ctx, &sess)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("goal session occurrence lookup: %w", err)
+		}
+		goalConcluded, goalRetained = concluded, retained
+		if !goalConcluded {
+			if err := r.GoalValidator.ValidateGoalSession(ctx, &sess); err != nil {
+				return ctrl.Result{}, fmt.Errorf("goal session activation refused: %w", err)
+			}
+		}
+	}
 	// Snapshot the session as read so every status write below sends only the
 	// fields this reconcile actually changes; agentstatus.WriteOwned diffs
 	// against it.
@@ -1249,8 +1285,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// proceed=false short-circuits the normal reconcile; the next watch event
 	// re-enters either to continue (idempotent) or to operate on the
 	// now-superseded parent.
-	if proceed, res, err := r.ReconcileRestart(ctx, &sess); err != nil || !proceed {
-		return res, err
+	// A concluded goal run is never forked: the child would carry no authority
+	// to run under.
+	if !goalConcluded {
+		if proceed, res, err := r.ReconcileRestart(ctx, &sess); err != nil || !proceed {
+			return res, err
+		}
 	}
 
 	// StartFailure signal: channelsd sets status.startFailure on a terminal
@@ -1260,6 +1300,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// crash-restart that re-reads an already-Failed session idempotent.
 	if sess.Status.StartFailure != nil && !isTerminalPhase(sess.Status.Phase) {
 		return r.markBootFailed(ctx, &sess, sess.Status.StartFailure.Reason, sess.Status.StartFailure.Message)
+	}
+
+	// A retained goal run usually ends with the runner's Idle yield, and the
+	// goalConcluded return below skips every sweep that would move an Idle
+	// session on. Finish it here, ahead of chain-head anchoring, so the run is
+	// anchored in this same reconcile rather than never.
+	if goalRetained && !isTerminalPhase(sess.Status.Phase) {
+		if err := r.concludeGoalRun(ctx, &sess); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Chain-head anchoring: once a session is terminal, compute its per-publisher
@@ -1372,6 +1422,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
+	if goalConcluded {
+		sess.Status.ObservedGeneration = sess.Generation
+		return ctrl.Result{}, r.applyStatus(ctx, &sess)
+	}
+
 	// 1. Resolve AgentClass + gate on Valid=True.
 	var ac spiceboxv1alpha1.AgentClass
 	acKey := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Spec.Class}
@@ -1442,6 +1497,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, fmt.Errorf("resolve settings: %w", err)
 		}
 		sess.Status.EffectiveSettings = &eff
+		if sess.Spec.GoalExecution != nil {
+			if err := r.GoalValidator.ConstrainGoalSettings(ctx, &sess, &eff); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
 		// Catalog token: when the effective model came from the model catalog
 		// rather than bring-your-own, read the central token from its
 		// system-namespace Secret and repoint Model.APIKey at the per-session

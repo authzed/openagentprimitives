@@ -413,5 +413,14 @@ func clonePlan(p *Plan) Plan {
 	out := *p
 	out.Items = append([]Item(nil), p.Items...)
 	out.Phases = append([]Phase(nil), p.Phases...)
+	for i := range out.Phases {
+		out.Phases[i].Reminders = append([]ReminderRequest(nil), p.Phases[i].Reminders...)
+		for j := range out.Phases[i].Reminders {
+			terms := &out.Phases[i].Reminders[j].Terms
+			terms.SkillVersions = append([]string(nil), terms.SkillVersions...)
+			terms.AllowedOperations = append([]string(nil), terms.AllowedOperations...)
+			terms.Evidence = append([]string(nil), terms.Evidence...)
+		}
+	}
 	return out
 }

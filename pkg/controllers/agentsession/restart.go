@@ -53,6 +53,9 @@ const restorePollInterval = 5 * time.Second
 // service account may create a session that way (the finalizer admission
 // policy), which is why this create must stay on the operator's client.
 func EnsureChildSession(ctx context.Context, c client.Client, parent *spiceboxv1alpha1.AgentSession, pr *spiceboxv1alpha1.PendingRestart) (*spiceboxv1alpha1.AgentSession, error) {
+	if parent.Spec.GoalExecution != nil {
+		return nil, fmt.Errorf("goal execution cannot create a continuation")
+	}
 	desired := BuildChildSession(parent, pr)
 	if err := c.Create(ctx, desired); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
@@ -338,6 +341,9 @@ func (r *Reconciler) clearPriorRestartDenial(ctx context.Context, sess *spicebox
 // in flight and the outer Reconcile should continue normally.
 func (r *Reconciler) ReconcileRestart(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (proceed bool, res ctrl.Result, err error) {
 	pr := sess.Status.PendingRestart
+	if pr != nil && sess.Spec.GoalExecution != nil {
+		return false, ctrl.Result{}, fmt.Errorf("goal execution cannot fork or automatically restart")
+	}
 	if pr == nil {
 		return true, ctrl.Result{}, nil
 	}

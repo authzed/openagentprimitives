@@ -10,6 +10,7 @@ import (
 
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/notice"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
 func TestDecisionWireRoundTrip(t *testing.T) {
@@ -143,4 +144,21 @@ func TestRequestViewMessageSendsVia(t *testing.T) {
 	require.NoError(t, json.Unmarshal(gotEnv.Payload, &pl))
 	assert.Equal(t, "urn:ap:view:artifact:artifact-3f2a1b8c", pl.Via)
 	assert.Equal(t, "hello", pl.Text)
+}
+
+func TestRequestViewActorDoesNotDeliverAnotherMessage(t *testing.T) {
+	deps := Deps{NATSRequest: func(subject string, data []byte, _ time.Duration) ([]byte, error) {
+		var env channelevents.Envelope
+		require.NoError(t, json.Unmarshal(data, &env))
+		var pl channelevents.ViewMessagePayload
+		require.NoError(t, json.Unmarshal(env.Payload, &pl))
+		assert.True(t, pl.AttestOnly)
+		assert.Empty(t, pl.Text)
+		assert.Empty(t, pl.RequestID)
+		assert.Equal(t, identity.Email("alice@example.com"), pl.Author.Email)
+		return json.Marshal(channelevents.ViewMessageResultPayload{Outcome: "routed"})
+	}}
+	dec, err := RequestViewActor(deps, "default", "sess", ExternalIdentity{Kind: "idp", Email: "alice@example.com", ExternalID: "alice@example.com"})
+	require.NoError(t, err)
+	assert.Equal(t, OutcomeRouted, dec.Outcome)
 }

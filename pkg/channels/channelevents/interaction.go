@@ -249,6 +249,8 @@ type InteractionAudience struct {
 // externally-derived content (tool output, inspected data, third-party strings)
 // MUST be routed through Excerpt, never through the trusted fields.
 type InteractionRequestPayload struct {
+	// Consents are exact requests reviewed and decided together with this plan.
+	Consents []InteractionRequestPayload `json:"consents,omitempty"`
 	// AgentSessionRef is a denormalized copy for renderer convenience, not
 	// validated here. It is NOT a routing input, and neither is the envelope's
 	// Session field: on the bus the NATS subject is the routing authority and
@@ -318,6 +320,9 @@ type InteractionRequestPayload struct {
 // Validate enforces the wire contract. Nil Actions is legal: a read-only
 // notice card (info-leakage notice-only mode).
 func (p InteractionRequestPayload) Validate() error {
+	if err := p.ValidatePlanConsents(); err != nil {
+		return err
+	}
 	if p.Category == "" {
 		return fmt.Errorf("interaction request: category must not be empty")
 	}

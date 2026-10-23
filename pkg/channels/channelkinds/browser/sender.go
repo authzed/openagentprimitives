@@ -43,6 +43,10 @@ func (s *browserSender) Send(_ context.Context, sess channelkinds.SessionInfo, e
 		if err := json.Unmarshal(env.Payload, &pl); err != nil {
 			return s.emitSendError(sess, env.Kind, err)
 		}
+		if pl.Opening != nil {
+			s.sink.Emit(MsgSessionOpening{Session: refOf(sess), Opening: pl.Opening})
+			return channelkinds.SubChannelSendResult{}, nil
+		}
 		var atts []MsgAttachment
 		for _, a := range pl.Attachments {
 			// Skip an attachment with no artifact id — the browser chip needs it
@@ -53,7 +57,7 @@ func (s *browserSender) Send(_ context.Context, sess channelkinds.SessionInfo, e
 			}
 			atts = append(atts, MsgAttachment{ArtifactID: a.ArtifactID, Filename: a.Filename, MIME: a.MIME})
 		}
-		s.sink.Emit(MsgUserMessage{Session: refOf(sess), Text: pl.Text, Attachments: atts})
+		s.sink.Emit(MsgUserMessage{Session: refOf(sess), Text: pl.Text, Attachments: atts, Delivery: pl.Delivery})
 		return channelkinds.SubChannelSendResult{}, nil
 
 	case channelevents.KindNotification:
