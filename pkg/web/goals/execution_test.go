@@ -430,20 +430,23 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 		f.auth.denySource = false
 	}
 	require.NoError(t, dispatcher.ValidateGoalSession(ctx, &scheduled))
-	concluded, err := dispatcher.GoalSessionConcluded(ctx, &scheduled)
+	concluded, retained, err := dispatcher.GoalSessionConcluded(ctx, &scheduled)
 	require.NoError(t, err)
 	assert.False(t, concluded, "a running occurrence's session is not concluded")
+	assert.False(t, retained, "a running occurrence is not retained")
 	impostor := scheduled.DeepCopy()
 	impostor.UID = "impostor"
-	concluded, err = dispatcher.GoalSessionConcluded(ctx, impostor)
+	concluded, retained, err = dispatcher.GoalSessionConcluded(ctx, impostor)
 	require.NoError(t, err)
 	assert.False(t, concluded, "a session the occurrence never attached is never concluded")
+	assert.False(t, retained, "a session the occurrence never attached is never retained")
 	// A retained run is concluded: terminal reconciles proceed while activation stays refused.
 	_, err = db.DB().ExecContext(ctx, `UPDATE oap_goal_occurrences SET state=? WHERE id=?`, string(domain.OccurrenceRetained), occurrence.ID)
 	require.NoError(t, err)
-	concluded, err = dispatcher.GoalSessionConcluded(ctx, &scheduled)
+	concluded, retained, err = dispatcher.GoalSessionConcluded(ctx, &scheduled)
 	require.NoError(t, err)
 	assert.True(t, concluded, "a retained occurrence's own session is concluded")
+	assert.True(t, retained, "a retained occurrence reports retained, so the reconciler may finish its session")
 	require.ErrorIs(t, dispatcher.ValidateGoalSession(ctx, &scheduled), domain.ErrDenied)
 	_, err = db.DB().ExecContext(ctx, `UPDATE oap_goal_occurrences SET state=? WHERE id=?`, string(domain.OccurrenceRunning), occurrence.ID)
 	require.NoError(t, err)

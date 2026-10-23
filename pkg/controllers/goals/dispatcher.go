@@ -366,20 +366,23 @@ func (d *Dispatcher) stop(ctx context.Context, o domain.Occurrence, sess *v1.Age
 // its terminal reconciles (chain-head anchoring, pod reap, GC) through the
 // retention window, so the reconciler routes it there instead of refusing it.
 // A session the occurrence never attached is not concluded; it gets the full
-// ValidateGoalSession refusal.
-func (d *Dispatcher) GoalSessionConcluded(ctx context.Context, sess *v1.AgentSession) (bool, error) {
+// ValidateGoalSession refusal. retained is true only for OccurrenceRetained,
+// which the store admits solely for a RunSessionEnded outcome after every
+// runner pod succeeded: the one state in which the reconciler may itself mark
+// the session Succeeded.
+func (d *Dispatcher) GoalSessionConcluded(ctx context.Context, sess *v1.AgentSession) (concluded, retained bool, err error) {
 	reference := sess.Spec.GoalExecution
 	if reference == nil {
-		return false, nil
+		return false, false, nil
 	}
 	o, err := d.Store.Occurrence(ctx, reference.OccurrenceID)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if o.SessionUID == "" || o.SessionUID != string(sess.UID) || o.SessionName != sess.Name || o.Domain.Namespace != sess.Namespace || !reflect.DeepEqual(reference, ref(o)) {
-		return false, nil
+		return false, false, nil
 	}
-	return o.Outcome != nil || o.State != domain.OccurrenceRunning, nil
+	return o.Outcome != nil || o.State != domain.OccurrenceRunning, o.State == domain.OccurrenceRetained, nil
 }
 
 // ValidateGoalSession is called before the reconciler reads any credentials.

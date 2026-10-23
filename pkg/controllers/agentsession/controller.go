@@ -548,8 +548,11 @@ type ScopeDeleter interface {
 type GoalSessionValidator interface {
 	// GoalSessionConcluded reports whether the session is the one its occurrence
 	// attached and that run has ended. A concluded session gets terminal
-	// reconciles only; it is never validated for activation.
-	GoalSessionConcluded(context.Context, *spiceboxv1alpha1.AgentSession) (bool, error)
+	// reconciles only; it is never validated for activation. retained further
+	// reports that the dispatcher confirmed a clean end (every runner pod
+	// succeeded) and is keeping the session for inspection, which is what lets
+	// the reconciler finish a session the runner left Idle.
+	GoalSessionConcluded(context.Context, *spiceboxv1alpha1.AgentSession) (concluded, retained bool, err error)
 	ValidateGoalSession(context.Context, *spiceboxv1alpha1.AgentSession) error
 	ConstrainGoalSettings(context.Context, *spiceboxv1alpha1.AgentSession, *spiceboxv1alpha1.EffectiveSettings) error
 }
@@ -1185,16 +1188,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// reap, GC). goalConcluded routes it through those and returns before the
 	// AgentClass resolve, so nothing past that point — credentials, sandboxes,
 	// wake, the runner pod — can run for it.
-	goalConcluded := false
+	goalConcluded, goalRetained := false, false
 	if sess.Spec.GoalExecution != nil {
 		if r.GoalValidator == nil {
 			return ctrl.Result{}, fmt.Errorf("goal session validator unavailable")
 		}
-		concluded, err := r.GoalValidator.GoalSessionConcluded(ctx, &sess)
+		concluded, retained, err := r.GoalValidator.GoalSessionConcluded(ctx, &sess)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("goal session occurrence lookup: %w", err)
 		}
-		goalConcluded = concluded
+		goalConcluded, goalRetained = concluded, retained
 		if !goalConcluded {
 			if err := r.GoalValidator.ValidateGoalSession(ctx, &sess); err != nil {
 				return ctrl.Result{}, fmt.Errorf("goal session activation refused: %w", err)
@@ -1297,6 +1300,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// crash-restart that re-reads an already-Failed session idempotent.
 	if sess.Status.StartFailure != nil && !isTerminalPhase(sess.Status.Phase) {
 		return r.markBootFailed(ctx, &sess, sess.Status.StartFailure.Reason, sess.Status.StartFailure.Message)
+	}
+
+	// A retained goal run usually ends with the runner's Idle yield, and the
+	// goalConcluded return below skips every sweep that would move an Idle
+	// session on. Finish it here, ahead of chain-head anchoring, so the run is
+	// anchored in this same reconcile rather than never.
+	if goalRetained && !isTerminalPhase(sess.Status.Phase) {
+		if err := r.concludeGoalRun(ctx, &sess); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Chain-head anchoring: once a session is terminal, compute its per-publisher

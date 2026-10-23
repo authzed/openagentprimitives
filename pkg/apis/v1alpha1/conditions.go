@@ -963,6 +963,7 @@ const (
 const (
 	ReasonAgentSessionAgentWorkComplete = "AgentWorkComplete" // agent_work_complete tool was called
 	ReasonAgentSessionArchived          = "Archived"          // operator archive sweep transitioned Idle â Succeeded
+	ReasonAgentSessionGoalRunConcluded  = "GoalRunConcluded"  // goal dispatcher retained the run; operator transitioned Idle to Succeeded
 )
 
 // AnnotationPinRefreeze requests that the dependency's pin baseline be

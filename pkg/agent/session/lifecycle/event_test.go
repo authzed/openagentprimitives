@@ -17,7 +17,7 @@ func TestEventsSealed(t *testing.T) {
 		DecisionResolved{RequestID: "r1", Approved: true},
 		ProviderError{}, RetryRequested{}, RetryTTLExpired{}, WakeRequested{},
 		ArchiveSweep{}, Sleep{}, AwaitYieldEntered{}, AwaitResumed{}, IdleYield{}, ShareDeniedYield{},
-		Revoked{}, ScopeMutated{}, RestartRequested{}, Expired{},
+		Revoked{}, ScopeMutated{}, RestartRequested{}, Expired{}, GoalRunConcluded{},
 		Held{Reason: "manual review"}, Released{ApprovedBy: "canonical-user"},
 	}
 	if len(evs) == 0 {
