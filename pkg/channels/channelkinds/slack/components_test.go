@@ -37,6 +37,18 @@ func vizManySeries(n int) string {
 		`"axis_config":{"categories":["Mon"]}}}]`
 }
 
+// vizBar builds a bar chart from a raw categories array and raw series
+// objects, so each case states only the part of the chart it is breaking.
+func vizBar(categories, series string) string {
+	return `[{"type":"data_visualization","title":"x","chart":{"type":"bar",` +
+		`"series":[` + series + `],"axis_config":{"categories":` + categories + `}}}]`
+}
+
+// vizPie builds a pie chart from raw segment objects.
+func vizPie(segments string) string {
+	return `[{"type":"data_visualization","title":"x","chart":{"type":"pie","segments":[` + segments + `]}}]`
+}
+
 func repeatBlock(block string, n int) string {
 	parts := make([]string, n)
 	for i := range parts {
@@ -195,7 +207,7 @@ func TestValidateComponents(t *testing.T) {
 		{name: "rich_text usergroup element: rejected usergroup ping", json: `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"usergroup","usergroup_id":"S12345"}]}]}]`, wantErr: "usergroup"},
 		{name: "data_viz pie segment label <!channel>: rejected broadcast", json: `[{"type":"data_visualization","title":"Share","chart":{"type":"pie","segments":[{"label":"<!channel>","value":60}]}}]`, wantErr: "broadcast"},
 		{name: "data_viz bar series name <!subteam^>: rejected usergroup ping", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"bar","series":[{"name":"<!subteam^S1>","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "usergroup"},
-		{name: "data_viz axis category <!here>: rejected broadcast", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"line","series":[{"name":"S","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["<!here>"]}}}]`, wantErr: "broadcast"},
+		{name: "data_viz axis category <!here>: rejected broadcast", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"line","series":[{"name":"S","data":[{"label":"<!here>","value":10}]}],"axis_config":{"categories":["<!here>"]}}}]`, wantErr: "broadcast"},
 
 		// --- one block slot is reserved for the sender's mention_only footer ---
 		{name: "49 blocks: accepted at the agent cap", json: repeatBlock(`{"type":"divider"}`, 49), wantErr: ""},
@@ -220,16 +232,25 @@ func TestValidateComponents(t *testing.T) {
 		// block_data_visualization.go documents 1–6 series/segments, 1–20
 		// categories with exactly one point per category, ≤20-char labels) ---
 		{name: "line chart with 20 points: accepted at the cap", json: vizLineChart(20), wantErr: ""},
-		{name: "line chart with 21 points: rejected over cap", json: vizLineChart(21), wantErr: "aggregate into fewer buckets"},
+		{name: "line chart with 21 points: rejected over cap", json: vizLineChart(21), wantErr: "cannot have more than 20 points"},
 		{name: "bar chart with 6 series: accepted at the cap", json: vizManySeries(6), wantErr: ""},
-		{name: "bar chart with 7 series: rejected over cap", json: vizManySeries(7), wantErr: "series per chart"},
-		{name: "series point count != categories: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"bar","series":[{"name":"S","data":[{"label":"Mon","value":1},{"label":"Tue","value":2}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "one point per category"},
-		{name: "category label over 20 chars: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"line","series":[{"name":"S","data":[{"label":"x","value":1}]}],"axis_config":{"categories":["` + strings.Repeat("c", 21) + `"]}}}]`, wantErr: "category labels to"},
-		{name: "series name over 20 chars: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"bar","series":[{"name":"` + strings.Repeat("s", 21) + `","data":[{"label":"Mon","value":1}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "series names to"},
-		{name: "data point label over 20 chars: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"line","series":[{"name":"S","data":[{"label":"` + strings.Repeat("p", 21) + `","value":1}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "point labels to"},
-		{name: "duplicate series names: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"bar","series":[{"name":"S","data":[{"label":"Mon","value":1}]},{"name":"S","data":[{"label":"Mon","value":2}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "unique series names"},
-		{name: "pie chart with 7 segments: rejected over cap", json: `[{"type":"data_visualization","title":"x","chart":{"type":"pie","segments":[{"label":"a","value":1},{"label":"b","value":1},{"label":"c","value":1},{"label":"d","value":1},{"label":"e","value":1},{"label":"f","value":1},{"label":"g","value":1}]}}]`, wantErr: "segments per chart"},
-		{name: "pie segment label over 20 chars: rejected", json: `[{"type":"data_visualization","title":"x","chart":{"type":"pie","segments":[{"label":"` + strings.Repeat("a", 21) + `","value":1}]}}]`, wantErr: "segment labels to"},
+		{name: "bar chart with 7 series: rejected over cap", json: vizManySeries(7), wantErr: "cannot have more than 6 series"},
+		{name: "series point count != categories: rejected", json: vizBar(`["Mon"]`, `{"name":"S","data":[{"label":"Mon","value":1},{"label":"Tue","value":2}]}`), wantErr: "exactly one point for every category"},
+		{name: "point label not matching its category: rejected", json: vizBar(`["2026-10-01","2026-10-02"]`, `{"name":"S","data":[{"label":"Oct 1","value":1},{"label":"Oct 2","value":2}]}`), wantErr: "must match axis_config.categories"},
+		{name: "repeated point label within a series: rejected", json: vizBar(`["Mon","Tue"]`, `{"name":"S","data":[{"label":"Mon","value":1},{"label":"Mon","value":2}]}`), wantErr: "duplicate label"},
+		{name: "repeated category: rejected", json: vizBar(`["Mon","Mon"]`, `{"name":"S","data":[{"label":"Mon","value":1},{"label":"Mon","value":2}]}`), wantErr: "duplicate category"},
+		{name: "empty category: rejected", json: vizBar(`[""]`, `{"name":"S","data":[{"label":"","value":1}]}`), wantErr: "categories[0] must have a minimum length of 1"},
+		{name: "category label over 20 chars: rejected", json: vizBar(`["`+strings.Repeat("c", 21)+`"]`, `{"name":"S","data":[{"label":"`+strings.Repeat("c", 21)+`","value":1}]}`), wantErr: "categories[0] cannot be longer than 20"},
+		{name: "empty series name: rejected", json: vizBar(`["Mon"]`, `{"name":"","data":[{"label":"Mon","value":1}]}`), wantErr: "name must have a minimum length of 1"},
+		{name: "series name over 20 chars: rejected", json: vizBar(`["Mon"]`, `{"name":"`+strings.Repeat("s", 21)+`","data":[{"label":"Mon","value":1}]}`), wantErr: "name cannot be longer than 20"},
+		{name: "empty data point label: rejected", json: vizBar(`["Mon"]`, `{"name":"S","data":[{"label":"","value":1}]}`), wantErr: "label must have a minimum length of 1"},
+		{name: "duplicate series names: rejected", json: vizBar(`["Mon"]`, `{"name":"S","data":[{"label":"Mon","value":1}]},{"name":"S","data":[{"label":"Mon","value":2}]}`), wantErr: "series names must be unique"},
+		{name: "pie chart with 7 segments: rejected over cap", json: `[{"type":"data_visualization","title":"x","chart":{"type":"pie","segments":[{"label":"a","value":1},{"label":"b","value":1},{"label":"c","value":1},{"label":"d","value":1},{"label":"e","value":1},{"label":"f","value":1},{"label":"g","value":1}]}}]`, wantErr: "more than 6 segments"},
+		{name: "pie segment label over 20 chars: rejected", json: vizPie(`{"label":"` + strings.Repeat("a", 21) + `","value":1}`), wantErr: "label cannot be longer than 20"},
+		{name: "pie segment with empty label: rejected", json: vizPie(`{"label":"","value":1}`), wantErr: "label must have a minimum length of 1"},
+		{name: "pie segment with zero value: rejected", json: vizPie(`{"label":"Sales","value":5},{"label":"Refunds","value":0}`), wantErr: "value must be greater than 0"},
+		{name: "pie segment with negative value: rejected", json: vizPie(`{"label":"Refunds","value":-1}`), wantErr: "value must be greater than 0"},
+		{name: "chart rejection: carries the full rule set for the model", json: vizLineChart(21), wantErr: "bucket long time ranges"},
 
 		// --- structurally empty blocks Slack rejects ---
 		{name: "header without text: rejected", json: `[{"type":"header"}]`, wantErr: "header"},
