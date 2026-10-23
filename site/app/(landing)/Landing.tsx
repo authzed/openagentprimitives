@@ -16,12 +16,10 @@ import { OapMark, OAP_MARK_PATHS } from "@/components/OapMark";
 import { SiteFooter } from "@/components/SiteFooter";
 import { THEME_MODES, type ThemeMode } from "@/components/ThemeToggle";
 import { DiscordIcon, GitHubIcon } from "@/components/BrandIcons";
-import { DISCORD_URL } from "@/lib/site";
+import { DISCORD_URL, REPO_URL } from "@/lib/site";
 import { getAsset } from "@/lib/manifest";
 import { GeoFigure } from "./geo/GeoFigure";
 import { OWASP, COVERAGE_LABEL, coverageSummary } from "./owasp";
-
-const REPO = "https://github.com/authzed/openagentprimitives";
 
 /* The page's copy follows the repository README: its order, its emphasis and
  * its claims. When the README's story changes, change this page to match. */
@@ -1143,7 +1141,7 @@ export function Landing() {
           </a>
           <a href="#secure">Security</a>
           <a href="#agent-builder">Agent Builder</a>
-          <a className="lp-nav-icon" href={REPO} aria-label="GitHub">
+          <a className="lp-nav-icon" href={REPO_URL} aria-label="GitHub">
             <GitHubIcon />
           </a>
           <a className="lp-nav-icon" href={DISCORD_URL} aria-label="Discord">
@@ -1443,7 +1441,7 @@ export function Landing() {
               <a className="lp-btn lp-btn--ghost" href="/docs/what-is-oap">
                 Read the docs
               </a>
-              <a className="lp-btn lp-btn--ghost" href={REPO}>
+              <a className="lp-btn lp-btn--ghost" href={REPO_URL}>
                 Source
               </a>
             </div>

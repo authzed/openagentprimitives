@@ -1,5 +1,5 @@
 // A coverage badge for the OWASP page — the four levels the coverage doc uses.
-const LABELS: Record<string, string> = {
+export const COVERAGE_LABELS: Record<string, string> = {
   substantial: "Substantial",
   partial: "Partial",
   minimal: "Minimal",
@@ -9,7 +9,7 @@ const LABELS: Record<string, string> = {
 export function Coverage({ level }: { level: string }) {
   return (
     <span className={`doc-cov doc-cov--${level}`}>
-      {LABELS[level] ?? level}
+      {COVERAGE_LABELS[level] ?? level}
     </span>
   );
 }

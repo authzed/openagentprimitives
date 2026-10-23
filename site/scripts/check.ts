@@ -164,6 +164,15 @@ for (const p of checkLedeTags(
 ))
   err(`${p.file}: uses <p className="doc-lede">; use <div> instead`);
 
+// 6: every guide has a meta description. It is the page's search snippet,
+// its share-card text, and its line in /llms.txt; without one the page falls
+// back to the site-wide description and reads as a duplicate of every other.
+for (const [slug, src] of guideSources) {
+  const meta = /^export const meta = \{[\s\S]*?^\}/m.exec(src)?.[0] ?? "";
+  if (!/\bdescription:\s*\S/.test(meta))
+    err(`content/docs/${slug}.mdx: meta has no description`);
+}
+
 if (errors.length) {
   console.error(`check FAILED with ${errors.length} problem(s):`);
   for (const e of errors) console.error(`  ✗ ${e}`);

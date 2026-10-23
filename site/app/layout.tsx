@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { ThemeProvider } from "next-themes";
 import { Analytics } from "@/components/Analytics";
-import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
+import { PUBLISHER, SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 import iconDarkInk from "../../docs/assets/brand/oap-icon-dark.svg";
 import iconLightInk from "../../docs/assets/brand/oap-icon-light.svg";
 
@@ -10,6 +10,23 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: { default: SITE_NAME, template: "%s · OAP docs" },
   description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  authors: [PUBLISHER],
+  creator: PUBLISHER.name,
+  publisher: PUBLISHER.name,
+  category: "technology",
+  // Let search show full snippets and large image previews.
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-snippet": -1,
+      "max-image-preview": "large",
+      "max-video-preview": -1,
+    },
+  },
   openGraph: {
     siteName: SITE_NAME,
     type: "website",

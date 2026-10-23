@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
-import { OG_IMAGE, SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
+import { JsonLd } from "@/components/JsonLd";
+import { OG_IMAGE, SITE_DESCRIPTION, SITE_NAME, SITE_TITLE } from "@/lib/site";
+import { landingGraph } from "@/lib/structured-data";
 import { Landing } from "./Landing";
 import "./landing.css";
 
 export const metadata: Metadata = {
-  title: {
-    absolute: "Open Agent Primitives: a secure way to run enterprise AI agents",
-  },
+  title: { absolute: SITE_TITLE },
   description: SITE_DESCRIPTION,
-  alternates: { canonical: "/" },
+  // The docs index for LLMs and agents (app/llms.txt).
+  alternates: { canonical: "/", types: { "text/plain": "/llms.txt" } },
   openGraph: {
-    title: SITE_NAME,
+    title: SITE_TITLE,
     description: SITE_DESCRIPTION,
     url: "/",
     siteName: SITE_NAME,
@@ -21,5 +22,10 @@ export const metadata: Metadata = {
 };
 
 export default function Page() {
-  return <Landing />;
+  return (
+    <>
+      <JsonLd data={landingGraph()} />
+      <Landing />
+    </>
+  );
 }
