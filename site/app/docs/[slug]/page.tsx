@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { CopyPage } from "@/components/CopyPage";
 import { JsonLd } from "@/components/JsonLd";
 import { guideSlugs, loadGuide } from "@/lib/guides";
 import { SITE_DESCRIPTION, SITE_NAME } from "@/lib/site";
@@ -57,6 +58,7 @@ export default async function GuidePage({ params }: Props) {
           `/docs/${slug}/opengraph-image`,
         )}
       />
+      <CopyPage slug={slug} />
       <Component />
     </div>
   );
