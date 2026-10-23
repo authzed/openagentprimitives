@@ -127,7 +127,7 @@ type kindDispatch struct {
 // approver subject set.
 func cliApprover(approverEmail string) channelevents.ExternalIdentity {
 	return channelevents.ExternalIdentity{
-		Kind:  "cli",
+		Kind:  identity.KindCLI,
 		Email: identity.Email(approverEmail),
 	}
 }
@@ -237,6 +237,17 @@ func approvalKindForCategory(category string) (approvalKind, bool) {
 		}
 		return "", false
 	}
+}
+
+// cliDecidable refuses a category channelsd will not accept from this command
+// (ChannelDecisionOnly), before anything is published. The approver this
+// command stamps is one the caller asserts, so a decision that must come from
+// an authenticated human is pointed back at its channel instead.
+func cliDecidable(k approvalKind, requestID string) error {
+	if c, ok := channelinteractions.Get(string(k)); ok && c.ChannelDecisionOnly {
+		return fmt.Errorf("request %s (%s) must be decided in the channel where it was raised; oap session approve cannot prove who is deciding", requestID, k)
+	}
+	return nil
 }
 
 // pendingListing renders the unified pending view as "id (kind), id
@@ -432,6 +443,9 @@ func runSessionApprove(
 		fmt.Fprintf(out, "resolved request %s (%s)\n", requestID, matched.Kind)
 	}
 
+	if err := cliDecidable(matched.Kind, requestID); err != nil {
+		return err
+	}
 	dispatch, ok := dispatchFor(matched.Kind)
 	if !ok {
 		return fmt.Errorf("unsupported approval kind %q for request %s", matched.Kind, requestID)
@@ -567,8 +581,10 @@ func runSessionApprove(
 	publishFn := channelevents.PublishFunc(func(subject string, body []byte) error {
 		return nc.Publish(subject, body)
 	})
-	// The CLI credentials authorize this component-only subject. Runner
-	// credentials cannot publish here, which protects included goal consents.
+	// The CLI credentials authorize this component-only subject; runner
+	// credentials cannot publish here. Arrival on it proves a component sent the
+	// decision, not that the named approver made it, which is why channelsd
+	// refuses this path for ChannelDecisionOnly categories (goal consent).
 	if err := channelevents.PublishComponentDecision(publishFn, b.Namespace, sessionName, pl); err != nil {
 		return fmt.Errorf("publish decision envelope: %w", err)
 	}

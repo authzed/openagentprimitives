@@ -139,6 +139,11 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 		return p.publishDecisionRejected(ctx, env.Session, pl, "category_mismatch", "this action no longer matches the pending request", nil, "")
 	}
 
+	if cat.ChannelDecisionOnly && pl.Decider.Kind == identity.KindCLI {
+		logger.Info("interaction decision: CLI-asserted decider refused for a channel-decision-only category")
+		return p.publishDecisionRejected(ctx, env.Session, pl, "not_authorized", "this request must be decided in the channel where it was raised", nil, "")
+	}
+
 	deciderCanon, err := identity.FromExternal(identity.Kind(pl.Decider.Kind), identity.TeamScope(pl.Decider.TeamScope), identity.RawExternalID(pl.Decider.ExternalID), identity.Email(pl.Decider.Email)).Canonical()
 	if err != nil {
 		logger.Info("interaction decision: decider has no canonical identity; rejecting", "err", err.Error())

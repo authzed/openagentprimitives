@@ -19,11 +19,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-type runAuthority struct{ err error }
+// runAuthority allows everything except AuthorizeDispatch's err and reads of
+// the resource IDs in revoked.
+type runAuthority struct {
+	err     error
+	revoked map[string]bool
+}
 
-func (*runAuthority) Authorize(context.Context, domain.Actor, bool) error                { return nil }
-func (*runAuthority) Sources(context.Context, domain.Actor) ([]domain.Source, error)     { return nil, nil }
-func (*runAuthority) ReadGoal(context.Context, domain.Actor, domain.Goal) error          { return nil }
+func (*runAuthority) Authorize(context.Context, domain.Actor, bool) error            { return nil }
+func (*runAuthority) Sources(context.Context, domain.Actor) ([]domain.Source, error) { return nil, nil }
+func (a *runAuthority) ReadGoal(_ context.Context, _ domain.Actor, g domain.Goal) error {
+	for _, src := range g.Sources {
+		if a.revoked[src.ResourceID] {
+			return domain.ErrDenied
+		}
+	}
+	return nil
+}
 func (*runAuthority) Validate(context.Context, domain.Goal, domain.ExecutionTerms) error { return nil }
 func (*runAuthority) VerifyDecision(context.Context, domain.Goal, domain.ExecutionDecision) error {
 	return nil

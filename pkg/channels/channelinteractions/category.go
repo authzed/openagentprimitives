@@ -117,6 +117,18 @@ type Category struct {
 	PlanConsent bool
 	// IncludesConsents permits a plan card to carry exact child requests.
 	IncludesConsents bool
+	// ChannelDecisionOnly refuses a decider asserted by the CLI
+	// (identity.KindCLI), directly or through a plan card that includes this
+	// category. `oap session approve` stamps an approver email the caller
+	// types, so it can say who decided but cannot prove it. A category whose
+	// whole point is that a specific human decided must be decided on a
+	// channel transport that authenticates that human.
+	//
+	// This is a refusal of the CLI's own path, not a bus boundary: the CLI's
+	// NATS credentials can publish any component decision, so a holder who
+	// forges a non-CLI decider still gets through. Binding the CLI decision to
+	// a verified login is the follow-up that would make it one.
+	ChannelDecisionOnly bool
 	// Name is the registry key, snake_case ("tool_approval").
 	Name string
 	// Park is the AgentSession phase this category parks the session in

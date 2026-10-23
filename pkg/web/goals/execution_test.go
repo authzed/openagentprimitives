@@ -430,6 +430,23 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 		f.auth.denySource = false
 	}
 	require.NoError(t, dispatcher.ValidateGoalSession(ctx, &scheduled))
+	concluded, err := dispatcher.GoalSessionConcluded(ctx, &scheduled)
+	require.NoError(t, err)
+	assert.False(t, concluded, "a running occurrence's session is not concluded")
+	impostor := scheduled.DeepCopy()
+	impostor.UID = "impostor"
+	concluded, err = dispatcher.GoalSessionConcluded(ctx, impostor)
+	require.NoError(t, err)
+	assert.False(t, concluded, "a session the occurrence never attached is never concluded")
+	// A retained run is concluded: terminal reconciles proceed while activation stays refused.
+	_, err = db.DB().ExecContext(ctx, `UPDATE oap_goal_occurrences SET state=? WHERE id=?`, string(domain.OccurrenceRetained), occurrence.ID)
+	require.NoError(t, err)
+	concluded, err = dispatcher.GoalSessionConcluded(ctx, &scheduled)
+	require.NoError(t, err)
+	assert.True(t, concluded, "a retained occurrence's own session is concluded")
+	require.ErrorIs(t, dispatcher.ValidateGoalSession(ctx, &scheduled), domain.ErrDenied)
+	_, err = db.DB().ExecContext(ctx, `UPDATE oap_goal_occurrences SET state=? WHERE id=?`, string(domain.OccurrenceRunning), occurrence.ID)
+	require.NoError(t, err)
 	f.s.ExecutionSessions = dispatcher
 	f.s.Tokens.Set(memory.NamespacedName{Namespace: "team", Name: scheduled.Name}, "root-token", "")
 	verifyProductionPlanApproval(t, f, &scheduled, g, unattended, signer)

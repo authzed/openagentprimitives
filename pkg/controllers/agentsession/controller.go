@@ -546,6 +546,10 @@ type ScopeDeleter interface {
 
 // Reconciler reconciles AgentSession objects.
 type GoalSessionValidator interface {
+	// GoalSessionConcluded reports whether the session is the one its occurrence
+	// attached and that run has ended. A concluded session gets terminal
+	// reconciles only; it is never validated for activation.
+	GoalSessionConcluded(context.Context, *spiceboxv1alpha1.AgentSession) (bool, error)
 	ValidateGoalSession(context.Context, *spiceboxv1alpha1.AgentSession) error
 	ConstrainGoalSettings(context.Context, *spiceboxv1alpha1.AgentSession, *spiceboxv1alpha1.EffectiveSettings) error
 }
@@ -1174,12 +1178,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if !sess.DeletionTimestamp.IsZero() {
 		return r.finalize(ctx, &sess)
 	}
+	// A goal session is validated against its occurrence before anything reads
+	// credentials or starts a pod. Once the run has ended, validation refuses by
+	// design, yet the dispatcher keeps the session through its inspection window
+	// and it still needs the terminal reconciles below (chain-head anchoring,
+	// reap, GC). goalConcluded routes it through those and returns before the
+	// AgentClass resolve, so nothing past that point — credentials, sandboxes,
+	// wake, the runner pod — can run for it.
+	goalConcluded := false
 	if sess.Spec.GoalExecution != nil {
 		if r.GoalValidator == nil {
 			return ctrl.Result{}, fmt.Errorf("goal session validator unavailable")
 		}
-		if err := r.GoalValidator.ValidateGoalSession(ctx, &sess); err != nil {
-			return ctrl.Result{}, fmt.Errorf("goal session activation refused: %w", err)
+		concluded, err := r.GoalValidator.GoalSessionConcluded(ctx, &sess)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("goal session occurrence lookup: %w", err)
+		}
+		goalConcluded = concluded
+		if !goalConcluded {
+			if err := r.GoalValidator.ValidateGoalSession(ctx, &sess); err != nil {
+				return ctrl.Result{}, fmt.Errorf("goal session activation refused: %w", err)
+			}
 		}
 	}
 	// Snapshot the session as read so every status write below sends only the
@@ -1263,8 +1282,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// proceed=false short-circuits the normal reconcile; the next watch event
 	// re-enters either to continue (idempotent) or to operate on the
 	// now-superseded parent.
-	if proceed, res, err := r.ReconcileRestart(ctx, &sess); err != nil || !proceed {
-		return res, err
+	// A concluded goal run is never forked: the child would carry no authority
+	// to run under.
+	if !goalConcluded {
+		if proceed, res, err := r.ReconcileRestart(ctx, &sess); err != nil || !proceed {
+			return res, err
+		}
 	}
 
 	// StartFailure signal: channelsd sets status.startFailure on a terminal
@@ -1384,6 +1407,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				return ctrl.Result{RequeueAfter: reclaimAfter}, nil
 			}
 		}
+	}
+
+	if goalConcluded {
+		sess.Status.ObservedGeneration = sess.Generation
+		return ctrl.Result{}, r.applyStatus(ctx, &sess)
 	}
 
 	// 1. Resolve AgentClass + gate on Valid=True.

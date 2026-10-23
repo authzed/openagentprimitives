@@ -17,6 +17,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/inmem"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -95,6 +96,9 @@ func TestComposedPlanConsentsPreflightEverySignedRequest(t *testing.T) {
 		}},
 		{"foreign session rejects", func(r *channelevents.InteractionRequestPayload, _ *channelevents.InteractionDecisionPayload) {
 			r.Consents[1].AgentSessionRef.Name = "foreign"
+		}},
+		{"CLI-asserted decider rejects included goal consent", func(_ *channelevents.InteractionRequestPayload, d *channelevents.InteractionDecisionPayload) {
+			d.Decider.Kind = identity.KindCLI
 		}},
 		{"expired parent rejects", func(r *channelevents.InteractionRequestPayload, _ *channelevents.InteractionDecisionPayload) {
 			expired := time.Now().UTC().Add(-time.Second)

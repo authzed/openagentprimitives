@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,7 +111,7 @@ func (d *Discovery) livePolicy(ctx context.Context, p domain.DiscoveryPolicy) er
 	if !ok {
 		return sessionevents.ErrDenied
 	}
-	current, err := d.Server.resolve(ctx, ns, name)
+	current, err := d.Server.actor(ctx, ns, name)
 	if err != nil {
 		return err
 	}
@@ -255,12 +256,28 @@ func (d *Discovery) NotifyProposal(ctx context.Context, q domain.DiscoveryPropos
 	return d.publish(ctx, q.Goal, "discovery_proposal", q, q.ExpiresAt, request.Lead, request.Body, request.Fields)
 }
 
+// proposalConsentEntry is the only execution consent in the discovery flow
+// (the policy card authorizes no execution), so it shows the same terms the
+// direct consent card does: operations, action approval, destination and
+// limits. The monitored subject comes from an observation, not from the owner,
+// so it is shown quoted, as data.
 func proposalConsentEntry(q domain.DiscoveryProposal, now time.Time) (memory.Entry, error) {
-	watch := q.Goal.Execution.Terms.Event
-	fields := []channelevents.InteractionField{{Label: "Monitor", Value: watch.Predicate.Subject}, {Label: "Until", Value: q.Goal.Execution.Terms.ExpiresAt.Format("2 Jan 2006, 15:04 MST")}, {Label: "Limits", Value: fmt.Sprintf("Up to %d private sessions", watch.MaxRuns)}}
+	terms, err := consentEntry(q.Goal, now)
+	if err != nil {
+		return memory.Entry{}, err
+	}
+	var termsContent goalconsent.Content
+	if err := json.Unmarshal(terms.Content, &termsContent); err != nil {
+		return memory.Entry{}, err
+	}
+	var termsCard channelevents.InteractionRequestPayload
+	if err := json.Unmarshal(termsContent.Request, &termsCard); err != nil {
+		return memory.Entry{}, err
+	}
+	fields := append([]channelevents.InteractionField{{Label: "Monitor (observed subject)", Value: strconv.Quote(q.Goal.Execution.Terms.Event.Predicate.Subject)}}, termsCard.Fields...)
 	body := "Approval creates this goal and its finite watch. Each run needs your plan approval."
 	if q.Goal.Execution.Terms.ActionApproval == "standing_private" {
-		body = "Approval creates this goal and permits unattended private reports within the exact watch, recipient and limits. Other actions need separate approval."
+		body = "Approval creates this goal and permits unattended private reports within the exact watch, recipient and limits. A plan that asks for any other action is refused."
 	}
 	return discoveryConsentEntry(q.Goal, "discovery_proposal", q, q.ExpiresAt, "Shall I monitor this for you?", body, fields, now)
 }

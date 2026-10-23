@@ -29,6 +29,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/useridentity"
 	eventweb "github.com/authzed/openagentprimitives/pkg/web/sessionevents"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -168,6 +169,16 @@ func TestProductionDiscoveryConsentAndAcceptance(t *testing.T) {
 	require.Equal(t, "Shall I monitor this for you?", proposalCard.Lead)
 	require.Contains(t, proposalCard.Body, "unattended private reports")
 	require.NoError(t, proposalCard.Validate())
+	// The only execution consent in this flow shows every granted term, and the
+	// observed subject only as quoted data.
+	cardFields := map[string]string{}
+	for _, field := range proposalCard.Fields {
+		cardFields[field.Label] = field.Value
+	}
+	assert.Equal(t, `"trip-1"`, cardFields["Monitor (observed subject)"])
+	for _, label := range []string{"Permitted action", "Private recipient", "Action approval", "Limits per session", "Authorization ends"} {
+		assert.Contains(t, cardFields, label, "proposal card shows %q", label)
+	}
 	var detail struct {
 		Goal      domain.Goal              `json:"goal"`
 		Authority domain.DiscoveryProposal `json:"authority"`

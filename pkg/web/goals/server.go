@@ -380,7 +380,33 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	http.Error(w, message, code)
 }
 
+// resolve establishes the human actor for a goal request and refreshes that
+// session's private goal-scope binding. It runs once per HTTP request; checks
+// that only need to re-establish who the actor is use actor, which writes
+// nothing.
 func (s *Server) resolve(ctx context.Context, ns, name string) (domain.Actor, error) {
+	a, err := s.actor(ctx, ns, name)
+	if err != nil {
+		return domain.Actor{}, err
+	}
+	// The pin survives grant expiry. Another employee in this conversation must
+	// start their own session, rather than move a framework-owned private slot.
+	id, err := authz.NewObjectID(a.Domain.ID(), nil)
+	if err != nil {
+		return domain.Actor{}, err
+	}
+	if err := s.Auth.GrantSlots(ctx, ns, name, []authz.SlotBinding{{ResourceType: ResourceType, ResourceID: id, Permission: "write_memory", Occupancy: authz.SlotOccupancySingle, Rebind: authz.SlotRebindNever}}, authz.SlotGrantExpiry(time.Now(), 0)); err != nil {
+		return domain.Actor{}, fmt.Errorf("%w: private goal scope binding failed: %v", domain.ErrDenied, err)
+	}
+	if err := s.Auth.Relations().WriteRelationships(ctx, []authz.Relation{{ResourceType: ResourceType, ResourceID: a.Domain.ID(), Relation: "owner", SubjectType: "user", SubjectID: a.Domain.Owner}}); err != nil {
+		return domain.Actor{}, err
+	}
+	return a, nil
+}
+
+// actor re-derives the session's human actor from the platform attestation
+// and the owner's live interact standing, without writing anything.
+func (s *Server) actor(ctx context.Context, ns, name string) (domain.Actor, error) {
 	var sess v1.AgentSession
 	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sess); err != nil {
 		return domain.Actor{}, fmt.Errorf("%w: session lookup: %v", domain.ErrDenied, err)
@@ -450,20 +476,7 @@ func (s *Server) resolve(ctx context.Context, ns, name string) (domain.Actor, er
 	if err != nil {
 		return domain.Actor{}, err
 	}
-	a := domain.Actor{Domain: domain.Domain{Namespace: ns, Owner: proof.Owner, Class: class.Name, ClassUID: string(class.UID)}, Session: ns + "/" + name, SessionUID: string(sess.UID), Proof: latest.ID, Attestation: string(attestation)}
-	// The pin survives grant expiry. Another employee in this conversation must
-	// start their own session, rather than move a framework-owned private slot.
-	id, err := authz.NewObjectID(a.Domain.ID(), nil)
-	if err != nil {
-		return domain.Actor{}, err
-	}
-	if err := s.Auth.GrantSlots(ctx, ns, name, []authz.SlotBinding{{ResourceType: ResourceType, ResourceID: id, Permission: "write_memory", Occupancy: authz.SlotOccupancySingle, Rebind: authz.SlotRebindNever}}, authz.SlotGrantExpiry(time.Now(), 0)); err != nil {
-		return domain.Actor{}, fmt.Errorf("%w: private goal scope binding failed: %v", domain.ErrDenied, err)
-	}
-	if err := s.Auth.Relations().WriteRelationships(ctx, []authz.Relation{{ResourceType: ResourceType, ResourceID: a.Domain.ID(), Relation: "owner", SubjectType: "user", SubjectID: proof.Owner}}); err != nil {
-		return domain.Actor{}, err
-	}
-	return a, nil
+	return domain.Actor{Domain: domain.Domain{Namespace: ns, Owner: proof.Owner, Class: class.Name, ClassUID: string(class.UID)}, Session: ns + "/" + name, SessionUID: string(sess.UID), Proof: latest.ID, Attestation: string(attestation)}, nil
 }
 
 // Authorize runs at every operation, including deduplication retries, and
@@ -473,7 +486,7 @@ func (s *Server) Authorize(ctx context.Context, a domain.Actor, write bool) erro
 	if !ok {
 		return domain.ErrDenied
 	}
-	current, err := s.resolve(ctx, ns, name)
+	current, err := s.actor(ctx, ns, name)
 	if err != nil {
 		return err
 	}

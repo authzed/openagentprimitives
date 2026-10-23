@@ -39,6 +39,7 @@ type authority struct {
 	failExecutionGrant bool
 	startPermission    string
 	owners             map[string]string
+	grants             int
 }
 
 func (a *authority) Relations() authz.RelWriter { return a }
@@ -53,6 +54,7 @@ func (a *authority) WriteRelationships(_ context.Context, rels []authz.Relation)
 }
 func (a *authority) DeleteRelationships(context.Context, []authz.Relation) error { return nil }
 func (a *authority) GrantSlots(context.Context, string, string, []authz.SlotBinding, time.Time) error {
+	a.grants++
 	return nil
 }
 func (a *authority) CheckInteract(context.Context, string, string, identity.CanonicalUserID, bool) (bool, error) {
@@ -136,8 +138,10 @@ func TestServerBoundariesAndLifecycle(t *testing.T) {
 	status, _ := f.call(t, "token", list)
 	assert.Equal(t, 404, status, "no human proof")
 	f.proof(t, "alice")
+	grants := f.auth.grants
 	status, r := f.call(t, "token", list)
 	require.Equal(t, 200, status)
+	assert.Equal(t, 1, f.auth.grants-grants, "one request refreshes the private scope binding once; reauthorization writes nothing")
 	assert.False(t, r.ExecutionAvailable)
 	assert.Empty(t, r.Page.Goals)
 	status, _ = f.call(t, "foreign-token", list)

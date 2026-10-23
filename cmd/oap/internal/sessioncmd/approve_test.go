@@ -197,6 +197,28 @@ func TestRegisteredPlanApprovalsAreDispatchable(t *testing.T) {
 	}
 }
 
+func TestCLIDecidableRefusesChannelDecisionOnly(t *testing.T) {
+	cases := []struct {
+		name    string
+		kind    approvalKind
+		refused bool
+	}{
+		{name: "goal consent: refused, must be decided in its channel", kind: approvalKind(categories.GoalExecutionConsent), refused: true},
+		{name: "plan phase: allowed", kind: approvalKind(categories.PlanPhase)},
+		{name: "tool approval: allowed", kind: approvalKindTool},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := cliDecidable(tc.kind, "req-1")
+			if tc.refused {
+				assert.ErrorContains(t, err, "must be decided in the channel where it was raised")
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
 // TestResolvePending covers the unified resolution: auto-pick (one only),
 // disambiguation error (multiple), no-pending error, explicit match, and
 // explicit no-match (across all three kinds).

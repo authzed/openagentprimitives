@@ -286,7 +286,7 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 	}
 	if c.Terms.ActionApproval == "standing_private" {
 		request.Body = "Authorize private delivery without another approval for each run. Each fresh plan must stay within this watch or schedule, recipient, and limits. Quiet hours defer reminders; missed windows are skipped. You can pause or cancel the goal."
-		request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Action approval", Value: "Unattended private delivery only. Other actions require separate approval."})
+		request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Action approval", Value: "Unattended private delivery only. A plan that asks for any other action is refused."})
 	}
 	if report := c.Terms.Report; report != nil {
 		request.Lead = "Allow this private observation collector?"
@@ -305,7 +305,7 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 		request.Fields[3].Value = strings.Join(actions, "; ")
 		request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Observation", Value: report.Kind + " · " + report.Subject})
 		if c.Terms.ActionApproval == "standing_private" {
-			request.Fields[len(request.Fields)-2].Value = "Unattended private reporting within these terms. Other actions require separate approval."
+			request.Fields[len(request.Fields)-2].Value = "Unattended private reporting within these terms. A plan that asks for any other action is refused."
 		}
 	}
 	raw, e := json.Marshal(request)

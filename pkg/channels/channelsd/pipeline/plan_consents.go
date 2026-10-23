@@ -7,6 +7,7 @@ import (
 
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
 // All child requests are preflighted before any handler commits a decision.
@@ -37,6 +38,9 @@ func (p *Pipeline) decideWithConsents(ctx context.Context, session channelevents
 			cat, ok := channelinteractions.Get(child.Category)
 			if !ok || !cat.PlanConsent || cat.Deciders != channelinteractions.DecideRequester || child.Audience.Requester == nil {
 				return channelinteractions.Outcome{}, fmt.Errorf("unsupported plan consent category")
+			}
+			if cat.ChannelDecisionOnly && payload.Decider.Kind == identity.KindCLI {
+				return channelinteractions.Outcome{}, fmt.Errorf("included %s consent must be decided in the channel where it was raised", child.Category)
 			}
 			owner, err := child.Audience.Requester.Principal().Canonical()
 			if err != nil {

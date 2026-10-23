@@ -528,7 +528,7 @@ func TestRunOutcomesRemainFencedAndDoNotCompleteGoals(t *testing.T) {
 			require.Equal(t, recovered, page.Runs[0])
 			svc.Auth = denyRestricted{}
 			hidden, err := svc.Runs(ctx, actor(), g.ID, goals.ListRequest{Limit: 1})
-			require.ErrorIs(t, err, goals.ErrDenied)
+			require.NoError(t, err, "an unreadable run is left out, not a failed page")
 			require.Empty(t, hidden.Runs, "result dependencies survive root cleanup")
 			svc.Auth = allow{}
 			private := actor()

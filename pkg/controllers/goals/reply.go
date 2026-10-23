@@ -122,6 +122,14 @@ func (d *Dispatcher) processReply(ctx context.Context, o domain.Occurrence) (dom
 	if err := d.ValidateGoalSession(ctx, &sess); err != nil {
 		return o, err
 	}
+	// The reply carries what its author read. The owner must still be able to
+	// read every one of those sources at send time, not only at prepare time.
+	if d.Service.Auth == nil {
+		return o, domain.ErrDenied
+	}
+	if err := d.Service.Auth.ReadGoal(ctx, domain.Actor{Domain: o.Domain}, domain.Goal{Sources: o.Reply.Sources}); err != nil {
+		return o, err
+	}
 	accepted, err := receiver.Accept(ctx, o.Reply.Intent)
 	if err != nil {
 		return o, err

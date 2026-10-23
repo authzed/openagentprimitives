@@ -104,7 +104,7 @@ const (
 // same reason as registerNotices: a test that Resets the registry can put it
 // back, which an init cannot do.
 func registerPrompts() {
-	channelinteractions.Register(channelinteractions.Category{Name: GoalExecutionConsent, PlanConsent: true, Tone: channelinteractions.TonePrivacy, Deciders: channelinteractions.DecideRequester, Resurface: channelinteractions.ResurfaceCached, Surface: channelinteractions.SurfaceDMOnly})
+	channelinteractions.Register(channelinteractions.Category{Name: GoalExecutionConsent, PlanConsent: true, ChannelDecisionOnly: true, Tone: channelinteractions.TonePrivacy, Deciders: channelinteractions.DecideRequester, Resurface: channelinteractions.ResurfaceCached, Surface: channelinteractions.SurfaceDMOnly})
 	channelinteractions.Register(channelinteractions.Category{
 		Name: PlanPhase, IncludesConsents: true,
 		Park: v1alpha1.AgentSessionPhaseAwaitingDecision,

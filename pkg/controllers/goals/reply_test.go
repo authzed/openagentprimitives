@@ -48,7 +48,7 @@ func (m *replyFaults) Query(ctx context.Context, q memory.Query) (memory.QueryRe
 }
 
 func TestReplyRecoveryDoesNotResendOrPreventCancellation(t *testing.T) {
-	for _, mode := range []string{"lost acknowledgement then cancelled during outage", "cancel before acceptance", "cancel attempted but unaccepted reply"} {
+	for _, mode := range []string{"lost acknowledgement then cancelled during outage", "cancel before acceptance", "cancel attempted but unaccepted reply", "source revoked before send"} {
 		t.Run(mode, func(t *testing.T) {
 			cancelBeforeAttempt := mode == "cancel before acceptance"
 			unaccepted := mode == "cancel attempted but unaccepted reply"
@@ -93,9 +93,25 @@ func TestReplyRecoveryDoesNotResendOrPreventCancellation(t *testing.T) {
 			payload := channelevents.OutboundUserMessagePayload{Text: "Stand up and stretch!"}
 			payload.Delivery, err = channelevents.NewDeliveryOperation(string(root.UID), "approved-reply", payload)
 			require.NoError(t, err)
-			prepared, err := d.PrepareGoalReply(ctx, root, payload, nil)
+			var sources []domain.Source
+			if mode == "source revoked before send" {
+				sources = []domain.Source{{ResourceType: "document", ResourceID: "brief", Permission: "read"}}
+			}
+			prepared, err := d.PrepareGoalReply(ctx, root, payload, sources)
 			require.NoError(t, err)
 			require.Equal(t, "prepared", prepared.Reply.State)
+			if mode == "source revoked before send" {
+				auth.revoked = map[string]bool{"brief": true}
+				now = now.Add(2 * time.Second)
+				require.ErrorIs(t, d.Tick(ctx), domain.ErrDenied, "a reply is not sent once the owner loses a source it was built from")
+				held, err := store.Occurrence(ctx, o.ID)
+				require.NoError(t, err)
+				require.NotEqual(t, "accepted", held.Reply.State)
+				entries, err := base.Query(memory.WithSystemApproval(ctx, "system:operator"), memory.Query{Scope: memory.Scope{Kind: "session", ID: "team/" + o.SessionName}, Kinds: []string{replydelivery.KindName}})
+				require.NoError(t, err)
+				require.Empty(t, entries.Entries, "no delivery is written for a revoked source")
+				return
+			}
 			if !cancelBeforeAttempt {
 				now = now.Add(2 * time.Second)
 				attemptErr := d.Tick(ctx)

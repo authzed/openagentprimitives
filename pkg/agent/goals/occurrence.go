@@ -2,6 +2,7 @@ package goals
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -145,22 +146,44 @@ func (s *Service) Runs(ctx context.Context, a Actor, id string, r ListRequest) (
 	if err != nil {
 		return RunPage{}, err
 	}
+	// Like List, a run whose sources the owner can no longer read is left out
+	// rather than hiding the rest of the history. Any other error still fails
+	// the page.
+	visible := make([]Occurrence, 0, len(page.Runs))
 	for _, run := range page.Runs {
-		if run.Event != nil {
-			if s.Events == nil || s.Events.Sources == nil {
-				return RunPage{}, ErrDenied
-			}
-			if err := s.Events.Sources.Check(ctx, a.Domain.Owner, run.Event.Observation.Source, run.Event.Observation.Dependencies); err != nil {
-				return RunPage{}, err
-			}
+		readable, err := s.runReadable(ctx, a, run)
+		if err != nil {
+			return RunPage{}, err
 		}
-		if run.Proposal != nil || run.Reply != nil || run.Event != nil {
-			if err := s.Auth.ReadGoal(ctx, a, Goal{Sources: run.ReadDependencies()}); err != nil {
-				return RunPage{}, err
-			}
+		if readable {
+			visible = append(visible, run)
 		}
 	}
+	page.Runs = visible
 	return page, nil
+}
+
+func (s *Service) runReadable(ctx context.Context, a Actor, run Occurrence) (bool, error) {
+	if run.Event != nil {
+		if s.Events == nil || s.Events.Sources == nil {
+			return false, ErrDenied
+		}
+		if err := s.Events.Sources.Check(ctx, a.Domain.Owner, run.Event.Observation.Source, run.Event.Observation.Dependencies); err != nil {
+			if errors.Is(err, ErrDenied) || errors.Is(err, sessionevents.ErrDenied) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	if run.Proposal != nil || run.Reply != nil || run.Event != nil {
+		if err := s.Auth.ReadGoal(ctx, a, Goal{Sources: run.ReadDependencies()}); err != nil {
+			if errors.Is(err, ErrDenied) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // RunProposal is an agent's account, never a transport receipt or authorization
