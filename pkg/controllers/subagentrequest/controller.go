@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -235,6 +236,17 @@ type Reconciler struct {
 	Scheme             *runtime.Scheme
 	Authz              LineageWriter
 	MaxDelegationDepth int
+
+	// SlotSweeper, when set, sweeps the child's (ns, name) of slot and
+	// data-slot tuples a dead predecessor left behind, BEFORE the child is
+	// created — and the child is then created with the session finalizer
+	// pre-stamped, so its own first reconcile does not run the admission sweep.
+	// That sweep would otherwise race the data-slot grants bindDataSlots writes
+	// onto the child right after Create, and could wipe them. The operator SA
+	// is allowed to pre-stamp it (config/admission/agentsession-finalizer-policy.yaml).
+	// Nil keeps the child unstamped and leaves the sweep to the AgentSession
+	// reconciler.
+	SlotSweeper SlotSweeper
 
 	// WorkshopBuild is the ONE relaxation of step 0's same-namespace rule: a
 	// SubagentRequest whose parent is in a different namespace is admitted
@@ -999,6 +1011,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
+	if r.SlotSweeper != nil {
+		swept, err := r.sweepAbsentChild(ctx, child)
+		if err != nil {
+			// Fail closed: creating the child over a predecessor's unswept
+			// authority is the leak the sweep exists to prevent. Retried.
+			return ctrl.Result{}, err
+		}
+		if swept {
+			controllerutil.AddFinalizer(child, v1.FinalizerAgentSession)
+		}
+	}
+
 	if err := r.Create(ctx, child); err != nil && !apierrors.IsAlreadyExists(err) {
 		if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
 			// Same hang shape loadParent's ParentClassMissing case exists to
@@ -1093,6 +1117,40 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	sr.Status.Phase = v1.SubagentRequestPhaseRunning
 	sr.Status.Determination = fmt.Sprintf("delegated to %s", child.Name)
 	return ctrl.Result{}, r.Status().Update(ctx, &sr)
+}
+
+// SlotSweeper deletes every slot and data-slot tuple naming a session.
+// *spicedb.Client satisfies it.
+type SlotSweeper interface {
+	DeleteSlotGrants(ctx context.Context, ns, name string) error
+	DeleteDataSlotGrants(ctx context.Context, ns, name string) error
+}
+
+// sweepAbsentChild sweeps the child's name when the child does not exist yet,
+// reporting whether it swept. An existing child — an AlreadyExists retry — is
+// never swept: it may already hold the grants this controller wrote for it.
+// Read uncached when an APIReader is wired, so a lagging cache cannot report a
+// live child absent.
+func (r *Reconciler) sweepAbsentChild(ctx context.Context, child *v1.AgentSession) (bool, error) {
+	reader := client.Reader(r.Client)
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	var existing v1.AgentSession
+	err := reader.Get(ctx, client.ObjectKeyFromObject(child), &existing)
+	if err == nil {
+		return false, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("subagentrequest: check child %s/%s before sweep: %w", child.Namespace, child.Name, err)
+	}
+	if err := r.SlotSweeper.DeleteSlotGrants(ctx, child.Namespace, child.Name); err != nil {
+		return false, fmt.Errorf("subagentrequest: sweep stale slot tuples for child %s/%s: %w", child.Namespace, child.Name, err)
+	}
+	if err := r.SlotSweeper.DeleteDataSlotGrants(ctx, child.Namespace, child.Name); err != nil {
+		return false, fmt.Errorf("subagentrequest: sweep stale data-slot grants for child %s/%s: %w", child.Namespace, child.Name, err)
+	}
+	return true, nil
 }
 
 func (r *Reconciler) buildChild(sr *v1.SubagentRequest, parent, root *v1.AgentSession) *v1.AgentSession {

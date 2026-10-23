@@ -146,6 +146,7 @@ func TestResolveGVRScope(t *testing.T) {
 	clusterScoped := []string{
 		"Namespace", "ClusterRole", "ClusterRoleBinding", "CustomResourceDefinition",
 		"ValidatingWebhookConfiguration", "MutatingWebhookConfiguration", "StorageClass",
+		"ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding",
 	}
 	for _, k := range clusterScoped {
 		ns, err := kube.ResolveNamespacedForTest("", k)

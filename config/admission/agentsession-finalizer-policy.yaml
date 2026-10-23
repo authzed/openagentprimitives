@@ -1,0 +1,78 @@
+# Only the operator and channelsd may ADD the AgentSession finalizer.
+#
+# Why this exists. The AgentSession reconciler runs an "admission sweep" on a
+# session's first reconcile: it deletes every slot_grant_* and slot_pin tuple
+# SpiceDB holds under the session's (namespace, name), wiping whatever a dead
+# predecessor with the same name left behind. Slot tuples are keyed by
+# (namespace, name), not UID, and a slot_pin never expires, so without the
+# sweep a recreated session inherits the predecessor's pin and grants.
+#
+# The sweep is skipped when the finalizer is ALREADY present at first
+# reconcile, because two trusted creators pre-stamp it and own the sweep
+# themselves:
+#   - channelsd's mint stamps it at create and runs the same sweep
+#     synchronously before its own mint-time binds;
+#   - the operator's fork path stamps it on every restart child, because the
+#     parent's restart copies its slot grants and pin onto the child right
+#     after creating it, and a sweep would delete them.
+#
+# Anyone else who can create an AgentSession could write that same finalizer
+# into their manifest and skip the sweep, inheriting a predecessor's
+# authority. This policy makes the skip unforgeable: a CREATE carrying the
+# finalizer, or an UPDATE that adds it, is refused unless the caller is one of
+# those two service accounts. Removing the finalizer, and every write that
+# leaves it as it was, is not evaluated at all (matchConditions).
+#
+# Why a ValidatingAdmissionPolicy and not another webhook in webhook.yaml: it
+# runs inside the apiserver, so it fails closed (failurePolicy: Fail) without
+# making every AgentSession write depend on the operator pod being up and its
+# serving cert being injected. A webhook would force a choice between that
+# dependency (Fail) and a silent bypass during an operator outage (Ignore).
+#
+# The service-account names are spelled out because CEL cannot read
+# kustomize's namespace. They must match config/manager/serviceaccount.yaml
+# and pkg/platform/manifests/channelsd/serviceaccount.yaml.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: agentsession-finalizer.agentprimitives.authzed.com
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["agentprimitives.authzed.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        # The main resource only. A status write cannot change
+        # metadata.finalizers, so agentsessions/status is not matched.
+        resources: ["agentsessions"]
+  matchConditions:
+    # True only for a write that ADDS the finalizer: present on a CREATE, or
+    # present in the new object and absent from the old one on an UPDATE.
+    # oldObject is null on CREATE, so the operation is tested first.
+    - name: adds-agentsession-finalizer
+      expression: >-
+        has(object.metadata.finalizers) &&
+        'agentsession.agentprimitives.authzed.com/finalizer' in object.metadata.finalizers &&
+        (request.operation == 'CREATE' ||
+        !has(oldObject.metadata.finalizers) ||
+        !('agentsession.agentprimitives.authzed.com/finalizer' in oldObject.metadata.finalizers))
+  validations:
+    - expression: >-
+        request.userInfo.username in [
+        'system:serviceaccount:agentprimitives-system:spicebox-operator',
+        'system:serviceaccount:agentprimitives-system:spicebox-channelsd']
+      reason: Forbidden
+      messageExpression: >-
+        'only the agentprimitives operator and channelsd may add the
+        agentsession.agentprimitives.authzed.com/finalizer finalizer; '
+        + request.userInfo.username + ' may not. Create the AgentSession
+        without it and the operator adds it after sweeping stale slot grants.'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: agentsession-finalizer.agentprimitives.authzed.com
+spec:
+  policyName: agentsession-finalizer.agentprimitives.authzed.com
+  validationActions: ["Deny"]

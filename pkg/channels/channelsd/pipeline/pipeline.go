@@ -81,6 +81,23 @@ type Authz interface {
 	// adoption to seed the values a trusted author already put in the thread,
 	// so the agent may reach them without a prompt. Present on *spicedb.Client.
 	GrantSlots(ctx context.Context, ns, name string, bindings []authz.SlotBinding, expiresAt time.Time) error
+	// DeleteSlotGrants removes every slot grant AND pin a session holds. The
+	// mint path calls it to sweep whatever a DEAD PREDECESSOR with this same
+	// ns/name left in SpiceDB, BEFORE it creates the session — because this
+	// path pre-stamps the operator's finalizer (see the Create site), which
+	// suppresses the operator's own admission sweep for a channelsd mint. A pin
+	// never expires, so a leftover would otherwise refuse the new session its
+	// own first bind and leak the predecessor's authority under the reused
+	// name. Present on *spicedb.Client (same method finalize + the operator's
+	// admission sweep use).
+	DeleteSlotGrants(ctx context.Context, ns, name string) error
+	// DeleteDataSlotGrants removes every data-slot grant
+	// (pt_tag:<T>#granted_to@agentsession:<ns/name>) a session holds. The mint
+	// sweep calls it beside DeleteSlotGrants for the same reason: it is keyed by
+	// ns/name, and DeleteSlotGrants does not reach it. Present on
+	// *spicedb.Client (same method finalize + the operator's admission sweep
+	// use).
+	DeleteDataSlotGrants(ctx context.Context, ns, name string) error
 	// Relations is the authz.RelWriter view of the same client, needed so an
 	// approval can narrow scope through authz.BindApproved rather than writing
 	// a grant alone. Present on *spicedb.Client.
@@ -1504,6 +1521,21 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sessName,
 			Namespace: ev.Channel.Namespace,
+			// Pre-stamp the operator's finalizer at Create. The operator runs
+			// its admission slot-tuple sweep before EnsureFinalizer whenever the
+			// finalizer is ABSENT, and skips it when a trusted creator
+			// pre-stamped it. Left unstamped, that sweep would race the mint-time
+			// slot binds this path performs right after the session exists
+			// (BindTriggerSlots, seedThreadSlots): the two are unordered, so the
+			// sweep could delete the legitimate authority — including the pin —
+			// those binds just wrote, deterministically when the operator is
+			// briefly backlogged. With the finalizer present the operator never
+			// sweeps a channelsd mint; this path sweeps stale tuples itself,
+			// BEFORE the Create (see sweepBeforeMint below). Only the operator
+			// and channelsd service accounts may add this finalizer at all —
+			// config/admission/agentsession-finalizer-policy.yaml enforces it —
+			// so the skip cannot be forged by an ordinary session creator.
+			Finalizers: []string{spiceboxv1alpha1.FinalizerAgentSession},
 			Labels: map[string]string{
 				spiceboxv1alpha1.LabelChannelName: ev.Channel.Name,
 				spiceboxv1alpha1.LabelChannelKind: ev.Channel.Spec.Kind,
@@ -1582,6 +1614,15 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 	// exists without it.
 	if startParked {
 		sess.Annotations[spiceboxv1alpha1.AnnotationStartApprovalRequestRef] = startRequestRef
+	}
+	// Admission sweep for a channelsd mint, run BEFORE the Create. See
+	// sweepBeforeMint. Fail CLOSED: no session is created over a name whose
+	// predecessor's authority may still be live, and the inbound errors so a
+	// redelivery retries the whole mint — sweep included.
+	if err := p.sweepBeforeMint(ctx, sess.Namespace, sess.Name); err != nil {
+		log.FromContext(ctx).Info("mint admission sweep failed; refusing to create the session over unverified authority",
+			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+		return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
 	}
 	created := false
 	if err := p.K8s.Create(ctx, sess); err != nil {
@@ -2612,6 +2653,56 @@ func authorSubject(ev channelkinds.InboundEvent) identity.Subject {
 		return ""
 	}
 	return canonicalID(ev.ExternalIDs).Subject()
+}
+
+// sweepBeforeMint is the admission sweep for a channelsd mint: it wipes
+// whatever a DEAD PREDECESSOR with this same ns/name left in SpiceDB — slot
+// grants, the never-expiring slot pin, and data-slot grants, all keyed by
+// ns/name rather than UID — before the session exists. A stale pin would refuse
+// the new session its own first bind, and a stale grant would resolve for the
+// new session: leaked authority under a reused name (makeSessionName is
+// deterministic).
+//
+// This IS the operator's admission sweep, MOVED to the creator: this path
+// pre-stamps the operator's finalizer, which makes the operator skip its own.
+//
+// BEFORE the Create, and only while the session does not exist, so it is
+// retry-safe on its own. The previous rule — sweep after Create, gated on
+// having won the Create — ran exactly once: a crash or a failed sweep between
+// Create and the sweep left a pre-stamped (so operator-skipped), unswept
+// session, and a redelivery hit AlreadyExists and never swept either. Here a
+// crash anywhere before the Create leaves no session, so the redelivery sweeps
+// again; a crash after it leaves a session that was already swept. A session
+// that already exists (an AlreadyExists race loser, a redelivery after a
+// successful mint, a parked start awaiting approval) is LIVE and owns its own
+// tuples — it is never swept here. p.K8s is the uncached client, so the
+// existence check reads the apiserver, not a lagging cache.
+//
+// RESIDUAL: two replicas minting the same session concurrently can both find
+// it absent; the loser's sweep can then land after the winner's Create and
+// mint-time binds, deleting them. That only removes authority the winner just
+// wrote — the session re-asks — and never leaves a predecessor's behind.
+//
+// A nil Authz is a no-op (nothing binds, so there is nothing to sweep).
+func (p *Pipeline) sweepBeforeMint(ctx context.Context, ns, name string) error {
+	if p.Authz == nil {
+		return nil
+	}
+	var existing spiceboxv1alpha1.AgentSession
+	err := p.K8s.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &existing)
+	switch {
+	case err == nil:
+		return nil
+	case !apierrors.IsNotFound(err):
+		return fmt.Errorf("mint admission sweep: check whether %s/%s exists: %w", ns, name, err)
+	}
+	if err := p.Authz.DeleteSlotGrants(ctx, ns, name); err != nil {
+		return fmt.Errorf("mint admission sweep: delete stale slot grants/pins %s/%s: %w", ns, name, err)
+	}
+	if err := p.Authz.DeleteDataSlotGrants(ctx, ns, name); err != nil {
+		return fmt.Errorf("mint admission sweep: delete stale data-slot grants %s/%s: %w", ns, name, err)
+	}
+	return nil
 }
 
 // makeSessionName produces a deterministic-ish name based on the channel

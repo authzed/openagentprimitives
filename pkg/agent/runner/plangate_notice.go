@@ -13,9 +13,13 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 
+	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
@@ -38,8 +42,33 @@ func approverIDOf(p identity.Principal) string {
 	return "(unidentified)"
 }
 
+// approvalNotice is the copy one failed approval publishes to its approvers.
+type approvalNotice struct {
+	category string
+	lead     string
+	nextStep string
+}
+
+// discardedApprovalNotice is the copy for an approval the gate could not RECORD
+// at all — the standing lookup that bounds what the approver may delegate
+// failed, so nothing was written and the card will be asked again. "Nothing was
+// granted, try once more" is true here and only here: once a decision is
+// recorded, the bind-time outcomes below apply instead.
+func discardedApprovalNotice() approvalNotice {
+	return approvalNotice{
+		// InternalError is the "we broke, retrying is a remedy" category.
+		category: categories.InternalError,
+		lead: "Your approval could not be applied, so nothing was granted and the plan " +
+			"has not started. This is a fault on our side, not a refusal.",
+		// Bounded rather than "retry"/"don't retry" — one more attempt
+		// distinguishes a transient blip from a persistent one; a third never does.
+		nextStep: "Try approving once more. If it fails again, report it — nothing " +
+			"has been granted either way.",
+	}
+}
+
 // publishPlanGateApprovalFailed tells the session that an approval was received
-// and could not be applied.
+// and did not take effect as shown.
 //
 // Best-effort by the same rule as every other gate write — a notice that fails
 // to publish must not take down the turn — but it must never be silent, so a
@@ -49,7 +78,7 @@ func approverIDOf(p identity.Principal) string {
 // lookup" is not something the person clicking Approve can act on, and this
 // surface is a chat window, not an operator console; the operator detail is in
 // the log line beside this call.
-func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error) {
+func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause error, n approvalNotice) {
 	if h.l == nil || h.l.InteractionRequestPublish == nil {
 		return
 	}
@@ -57,23 +86,15 @@ func (h *runnerHost) publishPlanGateApprovalFailed(ctx context.Context, cause er
 	if sessNS == "" && sessName == "" {
 		sessNS, sessName = h.sess.Namespace, h.sess.Name
 	}
-
 	pl := channelevents.InteractionRequestPayload{
 		AgentSessionRef: channelevents.SessionRef{Namespace: sessNS, Name: sessName},
-		Category:        categories.InternalError,
+		Category:        n.category,
 		RequestRef:      newRequestID(),
-		Lead: "Your approval could not be applied, so nothing was granted and the plan " +
-			"has not started. This is a fault on our side, not a refusal.",
-		// Required of every degraded-tone notice, and the reason the rule
-		// exists: without it this says something went wrong and leaves the
-		// reader holding an unanswered card.
-		//
-		// Bounded rather than "retry" or "don't retry", because BOTH causes are
-		// real and they want opposite advice: an unreachable permission service
-		// clears on its own, and an identity the service cannot accept never
-		// will. One more attempt distinguishes them; a third never does.
-		NextStep: "Try approving once more. If it fails again, report it — nothing " +
-			"has been granted either way.",
+		Lead:            n.lead,
+		// Required of every degraded-tone notice, and the reason the rule exists:
+		// without it this says something went wrong and leaves the reader holding
+		// an unanswered card.
+		NextStep: n.nextStep,
 		Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceApprovers},
 	}
 	env, err := channelevents.BuildEnvelope(sessNS, sessName, channelevents.KindInteractionRequest, pl)
@@ -160,6 +181,27 @@ func planGateItems(c plangate.Card) []channelevents.InteractionItem {
 			item.Items = append(item.Items, channelevents.InteractionItem{
 				Text: "reaches " + r.Text, Detail: r.Detail, Icon: r.Icon, Href: r.Href,
 			})
+			if r.MovedFrom != "" {
+				// The cost half of a slot move, as its own line: approving
+				// repoints the pin and revokes the displaced instance. External
+				// tone because the approver loses something, and a surface must
+				// not render that at the weight of a read.
+				item.Items = append(item.Items, channelevents.InteractionItem{
+					Text: "moves the pin and revokes this session's access to " + r.MovedFrom,
+					Tone: channelevents.ToneExternal,
+				})
+			}
+			if r.PinnedImmovable != "" {
+				// A `rebind: never` slot pinned elsewhere: the named instance
+				// cannot be granted here. Carried as its own line so a surface
+				// cannot render the resource above as grantable — external tone
+				// because it is a hard limit the approver must not skim past.
+				item.Items = append(item.Items, channelevents.InteractionItem{
+					Text: "cannot be granted — this session is pinned to " + r.PinnedImmovable +
+						" for its life; start a new session to reach " + r.Detail,
+					Tone: channelevents.ToneExternal,
+				})
+			}
 		}
 		out = append(out, item)
 	}
@@ -171,4 +213,240 @@ func planGateItems(c plangate.Card) []channelevents.InteractionItem {
 		})
 	}
 	return out
+}
+
+// slotOutcome is how one resource type fared across an approval's binds.
+type slotOutcome int
+
+const (
+	slotBound slotOutcome = iota
+	// slotFault: a store fault, or an approved move whose pin drifted since the
+	// card. Nothing changed for the type; the agent asks again when it needs it.
+	slotFault
+	// slotMoveCommitted: the approved move landed — the displaced instance's
+	// access is revoked — but the grant on the new instance did not.
+	slotMoveCommitted
+	// slotRefused: the type is committed to a different instance; an answer,
+	// not a fault, and re-approving will not change it.
+	slotRefused
+)
+
+// approvalOutcome aggregates, PER RESOURCE TYPE, how one approval's binds
+// landed across every phase it covers, so the approver gets ONE notice that is
+// true for the approval as a whole.
+//
+// Per type because GrantSlots is per-type partitioned: one type can be refused
+// while another binds and a third blips, and a single label for the whole call
+// lies about at least two of them. Across phases because a plan-scoped approval
+// binds once per covered phase: publishing per phase repeated the notice for
+// each, and could contradict itself — a "move committed but not granted" from
+// phase 1 beside a later phase whose same-instance bind then wrote that grant.
+//
+// Merge rule, per (type, permission) in phase order: a refusal is sticky (the
+// instance it named was not granted, whatever a later phase did); otherwise the
+// LATEST outcome wins, so a later successful bind of the same grant supersedes
+// an earlier fault or committed-move. A failure covers every permission its type
+// was bound with in that phase — a type's grants land together or not at all.
+//
+// A type held out by a precondition (BindApproved drops it without error) reads
+// as bound here; it escalates to the waiver card on its own, which is the
+// notice it needs.
+type approvalOutcome struct {
+	order  []outcomeKey
+	byKey  map[outcomeKey]slotOutcome
+	causes []error
+}
+
+// outcomeKey is one grant an approval asked for. Keyed by permission as well as
+// type because each covered phase binds its own permissions: a later phase that
+// writes `push` on a type must not paper over an earlier phase whose `read` on
+// the same type failed.
+type outcomeKey struct{ resourceType, permission string }
+
+// record folds one phase's BindApproved result in. It reports false when err
+// carries no per-type slot outcome at all (a session_scope write failure before
+// GrantSlots ran); the caller keeps that log-only, as before.
+func (o *approvalOutcome) record(bindings []authz.SlotBinding, err error) bool {
+	if o.byKey == nil {
+		o.byKey = map[outcomeKey]slotOutcome{}
+	}
+	failures := authz.SlotBindFailures(err)
+	if err != nil && len(failures) == 0 {
+		return false
+	}
+	if err != nil {
+		o.causes = append(o.causes, err)
+	}
+	failed := map[string]slotOutcome{}
+	for _, f := range failures {
+		k := slotFault
+		switch f.Kind {
+		case authz.SlotFailureRefused:
+			k = slotRefused
+		case authz.SlotFailureMoveCommitted:
+			k = slotMoveCommitted
+		case authz.SlotFailureFault, authz.SlotFailureDrifted:
+		}
+		for _, rt := range f.ResourceTypes {
+			failed[rt] = k
+		}
+	}
+	for _, b := range bindings {
+		k, ok := failed[b.ResourceType]
+		if !ok {
+			k = slotBound
+		}
+		o.merge(outcomeKey{b.ResourceType, b.Permission}, k)
+	}
+	return true
+}
+
+func (o *approvalOutcome) merge(key outcomeKey, k slotOutcome) {
+	prev, seen := o.byKey[key]
+	if !seen {
+		o.order = append(o.order, key)
+	}
+	if seen && prev == slotRefused {
+		return
+	}
+	o.byKey[key] = k
+}
+
+// typesWith lists, once each and in first-seen order, the types holding at
+// least one grant with outcome k.
+func (o *approvalOutcome) typesWith(k slotOutcome) []string {
+	var out []string
+	for _, key := range o.order {
+		if o.byKey[key] == k && !slices.Contains(out, key.resourceType) {
+			out = append(out, key.resourceType)
+		}
+	}
+	return out
+}
+
+// cause joins every recorded error, for the log line beside the notice.
+func (o *approvalOutcome) cause() error { return errors.Join(o.causes...) }
+
+// notice builds the one approver notice the outcome warrants; ok=false when
+// every type bound.
+//
+// The primary copy follows the most consequential fact — a committed move (an
+// instance's access was REMOVED), then a refusal (an answer), then a fault —
+// and any other fact present is appended to the next step, so nothing the
+// approver needs is dropped and nothing claims more than happened. In
+// particular no bind-time copy says "nothing was granted": the decision is
+// recorded and the other types may well have bound.
+//
+// The refusal route follows the REFUSED types' policy only (authz.AllRebindNever
+// over the refusals, never over every binding): when every refused slot is
+// `rebind: never`, no amendment can move it and the only route is a new
+// session.
+func (o *approvalOutcome) notice() (approvalNotice, bool) {
+	committed, refused, faulted := o.typesWith(slotMoveCommitted), o.typesWith(slotRefused), o.typesWith(slotFault)
+	var n approvalNotice
+	switch {
+	case len(committed) > 0:
+		n = approvalNotice{
+			category: categories.InternalError,
+			lead: "Your approval moved this session to the new target for " + typeList(committed) +
+				" and removed its access to the previous one, but access to the new target could not be granted.",
+			nextStep: "The agent will ask again when it reaches the new target. If it fails again, report it.",
+		}
+	case len(refused) > 0:
+		// An answer, not a fault: SlotBindRefused, not InternalError — the
+		// category is what a surface reads to tell "we erred, try again" from
+		// "this is the answer".
+		n = approvalNotice{
+			category: categories.SlotBindRefused,
+			lead: "This session is already committed to a different target for " + typeList(refused) +
+				", so the instance your approval named there was not granted. Other instances the plan " +
+				"named may have been granted; that one was not.",
+		}
+		if authz.AllRebindNever(authz.SlotPinRefusals(o.cause())) {
+			n.nextStep = "This commitment is fixed for the session's life and cannot be moved. " +
+				"Start a new session to work on the instance you wanted. Re-approving this card will not change it."
+		} else {
+			n.nextStep = "To reach the instance you wanted, the plan must name it so an approved amendment " +
+				"moves the commitment to it; otherwise start a new session for it. Re-approving this card will not move it."
+		}
+	case len(faulted) > 0:
+		n = approvalNotice{
+			category: categories.InternalError,
+			lead: "Your approval was recorded but could not be fully applied, so some or all of the access " +
+				"it covers (" + typeList(faulted) + ") was not granted. This is a fault on our side, not a refusal.",
+			nextStep: "The agent will ask again when it reaches anything that was not granted. If that fails too, report it.",
+		}
+	default:
+		return approvalNotice{}, false
+	}
+	if len(committed) > 0 && len(refused) > 0 {
+		n.nextStep += " Separately, this session is committed to a different target for " + typeList(refused) +
+			", so the instance named there was not granted."
+	}
+	if (len(committed) > 0 || len(refused) > 0) && len(faulted) > 0 {
+		n.nextStep += " Separately, access to " + typeList(faulted) +
+			" could not be granted because of a fault on our side; the agent will ask again when it reaches it."
+	}
+	return n, true
+}
+
+func typeList(types []string) string { return strings.Join(types, ", ") }
+
+// conflictingMoveTargets returns, per single-occupancy resource type, the
+// distinct instances an approval would bind when it MOVES that type's pin and
+// names more than one instance of it across its covered phases. Such a plan
+// cannot be honored — a session holds one — and executing it phase by phase
+// goes wrong whichever way round it lands: two moves commit the first (revoking
+// the prior instance) and then fail the second; a phase that stays on the
+// pinned instance beside one that moves off it binds the first, then the move
+// revokes that fresh grant with no notice at all. Every binding counts, moving
+// or staying, so the approval is refused whole before anything is written.
+//
+// A type with no move among its bindings is left to GrantSlots, which refuses
+// the extra instance per type with its own notice.
+func conflictingMoveTargets(phases [][]authz.SlotBinding) map[string][]string {
+	targets := map[string][]string{}
+	moving := map[string]bool{}
+	for _, bindings := range phases {
+		for _, b := range bindings {
+			if b.Occupancy == authz.SlotOccupancyMulti {
+				continue
+			}
+			if !b.PriorID.IsZero() {
+				moving[b.ResourceType] = true
+			}
+			id := b.ResourceID.String()
+			if !slices.Contains(targets[b.ResourceType], id) {
+				targets[b.ResourceType] = append(targets[b.ResourceType], id)
+			}
+		}
+	}
+	for rt, ids := range targets {
+		if len(ids) < 2 || !moving[rt] {
+			delete(targets, rt)
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	return targets
+}
+
+// moveConflictNotice is the copy for an approval refused whole by
+// conflictingMoveTargets. Nothing was recorded or written, so the card will be
+// asked again — and will conflict again until the plan changes, which is the
+// route it names.
+func moveConflictNotice(conflict map[string][]string) approvalNotice {
+	types := make([]string, 0, len(conflict))
+	for rt := range conflict {
+		types = append(types, rt)
+	}
+	slices.Sort(types)
+	return approvalNotice{
+		category: categories.SlotBindRefused,
+		lead: "This plan moves " + typeList(types) + " to a new target but also names another one, and a " +
+			"session can be committed to only one, so your approval was not applied and nothing was granted.",
+		nextStep: "Ask the agent to revise the plan so it works on one target per session, or split the " +
+			"work across separate sessions. Re-approving this card will not change it.",
+	}
 }

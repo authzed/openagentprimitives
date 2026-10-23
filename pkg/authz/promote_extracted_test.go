@@ -32,7 +32,7 @@ func TestPromoteExtractedSlots_BindsCheckedCandidates(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/promote"}
 	recordCandidate(t, mem, memScope, 3, "github_repo", "demo-org/demo-repo")
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.PromoteExtractedSlots(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{querySlot("github_repo", "read")}, allowAll(), w, "alice", 3, time.Now, 0))
@@ -112,7 +112,7 @@ func TestPromoteExtractedSlots_DropsWhatItMustNotBind(t *testing.T) {
 			mem := memory.NewLocal(inmem.NewBackend())
 			memScope := memory.Scope{Kind: "session", ID: "ns/" + tc.name}
 			recordCandidate(t, mem, memScope, 1, tc.candType, tc.candID)
-			w := &recordingRelWriter{}
+			w := &pinningFake{}
 
 			require.NoError(t, authz.PromoteExtractedSlots(systemCtx(), mem, memScope, bindSession(),
 				tc.declared, tc.chk, w, "alice", 1, time.Now, 0))
@@ -136,7 +136,7 @@ func TestPromoteExtractedSlots_OnlyThisTurn(t *testing.T) {
 	memScope := memory.Scope{Kind: "session", ID: "ns/promote-turns"}
 	recordCandidate(t, mem, memScope, 1, "github_repo", "demo-org/turn-one")
 	recordCandidate(t, mem, memScope, 2, "github_repo", "demo-org/turn-two")
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.PromoteExtractedSlots(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{querySlot("github_repo", "read")}, allowAll(), w, "alice", 2, time.Now, 0))
@@ -149,7 +149,7 @@ func TestPromoteExtractedSlots_Idempotent(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/promote-idem"}
 	recordCandidate(t, mem, memScope, 1, "github_repo", "demo-org/demo-repo")
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	specs := []authz.BoundEntitySpec{querySlot("github_repo", "read")}
 
 	require.NoError(t, authz.PromoteExtractedSlots(systemCtx(), mem, memScope, bindSession(), specs, allowAll(), w, "alice", 1, time.Now, 0))
@@ -181,7 +181,7 @@ func TestPromoteExtractedSlots_NoOpInputs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w := &recordingRelWriter{}
+			w := &pinningFake{}
 			require.NoError(t, authz.PromoteExtractedSlots(systemCtx(), mem, memScope, bindSession(),
 				tc.specs, tc.chk, w, tc.subject, tc.turn, time.Now, 0))
 			assert.Empty(t, w.wrote)
@@ -198,7 +198,7 @@ func TestPromoteExtractedSlots_CandidateRunsThroughTheDeclaredTransformChain(t *
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/promote-transform"}
 	recordCandidate(t, mem, memScope, 5, "git_repo", "https://github.com/acme/app")
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	slot := querySlot("git_repo", "push")
 	slot.ValueTransforms = []string{"normalize_url", "spicedb_escape"}
 
@@ -217,7 +217,7 @@ func TestPromoteExtractedSlots_UndrivableCandidateIsDroppedNotBoundRaw(t *testin
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/promote-badtransform"}
 	recordCandidate(t, mem, memScope, 6, "git_repo", "https://github.com/acme/app")
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 	slot := querySlot("git_repo", "push")
 	slot.ValueTransforms = []string{"no_such_transform"}
 
@@ -234,7 +234,7 @@ func TestPromoteExtractedSlots_AskSlotBindsTheAnsweredValue(t *testing.T) {
 	mem := memory.NewLocal(inmem.NewBackend())
 	memScope := memory.Scope{Kind: "session", ID: "ns/ask"}
 	recordCandidate(t, mem, memScope, 4, "cluster", "cluster-7")
-	w := &recordingRelWriter{}
+	w := &pinningFake{}
 
 	require.NoError(t, authz.PromoteExtractedSlots(systemCtx(), mem, memScope, bindSession(),
 		[]authz.BoundEntitySpec{{ResourceType: "cluster", Permission: "debug", FillFrom: []string{"ask"}}},

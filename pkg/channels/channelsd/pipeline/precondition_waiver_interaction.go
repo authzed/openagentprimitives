@@ -97,6 +97,11 @@ func preconditionWaiverHandler(p *Pipeline) channelinteractions.DecisionHandler 
 					ResourceID:      authz.TrustedObjectID(det.ResourceID),
 					Permission:      det.Permission,
 					NoGrantRelation: det.NoSlotGrant,
+					// Resolved from the class slot at request-record time and
+					// carried in the details, so the waiver's grant is pinned
+					// exactly as any other bind of the same single-occupancy slot.
+					Occupancy: det.Occupancy,
+					Rebind:    det.Rebind,
 				}}, authz.PreconditionsWaived, expiry, logr.FromContextOrDiscard(ctx), p.Now); err != nil {
 				return channelinteractions.Outcome{}, fmt.Errorf(
 					"precondition waiver decision: bind %s on %s/%s (requestRef %q): %w",

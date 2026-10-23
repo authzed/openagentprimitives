@@ -468,28 +468,45 @@ func stampOapSource(agentClass *unstructured.Unstructured, version string, opts 
 	return nil
 }
 
-// completeAuthzSlotMembershipDefaults fills spec.authz.slots[].membership
-// with v1alpha1.AuthzSlotMembershipDefault wherever a slot leaves it absent or
-// empty — which is the normal case, since no bundle author spells out a
-// value that only ever mirrors the field's own +kubebuilder:default.
+// completeSlotStringField sets slot[key] to def when unset or empty, so the
+// installer writes what the apiserver would have defaulted. A non-string
+// value is an error naming the slot index — a malformed slot must refuse,
+// not be silently overwritten.
+func completeSlotStringField(slot map[string]interface{}, i int, key, def string) (bool, error) {
+	v, _, err := unstructured.NestedString(slot, key)
+	if err != nil {
+		return false, fmt.Errorf("read spec.authz.slots[%d].%s: %w", i, key, err)
+	}
+	if v != "" {
+		return false, nil
+	}
+	slot[key] = def
+	return true, nil
+}
+
+// completeAuthzSlotDefaults fills spec.authz.slots[].membership,
+// .occupancy, and .rebind with their v1alpha1.AuthzSlot*Default constants
+// wherever a slot leaves one absent or empty — which is the normal case,
+// since no bundle author spells out a value that only ever mirrors the
+// field's own +kubebuilder:default.
 //
 // It exists because AgentClassSpec.Authz.Slots is +listType=atomic
 // (pkg/apis/v1alpha1/agentclass_types.go): SSA treats the whole list as one
 // value, so a re-applied slot list REPLACES the live one at merge time rather
-// than merging element by element. A slot that omits membership therefore
-// applies as a slot the apiserver has since defaulted; the merged object
-// differs from the live one by exactly that field, the field manager records
-// a change even though the apiserver re-defaults membership on the way to
-// storage and the stored spec ends up unchanged. That is a real violation of
-// "a byte-identical re-apply must be a no-op" (AGENTS.md), even though
-// nothing in the stored spec ever moves. Writing the default into the
-// payload ourselves keeps what install applies identical to what the
+// than merging element by element. A slot that omits one of these fields
+// therefore applies as a slot the apiserver has since defaulted; the merged
+// object differs from the live one by exactly that field, the field manager
+// records a change even though the apiserver re-defaults the field on the
+// way to storage and the stored spec ends up unchanged. That is a real
+// violation of "a byte-identical re-apply must be a no-op" (AGENTS.md), even
+// though nothing in the stored spec ever moves. Writing the defaults into
+// the payload ourselves keeps what install applies identical to what the
 // apiserver would store either way.
 //
-// A slot that already sets membership — default or not — is left exactly as
+// A slot that already sets a field — default or not — is left exactly as
 // declared; a class with no authz.slots at all is left untouched rather than
 // gaining a fabricated empty list (itself an applied-field change).
-func completeAuthzSlotMembershipDefaults(agentClass *unstructured.Unstructured) error {
+func completeAuthzSlotDefaults(agentClass *unstructured.Unstructured) error {
 	slots, found, err := unstructured.NestedSlice(agentClass.Object, "spec", "authz", "slots")
 	if err != nil {
 		return fmt.Errorf("read spec.authz.slots: %w", err)
@@ -504,15 +521,20 @@ func completeAuthzSlotMembershipDefaults(agentClass *unstructured.Unstructured) 
 		if !ok {
 			return fmt.Errorf("spec.authz.slots[%d] is %T, not an object", i, s)
 		}
-		membership, _, err := unstructured.NestedString(slot, "membership")
-		if err != nil {
-			return fmt.Errorf("read spec.authz.slots[%d].membership: %w", i, err)
+		for _, field := range []struct {
+			key string
+			def string
+		}{
+			{"membership", v1alpha1.AuthzSlotMembershipDefault},
+			{"occupancy", v1alpha1.AuthzSlotOccupancyDefault},
+			{"rebind", v1alpha1.AuthzSlotRebindDefault},
+		} {
+			fieldChanged, err := completeSlotStringField(slot, i, field.key, field.def)
+			if err != nil {
+				return err
+			}
+			changed = changed || fieldChanged
 		}
-		if membership != "" {
-			continue
-		}
-		slot["membership"] = v1alpha1.AuthzSlotMembershipDefault
-		changed = true
 	}
 	if !changed {
 		return nil

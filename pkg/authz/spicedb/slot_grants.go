@@ -9,6 +9,8 @@ import (
 	"time"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/authzed/openagentprimitives/pkg/authz"
@@ -45,6 +47,13 @@ func slotGrantsOfSession(ns, name string) *v1.RelationshipFilter {
 // isSlotGrantRelation reports whether a relation name is a slot grant.
 func isSlotGrantRelation(rel string) bool {
 	return strings.HasPrefix(rel, authz.SlotGrantRelationPrefix)
+}
+
+// isSlotPinRelation reports whether a relation name is the slot pin relation.
+// Unlike slot grants there is only one name to match — a pin is per TYPE, not
+// per permission.
+func isSlotPinRelation(rel string) bool {
+	return rel == authz.SlotPinRelationName
 }
 
 // permissionOfSlotGrant recovers the permission a slot-grant relation carries.
@@ -95,31 +104,165 @@ func (c *Client) ListSlotGrants(ctx context.Context, ns, name string) ([]authz.S
 	return out, nil
 }
 
-// DeleteSlotGrants removes every slot grant held by this session.
+// ListSlotPins returns every pin held by this session, verbatim.
+//
+// Mirrors ListSlotGrants's read shape exactly — one subject-only RPC, filtered
+// client-side, for the same reason: a resource-type/relation filter cannot
+// express "a slot_pin tuple naming agentsession:<ns>/<name> as its subject"
+// any more precisely than the grant sweep can express its per-permission
+// relation names server-side. Here the client-side predicate is
+// isSlotPinRelation instead of the slot_grant_ prefix.
+//
+// Returned as plain Relation, not SlotBinding: a pin carries no permission and
+// no occupancy to recover — it is the tuple itself that CopySlotGrants needs
+// to copy byte-for-byte, re-targeting only the subject.
+//
+// Fully consistent, for the same reason as ListSlotGrants: a stale read here
+// either hides a pin a write just moved or surfaces one that no longer holds.
+func (c *Client) ListSlotPins(ctx context.Context, ns, name string) ([]authz.Relation, error) {
+	stream, err := c.cl.ReadRelationships(ctx, &v1.ReadRelationshipsRequest{
+		Consistency:        &v1.Consistency{Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true}},
+		RelationshipFilter: slotGrantsOfSession(ns, name),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read slot pins %s/%s: %w", ns, name, err)
+	}
+	var out []authz.Relation
+	for {
+		msg, rerr := stream.Recv()
+		if errors.Is(rerr, io.EOF) {
+			break
+		}
+		if rerr != nil {
+			return nil, fmt.Errorf("read slot pins stream %s/%s: %w", ns, name, rerr)
+		}
+		rel := msg.GetRelationship()
+		if !isSlotPinRelation(rel.GetRelation()) {
+			// The session is the subject of other relations too (slot grants,
+			// the agentsession relations themselves); only the pin belongs here.
+			continue
+		}
+		res := rel.GetResource()
+		subj := rel.GetSubject().GetObject()
+		out = append(out, authz.Relation{
+			ResourceType: res.GetObjectType(),
+			ResourceID:   res.GetObjectId(),
+			Relation:     rel.GetRelation(),
+			SubjectType:  subj.GetObjectType(),
+			SubjectID:    subj.GetObjectId(),
+		})
+	}
+	return out, nil
+}
+
+// CopySlotTuples writes rels verbatim in one batched TOUCH — no gate, and no
+// expiry stamping of its own. The caller (authz.CopySlotGrants) has already
+// re-targeted every relation's SubjectID at the child and, for a grant,
+// stamped the child's expiry; a pin tuple carries none, exactly as EnsurePin
+// writes it, so this never adds one.
+//
+// For every type in unpinnedTypes the RPC carries a MUST_NOT_MATCH
+// precondition that child holds no slot_pin of that type — the same
+// any-instance filter EnsurePin guards its first-fill with. SpiceDB evaluates
+// the preconditions and the TOUCH atomically, so a pin the child's own runner
+// committed after CopySlotGrants read the child's pins refuses the whole copy
+// rather than landing a second pin beside it (which ReadPin would then fail
+// closed on forever). A refusal wraps authz.ErrSlotPinned.
+func (c *Client) CopySlotTuples(ctx context.Context, child authz.SessionRef, rels []authz.Relation, unpinnedTypes []string) error {
+	if len(rels) == 0 {
+		return nil
+	}
+	updates := make([]*v1.RelationshipUpdate, 0, len(rels))
+	for _, r := range rels {
+		updates = append(updates, &v1.RelationshipUpdate{
+			Operation:    v1.RelationshipUpdate_OPERATION_TOUCH,
+			Relationship: relationshipFor(r),
+		})
+	}
+	preconditions := make([]*v1.Precondition, 0, len(unpinnedTypes))
+	for _, t := range unpinnedTypes {
+		preconditions = append(preconditions, &v1.Precondition{
+			Operation: v1.Precondition_OPERATION_MUST_NOT_MATCH,
+			Filter:    pinFilter(t, "", child),
+		})
+	}
+	_, err := c.cl.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{
+		Updates:               updates,
+		OptionalPreconditions: preconditions,
+	})
+	if err == nil {
+		return nil
+	}
+	if status.Code(err) == codes.FailedPrecondition && !isSchemaDefinitionAbsent(err) {
+		return fmt.Errorf("copy slot tuples to %s: the child pinned a copied type concurrently: %w", child, authz.ErrSlotPinned)
+	}
+	return fmt.Errorf("copy slot tuples to %s: %w", child, err)
+}
+
+// DeleteSlotGrants removes every slot grant AND pin held by this session.
 //
 // The reciprocal of DeleteAgentSessionRelationships, and NOT covered by it: a
-// slot grant has the session as its SUBJECT, while that call filters
-// agentsession as the RESOURCE. Without this, every session that bound an
-// instance leaves live authority behind on an external resource — the
+// slot grant (and a pin) has the session as its SUBJECT, while that call
+// filters agentsession as the RESOURCE. Without this, every session that bound
+// an instance leaves live authority behind on an external resource — the
 // AgentSession CR is retained after completion, so slot_grant->interact keeps
 // resolving indefinitely.
 //
-// Idempotent: succeeds when the session holds no grants.
+// Pins are included deliberately: unlike a grant, a pin carries no
+// expiration, so a dropped pin-delete here is not a grant that simply lapses
+// later — it is a PERMANENT leak. A session name that is reused after this one
+// tears down would otherwise inherit a pin it never earned and be refused its
+// own first bind (see the admission sweep in pkg/controllers/agentsession,
+// which calls this same method for exactly that leftover).
+//
+// Two delete calls, not one: the grant delete routes through authz.RevokeSlots
+// so the grant tuple is built by the sanctioned SlotGrantRelation call site
+// (see slot_grant_guard_test.go — a hand-built slot_grant_/slot_pin tuple
+// outside GrantSlots/RevokeSlots/the pinner trips that guard), while pins are
+// already fully-built Relations straight from ListSlotPins and need no
+// builder call at all. Both failures are returned, never swallowed — a
+// dropped pin delete is the permanent leak above.
+//
+// PINS FIRST, then grants are listed and revoked. A single-occupancy grant is
+// written by WriteGrantsPinned under a MUST_MATCH precondition on the pin, so
+// once the pin is gone every racing pinned write fails instead of landing.
+// Listing the grants only AFTER that delete means the grant read sees every
+// pinned write that could still succeed. Revoking grants first (as this once
+// did) left a window in which a pinned write landed after the grant list was
+// read and before the pin was deleted — an orphaned grant that outlived the
+// teardown until it expired.
+//
+// Idempotent: succeeds when the session holds no grants or pins.
 func (c *Client) DeleteSlotGrants(ctx context.Context, ns, name string) error {
 	// Listed then deleted, rather than swept by one filter. A subject-only
 	// filter would also match the session's NON-slot relations, and
 	// per-permission relation names cannot be expressed as one server-side
-	// filter — so the read is what identifies the slot grants, and the delete
-	// names exactly those.
+	// filter — so the read is what identifies the slot grants and pins, and the
+	// delete names exactly those.
+	pins, err := c.ListSlotPins(ctx, ns, name)
+	if isSchemaDefinitionAbsent(err) {
+		// No schema has been composed yet (no class has ever become valid), so
+		// no session can have bound anything: there is nothing to sweep. The
+		// mint and admission sweeps meet this state on a fresh install, and
+		// failing closed there would refuse every first session.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete slot grants %s/%s: list pins: %w", ns, name, err)
+	}
+	if len(pins) > 0 {
+		if err := c.Relations().DeleteRelationships(ctx, pins); err != nil {
+			return fmt.Errorf("delete slot grants %s/%s: delete pins: %w", ns, name, err)
+		}
+	}
 	held, err := c.ListSlotGrants(ctx, ns, name)
 	if err != nil {
 		return fmt.Errorf("delete slot grants %s/%s: %w", ns, name, err)
 	}
-	if len(held) == 0 {
-		return nil
-	}
-	if err := authz.RevokeSlots(ctx, c.Relations(), authz.SessionRef{Namespace: ns, Name: name}, held); err != nil {
-		return fmt.Errorf("delete slot grants %s/%s: %w", ns, name, err)
+	if len(held) > 0 {
+		if err := authz.RevokeSlots(ctx, c.Relations(), authz.SessionRef{Namespace: ns, Name: name}, held); err != nil {
+			return fmt.Errorf("delete slot grants %s/%s: %w", ns, name, err)
+		}
 	}
 	return nil
 }
@@ -185,16 +328,30 @@ func (w *RelationWriter) WriteRelationships(ctx context.Context, rels []authz.Re
 	if err != nil {
 		return fmt.Errorf("write relationships: %w", err)
 	}
-	// Advance the caller's freshness floor to this write. Only after success, and
-	// only with a real token — an empty one would be a no-op the callee ignores
-	// anyway, but not calling keeps the contract ("onWrite means a durable
-	// write") honest.
-	if w.onWrite != nil {
-		if tok := resp.GetWrittenAt().GetToken(); tok != "" {
-			w.onWrite(rels, tok)
-		}
-	}
+	w.advanceFloor(rels, resp)
 	return nil
+}
+
+// advanceFloor invokes the freshness-floor hook for a SUCCESSFUL write, when one
+// is wired. Nil-safe, and only fires with a real WrittenAt token — an empty one
+// is a no-op the callee ignores anyway, but not calling keeps the contract
+// ("onWrite means a durable write") honest.
+//
+// Shared by EVERY write on this RelationWriter that must advance the floor —
+// the plain batched WriteRelationships here AND the pinned-grant / move writes
+// in slot_pin.go — so a single-occupancy grant cannot silently skip the
+// read-your-writes floor advance the plain path gets (the approve-then-stale-
+// denied race the floor closes applies to pinned grants exactly as it does to
+// unpinned ones). The one write that deliberately does NOT call this is
+// EnsurePin: nothing ever Checks the slot_pin relation, so there is no floor a
+// later check could need advanced.
+func (w *RelationWriter) advanceFloor(rels []authz.Relation, resp *v1.WriteRelationshipsResponse) {
+	if w.onWrite == nil {
+		return
+	}
+	if tok := resp.GetWrittenAt().GetToken(); tok != "" {
+		w.onWrite(rels, tok)
+	}
 }
 
 // DeleteRelationships removes exactly the named tuples in one atomic RPC.
@@ -239,3 +396,7 @@ func relationshipFor(r authz.Relation) *v1.Relationship {
 }
 
 var _ authz.RelWriter = (*RelationWriter)(nil)
+
+// *Client is the fork path's SlotGrantCopier: ListSlotGrants + ListSlotPins +
+// CopySlotTuples.
+var _ authz.SlotGrantCopier = (*Client)(nil)

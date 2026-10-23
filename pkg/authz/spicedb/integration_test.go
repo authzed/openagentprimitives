@@ -566,6 +566,7 @@ const slotSchemaFragment = `
 definition demo_target {
     relation slot_grant_reachable: agentsession with expiration
     relation slot_grant_mutate: agentsession with expiration
+    relation slot_pin: agentsession
     relation owner: user
     permission reachable = slot_grant_reachable->interact + owner
     permission mutate = slot_grant_mutate->interact + owner
@@ -573,6 +574,7 @@ definition demo_target {
 
 definition demo_widget {
     relation slot_grant_usable: agentsession with expiration
+    relation slot_pin: agentsession
     relation owner: user
     permission usable = slot_grant_usable->interact + owner
 }
@@ -780,9 +782,12 @@ func TestIntegration_RevokeSlot_IsSurgicalAndImmediate(t *testing.T) {
 
 	require.NoError(t, c.TouchInteractParticipantUser(ctx, ns, sessName, member), "TouchInteractParticipantUser")
 	sess := authz.SessionRef{Namespace: ns, Name: sessName}
+	// Occupancy multi: surgical revocation is only interesting when the session
+	// holds MORE THAN ONE instance of a type, which single-occupancy pinning
+	// forbids by construction. This is the explicit multi-set case.
 	require.NoError(t, authz.GrantSlots(ctx, c.Relations(), sess, []authz.SlotBinding{
-		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(keepID), Permission: "reachable"},
-		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(dropID), Permission: "reachable"},
+		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(keepID), Permission: "reachable", Occupancy: "multi"},
+		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(dropID), Permission: "reachable", Occupancy: "multi"},
 	}, time.Now().Add(time.Hour)), "GrantSlots")
 
 	reach := func(id string) bool {
@@ -923,4 +928,70 @@ func TestIntegration_DeniedLosesTheNewPermissions(t *testing.T) {
 		assert.False(t, allowed,
 			"a denied user must lose %s, whatever else grants it — denied wins over every grant", perm)
 	}
+}
+
+// TestIntegration_CopySlotGrants_ChildPinWinsAndTheGuardIsAtomic locks the
+// fork-copy re-run fix against real SpiceDB. The copy re-runs on every
+// ReconcileRestart pass while the child's runner may be live, so:
+//
+//   - a child that already pins demo_target keeps exactly its own pin and
+//     receives none of the parent's demo_target tuples, while demo_widget still
+//     copies;
+//   - the MUST_NOT_MATCH guard on CopySlotTuples is evaluated by SpiceDB itself:
+//     a write guarded on a type the child already pins is refused with
+//     ErrSlotPinned and writes nothing.
+func TestIntegration_CopySlotGrants_ChildPinWinsAndTheGuardIsAtomic(t *testing.T) {
+	c := newSlotIntegrationClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	ns := "integration-test"
+	parent := authz.SessionRef{Namespace: ns, Name: uniq(t, "fork-parent-")}
+	child := authz.SessionRef{Namespace: ns, Name: uniq(t, "fork-child-")}
+	parentTarget, childTarget, widget := uniq(t, "tgt-a-"), uniq(t, "tgt-b-"), uniq(t, "widget-")
+	t.Cleanup(func() {
+		_ = c.DeleteSlotGrants(context.Background(), ns, parent.Name)
+		_ = c.DeleteSlotGrants(context.Background(), ns, child.Name)
+	})
+	exp := time.Now().Add(time.Hour)
+
+	// Parent: pinned demo_target (A) + a grant on it, and pinned demo_widget.
+	require.NoError(t, authz.GrantSlots(ctx, c.Relations(), parent, []authz.SlotBinding{
+		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(parentTarget), Permission: "reachable"},
+		{ResourceType: "demo_widget", ResourceID: authz.TrustedObjectID(widget), Permission: "usable"},
+	}, exp), "GrantSlots (parent)")
+	// Child: its own runner already pinned demo_target to a DIFFERENT instance.
+	require.NoError(t, authz.GrantSlots(ctx, c.Relations(), child, []authz.SlotBinding{
+		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(childTarget), Permission: "reachable"},
+	}, exp), "GrantSlots (child)")
+
+	res, err := authz.CopySlotGrants(ctx, c, parent, child, exp)
+	require.NoError(t, err, "CopySlotGrants")
+	assert.Equal(t, []string{"demo_target"}, res.SkippedTypes)
+	assert.Equal(t, 1, res.Grants, "only the demo_widget grant copies")
+	assert.Equal(t, 1, res.Pins, "only the demo_widget pin copies")
+
+	pinned, err := c.Relations().(authz.SlotPinner).ReadPin(ctx, "demo_target", child)
+	require.NoError(t, err, "exactly one demo_target pin: ReadPin fails closed on two")
+	assert.Equal(t, childTarget, pinned, "the child's own pin wins")
+	widgetPin, err := c.Relations().(authz.SlotPinner).ReadPin(ctx, "demo_widget", child)
+	require.NoError(t, err)
+	assert.Equal(t, widget, widgetPin, "an unpinned type still copies")
+
+	grants, err := c.ListSlotGrants(ctx, ns, child.Name)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []authz.SlotBinding{
+		{ResourceType: "demo_target", ResourceID: authz.TrustedObjectID(childTarget), Permission: "reachable"},
+		{ResourceType: "demo_widget", ResourceID: authz.TrustedObjectID(widget), Permission: "usable"},
+	}, grants, "the parent's demo_target grant must not come back onto a child that pins demo_target")
+
+	// The guard itself, evaluated server-side: the child pins demo_target, so a
+	// write guarded on it must be refused and land nothing.
+	stray := authz.SlotPinRelation("demo_target", parentTarget, child)
+	err = c.CopySlotTuples(ctx, child, []authz.Relation{stray}, []string{"demo_target"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, authz.ErrSlotPinned)
+	pinned, err = c.Relations().(authz.SlotPinner).ReadPin(ctx, "demo_target", child)
+	require.NoError(t, err, "the refused write must not have landed a second pin")
+	assert.Equal(t, childTarget, pinned)
 }

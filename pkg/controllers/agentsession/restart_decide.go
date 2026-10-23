@@ -178,12 +178,31 @@ func BuildChildSession(parent *spiceboxv1alpha1.AgentSession, pr *spiceboxv1alph
 				teamID + ":" + channelID + ":" + threadTS
 		}
 	}
+	// Pre-stamped — for every mode EXCEPT takeover — so the child's first
+	// reconcile skips the admission sweep: ReconcileRestart copies the parent's
+	// slot grants AND pin onto this (ns, name) right after creating it
+	// (restart.go step 6c), and a sweep on the child's first reconcile would
+	// wipe them. ReconcileRestart sweeps the target name itself just before
+	// creating the child, so the skip does not leave a reused name unswept.
+	// Only the operator and channelsd service accounts may add this finalizer
+	// (config/admission/agentsession-finalizer-policy.yaml); the operator
+	// creates this child, so the policy admits it.
+	//
+	// A takeover copies NO grants (step 6c skips it), so a pre-stamp would buy
+	// nothing — and takeover is the mode where a DIFFERENT user inherits
+	// whatever is stale under the name. Leaving the finalizer off hands the
+	// child to the ordinary admission sweep.
+	var finalizers []string
+	if pr.Mode != spiceboxv1alpha1.PendingRestartModeTakeover {
+		finalizers = []string{spiceboxv1alpha1.FinalizerAgentSession}
+	}
 	return &spiceboxv1alpha1.AgentSession{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        pr.TargetSessionName,
 			Namespace:   parent.Namespace,
 			Labels:      childLabels,
 			Annotations: childAnnotations,
+			Finalizers:  finalizers,
 		},
 		Spec: spiceboxv1alpha1.AgentSessionSpec{
 			Class:         parent.Spec.Class,

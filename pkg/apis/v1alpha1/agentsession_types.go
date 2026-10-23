@@ -44,6 +44,13 @@ type AgentSessionList struct {
 // different session, which silently moves a running session's approval and
 // transcript-read standing to a different set of humans.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.parent) || (has(self.parent) && self.parent == oldSelf.parent)",message="spec.parent is immutable once set"
+//
+// forkedFrom is pinned harder than parent: it may be neither added, removed nor
+// repointed after create, because only the operator's fork path sets it, and
+// only at create (BuildChildSession). A field-level rule cannot express this —
+// it never runs when the field is absent on either side — hence the spec-level
+// transition rule comparing presence as well as value.
+// +kubebuilder:validation:XValidation:rule="has(self.forkedFrom) == has(oldSelf.forkedFrom) && (!has(self.forkedFrom) || self.forkedFrom == oldSelf.forkedFrom)",message="spec.forkedFrom is immutable: it cannot be added, removed or changed after create"
 type AgentSessionSpec struct {
 	// Class names the AgentClass in the same namespace.
 	Class string `json:"class"`
@@ -76,7 +83,10 @@ type AgentSessionSpec struct {
 	OutputChannel *ChannelBinding `json:"outputChannel,omitempty"`
 
 	// ForkedFrom names the prior AgentSession (same namespace) this
-	// session was forked from via Restart-from-here. Immutable.
+	// session was forked from via Restart-from-here. Immutable after
+	// create (CEL rule on AgentSessionSpec). Whoever creates the CR picks
+	// the value and nothing verifies that the named session exists, so it
+	// must never gate anything security-relevant.
 	// Distinct from ChannelBinding.InheritFrom (set on auto-inherit
 	// after archive); ForkedFrom is set on explicit user-triggered
 	// restart.
@@ -219,6 +229,17 @@ type AgentSessionStatus struct {
 	// baseline pin.
 	// +optional
 	ObservedPins []ObservedPin `json:"observedPins,omitempty"`
+
+	// SlotPins is a DISPLAY-ONLY observation, one entry per single-occupancy
+	// resource type, mirroring the instance SpiceDB's slot_pin relation
+	// currently pins this session to. SpiceDB is the enforcement source of
+	// truth for single-occupancy pinning; nothing that authorizes a bind or a
+	// tool call reads this field. See SlotPin's doc comment for what writes
+	// it and what MovedBy/MovedAt mean.
+	// +optional
+	// +listType=map
+	// +listMapKey=resourceType
+	SlotPins []SlotPin `json:"slotPins,omitempty"`
 
 	// CredentialAuthFailures records, per tool ORIGIN, that the platform ITSELF
 	// observed an auth-shaped failure there — the independent corroboration a

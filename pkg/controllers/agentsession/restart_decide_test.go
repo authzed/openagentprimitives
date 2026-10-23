@@ -115,6 +115,34 @@ func TestBuildChildSession_CarriesForwardSpec(t *testing.T) {
 	assert.Equal(t, "U1", child.Annotations[v1alpha1.AnnotationStartedByExternalID])
 }
 
+// TestBuildChildSession_PreStampsSessionFinalizer pins which restart children
+// are created with the AgentSession finalizer already present. ReconcileRestart
+// copies the parent's slot grants and pin onto a restart/inherit child right
+// after creating it (restart.go step 6c); a child whose finalizer were absent at
+// first reconcile would take the admission sweep and lose them. A takeover
+// child copies NO grants, so it is deliberately NOT pre-stamped: it takes the
+// ordinary admission sweep, which is what protects the different user who
+// inherits the name from whatever is stale under it.
+func TestBuildChildSession_PreStampsSessionFinalizer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode string
+		want []string
+	}{
+		{name: "restart-from-here: child carries the AgentSession finalizer", mode: v1alpha1.PendingRestartModeRestart, want: []string{v1alpha1.FinalizerAgentSession}},
+		{name: "inherit: child carries the AgentSession finalizer", mode: v1alpha1.PendingRestartModeInherit, want: []string{v1alpha1.FinalizerAgentSession}},
+		{name: "takeover: child carries no finalizer, so it takes the admission sweep", mode: v1alpha1.PendingRestartModeTakeover, want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "parent", Namespace: "ns"}}
+			child := agentsession.BuildChildSession(parent, &v1alpha1.PendingRestart{
+				Mode: tc.mode, TargetSessionName: "parent-fk1",
+			})
+			assert.Equal(t, tc.want, child.Finalizers)
+		})
+	}
+}
+
 // TestBuildChildSession_ClearsThreadTSAndChannelKeyLabel verifies that a
 // restart-from-here (-fk) fork's ChannelBinding has thread_ts (and the
 // parent-thread permalink) stripped (so the Slack sender posts at channel

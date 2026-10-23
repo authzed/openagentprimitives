@@ -1111,6 +1111,14 @@ type BoundChannelRef struct {
 // pkg/platform/oap/install/apply.go's completion of spec.authz.slots.
 const AuthzSlotMembershipDefault = "frozen"
 
+// AuthzSlotOccupancyDefault mirrors AuthzSlot.Occupancy's +kubebuilder:default.
+// Completed by the installer before SSA apply for the same reason membership is
+// (slots is +listType=atomic) — see pkg/platform/oap/install/apply.go.
+const AuthzSlotOccupancyDefault = "single"
+
+// AuthzSlotRebindDefault mirrors AuthzSlot.Rebind's +kubebuilder:default.
+const AuthzSlotRebindDefault = "approval"
+
 // AuthzSlot declares a TYPE of resource this agent operates on, gated by a
 // permission — the instance axis of the two-axis ceiling: the permission
 // Check'd at bind time, optional default IDs to bind at session start, and
@@ -1244,6 +1252,41 @@ type AuthzSlot struct {
 	// +kubebuilder:validation:Enum=dynamic;frozen
 	// +kubebuilder:default=frozen
 	Membership string `json:"membership,omitempty"`
+
+	// Occupancy decides how many instances may occupy this slot at once.
+	//
+	// single (default): at most one instance occupies the slot for the
+	// session's life, recorded as a non-expiring slot_pin relationship. A
+	// bind to a DIFFERENT instance is refused rather than silently added.
+	// A second permission on the SAME instance, and a re-grant of the same
+	// instance after its grants expired, are not drift and still bind.
+	//
+	// multi: the slot binds a set; each addition is gated as it is today.
+	// No pin is written.
+	//
+	// UPGRADE NOTE. Before this field existed every slot behaved as multi, and a
+	// class written then has no occupancy set, so the apiserver now defaults it
+	// to single. A slot listing two or more defaults is then refused
+	// (SlotDeclarationInvalid), and a thread seed or trigger binding several
+	// instances of one type is refused rather than binding them all. Set
+	// occupancy: multi on such slots before upgrading.
+	// +optional
+	// +kubebuilder:validation:Enum=single;multi
+	// +kubebuilder:default=single
+	Occupancy string `json:"occupancy,omitempty"`
+
+	// Rebind decides what a bind to a DIFFERENT instance does on a filled
+	// single-occupancy slot. Meaningful only when occupancy is single
+	// (as triggerInstance is meaningful only with fillFrom "trigger").
+	//
+	// approval (default): refused, and the refusal names the route — an
+	// approved plan amendment naming the new instance moves the pin and
+	// revokes the old instance's grants.
+	// never: refused unconditionally; retargeting requires a new session.
+	// +optional
+	// +kubebuilder:validation:Enum=approval;never
+	// +kubebuilder:default=approval
+	Rebind string `json:"rebind,omitempty"`
 
 	// Requires are predicates over the facts a candidate arrived with, all of
 	// which must be Satisfied before it may occupy this slot. Any Refused or

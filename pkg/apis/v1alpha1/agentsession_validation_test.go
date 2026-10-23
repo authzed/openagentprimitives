@@ -23,6 +23,7 @@ package v1alpha1_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -103,4 +104,47 @@ func TestAgentSessionParentImmutableCEL(t *testing.T) {
 		assert.True(t, apierrors.IsInvalid(err), "expected an Invalid API error, got: %v", err)
 		assert.Contains(t, err.Error(), "spec.parent is immutable once set")
 	})
+}
+
+// TestAgentSessionForkedFromImmutableCEL pins spec.forkedFrom as fully
+// immutable after create: unlike parent, it may not even be ADDED later. The
+// field is creator-chosen and unverified, so a value that could change after
+// the operator first reconciled the session would be a lever with no owner.
+func TestAgentSessionForkedFromImmutableCEL(t *testing.T) {
+	env := testenv.Start(t)
+	ctx := context.Background()
+
+	const msg = "spec.forkedFrom is immutable"
+	cases := []struct {
+		name       string
+		createWith string
+		updateTo   string
+		wantErr    bool
+	}{
+		{name: "A to A: allowed (a re-apply is a no-op)", createWith: "session-a", updateTo: "session-a", wantErr: false},
+		{name: "unset to unset: allowed (unrelated spec edits are untouched)", createWith: "", updateTo: "", wantErr: false},
+		{name: "unset to A: rejected (adding after create)", createWith: "", updateTo: "session-a", wantErr: true},
+		{name: "A to unset: rejected (removing)", createWith: "session-a", updateTo: "", wantErr: true},
+		{name: "A to B: rejected (repointing)", createWith: "session-a", updateTo: "session-b", wantErr: true},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newParentTestSession(fmt.Sprintf("forkedfrom-%d", i))
+			sess.Spec.ForkedFrom = tc.createWith
+			require.NoError(t, env.Client.Create(ctx, sess), "create")
+
+			var fresh v1alpha1.AgentSession
+			require.NoError(t, env.Client.Get(ctx, client.ObjectKeyFromObject(sess), &fresh), "Get before update")
+			fresh.Spec.ForkedFrom = tc.updateTo
+			fresh.Spec.Prompt.Inline = "edited"
+			err := env.Client.Update(ctx, &fresh)
+			if !tc.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.True(t, apierrors.IsInvalid(err), "expected an Invalid API error, got: %v", err)
+			assert.Contains(t, err.Error(), msg)
+		})
+	}
 }

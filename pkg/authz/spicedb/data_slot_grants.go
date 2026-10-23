@@ -72,6 +72,10 @@ func (c *Client) ListDataSlotGrants(ctx context.Context, ns, name string) ([]aut
 // Idempotent: succeeds when the session holds no data slots.
 func (c *Client) DeleteDataSlotGrants(ctx context.Context, ns, name string) error {
 	held, err := c.ListDataSlotGrants(ctx, ns, name)
+	if isSchemaDefinitionAbsent(err) {
+		// No schema yet means nothing can have been granted — see DeleteSlotGrants.
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("delete data slot grants %s/%s: %w", ns, name, err)
 	}

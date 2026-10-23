@@ -46,9 +46,20 @@ type fakeAuthz struct {
 	grantedSlotsSession string
 	grantedSlotsExpiry  time.Time
 	grantSlotsErr       error
-	checkResult         bool
-	checkErr            error
-	checkInteractFn     func(canonicalID string) (bool, error)
+	// deleteSlotGrantsCalls / deleteSlotGrantsErr back DeleteSlotGrants — the
+	// mint admission sweep. slotCallOrder records "sweep"/"grant" in arrival
+	// order so a test can prove the sweep runs BEFORE the first bind rather than
+	// merely that both fired.
+	deleteSlotGrantsCalls int
+	deleteSlotGrantsErr   error
+	slotCallOrder         []string
+	// deleteDataSlotGrantsCalls / deleteDataSlotGrantsErr back
+	// DeleteDataSlotGrants — the data-slot half of the same sweep.
+	deleteDataSlotGrantsCalls int
+	deleteDataSlotGrantsErr   error
+	checkResult               bool
+	checkErr                  error
+	checkInteractFn           func(canonicalID string) (bool, error)
 
 	// delegations models the SpiceDB lineage that agentsession#converse
 	// resolves over: one entry per delegation edge, "<parentNS>/<parentName>"
@@ -236,6 +247,7 @@ func (f *fakeAuthz) CheckOnResource(ctx context.Context, resType, resID, _ strin
 // GrantSlots records the instances thread adoption seeded, so a test can
 // assert WHICH values bound rather than merely that something was written.
 func (f *fakeAuthz) GrantSlots(_ context.Context, ns, name string, bindings []authz.SlotBinding, expiresAt time.Time) error {
+	f.slotCallOrder = append(f.slotCallOrder, "grant")
 	if f.grantSlotsErr != nil {
 		return f.grantSlotsErr
 	}
@@ -243,6 +255,29 @@ func (f *fakeAuthz) GrantSlots(_ context.Context, ns, name string, bindings []au
 	f.grantedSlotsSession = ns + "/" + name
 	f.grantedSlotsExpiry = expiresAt
 	return nil
+}
+
+// DeleteSlotGrants models the mint admission sweep: it clears whatever this
+// name held (a stale predecessor's tuples), so a test seeding a stale binding
+// can assert the sweep wiped it and left only the FRESH bind behind, and it
+// records its order relative to GrantSlots to prove it ran first. A test mints
+// exactly one session, so clearing is session-scoped in effect.
+func (f *fakeAuthz) DeleteSlotGrants(_ context.Context, _, _ string) error {
+	f.deleteSlotGrantsCalls++
+	f.slotCallOrder = append(f.slotCallOrder, "sweep")
+	if f.deleteSlotGrantsErr != nil {
+		return f.deleteSlotGrantsErr
+	}
+	f.grantedSlots = nil
+	f.grantedSlotsSession = ""
+	return nil
+}
+
+// DeleteDataSlotGrants models the data-slot half of the mint admission sweep.
+func (f *fakeAuthz) DeleteDataSlotGrants(_ context.Context, _, _ string) error {
+	f.deleteDataSlotGrantsCalls++
+	f.slotCallOrder = append(f.slotCallOrder, "dataSweep")
+	return f.deleteDataSlotGrantsErr
 }
 
 // Relations satisfies pipeline.Authz for tests that never approve a JIT tool

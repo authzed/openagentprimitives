@@ -69,6 +69,11 @@ func FromSlots(slots []spiceboxv1alpha1.AuthzSlot, transforms map[string][]strin
 			AutoFillArgs:    afArgs,
 			ValueTransforms: transforms[et.ResourceType],
 			Requires:        requires,
+			// Occupancy and Rebind are plain spec fields on AuthzSlot (not
+			// status-derived like ValueTransforms), so they are copied straight
+			// off the slot. Empty reads as single downstream.
+			Occupancy: et.Occupancy,
+			Rebind:    et.Rebind,
 		})
 	}
 	return out, nil
