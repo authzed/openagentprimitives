@@ -238,6 +238,59 @@ func TestConsentPostEverythingScope(t *testing.T) {
 	assert.Empty(t, entry.ScopeClasses)
 }
 
+func TestConsentPostEmptyScopeRerendersWithFreshPending(t *testing.T) {
+	s := newTestServerWithConsent(t)
+	validClient := mintTestClientID(t, s, "demo tool", []string{"http://127.0.0.1:7777/cb"})
+	pendingID := primePendingAuthorize(t, s, validClient)
+
+	rec := doConsentPost(t, s, url.Values{
+		"pending": {pendingID},
+		"role":    {"read"},
+	})
+	require.Equal(t, http.StatusOK, rec.Code, "an approval naming no agent must re-render the form, not redirect with a code")
+	body := rec.Body.String()
+	assert.Contains(t, body, `role="alert"`, "the re-render must say why")
+	retryID := extractHiddenValue(t, body, "pending")
+	assert.NotEqual(t, pendingID, retryID, "the consumed pending id must not be reissued")
+
+	rec = doConsentPost(t, s, url.Values{
+		"pending": {retryID},
+		"role":    {"read"},
+		"scope":   {"default/demo-agent"},
+	})
+	require.Equal(t, http.StatusFound, rec.Code, "the re-rendered form's pending id must complete the flow")
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1:7777", loc.Host, "the retry must still redirect to the originally validated redirect_uri")
+	assert.Equal(t, "st", loc.Query().Get("state"))
+	assert.NotEmpty(t, loc.Query().Get("code"))
+}
+
+func TestConsentFormShowsRedirectTarget(t *testing.T) {
+	s := newTestServerWithConsent(t)
+	cases := []struct {
+		name        string
+		redirectURI string
+		wantText    string
+		wantWarn    bool
+	}{
+		{name: "loopback redirect: names this computer, no warning", redirectURI: "http://127.0.0.1:7777/cb", wantText: "a program running on this computer", wantWarn: false},
+		{name: "remote https redirect: names the host, warns unverified", redirectURI: "https://attacker.example/cb", wantText: "attacker.example", wantWarn: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clientID := mintTestClientID(t, s, "Claude Code", []string{tc.redirectURI})
+			rec := doAuthorizeGet(t, s, "?response_type=code&client_id="+clientID+
+				"&redirect_uri="+url.QueryEscape(tc.redirectURI)+"&code_challenge=x&code_challenge_method=S256")
+			require.Equal(t, http.StatusOK, rec.Code)
+			body := rec.Body.String()
+			assert.Contains(t, body, tc.wantText)
+			assert.Contains(t, body, "has not been verified", "a self-reported client name must always be flagged")
+			assert.Equal(t, tc.wantWarn, strings.Contains(body, `class="notice warn"`))
+		})
+	}
+}
+
 // TestOAuthAuthorizationServerRoutesGatedOnConsent is the route-registration
 // half of "feature off without SpiceDB": a server built WITHOUT ConsentDeps
 // (newTestServer, not newTestServerWithConsent) must 404 the entire

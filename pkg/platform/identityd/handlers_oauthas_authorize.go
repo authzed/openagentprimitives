@@ -140,7 +140,13 @@ func (s *Server) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeConsentForm(w, reg.Name, identity.DecodeForDisplay(canonical.String()), pendingID, classes)
+	writeConsentForm(w, consentView{
+		ClientName:   reg.Name,
+		RedirectURI:  redirectURI,
+		OwnerDisplay: identity.DecodeForDisplay(canonical.String()),
+		PendingID:    pendingID,
+		Classes:      classes,
+	})
 }
 
 // handleOAuthConsent handles POST /oauth/consent — the consent screen's
@@ -250,6 +256,31 @@ func (s *Server) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// An approval naming no agent at all is not a grant MintAccessToken can
+	// honor (it refuses a token with neither scope classes nor unfiltered),
+	// and discovering that only at /oauth/token would burn the code and hand
+	// the client a bare server_error. Catch it here, while the person is still
+	// on the page: the pending entry was consumed above, so re-issue one from
+	// the same validated fields and re-render the form with the reason.
+	if !unfiltered && len(scopeClasses) == 0 {
+		pendingID, err := s.pendingAuth.NewPending(pending)
+		if err != nil {
+			logger.Info("oauth consent: re-mint pending after empty scope failed", "err", err.Error())
+			s.writeError(w, r, http.StatusInternalServerError, "Could not continue authorization",
+				"Start over from the tool you were connecting.")
+			return
+		}
+		writeConsentForm(w, consentView{
+			ClientName:   pending.ClientName,
+			RedirectURI:  pending.RedirectURI,
+			OwnerDisplay: identity.DecodeForDisplay(canonical.String()),
+			PendingID:    pendingID,
+			Classes:      classes,
+			Error:        "Choose at least one agent, or \"Everything I can access\".",
+		})
+		return
+	}
+
 	code, err := s.authCodes.NewCode(authCodeEntry{
 		ClientID:     pending.ClientID,
 		RedirectURI:  pending.RedirectURI,
@@ -286,12 +317,48 @@ func redirectWithParams(w http.ResponseWriter, r *http.Request, base *url.URL, p
 	http.Redirect(w, r, base.String(), http.StatusFound)
 }
 
+// consentView is everything the consent screen renders. Every string field is
+// escaped at render time — ClientName is DCR-supplied (attacker-choosable),
+// OwnerDisplay is decoded from the subject, and Classes come from lookups this
+// handler does not control.
+type consentView struct {
+	ClientName string
+	// RedirectURI is the client's validated, registered redirect target. Its
+	// host is shown on the page because it — not ClientName — is the one
+	// fact about the client that registration actually pins down: anyone may
+	// register any name, but the code this approval mints goes to this host.
+	RedirectURI  string
+	OwnerDisplay string
+	PendingID    string
+	Classes      []ConsentClass
+	// Error, when set, is shown above the form (a re-render after a
+	// submission the handler refused).
+	Error string
+}
+
+// redirectNotice describes where approving sends the person, and is the
+// consent screen's answer to client-name phishing: DCR is open and accepts
+// any https redirect, so "Claude Code wants to access your account" proves
+// nothing about who is asking. A loopback redirect stays on this machine (a
+// local tool); anything else is named by host and flagged as unverified, with
+// the warning styling, so a name/host mismatch is visible before the click.
+func redirectNotice(redirectURI string) (text string, warn bool) {
+	u, err := url.Parse(redirectURI)
+	if err != nil || u.Hostname() == "" {
+		return "This tool's name is self-reported and has not been verified.", true
+	}
+	if isLoopbackHost(u.Hostname()) {
+		return "Approving returns you to a program running on this computer. " +
+			"This tool's name is self-reported and has not been verified.", false
+	}
+	return "Approving sends access to " + u.Host + ". This tool's name is self-reported " +
+		"and has not been verified — only approve if you recognize that site.", true
+}
+
 // writeConsentForm renders the consent screen: a self-contained HTML page
 // (no third-party assets, no JS) with html.EscapeString on every
-// interpolation — clientName and ownerDisplay are both user-influenced
-// (DCR client_name, and whatever string decoded the subject's canonical),
-// and classes come from SpiceDB-backed lookups this handler does not control.
-func writeConsentForm(w http.ResponseWriter, clientName, ownerDisplay, pendingID string, classes []ConsentClass) {
+// interpolation.
+func writeConsentForm(w http.ResponseWriter, v consentView) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// Never cached: a per-visit page carrying a single-use pending id.
 	w.Header().Set("Cache-Control", "no-store")
@@ -305,18 +372,34 @@ func writeConsentForm(w http.ResponseWriter, clientName, ownerDisplay, pendingID
 	w.WriteHeader(http.StatusOK)
 
 	var rows strings.Builder
-	for _, c := range classes {
+	for _, c := range v.Classes {
 		fmt.Fprintf(&rows, consentScopeRowHTML, html.EscapeString(c.ID), html.EscapeString(c.DisplayName))
+	}
+
+	notice, warn := redirectNotice(v.RedirectURI)
+	noticeClass := "notice"
+	if warn {
+		noticeClass = "notice warn"
+	}
+	var errBlock string
+	if v.Error != "" {
+		errBlock = fmt.Sprintf(consentErrorHTML, html.EscapeString(v.Error))
 	}
 
 	fmt.Fprintf(w, consentFormHTML,
 		html.EscapeString(webui.FaviconHref),
-		html.EscapeString(clientName),
-		html.EscapeString(ownerDisplay),
-		html.EscapeString(pendingID),
+		html.EscapeString(v.ClientName),
+		html.EscapeString(v.OwnerDisplay),
+		noticeClass,
+		html.EscapeString(notice),
+		errBlock,
+		html.EscapeString(v.PendingID),
 		rows.String(),
 	)
 }
+
+const consentErrorHTML = `  <p class="error" role="alert">%s</p>
+`
 
 const consentScopeRowHTML = `      <label><input type="checkbox" name="scope" value="%s"> %s</label>
 `
@@ -334,6 +417,9 @@ const consentFormHTML = `<!DOCTYPE html>
   .card { background: #fff; border-radius: 12px; padding: 2rem; box-shadow: 0 1px 4px rgba(0,0,0,0.12); width: 100%%; max-width: 420px; }
   h1 { font-size: 1.1rem; margin: 0 0 0.25rem; }
   .owner { color: #6e6e73; font-size: 0.85rem; margin: 0 0 1rem; }
+  .notice { font-size: 0.85rem; margin: 0 0 1rem; padding: 0.6rem 0.75rem; border-radius: 8px; background: #f0f0f3; color: #3a3a3c; }
+  .notice.warn { background: #fff4e5; color: #8a4b00; }
+  .error { font-size: 0.85rem; margin: 0 0 1rem; color: #c62828; }
   fieldset { border: 1px solid #d2d2d7; border-radius: 8px; margin: 0 0 1rem; padding: 0.75rem; }
   legend { font-size: 0.85rem; color: #6e6e73; padding: 0 0.3rem; }
   label { display: block; font-size: 0.95rem; margin: 0.4rem 0; }
@@ -348,6 +434,9 @@ const consentFormHTML = `<!DOCTYPE html>
     h1 { color: #f5f5f7; }
     .owner, .desc, legend { color: #98989d; }
     fieldset { border-color: #48484a; }
+    .notice { background: #3a3a3c; color: #e5e5ea; }
+    .notice.warn { background: #3d2c12; color: #ffcc80; }
+    .error { color: #ff8a80; }
     label { color: #f5f5f7; }
     button[name=deny] { background: #3a3a3c; color: #f5f5f7; }
   }
@@ -357,7 +446,8 @@ const consentFormHTML = `<!DOCTYPE html>
 <div class="card">
   <h1>%s wants to access your account</h1>
   <p class="owner">Signed in as %s</p>
-  <form method="POST" action="/oauth/consent">
+  <p class="%s">%s</p>
+%s  <form method="POST" action="/oauth/consent">
     <input type="hidden" name="pending" value="%s">
     <fieldset>
       <legend>Access level</legend>

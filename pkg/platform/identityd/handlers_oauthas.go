@@ -127,13 +127,19 @@ func validateRedirectURI(raw string) error {
 	case "https":
 		return nil
 	case "http":
-		host := u.Hostname()
-		if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+		if isLoopbackHost(u.Hostname()) {
 			return nil
 		}
 		return fmt.Errorf("http redirect_uri must be loopback")
 	}
 	return fmt.Errorf("redirect_uri scheme must be https or loopback http")
+}
+
+// isLoopbackHost reports whether host (a url.URL.Hostname(), so no port and
+// no IPv6 brackets) names this machine — the redirect target a local tool
+// listens on.
+func isLoopbackHost(host string) bool {
+	return host == "127.0.0.1" || host == "::1" || host == "localhost"
 }
 
 // sanitizeClientName strips non-printable runes and '<'/'>' (the client_name
