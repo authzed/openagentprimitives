@@ -84,6 +84,31 @@ func (ui) Routes(deps webui.Deps) []webui.Route {
 			"(authorization client wired=%t, operator client wired=%t)\n",
 			sd.AgentIdentityAuthz != nil, sd.AgentCredentialWriter != nil)
 	}
+	// Optional, same shape as WebAuthzDeps above: only a SpiceDB-configured
+	// webd implements ConsentDeps directly (its ConsentClasses method, built
+	// over LookupStartableClasses + LookupInteractableSessions). Absent, the
+	// field stays a genuine nil interface and server.go's routes() does not
+	// register ANY of the OAuth authorization-server surface.
+	if cd, ok := deps.(ConsentDeps); ok {
+		sd.Consent = cd
+	}
+	if sd.Consent == nil {
+		fmt.Fprintf(os.Stderr, "identityd: OAuth authorization-server routes "+
+			"(metadata/register/authorize/consent) are NOT mounted (no consent-class deps wired)\n")
+	}
+	// Optional, same shape as ConsentDeps above: Task 9 wires webd's concrete
+	// *mcpfront.Minter to satisfy AccessTokenMinter structurally (identityd
+	// cannot import pkg/web/mcpfront — see handlers_oauthas_token.go's package
+	// doc). No deps value implements this yet, so sd.Minter stays a genuine
+	// nil interface in production: /oauth/token still mounts (it is gated on
+	// Consent, not on Minter) but 503s "token minting unavailable" until Task
+	// 9 lands.
+	if m, ok := deps.(AccessTokenMinter); ok {
+		sd.Minter = m
+	}
+	if sd.Minter == nil {
+		fmt.Fprintf(os.Stderr, "identityd: /oauth/token will respond 503 (no access-token minter wired)\n")
+	}
 	return NewServer(sd).routes()
 }
 
