@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +25,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/nats-io/nats.go"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -971,66 +974,89 @@ func (d *artifactViewDeps) ConsentClasses(ctx context.Context, owner identity.Ca
 		return nil, fmt.Errorf("mcpfront: SpiceDB not configured")
 	}
 
-	// classes maps a "ns/name" class id to its resolved AgentClass (nil until
-	// resolved) so the display-name pass below can reuse what AgentClassOf
-	// already fetched for an interactable session's class, rather than
-	// re-Getting it.
-	classes := map[string]*spiceboxv1alpha1.AgentClass{}
-	var order []string
-	note := func(id string) {
-		if _, ok := classes[id]; !ok {
-			classes[id] = nil
-			order = append(order, id)
-		}
-	}
-
 	startable, err := d.LookupStartableClasses(ctx, owner, consentClassLookupLimit, false)
 	if err != nil {
 		return nil, fmt.Errorf("consent classes: lookup startable classes: %w", err)
 	}
-	for _, ref := range startable.Refs {
-		note(ref.Namespace + "/" + ref.Name)
-	}
-
 	interactable, err := d.LookupInteractableSessions(ctx, owner, consentClassSessionLookupLimit, false)
 	if err != nil {
 		return nil, fmt.Errorf("consent classes: lookup interactable sessions: %w", err)
 	}
-	for _, ref := range interactable.Refs {
-		ac, acErr := d.AgentClassOf(ctx, ref.Namespace, ref.Name)
-		if acErr != nil {
-			d.logger.Info("consent classes: resolve session's agent class failed; skipping",
-				"session", ref.Namespace+"/"+ref.Name, "err", acErr.Error())
-			continue
-		}
-		note(ac.Namespace + "/" + ac.Name)
-		classes[ac.Namespace+"/"+ac.Name] = ac
-	}
 
-	sort.Strings(order)
-	out := make([]identityd.ConsentClass, 0, len(order))
-	for _, id := range order {
-		ns, name, ok := strings.Cut(id, "/")
-		if !ok {
-			continue
-		}
-		ac := classes[id]
-		if ac == nil {
-			var fetched spiceboxv1alpha1.AgentClass
-			if getErr := d.K8s().Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &fetched); getErr == nil {
-				ac = &fetched
-			} else {
-				d.logger.Info("consent classes: resolve display name failed; falling back to the class name",
-					"class", id, "err", getErr.Error())
-			}
-		}
-		display := name
-		if ac != nil && ac.Spec.DisplayName != "" {
-			display = ac.Spec.DisplayName
-		}
-		out = append(out, identityd.ConsentClass{ID: id, DisplayName: display})
+	ids := make(map[string]struct{}, len(startable.Refs))
+	for _, ref := range startable.Refs {
+		ids[ref.Namespace+"/"+ref.Name] = struct{}{}
 	}
-	return out, nil
+	for id := range sessionClassIDs(ctx, d.K8s(), interactable.Refs, d.logger) {
+		ids[id] = struct{}{}
+	}
+	return consentClassesFor(ctx, d.K8s(), slices.Sorted(maps.Keys(ids)), d.logger), nil
+}
+
+// consentLookupConcurrency bounds the parallel Gets ConsentClasses fans out
+// (one per interactable session, then one per distinct class), the same
+// discipline pkg/web/mcpfront's readableSessionConcurrency applies: webd's
+// client is direct, not cache-backed, so every Get is an apiserver round trip.
+const consentLookupConcurrency = 8
+
+// sessionClassIDs returns the distinct "ns/class" ids behind refs: ONE Get per
+// session, reading spec.class straight off it. Resolving each session through
+// AgentClassOf instead would also Get the class once per SESSION — mostly the
+// same few classes, over and over — which consentClassesFor already does once
+// per distinct class. A session that cannot be read is logged and skipped.
+func sessionClassIDs(ctx context.Context, k8s client.Client, refs []spicedb.SessionRef, logger logr.Logger) map[string]struct{} {
+	var mu sync.Mutex
+	ids := map[string]struct{}{}
+	var g errgroup.Group
+	g.SetLimit(consentLookupConcurrency)
+	for _, ref := range refs {
+		g.Go(func() error {
+			var sess spiceboxv1alpha1.AgentSession
+			if err := k8s.Get(ctx, client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}, &sess); err != nil {
+				logger.Info("consent classes: read session failed; skipping its class",
+					"session", ref.Namespace+"/"+ref.Name, "err", err.Error())
+				return nil
+			}
+			mu.Lock()
+			ids[sess.Namespace+"/"+sess.Spec.Class] = struct{}{}
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil { // unreachable: every Go func returns nil and logs its own failure
+		logger.Info("consent classes: session class fan-out errored", "err", err.Error())
+	}
+	return ids
+}
+
+// consentClassesFor resolves each sorted "ns/name" class id to its consent row,
+// one Get per class for the display name. A class that cannot be read keeps
+// its row under the bare class name (logged) — the id is what the grant
+// records, and the display name is cosmetic.
+func consentClassesFor(ctx context.Context, k8s client.Client, ids []string, logger logr.Logger) []identityd.ConsentClass {
+	out := make([]identityd.ConsentClass, len(ids))
+	var g errgroup.Group
+	g.SetLimit(consentLookupConcurrency)
+	for i, id := range ids {
+		g.Go(func() error {
+			ns, name, _ := strings.Cut(id, "/")
+			out[i] = identityd.ConsentClass{ID: id, DisplayName: name}
+			var ac spiceboxv1alpha1.AgentClass
+			if err := k8s.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &ac); err != nil {
+				logger.Info("consent classes: resolve display name failed; falling back to the class name",
+					"class", id, "err", err.Error())
+				return nil
+			}
+			if ac.Spec.DisplayName != "" {
+				out[i].DisplayName = ac.Spec.DisplayName
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil { // unreachable: every Go func returns nil and logs its own failure
+		logger.Info("consent classes: display-name fan-out errored", "err", err.Error())
+	}
+	return out
 }
 
 func (d *artifactViewDeps) CheckView(ctx context.Context, artifactID, subject string) (bool, error) {
