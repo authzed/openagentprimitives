@@ -2,6 +2,7 @@ package mcpfront
 
 import (
 	"context"
+	"fmt"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -40,15 +41,19 @@ type scriptedAuthz struct {
 	mirrorDecision func(permission string) (bool, error)
 	coveredClasses map[string]bool
 	filterCalls    [][]string
+	// snapshotReads counts calls made with fullyConsistent=false. Every check
+	// an op makes is a gate, so this must stay zero.
+	snapshotReads int
 }
 
 func newScriptedAuthz() *scriptedAuthz {
 	return &scriptedAuthz{coveredClasses: map[string]bool{}}
 }
 
-func (s *scriptedAuthz) CheckAccessTokenOp(_ context.Context, chk spicedb.AccessTokenCheck, _ bool) (spicedb.AccessTokenDecision, error) {
+func (s *scriptedAuthz) CheckAccessTokenOp(_ context.Context, chk spicedb.AccessTokenCheck, fullyConsistent bool) (spicedb.AccessTokenDecision, error) {
 	s.mu.Lock()
 	s.opCalls = append(s.opCalls, chk)
+	s.noteConsistencyLocked(fullyConsistent)
 	s.mu.Unlock()
 	if s.opDecision != nil {
 		return s.opDecision(chk)
@@ -56,8 +61,9 @@ func (s *scriptedAuthz) CheckAccessTokenOp(_ context.Context, chk spicedb.Access
 	return spicedb.AccessTokenDecision{TokenGrants: true, ScopeCovers: true, OwnerHas: true}, nil
 }
 
-func (s *scriptedAuthz) CheckAccessTokenMirror(_ context.Context, _ string, _ identity.CanonicalUserID, permission string, _ bool) (bool, error) {
+func (s *scriptedAuthz) CheckAccessTokenMirror(_ context.Context, _ string, _ identity.CanonicalUserID, permission string, fullyConsistent bool) (bool, error) {
 	s.mu.Lock()
+	s.noteConsistencyLocked(fullyConsistent)
 	s.mirrorCalls = append(s.mirrorCalls, permission)
 	s.mu.Unlock()
 	if s.mirrorDecision != nil {
@@ -66,8 +72,9 @@ func (s *scriptedAuthz) CheckAccessTokenMirror(_ context.Context, _ string, _ id
 	return true, nil
 }
 
-func (s *scriptedAuthz) FilterAccessTokenCoveredClasses(_ context.Context, _ string, classIDs []string, _ bool) (map[string]bool, error) {
+func (s *scriptedAuthz) FilterAccessTokenCoveredClasses(_ context.Context, _ string, classIDs []string, fullyConsistent bool) (map[string]bool, error) {
 	s.mu.Lock()
+	s.noteConsistencyLocked(fullyConsistent)
 	s.filterCalls = append(s.filterCalls, append([]string(nil), classIDs...))
 	s.mu.Unlock()
 	out := make(map[string]bool, len(classIDs))
@@ -77,6 +84,12 @@ func (s *scriptedAuthz) FilterAccessTokenCoveredClasses(_ context.Context, _ str
 		}
 	}
 	return out, nil
+}
+
+func (s *scriptedAuthz) noteConsistencyLocked(fullyConsistent bool) {
+	if !fullyConsistent {
+		s.snapshotReads++
+	}
 }
 
 var _ AccessTokenAuthz = (*scriptedAuthz)(nil)
@@ -121,7 +134,7 @@ func (f *fakeOpsDeps) AccessTokenAuthz() AccessTokenAuthz { return f.authz }
 func (f *fakeOpsDeps) AccessTokenNamespace() string       { return "agentprimitives-system" }
 func (f *fakeOpsDeps) OperatorURL() string                { return f.operatorURL }
 func (f *fakeOpsDeps) MemoryToken() string                { return f.memoryToken }
-func (f *fakeOpsDeps) Artifacts() *artifacts.Service       { return f.artifactSvc }
+func (f *fakeOpsDeps) Artifacts() *artifacts.Service      { return f.artifactSvc }
 func (f *fakeOpsDeps) LookupReadableSessions(_ context.Context, _ identity.CanonicalUserID) (spicedb.InteractableSessions, error) {
 	f.lookupCalls++
 	return f.lookupSessions, f.lookupErr
@@ -275,6 +288,72 @@ func TestListSessionsFiltersByCoverageAndClass(t *testing.T) {
 	})
 }
 
+func TestEnumerationReportsTruncation(t *testing.T) {
+	ctx := context.Background()
+	act := opsTestActing()
+
+	// maxSearchDerivedScopes+5 covered sessions, each started one minute after
+	// the last, listed to the op in OLDEST-first lookup order so a cap applied
+	// in lookup order would keep exactly the wrong ones.
+	n := maxSearchDerivedScopes + 5
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	objs := make([]client.Object, 0, n)
+	refs := make([]spicedb.SessionRef, 0, n)
+	for i := range n {
+		sess := sessionFixture("demo-ns", fmt.Sprintf("sess-%02d", i), "class-a")
+		started := metav1.NewTime(base.Add(time.Duration(i) * time.Minute))
+		sess.Status.StartedAt = &started
+		objs = append(objs, sess)
+		refs = append(refs, spicedb.SessionRef{Namespace: "demo-ns", Name: sess.Name})
+	}
+
+	t.Run("search_memory without a session: newest sessions searched, truncated=true", func(t *testing.T) {
+		var gotScopes []memory.Scope
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req memory.SearchRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			gotScopes = req.Scopes
+			w.Header().Set("Content-Type", "application/json")
+			require.NoError(t, json.NewEncoder(w).Encode(memory.MergedSearchResult{}))
+		}))
+		defer srv.Close()
+
+		d := newOpsFakeDeps(t, newOpsTestClient(t, objs...))
+		d.operatorURL = srv.URL
+		d.memoryToken = "webd-token"
+		d.lookupSessions = spicedb.InteractableSessions{Refs: refs}
+		d.authz.coveredClasses = map[string]bool{"demo-ns/class-a": true}
+
+		out, err := opSearchMemory(ctx, d, act, SearchMemoryIn{Query: "x"})
+		require.NoError(t, err)
+		assert.True(t, out.Truncated, "skipping older sessions must be reported")
+		require.Len(t, gotScopes, maxSearchDerivedScopes)
+		assert.Equal(t, fmt.Sprintf("demo-ns/sess-%02d", n-1), gotScopes[0].ID, "the newest session is searched first")
+		assert.NotContains(t, gotScopes, memory.Scope{Kind: "session", ID: "demo-ns/sess-00"}, "the oldest sessions are the ones dropped")
+	})
+
+	t.Run("list_sessions over a truncated lookup: truncated=true", func(t *testing.T) {
+		d := newOpsFakeDeps(t, newOpsTestClient(t, objs...))
+		d.lookupSessions = spicedb.InteractableSessions{Refs: refs, Truncated: true}
+		d.authz.coveredClasses = map[string]bool{"demo-ns/class-a": true}
+
+		out, err := opListSessions(ctx, d, act, ListSessionsIn{})
+		require.NoError(t, err)
+		assert.True(t, out.Truncated)
+		assert.Len(t, out.Sessions, n)
+	})
+
+	t.Run("list_sessions over a complete lookup: truncated=false", func(t *testing.T) {
+		d := newOpsFakeDeps(t, newOpsTestClient(t, objs...))
+		d.lookupSessions = spicedb.InteractableSessions{Refs: refs}
+		d.authz.coveredClasses = map[string]bool{"demo-ns/class-a": true}
+
+		out, err := opListSessions(ctx, d, act, ListSessionsIn{})
+		require.NoError(t, err)
+		assert.False(t, out.Truncated)
+	})
+}
+
 func TestGetTranscriptPaginates(t *testing.T) {
 	ctx := context.Background()
 	act := opsTestActing()
@@ -354,7 +433,7 @@ func TestSearchMemoryScopesToAuthorizedSessionsOnly(t *testing.T) {
 		assert.False(t, out.SearchUnavailable)
 		require.Len(t, gotScopes, 1, "only the covered session's scope is ever sent")
 		assert.Equal(t, memory.Scope{Kind: "session", ID: "demo-ns/sess-a"}, gotScopes[0])
-		assert.Contains(t, d.authz.mirrorCalls, permRead, "the derived branch mirrors on \"read\", not \"read_transcript\"")
+		assert.Equal(t, []string{permReadTranscript}, d.authz.mirrorCalls, "the derived branch gates on the session permission it reads under")
 	})
 
 	t.Run("no search providers configured: SearchUnavailable, no error", func(t *testing.T) {
@@ -397,15 +476,14 @@ func TestSearchMemoryScopesToAuthorizedSessionsOnly(t *testing.T) {
 		require.Len(t, gotScopes, 1)
 		assert.Equal(t, memory.Scope{Kind: "session", ID: "demo-ns/demo-session"}, gotScopes[0])
 		require.Len(t, d.authz.opCalls, 1)
-		assert.Equal(t, permRead, d.authz.opCalls[0].Permission)
+		assert.Equal(t, permReadTranscript, d.authz.opCalls[0].Permission)
 	})
 }
 
-// TestRoleMatrixOnTools pins BOTH permission names each tool uses: the token
-// mirror name leg 1 checks ($sameperm contract) and the resource permission
-// leg 3 checks on the agentsession (the view/read → read_transcript mapping;
-// "" means leg 3 defaults to the mirror name). A drift on either side of
-// sessionResourcePermission's map is a regression this table catches by name.
+// TestRoleMatrixOnTools pins the permission each tool checks (one name, used
+// for both the token mirror and the agentsession — see permReadTranscript),
+// and that every check is fully consistent: each one is a gate a just-revoked
+// token must fail immediately, enumeration included.
 func TestRoleMatrixOnTools(t *testing.T) {
 	ctx := context.Background()
 	act := opsTestActing()
@@ -417,13 +495,11 @@ func TestRoleMatrixOnTools(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	type permPair struct{ mirror, resource string }
-
 	cases := []struct {
 		tool       string
 		run        func(t *testing.T, d *fakeOpsDeps) error
-		wantOp     *permPair // the CheckAccessTokenOp (mirror, ResourcePermission) pair; nil = no three-leg check
-		wantMirror string    // the CheckAccessTokenMirror permission; "" = no mirror-only check
+		wantOp     string // the CheckAccessTokenOp permission; "" = no three-leg check
+		wantMirror string // the CheckAccessTokenMirror permission; "" = no mirror-only check
 	}{
 		{
 			tool: "get_session",
@@ -431,7 +507,7 @@ func TestRoleMatrixOnTools(t *testing.T) {
 				_, err := opGetSession(ctx, d, act, GetSessionIn{Namespace: "demo-ns", Name: "demo-session"})
 				return err
 			},
-			wantOp: &permPair{mirror: permReadTranscript, resource: ""},
+			wantOp: permReadTranscript,
 		},
 		{
 			tool: "get_transcript",
@@ -439,7 +515,7 @@ func TestRoleMatrixOnTools(t *testing.T) {
 				_, err := opGetTranscript(ctx, d, act, GetTranscriptIn{Namespace: "demo-ns", Name: "demo-session"})
 				return err
 			},
-			wantOp: &permPair{mirror: permReadTranscript, resource: ""},
+			wantOp: permReadTranscript,
 		},
 		{
 			tool: "search_memory (explicit session)",
@@ -447,7 +523,7 @@ func TestRoleMatrixOnTools(t *testing.T) {
 				_, err := opSearchMemory(ctx, d, act, SearchMemoryIn{Query: "x", Namespace: "demo-ns", Name: "demo-session"})
 				return err
 			},
-			wantOp: &permPair{mirror: permRead, resource: permReadTranscript},
+			wantOp: permReadTranscript,
 		},
 		{
 			tool: "search_memory (derived)",
@@ -455,7 +531,7 @@ func TestRoleMatrixOnTools(t *testing.T) {
 				_, err := opSearchMemory(ctx, d, act, SearchMemoryIn{Query: "x"})
 				return err
 			},
-			wantMirror: permRead,
+			wantMirror: permReadTranscript,
 		},
 		{
 			tool: "list_artifacts",
@@ -463,7 +539,7 @@ func TestRoleMatrixOnTools(t *testing.T) {
 				_, err := opListArtifacts(ctx, d, act, ListArtifactsIn{Namespace: "demo-ns", Name: "demo-session"})
 				return err
 			},
-			wantOp: &permPair{mirror: permView, resource: permReadTranscript},
+			wantOp: permReadTranscript,
 		},
 		{
 			tool: "get_artifact",
@@ -471,7 +547,7 @@ func TestRoleMatrixOnTools(t *testing.T) {
 				_, err := opGetArtifact(ctx, d, act, GetArtifactIn{Namespace: "demo-ns", Name: "demo-session", ArtifactID: "artifact-1"})
 				return err
 			},
-			wantOp: &permPair{mirror: permView, resource: permReadTranscript},
+			wantOp: permReadTranscript,
 		},
 		{
 			tool: "list_sessions",
@@ -484,7 +560,7 @@ func TestRoleMatrixOnTools(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.tool+": pins mirror + resource permission names", func(t *testing.T) {
+		t.Run(tc.tool+": checks read_transcript, fully consistently", func(t *testing.T) {
 			d := newOpsFakeDeps(t, newOpsTestClient(t, sess))
 			d.operatorURL = srv.URL
 			d.memoryToken = "webd-token"
@@ -497,10 +573,9 @@ func TestRoleMatrixOnTools(t *testing.T) {
 
 			require.NoError(t, tc.run(t, d))
 
-			if tc.wantOp != nil {
+			if tc.wantOp != "" {
 				require.Len(t, d.authz.opCalls, 1, "exactly one three-leg check per authorized op")
-				assert.Equal(t, tc.wantOp.mirror, d.authz.opCalls[0].Permission, "leg-1 mirror name")
-				assert.Equal(t, tc.wantOp.resource, d.authz.opCalls[0].ResourcePermission, "leg-3 resource permission")
+				assert.Equal(t, tc.wantOp, d.authz.opCalls[0].Permission)
 			}
 			if tc.wantMirror != "" {
 				require.Len(t, d.authz.mirrorCalls, 1, "exactly one mirror-only check per enumeration op")
@@ -508,11 +583,11 @@ func TestRoleMatrixOnTools(t *testing.T) {
 			}
 			for _, c := range d.authz.opCalls {
 				assert.NotEqual(t, "interact", c.Permission, "interact is a send-class permission; no read-role tool may check it")
-				assert.NotEqual(t, "interact", c.ResourcePermission)
 			}
 			for _, p := range d.authz.mirrorCalls {
 				assert.NotEqual(t, "interact", p)
 			}
+			assert.Zero(t, d.authz.snapshotReads, "no authorization check may read a snapshot")
 		})
 	}
 }

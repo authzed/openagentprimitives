@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/go-logr/logr"
 	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,16 +22,21 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/web/webui/livemirror"
 )
 
-// The three $sameperm mirror names this file checks, pinned as constants so a
-// typo can't silently check the wrong permission — and so
-// TestRoleMatrixOnTools can assert on the exact string a tool uses without
-// duplicating the literal everywhere. See accesstoken.MirrorPermissions for
-// the full set these are drawn from.
-const (
-	permReadTranscript = "read_transcript"
-	permRead           = "read"
-	permView           = "view"
-)
+// permReadTranscript is the one permission every tool in this file checks —
+// on the token's $sameperm mirror (leg 1) and on the agentsession itself
+// (leg 3), under the same name, because every tool here reads something whose
+// session-level truth is read_transcript: the transcript and session metadata
+// directly, and memory and artifacts because both are scoped to the session
+// (memory_entry#read is literally session->read_transcript). Checking the
+// session rather than the artifact also keeps artifact#view's org-viewer and
+// platform-admin arms out of a delegated bearer's reach.
+//
+// The token definition's read/view mirrors are for a future tool that checks
+// memory_entry#read or artifact#view on the entry or artifact itself; using
+// them here, against a session, would need a Go-side mapping from mirror name
+// to session permission — exactly what the mirror naming exists to avoid.
+// Pinned as a constant so TestRoleMatrixOnTools can assert on it by name.
+const permReadTranscript = "read_transcript"
 
 // maxReadableSessionRefs is a defensive second cap on the refs this file fans
 // K8s Gets out over, mirroring pkg/web/webui/sessions' maxListedSessions.
@@ -101,6 +107,12 @@ type SessionSummary struct {
 
 type ListSessionsOut struct {
 	Sessions []SessionSummary `json:"sessions"`
+	// Truncated is true when the owner can read more sessions than this tool
+	// enumerates (see coveredSessions), so matching sessions may be missing
+	// from Sessions — including all of them, for a token scoped to a class
+	// whose sessions fell outside the enumerated set. A session known by
+	// (namespace, name) is still reachable through get_session.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 type GetSessionIn struct {
@@ -154,6 +166,11 @@ type SearchMemoryOut struct {
 	// (memory.ErrNoSearchProviders) — distinct from "no hits", so a caller
 	// doesn't read an empty result as "nothing matched".
 	SearchUnavailable bool `json:"searchUnavailable,omitempty"`
+	// Truncated is true when a session-less search covered only the
+	// maxSearchDerivedScopes most recently started sessions (or the owner's
+	// readable set was itself truncated): older sessions were not searched.
+	// Name a session explicitly to search it.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 type ListArtifactsIn struct {
@@ -214,48 +231,6 @@ func failedLegOf(dec spicedb.AccessTokenDecision) string {
 	}
 }
 
-// sessionResourcePermission maps a token mirror permission to the permission
-// leg 3 checks on the agentsession itself (AccessTokenCheck.ResourcePermission).
-//
-// WHY the "read"/"view" mirrors map to read_transcript: agentsession defines
-// no "read" or "view" permission, and the session-level truth each mirror
-// stands on IS read_transcript —
-//   - memory_entry#read is literally defined as session->read_transcript in
-//     the schema, so for a whole-session memory read, read_transcript on the
-//     session is the same question asked one hop earlier;
-//   - artifact#view adds org-view (parent->artifact_org_view) and platform
-//     admin (platform->view_audit) arms on top of parent->interact. Gating a
-//     token's artifact reads on session-level read_transcript is deliberately
-//     NARROWER on those two arms: token holders do not get those side doors
-//     in v1 — an org-wide artifact audience or an admin's audit standing must
-//     not leak through a delegated bearer token.
-//
-// The mapping is NOT narrower in every direction, though. read_transcript
-// also has a parent-chain arm (parent + parent->read_transcript) that
-// artifact#view's own parent->interact arm does not mirror one-for-one, so a
-// parent-session owner's token can fetch a CHILD session's artifacts here
-// where the browser's artifact#view would require interact on the child
-// directly — WIDER, on that one arm, than the permission being mirrored.
-// Accepted trade, not an oversight: a holder who can read_transcript on the
-// parent already sees everything the child did (transcript access already
-// dominates artifact content for information purposes — an artifact is a
-// rendering of something the transcript already narrates), and list_sessions
-// never lists child sessions, so this widening cannot be used to discover a
-// child session a caller does not already know the (namespace, name) of.
-//
-// Every other mirror ("read_transcript", "interact", "approve", ...) is
-// literally the session permission of the same name; empty means "same as
-// the mirror" (CheckAccessTokenOp's default), keeping this map a closed
-// exception list rather than a parallel naming scheme.
-func sessionResourcePermission(mirrorPerm string) string {
-	switch mirrorPerm {
-	case permRead, permView:
-		return permReadTranscript
-	default:
-		return ""
-	}
-}
-
 // authorizeSessionOp loads the AgentSession CR and runs the three-legged
 // CheckAccessTokenOp for perm against it. Denial and not-found BOTH return
 // errSessionNotAccessible — verbatim, never wrapped — so a caller cannot tell
@@ -281,13 +256,12 @@ func authorizeSessionOp(ctx context.Context, d Deps, act acting, perm, ns, name 
 
 	classID := sess.Namespace + "/" + sess.Spec.Class
 	dec, err := d.AccessTokenAuthz().CheckAccessTokenOp(ctx, spicedb.AccessTokenCheck{
-		TokenID:            act.TokenID,
-		Owner:              act.Owner,
-		Permission:         perm,
-		ResourceType:       "agentsession",
-		ResourceID:         ns + "/" + name,
-		ClassID:            classID,
-		ResourcePermission: sessionResourcePermission(perm),
+		TokenID:      act.TokenID,
+		Owner:        act.Owner,
+		Permission:   perm,
+		ResourceType: "agentsession",
+		ResourceID:   ns + "/" + name,
+		ClassID:      classID,
 	}, true)
 	if err != nil {
 		d.Logger().Info("mcpfront: authorizeSessionOp check errored; denying",
@@ -333,35 +307,57 @@ type coveredSessionRow struct {
 // objects and filter to the classes the token's scope actually covers (leg
 // 2, bulk, once).
 //
+// Every leg runs fully consistently, the same as authorizeSessionOp. This
+// list is not a display convenience that a later door re-checks: for
+// search_memory the rows ARE the authorization boundary (see opSearchMemory),
+// and list_sessions hands back session metadata directly. A snapshot read
+// here would let a just-revoked token — its tuples deleted, its CR possibly
+// still in the bearer cache for tokenCacheTTL — keep enumerating sessions and
+// pulling memory until the snapshot caught up.
+//
+// truncated reports that the owner's readable set was larger than this
+// enumerates (the lookup's own limit, or maxReadableSessionRefs), so rows may
+// be missing. The cap necessarily lands BEFORE the class filter: a session's
+// class is only known from its Kubernetes object, which is what the bounded
+// fan-out reads. Filtering by class first needs either a session→class
+// relation in SpiceDB or a list grant on agentsessions for webd; until then
+// the shortfall is reported rather than silent.
+//
 // A false mirror check returns an EMPTY result with no error and, crucially,
 // never calls LookupReadableSessions or touches K8s at all — the brief's
 // "no lookup/K8s reads" requirement, so a read-role token asking a
 // write-scoped question costs nothing beyond the one mirror check.
-func coveredSessions(ctx context.Context, d Deps, act acting, mirrorPerm string) ([]coveredSessionRow, error) {
-	mirrorOK, err := d.AccessTokenAuthz().CheckAccessTokenMirror(ctx, act.TokenID, act.Owner, mirrorPerm, false)
+func coveredSessions(ctx context.Context, d Deps, act acting, mirrorPerm string) (rows []coveredSessionRow, truncated bool, err error) {
+	mirrorOK, err := d.AccessTokenAuthz().CheckAccessTokenMirror(ctx, act.TokenID, act.Owner, mirrorPerm, true)
 	if err != nil {
 		d.Logger().Info("mcpfront: coveredSessions mirror check errored; returning empty",
 			"tokenID", act.TokenID, "permission", mirrorPerm, "err", err.Error())
 		recordDecision(d, act, mirrorPerm, "accesstoken", act.TokenID, false, "token")
-		return nil, nil
+		return nil, false, nil
 	}
 	if !mirrorOK {
 		recordDecision(d, act, mirrorPerm, "accesstoken", act.TokenID, false, "token")
-		return nil, nil
+		return nil, false, nil
 	}
 	recordDecision(d, act, mirrorPerm, "accesstoken", act.TokenID, true, "")
 
 	lookup, err := d.LookupReadableSessions(ctx, act.Owner)
 	if err != nil {
-		return nil, fmt.Errorf("mcpfront: lookup readable sessions: %w", err)
+		return nil, false, fmt.Errorf("mcpfront: lookup readable sessions: %w", err)
 	}
 
 	refs := lookup.Refs
+	truncated = lookup.Truncated
 	if len(refs) > maxReadableSessionRefs {
 		refs = refs[:maxReadableSessionRefs]
+		truncated = true
+	}
+	if truncated {
+		d.Logger().Info("mcpfront: readable-session set truncated; enumeration may miss sessions",
+			"tokenID", act.TokenID, "owner", act.Owner.String(), "enumerated", len(refs))
 	}
 
-	rows := make([]*coveredSessionRow, len(refs))
+	found := make([]*coveredSessionRow, len(refs))
 	var mu sync.Mutex
 	classSet := map[string]struct{}{}
 
@@ -389,39 +385,39 @@ func coveredSessions(ctx context.Context, d Deps, act acting, mirrorPerm string)
 			mu.Lock()
 			classSet[classID] = struct{}{}
 			mu.Unlock()
-			rows[i] = &coveredSessionRow{Ref: r, Sess: &sess, Class: classID}
+			found[i] = &coveredSessionRow{Ref: r, Sess: &sess, Class: classID}
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
-		return nil, fmt.Errorf("mcpfront: fan out session gets: %w", err)
+		return nil, false, fmt.Errorf("mcpfront: fan out session gets: %w", err)
 	}
 
 	classIDs := make([]string, 0, len(classSet))
 	for c := range classSet {
 		classIDs = append(classIDs, c)
 	}
-	covered, err := d.AccessTokenAuthz().FilterAccessTokenCoveredClasses(ctx, act.TokenID, classIDs, false)
+	covered, err := d.AccessTokenAuthz().FilterAccessTokenCoveredClasses(ctx, act.TokenID, classIDs, true)
 	if err != nil {
-		return nil, fmt.Errorf("mcpfront: filter covered classes: %w", err)
+		return nil, false, fmt.Errorf("mcpfront: filter covered classes: %w", err)
 	}
 
-	out := make([]coveredSessionRow, 0, len(rows))
-	for _, row := range rows {
+	rows = make([]coveredSessionRow, 0, len(found))
+	for _, row := range found {
 		if row == nil {
 			continue
 		}
 		if !covered[row.Class] {
 			continue
 		}
-		out = append(out, *row)
+		rows = append(rows, *row)
 	}
-	return out, nil
+	return rows, truncated, nil
 }
 
 // opListSessions implements the list_sessions tool.
 func opListSessions(ctx context.Context, d Deps, act acting, in ListSessionsIn) (ListSessionsOut, error) {
-	rows, err := coveredSessions(ctx, d, act, permReadTranscript)
+	rows, truncated, err := coveredSessions(ctx, d, act, permReadTranscript)
 	if err != nil {
 		return ListSessionsOut{}, err
 	}
@@ -448,23 +444,45 @@ func opListSessions(ctx context.Context, d Deps, act acting, in ListSessionsIn) 
 		summaries = append(summaries, sessionSummaryFrom(row.Sess))
 	}
 
-	// Deterministic order: newest first, tiebroken by namespace/name — two
-	// identical calls must return the same order (sort.Slice is not stable and
-	// StartedAt alone collides at second granularity).
-	sort.Slice(summaries, func(i, j int) bool {
-		if !summaries[i].StartedAt.Equal(summaries[j].StartedAt) {
-			return summaries[i].StartedAt.After(summaries[j].StartedAt)
-		}
-		if summaries[i].Namespace != summaries[j].Namespace {
-			return summaries[i].Namespace < summaries[j].Namespace
-		}
-		return summaries[i].Name < summaries[j].Name
-	})
+	sort.Slice(summaries, func(i, j int) bool { return summaryNewer(summaries[i], summaries[j]) })
 
 	if len(summaries) > limit {
 		summaries = summaries[:limit]
 	}
-	return ListSessionsOut{Sessions: summaries}, nil
+	return ListSessionsOut{Sessions: summaries, Truncated: truncated}, nil
+}
+
+// newerFirst orders newest-started first, tiebroken by namespace/name — two
+// identical calls must return the same order (sort.Slice is not stable and
+// StartedAt alone collides at second granularity).
+func newerFirst(aStarted time.Time, aNS, aName string, bStarted time.Time, bNS, bName string) bool {
+	if !aStarted.Equal(bStarted) {
+		return aStarted.After(bStarted)
+	}
+	if aNS != bNS {
+		return aNS < bNS
+	}
+	return aName < bName
+}
+
+func summaryNewer(a, b SessionSummary) bool {
+	return newerFirst(a.StartedAt, a.Namespace, a.Name, b.StartedAt, b.Namespace, b.Name)
+}
+
+func sessionNewer(a, b *spiceboxv1alpha1.AgentSession) bool {
+	return newerFirst(sessionStartedAt(a), a.Namespace, a.Name, sessionStartedAt(b), b.Namespace, b.Name)
+}
+
+// sessionStartedAt is when the session started, falling back to when its CR
+// was created.
+func sessionStartedAt(sess *spiceboxv1alpha1.AgentSession) time.Time {
+	switch {
+	case sess.Status.StartedAt != nil:
+		return sess.Status.StartedAt.Time.UTC()
+	case !sess.CreationTimestamp.IsZero():
+		return sess.CreationTimestamp.Time.UTC()
+	}
+	return time.Time{}
 }
 
 // sessionIsEnded reports whether phase is one of the two terminal phases —
@@ -475,14 +493,6 @@ func sessionIsEnded(phase string) bool {
 
 // sessionSummaryFrom maps an AgentSession CR to the wire SessionSummary.
 func sessionSummaryFrom(sess *spiceboxv1alpha1.AgentSession) SessionSummary {
-	var startedAt time.Time
-	switch {
-	case sess.Status.StartedAt != nil:
-		startedAt = sess.Status.StartedAt.Time.UTC()
-	case !sess.CreationTimestamp.IsZero():
-		startedAt = sess.CreationTimestamp.Time.UTC()
-	}
-
 	var channel map[string]string
 	if ic := sess.Spec.InputChannel; ic != nil {
 		channel = make(map[string]string, len(ic.External)+2)
@@ -498,7 +508,7 @@ func sessionSummaryFrom(sess *spiceboxv1alpha1.AgentSession) SessionSummary {
 		Name:      sess.Name,
 		Class:     sess.Spec.Class,
 		Phase:     sess.Status.Phase,
-		StartedAt: startedAt,
+		StartedAt: sessionStartedAt(sess),
 		Channel:   channel,
 	}
 }
@@ -564,17 +574,23 @@ func opGetTranscript(ctx context.Context, d Deps, act acting, in GetTranscriptIn
 // class scope — was never granted.
 func opSearchMemory(ctx context.Context, d Deps, act acting, in SearchMemoryIn) (SearchMemoryOut, error) {
 	var scopes []memory.Scope
+	var truncated bool
 
 	if in.Namespace != "" && in.Name != "" {
-		if _, err := authorizeSessionOp(ctx, d, act, permRead, in.Namespace, in.Name); err != nil {
+		if _, err := authorizeSessionOp(ctx, d, act, permReadTranscript, in.Namespace, in.Name); err != nil {
 			return SearchMemoryOut{}, err
 		}
 		scopes = []memory.Scope{{Kind: "session", ID: in.Namespace + "/" + in.Name}}
 	} else {
-		rows, err := coveredSessions(ctx, d, act, permRead)
+		rows, lookupTruncated, err := coveredSessions(ctx, d, act, permReadTranscript)
 		if err != nil {
 			return SearchMemoryOut{}, err
 		}
+		// Newest first before capping: lookup order is SpiceDB's stream
+		// order, which says nothing about which sessions a caller most
+		// plausibly means.
+		sort.Slice(rows, func(i, j int) bool { return sessionNewer(rows[i].Sess, rows[j].Sess) })
+		truncated = lookupTruncated || len(rows) > maxSearchDerivedScopes
 		if len(rows) > maxSearchDerivedScopes {
 			rows = rows[:maxSearchDerivedScopes]
 		}
@@ -585,7 +601,7 @@ func opSearchMemory(ctx context.Context, d Deps, act acting, in SearchMemoryIn) 
 	}
 
 	if len(scopes) == 0 {
-		return SearchMemoryOut{}, nil
+		return SearchMemoryOut{Truncated: truncated}, nil
 	}
 
 	limit := in.Limit
@@ -597,7 +613,7 @@ func opSearchMemory(ctx context.Context, d Deps, act acting, in SearchMemoryIn) 
 	res, err := mem.Search(ctx, memory.SearchRequest{Scopes: scopes, Text: in.Query, Limit: limit})
 	if err != nil {
 		if errors.Is(err, memory.ErrNoSearchProviders) {
-			return SearchMemoryOut{SearchUnavailable: true}, nil
+			return SearchMemoryOut{SearchUnavailable: true, Truncated: truncated}, nil
 		}
 		return SearchMemoryOut{}, fmt.Errorf("mcpfront: search memory: %w", err)
 	}
@@ -612,7 +628,7 @@ func opSearchMemory(ctx context.Context, d Deps, act acting, in SearchMemoryIn) 
 			Score:   se.Score,
 		})
 	}
-	return SearchMemoryOut{Hits: hits}, nil
+	return SearchMemoryOut{Hits: hits, Truncated: truncated}, nil
 }
 
 // maxSnippetRunes bounds search_memory's Snippet field — a preview, not the
@@ -638,7 +654,7 @@ func snippetFrom(content []byte) string {
 
 // opListArtifacts implements the list_artifacts tool.
 func opListArtifacts(ctx context.Context, d Deps, act acting, in ListArtifactsIn) (ListArtifactsOut, error) {
-	if _, err := authorizeSessionOp(ctx, d, act, permView, in.Namespace, in.Name); err != nil {
+	if _, err := authorizeSessionOp(ctx, d, act, permReadTranscript, in.Namespace, in.Name); err != nil {
 		return ListArtifactsOut{}, err
 	}
 
@@ -650,7 +666,7 @@ func opListArtifacts(ctx context.Context, d Deps, act acting, in ListArtifactsIn
 
 	out := make([]ArtifactSummary, 0, len(views))
 	for _, v := range views {
-		out = append(out, artifactSummaryFrom(v))
+		out = append(out, artifactSummaryFrom(d.Logger(), v))
 	}
 	return ListArtifactsOut{Artifacts: out}, nil
 }
@@ -663,10 +679,13 @@ const artifactCreatedAtLayout = "2006-01-02T15:04:05Z"
 // ArtifactSummary. An unparsable CreatedAt (should not happen; the service
 // always writes this exact layout) degrades to the zero time rather than
 // failing the whole list — one malformed timestamp must not blank a page of
-// otherwise-valid artifacts.
-func artifactSummaryFrom(v artifacts.ArtifactView) ArtifactSummary {
+// otherwise-valid artifacts. It is logged, so a layout drift shows up as a
+// greppable line rather than only as 0001-01-01 in a client.
+func artifactSummaryFrom(logger logr.Logger, v artifacts.ArtifactView) ArtifactSummary {
 	createdAt, err := time.Parse(artifactCreatedAtLayout, v.CreatedAt)
 	if err != nil {
+		logger.Info("mcpfront: artifact CreatedAt unparsable; reporting zero time",
+			"artifactID", v.ArtifactID, "createdAt", v.CreatedAt, "err", err.Error())
 		createdAt = time.Time{}
 	}
 	return ArtifactSummary{
@@ -686,7 +705,7 @@ func artifactSummaryFrom(v artifacts.ArtifactView) ArtifactSummary {
 // so going through the same list the sibling tool uses keeps one artifact id
 // reporting one CreatedAt everywhere, and doubles as the existence check.
 func opGetArtifact(ctx context.Context, d Deps, act acting, in GetArtifactIn) (GetArtifactOut, error) {
-	if _, err := authorizeSessionOp(ctx, d, act, permView, in.Namespace, in.Name); err != nil {
+	if _, err := authorizeSessionOp(ctx, d, act, permReadTranscript, in.Namespace, in.Name); err != nil {
 		return GetArtifactOut{}, err
 	}
 
@@ -699,7 +718,7 @@ func opGetArtifact(ctx context.Context, d Deps, act acting, in GetArtifactIn) (G
 	found := false
 	for _, v := range views {
 		if v.ArtifactID == in.ArtifactID {
-			summary = artifactSummaryFrom(v)
+			summary = artifactSummaryFrom(d.Logger(), v)
 			found = true
 			break
 		}

@@ -2,6 +2,7 @@ package mcpfront
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -89,19 +91,25 @@ func newAuthTestClient(t *testing.T, objects ...client.Object) client.Client {
 }
 
 // recordingHandler is the inner http.Handler every middleware test wraps: it
-// records whether it ran at all and what actingFrom returned, so a test can
+// records whether it ran at all and what identity the SDK's TokenInfo carried
+// (the same value actingFrom hands a tool handler), so a test can
 // assert both "did the request reach the application" and "with what
 // identity" in one place.
 type recordingHandler struct {
 	ran    bool
 	acting acting
 	ok     bool
+	userID string
 }
 
 func (h *recordingHandler) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ran = true
-		h.acting, h.ok = actingFrom(r.Context())
+		ti := auth.TokenInfoFromContext(r.Context())
+		h.acting, h.ok = actingFromTokenInfo(ti)
+		if ti != nil {
+			h.userID = ti.UserID
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 }
@@ -153,6 +161,7 @@ func TestBearerMiddleware(t *testing.T) {
 				require.True(t, rh.ok, "acting must be present in context")
 				assert.Equal(t, tc.wantActing, rh.acting.TokenID)
 				assert.Equal(t, "owner-canonical", rh.acting.Owner.String())
+				assert.Equal(t, "owner-canonical", rh.userID, "TokenInfo.UserID must be the owner, arming the SDK's session-hijack guard")
 			} else {
 				assert.False(t, rh.ran, "inner handler must NOT run on a rejected request")
 			}
@@ -456,21 +465,18 @@ func TestPerTokenRateLimit(t *testing.T) {
 	assert.Equal(t, http.StatusOK, doReq(valA).Code, "after the clock advances, the token is admitted again")
 }
 
-// TestLastUsedPatchedOnMeaningfulChangeOnly: two requests in quick succession
-// patch status.lastUsedAt exactly once; a request after the fake clock
-// advances past lastUsedResolution patches a second time. The SSA/
-// idempotency rule under test: never a write per request.
-func TestLastUsedPatchedOnMeaningfulChangeOnly(t *testing.T) {
-	cur := time.Now()
-	clock := func() time.Time { return cur }
-
+// newLastUsedHarness builds a middleware over one token whose status patches
+// are counted (and, when failPatch is set, refused), returning a doReq that
+// issues one request and waits for any background lastUsedAt write it
+// started. Expiry is far enough out to outlive every clock advance below, or
+// a late request would correctly 401 on expiry instead of exercising the
+// write cadence these tests are about.
+func newLastUsedHarness(t *testing.T, clock func() time.Time, failPatch bool) (doReq func(), patchCount *atomic.Int32) {
+	t.Helper()
 	val := mustNewTokenValue(t)
-	// Expiry must outlive the clock advance below (2h) or the third request
-	// would correctly 401 on token expiry rather than exercising the lastUsed
-	// patch cadence this test is actually about.
-	cr := accessTokenCR("at-aaaaaaaaaaaa", val, "owner-a", cur.Add(24*time.Hour))
+	cr := accessTokenCR("at-aaaaaaaaaaaa", val, "owner-a", clock().Add(24*time.Hour))
 
-	patchCount := 0
+	patchCount = &atomic.Int32{}
 	c := fake.NewClientBuilder().
 		WithScheme(newMintScheme(t)).
 		WithStatusSubresource(&spiceboxv1alpha1.AccessToken{}).
@@ -478,26 +484,52 @@ func TestLastUsedPatchedOnMeaningfulChangeOnly(t *testing.T) {
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourcePatch: func(ctx context.Context, cl client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
 				if subResourceName == "status" {
-					patchCount++
+					patchCount.Add(1)
+					if failPatch {
+						return errors.New("injected status patch failure")
+					}
 				}
 				return cl.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
 			},
 		}).
 		Build()
-	d := newFakeDeps(c)
-	mw := newBearerMiddleware(d, clock)
+	cache := newTokenCache()
+	mw := cache.middleware(newFakeDeps(c), clock)
 
-	doReq := func() {
+	return func() {
+		t.Helper()
 		rh := &recordingHandler{}
 		rec := doBearerRequest(mw, rh.handler(), "Bearer "+val)
 		require.Equal(t, http.StatusOK, rec.Code)
-	}
+		cache.touches.Wait()
+	}, patchCount
+}
 
-	doReq()
-	doReq()
-	assert.Equal(t, 1, patchCount, "two requests in quick succession must patch status.lastUsedAt exactly once")
+func TestLastUsedWriteCadence(t *testing.T) {
+	t.Run("success: two quick requests patch once, a request past lastUsedResolution patches again", func(t *testing.T) {
+		cur := time.Now()
+		doReq, patches := newLastUsedHarness(t, func() time.Time { return cur }, false)
 
-	cur = cur.Add(2 * time.Hour)
-	doReq()
-	assert.Equal(t, 2, patchCount, "a request after lastUsedResolution has elapsed must patch again")
+		doReq()
+		doReq()
+		assert.Equal(t, int32(1), patches.Load(), "never a write per request")
+
+		cur = cur.Add(2 * time.Hour)
+		doReq()
+		assert.Equal(t, int32(2), patches.Load())
+	})
+
+	t.Run("failure: retried no sooner than lastUsedRetryBackoff, not on every request", func(t *testing.T) {
+		cur := time.Now()
+		doReq, patches := newLastUsedHarness(t, func() time.Time { return cur }, true)
+
+		doReq()
+		doReq()
+		doReq()
+		assert.Equal(t, int32(1), patches.Load(), "a failing write must not be re-attempted on every request")
+
+		cur = cur.Add(lastUsedRetryBackoff + time.Second)
+		doReq()
+		assert.Equal(t, int32(2), patches.Load(), "a failed write is retried once the backoff has passed")
+	})
 }

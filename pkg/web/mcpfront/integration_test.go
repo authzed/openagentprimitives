@@ -27,10 +27,12 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -205,30 +207,17 @@ func (f *mcpFixture) callToolRaw(ctx context.Context, bearer, name string, args 
 	return probe.CallTool(ctx, f.baseURL+"/mcp", &http.Client{}, name, args, "Authorization", "Bearer "+bearer, nil)
 }
 
-// listSessionsUntil polls list_sessions until pred holds of the decoded
-// result or a short deadline passes, returning the last decoded result
-// either way. coveredSessions' leg-1 (CheckAccessTokenMirror) and leg-2
-// (FilterAccessTokenCoveredClasses) checks both run at SpiceDB's
-// MinimizeLatency consistency — ops.go's deliberate latency/freshness
-// tradeoff for cheap per-row enumeration checks (contrast
-// authorizeSessionOp's single-resource checks, which are always fully
-// consistent) — so a token minted microseconds earlier can briefly list as
-// covering nothing. This rides out that same window the way a real polling
-// client would, rather than asserting on an instant SpiceDB's own consistency
-// model does not guarantee.
-func listSessionsUntil(t *testing.T, f *mcpFixture, bearer string, pred func(ListSessionsOut) bool) ListSessionsOut {
+// listSessions calls list_sessions once and decodes the result. One call is
+// enough: coveredSessions runs every leg fully consistently (it is a
+// revocation gate, not a display list), so a token minted the line before is
+// already visible.
+func listSessions(t *testing.T, f *mcpFixture, bearer string) ListSessionsOut {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	var last ListSessionsOut
-	for {
-		out := f.callTool(t, bearer, "list_sessions", nil)
-		require.False(t, out.IsError, "list_sessions must succeed: %+v", out)
-		require.NoError(t, json.Unmarshal([]byte(out.Content[0].Text), &last))
-		if pred(last) || time.Now().After(deadline) {
-			return last
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	out := f.callTool(t, bearer, "list_sessions", nil)
+	require.False(t, out.IsError, "list_sessions must succeed: %+v", out)
+	var got ListSessionsOut
+	require.NoError(t, json.Unmarshal([]byte(out.Content[0].Text), &got))
+	return got
 }
 
 // assertDenialText decodes out's single text block as the {"error": "..."}
@@ -456,14 +445,7 @@ func TestFullOAuthAndMCPFlow(t *testing.T) {
 		names)
 
 	// 6. list_sessions contains demo-session.
-	lso := listSessionsUntil(t, f, tok.AccessToken, func(o ListSessionsOut) bool {
-		for _, s := range o.Sessions {
-			if s.Namespace == fixtureSessionNamespace && s.Name == fixtureSessionName {
-				return true
-			}
-		}
-		return false
-	})
+	lso := listSessions(t, f, tok.AccessToken)
 	var sawDemoSession bool
 	for _, s := range lso.Sessions {
 		if s.Namespace == fixtureSessionNamespace && s.Name == fixtureSessionName {
@@ -567,9 +549,7 @@ func TestScopeFilterExcludesOtherClasses(t *testing.T) {
 
 	minted := f.mint(t, accesstoken.RoleRead, []string{fixtureSessionNamespace + "/" + fixtureClassName}, false)
 
-	lso := listSessionsUntil(t, f, minted.Value, func(o ListSessionsOut) bool {
-		return len(o.Sessions) == 1 && o.Sessions[0].Name == fixtureSessionName
-	})
+	lso := listSessions(t, f, minted.Value)
 	names := make([]string, 0, len(lso.Sessions))
 	for _, s := range lso.Sessions {
 		names = append(names, s.Name)
@@ -592,4 +572,87 @@ func TestScopeFilterExcludesOtherClasses(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(missingOut.Content[0].Text), &missingBody))
 	assert.Equal(t, missingBody.Error, otherBody.Error,
 		"a scope-excluded session must read identically to a nonexistent one — no existence oracle")
+}
+
+// swappableBearer is an http.RoundTripper that stamps whichever bearer is
+// current onto every request, so one MCP client session can be driven by a
+// different token mid-session — the shape of a replayed Mcp-Session-Id.
+type swappableBearer struct{ value atomic.Value }
+
+func (b *swappableBearer) set(v string) { b.value.Store(v) }
+
+func (b *swappableBearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.value.Load().(string))
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// TestSessionIdentityIsPerRequest pins that a tool call runs as the token on
+// THAT request, not the token that initialized the MCP session. The stateful
+// streamable handler runs every tool call on the session's connection context
+// — the initialize request's — so identity carried on the HTTP request
+// context would be frozen at initialize: token B replaying token A's session
+// would act with A's scope, and a re-minted token would keep acting as the
+// revoked one. Identity now rides the SDK's per-request TokenInfo, whose
+// UserID (the owner) also arms the SDK's own cross-user session guard.
+func TestSessionIdentityIsPerRequest(t *testing.T) {
+	f := newMCPFixture(t)
+	ctx := context.Background()
+
+	const otherSessionName = "other-session"
+	other := sessionFixture(fixtureSessionNamespace, otherSessionName, fixtureOtherClassName)
+	require.NoError(t, f.k8s.Create(ctx, other), "create other-session")
+	require.NoError(t, f.spdb.TouchSessionOwner(ctx, fixtureSessionNamespace, otherSessionName, f.owner))
+
+	tokA := f.mint(t, accesstoken.RoleRead, []string{fixtureSessionNamespace + "/" + fixtureClassName}, false)
+	tokB := f.mint(t, accesstoken.RoleRead, []string{fixtureSessionNamespace + "/" + fixtureOtherClassName}, false)
+	stranger, err := f.minter.MintAccessToken(ctx, MintParams{
+		Owner:      identity.CanonicalFromTrusted("mcp-fixture-stranger", "integration test fixture"),
+		Role:       accesstoken.RoleRead,
+		Unfiltered: true,
+		ClientName: "integration test",
+		ClientID:   "integration-test-client",
+	})
+	require.NoError(t, err, "mint stranger token")
+
+	bearer := &swappableBearer{}
+	bearer.set(tokA.Value)
+	client := mcp.NewClient(&mcp.Implementation{Name: "session-identity-test", Version: "test"}, nil)
+	cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   f.baseURL + "/mcp",
+		HTTPClient: &http.Client{Transport: bearer},
+	}, nil)
+	require.NoError(t, err, "connect as token A")
+	t.Cleanup(func() { _ = cs.Close() })
+
+	listNames := func(t *testing.T) []string {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "list_sessions", Arguments: map[string]any{}})
+		require.NoError(t, err, "list_sessions")
+		require.False(t, res.IsError, "list_sessions must succeed: %+v", res)
+		require.NotEmpty(t, res.Content)
+		text, ok := res.Content[0].(*mcp.TextContent)
+		require.True(t, ok, "list_sessions returns one text block")
+		var out ListSessionsOut
+		require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
+		names := make([]string, 0, len(out.Sessions))
+		for _, s := range out.Sessions {
+			names = append(names, s.Name)
+		}
+		return names
+	}
+
+	assert.Equal(t, []string{fixtureSessionName}, listNames(t), "token A sees its own class's session")
+
+	bearer.set(tokB.Value)
+	assert.Equal(t, []string{otherSessionName}, listNames(t),
+		"token B on token A's session must act as B — its own scope, not the session initializer's")
+
+	bearer.set(stranger.Value)
+	_, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "list_sessions", Arguments: map[string]any{}})
+	require.Error(t, err, "another owner's token must not be able to drive this session at all")
+	// 403 is the SDK's session-binding refusal ("session user mismatch"); the
+	// bearer middleware itself only ever answers 401 or 429, and the stranger's
+	// token is valid, so no other layer produces this status.
+	assert.Contains(t, err.Error(), http.StatusText(http.StatusForbidden), "refused by the SDK's session binding")
 }

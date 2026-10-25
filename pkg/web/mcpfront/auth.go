@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/sync/singleflight"
 	"golang.org/x/time/rate"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -55,6 +57,18 @@ const (
 	// exactly the pattern to avoid).
 	lastUsedResolution = time.Hour
 
+	// lastUsedRetryBackoff is the minimum gap between two lastUsedAt write
+	// ATTEMPTS for the same token, successful or not. Without it a write that
+	// keeps failing (conflict, RBAC drift, a slow apiserver) would be retried
+	// — and logged — on every request the token makes.
+	lastUsedRetryBackoff = time.Minute
+
+	// lastUsedWriteTimeout bounds one background lastUsedAt write. The write
+	// runs detached from the request (it must not block it, nor die with it),
+	// so this is the only thing stopping a hung apiserver call from pinning a
+	// goroutine.
+	lastUsedWriteTimeout = 10 * time.Second
+
 	// tokenRateLimitRPS / tokenRateLimitBurst bound each individual token's
 	// request rate, independent of every other token.
 	tokenRateLimitRPS   = 10
@@ -71,28 +85,78 @@ const (
 )
 
 // acting is who a /mcp request is authenticated as: the presented
-// AccessToken's id and the owner it acts on behalf of. Carried on the
-// request context by the bearer middleware; read back via actingFrom by
-// every tool handler (Task 10) that needs to run a SpiceDB check.
+// AccessToken's id, the owner it acts on behalf of, and when it expires.
+//
+// It reaches a tool handler through the MCP SDK's per-request
+// auth.TokenInfo (req.Extra.TokenInfo), NEVER through the handler's ctx. The
+// stateful StreamableHTTPHandler connects a session on `initialize` with THAT
+// request's context, and every later tool call on the session runs on the
+// connection's context — so a value put on r.Context() by this middleware
+// would be the INITIALIZE request's identity for the whole session: a second
+// token replaying the first's Mcp-Session-Id would run as the first, and a
+// re-minted token would keep acting as the revoked one. TokenInfo, by
+// contrast, is stamped onto each JSON-RPC message from the HTTP request that
+// carried it.
 type acting struct {
-	TokenID string
-	Owner   identity.CanonicalUserID
+	TokenID   string
+	Owner     identity.CanonicalUserID
+	ExpiresAt time.Time
 }
 
-type actingKeyT struct{}
+// tokenInfoActingKey is the auth.TokenInfo.Extra key carrying the acting
+// value itself.
+const tokenInfoActingKey = "mcpfront.acting"
 
-var actingKey actingKeyT
-
-func withActing(ctx context.Context, a acting) context.Context {
-	return context.WithValue(ctx, actingKey, a)
+// tokenInfoFor is the auth.TokenInfo the SDK binds to a request. UserID is
+// the OWNER, which turns on the SDK's session-hijack guard (a session
+// created by one user refuses a request from another with 403) while
+// letting the same person's re-minted token keep its session — identity is
+// re-read per request anyway, so the session carries no stale authority.
+func tokenInfoFor(a acting) *auth.TokenInfo {
+	return &auth.TokenInfo{
+		UserID:     a.Owner.String(),
+		Expiration: a.ExpiresAt,
+		Extra:      map[string]any{tokenInfoActingKey: a},
+	}
 }
 
-// actingFrom returns the acting identity the bearer middleware attached to
-// ctx. ok is false for any context that didn't pass through the middleware
-// (e.g. a test calling a tool handler directly without it).
-func actingFrom(ctx context.Context) (acting, bool) {
-	a, ok := ctx.Value(actingKey).(acting)
+// actingFromTokenInfo recovers the acting identity tokenInfoFor stored.
+func actingFromTokenInfo(ti *auth.TokenInfo) (acting, bool) {
+	if ti == nil {
+		return acting{}, false
+	}
+	a, ok := ti.Extra[tokenInfoActingKey].(acting)
 	return a, ok
+}
+
+// actingFrom returns the identity of the HTTP request that carried req. ok is
+// false for a request that didn't pass through the bearer middleware (e.g. a
+// test calling a tool handler directly without it).
+func actingFrom(req *mcp.CallToolRequest) (acting, bool) {
+	if req == nil || req.Extra == nil {
+		return acting{}, false
+	}
+	return actingFromTokenInfo(req.Extra.TokenInfo)
+}
+
+// authenticatedKey carries the middleware's resolved identity across the one
+// hop to the SDK's bearer wrapper (see bindTokenInfo), and nowhere else.
+type authenticatedKey struct{}
+
+// bindTokenInfo wraps next in the SDK's own RequireBearerToken — the only
+// exported way to put an auth.TokenInfo on a request context — with a
+// verifier that does no verification of its own: it hands back what the
+// bearer middleware already resolved. Every real failure has already 401'd
+// through writeUnauthorized before this runs; the ErrInvalidToken branch is
+// unreachable unless something mounts this wrapper without the middleware.
+func bindTokenInfo(next http.Handler) http.Handler {
+	return auth.RequireBearerToken(func(ctx context.Context, _ string, _ *http.Request) (*auth.TokenInfo, error) {
+		a, ok := ctx.Value(authenticatedKey{}).(acting)
+		if !ok {
+			return nil, auth.ErrInvalidToken
+		}
+		return tokenInfoFor(a), nil
+	}, nil)(next)
 }
 
 // cachedToken is one AccessToken's authentication-relevant state, keyed by
@@ -118,6 +182,13 @@ type tokenCache struct {
 	// a MISS re-lists only once the cache is older than missRelistFloor.
 	listedAt time.Time
 	limiters map[string]*rate.Limiter
+	// lastUsedAttempts records, per token id, when a lastUsedAt write was
+	// last STARTED (see lastUsedRetryBackoff). Same lifecycle as limiters:
+	// pruned, never wiped, on rebuild.
+	lastUsedAttempts map[string]time.Time
+	// touches tracks in-flight background lastUsedAt writes, so a test can
+	// wait for them.
+	touches sync.WaitGroup
 	// relistGroup collapses concurrent re-lists into ONE List call: N
 	// concurrent requests bearing unknown tokens (or arriving just as the TTL
 	// lapses) share a single K8s round trip rather than issuing N.
@@ -125,7 +196,11 @@ type tokenCache struct {
 }
 
 func newTokenCache() *tokenCache {
-	return &tokenCache{byHash: map[string]cachedToken{}, limiters: map[string]*rate.Limiter{}}
+	return &tokenCache{
+		byHash:           map[string]cachedToken{},
+		limiters:         map[string]*rate.Limiter{},
+		lastUsedAttempts: map[string]time.Time{},
+	}
 }
 
 // resolve answers whether hash names a live, unexpired AccessToken. A cache
@@ -197,8 +272,13 @@ func (c *tokenCache) relist(ctx context.Context, d Deps, now time.Time) error {
 // spec.expiresAt — the "expired CR: 401 even though hash matches" case: the
 // CR can still exist (GC hasn't swept it yet) while the token itself must no
 // longer authenticate.
+//
+// A zero expiresAt is refused too: the CRD requires the field, and the SDK's
+// bearer wrapper (bindTokenInfo) would refuse a zero TokenInfo.Expiration with
+// a 401 of its own wording — so a zero must be caught here, where every
+// failure reads the same.
 func checkExpiry(tok cachedToken, now time.Time) (cachedToken, bool, error) {
-	if !tok.ExpiresAt.IsZero() && !now.Before(tok.ExpiresAt) {
+	if tok.ExpiresAt.IsZero() || !now.Before(tok.ExpiresAt) {
 		return cachedToken{}, false, nil
 	}
 	return tok, true, nil
@@ -238,6 +318,11 @@ func (c *tokenCache) rebuildLocked(list spiceboxv1alpha1.AccessTokenList, now ti
 			delete(c.limiters, id)
 		}
 	}
+	for id := range c.lastUsedAttempts {
+		if !live[id] {
+			delete(c.lastUsedAttempts, id)
+		}
+	}
 }
 
 // limiterFor returns tokenID's rate limiter, creating a fresh one (full
@@ -255,12 +340,14 @@ func (c *tokenCache) limiterFor(tokenID string) *rate.Limiter {
 	return l
 }
 
-// touchLastUsed patches status.lastUsedAt when the cached value is zero or at
-// least lastUsedResolution old, then remembers the new value in the cache ON
-// SUCCESS ONLY — a transient apiserver failure is retried on the very next
-// request rather than silently debounced for an hour. This is OBSERVATION,
-// not enforcement: a patch failure is logged and never fails the request
-// (AGENTS.md's no-silent-errors rule — logging is the allowed second option).
+// touchLastUsed records status.lastUsedAt when the cached value is zero or at
+// least lastUsedResolution old. This is OBSERVATION, not enforcement, so it
+// never costs the request anything: the write runs in the background, and at
+// most one attempt per token starts per lastUsedRetryBackoff whether the
+// previous one succeeded or not. A failed write is logged (AGENTS.md's
+// no-silent-errors rule — logging is the allowed second option) and retried
+// no sooner than the backoff; a successful one is remembered in the cache so
+// the next lastUsedResolution of requests skip it entirely.
 //
 // The Get-then-MergeFrom-Patch shape (rather than constructing a bare patch
 // object by hand) mirrors pkg/web/webui/agentui's wake.go: diffing against a
@@ -271,24 +358,46 @@ func (c *tokenCache) touchLastUsed(ctx context.Context, d Deps, hash string, tok
 	if !tok.LastUsedAt.IsZero() && now.Sub(tok.LastUsedAt) < lastUsedResolution {
 		return
 	}
-	var cr spiceboxv1alpha1.AccessToken
-	if err := d.K8s().Get(ctx, client.ObjectKey{Namespace: d.AccessTokenNamespace(), Name: tok.TokenID}, &cr); err != nil {
-		d.Logger().Info("mcpfront: lastUsed Get failed; status not patched", "tokenID", tok.TokenID, "err", err.Error())
+	c.mu.Lock()
+	if last, ok := c.lastUsedAttempts[tok.TokenID]; ok && now.Sub(last) < lastUsedRetryBackoff {
+		c.mu.Unlock()
 		return
+	}
+	c.lastUsedAttempts[tok.TokenID] = now
+	c.mu.Unlock()
+
+	c.touches.Add(1)
+	go func() {
+		defer c.touches.Done()
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lastUsedWriteTimeout)
+		defer cancel()
+		if err := patchLastUsed(ctx, d, tok.TokenID, now); err != nil {
+			d.Logger().Info("mcpfront: lastUsed not recorded; retrying no sooner than the backoff",
+				"tokenID", tok.TokenID, "retryAfter", lastUsedRetryBackoff.String(), "err", err.Error())
+			return
+		}
+		c.mu.Lock()
+		if entry, ok := c.byHash[hash]; ok {
+			entry.LastUsedAt = now
+			c.byHash[hash] = entry
+		}
+		c.mu.Unlock()
+	}()
+}
+
+// patchLastUsed writes status.lastUsedAt=now onto the named AccessToken.
+func patchLastUsed(ctx context.Context, d Deps, tokenID string, now time.Time) error {
+	var cr spiceboxv1alpha1.AccessToken
+	if err := d.K8s().Get(ctx, client.ObjectKey{Namespace: d.AccessTokenNamespace(), Name: tokenID}, &cr); err != nil {
+		return fmt.Errorf("get: %w", err)
 	}
 	original := cr.DeepCopy()
 	patchedAt := metav1.NewTime(now)
 	cr.Status.LastUsedAt = &patchedAt
 	if err := d.K8s().Status().Patch(ctx, &cr, client.MergeFrom(original)); err != nil {
-		d.Logger().Info("mcpfront: lastUsed patch failed", "tokenID", tok.TokenID, "err", err.Error())
-		return
+		return fmt.Errorf("status patch: %w", err)
 	}
-	c.mu.Lock()
-	if entry, ok := c.byHash[hash]; ok {
-		entry.LastUsedAt = now
-		c.byHash[hash] = entry
-	}
-	c.mu.Unlock()
+	return nil
 }
 
 // parseBearer extracts the token value from an Authorization header,
@@ -326,14 +435,21 @@ func writeUnauthorized(w http.ResponseWriter, d Deps) {
 
 // newBearerMiddleware builds the /mcp authentication middleware: hash the
 // presented bearer, resolve it against d's AccessTokens (cached — see
-// tokenCache), rate-limit per token, best-effort record lastUsedAt, and
-// attach the resolved acting identity to the request context. clock is
+// tokenCache), rate-limit per token, record lastUsedAt in the background, and
+// bind the resolved acting identity to the request as the SDK's
+// auth.TokenInfo (see acting's doc for why not the context). clock is
 // time.Now in production and an injectable fake in tests, so the rate
 // limiter's refill and the lastUsed resolution window are both deterministic
 // under test.
 func newBearerMiddleware(d Deps, clock func() time.Time) func(http.Handler) http.Handler {
-	cache := newTokenCache()
+	return newTokenCache().middleware(d, clock)
+}
+
+// middleware is newBearerMiddleware over an explicit cache, so a test can
+// reach the cache (e.g. to wait on its background lastUsedAt writes).
+func (c *tokenCache) middleware(d Deps, clock func() time.Time) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
+		next = bindTokenInfo(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			now := clock()
 
@@ -345,7 +461,7 @@ func newBearerMiddleware(d Deps, clock func() time.Time) func(http.Handler) http
 			}
 
 			hash := accesstoken.HashTokenValue(value)
-			tok, found, err := cache.resolve(r.Context(), d, hash, now)
+			tok, found, err := c.resolve(r.Context(), d, hash, now)
 			if err != nil {
 				d.Logger().Info("mcpfront: bearer rejected", "reason", "token lookup errored", "hashPrefix", hashPrefix(hash), "err", err.Error())
 				writeUnauthorized(w, d)
@@ -357,7 +473,7 @@ func newBearerMiddleware(d Deps, clock func() time.Time) func(http.Handler) http
 				return
 			}
 
-			limiter := cache.limiterFor(tok.TokenID)
+			limiter := c.limiterFor(tok.TokenID)
 			if !limiter.AllowN(now, 1) {
 				d.Logger().Info("mcpfront: rate limit exceeded", "tokenID", tok.TokenID)
 				w.Header().Set("Retry-After", "1")
@@ -365,10 +481,10 @@ func newBearerMiddleware(d Deps, clock func() time.Time) func(http.Handler) http
 				return
 			}
 
-			cache.touchLastUsed(r.Context(), d, hash, tok, now)
+			c.touchLastUsed(r.Context(), d, hash, tok, now)
 
-			ctx := withActing(r.Context(), acting{TokenID: tok.TokenID, Owner: tok.Owner})
-			next.ServeHTTP(w, r.WithContext(ctx))
+			a := acting{TokenID: tok.TokenID, Owner: tok.Owner, ExpiresAt: tok.ExpiresAt}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authenticatedKey{}, a)))
 		})
 	}
 }

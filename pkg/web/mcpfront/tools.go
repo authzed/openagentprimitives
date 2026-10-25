@@ -55,18 +55,18 @@ func decodeArgs(req *mcp.CallToolRequest, out any) error {
 var readOnly = &mcp.ToolAnnotations{ReadOnlyHint: true}
 
 // unauthenticatedErr is returned by a tool handler when actingFrom finds no
-// acting identity on the request context. Unreachable in production — every
+// acting identity on the request's TokenInfo. Unreachable in production — every
 // /mcp request passes through newBearerMiddleware first, which either attaches
 // one or never reaches a tool handler at all — but a handler must still fail
 // closed rather than panic if ever called directly (e.g. from a future
 // in-process test harness that forgets the middleware).
 func unauthenticatedErr() *mcp.CallToolResult {
-	return toolErr("unauthenticated: no acting identity on request context")
+	return toolErr("unauthenticated: no acting identity on request")
 }
 
 // registerTools registers the /mcp server's read-role tool set against d.
-// Every handler: resolve the acting identity the bearer middleware attached
-// to the request context, decode args, run the op, and translate its result
+// Every handler: resolve the acting identity the bearer middleware bound to
+// THIS request (req.Extra.TokenInfo — never ctx; see acting's doc), decode args, run the op, and translate its result
 // (or its denial) into a CallToolResult. The ops themselves (pkg/web/mcpfront
 // ops.go) own every authorization decision; nothing here second-guesses them.
 func registerTools(srv *mcp.Server, d Deps) {
@@ -78,7 +78,9 @@ func registerTools(srv *mcp.Server, d Deps) {
 			"filter with the channel fields to answer questions like \"find reviewbot's session for " +
 			"PR #123\" by filtering to agent=reviewbot and matching the channel key/metadata yourself, " +
 			"rather than needing a dedicated per-channel tool. Only sessions whose agentclass this " +
-			"token's scope covers are returned; everything else is silently absent, not denied.",
+			"token's scope covers are returned; everything else is silently absent, not denied. " +
+			"truncated=true means the owner has more sessions than this tool enumerates, so " +
+			"matches may be missing.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -134,7 +136,8 @@ func registerTools(srv *mcp.Server, d Deps) {
 			"get_session when you need to narrow to one agent or channel first. Each hit names the " +
 			"session it came from, so a cross-session search stays attributable. When no search " +
 			"provider is configured, searchUnavailable is true and hits is empty — that is not the " +
-			"same as \"nothing matched\".",
+			"same as \"nothing matched\". With no session named, only the most recently started " +
+			"sessions are searched; truncated=true says older ones were skipped.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -183,7 +186,7 @@ func registerTools(srv *mcp.Server, d Deps) {
 
 func handleListSessions(d Deps) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		act, ok := actingFrom(ctx)
+		act, ok := actingFrom(req)
 		if !ok {
 			return unauthenticatedErr(), nil
 		}
@@ -201,7 +204,7 @@ func handleListSessions(d Deps) mcp.ToolHandler {
 
 func handleGetSession(d Deps) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		act, ok := actingFrom(ctx)
+		act, ok := actingFrom(req)
 		if !ok {
 			return unauthenticatedErr(), nil
 		}
@@ -219,7 +222,7 @@ func handleGetSession(d Deps) mcp.ToolHandler {
 
 func handleGetTranscript(d Deps) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		act, ok := actingFrom(ctx)
+		act, ok := actingFrom(req)
 		if !ok {
 			return unauthenticatedErr(), nil
 		}
@@ -237,7 +240,7 @@ func handleGetTranscript(d Deps) mcp.ToolHandler {
 
 func handleSearchMemory(d Deps) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		act, ok := actingFrom(ctx)
+		act, ok := actingFrom(req)
 		if !ok {
 			return unauthenticatedErr(), nil
 		}
@@ -255,7 +258,7 @@ func handleSearchMemory(d Deps) mcp.ToolHandler {
 
 func handleListArtifacts(d Deps) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		act, ok := actingFrom(ctx)
+		act, ok := actingFrom(req)
 		if !ok {
 			return unauthenticatedErr(), nil
 		}
@@ -273,7 +276,7 @@ func handleListArtifacts(d Deps) mcp.ToolHandler {
 
 func handleGetArtifact(d Deps) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		act, ok := actingFrom(ctx)
+		act, ok := actingFrom(req)
 		if !ok {
 			return unauthenticatedErr(), nil
 		}

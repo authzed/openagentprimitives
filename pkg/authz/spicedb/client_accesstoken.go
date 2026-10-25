@@ -118,31 +118,20 @@ func (c *Client) DeleteAccessTokenTuples(ctx context.Context, tokenID string) er
 // token: the token being presented, who it claims to act as, the permission
 // the caller wants, and the resource (plus its owning agentclass) the
 // permission is being checked against.
+//
+// Permission is checked under the SAME name on both the token (leg 1, its
+// $sameperm mirror) and the resource (leg 3). There is deliberately no way to
+// check one name on the token and another on the resource: that would be a
+// role→permission table in Go, which the schema's mirror naming exists to
+// make unnecessary. A caller picks the resource permission it means and the
+// mirror follows.
 type AccessTokenCheck struct {
 	TokenID      string
 	Owner        identity.CanonicalUserID
-	Permission   string // the $sameperm name, e.g. "read_transcript" — leg 1 (token mirror)
+	Permission   string // e.g. "read_transcript" — leg 1 (token mirror) AND leg 3 (resource)
 	ResourceType string // "agentsession" | "artifact" | "agentclass" | "memory_entry"
 	ResourceID   string
 	ClassID      string // agentclass object id "ns/name" for leg 2
-	// ResourcePermission, when set, is the permission leg 3 checks on the
-	// RESOURCE, decoupled from the mirror name leg 1 checks on the token.
-	// Empty means "same as Permission" — the common case, where the $sameperm
-	// mirror name and the resource's own permission are literally the same
-	// string. It exists for the mirrors whose resource-side permission lives
-	// under a different name than the token-side one (e.g. a "view" or "read"
-	// mirror whose agentsession-level truth is read_transcript — see
-	// mcpfront's authorizeSessionOp for the mapping and its rationale).
-	ResourcePermission string
-}
-
-// effectiveResourcePermission is the permission leg 3 actually checks:
-// ResourcePermission when set, else Permission.
-func (chk AccessTokenCheck) effectiveResourcePermission() string {
-	if chk.ResourcePermission != "" {
-		return chk.ResourcePermission
-	}
-	return chk.Permission
 }
 
 // AccessTokenDecision is the three-legged intersection CheckAccessTokenOp
@@ -170,14 +159,9 @@ func (c *Client) CheckAccessTokenOp(ctx context.Context, chk AccessTokenCheck, f
 	// address the token resource), so a check FOR "covers" itself would be
 	// attributed to the wrong leg. "owner" is likewise an internal permission,
 	// never a $sameperm mirror. Refuse both by intent rather than letting the
-	// switch mis-attribute them by coincidence — and guard BOTH fields: a
-	// ResourcePermission of "covers"/"owner" would aim leg 3 at an internal
-	// permission just as wrongly as the mirror name would.
+	// switch mis-attribute them by coincidence.
 	if chk.Permission == accesstoken.PermissionCovers || chk.Permission == accesstoken.PermissionOwner {
 		return dec, fmt.Errorf("access token check for %q: permission %q is internal to the token definition, not a checkable mirror", chk.TokenID, chk.Permission)
-	}
-	if chk.ResourcePermission == accesstoken.PermissionCovers || chk.ResourcePermission == accesstoken.PermissionOwner {
-		return dec, fmt.Errorf("access token check for %q: resource permission %q is internal to the token definition, not a checkable permission", chk.TokenID, chk.ResourcePermission)
 	}
 
 	ownerSubj := &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: "user", ObjectId: chk.Owner.String()}}
@@ -194,7 +178,7 @@ func (c *Client) CheckAccessTokenOp(ctx context.Context, chk AccessTokenCheck, f
 		},
 		{
 			Resource:   &v1.ObjectReference{ObjectType: chk.ResourceType, ObjectId: chk.ResourceID},
-			Permission: chk.effectiveResourcePermission(),
+			Permission: chk.Permission,
 			Subject:    ownerSubj,
 		},
 	}
