@@ -39,7 +39,10 @@ func parseKey(raw []byte) (crypto.PublicKey, error) {
 
 // RequiredKey reports whether ref falls under OAPAgentsPrefix and, if so,
 // returns the embedded key it must verify against. For refs outside the prefix
-// it returns (nil, false, nil). An unparseable ref is an error. If ref is under
+// it returns (nil, false, nil). Hosts are compared canonically through
+// oci.RefHasPrefix, so "ghcr.io:443", "ghcr.io." and "GHCR.IO" are all pinned
+// like "ghcr.io"; a host with no canonical form is an error, never an unpinned
+// match. An unparseable ref is an error. If ref is under
 // the prefix but the embedded key fails to parse, it returns pinned=true
 // together with the error, so a caller that drops err still fails closed.
 func RequiredKey(ref string) (pub crypto.PublicKey, pinned bool, err error) {
