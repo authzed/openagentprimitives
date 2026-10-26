@@ -122,3 +122,11 @@ func (g *Gate) DropPending() (string, bool) {
 	g.pending = ""
 	return link, true
 }
+
+// Pending reports the held link without claiming or clearing it — for
+// diagnostics, e.g. logging a link that is held behind a busy gate.
+func (g *Gate) Pending() (string, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.pending, g.pending != ""
+}

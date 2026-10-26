@@ -119,8 +119,8 @@ func linkReadiness(st settingsui.State) linkinstall.Readiness {
 // installAgentFromLink offers the link to the gate and acts on the decision.
 // Readiness is read and offered under s.mu so the offer is atomic with
 // bring-up's running/failed transitions: a link either lands as pending
-// before bring-up finishes (and runHeldLink/dropHeldLink sees it) or sees the
-// final state, never neither.
+// before bring-up finishes (and enableRunningMenu/dropHeldLink sees it) or
+// sees the final state, never neither.
 func (s *desktopState) installAgentFromLink(l links.Link) {
 	ref := l.Params["ref"]
 	s.mu.Lock()
@@ -140,19 +140,16 @@ func (s *desktopState) installAgentFromLink(l links.Link) {
 		}
 		linkNotify("OAP Desktop is still starting — the install will continue once it's ready.")
 	case linkinstall.RunNow:
-		defer s.linkGate.Release()
+		defer s.releaseLinkGate()
 		s.runLinkInstall(l)
 	}
 }
 
-// runHeldLink runs the link held during bring-up, if any. Called once
-// bring-up has succeeded; the gate is released however the install ends.
-func (s *desktopState) runHeldLink() {
-	raw, ok := s.linkGate.TakePending()
-	if !ok {
-		return
-	}
-	defer s.linkGate.Release()
+// runClaimedLink runs a held link already claimed from the gate (by
+// enableRunningMenu's running transition, or by drainHeldLink). The gate is
+// busy on entry and released — then drained again — however the install ends.
+func (s *desktopState) runClaimedLink(raw string) {
+	defer s.releaseLinkGate()
 	l, err := links.Parse(raw)
 	if err != nil { // unreachable: only parsed links are held
 		s.logf("install link: held link no longer parses (%d bytes): %v", len(raw), err)
@@ -161,6 +158,39 @@ func (s *desktopState) runHeldLink() {
 	}
 	s.logf("install link: %s ref=%q running link held during start-up", l.Key, l.Params["ref"])
 	s.runLinkInstall(l)
+}
+
+// releaseLinkGate ends an install's hold on the gate, then runs any link
+// still held so it can never be stranded behind the install that just ended.
+func (s *desktopState) releaseLinkGate() {
+	s.linkGate.Release()
+	s.drainHeldLink()
+}
+
+// drainHeldLink claims and runs the held link when the cluster is running and
+// the gate is free. Claiming happens under s.mu, like every running-state
+// read, so it cannot race Stop. A link still held behind a busy gate is
+// logged; the busy install's own release drains it.
+func (s *desktopState) drainHeldLink() {
+	var raw string
+	var claimed, running bool
+	s.mu.Lock()
+	running = s.running
+	if running {
+		raw, claimed = s.linkGate.TakePending()
+	}
+	s.mu.Unlock()
+	if claimed {
+		s.runClaimedLink(raw)
+		return
+	}
+	if held, ok := s.linkGate.Pending(); ok && running {
+		ref := ""
+		if l, err := links.Parse(held); err == nil {
+			ref = l.Params["ref"]
+		}
+		s.logf("install link: %q still held; another install in progress", ref)
+	}
 }
 
 // dropHeldLink cancels a link held during bring-up (bring-up failed or the
@@ -237,6 +267,14 @@ func linkConfirmDialog(p linkinstall.Prompt) bool {
 			return false
 		}
 	}
+}
+
+// markStoppedLocked records a stopped cluster; s.mu must be held. Clearing
+// the step matters: without it the stale last bring-up step would make
+// phase() report "starting" after a stop (and hold links forever).
+func (s *desktopState) markStoppedLocked() {
+	s.running = false
+	s.currentStep = ""
 }
 
 // markBringUpStarting records that bring-up is committed, so phase() reports

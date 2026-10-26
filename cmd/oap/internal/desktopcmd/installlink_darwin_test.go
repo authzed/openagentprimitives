@@ -3,6 +3,7 @@
 package desktopcmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -196,27 +197,108 @@ func TestRunNowAlwaysReleasesTheGate(t *testing.T) {
 	}
 }
 
-func TestRunHeldLinkRunsAndReleases(t *testing.T) {
-	got := captureLinkNotify(t)
+// recordFetches stubs prepareLink to record each fetched ref and end the
+// install as a user cancel (the gate is released either way).
+func recordFetches(t *testing.T) *[]string {
+	t.Helper()
 	var fetched []string
 	stubPrepareLink(t, func(_ context.Context, _, ref string) ([]byte, linkinstall.Prompt, error) {
 		fetched = append(fetched, ref)
 		return nil, linkinstall.Prompt{}, linkinstall.ErrCancelled
 	})
+	return &fetched
+}
+
+const otherLinkRef = "ghcr.io/acme/agents/other-agent:1.0"
+
+// TestHeldLinkSurvivesAReadyLinkDuringTheRunningTransition: the held link is
+// claimed in the same critical section that flips running, so a Ready link
+// arriving before the held install launches is refused as busy instead of
+// taking the gate and stranding the held one.
+func TestHeldLinkSurvivesAReadyLinkDuringTheRunningTransition(t *testing.T) {
+	got := captureLinkNotify(t)
+	fetched := recordFetches(t)
 	s := linkStateForTest(t)
 	s.markBringUpStarting()
 	s.handleLink(testInstallLink(testLinkRef))
-	require.Len(t, *got, 1, "the hold itself notifies")
 
-	s.running = true
-	s.runHeldLink()
-	assert.Equal(t, []string{testLinkRef}, fetched, "the held link runs through the install path once")
+	held, claimed := s.enableRunningMenu()
+	require.True(t, claimed, "the running transition claims the held link")
+	assert.Equal(t, testInstallLink(testLinkRef), held)
+
+	s.handleLink(testInstallLink(otherLinkRef)) // arrives before the held install launches
+	s.runClaimedLink(held)
+
+	assert.Equal(t, []string{testLinkRef}, *fetched, "the held link runs exactly once; the late one never fetches")
+	assert.Equal(t, []string{
+		"OAP Desktop is still starting — the install will continue once it's ready.",
+		"Another agent install is already in progress.",
+	}, *got)
 	d, _ := s.linkGate.Offer("next", linkinstall.Ready)
 	assert.Equal(t, linkinstall.RunNow, d, "the gate is released after the held install")
+}
 
-	s.linkGate.Release()
-	s.runHeldLink()
-	assert.Len(t, fetched, 1, "nothing held: runHeldLink is a no-op")
+// TestReleaseDrainsALeftoverHeldLink: if a link is ever still held when an
+// install releases the gate, the release runs it rather than stranding it.
+func TestReleaseDrainsALeftoverHeldLink(t *testing.T) {
+	captureLinkNotify(t)
+	fetched := recordFetches(t)
+	s := linkStateForTest(t)
+	_, _ = s.linkGate.Offer(testInstallLink(testLinkRef), linkinstall.Starting)
+	s.running = true
+
+	s.handleLink(testInstallLink(otherLinkRef)) // RunNow; its release drains the held link
+
+	assert.Equal(t, []string{otherLinkRef, testLinkRef}, *fetched, "the leftover held link runs once, after the in-flight one")
+	_, pending := s.linkGate.Pending()
+	assert.False(t, pending, "nothing left held")
+	d, _ := s.linkGate.Offer("next", linkinstall.Ready)
+	assert.Equal(t, linkinstall.RunNow, d, "the gate is released after the drained install")
+}
+
+func TestDrainHeldLink(t *testing.T) {
+	cases := []struct {
+		name    string
+		running bool
+		busy    bool
+		wantLog string
+	}{
+		{name: "running, gate busy: stays held and is logged", running: true, busy: true, wantLog: "still held; another install in progress"},
+		{name: "not running: stays held, not run", running: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			captureLinkNotify(t)
+			fetched := recordFetches(t)
+			s := linkStateForTest(t)
+			_, _ = s.linkGate.Offer(testInstallLink(testLinkRef), linkinstall.Starting)
+			if tc.busy {
+				_, _ = s.linkGate.Offer("in-flight", linkinstall.Ready)
+			}
+			s.running = tc.running
+
+			s.drainHeldLink()
+
+			assert.Empty(t, *fetched)
+			held, ok := s.linkGate.Pending()
+			assert.True(t, ok)
+			assert.Equal(t, testInstallLink(testLinkRef), held)
+			if tc.wantLog != "" {
+				assert.Contains(t, s.out.(*bytes.Buffer).String(), tc.wantLog)
+				assert.Contains(t, s.out.(*bytes.Buffer).String(), testLinkRef)
+			}
+		})
+	}
+}
+
+func TestMarkStoppedLockedReportsStopped(t *testing.T) {
+	s := linkStateForTest(t)
+	s.running, s.currentStep = true, "Configuring cluster"
+	s.mu.Lock()
+	s.markStoppedLocked()
+	got := s.phaseLocked()
+	s.mu.Unlock()
+	assert.Equal(t, settingsui.State{Phase: "stopped"}, got, "after Stop the stale last step must not read as starting")
 }
 
 func TestDropHeldLinkNotifiesOnlyWhenSomethingWasHeld(t *testing.T) {
