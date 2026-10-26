@@ -43,16 +43,18 @@ func installDialogText(b *oap.Bundle) (title, message string) {
 }
 
 // installConfirmDialog shows a native confirm dialog before installing. When
-// hasReadme is true it offers a "View README" button. Returns the user's
-// choice; a cancel / dialog error maps to installCancel (install nothing).
-func installConfirmDialog(title, message string, hasReadme bool) installChoice {
+// hasReadme is true it offers a "View README" button. defaultButton names the
+// button Return presses ("Install" for a file the user just picked, "Cancel"
+// for an install link). Returns the user's choice; a cancel / dialog error
+// maps to installCancel (install nothing).
+func installConfirmDialog(title, message string, hasReadme bool, defaultButton string) installChoice {
 	buttons := `{"Cancel", "Install"}`
 	if hasReadme {
 		buttons = `{"Cancel", "View README", "Install"}`
 	}
 	script := fmt.Sprintf(
-		`display dialog %q with title %q buttons %s default button "Install" cancel button "Cancel"`,
-		message, title, buttons)
+		`display dialog %q with title %q buttons %s default button %q cancel button "Cancel"`,
+		message, title, buttons, defaultButton)
 	out, err := exec.Command("osascript", "-e", script).Output()
 	if err != nil {
 		return installCancel // cancel button (osascript exits non-zero) or no display
@@ -233,14 +235,43 @@ func (s *desktopState) installAgentFromFile() {
 	if !ok {
 		return // user cancelled (or no display) — not an error, nothing to notify
 	}
+	label := filepath.Base(path)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		s.logf("install agent: read %s: %v", path, err)
-		notify("OAP Desktop", fmt.Sprintf("Could not read %s: %v", filepath.Base(path), err))
+		notify("OAP Desktop", fmt.Sprintf("Could not read %s: %v", label, err))
 		return
 	}
 
+	// Confirm-with-preview: if the bundle ships a README, let the user read it
+	// and confirm before we apply anything. A README-less bundle keeps the
+	// one-click behavior (no dialog).
+	if preview, uerr := oap.Unpack(data); uerr == nil && len(preview.Readme) > 0 {
+		title, message := installDialogText(preview)
+	confirm:
+		for {
+			switch installConfirmDialog(title, message, true, "Install") {
+			case installViewReadme:
+				openReadme(preview.Manifest.Agent.Name, preview.Readme)
+				continue
+			case installConfirm:
+				break confirm
+			default: // installCancel
+				s.logf("install agent: %s cancelled at confirm dialog", label)
+				return
+			}
+		}
+	}
+
+	s.installApproved(data, label)
+}
+
+// installApproved installs bundle bytes the user has already approved into
+// demoChatNamespace — the post-approval half shared by the .oap file picker
+// and oap:// install links. label names the source in logs and
+// notifications (a file name or an OCI ref).
+func (s *desktopState) installApproved(data []byte, label string) {
 	s.mu.Lock()
 	dg := s.dg
 	s.mu.Unlock()
@@ -256,38 +287,18 @@ func (s *desktopState) installAgentFromFile() {
 		return
 	}
 
-	// Confirm-with-preview: if the bundle ships a README, let the user read it
-	// and confirm before we apply anything. A README-less bundle keeps the
-	// one-click behavior (no dialog).
-	if preview, uerr := oap.Unpack(data); uerr == nil && len(preview.Readme) > 0 {
-		title, message := installDialogText(preview)
-	confirm:
-		for {
-			switch installConfirmDialog(title, message, true) {
-			case installViewReadme:
-				openReadme(preview.Manifest.Agent.Name, preview.Readme)
-				continue
-			case installConfirm:
-				break confirm
-			default: // installCancel
-				s.logf("install agent: %s cancelled at confirm dialog", filepath.Base(path))
-				return
-			}
-		}
-	}
-
 	s.setStatus(menubaricons.StateSetup, "Installing agent…", "OAP Desktop — installing agent…")
 	defer s.setStatus(menubaricons.StateRunning, "Running", "OAP Desktop — running")
 
 	result, err := installOapFromPath(s.ctx, kb, s.logWriter(), data, demoChatNamespace)
 	switch {
 	case errors.Is(err, errNeedsConfig):
-		s.logf("install agent: %s needs configuration, nothing installed", filepath.Base(path))
+		s.logf("install agent: %s needs configuration, nothing installed", label)
 		notify("OAP Desktop", "This agent needs configuration — install it from the dashboard.")
 		s.openDashboard()
 	case err != nil:
-		s.logf("install agent: %s: %v", filepath.Base(path), err)
-		notify("OAP Desktop", fmt.Sprintf("Could not install %s: %v", filepath.Base(path), err))
+		s.logf("install agent: %s: %v", label, err)
+		notify("OAP Desktop", fmt.Sprintf("Could not install %s: %v", label, err))
 	default:
 		// result.Adopted is logged here even when empty (kinds/secrets already
 		// are) — per Result.Adopted's own doc comment, adoption is recorded
