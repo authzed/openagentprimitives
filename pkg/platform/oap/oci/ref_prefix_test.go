@@ -21,7 +21,13 @@ func TestRefHasPrefix(t *testing.T) {
 		{name: "digest ref in nested path under prefix: true", ref: "ghcr.io/acme/agents/sub/x@" + testDigest, want: true},
 		{name: "sibling repo sharing a string prefix: false", ref: "ghcr.io/acme/agents-evil/x", want: false},
 		{name: "repo whose name extends the prefix dir: false", ref: "ghcr.io/acme/agentsx", want: false},
-		{name: "explicit port differs from prefix host: false", ref: "ghcr.io:443/acme/agents/x", want: false},
+		{name: "explicit :443 is the same host: true", ref: "ghcr.io:443/acme/agents/x", want: true},
+		{name: "zero-padded :0443 is the same host: true", ref: "ghcr.io:0443/acme/agents/x", want: true},
+		{name: "trailing-dot FQDN is the same host: true", ref: "ghcr.io./acme/agents/x", want: true},
+		{name: "trailing dot plus :443 is the same host: true", ref: "ghcr.io.:443/acme/agents/x", want: true},
+		{name: "uppercase host is the same host: true", ref: "GHCR.IO/acme/agents/x", want: true},
+		{name: "non-default port is a different host: false", ref: "ghcr.io:8443/acme/agents/x", want: false},
+		{name: "double trailing dot has no canonical form: error", ref: "ghcr.io../acme/agents/x", wantErr: true},
 		{name: "different registry: false", ref: "docker.io/acme/agents/x", want: false},
 		{name: "shorter repo outside prefix: false", ref: "ghcr.io/acme/x", want: false},
 		{name: "repository equal to the prefix directory matches (intentional)", ref: "ghcr.io/acme/agents", want: true},
@@ -40,11 +46,6 @@ func TestRefHasPrefix(t *testing.T) {
 		})
 	}
 
-	t.Run("uppercase registry host: false or error, never true", func(t *testing.T) {
-		got, _ := RefHasPrefix("GHCR.io/acme/agents/x", prefix)
-		assert.False(t, got)
-	})
-
 	t.Run("invalid prefix: error", func(t *testing.T) {
 		got, err := RefHasPrefix("ghcr.io/acme/agents/x", "ghcr.io/acme/agents")
 		require.Error(t, err)
@@ -61,6 +62,11 @@ func TestValidatePrefix(t *testing.T) {
 		{prefix: "ghcr.io/acme/agents/"},
 		{prefix: "localhost:5000/acme/"},
 		{prefix: "GHCR.io/acme/", wantErr: true},
+		{prefix: "ghcr.io:443/a/", wantErr: true},
+		{prefix: "ghcr.io:0443/a/", wantErr: true},
+		{prefix: "ghcr.io./a/", wantErr: true},
+		{prefix: "ghcr.io.:443/a/", wantErr: true},
+		{prefix: "ghcr.io:8443/a/"},
 		{prefix: "ghcr.io/acme", wantErr: true},
 		{prefix: "https://ghcr.io/acme/", wantErr: true},
 		{prefix: "ghcr.io/", wantErr: true},
@@ -84,6 +90,35 @@ func TestValidatePrefix(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestCanonicalHost(t *testing.T) {
+	cases := []struct {
+		host, want string
+		wantErr    bool
+	}{
+		{host: "ghcr.io", want: "ghcr.io"},
+		{host: "GHCR.IO", want: "ghcr.io"},
+		{host: "ghcr.io.", want: "ghcr.io"},
+		{host: "ghcr.io:443", want: "ghcr.io"},
+		{host: "ghcr.io.:443", want: "ghcr.io"},
+		{host: "localhost:5000", want: "localhost:5000"},
+		{host: "[::1]:443", want: "[::1]"},
+		{host: "[::1]:5000", want: "[::1]:5000"},
+		{host: "ghcr.io..", wantErr: true},
+		{host: ".", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.host, func(t *testing.T) {
+			got, err := canonicalHost(tc.host)
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

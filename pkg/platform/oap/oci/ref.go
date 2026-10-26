@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/opencontainers/go-digest"
@@ -224,11 +225,14 @@ func splitPrefix(prefix string) (host, repoPath string, err error) {
 			return bad("empty path segment")
 		}
 	}
-	// RefHasPrefix compares hosts case-exactly (and the key pin does the
-	// same), so an uppercase entry would admit a link the pin treats as
-	// unpinned. Refuse it rather than normalize.
-	if host != strings.ToLower(host) {
-		return bad("registry host must be lowercase")
+	// Entries are stored in canonical form only, so the allowlist a user
+	// sees is exactly what RefHasPrefix compares against.
+	canon, cerr := canonicalHost(host)
+	if cerr != nil {
+		return bad(cerr.Error())
+	}
+	if canon != host {
+		return bad(fmt.Sprintf("registry host must be written canonically as %q (lowercase, no trailing '.', no explicit :443)", canon))
 	}
 	// The prefix plus a probe repository name must parse as a real reference,
 	// so host and path characters are held to the same rules as refs.
@@ -252,10 +256,12 @@ func ValidatePrefix(prefix string) error {
 
 // RefHasPrefix reports whether ref lives under prefix. ref is parsed with
 // registry.ParseReference and compared field-wise: the registry must equal the
-// prefix host exactly (case- and port-sensitive, so "GHCR.io" or "ghcr.io:443"
-// never match "ghcr.io"), and repository+"/" must start with the prefix path,
-// so "org/agents-evil/x" does not match "org/agents/". Unparseable refs and
-// invalid prefixes are errors, never matches.
+// prefix host after both are canonicalized (see canonicalHost — so "GHCR.io",
+// "ghcr.io." and "ghcr.io:443" all match "ghcr.io", because the registry client
+// dials all of them as the same host), and repository+"/" must start with the
+// prefix path, so "org/agents-evil/x" does not match "org/agents/". Unparseable
+// refs, hosts that cannot be canonicalized and invalid prefixes are errors,
+// never matches.
 func RefHasPrefix(ref, prefix string) (bool, error) {
 	host, repoPath, err := splitPrefix(prefix)
 	if err != nil {
@@ -265,5 +271,37 @@ func RefHasPrefix(ref, prefix string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("parse oci ref %q: %w", ref, err)
 	}
-	return parsed.Registry == host && strings.HasPrefix(parsed.Repository+"/", repoPath), nil
+	refHost, err := canonicalHost(parsed.Registry)
+	if err != nil {
+		return false, fmt.Errorf("oci ref %q: %w", ref, err)
+	}
+	return refHost == host && strings.HasPrefix(parsed.Repository+"/", repoPath), nil
+}
+
+// canonicalHost folds the spellings of one registry host that the registry
+// client treats identically onto a single form: lowercased, one trailing "."
+// (a fully-qualified DNS name) removed, and an explicit HTTPS-default port
+// (":443", including zero-padded spellings like ":0443") dropped. Anything it
+// cannot fold unambiguously — a host still ending in "." after one is
+// stripped, an empty host — is an error, so a caller deciding trust fails
+// closed rather than treating an odd spelling as a different host.
+func canonicalHost(host string) (string, error) {
+	name, port := strings.ToLower(host), ""
+	if n, p, err := net.SplitHostPort(name); err == nil {
+		name, port = n, p
+	}
+	name = strings.TrimSuffix(name, ".")
+	if name == "" || strings.HasSuffix(name, ".") {
+		return "", fmt.Errorf("registry host %q has no unambiguous canonical form", host)
+	}
+	if port == "" {
+		return name, nil
+	}
+	if n, err := strconv.Atoi(port); err == nil && n == 443 {
+		if strings.Contains(name, ":") { // IPv6 literal keeps its brackets
+			return "[" + name + "]", nil
+		}
+		return name, nil
+	}
+	return net.JoinHostPort(name, port), nil
 }
