@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/idp/passwordkind"
+	"github.com/authzed/openagentprimitives/pkg/platform/oap/trustedkeys"
 )
 
 // minSettingsPassword is the floor for a new admin password submitted
@@ -37,6 +39,15 @@ type configResponse struct {
 	HealthNotifications bool     `json:"healthNotifications"`
 	PasswordSet         bool     `json:"passwordSet"`
 	ConfigPath          string   `json:"configPath"`
+	// InstallSources is the effective oap:// install allowlist (never null:
+	// an explicit empty list means links are turned off).
+	InstallSources []string `json:"installSources"`
+	// InstallSourcesDefault is true when no list is stored, so the default
+	// applies.
+	InstallSourcesDefault bool `json:"installSourcesDefault"`
+	// PinnedInstallPrefix is the prefix whose installs are signature-checked
+	// against the embedded key, shown so the UI can label it.
+	PinnedInstallPrefix string `json:"pinnedInstallPrefix"`
 }
 
 // configUpdateRequest is the PUT /api/config wire shape. An empty
@@ -57,6 +68,14 @@ type configUpdateRequest struct {
 		Current string `json:"current"`
 		New     string `json:"new"`
 	} `json:"password,omitempty"`
+	// InstallSources replaces the install-link allowlist when non-nil. nil
+	// means "keep the stored value" so other tabs' whole-form PUTs cannot
+	// wipe it; a pointer to an empty list turns install links off.
+	InstallSources *[]string `json:"installSources,omitempty"`
+	// ResetInstallSources sets the stored list to the default entry plus the
+	// current entries, deduplicated, default first. Written explicitly,
+	// never as nil. Takes precedence over InstallSources.
+	ResetInstallSources bool `json:"resetInstallSources"`
 }
 
 // fieldOutcome reports what happened to one changed field group as a result
@@ -64,7 +83,7 @@ type configUpdateRequest struct {
 // effect the next time the cluster comes up), or "failed" (saved, but the
 // immediate apply attempt errored — see Message).
 type fieldOutcome struct {
-	Field   string `json:"field"`   // "model" | "password" | "ngrok" | "healthNotifications"
+	Field   string `json:"field"`   // "model" | "password" | "ngrok" | "healthNotifications" | "installSources"
 	Outcome string `json:"outcome"` // "applied" | "next-start" | "failed"
 	Message string `json:"message,omitempty"`
 }
@@ -109,11 +128,24 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	resp.HealthNotifications = cfg.HealthNotificationsEnabled()
 	resp.PasswordSet = cfg.AdminPasswordHash != ""
 	resp.ConfigPath = filepath.Join(s.deps.SupportDir, "config.json")
+	resp.InstallSources = installSourcePrefixes(cfg.EffectiveInstallSources())
+	resp.InstallSourcesDefault = cfg.InstallSources == nil
+	resp.PinnedInstallPrefix = trustedkeys.OAPAgentsPrefix
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		s.deps.Logf("settingsui: encode config response: %v", err)
 	}
+}
+
+// installSourcePrefixes projects sources to their prefixes as a non-nil
+// slice, so an empty allowlist encodes as [] rather than null.
+func installSourcePrefixes(sources []desktop.InstallSource) []string {
+	out := make([]string, 0, len(sources))
+	for _, s := range sources {
+		out = append(out, s.Prefix)
+	}
+	return out
 }
 
 // ngrokEqual reports whether two (possibly nil) NgrokConfig values carry the
@@ -169,6 +201,28 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 	healthEnabled := req.HealthNotifications
 	updated.HealthNotifications = &healthEnabled
 
+	switch {
+	case req.ResetInstallSources:
+		// Keep the first occurrence of each prefix so the default stays first.
+		prefixes := append([]string{trustedkeys.OAPAgentsPrefix}, installSourcePrefixes(cur.EffectiveInstallSources())...)
+		seen := map[string]struct{}{}
+		list := make([]desktop.InstallSource, 0, len(prefixes))
+		for _, p := range prefixes {
+			if _, dup := seen[p]; dup {
+				continue
+			}
+			seen[p] = struct{}{}
+			list = append(list, desktop.InstallSource{Prefix: p})
+		}
+		updated.InstallSources = &list
+	case req.InstallSources != nil:
+		list := make([]desktop.InstallSource, 0, len(*req.InstallSources))
+		for _, p := range *req.InstallSources {
+			list = append(list, desktop.InstallSource{Prefix: p})
+		}
+		updated.InstallSources = &list
+	}
+
 	if req.Password != nil {
 		if len(req.Password.New) < minSettingsPassword {
 			http.Error(w, fmt.Sprintf("settings: password must be at least %d characters", minSettingsPassword), http.StatusBadRequest)
@@ -208,6 +262,13 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 	healthChanged := cur.HealthNotificationsEnabled() != updated.HealthNotificationsEnabled()
 
 	outcomes := []fieldOutcome{}
+
+	// The allowlist is read fresh from config.json for every link, so a
+	// save takes effect immediately. Compared by effective value: an unset
+	// list and an explicit default list are the same allowlist.
+	if !slices.Equal(installSourcePrefixes(cur.EffectiveInstallSources()), installSourcePrefixes(updated.EffectiveInstallSources())) {
+		outcomes = append(outcomes, fieldOutcome{Field: "installSources", Outcome: "applied"})
+	}
 
 	if modelChanged || passwordChanged {
 		switch {
