@@ -2660,6 +2660,7 @@ func (s *desktopState) uninstall() {
 		s.pf = nil
 	}
 	s.mu.Unlock()
+	s.stopTakingLinksForUninstall()
 
 	s.setStatus(menubaricons.StateUninstalling, "Uninstalling…", "OAP Desktop — uninstalling…")
 	if err := s.eng.Uninstall(s.ctx); err != nil {

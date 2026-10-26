@@ -100,6 +100,10 @@ func TestLinkFailureMessage(t *testing.T) {
 		{name: "cancelled: no notification", err: fmt.Errorf("%q: %w", testLinkRef, linkinstall.ErrCancelled), wantShow: false},
 		{name: "verify failure: signature message", err: fmt.Errorf("verify %q: %w", testLinkRef, &linkVerifyError{err: errors.New("no signature")}), want: "Couldn't verify " + testLinkRef + " was signed by the OAP project, so it wasn't installed.", wantShow: true},
 		{name: "settings unreadable: see logs", err: fmt.Errorf("%w: %w", errLinkSettings, errors.New("eof")), want: "Couldn't read OAP Desktop settings — see logs.", wantShow: true},
+		{name: "malformed install source: settings-invalid message", err: fmt.Errorf("x: %w: %w", linkinstall.ErrInvalidSource, errors.New("must end with '/'")), want: "OAP Desktop's install-link settings are invalid — check Settings → Install links.", wantShow: true},
+		{name: "unusable ref: invalid-link message", err: fmt.Errorf("x: %w: %w", linkinstall.ErrInvalidRef, errors.New("bad ref")), want: "That isn't a valid OAP Desktop link.", wantShow: true},
+		{name: "signing key unavailable: key message", err: fmt.Errorf("x: %w: %w", linkinstall.ErrTrustedKey, errors.New("no PEM")), want: "Couldn't load OAP's signing key — see logs.", wantShow: true},
+		{name: "dialog failed: shown, not treated as a cancel", err: fmt.Errorf("x: %w: %w", linkinstall.ErrConfirmFailed, errors.New("no display")), want: "Couldn't show the install dialog — see logs.", wantShow: true},
 		{name: "digest mismatch: download message", err: linkinstall.ErrDigestMismatch, want: "Couldn't download " + testLinkRef + ": " + linkinstall.ErrDigestMismatch.Error(), wantShow: true},
 		{name: "other fetch error: download message", err: errors.New("pull: 404"), want: "Couldn't download " + testLinkRef + ": pull: 404", wantShow: true},
 	}
@@ -316,4 +320,57 @@ func TestDropHeldLinkNotifiesOnlyWhenSomethingWasHeld(t *testing.T) {
 	assert.Equal(t, []string{"OAP Desktop is still starting — the install will continue once it's ready.", "dropped"}, *got)
 	_, ok := s.linkGate.DropPending()
 	assert.False(t, ok, "the held link is gone")
+}
+
+func TestStopTakingLinksForUninstall(t *testing.T) {
+	got := captureLinkNotify(t)
+	calls := stubPrepareLink(t, func(context.Context, string, string) ([]byte, linkinstall.Prompt, error) {
+		return nil, linkinstall.Prompt{}, errors.New("must not be called")
+	})
+	s := linkStateForTest(t)
+	s.markBringUpStarting()
+	s.handleLink(testInstallLink(testLinkRef)) // held during start-up
+
+	s.stopTakingLinksForUninstall()
+	_, held := s.linkGate.Pending()
+	assert.False(t, held, "the held link is dropped")
+
+	s.handleLink(testInstallLink(testLinkRef)) // arrives mid-uninstall
+	assert.Equal(t, []string{
+		"OAP Desktop is still starting — the install will continue once it's ready.",
+		uninstallDropMessage,
+		"Start OAP Desktop and finish setup, then click the link again.",
+	}, *got)
+	_, held = s.linkGate.Pending()
+	assert.False(t, held, "a link arriving during uninstall is refused, not held")
+	assert.Zero(t, *calls, "nothing reaches the fetch path")
+}
+
+func TestLinkConfirmDialog(t *testing.T) {
+	boom := errors.New("osascript: no display")
+	cases := []struct {
+		name    string
+		choice  installChoice
+		err     error
+		want    bool
+		wantErr error
+	}{
+		{name: "Install: approved", choice: installConfirm, want: true},
+		{name: "Cancel: declined, no error", choice: installCancel},
+		{name: "dialog failed: error, not a decline", choice: installDialogFailed, err: boom, wantErr: boom},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := installConfirmDialog
+			installConfirmDialog = func(string, string, bool, string) (installChoice, error) { return tc.choice, tc.err }
+			t.Cleanup(func() { installConfirmDialog = orig })
+			got, err := linkConfirmDialog(linkinstall.Prompt{Ref: testLinkRef, Digest: "sha256:aa"})
+			assert.Equal(t, tc.want, got)
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
