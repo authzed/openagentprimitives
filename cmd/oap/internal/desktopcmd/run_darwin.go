@@ -188,6 +188,20 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 	}
 	defer logFile.Close()
 
+	// Single-instance guard, taken before orphan cleanup below: a second copy
+	// (the .app started by an install link while `oap desktop` runs in a
+	// terminal) would otherwise kill the first copy's live VM as an "orphan".
+	// The fd stays open, and so the lock held, until the process exits.
+	lock, err := acquireInstanceLock(support)
+	if err != nil {
+		fmt.Fprintf(logFile, "[%s] desktop: not starting: %v\n", time.Now().Format(time.RFC3339), err)
+		if errors.Is(err, errAlreadyRunning) {
+			notify("OAP Desktop", alreadyRunningMessage)
+		}
+		return fmt.Errorf("desktop: %w", err)
+	}
+	defer lock.Close()
+
 	st := &desktopState{
 		ctx:       ctx,
 		out:       out,
