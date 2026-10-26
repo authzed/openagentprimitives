@@ -17,7 +17,7 @@ oap agent verify ghcr.io/authzed/openagentprimitives/agents/codebot:latest \
 1. Generate a new keypair outside the repo:
    `openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out new.key`
    and `openssl ec -in new.key -pubout -out new.pub`.
-2. Replace `OAP_AGENT_SIGNING_KEY` with `new.key`'s contents and this file
-   with `new.pub` in the same PR.
+2. Replace `OAP_AGENT_SIGNING_KEY` with `new.key`'s contents and this file with
+   `new.pub` in the same PR.
 3. After merge, the publish workflow re-signs every example under the new key.
    Bundles signed only by the old key stop verifying against this file.
