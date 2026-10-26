@@ -11,6 +11,7 @@ import (
 
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm/models"
+	"github.com/authzed/openagentprimitives/pkg/platform/oap/trustedkeys"
 )
 
 // providerCases enumerates every model provider the desktop setup form
@@ -298,4 +299,111 @@ func TestConfig_SaveLoad_PreservesHealthNotifications(t *testing.T) {
 	require.NotNil(t, got.HealthNotifications, "pointer must survive the round trip")
 	assert.False(t, *got.HealthNotifications)
 	assert.False(t, got.HealthNotificationsEnabled())
+}
+
+func TestEffectiveInstallSources(t *testing.T) {
+	explicit := []desktop.InstallSource{{Prefix: "ghcr.io/acme/"}}
+	empty := []desktop.InstallSource{}
+	cases := []struct {
+		name string
+		in   *[]desktop.InstallSource
+		want []desktop.InstallSource
+	}{
+		{name: "nil: the default allowlist", in: nil, want: desktop.DefaultInstallSources()},
+		{name: "pointer to empty: disabled (no sources)", in: &empty, want: []desktop.InstallSource{}},
+		{name: "explicit list: itself", in: &explicit, want: explicit},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := desktop.Config{InstallSources: tc.in}.EffectiveInstallSources()
+			assert.Equal(t, tc.want, got)
+		})
+	}
+	assert.Equal(t, []desktop.InstallSource{{Prefix: trustedkeys.OAPAgentsPrefix}}, desktop.DefaultInstallSources())
+}
+
+func TestConfig_InstallSources_JSONRoundTrip(t *testing.T) {
+	t.Run("absent stays nil", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, validConfig().Save(dir))
+		got, err := desktop.Load(dir)
+		require.NoError(t, err)
+		assert.Nil(t, got.InstallSources)
+	})
+	t.Run("empty list stays non-nil empty", func(t *testing.T) {
+		dir := t.TempDir()
+		c := validConfig()
+		c.InstallSources = &[]desktop.InstallSource{}
+		require.NoError(t, c.Save(dir))
+		raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+		require.NoError(t, err)
+		assert.Contains(t, string(raw), `"installSources": []`)
+		got, err := desktop.Load(dir)
+		require.NoError(t, err)
+		require.NotNil(t, got.InstallSources)
+		assert.Empty(t, *got.InstallSources)
+	})
+}
+
+func TestAllowedSource(t *testing.T) {
+	broad := desktop.InstallSource{Prefix: "ghcr.io/acme/"}
+	narrow := desktop.InstallSource{Prefix: "ghcr.io/acme/agents/"}
+	cases := []struct {
+		name        string
+		sources     []desktop.InstallSource
+		ref         string
+		want        desktop.InstallSource
+		wantAllowed bool
+		wantErr     bool
+	}{
+		{name: "default list allows a ref under the default prefix", sources: desktop.DefaultInstallSources(), ref: "ghcr.io/authzed/openagentprimitives/x:1", want: desktop.InstallSource{Prefix: trustedkeys.OAPAgentsPrefix}, wantAllowed: true},
+		{name: "empty list: not allowed", sources: []desktop.InstallSource{}, ref: "ghcr.io/authzed/openagentprimitives/x:1"},
+		{name: "overlapping entries: longest prefix returned", sources: []desktop.InstallSource{broad, narrow}, ref: "ghcr.io/acme/agents/x:1", want: narrow, wantAllowed: true},
+		{name: "overlapping entries in reverse order: longest still returned", sources: []desktop.InstallSource{narrow, broad}, ref: "ghcr.io/acme/agents/x:1", want: narrow, wantAllowed: true},
+		{name: "ref only under the broad entry: broad returned", sources: []desktop.InstallSource{broad, narrow}, ref: "ghcr.io/acme/other/x:1", want: broad, wantAllowed: true},
+		{name: "non-matching ref: not allowed", sources: desktop.DefaultInstallSources(), ref: "ghcr.io/evil/x:1"},
+		{name: "unparseable ref: error, not allowed", sources: desktop.DefaultInstallSources(), ref: "::bad", wantErr: true},
+		{name: "invalid entry: error, not allowed", sources: []desktop.InstallSource{{Prefix: "ghcr.io/acme"}}, ref: "ghcr.io/acme/x", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := desktop.AllowedSource(tc.sources, tc.ref)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.False(t, ok, "an error must never come with allowed=true")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantAllowed, ok)
+			if tc.wantAllowed {
+				assert.Equal(t, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_InstallSources(t *testing.T) {
+	cases := []struct {
+		name    string
+		sources []desktop.InstallSource
+		wantErr string
+	}{
+		{name: "valid entries: ok", sources: []desktop.InstallSource{{Prefix: "ghcr.io/acme/"}, {Prefix: "ghcr.io/acme/agents/"}}},
+		{name: "empty list: ok (links disabled)", sources: []desktop.InstallSource{}},
+		{name: "scheme in prefix: rejected", sources: []desktop.InstallSource{{Prefix: "https://x/"}}, wantErr: "install source"},
+		{name: "duplicate prefixes: rejected", sources: []desktop.InstallSource{{Prefix: "ghcr.io/acme/"}, {Prefix: "ghcr.io/acme/"}}, wantErr: "duplicate"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig()
+			c.InstallSources = &tc.sources
+			err := c.Validate()
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }
