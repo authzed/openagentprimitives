@@ -194,3 +194,70 @@ func DefaultLocalName(ref string) (string, error) {
 	}
 	return path.Base(parsed.Repository) + oap.DefaultExtension, nil
 }
+
+// splitPrefix validates prefix and returns its registry host ("host[:port]")
+// and repository path (with the trailing "/"). A prefix is "host[:port]/path/…/":
+// trailing slash required, no scheme, tag or digest, a non-empty host, and at
+// least one non-empty path segment.
+func splitPrefix(prefix string) (host, repoPath string, err error) {
+	bad := func(why string) (string, string, error) {
+		return "", "", fmt.Errorf("invalid ref prefix %q: %s", prefix, why)
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		return bad("must end with '/'")
+	}
+	if strings.Contains(prefix, "://") {
+		return bad("must not include a scheme")
+	}
+	host, repoPath, found := strings.Cut(prefix, "/")
+	if !found || host == "" {
+		return bad("missing registry host")
+	}
+	if repoPath == "" {
+		return bad("needs at least one path segment")
+	}
+	if strings.ContainsAny(repoPath, ":@") {
+		return bad("must not include a tag or digest")
+	}
+	for _, seg := range strings.Split(strings.TrimSuffix(repoPath, "/"), "/") {
+		if seg == "" {
+			return bad("empty path segment")
+		}
+	}
+	// The prefix plus a probe repository name must parse as a real reference,
+	// so host and path characters are held to the same rules as refs.
+	parsed, perr := registry.ParseReference(prefix + "x")
+	if perr != nil {
+		return bad(perr.Error())
+	}
+	if parsed.Registry != host || parsed.Repository+"/" != repoPath+"x/" {
+		return bad("does not round-trip through reference parsing")
+	}
+	return host, repoPath, nil
+}
+
+// ValidatePrefix reports whether prefix is a well-formed ref prefix:
+// "host[:port]/path/…/" with a required trailing slash, no scheme, tag or
+// digest, a non-empty host and at least one path segment.
+func ValidatePrefix(prefix string) error {
+	_, _, err := splitPrefix(prefix)
+	return err
+}
+
+// RefHasPrefix reports whether ref lives under prefix. ref is parsed with
+// registry.ParseReference and compared field-wise: the registry must equal the
+// prefix host exactly (case- and port-sensitive, so "GHCR.io" or "ghcr.io:443"
+// never match "ghcr.io"), and repository+"/" must start with the prefix path,
+// so "org/agents-evil/x" does not match "org/agents/". Unparseable refs and
+// invalid prefixes are errors, never matches.
+func RefHasPrefix(ref, prefix string) (bool, error) {
+	host, repoPath, err := splitPrefix(prefix)
+	if err != nil {
+		return false, err
+	}
+	parsed, err := registry.ParseReference(ref)
+	if err != nil {
+		return false, fmt.Errorf("parse oci ref %q: %w", ref, err)
+	}
+	return parsed.Registry == host && strings.HasPrefix(parsed.Repository+"/", repoPath), nil
+}
