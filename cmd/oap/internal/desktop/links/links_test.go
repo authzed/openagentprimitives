@@ -80,3 +80,12 @@ func TestKeys(t *testing.T) {
 func TestRegisterPanicsOnDuplicate(t *testing.T) {
 	assert.Panics(t, func() { Register(Spec{Key: KeyInstallAgent, MaxVersion: 1}) })
 }
+
+// TestParseDocsSiteHref pins the href site/components/InstallInDesktop.tsx
+// produces for the fixture ref, so the docs button and the parser agree.
+func TestParseDocsSiteHref(t *testing.T) {
+	got, err := Parse("oap://install/agent?v=1&ref=ghcr.io%2Facme%2Fagents%2Fdemo-agent%3A1.0")
+	require.NoError(t, err)
+	assert.Equal(t, KeyInstallAgent, got.Key)
+	assert.Equal(t, "ghcr.io/acme/agents/demo-agent:1.0", got.Params["ref"])
+}

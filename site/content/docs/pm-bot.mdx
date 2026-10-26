@@ -43,6 +43,10 @@ oap agent lint    examples/pm-agent
 oap agent install examples/pm-agent --namespace default
 ```
 
+Or install the published, signed image straight into [OAP Desktop](/docs/install-desktop#install-links):
+
+<InstallInDesktop ref="ghcr.io/authzed/openagentprimitives/agents/product-manager:latest" />
+
 The install asks its two questions — which repositories the agent may read, and
 the read-only GitHub PAT it authenticates with. It applies no privileged
 resources, so it is safe to install into a shared namespace.
