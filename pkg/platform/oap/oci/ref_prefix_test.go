@@ -24,6 +24,7 @@ func TestRefHasPrefix(t *testing.T) {
 		{name: "explicit port differs from prefix host: false", ref: "ghcr.io:443/acme/agents/x", want: false},
 		{name: "different registry: false", ref: "docker.io/acme/agents/x", want: false},
 		{name: "shorter repo outside prefix: false", ref: "ghcr.io/acme/x", want: false},
+		{name: "repository equal to the prefix directory matches (intentional)", ref: "ghcr.io/acme/agents", want: true},
 		{name: "unparseable ref: error", ref: "::bad", wantErr: true},
 	}
 	for _, tc := range cases {
@@ -59,6 +60,7 @@ func TestValidatePrefix(t *testing.T) {
 		{prefix: "ghcr.io/acme/"},
 		{prefix: "ghcr.io/acme/agents/"},
 		{prefix: "localhost:5000/acme/"},
+		{prefix: "GHCR.io/acme/", wantErr: true},
 		{prefix: "ghcr.io/acme", wantErr: true},
 		{prefix: "https://ghcr.io/acme/", wantErr: true},
 		{prefix: "ghcr.io/", wantErr: true},

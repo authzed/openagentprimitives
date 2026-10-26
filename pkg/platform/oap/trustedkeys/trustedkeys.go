@@ -39,7 +39,9 @@ func parseKey(raw []byte) (crypto.PublicKey, error) {
 
 // RequiredKey reports whether ref falls under OAPAgentsPrefix and, if so,
 // returns the embedded key it must verify against. For refs outside the prefix
-// it returns (nil, false, nil). An unparseable ref is an error.
+// it returns (nil, false, nil). An unparseable ref is an error. If ref is under
+// the prefix but the embedded key fails to parse, it returns pinned=true
+// together with the error, so a caller that drops err still fails closed.
 func RequiredKey(ref string) (pub crypto.PublicKey, pinned bool, err error) {
 	pinned, err = oci.RefHasPrefix(ref, OAPAgentsPrefix)
 	if err != nil {
@@ -50,7 +52,7 @@ func RequiredKey(ref string) (pub crypto.PublicKey, pinned bool, err error) {
 	}
 	pub, err = parseKey(oapAgentsPub)
 	if err != nil {
-		return nil, false, err
+		return nil, true, err
 	}
 	return pub, true, nil
 }
