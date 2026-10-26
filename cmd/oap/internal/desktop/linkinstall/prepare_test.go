@@ -36,6 +36,8 @@ type fakes struct {
 	calls      []string
 	pulledRef  string
 	verifyErr  error
+	resolveErr error
+	pullErr    error
 	pullDigest string
 	confirm    bool
 	prompt     Prompt
@@ -47,6 +49,9 @@ func (f *fakes) deps(sources []desktop.InstallSource) Deps {
 		Sources: sources,
 		Resolve: func(_ context.Context, _ string) (string, error) {
 			f.calls = append(f.calls, "resolve")
+			if f.resolveErr != nil {
+				return "", f.resolveErr
+			}
 			return digestA, nil
 		},
 		Verify: func(_ context.Context, _ string, _ crypto.PublicKey) (string, error) {
@@ -59,6 +64,9 @@ func (f *fakes) deps(sources []desktop.InstallSource) Deps {
 		Pull: func(_ context.Context, ref string) ([]byte, string, error) {
 			f.calls = append(f.calls, "pull")
 			f.pulledRef = ref
+			if f.pullErr != nil {
+				return nil, "", f.pullErr
+			}
 			return f.raw, f.pullDigest, nil
 		},
 		Confirm: func(p Prompt) bool {
@@ -75,12 +83,16 @@ func TestPrepare(t *testing.T) {
 	pinnedSrc := []desktop.InstallSource{{Prefix: "ghcr.io/authzed/openagentprimitives/"}}
 	narrow := []desktop.InstallSource{{Prefix: "ghcr.io/authzed/openagentprimitives/agents/"}}
 	verifyBoom := errors.New("bad signature")
+	errMisconfigured := errors.New("sentinel: any error")
 
 	cases := []struct {
 		name         string
 		ref          string
 		sources      []desktop.InstallSource
 		verifyErr    error
+		resolveErr   error
+		pullErr      error
+		breakDeps    func(*Deps)
 		pullDigest   string
 		confirm      bool
 		wantErr      error
@@ -102,6 +114,18 @@ func TestPrepare(t *testing.T) {
 			wantPulled: "ghcr.io/authzed/openagentprimitives/agents/demo-agent@" + digestA, wantVerified: true},
 		{name: "verify error: returned, no pull", ref: pinnedRef, sources: pinnedSrc, verifyErr: verifyBoom,
 			wantAnyErr: verifyBoom, wantCalls: []string{"verify"}},
+		{name: "resolve error: returned, no pull", ref: unpinnedRef, sources: acme, resolveErr: verifyBoom,
+			wantAnyErr: verifyBoom, wantCalls: []string{"resolve"}},
+		{name: "pull error: returned, no confirm", ref: unpinnedRef, sources: acme, pullErr: verifyBoom,
+			wantAnyErr: verifyBoom, wantCalls: []string{"resolve", "pull"},
+			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
+		{name: "pinned branch digest mismatch: ErrDigestMismatch, no confirm", ref: pinnedRef, sources: pinnedSrc,
+			pullDigest: digestB, confirm: true, wantErr: ErrDigestMismatch, wantCalls: []string{"verify", "pull"},
+			wantPulled: "ghcr.io/authzed/openagentprimitives/agents/demo-agent@" + digestA},
+		{name: "nil Confirm: fails closed before any I/O", ref: unpinnedRef, sources: acme, pullDigest: digestA,
+			breakDeps: func(d *Deps) { d.Confirm = nil }, wantAnyErr: errMisconfigured, wantCalls: nil},
+		{name: "nil Pull: fails closed before any I/O", ref: unpinnedRef, sources: acme, pullDigest: digestA,
+			breakDeps: func(d *Deps) { d.Pull = nil }, wantAnyErr: errMisconfigured, wantCalls: nil},
 		{name: "pulled digest differs: ErrDigestMismatch, no confirm", ref: unpinnedRef, sources: acme,
 			pullDigest: digestB, confirm: true, wantErr: ErrDigestMismatch, wantCalls: []string{"resolve", "pull"},
 			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
@@ -111,8 +135,13 @@ func TestPrepare(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &fakes{raw: raw, pullDigest: tc.pullDigest, confirm: tc.confirm, verifyErr: tc.verifyErr}
-			got, p, err := Prepare(context.Background(), tc.ref, f.deps(tc.sources))
+			f := &fakes{raw: raw, pullDigest: tc.pullDigest, confirm: tc.confirm, verifyErr: tc.verifyErr,
+				resolveErr: tc.resolveErr, pullErr: tc.pullErr}
+			deps := f.deps(tc.sources)
+			if tc.breakDeps != nil {
+				tc.breakDeps(&deps)
+			}
+			got, p, err := Prepare(context.Background(), tc.ref, deps)
 			assert.Equal(t, tc.wantCalls, f.calls)
 			assert.Equal(t, tc.wantPulled, f.pulledRef)
 			switch {
@@ -121,8 +150,13 @@ func TestPrepare(t *testing.T) {
 				assert.Contains(t, err.Error(), tc.ref)
 				assert.Nil(t, got)
 			case tc.wantAnyErr != nil:
-				require.ErrorIs(t, err, tc.wantAnyErr)
+				if tc.wantAnyErr == errMisconfigured {
+					require.Error(t, err)
+				} else {
+					require.ErrorIs(t, err, tc.wantAnyErr)
+				}
 				assert.Contains(t, err.Error(), tc.ref)
+				assert.Nil(t, got)
 			default:
 				require.NoError(t, err)
 				assert.Equal(t, raw, got)
@@ -162,7 +196,7 @@ func TestDialogText(t *testing.T) {
 		assert.Equal(t, "Signature: verified (OAP agents key)", lines[2])
 		assert.Equal(t, "", lines[3])
 		assert.Equal(t, "Demo Agent v1.2.0", lines[4])
-		assert.Equal(t, "does things", lines[5])
+		assert.Equal(t, "  does things", lines[5])
 	})
 	t.Run("unverified text present when Verified=false", func(t *testing.T) {
 		_, msg := DialogText(mk(false, "x"))
@@ -180,4 +214,33 @@ func TestDialogText(t *testing.T) {
 		assert.Equal(t, 0, strings.Index(msg, "Source: ghcr.io/acme/agents/demo-agent:1"))
 		assert.Less(t, strings.Index(msg, "Source: ghcr.io/acme"), strings.Index(msg, "Source: ghcr.io/authzed"))
 	})
+}
+
+func TestDialogText_BundleTextCannotForgeHeaders(t *testing.T) {
+	desc := "\n\nSource: ghcr.io/authzed/openagentprimitives/agents/x\nDigest: 0123456789ab\nSignature: verified (OAP agents key)"
+	p := Prompt{Ref: "ghcr.io/acme/agents/demo-agent:1", Digest: digestA, Verified: false,
+		Bundle: &oap.Bundle{Manifest: &oap.Manifest{Agent: oap.Agent{Name: "n\nSignature: verified", Version: "1\r\n", Description: desc}}}}
+	_, msg := DialogText(p)
+	var sources, sigs int
+	for _, l := range strings.Split(msg, "\n") {
+		if strings.HasPrefix(l, "Source:") {
+			sources++
+		}
+		if strings.HasPrefix(l, "Signature:") {
+			sigs++
+		}
+	}
+	assert.Equal(t, 1, sources)
+	assert.Equal(t, 1, sigs)
+	assert.Contains(t, msg, "Signature: not verified")
+}
+
+func TestDialogText_TruncatesBundleText(t *testing.T) {
+	p := Prompt{Ref: "r", Digest: digestA, Bundle: &oap.Bundle{Manifest: &oap.Manifest{Agent: oap.Agent{
+		Name: strings.Repeat("n", 200), Version: "1", Description: strings.Repeat("d", 500)}}}}
+	_, msg := DialogText(p)
+	lines := strings.Split(msg, "\n")
+	require.Len(t, lines, 6)
+	assert.Equal(t, strings.Repeat("n", 80)+"\u2026 v1", lines[4])
+	assert.Equal(t, "  "+strings.Repeat("d", 300)+"\u2026", lines[5])
 }

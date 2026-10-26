@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop"
 	"github.com/authzed/openagentprimitives/pkg/platform/oap"
@@ -47,6 +48,9 @@ type Deps struct {
 // Prepare fetches and gets approval for ref, returning the approved bundle
 // bytes. Every refusal wraps a sentinel or the underlying error and names ref.
 func Prepare(ctx context.Context, ref string, d Deps) ([]byte, Prompt, error) {
+	if d.Resolve == nil || d.Verify == nil || d.Pull == nil || d.Confirm == nil {
+		return nil, Prompt{}, fmt.Errorf("install %q: misconfigured dependencies (nil Resolve/Verify/Pull/Confirm)", ref)
+	}
 	_, ok, err := desktop.AllowedSource(d.Sources, ref)
 	if err != nil {
 		return nil, Prompt{}, fmt.Errorf("install source check for %q: %w", ref, err)
@@ -116,10 +120,31 @@ func DialogText(p Prompt) (title, message string) {
 		if name == "" {
 			name = a.Name
 		}
-		fmt.Fprintf(&b, "%s v%s", name, a.Version)
-		if a.Description != "" {
-			fmt.Fprintf(&b, "\n%s", a.Description)
+		fmt.Fprintf(&b, "%s v%s", sanitize(name, maxNameRunes), sanitize(a.Version, maxNameRunes))
+		if d := sanitize(a.Description, maxDescRunes); d != "" {
+			fmt.Fprintf(&b, "\n  %s", d)
 		}
 	}
 	return "Install agent?", b.String()
+}
+
+const (
+	maxNameRunes = 80
+	maxDescRunes = 300
+)
+
+// sanitize flattens bundle-supplied text to one line (control characters and
+// newlines become spaces, runs collapse) and caps it at max runes, so it can
+// never forge a header line in the dialog.
+func sanitize(s string, max int) string {
+	s = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)), " ")
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "\u2026"
+	}
+	return s
 }
