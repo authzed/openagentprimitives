@@ -28,7 +28,8 @@ func newAgentVerifyCmd(_ *apcmd.Globals) *cobra.Command {
 			"<ref> is an OCI reference (\"host[:port]/name[:tag]\"). --key is the\n" +
 			"PEM-encoded ECDSA public key (PKIX/SubjectPublicKeyInfo) matching the\n" +
 			"private key `oap agent sign` used. Exits non-zero if no valid signature\n" +
-			"is found.",
+			"is found." +
+			"\n\n" + registryAuthHelp,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]

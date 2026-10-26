@@ -25,7 +25,8 @@ func newAgentPushCmd(_ *apcmd.Globals) *cobra.Command {
 		Short: "Push a packed .oap agent container to an OCI registry",
 		Long: "Push a packed .oap agent container to an OCI registry.\n\n" +
 			"<path> is the path to a .oap produced by `oap agent package` ('-' reads it from stdin).\n" +
-			"<ref> is an OCI reference (\"host[:port]/name[:tag]\").",
+			"<ref> is an OCI reference (\"host[:port]/name[:tag]\")." +
+			"\n\n" + registryAuthHelp,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, path := args[0], args[1]
