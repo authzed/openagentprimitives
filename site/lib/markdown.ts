@@ -110,8 +110,8 @@ function prose(text: string, ctx: MarkdownContext): string {
         series(attr(attrs, "name") ?? "", ctx),
       )
       .replace(/<InstallInDesktop\b([^>]*?)\/>/g, (_, attrs: string) => {
-        const ref = attr(attrs, "ref") ?? "";
-        return `[Install in OAP Desktop](oap://install/agent?v=1&ref=${encodeURIComponent(ref)}) or \`oap agent install ${ref}\``;
+        const image = attr(attrs, "image") ?? "";
+        return `[Install in OAP Desktop](oap://install/agent?v=1&ref=${encodeURIComponent(image)}) or \`oap agent install ${image}\``;
       })
       .replace(
         /<Coverage level="([^"]*)" \/>/g,

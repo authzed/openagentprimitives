@@ -85,6 +85,11 @@ describe("guideToMarkdown", () => {
       `- [X](${SITE}/docs/x#y): one two.\n- *Three*`,
     ],
     [
+      "install-in-desktop: oap:// link with the image url-encoded, plus the CLI command",
+      '<InstallInDesktop image="ghcr.io/acme/agents/demo-agent:1.0" />',
+      "[Install in OAP Desktop](oap://install/agent?v=1&ref=ghcr.io%2Facme%2Fagents%2Fdemo-agent%3A1.0) or `oap agent install ghcr.io/acme/agents/demo-agent:1.0`",
+    ],
+    [
       "markdown docs link: made absolute",
       "See [this](/docs/other).",
       `See [this](${SITE}/docs/other).`,
