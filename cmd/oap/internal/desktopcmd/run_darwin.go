@@ -209,6 +209,9 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 		support:   support,
 		resources: resources,
 	}
+	onNotifyFailed = func(title string, err error) {
+		st.logf("notify(%q) failed: %v", title, err)
+	}
 
 	// Load the on-disk config, if any. A missing or invalid config is no
 	// longer a hard failure that exits the process (that was the old
@@ -1385,14 +1388,25 @@ func openDesktopLogFile(supportDir string) (*os.File, error) {
 }
 
 // notify shows a native macOS notification banner via osascript. Best-effort:
-// a failure here (e.g. no display attached) is itself logged to stderr rather
+// a failure here (e.g. no display attached) is reported by notifyFailed rather
 // than silently dropped, but never treated as fatal — it's already the
 // fallback error-surfacing path.
 func notify(title, message string) {
 	script := fmt.Sprintf("display notification %q with title %q", message, title)
 	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "oap desktop: notify(%q) failed: %v\n", title, err)
+		notifyFailed(title, err)
 	}
+}
+
+// onNotifyFailed also records a failed notification in the desktop log:
+// stderr goes nowhere in a launched .app. runDesktop points it at st.logf
+// before starting anything that can notify.
+var onNotifyFailed = func(title string, err error) {}
+
+// notifyFailed reports a notification osascript could not post.
+func notifyFailed(title string, err error) {
+	fmt.Fprintf(os.Stderr, "oap desktop: notify(%q) failed: %v\n", title, err)
+	onNotifyFailed(title, err)
 }
 
 // confirmDialog shows a native Yes/No confirmation via osascript and reports
