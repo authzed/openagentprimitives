@@ -125,3 +125,20 @@ func TestStringers(t *testing.T) {
 	assert.Equal(t, "reject-unavailable", RejectUnavailable.String())
 	assert.Equal(t, "reject-busy", RejectBusy.String())
 }
+
+func TestGatePendingPeeksWithoutClaiming(t *testing.T) {
+	var g Gate
+	_, ok := g.Pending()
+	assert.False(t, ok, "empty gate: nothing pending")
+
+	g.Offer("held", Starting)
+	g.Offer("other", Ready) // busy now, with "held" still pending
+	got, ok := g.Pending()
+	assert.True(t, ok)
+	assert.Equal(t, "held", got)
+	_, took := g.TakePending()
+	assert.False(t, took, "Pending must not claim or clear: busy still blocks TakePending")
+	got, ok = g.Pending()
+	assert.True(t, ok)
+	assert.Equal(t, "held", got, "still held after the peek")
+}

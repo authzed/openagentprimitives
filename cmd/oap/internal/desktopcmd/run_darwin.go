@@ -1663,7 +1663,12 @@ func (s *desktopState) bringUp(cfg desktop.Config) {
 	// item was unlocked early (installHook -> enableKubectlMenuItem, when k3s
 	// began serving); enableRunningMenu enables the rest — dashboard, install
 	// agent, new chat, sessions, status — and re-enables kubectl idempotently.
-	s.enableRunningMenu()
+	// enableRunningMenu claims a link held during bring-up in the same
+	// critical section that flips running, so a link arriving now is refused
+	// as busy rather than stranding it. Launch it before the slow refreshes.
+	if held, claimed := s.enableRunningMenu(); claimed {
+		go s.runClaimedLink(held)
+	}
 	// The VM kubeconfig now exists (writeKubeconfig ran as part of Up), so
 	// the checkmark can reflect reality; outside the lock above since
 	// refreshKubectlCheckmark takes s.mu itself.
@@ -1675,8 +1680,6 @@ func (s *desktopState) bringUp(cfg desktop.Config) {
 	// Populate component health immediately rather than waiting a full
 	// watchHealth tick, so the submenu is current the moment we reach running.
 	s.refreshHealth()
-	// An oap:// link that arrived during bring-up was held; run it now.
-	s.runHeldLink()
 }
 
 // enableRunningMenu marks the cluster running and enables every
@@ -1692,12 +1695,15 @@ func (s *desktopState) bringUp(cfg desktop.Config) {
 // handler goroutine that races onReady's (systray-thread) menu-item
 // construction (see onReady's doc); the guards make that race harmless instead
 // of a nil-pointer panic.
-func (s *desktopState) enableRunningMenu() {
+func (s *desktopState) enableRunningMenu() (heldLink string, claimed bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// running gates watchSessions' periodic list (see watchSessions) and
 	// mirrors the "Active sessions" parent's enabled state.
 	s.running = true
+	// Claim an oap:// link held during bring-up atomically with the flip
+	// (lock order s.mu -> gate); the caller runs it via runClaimedLink.
+	heldLink, claimed = s.linkGate.TakePending()
 	for _, it := range []*systray.MenuItem{
 		s.dashboardItem, s.installAgentItem, s.sessionsItem, s.newChatItem,
 		s.kubectlItem, s.stopItem, s.uninstallItem, s.statusItem,
@@ -1706,6 +1712,7 @@ func (s *desktopState) enableRunningMenu() {
 			it.Enable()
 		}
 	}
+	return heldLink, claimed
 }
 
 // enableKubectlMenuItem unlocks ONLY the "Use oap cluster for kubectl" item and
@@ -2597,10 +2604,7 @@ func (s *desktopState) stopCluster() {
 	// this commits no in-flight or later health tick can override the
 	// StateShuttingDown/StateStopped icons — making "lifecycle transition always
 	// wins" airtight.
-	s.running = false
-	// Bring-up is long over; without this the stale last step would make
-	// phase() report "starting" after a stop (and hold links forever).
-	s.currentStep = ""
+	s.markStoppedLocked()
 	if pf := s.pf; pf != nil {
 		pf.Stop()
 		s.pf = nil
