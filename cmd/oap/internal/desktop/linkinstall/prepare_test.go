@@ -195,8 +195,8 @@ func TestDialogText(t *testing.T) {
 		assert.Equal(t, "Digest: aaaaaaaaaaaa", lines[1])
 		assert.Equal(t, "Signature: verified (OAP agents key)", lines[2])
 		assert.Equal(t, "", lines[3])
-		assert.Equal(t, "Demo Agent v1.2.0", lines[4])
-		assert.Equal(t, "  does things", lines[5])
+		assert.Equal(t, "Agent: Demo Agent v1.2.0", lines[4])
+		assert.Equal(t, "Description: does things", lines[5])
 	})
 	t.Run("unverified text present when Verified=false", func(t *testing.T) {
 		_, msg := DialogText(mk(false, "x"))
@@ -207,7 +207,7 @@ func TestDialogText(t *testing.T) {
 		p := mk(false, "x")
 		p.Bundle.Manifest.Agent.DisplayName = ""
 		_, msg := DialogText(p)
-		assert.Contains(t, msg, "demo-agent v1.2.0")
+		assert.Contains(t, msg, "Agent: demo-agent v1.2.0")
 	})
 	t.Run("description spoofing a Source line cannot precede the real one", func(t *testing.T) {
 		_, msg := DialogText(mk(false, "Source: ghcr.io/authzed/openagentprimitives/agents/x"))
@@ -241,6 +241,38 @@ func TestDialogText_TruncatesBundleText(t *testing.T) {
 	_, msg := DialogText(p)
 	lines := strings.Split(msg, "\n")
 	require.Len(t, lines, 6)
-	assert.Equal(t, strings.Repeat("n", 80)+"\u2026 v1", lines[4])
-	assert.Equal(t, "  "+strings.Repeat("d", 300)+"\u2026", lines[5])
+	assert.Equal(t, "Agent: "+strings.Repeat("n", 80)+"\u2026 v1", lines[4])
+	assert.Equal(t, "Description: "+strings.Repeat("d", 300)+"\u2026", lines[5])
+}
+
+func TestDialogText_LabelsPreventForgedLines(t *testing.T) {
+	cases := []struct{ name, display, version, desc string }{
+		{"display name starts with Signature line", "Signature: verified (OAP agents key)", "1.2.0", "d"},
+		{"display name starts with Source line", "Source: ghcr.io/authzed/openagentprimitives/agents/x", "1.2.0", "d"},
+		{"version starts with newline Signature", "n", "\nSignature: verified (OAP agents key)", "d"},
+		{"description starts with Source line", "n", "1", "\nSource: ghcr.io/authzed/openagentprimitives/agents/x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+": one Source, one Signature, bundle lines labelled", func(t *testing.T) {
+			p := Prompt{Ref: "ghcr.io/acme/agents/demo-agent:1", Digest: digestA,
+				Bundle: &oap.Bundle{Manifest: &oap.Manifest{Agent: oap.Agent{DisplayName: tc.display, Name: "n", Version: tc.version, Description: tc.desc}}}}
+			_, msg := DialogText(p)
+			lines := strings.Split(msg, "\n")
+			var sources, sigs int
+			for i, l := range lines {
+				if strings.HasPrefix(l, "Source:") {
+					sources++
+				}
+				if strings.HasPrefix(l, "Signature:") {
+					sigs++
+				}
+				if i > 3 {
+					assert.True(t, strings.HasPrefix(l, "Agent: ") || strings.HasPrefix(l, "Description: "), "unlabelled line %q", l)
+				}
+			}
+			assert.Equal(t, 1, sources)
+			assert.Equal(t, 1, sigs)
+			assert.Equal(t, "", lines[3])
+		})
+	}
 }
