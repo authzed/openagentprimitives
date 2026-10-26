@@ -35,6 +35,7 @@ import (
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/apcmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/demo"
+	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/linkinstall"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/menubaricons"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/menubaricons/assets"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/settingsui"
@@ -212,6 +213,11 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 		cfg = desktop.Config{}
 	}
 	st.initialConfig = cfg
+	if !st.needsConfigAtStart {
+		// onReady will start bring-up; say so now, so an oap:// link that
+		// cold-launched the app is held rather than refused.
+		st.markBringUpStarting()
+	}
 
 	st.eng = st.newEngine()
 
@@ -317,6 +323,15 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 		st.quit()
 	}()
 
+	// oap:// links: register the Apple Event handler on this (main,
+	// OS-locked) thread before the run loop starts, so a link that
+	// cold-launched the app is caught, and start consuming links.
+	onURLEventDropped = func(length int) {
+		st.logf("install link: dropped incoming link (queue full, %d bytes)", length)
+	}
+	installURLEventHandler()
+	go st.watchURLEvents()
+
 	systray.Run(st.onReady, st.onExit)
 
 	st.mu.Lock()
@@ -384,6 +399,11 @@ type desktopState struct {
 	pf          *portforward.PortForwarder
 	runErr      error  // set by failBringUp on a hard bring-up failure; read by runDesktop after systray.Run returns
 	currentStep string // last step name passed to progressHook; names timeline.Fail() on a hard bring-up failure
+
+	// linkGate serializes oap:// install links and holds the newest one while
+	// bring-up runs (see installlink_darwin.go). It has its own lock; when
+	// both are taken, s.mu is taken first.
+	linkGate linkinstall.Gate
 
 	// webdPort is the stable loopback port chosen (once, via
 	// desktop.PickStablePort) at the start of bringUp, BEFORE Install/Configure
@@ -1565,6 +1585,7 @@ func (s *desktopState) watchKubectlContext() {
 // invariant the task requires ("bring-up starts exactly once").
 func (s *desktopState) startBringUp(cfg desktop.Config) {
 	s.bringUpOnce.Do(func() {
+		s.markBringUpStarting()
 		go s.bringUp(cfg)
 	})
 }
@@ -1654,6 +1675,8 @@ func (s *desktopState) bringUp(cfg desktop.Config) {
 	// Populate component health immediately rather than waiting a full
 	// watchHealth tick, so the submenu is current the moment we reach running.
 	s.refreshHealth()
+	// An oap:// link that arrived during bring-up was held; run it now.
+	s.runHeldLink()
 }
 
 // enableRunningMenu marks the cluster running and enables every
@@ -1738,6 +1761,7 @@ func (s *desktopState) failBringUp(err error) {
 	step := s.currentStep
 	s.mu.Unlock()
 	s.timeline.Fail(step, time.Now().UnixMilli(), err.Error())
+	s.dropHeldLink("OAP Desktop couldn't start, so the agent install link was cancelled.")
 }
 
 func (s *desktopState) setStatus(state menubaricons.State, title, tooltip string) {
@@ -1923,6 +1947,28 @@ func (s *desktopState) openSettings() {
 	}()
 }
 
+// phase reports the desktop lifecycle phase. It backs both the settings UI's
+// state and the install-link gate's readiness (linkReadiness).
+func (s *desktopState) phase() settingsui.State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.phaseLocked()
+}
+
+// phaseLocked is phase with s.mu already held.
+func (s *desktopState) phaseLocked() settingsui.State {
+	switch {
+	case s.running:
+		return settingsui.State{Running: true, Phase: "running"}
+	case s.runErr != nil:
+		return settingsui.State{Phase: "failed", Step: s.currentStep}
+	case s.currentStep != "":
+		return settingsui.State{Phase: "starting", Step: s.currentStep}
+	default:
+		return settingsui.State{Phase: "stopped"}
+	}
+}
+
 // settingsDeps builds the settings server's collaborator seam. Every
 // closure here either reads a set-once desktopState field directly (support,
 // logf) or takes the same lock the field's other readers/writers already
@@ -1934,20 +1980,7 @@ func (s *desktopState) settingsDeps() settingsui.Deps {
 		SupportDir: s.support,
 		AppVersion: oapVersion(),
 		Logf:       s.logf,
-		State: func() settingsui.State {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			switch {
-			case s.running:
-				return settingsui.State{Running: true, Phase: "running"}
-			case s.runErr != nil:
-				return settingsui.State{Phase: "failed", Step: s.currentStep}
-			case s.currentStep != "":
-				return settingsui.State{Phase: "starting", Step: s.currentStep}
-			default:
-				return settingsui.State{Phase: "stopped"}
-			}
-		},
+		State:      s.phase,
 		Clients: func() (*kube.Bundle, error) {
 			s.mu.Lock()
 			dg := s.dg
@@ -2565,11 +2598,15 @@ func (s *desktopState) stopCluster() {
 	// StateShuttingDown/StateStopped icons — making "lifecycle transition always
 	// wins" airtight.
 	s.running = false
+	// Bring-up is long over; without this the stale last step would make
+	// phase() report "starting" after a stop (and hold links forever).
+	s.currentStep = ""
 	if pf := s.pf; pf != nil {
 		pf.Stop()
 		s.pf = nil
 	}
 	s.mu.Unlock()
+	s.dropHeldLink("The local cluster was stopped, so the pending agent install was cancelled.")
 
 	s.setStatus(menubaricons.StateShuttingDown, "Stopping…", "OAP Desktop — stopping…")
 	if err := s.eng.Down(s.ctx); err != nil {
