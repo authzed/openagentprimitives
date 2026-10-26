@@ -35,4 +35,13 @@ func TestRequiredKey(t *testing.T) {
 		require.Error(t, err)
 		assert.False(t, pinned)
 	})
+	t.Run("embedded key fails to parse: pinned=true with the error (fails closed)", func(t *testing.T) {
+		orig := oapAgentsPub
+		t.Cleanup(func() { oapAgentsPub = orig })
+		oapAgentsPub = []byte("not a pem block")
+		pub, pinned, err := RequiredKey(OAPAgentsPrefix + "demo-agent:1")
+		require.Error(t, err)
+		assert.True(t, pinned, "a caller that drops err must still see the ref as pinned")
+		assert.Nil(t, pub)
+	})
 }
