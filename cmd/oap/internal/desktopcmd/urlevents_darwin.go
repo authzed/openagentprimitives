@@ -43,14 +43,21 @@ func deliverURLEvent(s string) bool {
 	}
 }
 
+// onURLEventDropped reports a link dropped because urlEvents was full. It is
+// given only the link's length — a dropped link is never logged in full.
+// Defaults to stderr; runDesktop points it at the desktop log before the
+// handler is installed. It runs on the AppKit main thread and must not block.
+var onURLEventDropped = func(length int) {
+	fmt.Fprintf(os.Stderr, "oap desktop: install link dropped, %d links already queued (len=%d)\n", cap(urlEvents), length)
+}
+
 // goOAPURLEvent is called from the AppKit main thread by the Objective-C
-// handler in urlevents_darwin.m. It must not block. A drop goes to stderr:
-// the desktop process's logger is not reachable from a cgo callback.
+// handler in urlevents_darwin.m. It must not block.
 //
 //export goOAPURLEvent
 func goOAPURLEvent(cs *C.char) {
 	s := C.GoString(cs)
 	if !deliverURLEvent(s) {
-		fmt.Fprintf(os.Stderr, "oap desktop: install link dropped, %d links already queued (len=%d)\n", cap(urlEvents), len(s))
+		onURLEventDropped(len(s))
 	}
 }
