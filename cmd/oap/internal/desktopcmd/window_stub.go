@@ -20,6 +20,7 @@ import (
 // invoking `oap desktop-window` directly on an unsupported platform.
 func NewWindowCmd(_ *apcmd.Globals) *cobra.Command {
 	var url, title string
+	var width, height int
 	cmd := &cobra.Command{
 		Use:    "desktop-window",
 		Short:  "Internal: run the oap desktop setup window (native webview)",
@@ -31,6 +32,8 @@ func NewWindowCmd(_ *apcmd.Globals) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&url, "url", "", "URL of the local setup UI server to display (required)")
 	cmd.Flags().StringVar(&title, "title", "OAP Desktop", "Window title")
+	cmd.Flags().IntVar(&width, "width", defaultWindowWidth, "Initial window width in points")
+	cmd.Flags().IntVar(&height, "height", defaultWindowHeight, "Initial window height in points")
 	_ = cmd.MarkFlagRequired("url")
 	return cmd
 }
