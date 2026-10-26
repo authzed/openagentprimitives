@@ -36,7 +36,11 @@ func newAgentSignCmd(_ *apcmd.Globals) *cobra.Command {
 				return fmt.Errorf("load signing key: %w", err)
 			}
 
-			sigDigest, err := oci.Sign(cmd.Context(), ref, signer, oci.Options{PlainHTTP: plainHTTP})
+			opts, err := registryOptions(plainHTTP)
+			if err != nil {
+				return err
+			}
+			sigDigest, err := oci.Sign(cmd.Context(), ref, signer, opts)
 			if err != nil {
 				return err
 			}

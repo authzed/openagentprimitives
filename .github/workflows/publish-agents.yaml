@@ -1,0 +1,62 @@
+name: Publish example agents
+
+# Packages every example under examples/, pushes it to GHCR as
+# ghcr.io/<repo>/agents/<agent-name>:<short-sha> and :latest, signs it with
+# OAP_AGENT_SIGNING_KEY, and verifies it anonymously against the committed
+# pkg/platform/oap/trustedkeys/oap-agents.pub. OAP Desktop install links point
+# at these refs.
+#
+# Runs only after CI has passed on a push to main — never for pull requests, so
+# fork PRs can't reach the signing key.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # TEMPORARY: lets the branch that introduces this workflow prove push, sign
+  # and verify against real GHCR. Remove before merge.
+  push:
+    branches: [feat/desktop-install-protocol]
+
+permissions:
+  contents: read
+  packages: write
+
+# Serialize publishes so two merges in quick succession don't interleave their
+# :latest pushes. Never cancel: every merge's bundles should be published.
+concurrency:
+  group: publish-agents
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build oap
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/oap" ./cmd/oap
+      - name: Package, push, sign and verify
+        env:
+          OAP: ${{ runner.temp }}/oap
+          AGENTS_REPO: ghcr.io/${{ github.repository }}/agents
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          SIGNING_KEY: ${{ secrets.OAP_AGENT_SIGNING_KEY }}
+          VERIFY_KEY_FILE: pkg/platform/oap/trustedkeys/oap-agents.pub
+          OAP_REGISTRY_USERNAME: ${{ github.actor }}
+          OAP_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "OAP_AGENT_SIGNING_KEY secret is not set" >&2
+            exit 1
+          fi
+          export SIGNING_KEY_FILE="$RUNNER_TEMP/signing.key"
+          (umask 077 && printf '%s\n' "$SIGNING_KEY" > "$SIGNING_KEY_FILE")
+          export TAG="${SHA::12}"
+          scripts/publish-example-agents.sh

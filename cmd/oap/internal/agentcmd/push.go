@@ -44,7 +44,11 @@ func newAgentPushCmd(_ *apcmd.Globals) *cobra.Command {
 				}
 			}
 
-			dig, err := oci.Push(cmd.Context(), ref, packed, oci.Options{PlainHTTP: plainHTTP})
+			opts, err := registryOptions(plainHTTP)
+			if err != nil {
+				return err
+			}
+			dig, err := oci.Push(cmd.Context(), ref, packed, opts)
 			if err != nil {
 				return fmt.Errorf("push %s: %w", ref, err)
 			}

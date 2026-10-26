@@ -191,7 +191,10 @@ func loadInstallSource(cmd *cobra.Command, source string, verify bool, keyPath s
 		return b, &installSource{kind: installSourceKindFile, digest: dig}, nil
 	}
 
-	opts := oci.Options{PlainHTTP: plainHTTP}
+	opts, err := registryOptions(plainHTTP)
+	if err != nil {
+		return nil, nil, err
+	}
 	pullRef := source
 	if verify {
 		if keyPath == "" {

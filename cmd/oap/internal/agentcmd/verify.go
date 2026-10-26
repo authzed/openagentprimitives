@@ -38,7 +38,11 @@ func newAgentVerifyCmd(_ *apcmd.Globals) *cobra.Command {
 				return fmt.Errorf("load verification key: %w", err)
 			}
 
-			verifiedDigest, err := oci.Verify(cmd.Context(), ref, pub, oci.Options{PlainHTTP: plainHTTP})
+			opts, err := registryOptions(plainHTTP)
+			if err != nil {
+				return err
+			}
+			verifiedDigest, err := oci.Verify(cmd.Context(), ref, pub, opts)
 			if err != nil {
 				return err
 			}
