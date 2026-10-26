@@ -271,7 +271,13 @@ func (s *desktopState) installAgentFromFile() {
 	// Confirm-with-preview: if the bundle ships a README, let the user read it
 	// and confirm before we apply anything. A README-less bundle keeps the
 	// one-click behavior (no dialog).
-	if preview, uerr := oap.Unpack(data); uerr == nil && len(preview.Readme) > 0 {
+	// An unpack failure here is not reported on its own: installOapFromPath
+	// unpacks again and reports it as the install's failure.
+	preview, uerr := oap.Unpack(data)
+	if uerr != nil {
+		preview = nil
+	}
+	if preview != nil && len(preview.Readme) > 0 {
 		title, message := installDialogText(preview)
 	confirm:
 		for {
@@ -293,66 +299,34 @@ func (s *desktopState) installAgentFromFile() {
 		}
 	}
 
-	s.installApproved(data, label)
+	s.installApproved(data, label, installDisplayName(preview, label))
 }
 
 // installApproved installs bundle bytes the user has already approved into
 // demoChatNamespace — the post-approval half shared by the .oap file picker
-// and oap:// install links. label names the source in logs and
-// notifications (a file name or an OCI ref).
-func (s *desktopState) installApproved(data []byte, label string) {
+// and oap:// install links. label names the source in logs (a file name or an
+// OCI ref); name is what the user sees (see installDisplayName). The outcome
+// is shown by runInstallWithProgress (installprogress_darwin.go): a progress
+// window while it runs, then the new chat or a dialog.
+func (s *desktopState) installApproved(data []byte, label, name string) {
 	s.mu.Lock()
 	dg := s.dg
 	s.mu.Unlock()
+	// Fail before the progress window opens: an install that cannot start
+	// should not flash a window up first.
 	if dg == nil {
-		s.logf("install agent: no running cluster yet")
-		notify("OAP Desktop", "The local cluster isn't running yet — try again once OAP Desktop finishes starting up.")
+		s.reportInstallOutcome(name, label, nil, errClusterNotRunning)
 		return
 	}
 	kb, err := dg.Bundle()
 	if err != nil {
-		s.logf("install agent: connect to local cluster: %v", err)
-		notify("OAP Desktop", fmt.Sprintf("Could not connect to the local cluster: %v", err))
+		s.reportInstallOutcome(name, label, nil, fmt.Errorf("could not connect to the local cluster: %w", err))
 		return
 	}
 
-	s.setStatus(menubaricons.StateSetup, "Installing agent…", "OAP Desktop — installing agent…")
-	defer s.setStatus(menubaricons.StateRunning, "Running", "OAP Desktop — running")
-
-	result, err := installOapFromPath(s.ctx, kb, s.logWriter(), data, demoChatNamespace)
-	switch {
-	case errors.Is(err, errNeedsConfig):
-		s.logf("install agent: %s needs configuration, nothing installed", label)
-		notify("OAP Desktop", "This agent needs configuration — install it from the dashboard.")
-		s.openDashboard()
-	case err != nil:
-		s.logf("install agent: %s: %v", label, err)
-		notify("OAP Desktop", fmt.Sprintf("Could not install %s: %v", label, err))
-	default:
-		// result.Adopted is logged here even when empty (kinds/secrets already
-		// are) — per Result.Adopted's own doc comment, adoption is recorded
-		// NOWHERE on the seized object itself, so this log line is one of the
-		// only durable records that it happened.
-		s.logf("install agent: installed %s (kinds=%v secrets=%d adopted=%v)", result.Name, result.AppliedKinds, result.SecretsCreated, result.Adopted)
-		// Surface every non-fatal warning (e.g. a capacity clamp notice) to the
-		// desktop log, and pop ONE notification when there is at least one — the
-		// full text is in the log; the banner just says to go look.
-		for _, warn := range result.Warnings {
-			s.logf("install agent: %s: %s", result.Name, warn)
-		}
-		switch {
-		case len(result.Adopted) > 0 && len(result.Warnings) > 0:
-			notify("OAP Desktop", fmt.Sprintf("Installed %s — adopted %d pre-existing object(s) and %d other note(s), see logs", result.Name, len(result.Adopted), len(result.Warnings)))
-		case len(result.Adopted) > 0:
-			// Adoption overwrote an object this install did not create; the
-			// notification exists specifically so a menu-bar user (who never
-			// sees a --adopt flag or a confirm prompt's object list scroll by)
-			// still learns that it happened.
-			notify("OAP Desktop", fmt.Sprintf("Installed %s — adopted %d pre-existing object(s), see logs", result.Name, len(result.Adopted)))
-		case len(result.Warnings) > 0:
-			notify("OAP Desktop", fmt.Sprintf("Installed %s with %d note(s) — see logs", result.Name, len(result.Warnings)))
-		default:
-			notify("OAP Desktop", fmt.Sprintf("Installed %s", result.Name))
-		}
-	}
+	s.runInstallWithProgress(name, label, func() (*install.Result, error) {
+		s.setStatus(menubaricons.StateSetup, "Installing agent…", "OAP Desktop — installing agent…")
+		defer s.setStatus(menubaricons.StateRunning, "Running", "OAP Desktop — running")
+		return installOapFromPath(s.ctx, kb, s.logWriter(), data, demoChatNamespace)
+	})
 }
