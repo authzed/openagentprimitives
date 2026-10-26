@@ -239,7 +239,7 @@ func (s *desktopState) runLinkInstall(l links.Link) {
 		return
 	}
 	s.logf("install link: %s ref=%q approved digest=%s verified=%t", l.Key, ref, p.Digest, p.Verified)
-	s.installApproved(data, ref)
+	s.installApproved(data, ref, installDisplayName(p.Bundle, ref))
 }
 
 // linkFailureMessage is the notification for a Prepare failure; show is
