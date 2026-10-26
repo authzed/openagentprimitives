@@ -13,10 +13,6 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
-  # TEMPORARY: lets the branch that introduces this workflow prove push, sign
-  # and verify against real GHCR. Remove before merge.
-  push:
-    branches: [feat/desktop-install-protocol]
 
 permissions:
   contents: read
@@ -30,13 +26,13 @@ concurrency:
 
 jobs:
   publish:
-    if: github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -46,7 +42,7 @@ jobs:
         env:
           OAP: ${{ runner.temp }}/oap
           AGENTS_REPO: ghcr.io/${{ github.repository }}/agents
-          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
           SIGNING_KEY: ${{ secrets.OAP_AGENT_SIGNING_KEY }}
           VERIFY_KEY_FILE: pkg/platform/oap/trustedkeys/oap-agents.pub
           OAP_REGISTRY_USERNAME: ${{ github.actor }}
