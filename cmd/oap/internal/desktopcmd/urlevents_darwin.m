@@ -23,10 +23,12 @@
            withReplyEvent:(NSAppleEventDescriptor *)reply {
   NSString *url = [[event paramDescriptorForKeyword:keyDirectObject] stringValue];
   if (url == nil) {
+    NSLog(@"OAP Desktop: received GetURL event without a URL");
     return;
   }
   const char *s = [url UTF8String];
   if (s == NULL) {
+    NSLog(@"OAP Desktop: received GetURL event without a URL");
     return;
   }
   // goOAPURLEvent copies the string (C.GoString) before returning, so the

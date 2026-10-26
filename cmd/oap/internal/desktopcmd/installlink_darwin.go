@@ -208,6 +208,21 @@ func (s *desktopState) dropHeldLink(msg string) {
 	linkNotify(msg)
 }
 
+// uninstallDropMessage is the notification for a link held when the user
+// confirms Uninstall.
+const uninstallDropMessage = "OAP Desktop is uninstalling, so the pending agent install was cancelled."
+
+// stopTakingLinksForUninstall runs once the user has confirmed Uninstall:
+// marking the cluster stopped (under s.mu, like every running-state write)
+// makes links arriving during the uninstall refused rather than held or run,
+// and a link already held during bring-up is dropped with a notification.
+func (s *desktopState) stopTakingLinksForUninstall() {
+	s.mu.Lock()
+	s.markStoppedLocked()
+	s.mu.Unlock()
+	s.dropHeldLink(uninstallDropMessage)
+}
+
 // runLinkInstall fetches, verifies and gets approval for the link's ref, then
 // installs the approved bytes. The caller owns the gate.
 func (s *desktopState) runLinkInstall(l links.Link) {
@@ -236,6 +251,14 @@ func linkFailureMessage(ref string, err error) (msg string, show bool) {
 		return "", false
 	case errors.Is(err, errLinkSettings):
 		return "Couldn't read OAP Desktop settings — see logs.", true
+	case errors.Is(err, linkinstall.ErrConfirmFailed):
+		return dialogFailedMessage, true
+	case errors.Is(err, linkinstall.ErrInvalidSource):
+		return "OAP Desktop's install-link settings are invalid — check Settings → Install links.", true
+	case errors.Is(err, linkinstall.ErrInvalidRef):
+		return "That isn't a valid OAP Desktop link.", true
+	case errors.Is(err, linkinstall.ErrTrustedKey):
+		return "Couldn't load OAP's signing key — see logs.", true
 	case errors.Is(err, linkinstall.ErrNotAllowed):
 		return fmt.Sprintf("OAP Desktop only installs agents from sources in Settings → Install links. %s isn't one of them.", ref), true
 	case errors.As(err, &verr):
@@ -246,8 +269,9 @@ func linkFailureMessage(ref string, err error) (msg string, show bool) {
 }
 
 // linkConfirmDialog is linkinstall.Deps.Confirm: the always-shown approval
-// dialog, Cancel by default, looping on View README like the file flow.
-func linkConfirmDialog(p linkinstall.Prompt) bool {
+// dialog, Cancel by default, looping on View README like the file flow. A
+// dialog that could not be shown is an error, never a decline.
+func linkConfirmDialog(p linkinstall.Prompt) (bool, error) {
 	title, message := linkinstall.DialogText(p)
 	var readme []byte
 	name := "agent"
@@ -258,13 +282,16 @@ func linkConfirmDialog(p linkinstall.Prompt) bool {
 		}
 	}
 	for {
-		switch installConfirmDialog(title, message, len(readme) > 0, "Cancel") {
+		choice, err := installConfirmDialog(title, message, len(readme) > 0, "Cancel")
+		switch choice {
 		case installViewReadme:
 			openReadme(name, readme)
 		case installConfirm:
-			return true
+			return true, nil
+		case installDialogFailed:
+			return false, err
 		default: // installCancel
-			return false
+			return false, nil
 		}
 	}
 }

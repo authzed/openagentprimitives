@@ -25,6 +25,9 @@ const (
 	installCancel installChoice = iota
 	installViewReadme
 	installConfirm
+	// installDialogFailed means the dialog could not be shown (no display,
+	// osascript failure). It is not a cancel: the user never saw the prompt.
+	installDialogFailed
 )
 
 // installDialogText derives the confirm dialog's title and body from the
@@ -45,9 +48,11 @@ func installDialogText(b *oap.Bundle) (title, message string) {
 // installConfirmDialog shows a native confirm dialog before installing. When
 // hasReadme is true it offers a "View README" button. defaultButton names the
 // button Return presses ("Install" for a file the user just picked, "Cancel"
-// for an install link). Returns the user's choice; a cancel / dialog error
-// maps to installCancel (install nothing).
-func installConfirmDialog(title, message string, hasReadme bool, defaultButton string) installChoice {
+// for an install link). Returns the user's choice; the Cancel button maps to
+// installCancel, and any other failure to installDialogFailed with the error.
+// Either way nothing is installed. A package var so tests drive the callers
+// without osascript.
+var installConfirmDialog = func(title, message string, hasReadme bool, defaultButton string) (installChoice, error) {
 	buttons := `{"Cancel", "Install"}`
 	if hasReadme {
 		buttons = `{"Cancel", "View README", "Install"}`
@@ -56,14 +61,33 @@ func installConfirmDialog(title, message string, hasReadme bool, defaultButton s
 		`display dialog %q with title %q buttons %s default button %q cancel button "Cancel"`,
 		message, title, buttons, defaultButton)
 	out, err := exec.Command("osascript", "-e", script).Output()
+	return classifyInstallDialog(out, err)
+}
+
+// osascriptUserCanceled is the AppleScript error number osascript reports
+// (on stderr, with a non-zero exit) when the dialog's cancel button is chosen.
+const osascriptUserCanceled = "(-128)"
+
+// classifyInstallDialog maps osascript's result for the install dialog onto
+// a choice. Only the cancel button's -128 error is a cancel; every other
+// error is installDialogFailed, returned with the error so it gets logged.
+func classifyInstallDialog(out []byte, err error) (installChoice, error) {
 	if err != nil {
-		return installCancel // cancel button (osascript exits non-zero) or no display
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && strings.Contains(string(exitErr.Stderr), osascriptUserCanceled) {
+			return installCancel, nil
+		}
+		return installDialogFailed, fmt.Errorf("show install dialog: %w", err)
 	}
 	if strings.Contains(string(out), "View README") {
-		return installViewReadme
+		return installViewReadme, nil
 	}
-	return installConfirm
+	return installConfirm, nil
 }
+
+// dialogFailedMessage is the notification when the install dialog could not
+// be shown, for both the file picker and install links.
+const dialogFailedMessage = "Couldn't show the install dialog — see logs."
 
 // adoptDialogText renders the adopt confirmation. The menu bar has no
 // multi-select affordance, so the dialog is all-or-nothing — which makes
@@ -251,12 +275,17 @@ func (s *desktopState) installAgentFromFile() {
 		title, message := installDialogText(preview)
 	confirm:
 		for {
-			switch installConfirmDialog(title, message, true, "Install") {
+			choice, derr := installConfirmDialog(title, message, true, "Install")
+			switch choice {
 			case installViewReadme:
 				openReadme(preview.Manifest.Agent.Name, preview.Readme)
 				continue
 			case installConfirm:
 				break confirm
+			case installDialogFailed:
+				s.logf("install agent: %s: %v", label, derr)
+				notify("OAP Desktop", dialogFailedMessage)
+				return
 			default: // installCancel
 				s.logf("install agent: %s cancelled at confirm dialog", label)
 				return

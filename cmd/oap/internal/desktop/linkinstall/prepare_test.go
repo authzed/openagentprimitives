@@ -40,6 +40,7 @@ type fakes struct {
 	pullErr    error
 	pullDigest string
 	confirm    bool
+	confirmErr error
 	prompt     Prompt
 	raw        []byte
 }
@@ -69,10 +70,10 @@ func (f *fakes) deps(sources []desktop.InstallSource) Deps {
 			}
 			return f.raw, f.pullDigest, nil
 		},
-		Confirm: func(p Prompt) bool {
+		Confirm: func(p Prompt) (bool, error) {
 			f.calls = append(f.calls, "confirm")
 			f.prompt = p
-			return f.confirm
+			return f.confirm, f.confirmErr
 		},
 	}
 }
@@ -92,6 +93,7 @@ func TestPrepare(t *testing.T) {
 		verifyErr    error
 		resolveErr   error
 		pullErr      error
+		confirmErr   error
 		breakDeps    func(*Deps)
 		pullDigest   string
 		confirm      bool
@@ -129,6 +131,19 @@ func TestPrepare(t *testing.T) {
 		{name: "pulled digest differs: ErrDigestMismatch, no confirm", ref: unpinnedRef, sources: acme,
 			pullDigest: digestB, confirm: true, wantErr: ErrDigestMismatch, wantCalls: []string{"resolve", "pull"},
 			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
+		{name: "malformed install source: ErrInvalidSource with no I/O", ref: unpinnedRef,
+			sources: []desktop.InstallSource{{Prefix: "ghcr.io/acme/agents"}}, confirm: true,
+			wantErr: ErrInvalidSource, wantCalls: nil},
+		{name: "unparseable ref: ErrInvalidRef with no I/O", ref: "ghcr.io/acme/agents/UPPER:1", sources: acme, confirm: true,
+			wantErr: ErrInvalidRef, wantCalls: nil},
+		{name: "digest ref resolving to a different digest: ErrDigestMismatch before pull", ref: "ghcr.io/acme/agents/demo-agent@" + digestB,
+			sources: acme, pullDigest: digestA, confirm: true, wantErr: ErrDigestMismatch, wantCalls: []string{"resolve"}},
+		{name: "digest ref resolving to the same digest: installs", ref: "ghcr.io/acme/agents/demo-agent@" + digestA,
+			sources: acme, pullDigest: digestA, confirm: true, wantCalls: []string{"resolve", "pull", "confirm"},
+			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
+		{name: "confirm dialog failed: ErrConfirmFailed, not ErrCancelled", ref: unpinnedRef, sources: acme, pullDigest: digestA,
+			confirmErr: verifyBoom, wantErr: ErrConfirmFailed, wantCalls: []string{"resolve", "pull", "confirm"},
+			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
 		{name: "confirm declined: ErrCancelled", ref: unpinnedRef, sources: acme, pullDigest: digestA, confirm: false,
 			wantErr: ErrCancelled, wantCalls: []string{"resolve", "pull", "confirm"},
 			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
@@ -136,7 +151,7 @@ func TestPrepare(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakes{raw: raw, pullDigest: tc.pullDigest, confirm: tc.confirm, verifyErr: tc.verifyErr,
-				resolveErr: tc.resolveErr, pullErr: tc.pullErr}
+				resolveErr: tc.resolveErr, pullErr: tc.pullErr, confirmErr: tc.confirmErr}
 			deps := f.deps(tc.sources)
 			if tc.breakDeps != nil {
 				tc.breakDeps(&deps)
@@ -147,6 +162,9 @@ func TestPrepare(t *testing.T) {
 			switch {
 			case tc.wantErr != nil:
 				require.ErrorIs(t, err, tc.wantErr)
+				if tc.wantErr != ErrCancelled {
+					assert.NotErrorIs(t, err, ErrCancelled, "only a user decline is a cancel")
+				}
 				assert.Contains(t, err.Error(), tc.ref)
 				assert.Nil(t, got)
 			case tc.wantAnyErr != nil:

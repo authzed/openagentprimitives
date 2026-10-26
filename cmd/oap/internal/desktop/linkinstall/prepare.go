@@ -13,6 +13,8 @@ import (
 	"strings"
 	"unicode"
 
+	"oras.land/oras-go/v2/registry"
+
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop"
 	"github.com/authzed/openagentprimitives/pkg/platform/oap"
 	"github.com/authzed/openagentprimitives/pkg/platform/oap/oci"
@@ -24,8 +26,19 @@ var (
 	ErrNotAllowed = errors.New("ref is not under an allowed install source")
 	// ErrCancelled means the user declined the confirmation dialog.
 	ErrCancelled = errors.New("install cancelled by user")
-	// ErrDigestMismatch means the pulled content is not the verified/resolved digest.
+	// ErrDigestMismatch means the pulled content is not the verified/resolved
+	// digest, or a ref that names a digest resolved to a different one.
 	ErrDigestMismatch = errors.New("pulled digest differs from the verified digest")
+	// ErrInvalidSource means a configured install source is malformed, so
+	// the allowlist itself cannot be evaluated.
+	ErrInvalidSource = errors.New("invalid install source")
+	// ErrInvalidRef means the link's ref is not a usable OCI reference.
+	ErrInvalidRef = errors.New("invalid OCI reference")
+	// ErrTrustedKey means the embedded signing key could not be loaded.
+	ErrTrustedKey = errors.New("trusted signing key unavailable")
+	// ErrConfirmFailed means the approval dialog could not be shown; nothing
+	// was approved, but the user did not decline either.
+	ErrConfirmFailed = errors.New("install approval dialog failed")
 )
 
 // Prompt is what the user is asked to approve.
@@ -42,7 +55,9 @@ type Deps struct {
 	Resolve func(ctx context.Context, ref string) (string, error)
 	Verify  func(ctx context.Context, ref string, pub crypto.PublicKey) (string, error)
 	Pull    func(ctx context.Context, pinnedRef string) ([]byte, string, error)
-	Confirm func(Prompt) bool
+	// Confirm asks the user to approve p. A non-nil error means the dialog
+	// itself failed (approved is then ignored); it is not a decline.
+	Confirm func(Prompt) (approved bool, err error)
 }
 
 // Prepare fetches and gets approval for ref, returning the approved bundle
@@ -51,9 +66,16 @@ func Prepare(ctx context.Context, ref string, d Deps) ([]byte, Prompt, error) {
 	if d.Resolve == nil || d.Verify == nil || d.Pull == nil || d.Confirm == nil {
 		return nil, Prompt{}, fmt.Errorf("install %q: misconfigured dependencies (nil Resolve/Verify/Pull/Confirm)", ref)
 	}
+	// Validate every source first, so a remaining AllowedSource error is
+	// about the ref and each failure can be reported as what it is.
+	for _, src := range d.Sources {
+		if err := oci.ValidatePrefix(src.Prefix); err != nil {
+			return nil, Prompt{}, fmt.Errorf("install source check for %q: %w: %w", ref, ErrInvalidSource, err)
+		}
+	}
 	_, ok, err := desktop.AllowedSource(d.Sources, ref)
 	if err != nil {
-		return nil, Prompt{}, fmt.Errorf("install source check for %q: %w", ref, err)
+		return nil, Prompt{}, fmt.Errorf("install source check for %q: %w: %w", ref, ErrInvalidRef, err)
 	}
 	if !ok {
 		return nil, Prompt{}, fmt.Errorf("%q: %w", ref, ErrNotAllowed)
@@ -62,7 +84,7 @@ func Prepare(ctx context.Context, ref string, d Deps) ([]byte, Prompt, error) {
 	// Any error from RequiredKey is a refusal, even if it also reported pinned.
 	pub, pinned, err := trustedkeys.RequiredKey(ref)
 	if err != nil {
-		return nil, Prompt{}, fmt.Errorf("trusted key lookup for %q: %w", ref, err)
+		return nil, Prompt{}, fmt.Errorf("trusted key lookup for %q: %w: %w", ref, ErrTrustedKey, err)
 	}
 
 	var digest string
@@ -76,6 +98,12 @@ func Prepare(ctx context.Context, ref string, d Deps) ([]byte, Prompt, error) {
 		if err != nil {
 			return nil, Prompt{}, fmt.Errorf("resolve %q: %w", ref, err)
 		}
+	}
+
+	// A ref that already names a digest must resolve to exactly that digest;
+	// otherwise the bytes approved would not be the bytes the link named.
+	if named, ok := namedDigest(ref); ok && named != digest {
+		return nil, Prompt{}, fmt.Errorf("%q: names %s but resolved to %s: %w", ref, named, digest, ErrDigestMismatch)
 	}
 
 	pinnedRef, err := oci.PinnedRef(ref, digest)
@@ -95,10 +123,28 @@ func Prepare(ctx context.Context, ref string, d Deps) ([]byte, Prompt, error) {
 	}
 
 	p := Prompt{Ref: ref, Digest: digest, Verified: pinned, Bundle: bundle}
-	if !d.Confirm(p) {
+	approved, err := d.Confirm(p)
+	if err != nil {
+		return nil, Prompt{}, fmt.Errorf("%q: %w: %w", ref, ErrConfirmFailed, err)
+	}
+	if !approved {
 		return nil, Prompt{}, fmt.Errorf("%q: %w", ref, ErrCancelled)
 	}
 	return raw, p, nil
+}
+
+// namedDigest returns the digest ref is addressed by, if it is addressed by
+// one ("host/repo@sha256:…") rather than a tag.
+func namedDigest(ref string) (string, bool) {
+	parsed, err := registry.ParseReference(ref)
+	if err != nil {
+		return "", false
+	}
+	d, err := parsed.Digest()
+	if err != nil {
+		return "", false
+	}
+	return d.String(), true
 }
 
 // DialogText renders the confirmation dialog. Source, digest and signature
