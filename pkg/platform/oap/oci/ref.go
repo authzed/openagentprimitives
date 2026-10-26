@@ -224,6 +224,12 @@ func splitPrefix(prefix string) (host, repoPath string, err error) {
 			return bad("empty path segment")
 		}
 	}
+	// RefHasPrefix compares hosts case-exactly (and the key pin does the
+	// same), so an uppercase entry would admit a link the pin treats as
+	// unpinned. Refuse it rather than normalize.
+	if host != strings.ToLower(host) {
+		return bad("registry host must be lowercase")
+	}
 	// The prefix plus a probe repository name must parse as a real reference,
 	// so host and path characters are held to the same rules as refs.
 	parsed, perr := registry.ParseReference(prefix + "x")
