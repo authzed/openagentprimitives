@@ -45,6 +45,10 @@ oap agent lint    examples/reviewbot
 oap agent install examples/reviewbot --namespace default
 ```
 
+Or install the published, signed image straight into [OAP Desktop](/docs/install-desktop#install-links):
+
+<InstallInDesktop ref="ghcr.io/authzed/openagentprimitives/agents/demo-reviewbot:latest" />
+
 The install prompts for reviewbot's own Anthropic API key when its Secret is
 absent, and runs the GitHub channel wizard. See the bundle's README for the
 prerequisites, including the Claude toolchain image its sandbox runs.
