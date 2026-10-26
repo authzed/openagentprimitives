@@ -26,7 +26,8 @@ func newAgentSignCmd(_ *apcmd.Globals) *cobra.Command {
 		Long: "Sign a pushed .oap agent container in its OCI registry.\n\n" +
 			"<ref> is an OCI reference (\"host[:port]/name[:tag]\") that must already\n" +
 			"have been pushed (see `oap agent push`). --key is a PEM-encoded ECDSA\n" +
-			"private key (PKCS#8 or SEC1).",
+			"private key (PKCS#8 or SEC1)." +
+			"\n\n" + registryAuthHelp,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]

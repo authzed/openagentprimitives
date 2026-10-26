@@ -36,7 +36,8 @@ func newAgentPullCmd(_ *apcmd.Globals) *cobra.Command {
 			"<ref> is an OCI reference (\"host[:port]/name[:tag]\").\n\n" +
 			"--verify checks ref's cosign-format signature against --key before\n" +
 			"writing anything locally (see `oap agent verify`); a failed check writes\n" +
-			"nothing and exits non-zero.",
+			"nothing and exits non-zero." +
+			"\n\n" + registryAuthHelp,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]

@@ -18,6 +18,12 @@ const (
 	registryPasswordEnv = "OAP_REGISTRY_PASSWORD"
 )
 
+// registryAuthHelp is appended to the Long help of every registry-touching
+// agent verb so the env-var credential contract is discoverable from --help.
+const registryAuthHelp = "Registry credentials are read from " + registryUsernameEnv + " and\n" +
+	registryPasswordEnv + " (set both, or neither for anonymous access). They\n" +
+	"are only ever sent to <ref>'s own registry host."
+
 // registryOptions builds the oci.Options every registry-touching agent verb
 // uses. Neither env var set means anonymous access; exactly one set is an
 // error rather than a silent anonymous fallback, since a half-configured

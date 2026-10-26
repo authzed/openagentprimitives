@@ -62,6 +62,10 @@ installs nothing and exits non-zero. --values/--set answer the bundle's
 install questions non-interactively; any question still unanswered when
 stdin isn't a TTY is a hard error naming it.
 
+Registry credentials are read from OAP_REGISTRY_USERNAME and
+OAP_REGISTRY_PASSWORD (set both, or neither for anonymous access). They
+are only ever sent to &lt;ref&gt;'s own registry host.
+
 Flags:
 
 ```text
@@ -153,6 +157,10 @@ Pull a .oap agent container from an OCI registry.
 writing anything locally (see `oap agent verify`); a failed check writes
 nothing and exits non-zero.
 
+Registry credentials are read from OAP_REGISTRY_USERNAME and
+OAP_REGISTRY_PASSWORD (set both, or neither for anonymous access). They
+are only ever sent to &lt;ref&gt;'s own registry host.
+
 Flags:
 
 ```text
@@ -168,6 +176,10 @@ Push a packed .oap agent container to an OCI registry.
 
 &lt;path&gt; is the path to a .oap produced by `oap agent package` ('-' reads it from stdin).
 &lt;ref&gt; is an OCI reference ("host[:port]/name[:tag]").
+
+Registry credentials are read from OAP_REGISTRY_USERNAME and
+OAP_REGISTRY_PASSWORD (set both, or neither for anonymous access). They
+are only ever sent to &lt;ref&gt;'s own registry host.
 
 Flags:
 
@@ -271,6 +283,10 @@ Sign a pushed .oap agent container in its OCI registry.
 have been pushed (see `oap agent push`). --key is a PEM-encoded ECDSA
 private key (PKCS#8 or SEC1).
 
+Registry credentials are read from OAP_REGISTRY_USERNAME and
+OAP_REGISTRY_PASSWORD (set both, or neither for anonymous access). They
+are only ever sent to &lt;ref&gt;'s own registry host.
+
 Flags:
 
 ```text
@@ -294,6 +310,10 @@ Verify a pushed .oap agent container's signature in its OCI registry.
 PEM-encoded ECDSA public key (PKIX/SubjectPublicKeyInfo) matching the
 private key `oap agent sign` used. Exits non-zero if no valid signature
 is found.
+
+Registry credentials are read from OAP_REGISTRY_USERNAME and
+OAP_REGISTRY_PASSWORD (set both, or neither for anonymous access). They
+are only ever sent to &lt;ref&gt;'s own registry host.
 
 Flags:
 
