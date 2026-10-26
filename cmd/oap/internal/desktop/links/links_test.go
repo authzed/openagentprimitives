@@ -31,6 +31,8 @@ func TestParse(t *testing.T) {
 		{name: "v=2: unsupported", raw: "oap://install/agent?v=2&ref=x", wantErr: ErrUnsupported},
 		{name: "unknown key: unsupported", raw: "oap://open/session/x?v=1", wantErr: ErrUnsupported},
 		{name: "uppercase key is case-sensitive: unsupported", raw: "oap://INSTALL/agent?v=1&ref=x", wantErr: ErrUnsupported},
+		{name: "v=2 without ref: unsupported (version checked before params)", raw: "oap://install/agent?v=2", wantErr: ErrUnsupported},
+		{name: "v=0 on unknown key: invalid", raw: "oap://open/x?v=0", wantErr: ErrInvalid},
 		{name: "ref missing: invalid", raw: "oap://install/agent?v=1", wantErr: ErrInvalid},
 		{name: "ref empty: invalid", raw: "oap://install/agent?v=1&ref=", wantErr: ErrInvalid},
 		{name: "ref twice: invalid", raw: "oap://install/agent?v=1&ref=a&ref=b", wantErr: ErrInvalid},
@@ -63,11 +65,16 @@ func TestParseErrorsAreDistinct(t *testing.T) {
 }
 
 func TestKeys(t *testing.T) {
-	assert.Contains(t, Keys(), KeyInstallAgent)
-	keys := Keys()
-	for i := 1; i < len(keys); i++ {
-		assert.Less(t, keys[i-1], keys[i], "Keys must be sorted")
+	added := []string{"zzz/x", "aaa/y"}
+	t.Cleanup(func() {
+		for _, k := range added {
+			delete(registry, k)
+		}
+	})
+	for _, k := range added {
+		Register(Spec{Key: k, MaxVersion: 1})
 	}
+	assert.Equal(t, []string{"aaa/y", KeyInstallAgent, "zzz/x"}, Keys())
 }
 
 func TestRegisterPanicsOnDuplicate(t *testing.T) {
