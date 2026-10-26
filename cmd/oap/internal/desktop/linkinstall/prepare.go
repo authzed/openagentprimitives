@@ -120,9 +120,9 @@ func DialogText(p Prompt) (title, message string) {
 		if name == "" {
 			name = a.Name
 		}
-		fmt.Fprintf(&b, "%s v%s", sanitize(name, maxNameRunes), sanitize(a.Version, maxNameRunes))
+		fmt.Fprintf(&b, "Agent: %s v%s", sanitize(name, maxNameRunes), sanitize(a.Version, maxNameRunes))
 		if d := sanitize(a.Description, maxDescRunes); d != "" {
-			fmt.Fprintf(&b, "\n  %s", d)
+			fmt.Fprintf(&b, "\nDescription: %s", d)
 		}
 	}
 	return "Install agent?", b.String()
