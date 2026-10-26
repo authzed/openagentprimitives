@@ -30,6 +30,23 @@ func TestRequiredKey(t *testing.T) {
 		assert.False(t, pinned)
 		assert.Nil(t, pub)
 	})
+	for _, ref := range []string{
+		"ghcr.io:443/authzed/openagentprimitives/agents/x:1",
+		"ghcr.io./authzed/openagentprimitives/agents/x:1",
+		"ghcr.io.:443/authzed/openagentprimitives/agents/x:1",
+		"GHCR.IO/authzed/openagentprimitives/agents/x:1",
+	} {
+		t.Run("alternate host spelling "+ref+": still pinned", func(t *testing.T) {
+			pub, pinned, err := RequiredKey(ref)
+			require.NoError(t, err)
+			assert.True(t, pinned, "a spelling the registry client dials as ghcr.io must never escape the pin")
+			assert.NotNil(t, pub)
+		})
+	}
+	t.Run("host with no canonical form: error, never silently unpinned", func(t *testing.T) {
+		_, _, err := RequiredKey("ghcr.io../authzed/openagentprimitives/agents/x:1")
+		require.Error(t, err)
+	})
 	t.Run("unparseable ref: error", func(t *testing.T) {
 		_, pinned, err := RequiredKey("::bad")
 		require.Error(t, err)
