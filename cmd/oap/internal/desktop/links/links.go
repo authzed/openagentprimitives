@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -56,7 +55,7 @@ func Keys() []string {
 	for k := range registry {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }
 
