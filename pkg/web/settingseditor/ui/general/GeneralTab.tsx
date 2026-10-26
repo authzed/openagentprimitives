@@ -39,6 +39,10 @@ export function GeneralTab({ apiBase, running, kubectlCurrent }: GeneralTabProps
   const [newPassword, setNewPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
 
+  const [sources, setSources] = React.useState<string[]>([]);
+  const [sourcesDirty, setSourcesDirty] = React.useState(false);
+  const [newSource, setNewSource] = React.useState("");
+
   const [formError, setFormError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [outcomes, setOutcomes] = React.useState<FieldOutcome[]>([]);
@@ -54,6 +58,7 @@ export function GeneralTab({ apiBase, running, kubectlCurrent }: GeneralTabProps
         if (closed) return;
         setConfig(c);
         setHealthEnabled(c.healthNotifications);
+        setSources(c.installSources);
       })
       .catch((e: Error) => {
         if (!closed) setLoadError(e.message);
@@ -93,6 +98,8 @@ export function GeneralTab({ apiBase, running, kubectlCurrent }: GeneralTabProps
         clearNgrok: false,
         healthNotifications: healthEnabled,
         password: changingPassword ? { current: currentPassword, new: newPassword } : undefined,
+        // Only sent when this tab edited the list; absent means keep.
+        installSources: sourcesDirty ? sources : undefined,
       });
       setOutcomes(resp.outcomes);
       setCurrentPassword("");
@@ -100,6 +107,48 @@ export function GeneralTab({ apiBase, running, kubectlCurrent }: GeneralTabProps
       setConfirmPassword("");
       const refreshed = await getConfig(apiBase);
       setConfig(refreshed);
+      setSources(refreshed.installSources);
+      setSourcesDirty(false);
+    } catch (e) {
+      setFormError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleAddSource() {
+    const prefix = newSource.trim();
+    if (prefix === "") return;
+    if (!sources.includes(prefix)) setSources([...sources, prefix]);
+    setSourcesDirty(true);
+    setNewSource("");
+  }
+
+  function handleRemoveSource(prefix: string) {
+    setSources(sources.filter((p) => p !== prefix));
+    setSourcesDirty(true);
+  }
+
+  // Reset is its own immediate action: the server computes the new list
+  // (default + current entries) from what is stored, so nothing local is sent.
+  async function handleResetSources() {
+    setFormError(null);
+    setOutcomes([]);
+    setSaving(true);
+    try {
+      const latest = await getConfig(apiBase);
+      const resp = await putConfig(apiBase, {
+        model: { provider: latest.model.provider, apiKey: "", name: latest.model.name },
+        ngrokAuthToken: "",
+        clearNgrok: false,
+        healthNotifications: latest.healthNotifications,
+        resetInstallSources: true,
+      });
+      setOutcomes(resp.outcomes);
+      const refreshed = await getConfig(apiBase);
+      setConfig(refreshed);
+      setSources(refreshed.installSources);
+      setSourcesDirty(false);
     } catch (e) {
       setFormError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
     } finally {
@@ -180,6 +229,49 @@ export function GeneralTab({ apiBase, running, kubectlCurrent }: GeneralTabProps
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
           />
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h3 className="text-sm font-medium">Install links</h3>
+        <p className="text-xs text-muted-foreground">
+          oap:// links may install agents only from these registry prefixes.
+        </p>
+        {sources.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Install links are turned off</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {sources.map((prefix) => (
+              <li key={prefix} className="flex items-center gap-2">
+                <code className="text-sm">{prefix}</code>
+                {config?.pinnedInstallPrefix === prefix && (
+                  <span className="text-xs text-muted-foreground">signature-checked</span>
+                )}
+                <Button variant="outline" size="sm" onClick={() => handleRemoveSource(prefix)}>
+                  Remove
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="general-new-install-source">New install prefix</Label>
+          <div className="flex gap-2">
+            <Input
+              id="general-new-install-source"
+              value={newSource}
+              placeholder="ghcr.io/acme/agents/"
+              onChange={(e) => setNewSource(e.target.value)}
+            />
+            <Button variant="outline" onClick={handleAddSource} disabled={newSource.trim() === ""}>
+              Add
+            </Button>
+          </div>
+        </div>
+        <div>
+          <Button variant="outline" onClick={() => void handleResetSources()} disabled={saving || !config}>
+            Reset to default
+          </Button>
         </div>
       </section>
 
