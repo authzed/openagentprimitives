@@ -394,6 +394,49 @@ func TestConcurrentOccurrencesReserveCapacityAtomically(t *testing.T) {
 	}
 }
 
+// TestOccurrenceReclaimAuditsOwnerChangesOnly pins that the dispatcher's
+// lease-period re-claim of its own occurrence advances the fence without
+// appending to the audit log, while a takeover by another worker is audited.
+func TestOccurrenceReclaimAuditsOwnerChangesOnly(t *testing.T) {
+	ctx := context.Background()
+	client, err := memsqlite.NewClient(filepath.Join(t.TempDir(), "reclaim.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, client.Close()) })
+	store := goalsqlite.New(client.DB())
+	require.NoError(t, store.Migrate(ctx))
+	s, _ := executionService(store)
+	g := approveExecution(t, s, actor(), "reclaim")
+	o, err := store.Schedule(ctx, g)
+	require.NoError(t, err)
+	claimedActions := func() []string {
+		t.Helper()
+		events, err := store.Pending(ctx, 100)
+		require.NoError(t, err)
+		var actions []string
+		for _, e := range events {
+			if e.Occurrence != nil && e.Action == "execution_claimed" {
+				actions = append(actions, e.Occurrence.Worker)
+			}
+		}
+		return actions
+	}
+	now := executionNow.Add(2 * time.Minute)
+	claim := func(worker string) goals.Occurrence {
+		t.Helper()
+		claimed, err := store.Claim(ctx, goals.ClaimRequest{ID: o.ID, Worker: worker, Now: now, Lease: time.Second, OwnerLimit: 1, ClassLimit: 1})
+		require.NoError(t, err)
+		now = now.Add(2 * time.Second)
+		return claimed
+	}
+	first := claim("worker")
+	again := claim("worker")
+	again = claim("worker")
+	assert.Equal(t, first.Fence+2, again.Fence, "every re-claim still advances the fence")
+	assert.Equal(t, []string{"worker"}, claimedActions(), "re-claims by the holder are not audited")
+	claim("takeover")
+	assert.Equal(t, []string{"worker", "takeover"}, claimedActions(), "a change of worker is audited")
+}
+
 func TestOccurrenceAuditIsAtomicAndRecoverable(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "audit.db")

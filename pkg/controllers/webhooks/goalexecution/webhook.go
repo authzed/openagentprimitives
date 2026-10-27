@@ -5,6 +5,7 @@ import (
 	"context"
 	"reflect"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	admissionv1 "k8s.io/api/admission/v1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -29,6 +30,9 @@ func (h *Handler) Handle(_ context.Context, r admission.Request) admission.Respo
 		}
 	}
 	if old.Spec.GoalExecution == nil && sess.Spec.GoalExecution == nil {
+		if r.Operation == admissionv1.Create && goals.IsSessionName(sess.Name) {
+			return admission.Denied("session names of the form goal-<digest> are reserved for goal executions")
+		}
 		return admission.Allowed("ordinary session")
 	}
 	if r.Operation == admissionv1.Create {

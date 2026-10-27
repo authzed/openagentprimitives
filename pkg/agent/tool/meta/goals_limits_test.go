@@ -12,7 +12,7 @@ import (
 )
 
 func TestGoalLimitsDiscoveryAndOmittedBounds(t *testing.T) {
-	policy := &goals.ExecutionPolicy{DefaultBounds: goals.ExecutionBounds{180, 10, 10000, 90}, MaxBounds: goals.ExecutionBounds{600, 50, 40000, 600}, ServerTime: time.Now().UTC()}
+	policy := &goals.ExecutionPolicy{DefaultBounds: goals.ExecutionBounds{DurationSeconds: 180, Turns: 10, Tokens: 10000, ApprovalSeconds: 90}, MaxBounds: goals.ExecutionBounds{DurationSeconds: 600, Turns: 50, Tokens: 40000, ApprovalSeconds: 600}, ServerTime: time.Now().UTC()}
 	list := &goalTool{op: "list", call: func(context.Context, goals.Request) (goals.Response, error) {
 		return goals.Response{ExecutionPolicy: policy}, nil
 	}}

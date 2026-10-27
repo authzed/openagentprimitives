@@ -31622,7 +31622,8 @@ webhooks:
   failurePolicy: Fail
   matchConditions:
   - expression: (object != null && has(object.spec.goalExecution)) || (oldObject !=
-      null && has(oldObject.spec.goalExecution))
+      null && has(oldObject.spec.goalExecution)) || (request.operation == 'CREATE'
+      && object != null && object.metadata.name.matches('^goal-[0-9a-f]{32}$'))
     name: goal-session
   name: goalexecution.agentprimitives.authzed.com
   rules:

@@ -133,6 +133,12 @@ type Expired struct{ baseEvent }
 // finished, not parked, and must never be woken back into a new turn.
 type GoalRunConcluded struct{ baseEvent }
 
+// GoalRunFailed ends a goal execution session whose run the goal dispatcher
+// has retained as failed: the runner exited without a reported result (or was
+// stopped), and the session is kept only for inspection. Terminal, so it is
+// anchored and its pods are reaped, and never woken into a new turn.
+type GoalRunFailed struct{ baseEvent }
+
 // Sleep scales an Idle channel session's compute to zero: the operator reaps all
 // its pods but keeps the AgentSession Idle and wakeable. Only Idle sleeps; the
 // fold is a no-op on any other phase (a stale sweep). Analogous to ArchiveSweep.

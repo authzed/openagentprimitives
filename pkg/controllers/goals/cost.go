@@ -24,11 +24,11 @@ func (d *Dispatcher) captureCost(ctx context.Context, o domain.Occurrence, sess 
 		c.Reason = "estimate_unavailable"
 		if c.Estimate != nil {
 			if terminal {
-				reason, err := d.runnerOutcome(ctx, sess)
+				runner, err := d.runnerState(ctx, sess)
 				if err != nil {
 					return o, err
 				}
-				terminal = reason == domain.RunSessionEnded
+				terminal = runner == runnerExited
 			}
 			c.Final = terminal
 			c.Reason = "runner_active_or_interrupted"

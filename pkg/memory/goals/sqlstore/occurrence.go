@@ -216,7 +216,7 @@ func (s *Store) Schedule(ctx context.Context, g goals.Goal) (goals.Occurrence, e
 			}
 			h := sha256.Sum256([]byte(seed))
 			id := "occ-" + hex.EncodeToString(h[:])
-			res, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_occurrences(id,domain,owner_key,class_key,goal_id,goal_revision,consent_digest,due_at,expires_at,state,session_name) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`), id, g.Domain.ID(), owner, class, g.ID, g.Revision, current.Execution.Digest, w.DueAt.UnixNano(), w.ExpiresAt.UnixNano(), string(goals.OccurrenceQueued), "goal-"+hex.EncodeToString(h[:16]))
+			res, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_occurrences(id,domain,owner_key,class_key,goal_id,goal_revision,consent_digest,due_at,expires_at,state,session_name) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`), id, g.Domain.ID(), owner, class, g.ID, g.Revision, current.Execution.Digest, w.DueAt.UnixNano(), w.ExpiresAt.UnixNano(), string(goals.OccurrenceQueued), goals.SessionName(h[:16]))
 			if err != nil {
 				return first, err
 			}
@@ -330,6 +330,12 @@ func (s *Store) Claim(ctx context.Context, r goals.ClaimRequest) (goals.Occurren
 		if err != nil {
 			return claimed, err
 		}
+		// The dispatcher re-claims every occurrence it holds each time the lease
+		// lapses; that is its polling cadence, not a change of owner. Auditing it
+		// appended an event every lease period for the whole life of every run.
+		if o.State != goals.OccurrenceQueued && o.Worker == r.Worker {
+			return claimed, nil
+		}
 		return claimed, s.auditOccurrence(ctx, tx, claimed, "execution_claimed", r.Now)
 	})
 }
@@ -388,7 +394,7 @@ func (s *Store) Finish(ctx context.Context, o goals.Occurrence, state goals.Occu
 		if current.SessionUID != o.SessionUID {
 			return goals.ErrConflict
 		}
-		if state == goals.OccurrenceRetained && (current.Outcome == nil || current.Outcome.Reason != goals.RunSessionEnded || current.SessionUID == "") {
+		if state == goals.OccurrenceRetained && (current.Outcome == nil || current.SessionUID == "") {
 			return goals.ErrInvalid
 		}
 		if current.SessionUID == "" && state != goals.OccurrenceUnknown && state != goals.OccurrenceCancelled {

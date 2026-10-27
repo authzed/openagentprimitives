@@ -15,6 +15,7 @@ import (
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/sessionevents"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
@@ -124,21 +125,29 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 	if lookup != nil && !apierrors.IsNotFound(lookup) {
 		return lookup
 	}
+	// The session name is deterministic, so a session this occurrence did not
+	// create can hold it: one created ahead of time under that name, or a new
+	// object recreated under the name of the one it attached. It is never
+	// observed, stopped or deleted on this occurrence's behalf. To the run it is
+	// the same as no session at all.
+	exists := lookup == nil
+	foreign := exists && !ownsSession(o, g, &sess)
+	if foreign {
+		exists = false
+		sess = v1.AgentSession{}
+	}
 	// A persisted stop observation wins after a crash, including after the
 	// AgentSession has disappeared. Never reinterpret cleanup as a lost session.
 	if o.Outcome != nil {
 		var costErr error
-		o, costErr = d.captureCost(ctx, o, &sess, lookup == nil, o.Outcome.Reason == domain.RunSessionEnded || o.Outcome.Reason == domain.RunSessionFailed)
-		if o.Outcome.Reason == domain.RunSessionMissing {
-			_, err := d.Store.Finish(ctx, o, domain.OccurrenceUnknown, d.now())
-			return errors.Join(costErr, err)
-		}
-		// Keep the completed conversation inspectable for its original bounded
-		// window. Its observed outcome already prevents further goal actions.
-		if lookup == nil && o.Outcome.Reason == domain.RunSessionEnded && g.State == domain.Active && g.Revision == o.GoalRevision && g.Execution != nil && d.now().Before(o.ExpiresAt) && d.now().Before(sess.CreationTimestamp.Add(time.Duration(g.Execution.Terms.Bounds.DurationSeconds)*time.Second)) {
+		o, costErr = d.captureCost(ctx, o, &sess, exists, o.Outcome.Reason == domain.RunSessionEnded || o.Outcome.Reason == domain.RunSessionFailed)
+		// Keep the conversation inspectable for its original bounded window,
+		// whether the run ended or failed. Its observed outcome already prevents
+		// further goal actions.
+		if exists && (o.Outcome.Reason == domain.RunSessionEnded || o.Outcome.Reason == domain.RunSessionFailed) && g.State == domain.Active && g.Revision == o.GoalRevision && g.Execution != nil && d.now().Before(o.ExpiresAt) && d.now().Before(sess.CreationTimestamp.Add(time.Duration(g.Execution.Terms.Bounds.DurationSeconds)*time.Second)) {
 			return errors.Join(costErr, d.retainCompleted(ctx, o, &sess))
 		}
-		return errors.Join(costErr, d.stop(ctx, o, &sess, lookup == nil))
+		return errors.Join(costErr, d.stop(ctx, o, &sess, exists))
 	}
 	reason := domain.RunReason("")
 	switch {
@@ -160,12 +169,9 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 		}
 	}
 	if reason != "" {
-		return d.observeAndStop(ctx, o, &sess, lookup == nil, reason)
+		return d.observeAndStop(ctx, o, &sess, exists, reason)
 	}
-	if lookup == nil {
-		if !reflect.DeepEqual(sess.Spec.GoalExecution, ref(o)) || sess.Spec.Class != g.Domain.Class || (o.SessionUID != "" && o.SessionUID != string(sess.UID)) {
-			return fmt.Errorf("goal session identity mismatch")
-		}
+	if exists {
 		if o.SessionUID == "" {
 			o, err = d.Store.Attach(ctx, o, string(sess.UID), d.now())
 			if err != nil {
@@ -175,23 +181,33 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 		// Finishing a session never completes the goal. Goal completion remains a
 		// separate evidence-bearing decision by the human's management session.
 		if sess.Status.Phase == v1.AgentSessionPhaseSucceeded || sess.Status.Phase == v1.AgentSessionPhaseFailed {
-			reason := domain.RunSessionEnded
+			reason := exitReason(sess.Status.Phase, o)
 			if sess.Status.Phase == v1.AgentSessionPhaseFailed {
 				reason = domain.RunSessionFailed
 			}
 			return d.observeAndStop(ctx, o, &sess, true, reason)
-		}
-		if !sess.DeletionTimestamp.IsZero() {
-			return nil
 		}
 		if d.now().Sub(sess.CreationTimestamp.Time) > time.Duration(g.Execution.Terms.Bounds.DurationSeconds)*time.Second {
 			return d.observeAndStop(ctx, o, &sess, true, domain.RunDurationExpired)
 		}
 		// The runner can finish a conversation while the CR remains Idle. Read
 		// the durable pod status rather than depending on a lifecycle notification.
-		reason, err := d.runnerOutcome(ctx, &sess)
+		runner, err := d.runnerState(ctx, &sess)
 		if err != nil {
 			return err
+		}
+		reason = ""
+		switch runner {
+		case runnerCrashed:
+			reason = domain.RunInfrastructureFailed
+		case runnerExited:
+			reason = exitReason(sess.Status.Phase, o)
+		}
+		// Nothing here deletes a session before recording an outcome, so this is
+		// an external delete of a run still in progress. Record it now: once the
+		// CR is gone it would be indistinguishable from a lost session.
+		if reason == "" && !sess.DeletionTimestamp.IsZero() {
+			reason = domain.RunCancelled
 		}
 		if reason != "" {
 			return d.observeAndStop(ctx, o, &sess, true, reason)
@@ -200,19 +216,15 @@ func (d *Dispatcher) activate(ctx context.Context, o domain.Occurrence) error {
 		return err
 	}
 	// A missing known UID is an unknown result, never permission to recreate.
+	// The recorded outcome keeps that uncertainty; the reservation itself is
+	// released through stop once no runner pod remains.
 	if o.SessionUID != "" {
-		if o.Outcome == nil {
-			o, err = d.recordOutcome(ctx, o, domain.RunSessionMissing)
-			if err != nil {
-				return err
-			}
-		}
-		o, err = d.captureCost(ctx, o, &sess, false, false)
-		if err != nil {
-			return err
-		}
-		_, err = d.Store.Finish(ctx, o, domain.OccurrenceUnknown, d.now())
-		return err
+		return d.observeAndStop(ctx, o, &sess, false, domain.RunSessionMissing)
+	}
+	// Creating under a taken name can only fail, on every tick, while this
+	// occurrence holds the owner's capacity. End it instead.
+	if foreign {
+		return d.observeAndStop(ctx, o, &sess, false, domain.RunSessionNameTaken)
 	}
 	ns, name, _ := strings.Cut(g.Execution.Session, "/")
 	var source v1.AgentSession
@@ -323,6 +335,26 @@ func (d *Dispatcher) stop(ctx context.Context, o domain.Occurrence, sess *v1.Age
 				return err
 			}
 		}
+		// A hold preserves the session as evidence until a human releases it,
+		// which can take far longer than the run's bound. The outcome is already
+		// recorded. Once the runner no longer runs (a hold reaps it), release the
+		// owner's capacity by retaining the run; the release re-selects it here
+		// and cleanup proceeds.
+		hold, err := agentsession.ActiveHold(ctx, d.Reader, sess)
+		if err != nil {
+			return err
+		}
+		if hold != nil {
+			if o.State == domain.OccurrenceRetained {
+				return nil
+			}
+			runner, err := d.runnerState(ctx, sess)
+			if err != nil || runner == runnerActive {
+				return err
+			}
+			_, err = d.Store.Finish(ctx, o, domain.OccurrenceRetained, d.now())
+			return err
+		}
 		if sess.DeletionTimestamp.IsZero() {
 			uid := sess.UID
 			if err := d.Client.Delete(ctx, sess, &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil && !apierrors.IsNotFound(err) {
@@ -349,7 +381,7 @@ func (d *Dispatcher) stop(ctx context.Context, o domain.Occurrence, sess *v1.Age
 		switch o.Outcome.Reason {
 		case domain.RunSessionEnded:
 			state = domain.OccurrenceFinished
-		case domain.RunSessionFailed, domain.RunInfrastructureFailed, domain.RunDurationExpired:
+		case domain.RunSessionFailed, domain.RunInfrastructureFailed, domain.RunDurationExpired, domain.RunSessionMissing:
 			state = domain.OccurrenceFailed
 		}
 	}
@@ -366,23 +398,30 @@ func (d *Dispatcher) stop(ctx context.Context, o domain.Occurrence, sess *v1.Age
 // its terminal reconciles (chain-head anchoring, pod reap, GC) through the
 // retention window, so the reconciler routes it there instead of refusing it.
 // A session the occurrence never attached is not concluded; it gets the full
-// ValidateGoalSession refusal. retained is true only for OccurrenceRetained,
-// which the store admits solely for a RunSessionEnded outcome after every
-// runner pod succeeded: the one state in which the reconciler may itself mark
-// the session Succeeded.
-func (d *Dispatcher) GoalSessionConcluded(ctx context.Context, sess *v1.AgentSession) (concluded, retained bool, err error) {
+// ValidateGoalSession refusal. The verdict is decided only once the run is
+// OccurrenceRetained (its runner no longer runs): GoalRunSucceeded for a
+// RunSessionEnded outcome, which needs a reported result, and GoalRunFailed
+// for any other. The reconciler moves the session to that terminal phase.
+func (d *Dispatcher) GoalSessionConcluded(ctx context.Context, sess *v1.AgentSession) (concluded bool, verdict agentsession.GoalRunVerdict, err error) {
 	reference := sess.Spec.GoalExecution
 	if reference == nil {
-		return false, false, nil
+		return false, agentsession.GoalRunUndecided, nil
 	}
 	o, err := d.Store.Occurrence(ctx, reference.OccurrenceID)
 	if err != nil {
-		return false, false, err
+		return false, agentsession.GoalRunUndecided, err
 	}
 	if o.SessionUID == "" || o.SessionUID != string(sess.UID) || o.SessionName != sess.Name || o.Domain.Namespace != sess.Namespace || !reflect.DeepEqual(reference, ref(o)) {
-		return false, false, nil
+		return false, agentsession.GoalRunUndecided, nil
 	}
-	return o.Outcome != nil || o.State != domain.OccurrenceRunning, o.State == domain.OccurrenceRetained, nil
+	verdict = agentsession.GoalRunUndecided
+	if o.State == domain.OccurrenceRetained && o.Outcome != nil {
+		verdict = agentsession.GoalRunFailed
+		if o.Outcome.Reason == domain.RunSessionEnded {
+			verdict = agentsession.GoalRunSucceeded
+		}
+	}
+	return o.Outcome != nil || o.State != domain.OccurrenceRunning, verdict, nil
 }
 
 // ValidateGoalSession is called before the reconciler reads any credentials.
@@ -484,61 +523,121 @@ func (d *Dispatcher) observeAndStop(ctx context.Context, o domain.Occurrence, se
 	if err != nil {
 		return errors.Join(costErr, err)
 	}
-	if reason == domain.RunSessionEnded && exists {
+	if (reason == domain.RunSessionEnded || reason == domain.RunSessionFailed) && exists {
 		return errors.Join(costErr, d.retainCompleted(ctx, o, sess))
 	}
 	// Accounting outages must not prevent cancellation or bounded termination.
 	return errors.Join(costErr, d.stop(ctx, o, sess, exists))
 }
 
-// retainCompleted releases capacity only after all owned runner pods have
-// succeeded. A completion claim, Idle phase, or result proposal is insufficient.
-// The retained record stays fenced for cleanup and cannot authorize actions.
+// retainCompleted releases capacity once the runner container has exited and
+// keeps the session for inspection. A completion claim, Idle phase, or result
+// proposal alone is insufficient. The retained record stays fenced for cleanup
+// and cannot authorize actions.
 func (d *Dispatcher) retainCompleted(ctx context.Context, o domain.Occurrence, sess *v1.AgentSession) error {
 	if o.State == domain.OccurrenceRetained {
 		return nil
 	}
-	reason, err := d.runnerOutcome(ctx, sess)
+	runner, err := d.runnerState(ctx, sess)
 	if err != nil {
 		return err
 	}
-	if reason != domain.RunSessionEnded {
+	if runner != runnerExited {
 		return nil
 	}
 	_, err = d.Store.Finish(ctx, o, domain.OccurrenceRetained, d.now())
 	return err
 }
 
-func (d *Dispatcher) runnerOutcome(ctx context.Context, sess *v1.AgentSession) (domain.RunReason, error) {
-	var pods corev1.PodList
-	if err := d.Reader.List(ctx, &pods, client.InNamespace(sess.Namespace)); err != nil {
-		return "", err
+// exitReason classifies a run whose runner container has stopped.
+//
+// Idle and Succeeded are the phases a run ends in. Only one that reported its
+// result ended; the runner also yields Idle when a delivery is refused, when a
+// wait for input times out, and when the model stops without a tool call, and
+// the archive sweep can move that Idle on to Succeeded, so without a report
+// the run failed.
+//
+// Every other phase yields no verdict. The runner exits 0 after parking a
+// session in AwaitingRetry, AwaitingCredentials and the other waits on a
+// human: the user is shown a Retry button or a link card and the operator
+// respawns the runner when they act, so the run is not over. Held waits on a
+// human too. Running and Pending mean the operator has not yet folded the
+// runner's final phase write. The duration bound ends any of them that never
+// settles.
+func exitReason(phase string, o domain.Occurrence) domain.RunReason {
+	switch phase {
+	case v1.AgentSessionPhaseIdle, v1.AgentSessionPhaseSucceeded:
+		if o.Proposal != nil {
+			return domain.RunSessionEnded
+		}
+		return domain.RunSessionFailed
 	}
-	found := false
-	pending := false
-	for _, pod := range pods.Items {
-		owned := false
-		for _, owner := range pod.OwnerReferences {
-			if owner.UID == sess.UID && sess.UID != "" {
-				owned = true
-			}
+	return ""
+}
+
+type runnerStatus int
+
+const (
+	runnerActive runnerStatus = iota
+	runnerExited
+	runnerCrashed
+	// runnerGone: the runner pod is absent for a reason that is not an exit,
+	// such as not yet created or deleted out from under the session. It gives
+	// no verdict, but nothing is running either.
+	runnerGone
+)
+
+// runnerState reads the runner container itself. The session also owns
+// sidecar and detector pods, and in-pod sidecars share the runner's pod, so
+// neither "every owned pod" nor the runner pod's phase can say the runner is
+// done: a long-running MCP server keeps both Running after the runner exits 0.
+func (d *Dispatcher) runnerState(ctx context.Context, sess *v1.AgentSession) (runnerStatus, error) {
+	var pod corev1.Pod
+	err := d.Reader.Get(ctx, client.ObjectKey{Namespace: sess.Namespace, Name: agentsession.RunnerPodName(sess)}, &pod)
+	if apierrors.IsNotFound(err) {
+		// The sleep reaper and the terminal reaper delete the runner pod only
+		// once the session has stopped running. Any other absence (not yet
+		// created, deleted out from under it, reaped by a hold) is not an exit.
+		if sess.Status.SleptAt != nil || sess.Status.Phase == v1.AgentSessionPhaseSucceeded || sess.Status.Phase == v1.AgentSessionPhaseFailed {
+			return runnerExited, nil
 		}
-		if !owned {
-			continue
-		}
-		if pod.Status.Phase == corev1.PodFailed {
-			return domain.RunInfrastructureFailed, nil
-		}
-		if pod.Status.Phase != corev1.PodSucceeded {
-			pending = true
-			continue
-		}
-		found = true
+		return runnerGone, nil
 	}
-	if found && !pending {
-		return domain.RunSessionEnded, nil
+	if err != nil {
+		return runnerActive, err
 	}
-	return "", nil
+	if !ownedBy(&pod, sess) {
+		return runnerActive, nil
+	}
+	// The runner's own exit wins over the pod's phase: a pod evicted or reaped
+	// after the runner exited 0 can still be marked Failed, when in-pod
+	// sidecars are killed on the way out.
+	for _, c := range pod.Status.ContainerStatuses {
+		if c.Name == agentsession.RunnerContainerName && c.State.Terminated != nil && c.State.Terminated.ExitCode == 0 {
+			return runnerExited, nil
+		}
+	}
+	switch pod.Status.Phase {
+	case corev1.PodFailed:
+		return runnerCrashed, nil
+	case corev1.PodSucceeded:
+		return runnerExited, nil
+	}
+	return runnerActive, nil
+}
+
+func ownedBy(pod *corev1.Pod, sess *v1.AgentSession) bool {
+	for _, owner := range pod.OwnerReferences {
+		if owner.UID == sess.UID && sess.UID != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// ownsSession reports whether sess is the session this occurrence created.
+func ownsSession(o domain.Occurrence, g domain.Goal, sess *v1.AgentSession) bool {
+	return reflect.DeepEqual(sess.Spec.GoalExecution, ref(o)) && sess.Spec.Class == g.Domain.Class && (o.SessionUID == "" || o.SessionUID == string(sess.UID))
 }
 
 // RecordGoalResult binds the proposal to a verified root, never caller IDs.

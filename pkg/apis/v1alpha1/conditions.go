@@ -963,6 +963,7 @@ const (
 const (
 	ReasonAgentSessionAgentWorkComplete = "AgentWorkComplete" // agent_work_complete tool was called
 	ReasonAgentSessionArchived          = "Archived"          // operator archive sweep transitioned Idle â Succeeded
+	ReasonAgentSessionGoalRunFailed     = "GoalRunFailed"     // goal dispatcher retained the run as failed; operator transitioned it to Failed
 	ReasonAgentSessionGoalRunConcluded  = "GoalRunConcluded"  // goal dispatcher retained the run; operator transitioned Idle to Succeeded
 )
 

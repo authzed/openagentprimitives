@@ -39,13 +39,13 @@ var errGoalDenied = errors.New("denied")
 // activation validations, which refuse whenever deny is set.
 type stubGoalValidator struct {
 	concluded   bool
-	retained    bool
+	verdict     agentsession.GoalRunVerdict
 	deny        bool
 	validations int
 }
 
-func (s *stubGoalValidator) GoalSessionConcluded(context.Context, *spiceboxv1alpha1.AgentSession) (bool, bool, error) {
-	return s.concluded, s.retained, nil
+func (s *stubGoalValidator) GoalSessionConcluded(context.Context, *spiceboxv1alpha1.AgentSession) (bool, agentsession.GoalRunVerdict, error) {
+	return s.concluded, s.verdict, nil
 }
 
 func (s *stubGoalValidator) ValidateGoalSession(context.Context, *spiceboxv1alpha1.AgentSession) error {
@@ -153,17 +153,23 @@ func TestReconcileUnboundGoalSessionIsRefused(t *testing.T) {
 func TestReconcileConcludedGoalSessionLeftIdle(t *testing.T) {
 	cases := []struct {
 		name       string
-		retained   bool
+		verdict    agentsession.GoalRunVerdict
 		held       bool
+		parked     bool // the runner exited after AwaitingRetry instead of Idle
 		wantPhase  string
+		wantEvent  lifecyclecore.Event
 		wantAnchor bool
 	}{
-		{name: "retained: Idle → Succeeded, chain heads anchored, not wakeable", retained: true,
-			wantPhase: spiceboxv1alpha1.AgentSessionPhaseSucceeded, wantAnchor: true},
-		{name: "concluded but not retained: stays Idle for the dispatcher to delete", retained: false,
+		{name: "succeeded from Idle: Succeeded, chain heads anchored, not wakeable", verdict: agentsession.GoalRunSucceeded,
+			wantPhase: spiceboxv1alpha1.AgentSessionPhaseSucceeded, wantEvent: lifecyclecore.GoalRunConcluded{}, wantAnchor: true},
+		{name: "failed from Idle (no report): Failed/GoalRunFailed, chain heads anchored", verdict: agentsession.GoalRunFailed,
+			wantPhase: spiceboxv1alpha1.AgentSessionPhaseFailed, wantEvent: lifecyclecore.GoalRunFailed{}, wantAnchor: true},
+		{name: "succeeded verdict but parked in AwaitingRetry: Failed, never Succeeded", verdict: agentsession.GoalRunSucceeded, parked: true,
+			wantPhase: spiceboxv1alpha1.AgentSessionPhaseFailed, wantEvent: lifecyclecore.GoalRunFailed{}, wantAnchor: true},
+		{name: "undecided: stays Idle for the dispatcher to decide", verdict: agentsession.GoalRunUndecided,
 			wantPhase: spiceboxv1alpha1.AgentSessionPhaseIdle},
-		{name: "retained but held: stays Idle, evidence outranks cleanup", retained: true, held: true,
-			wantPhase: spiceboxv1alpha1.AgentSessionPhaseIdle},
+		{name: "succeeded but held: Held and contained, not concluded; evidence outranks cleanup", verdict: agentsession.GoalRunSucceeded, held: true,
+			wantPhase: spiceboxv1alpha1.AgentSessionPhaseHeld},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -185,15 +191,18 @@ func TestReconcileConcludedGoalSessionLeftIdle(t *testing.T) {
 			require.NoError(t, env.Client.Create(ctx, goalSession(name, ac.Name)), "create AgentSession")
 			reconcileToWork(t, ctx, r, name)
 
-			// The runner yields Idle and exits; the dispatcher records the outcome.
+			// The runner yields and exits; the dispatcher records the outcome.
 			key := types.NamespacedName{Namespace: "default", Name: name}
 			var sess spiceboxv1alpha1.AgentSession
 			require.NoError(t, env.Client.Get(ctx, key, &sess))
 			seedLifecycleEvent(t, mem, sess.Namespace, sess.Name, string(sess.UID),
 				1, channelevents.SeqBlockEnd, lifecyclecore.IdleYield{})
 			sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseIdle
-			require.NoError(t, env.Client.Status().Update(ctx, &sess), "mark session Idle")
-			goals.concluded, goals.retained, goals.deny = true, tc.retained, true
+			if tc.parked {
+				sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseAwaitingRetry
+			}
+			require.NoError(t, env.Client.Status().Update(ctx, &sess), "mark the phase the runner left")
+			goals.concluded, goals.verdict, goals.deny = true, tc.verdict, true
 			if tc.held {
 				require.NoError(t, env.Client.Create(ctx, &spiceboxv1alpha1.SessionHold{
 					ObjectMeta: metav1.ObjectMeta{Name: name + "-hold", Namespace: "default"},
@@ -210,6 +219,15 @@ func TestReconcileConcludedGoalSessionLeftIdle(t *testing.T) {
 				require.NoError(t, err, "reconcile of a concluded goal session must succeed")
 			}
 
+			if tc.held {
+				var hold spiceboxv1alpha1.SessionHold
+				require.NoError(t, env.Client.Get(ctx, types.NamespacedName{Namespace: "default", Name: name + "-hold"}, &hold))
+				assert.NotNil(t, hold.Status.TrippedAt, "the hold on a concluded goal session is processed, not skipped")
+				var held spiceboxv1alpha1.AgentSession
+				require.NoError(t, env.Client.Get(ctx, key, &held))
+				err := env.Client.Get(ctx, types.NamespacedName{Namespace: "default", Name: agentsession.RunnerPodName(&held)}, &corev1.Pod{})
+				assert.True(t, apierrors.IsNotFound(err), "the hold reaps the runner, so the dispatcher can release capacity; got %v", err)
+			}
 			var got spiceboxv1alpha1.AgentSession
 			require.NoError(t, env.Client.Get(ctx, key, &got))
 			assert.Equal(t, tc.wantPhase, got.Status.Phase)
@@ -219,19 +237,19 @@ func TestReconcileConcludedGoalSessionLeftIdle(t *testing.T) {
 				return
 			}
 			assert.Equal(t, map[string]string{"session:default/" + name: "2:dddd"}, got.Status.AuditChainHeads,
-				"chain heads anchored for the run the runner left Idle")
+				"chain heads anchored for the concluded run")
 			assert.NotNil(t, got.Status.FinishedAt)
-			assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseSucceeded, foldPhase(t, mem, sess.Namespace, sess.Name),
-				"the signed lifecycle log folds to Succeeded")
+			assert.Equal(t, tc.wantPhase, foldPhase(t, mem, sess.Namespace, sess.Name),
+				"the signed lifecycle log folds to the same terminal phase")
 			events, err := lifecyclekind.Events(ctx, mem, lifecycleScopeFor(sess.Namespace, sess.Name))
 			require.NoError(t, err)
-			concludedEvents := 0
+			recorded := 0
 			for _, ev := range events {
-				if _, ok := ev.(lifecyclecore.GoalRunConcluded); ok {
-					concludedEvents++
+				if fmt.Sprintf("%T", ev) == fmt.Sprintf("%T", tc.wantEvent) {
+					recorded++
 				}
 			}
-			assert.Equal(t, 1, concludedEvents, "GoalRunConcluded recorded once across reconciles")
+			assert.Equal(t, 1, recorded, "%T recorded once across reconciles", tc.wantEvent)
 		})
 	}
 }

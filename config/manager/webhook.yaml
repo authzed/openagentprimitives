@@ -355,7 +355,9 @@ webhooks:
     failurePolicy: Fail
     matchConditions:
       - name: goal-session
-        expression: "(object != null && has(object.spec.goalExecution)) || (oldObject != null && has(oldObject.spec.goalExecution))"
+        # The name clause routes ordinary creates under a reserved goal session
+        # name to the handler, which refuses them; it must match goals.IsSessionName.
+        expression: "(object != null && has(object.spec.goalExecution)) || (oldObject != null && has(oldObject.spec.goalExecution)) || (request.operation == 'CREATE' && object != null && object.metadata.name.matches('^goal-[0-9a-f]{32}$'))"
     clientConfig:
       caBundle: ""
       service:

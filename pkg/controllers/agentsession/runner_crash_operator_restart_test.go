@@ -36,7 +36,7 @@ func crashedRunnerPod(t *testing.T, msg string, finishedAt time.Time) *corev1.Po
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-session-runner", Namespace: "default"},
 		Status: corev1.PodStatus{
 			ContainerStatuses: []corev1.ContainerStatus{{
-				Name:         runnerContainerName,
+				Name:         RunnerContainerName,
 				Ready:        false,
 				RestartCount: earlyRunnerCrashRestarts,
 				State: corev1.ContainerState{

@@ -2,6 +2,7 @@ package goals
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -18,6 +19,9 @@ const (
 	OccurrenceRunning OccurrenceState = "running"
 	// Retained sessions have verified terminal runners and no execution authority.
 	// They remain inspectable until cleanup without reserving execution capacity.
+	// Any recorded outcome can be retained: a run that ended or failed is kept
+	// for its inspection window, and a run stopped while its session is held is
+	// kept until the hold is released.
 	OccurrenceRetained  OccurrenceState = "retained"
 	OccurrenceUnknown   OccurrenceState = "unknown"
 	OccurrenceFinished  OccurrenceState = "finished"
@@ -47,6 +51,28 @@ type Occurrence struct {
 	Outcome       *RunOutcome           `json:"outcome,omitempty"`
 	Cost          *RunCost              `json:"cost,omitempty"`
 	Reply         *RunReply             `json:"reply,omitempty"`
+}
+
+// sessionNamePrefix and the 16-byte digest after it make up the name of every
+// goal execution session, fixed when the occurrence is scheduled.
+const sessionNamePrefix = "goal-"
+
+// SessionName is the AgentSession name for the occurrence whose seed hashes
+// to digest.
+func SessionName(digest []byte) string {
+	return sessionNamePrefix + hex.EncodeToString(digest)
+}
+
+// IsSessionName reports whether name has the shape SessionName produces. Only
+// the operator may create a session under such a name: one created ahead of
+// time would hold the name of a scheduled occurrence and stop it launching.
+func IsSessionName(name string) bool {
+	digest, ok := strings.CutPrefix(name, sessionNamePrefix)
+	if !ok || len(digest) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(digest)
+	return err == nil && strings.ToLower(digest) == digest
 }
 
 type ClaimRequest struct {
@@ -102,11 +128,14 @@ const (
 	RunSuperseded           RunReason = "superseded"
 	RunAuthorityDenied      RunReason = "authority_denied"
 	RunSessionMissing       RunReason = "session_missing"
+	// RunSessionNameTaken: a session the dispatcher did not create already holds
+	// the occurrence's reserved name, so this occurrence can never launch.
+	RunSessionNameTaken RunReason = "session_name_taken"
 )
 
 func (r RunReason) Valid() bool {
 	switch r {
-	case RunMissed, RunSessionEnded, RunSessionFailed, RunInfrastructureFailed, RunDurationExpired, RunConsentExpired, RunCancelled, RunPaused, RunSuperseded, RunAuthorityDenied, RunSessionMissing:
+	case RunMissed, RunSessionEnded, RunSessionFailed, RunInfrastructureFailed, RunDurationExpired, RunConsentExpired, RunCancelled, RunPaused, RunSuperseded, RunAuthorityDenied, RunSessionMissing, RunSessionNameTaken:
 		return true
 	}
 	return false

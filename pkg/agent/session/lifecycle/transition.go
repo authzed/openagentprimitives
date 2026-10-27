@@ -296,6 +296,11 @@ func transitionTerminal(s State, e Event) (State, []Effect) {
 		// no-ops this for terminal sessions.
 		return fail(s, "SessionExpired", e)
 
+	case GoalRunFailed:
+		// fail() sets Phase=Failed + FailureReason; the sticky guard no-ops it
+		// for a session that is already terminal.
+		return fail(s, "GoalRunFailed", e)
+
 	case GoalRunConcluded:
 		// The goal dispatcher already proved the run ended cleanly, so this is a
 		// completion, not a park: Succeeded without Archived. The sticky guard

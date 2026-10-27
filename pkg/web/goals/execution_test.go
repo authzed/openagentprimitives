@@ -27,6 +27,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/browser"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/pipeline"
+	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/controllers/goals"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	goalsqlite "github.com/authzed/openagentprimitives/pkg/memory/goals/sqlite"
@@ -430,24 +431,41 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 		f.auth.denySource = false
 	}
 	require.NoError(t, dispatcher.ValidateGoalSession(ctx, &scheduled))
-	concluded, retained, err := dispatcher.GoalSessionConcluded(ctx, &scheduled)
+	concluded, verdict, err := dispatcher.GoalSessionConcluded(ctx, &scheduled)
 	require.NoError(t, err)
 	assert.False(t, concluded, "a running occurrence's session is not concluded")
-	assert.False(t, retained, "a running occurrence is not retained")
+	assert.Equal(t, agentsession.GoalRunUndecided, verdict, "a running occurrence has no verdict")
 	impostor := scheduled.DeepCopy()
 	impostor.UID = "impostor"
-	concluded, retained, err = dispatcher.GoalSessionConcluded(ctx, impostor)
+	concluded, verdict, err = dispatcher.GoalSessionConcluded(ctx, impostor)
 	require.NoError(t, err)
 	assert.False(t, concluded, "a session the occurrence never attached is never concluded")
-	assert.False(t, retained, "a session the occurrence never attached is never retained")
+	assert.Equal(t, agentsession.GoalRunUndecided, verdict, "a session the occurrence never attached gets no verdict")
 	// A retained run is concluded: terminal reconciles proceed while activation stays refused.
 	_, err = db.DB().ExecContext(ctx, `UPDATE oap_goal_occurrences SET state=? WHERE id=?`, string(domain.OccurrenceRetained), occurrence.ID)
 	require.NoError(t, err)
-	concluded, retained, err = dispatcher.GoalSessionConcluded(ctx, &scheduled)
+	// A retained run's verdict follows its outcome: only an ended run may be
+	// finished Succeeded by the reconciler; any other is finished Failed.
+	for _, outcome := range []struct {
+		reason  domain.RunReason
+		verdict agentsession.GoalRunVerdict
+	}{{"", agentsession.GoalRunUndecided}, {domain.RunSessionFailed, agentsession.GoalRunFailed}, {domain.RunDurationExpired, agentsession.GoalRunFailed}, {domain.RunSessionEnded, agentsession.GoalRunSucceeded}} {
+		_, err = db.DB().ExecContext(ctx, `DELETE FROM oap_goal_run_outcomes WHERE occurrence_id=?`, occurrence.ID)
+		require.NoError(t, err)
+		if outcome.reason != "" {
+			raw, err := json.Marshal(domain.RunOutcome{Reason: outcome.reason, ObservedAt: time.Date(2026, 10, 3, 5, 0, 0, 0, time.UTC), Effects: "unknown"})
+			require.NoError(t, err)
+			_, err = db.DB().ExecContext(ctx, `INSERT INTO oap_goal_run_outcomes(occurrence_id,payload) VALUES(?,?)`, occurrence.ID, string(raw))
+			require.NoError(t, err)
+		}
+		concluded, verdict, err = dispatcher.GoalSessionConcluded(ctx, &scheduled)
+		require.NoError(t, err)
+		assert.True(t, concluded, "a retained occurrence's own session is concluded (outcome %q)", outcome.reason)
+		assert.Equal(t, outcome.verdict, verdict, "verdict for outcome %q", outcome.reason)
+		require.ErrorIs(t, dispatcher.ValidateGoalSession(ctx, &scheduled), domain.ErrDenied)
+	}
+	_, err = db.DB().ExecContext(ctx, `DELETE FROM oap_goal_run_outcomes WHERE occurrence_id=?`, occurrence.ID)
 	require.NoError(t, err)
-	assert.True(t, concluded, "a retained occurrence's own session is concluded")
-	assert.True(t, retained, "a retained occurrence reports retained, so the reconciler may finish its session")
-	require.ErrorIs(t, dispatcher.ValidateGoalSession(ctx, &scheduled), domain.ErrDenied)
 	_, err = db.DB().ExecContext(ctx, `UPDATE oap_goal_occurrences SET state=? WHERE id=?`, string(domain.OccurrenceRunning), occurrence.ID)
 	require.NoError(t, err)
 	f.s.ExecutionSessions = dispatcher

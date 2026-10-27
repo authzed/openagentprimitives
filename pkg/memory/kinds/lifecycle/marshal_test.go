@@ -321,6 +321,15 @@ var eventRoundTripCases = []struct {
 		},
 	},
 	{
+		name:  "GoalRunFailed round-trips",
+		event: lc.GoalRunFailed{},
+		check: func(t *testing.T, got lc.Event) {
+			t.Helper()
+			_, ok := got.(lc.GoalRunFailed)
+			require.True(t, ok)
+		},
+	},
+	{
 		name:  "Sleep round-trips",
 		event: lc.Sleep{},
 		check: func(t *testing.T, got lc.Event) {
