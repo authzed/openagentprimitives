@@ -1298,12 +1298,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// proceed=false short-circuits the normal reconcile; the next watch event
 	// re-enters either to continue (idempotent) or to operate on the
 	// now-superseded parent.
-	// A concluded goal run is never forked: the child would carry no authority
-	// to run under.
-	if !goalConcluded {
-		if proceed, res, err := r.ReconcileRestart(ctx, &sess); err != nil || !proceed {
-			return res, err
-		}
+	// A goal run, concluded or not, is never forked: ReconcileRestart denies
+	// its marker before any fork step, so the requester is told rather than
+	// the marker sitting unanswered.
+	if proceed, res, err := r.ReconcileRestart(ctx, &sess); err != nil || !proceed {
+		return res, err
 	}
 
 	// StartFailure signal: channelsd sets status.startFailure on a terminal

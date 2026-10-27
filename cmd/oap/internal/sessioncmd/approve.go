@@ -240,12 +240,18 @@ func approvalKindForCategory(category string) (approvalKind, bool) {
 }
 
 // cliDecidable refuses a category channelsd will not accept from this command
-// (ChannelDecisionOnly), before anything is published. The approver this
-// command stamps is one the caller asserts, so a decision that must come from
-// an authenticated human is pointed back at its channel instead.
-func cliDecidable(k approvalKind, requestID string) error {
+// (ChannelDecisionOnly), directly or as a consent included in the plan card,
+// before anything is published. The approver this command stamps is one the
+// caller asserts, so a decision that must come from an authenticated human is
+// pointed back at its channel instead.
+func cliDecidable(k approvalKind, requestID string, included []string) error {
 	if c, ok := channelinteractions.Get(string(k)); ok && c.ChannelDecisionOnly {
 		return fmt.Errorf("request %s (%s) must be decided in the channel where it was raised; oap session approve cannot prove who is deciding", requestID, k)
+	}
+	for _, child := range included {
+		if c, ok := channelinteractions.Get(child); ok && c.ChannelDecisionOnly {
+			return fmt.Errorf("request %s (%s) includes a %s consent, so it must be decided in the channel where it was raised; oap session approve cannot prove who is deciding", requestID, k, child)
+		}
 	}
 	return nil
 }
@@ -398,6 +404,14 @@ func runSessionApprove(
 		return fmt.Errorf("get AgentSession %s/%s: %w", b.Namespace, sessionName, err)
 	}
 	pendings := collectPendings(&sess)
+	readHistory := func() (memory.QueryResult, error) {
+		conn, err := memclient.Connect(ctx, b, sessionName, "")
+		if err != nil {
+			return memory.QueryResult{}, err
+		}
+		defer conn.Close()
+		return conn.Client.Query(ctx, memory.Query{Scope: conn.Scope, Kinds: []string{interactionhistory.KindName}})
+	}
 	// An explicit parked request needs no history lookup. Auto-selection must
 	// read the complete history so it cannot overlook asynchronous consent.
 	parkedMatch := false
@@ -406,17 +420,14 @@ func runSessionApprove(
 			parkedMatch = true
 		}
 	}
+	var history *memory.QueryResult
 	if !parkedMatch {
-		conn, err := memclient.Connect(ctx, b, sessionName, "")
+		h, err := readHistory()
 		if err != nil {
 			return fmt.Errorf("read asynchronous approvals: %w", err)
 		}
-		defer conn.Close()
-		history, err := conn.Client.Query(ctx, memory.Query{Scope: conn.Scope, Kinds: []string{interactionhistory.KindName}})
-		if err != nil {
-			return fmt.Errorf("read asynchronous approvals: %w", err)
-		}
-		pendings, err = collectHistoryPendings(&sess, history, time.Now())
+		history = &h
+		pendings, err = collectHistoryPendings(&sess, h, time.Now())
 		if err != nil {
 			return err
 		}
@@ -443,7 +454,25 @@ func runSessionApprove(
 		fmt.Fprintf(out, "resolved request %s (%s)\n", requestID, matched.Kind)
 	}
 
-	if err := cliDecidable(matched.Kind, requestID); err != nil {
+	// A plan card can carry exact consents decided with it; the parked status
+	// entry does not, so its included categories come from the signed history.
+	// channelsd re-checks either way, so an unreadable history only costs the
+	// early refusal, not the guard.
+	var included []string
+	if c, ok := channelinteractions.Get(string(matched.Kind)); ok && c.IncludesConsents {
+		if history == nil {
+			h, herr := readHistory()
+			if herr != nil {
+				fmt.Fprintf(out, "warning: could not read the plan card's included consents (%v); channelsd will still check them\n", herr)
+			} else {
+				history = &h
+			}
+		}
+		if history != nil {
+			included = includedConsentCategories(&sess, *history, string(matched.Kind), requestID)
+		}
+	}
+	if err := cliDecidable(matched.Kind, requestID, included); err != nil {
 		return err
 	}
 	dispatch, ok := dispatchFor(matched.Kind)

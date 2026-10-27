@@ -10,6 +10,26 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
+// requiresChannelDecider reports whether the request, or any consent its plan
+// card includes, is ChannelDecisionOnly. HandleInteractionDecision refuses a
+// self-asserted decider on it before any handler runs, so the clicker gets
+// not_authorized rather than a handler error; decideWithConsents keeps its own
+// per-child check as the backstop.
+func requiresChannelDecider(cat channelinteractions.Category, request *channelevents.InteractionRequestPayload) bool {
+	if cat.ChannelDecisionOnly {
+		return true
+	}
+	if request == nil {
+		return false
+	}
+	for _, child := range request.Consents {
+		if c, ok := channelinteractions.Get(child.Category); ok && c.ChannelDecisionOnly {
+			return true
+		}
+	}
+	return false
+}
+
 // All child requests are preflighted before any handler commits a decision.
 // A partial downstream failure keeps the parent pending; children retry using
 // their durable decision identities, without extending existing grants.
@@ -39,7 +59,7 @@ func (p *Pipeline) decideWithConsents(ctx context.Context, session channelevents
 			if !ok || !cat.PlanConsent || cat.Deciders != channelinteractions.DecideRequester || child.Audience.Requester == nil {
 				return channelinteractions.Outcome{}, fmt.Errorf("unsupported plan consent category")
 			}
-			if cat.ChannelDecisionOnly && payload.Decider.Kind == identity.KindCLI {
+			if cat.ChannelDecisionOnly && identity.Kind(payload.Decider.Kind).SelfAsserted() {
 				return channelinteractions.Outcome{}, fmt.Errorf("included %s consent must be decided in the channel where it was raised", child.Category)
 			}
 			owner, err := child.Audience.Requester.Principal().Canonical()

@@ -298,7 +298,7 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	}
 	if watch {
 		assert.Equal(t, "Monitor this goal for changes?", card.Lead)
-		assert.Contains(t, card.Fields[0].Value, "up to 2 sessions")
+		assert.Equal(t, `trip.changed · "trip-1" · up to 2 sessions`, card.Fields[0].Value, "the watched subject is shown quoted, as data")
 		assert.Equal(t, "session-uid", g.Execution.Terms.Event.Source.UID)
 	}
 	require.Equal(t, "goalconsent-request-"+g.Execution.Digest, card.RequestRef)

@@ -106,7 +106,7 @@ func TestReplyRecoveryDoesNotResendOrPreventCancellation(t *testing.T) {
 				require.ErrorIs(t, d.Tick(ctx), domain.ErrDenied, "a reply is not sent once the owner loses a source it was built from")
 				held, err := store.Occurrence(ctx, o.ID)
 				require.NoError(t, err)
-				require.NotEqual(t, "accepted", held.Reply.State)
+				require.Equal(t, "prepared", held.Reply.State, "a revoked source stops the reply before any send is attempted")
 				entries, err := base.Query(memory.WithSystemApproval(ctx, "system:operator"), memory.Query{Scope: memory.Scope{Kind: "session", ID: "team/" + o.SessionName}, Kinds: []string{replydelivery.KindName}})
 				require.NoError(t, err)
 				require.Empty(t, entries.Entries, "no delivery is written for a revoked source")

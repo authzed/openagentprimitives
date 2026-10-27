@@ -199,17 +199,19 @@ func TestRegisteredPlanApprovalsAreDispatchable(t *testing.T) {
 
 func TestCLIDecidableRefusesChannelDecisionOnly(t *testing.T) {
 	cases := []struct {
-		name    string
-		kind    approvalKind
-		refused bool
+		name     string
+		kind     approvalKind
+		included []string
+		refused  bool
 	}{
 		{name: "goal consent: refused, must be decided in its channel", kind: approvalKind(categories.GoalExecutionConsent), refused: true},
+		{name: "plan phase including goal consent: refused", kind: approvalKind(categories.PlanPhase), included: []string{string(categories.GoalExecutionConsent)}, refused: true},
 		{name: "plan phase: allowed", kind: approvalKind(categories.PlanPhase)},
 		{name: "tool approval: allowed", kind: approvalKindTool},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := cliDecidable(tc.kind, "req-1")
+			err := cliDecidable(tc.kind, "req-1", tc.included)
 			if tc.refused {
 				assert.ErrorContains(t, err, "must be decided in the channel where it was raised")
 				return

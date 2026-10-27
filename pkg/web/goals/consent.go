@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -280,7 +281,9 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 	if event := c.Terms.Event; event != nil {
 		request.Lead = "Monitor this goal for changes?"
 		request.Body = "Matching events create a private session. Each session needs a fresh plan approval. Quiet hours defer work within its original deadline; events arriving while a launch is pending are skipped."
-		request.Fields[0] = channelevents.InteractionField{Label: "Watch", Value: fmt.Sprintf("%s · %s · up to %d sessions", event.Predicate.Kind, event.Predicate.Subject, event.MaxRuns)}
+		// The subject can come from an observation rather than the owner, so it
+		// is shown quoted, as data.
+		request.Fields[0] = channelevents.InteractionField{Label: "Watch", Value: fmt.Sprintf("%s · %s · up to %d sessions", event.Predicate.Kind, strconv.Quote(event.Predicate.Subject), event.MaxRuns)}
 		request.Fields[2].Label = "Limits per session"
 		request.Fields = append(request.Fields, channelevents.InteractionField{Label: "Source", Value: event.Source.ID}, channelevents.InteractionField{Label: "Event deadline", Value: fmt.Sprintf("%s after observation; authorization expiry may end it sooner", time.Duration(event.RunWindowSeconds)*time.Second)}, channelevents.InteractionField{Label: "Quiet hours", Value: sessionschedule.QuietDescription(sessionschedule.Spec{Timezone: event.Timezone, QuietHours: event.QuietHours})})
 	}

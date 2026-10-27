@@ -163,3 +163,25 @@ func TestComposedPlanDenialRecordsNoApprovedChild(t *testing.T) {
 		assert.False(t, *content.Approved)
 	}
 }
+
+func TestRequiresChannelDecider(t *testing.T) {
+	channelOnly := channelinteractions.Category{Name: "channel_only", ChannelDecisionOnly: true}
+	plan, _ := channelinteractions.Get(categories.PlanPhase)
+	withGoalConsent := &channelevents.InteractionRequestPayload{Consents: []channelevents.InteractionRequestPayload{{Category: categories.GoalExecutionConsent}}}
+	cases := []struct {
+		name    string
+		cat     channelinteractions.Category
+		request *channelevents.InteractionRequestPayload
+		want    bool
+	}{
+		{name: "channel-only category: required", cat: channelOnly, want: true},
+		{name: "plan card including goal consent: required", cat: plan, request: withGoalConsent, want: true},
+		{name: "plan card with no consents: not required", cat: plan, request: &channelevents.InteractionRequestPayload{}},
+		{name: "plan card with no cached request: not required", cat: plan},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, requiresChannelDecider(tc.cat, tc.request))
+		})
+	}
+}

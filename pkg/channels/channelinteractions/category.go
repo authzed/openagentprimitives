@@ -117,10 +117,11 @@ type Category struct {
 	PlanConsent bool
 	// IncludesConsents permits a plan card to carry exact child requests.
 	IncludesConsents bool
-	// ChannelDecisionOnly refuses a decider asserted by the CLI
-	// (identity.KindCLI), directly or through a plan card that includes this
-	// category. `oap session approve` stamps an approver email the caller
-	// types, so it can say who decided but cannot prove it. A category whose
+	// ChannelDecisionOnly refuses a decider the CLI process only asserts
+	// (identity.Kind.SelfAsserted: `oap session approve`'s typed approver
+	// email, `oap agent chat`'s OS-username fallback), directly or through a
+	// plan card that includes this category. Such a decider can say who
+	// decided but cannot prove it. A category whose
 	// whole point is that a specific human decided must be decided on a
 	// channel transport that authenticates that human.
 	//

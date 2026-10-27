@@ -14,16 +14,22 @@ import (
 )
 
 // TestHandleInteractionDecision_ChannelDecisionOnly proves a
-// ChannelDecisionOnly category refuses a CLI-asserted decider even when that
+// ChannelDecisionOnly category refuses a self-asserted decider even when that
 // decider has standing, while the same human on a channel transport resolves
 // it. Standing is GRANTED here, so the refusal can only come from the flag.
+// A plan card that only INCLUDES a channel-only consent is refused the same
+// way, as not_authorized, rather than failing later as a handler error.
 func TestHandleInteractionDecision_ChannelDecisionOnly(t *testing.T) {
+	const includedCategory = "fixture_channel_only_consent"
 	cases := []struct {
 		name        string
 		kind        identity.Kind
+		viaPlanCard bool
 		wantApplied bool
 	}{
 		{name: "CLI-asserted decider: not_authorized rejection, handler never runs", kind: identity.KindCLI},
+		{name: "chat OS-username decider: not_authorized rejection, handler never runs", kind: identity.KindLocal},
+		{name: "CLI-asserted decider on a plan card including the consent: not_authorized rejection", kind: identity.KindCLI, viaPlanCard: true},
 		{name: "channel-authenticated decider: applied", kind: identity.KindSlack, wantApplied: true},
 	}
 	for _, tc := range cases {
@@ -35,8 +41,9 @@ func TestHandleInteractionDecision_ChannelDecisionOnly(t *testing.T) {
 				Tone:                channelinteractions.ToneRoutine,
 				Deciders:            channelinteractions.DecideApprovers,
 				Resurface:           channelinteractions.ResurfaceCached,
-				ChannelDecisionOnly: true,
+				ChannelDecisionOnly: !tc.viaPlanCard,
 			})
+			channelinteractions.Register(channelinteractions.Category{Name: includedCategory, ChannelDecisionOnly: true, PlanConsent: true, Tone: channelinteractions.TonePrivacy, Deciders: channelinteractions.DecideRequester, Resurface: channelinteractions.ResurfaceCached})
 			calls := 0
 			channelinteractions.Bind(fixtureInteractionCategory,
 				trackingHandler(&calls, channelinteractions.Outcome{Result: channelevents.OutcomeApproved}, nil))
@@ -47,7 +54,11 @@ func TestHandleInteractionDecision_ChannelDecisionOnly(t *testing.T) {
 			mem := newTestMemory(t)
 			p.Mem = mem
 			decider := channelevents.ExternalIdentity{Kind: tc.kind, ExternalID: "U_ALICE", Email: "alice@example.com"}
-			notePendingInteractionRequest(t, mem, sessKey, fixtureInteractionCategory, "req-1", approversFixtureRequest(decider))
+			request := approversFixtureRequest(decider)
+			if tc.viaPlanCard {
+				request.Consents = []channelevents.InteractionRequestPayload{{Category: includedCategory, RequestRef: "consent-1"}}
+			}
+			notePendingInteractionRequest(t, mem, sessKey, fixtureInteractionCategory, "req-1", request)
 
 			env := mustBuildInteractionDecision(t, sessKey, fixtureInteractionCategory, "req-1", "approve", decider)
 			require.NoError(t, p.HandleInteractionDecision(context.Background(), env))
@@ -57,7 +68,7 @@ func TestHandleInteractionDecision_ChannelDecisionOnly(t *testing.T) {
 				assert.True(t, sawPublishedKind(natsRec, channelevents.KindInteractionApplied))
 				return
 			}
-			assert.Equal(t, 0, calls, "the bound handler must not run for a CLI decider")
+			assert.Equal(t, 0, calls, "the bound handler must not run for a self-asserted decider")
 			assert.False(t, sawPublishedKind(natsRec, channelevents.KindInteractionApplied))
 			assert.Equal(t, "not_authorized", findInteractionDecisionRejected(t, natsRec).Class)
 			assert.Len(t, outstandingPrompts(t, p, sessKey), 1, "the prompt stays parked for the channel decision")

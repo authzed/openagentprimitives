@@ -139,8 +139,8 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 		return p.publishDecisionRejected(ctx, env.Session, pl, "category_mismatch", "this action no longer matches the pending request", nil, "")
 	}
 
-	if cat.ChannelDecisionOnly && pl.Decider.Kind == identity.KindCLI {
-		logger.Info("interaction decision: CLI-asserted decider refused for a channel-decision-only category")
+	if identity.Kind(pl.Decider.Kind).SelfAsserted() && requiresChannelDecider(cat, req) {
+		logger.Info("interaction decision: self-asserted decider refused for a channel-decision-only request", "deciderKind", pl.Decider.Kind)
 		return p.publishDecisionRejected(ctx, env.Session, pl, "not_authorized", "this request must be decided in the channel where it was raised", nil, "")
 	}
 

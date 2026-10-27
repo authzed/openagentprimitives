@@ -103,3 +103,37 @@ func TestHistoryConsentDiscovery(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestIncludedConsentCategories(t *testing.T) {
+	source := channelevents.SessionRef{Namespace: "ns", Name: "source"}
+	sess := &apiv1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: source.Namespace, Name: source.Name, UID: types.UID("uid")}}
+	plan := channelevents.InteractionRequestPayload{
+		AgentSessionRef: source, Category: categories.PlanPhase, RequestRef: "plan",
+		Consents: []channelevents.InteractionRequestPayload{{AgentSessionRef: source, Category: categories.GoalExecutionConsent, RequestRef: "consent"}},
+	}
+	entry := func(c interactionhistory.Content, publisher string) memory.Entry {
+		b, err := json.Marshal(c)
+		require.NoError(t, err)
+		return memory.Entry{Kind: interactionhistory.KindName, Content: b, Provenance: &memory.Provenance{Publisher: publisher}}
+	}
+	signed := interactionhistory.Content{Source: source, SourceUID: string(sess.UID), Request: &plan}
+	recreated := signed
+	recreated.SourceUID = "old-uid"
+	cases := []struct {
+		name       string
+		entries    []memory.Entry
+		requestRef string
+		want       []string
+	}{
+		{name: "signed plan card: its included categories", entries: []memory.Entry{entry(signed, "system:channelsd")}, requestRef: "plan", want: []string{categories.GoalExecutionConsent}},
+		{name: "other request: none", entries: []memory.Entry{entry(signed, "system:channelsd")}, requestRef: "other"},
+		{name: "not channelsd-signed: none", entries: []memory.Entry{entry(signed, "runner")}, requestRef: "plan"},
+		{name: "recreated session: none", entries: []memory.Entry{entry(recreated, "system:channelsd")}, requestRef: "plan"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := includedConsentCategories(sess, memory.QueryResult{Entries: tc.entries}, categories.PlanPhase, tc.requestRef)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}

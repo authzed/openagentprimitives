@@ -1805,11 +1805,23 @@ func withDigest(in []plangateaudit.Content, digest string) []plangateaudit.Conte
 }
 
 func TestGoalExecutionRefusesAutomaticContinuation(t *testing.T) {
-	parent := &spiceboxv1alpha1.AgentSession{Spec: spiceboxv1alpha1.AgentSessionSpec{GoalExecution: &spiceboxv1alpha1.GoalExecutionReference{GoalID: "goal"}}, Status: spiceboxv1alpha1.AgentSessionStatus{PendingRestart: &spiceboxv1alpha1.PendingRestart{TargetSessionName: "continuation"}}}
-	r := &agentsession.Reconciler{}
-	proceed, _, err := r.ReconcileRestart(context.Background(), parent)
-	require.ErrorContains(t, err, "cannot fork")
+	ctx := context.Background()
+	parent := &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "goal-run", Namespace: "ns"}, Spec: spiceboxv1alpha1.AgentSessionSpec{GoalExecution: &spiceboxv1alpha1.GoalExecutionReference{GoalID: "goal"}}, Status: spiceboxv1alpha1.AgentSessionStatus{PendingRestart: &spiceboxv1alpha1.PendingRestart{TargetSessionName: "continuation"}}}
+	c := fake.NewClientBuilder().WithScheme(restartScheme(t)).WithObjects(parent).WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).Build()
+	// No restart dependencies are wired: the goal refusal must come first.
+	r := &agentsession.Reconciler{Client: c}
+	proceed, _, err := r.ReconcileRestart(ctx, parent)
+	require.NoError(t, err, "a goal restart is denied, not requeued as an error")
 	assert.False(t, proceed)
-	_, err = agentsession.EnsureChildSession(context.Background(), nil, parent, parent.Status.PendingRestart)
+
+	var got spiceboxv1alpha1.AgentSession
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "goal-run"}, &got))
+	assert.Nil(t, got.Status.PendingRestart, "the marker is cleared so it does not reconcile-loop")
+	denied := meta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionRestartDenied)
+	require.NotNil(t, denied, "the denial is relayed to the requester through RestartDenied")
+	assert.Equal(t, metav1.ConditionTrue, denied.Status)
+	assert.Equal(t, spiceboxv1alpha1.ReasonGoalExecutionNoRestart, denied.Reason)
+
+	_, err = agentsession.EnsureChildSession(ctx, nil, parent, parent.Status.PendingRestart)
 	require.ErrorContains(t, err, "cannot create a continuation")
 }

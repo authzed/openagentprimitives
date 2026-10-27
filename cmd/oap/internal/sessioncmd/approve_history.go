@@ -113,3 +113,28 @@ func collectHistoryPendings(sess *apiv1.AgentSession, history memory.QueryResult
 	}
 	return out, nil
 }
+
+// includedConsentCategories returns the categories of the consents the named
+// plan card carries, from this session's channelsd-signed history. It only
+// feeds the CLI's early refusal; channelsd decides with its own copy.
+func includedConsentCategories(sess *apiv1.AgentSession, history memory.QueryResult, category, requestRef string) []string {
+	source := channelevents.SessionRef{Namespace: sess.Namespace, Name: sess.Name}
+	var out []string
+	for _, entry := range history.Entries {
+		if entry.Kind != interactionhistory.KindName || entry.Provenance == nil || entry.Provenance.Publisher != "system:channelsd" {
+			continue
+		}
+		var record interactionhistory.Content
+		if err := json.Unmarshal(entry.Content, &record); err != nil || record.Request == nil {
+			continue
+		}
+		p := record.Request
+		if record.Source != source || record.SourceUID != string(sess.UID) || p.Category != category || p.RequestRef != requestRef {
+			continue
+		}
+		for _, child := range p.Consents {
+			out = append(out, child.Category)
+		}
+	}
+	return out
+}

@@ -919,6 +919,11 @@ const (
 	// ReasonForkNotAuthorized is the reason for AgentSessionConditionRestartDenied.
 	ReasonForkNotAuthorized = "ForkNotAuthorized"
 
+	// ReasonGoalExecutionNoRestart is the reason for RestartDenied=True on a
+	// goal session: a continuation would run with no occurrence, consent or
+	// bounds behind it, so goal runs are never forked or continued.
+	ReasonGoalExecutionNoRestart = "GoalExecutionNoRestart"
+
 	// ReasonRestartAttemptPending is the reason for
 	// AgentSessionConditionRestartDenied=False: the operator has picked up a new
 	// PendingRestart and cleared the previous attempt's verdict before running
