@@ -9,9 +9,10 @@ export const SITE_NAME = "Open Agent Primitives";
 export const SITE_DESCRIPTION =
   "Open-source building blocks for running enterprise AI agents in your own Kubernetes cluster, on the models you choose. OAP checks every action before it runs.";
 
-// The landing page's <title>, which is also its share-card headline.
+// The landing page's <title>, which is also its share-card headline. Keep it
+// to 60 characters or fewer so search results show it without truncation.
 export const SITE_TITLE =
-  "Open Agent Primitives: a secure way to run enterprise AI agents";
+  "Open Agent Primitives: run enterprise AI agents securely";
 
 export const REPO_URL = "https://github.com/authzed/openagentprimitives";
 
