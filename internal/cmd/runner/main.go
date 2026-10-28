@@ -779,6 +779,10 @@ func run(cfg *config) error {
 	// absent agentIdentity field means no credentials; leave the identity
 	// zero-valued so credresolve.Descriptors resolves no descriptors (a kind
 	// with no requirements yields an empty slice; one with requirements errors).
+	// The load is skipped when no tool resolves credentials runner-side
+	// (AgentClassSpec.ResolvesCredentialsInRunner): nothing below would read
+	// it, and the per-session Role grants `get` on it under that same predicate,
+	// so reading it anyway is forbidden and fails the session.
 	//
 	// identityMode=ask|dynamic: resolve an EFFECTIVE mode. On first boot the
 	// choice is not yet made (status.effectiveIdentityMode empty), so boot on a
@@ -814,7 +818,7 @@ func run(cfg *config) error {
 		}
 		runtimeIdentity = runner.RuntimeIdentityFromSessionUserIdentity(&suid)
 	default: // effectiveMode=agent (static agent/unset, ask|dynamic provisional, or re-spawn→agent)
-		if class.Spec.AgentIdentity != "" {
+		if class.Spec.AgentIdentity != "" && class.Spec.ResolvesCredentialsInRunner() {
 			var agentIdentity spiceboxv1alpha1.AgentIdentity
 			if err := c.Get(rootCtx, client.ObjectKey{Namespace: ns, Name: class.Spec.AgentIdentity}, &agentIdentity); err != nil {
 				if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionMCPAuthResolutionFailed,

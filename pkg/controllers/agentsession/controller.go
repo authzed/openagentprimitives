@@ -2039,7 +2039,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// SidecarToolboxes resolve creds controller-side and do not drive this pin.
 	mcpAgentIdentityName := ""
 	var mcpSecretNames []string
-	if (len(ac.Spec.MCPServers) > 0 || len(ac.Spec.ToolBundles) > 0) && ac.Spec.AgentIdentity != "" {
+	if ac.Spec.ResolvesCredentialsInRunner() && ac.Spec.AgentIdentity != "" {
 		var ai spiceboxv1alpha1.AgentIdentity
 		aiKey := types.NamespacedName{Namespace: sess.Namespace, Name: ac.Spec.AgentIdentity}
 		if err := r.Client.Get(ctx, aiKey, &ai); err != nil {

@@ -1365,6 +1365,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			"agentclass", ac.Namespace+"/"+ac.Name, "subagents", ac.Spec.Subagents)
 	}
 
+	// An AgentIdentity carrying credentials that no tool consumes. Purely
+	// diagnostic, same posture as CapabilitiesValid; the monitoring watcher
+	// posts the False transition to role=monitoring Channels. A lookup error
+	// leaves the condition as it was — a guess either way would flap.
+	if reason, msg, err := agentIdentityUnusedProblem(ctx, reader, &ac); err != nil {
+		log.FromContext(ctx).Info("agentclass: AgentIdentityInUse check failed; condition left unchanged",
+			"agentclass", ac.Namespace+"/"+ac.Name, "agentIdentity", ac.Spec.AgentIdentity, "err", err.Error())
+	} else if reason == "" {
+		conditions.SetTrue(&ac, &ac.Status.Conditions,
+			spiceboxv1alpha1.AgentClassConditionAgentIdentityInUse, spiceboxv1alpha1.ReasonAgentIdentityInUse)
+	} else {
+		conditions.SetFalse(&ac, &ac.Status.Conditions,
+			spiceboxv1alpha1.AgentClassConditionAgentIdentityInUse, reason, msg)
+		log.FromContext(ctx).Info("agentclass binds an AgentIdentity no tool consumes (graceful, not blocking readiness)",
+			"agentclass", ac.Namespace+"/"+ac.Name, "agentIdentity", ac.Spec.AgentIdentity)
+	}
+
 	// All references resolve.
 	ac.Status.ObservedGeneration = ac.Generation
 	conditions.SetTrue(&ac, &ac.Status.Conditions,
