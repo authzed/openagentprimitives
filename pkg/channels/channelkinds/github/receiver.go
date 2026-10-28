@@ -123,12 +123,50 @@ type prEvent struct {
 		} `json:"head"`
 		Base struct {
 			SHA string `json:"sha"`
+			// Ref is the branch the PR merges into. Compared against
+			// Repository.DefaultBranch to tell a stacked PR (see stacked).
+			Ref string `json:"ref"`
 		} `json:"base"`
 		ChangedFiles int `json:"changed_files"`
 	} `json:"pull_request"`
 	Repository struct {
-		FullName string `json:"full_name"`
+		FullName      string `json:"full_name"`
+		DefaultBranch string `json:"default_branch"`
 	} `json:"repository"`
+	// Changes is present on an "edited" delivery and names what changed.
+	// Only a base change is read: it is how a stacked PR becomes reviewable
+	// (see retargetedOffStack).
+	Changes struct {
+		Base *struct {
+			Ref struct {
+				From string `json:"from"`
+			} `json:"ref"`
+		} `json:"base"`
+	} `json:"changes"`
+}
+
+// stacked reports whether the PR's base is some branch other than the
+// repository's default branch — the shape of a PR opened on top of another,
+// still-open PR. Unknown on either side (an older or trimmed payload) is NOT
+// stacked: fail open to the pre-existing behavior of reviewing the PR, never
+// silently drop one.
+func stacked(ev prEvent) bool {
+	base, def := ev.PullRequest.Base.Ref, ev.Repository.DefaultBranch
+	return base != "" && def != "" && base != def
+}
+
+// retargetedOffStack reports whether this delivery is the PR being moved OFF
+// a stack onto the default branch — GitHub's automatic retarget when the PR
+// it was stacked on merges (and its branch is deleted), or a stacking tool or
+// person doing the same by hand. It arrives as action "edited" with a base
+// change, which no Channel lists in spec.github.events, so it is admitted
+// explicitly: it is the moment a deferred stacked PR finally gets its review.
+func retargetedOffStack(ev prEvent) bool {
+	if ev.Action != "edited" || ev.Changes.Base == nil || stacked(ev) {
+		return false
+	}
+	from := ev.Changes.Base.Ref.From
+	return from != "" && from != ev.Repository.DefaultBranch
 }
 
 // Translate maps a verified delivery to an inbound event, or to (nil, nil)
@@ -159,11 +197,18 @@ func (receiver) Translate(_ context.Context, ch *spiceboxv1alpha1.Channel, r cha
 		return nil, fmt.Errorf("github: pull_request payload has no repository or number (Channel %s/%s)", ch.Namespace, ch.Name)
 	}
 
-	if !slices.Contains(cfg.Events, ev.Action) {
+	// nil means true - see the field's doc comment.
+	skipStacked := cfg.SkipStacked == nil || *cfg.SkipStacked
+	if !slices.Contains(cfg.Events, ev.Action) && !(skipStacked && retargetedOffStack(ev)) {
 		return nil, nil
 	}
 	// nil means true - see the field's doc comment.
 	if ev.PullRequest.Draft && (cfg.SkipDrafts == nil || *cfg.SkipDrafts) {
+		return nil, nil
+	}
+	// A PR stacked on another open PR waits for that one to merge: its review
+	// arrives with the retarget onto the default branch (retargetedOffStack).
+	if skipStacked && stacked(ev) {
 		return nil, nil
 	}
 	if len(cfg.Repositories) > 0 && !slices.Contains(cfg.Repositories, ev.Repository.FullName) {
@@ -400,7 +445,15 @@ func renderPrompt(ev prEvent) string {
 
 	// Everything in this first group is structural: it comes from the event
 	// envelope GitHub signed, not from the submitter's keyboard.
-	fmt.Fprintf(&b, "Pull request %s#%d was %s.\n", ev.Repository.FullName, ev.Number, ev.Action)
+	if retargetedOffStack(ev) {
+		// "was edited" would read as a title or description change; this is
+		// the stacked PR becoming reviewable, and the agent should know the
+		// diff it sees is now against the default branch.
+		fmt.Fprintf(&b, "Pull request %s#%d was retargeted onto the default branch: it had been stacked on another pull request, which has merged or moved.\n",
+			ev.Repository.FullName, ev.Number)
+	} else {
+		fmt.Fprintf(&b, "Pull request %s#%d was %s.\n", ev.Repository.FullName, ev.Number, ev.Action)
+	}
 	fmt.Fprintf(&b, "URL: %s\n", ev.PullRequest.HTMLURL)
 	fmt.Fprintf(&b, "%s%s\n", headCommitLabel, ev.PullRequest.Head.SHA)
 	fmt.Fprintf(&b, "Base commit: %s\n", ev.PullRequest.Base.SHA)

@@ -329,7 +329,10 @@ thread.
 1. A pull request event — `opened`, `synchronize`, `reopened`, or
    `ready_for_review` by default (`spec.github.events`, and draft PRs are
    skipped unless the Channel opts in with `skipDrafts: false`) — delivers a
-   verified webhook. reviewbot claims the review with `claim_trigger_status`, a
+   verified webhook. A PR stacked on another open PR (its base is not the
+   default branch) waits: it is reviewed once GitHub retargets it onto the
+   default branch, which happens when the PR beneath it merges. Set
+   `skipStacked: false` to review PRs into any base branch. reviewbot claims the review with `claim_trigger_status`, a
    no-argument call: the github channel kind owns the Check Run on the head
    commit, so which pull request, which commit, and where the status lives all
    come from the event rather than from anything the agent assembles.

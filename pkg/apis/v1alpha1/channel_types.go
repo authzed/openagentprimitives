@@ -306,6 +306,23 @@ type GitHubChannelConfig struct {
 	// ChannelMetaagentSpec.Enabled in this file.
 	// +optional
 	SkipDrafts *bool `json:"skipDrafts,omitempty"`
+
+	// SkipStacked defers pull requests that are STACKED on another branch —
+	// whose base is not the repository's default branch, which is how a PR
+	// that depends on an earlier, still-open PR is opened. Nil means true:
+	// such a PR is not reviewed while it is stacked (opening it, pushing to
+	// it, or marking it ready all wait), and it is reviewed once GitHub
+	// retargets it onto the default branch, which happens when the PR it was
+	// stacked on merges. Reviewing every PR of a ten-deep stack at once
+	// re-reviews each change in every PR above it, and starts a burst of
+	// sessions the cluster may not have room for.
+	//
+	// Set `skipStacked: false` for repositories that genuinely review into a
+	// non-default branch (release branches, long-lived integration branches):
+	// the check cannot tell those from a stack, and with it on they would
+	// never be reviewed. Same *bool shape as SkipDrafts, for the same reason.
+	// +optional
+	SkipStacked *bool `json:"skipStacked,omitempty"`
 }
 
 // SlackOutputDefaults governs where the FIRST outbound message of

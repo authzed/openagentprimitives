@@ -100,7 +100,9 @@ func describeDelivery(channelKey, event string, body []byte) (meta, facts string
 	}
 
 	var factParts []string
-	if w := actionWord(ev.Action); w != "" {
+	if retargetedOffStack(ev) {
+		factParts = append(factParts, "retargeted onto "+strings.TrimSpace(sanitizeUntrusted(ev.Repository.DefaultBranch)))
+	} else if w := actionWord(ev.Action); w != "" {
 		factParts = append(factParts, w)
 	}
 	if ev.PullRequest.Draft {

@@ -1,0 +1,101 @@
+{
+  "name": "stacked-pr-retargeted-review",
+  "description": "A pull request that was stacked on another one is retargeted onto the default branch, which GitHub does when the pull request beneath it merges. That delivery is action \"edited\", which no Channel lists in spec.github.events, so it only starts a review because the receiver admits a retarget off a stack explicitly. A signed webhook carrying that retarget must reach the production route, spawn the review session, and tell the agent the pull request was retargeted rather than edited; the round then claims and concludes the check run. The deferral half (opened/updated while stacked spawns nothing) is covered at the receiver, since a bundle has no way to assert that no session was created.",
+  "agentDir": "testdata/agent-reviewbot",
+  "agentClass": "demo-reviewbot",
+  "trigger": {
+    "channel": "demo-reviewbot-gh",
+    "payload": "pull_request_edited.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#4",
+    "headSHA": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+    "statusName": "demo-reviewbot"
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "was retargeted onto the default branch",
+        "toolOffered": "claim_trigger_status"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "claim_trigger_status",
+            "args": {}
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "claim_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"already_concluded\":false"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "conclude_trigger_status",
+            "args": {
+              "outcome": "clean",
+              "summary": "Reviewed after the stack beneath it merged."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "conclude_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "clean"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Reviewed after the stack beneath it merged."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Reviewed after the stack beneath it merged."
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "triggerStatus": {
+      "status": "completed",
+      "conclusion": "success",
+      "externalID": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+      "summaryContains": [
+        "Reviewed after the stack beneath it merged."
+      ],
+      "creates": 1,
+      "updates": 1
+    },
+    "channel": {
+      "postsContain": [
+        "Reviewed after the stack beneath it merged.",
+        "retargeted onto main"
+      ],
+      "threadRootedByFirstPost": true,
+      "postCount": 2
+    }
+  }
+}
