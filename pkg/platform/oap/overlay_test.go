@@ -124,6 +124,82 @@ func TestApply_AppendMarker_NestedMapField(t *testing.T) {
 		"answer appended onto the pre-declared empty list at spec.config.allowedRepos")
 }
 
+// skillsClassFixture is an AgentClass declaring every candidate skill a bundle
+// offers; a `spec.skills[?]` question keeps only the ones the installer picks.
+func skillsClassFixture(names ...string) *unstructured.Unstructured {
+	skills := make([]any, len(names))
+	for i, n := range names {
+		skills[i] = map[string]any{"name": n, "ref": "github.com/example/skills//skills/" + n + "@v1"}
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "agentprimitives.authzed.com/v1alpha1",
+		"kind":       "AgentClass",
+		"metadata":   map[string]any{"name": "demo-agent"},
+		"spec":       map[string]any{"skills": skills},
+	}}
+}
+
+func skillNames(t *testing.T, cls *unstructured.Unstructured) []string {
+	t.Helper()
+	skills, _, err := unstructured.NestedSlice(cls.Object, "spec", "skills")
+	require.NoError(t, err)
+	out := []string{}
+	for _, s := range skills {
+		out = append(out, s.(map[string]any)["name"].(string))
+	}
+	return out
+}
+
+func TestApply_FilterMarker(t *testing.T) {
+	skillsQ := []Question{{Name: "skills", Type: QResourceList,
+		Binding: []Binding{{Target: "AgentClass/demo-agent#spec.skills[?]"}}}}
+
+	cases := []struct {
+		name    string
+		have    []string
+		answer  any
+		want    []string
+		wantErr string
+	}{
+		{name: "subset selected: only the named elements survive, in CR order",
+			have: []string{"alpha", "beta", "gamma"}, answer: []string{"gamma", "alpha"}, want: []string{"alpha", "gamma"}},
+		{name: "every element selected: list unchanged",
+			have: []string{"alpha", "beta"}, answer: []string{"alpha", "beta"}, want: []string{"alpha", "beta"}},
+		{name: "nothing selected: list emptied, not left whole",
+			have: []string{"alpha", "beta"}, answer: []string{}, want: []string{}},
+		{name: "unknown name: fails closed instead of silently dropping it",
+			have: []string{"alpha"}, answer: []string{"alpah"}, wantErr: `no skills element with name="alpah"`},
+		{name: "scalar answer: refused",
+			have: []string{"alpha"}, answer: "alpha", wantErr: "requires a list answer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cls := skillsClassFixture(tc.have...)
+			err := Apply([]*unstructured.Unstructured{cls}, skillsQ, Answers{"skills": tc.answer})
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, skillNames(t, cls))
+		})
+	}
+}
+
+func TestApply_FilterMarker_IdempotentReapply(t *testing.T) {
+	// Filtering an already-filtered list by the same answer is a no-op, so a
+	// re-install SSA-applies byte-identical spec.
+	cls := skillsClassFixture("alpha", "beta", "gamma")
+	qs := []Question{{Name: "skills", Type: QResourceList,
+		Binding: []Binding{{Target: "AgentClass/demo-agent#spec.skills[?]"}}}}
+	ans := Answers{"skills": []string{"beta"}}
+	require.NoError(t, Apply([]*unstructured.Unstructured{cls}, qs, ans))
+	first := cls.DeepCopy()
+	require.NoError(t, Apply([]*unstructured.Unstructured{cls}, qs, ans))
+	assert.Equal(t, first.Object, cls.Object)
+}
+
 func TestApply_MissingTargetCR_Errors(t *testing.T) {
 	qs := []Question{{Name: "endpoint", Type: QString, Binding: []Binding{{Target: "MCPServer/nope#spec.upstream.endpoint"}}}}
 	err := Apply([]*unstructured.Unstructured{agentClassFixture()}, qs, Answers{"endpoint": "x"})
