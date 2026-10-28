@@ -1,0 +1,48 @@
+# Read-only gh for messagingbot. Three rings bound what it can read:
+#
+#   - The TOKEN ring: the fine-grained PAT supplied at install grants
+#     Contents: Read and nothing else, so no call can write whatever this file
+#     allows.
+#   - The VERB ring: the subcommand allowlist plus the `gh api` constraint
+#     below — GET only, no body or host flags, and only repos/OWNER/NAME/...
+#     endpoints. `gh api` will POST anything the token permits if left
+#     unconstrained, so the allowlist alone is not a boundary.
+#   - The REPOSITORY ring: config.readableRepos — every call that names a
+#     repository must match spec.config.readableRepos on the AgentClass, set by
+#     the operator at install (oap.yaml's brandRepos question). Requiring a
+#     repos/ endpoint is what makes this ring hold: an endpoint naming no
+#     repository (search/code, orgs/X/repos, user) resolves no resource id and
+#     would otherwise pass ungated.
+#
+# SpiceboxToolspec is cluster-scoped (no metadata.namespace).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata:
+  name: messagingbot-gh-read
+spec:
+  name: messagingbot-gh-read
+  version: "1"
+  intent: "Read-only GitHub access to the operator-approved brand repositories: file contents, trees, and repo metadata. No writes."
+  toolkit:
+    name: gh
+    revision: "2026-05-01"
+  allowSubcommands: ["api", "repo view", "auth status"]
+  constraints:
+    # The verb ring. gh defaults to GET; -X/--method picks any verb; -f/-F add
+    # a body and silently flip the method to POST; --input supplies a body
+    # file; --hostname reroutes the request. All refused. The endpoint must be
+    # repo-scoped (so the repository ring below sees it), and `..` is refused
+    # so a path cannot climb out of the repository it names.
+    - cel: "call.subcommand != 'api' || (!call.hasFlag('method') && !call.hasFlag('field') && !call.hasFlag('raw-field') && !call.hasFlag('input') && !call.hasFlag('hostname') && !call.positional['endpoint'].contains('..') && call.positional['endpoint'].matches('^repos/[^/]+/[^/?]+([/?].*)?$'))"
+      message: "gh api is read-only here: GET requests on repos/OWNER/NAME/... endpoints only (e.g. repos/OWNER/NAME/readme, repos/OWNER/NAME/contents/PATH). No -X, -f, -F, --input, or --hostname."
+    # `repo view` names its repository only through the positional; with none,
+    # gh reads the working-directory remote, which authorization cannot see.
+    - cel: "call.subcommand != 'repo view' || 'repo' in call.positional"
+      message: "Pass the repository to `gh repo view OWNER/NAME` explicitly."
+    # The repository ring. gh api / repo view resolve call.resourceId to the
+    # canonical https://github.com/OWNER/NAME; it must match an entry in
+    # config.readableRepos. `auth status` names no repository and is not gated.
+    - cel: "call.resourceId == '' || config.readableRepos.exists(r, glob.match('https://github.com/' + r, call.resourceId))"
+      message: "This repository is not one messagingbot may read (spec.config.readableRepos, set by the operator at install). Ask the user which approved repository holds what you need."
+  sensitive:
+    env: [GITHUB_TOKEN, GH_TOKEN]

@@ -1,0 +1,39 @@
+# SkillSources for messagingbot's selectable skills. One per skill, each
+# discovering exactly the one SKILL.md under its subpath, so the namespace gets
+# the Skills this agent can use and not the other ~17 in the repository.
+#
+# Both are pinned to a COMMIT SHA, not a branch: a skill is instructions the
+# model follows, and a branch ref would let what the agent is told to do change
+# under an unchanged install. The SHA flows into each discovered Skill's
+# canonical name, which is what agentclass.yaml's spec.skills opts into — bump
+# both together.
+#
+# The skills question (oap.yaml) narrows spec.skills, not this list: a
+# SkillSource for a deselected skill still clones (it is a public repository and
+# a read-only fetch), but no session of this class can load it.
+#
+# metadata.namespace is intentionally omitted — `oap agent install --namespace`
+# stamps it, same as the other manifests.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SkillSource
+metadata:
+  name: messagingbot-frontend-design
+spec:
+  repoURL: https://github.com/anthropics/skills
+  ref: dbd4588f9e1033efb41dad4bef2f7947c8993d44
+  subpath: skills/frontend-design
+  auth:
+    agentIdentity: messagingbot-id
+    credential: github-token
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SkillSource
+metadata:
+  name: messagingbot-theme-factory
+spec:
+  repoURL: https://github.com/anthropics/skills
+  ref: dbd4588f9e1033efb41dad4bef2f7947c8993d44
+  subpath: skills/theme-factory
+  auth:
+    agentIdentity: messagingbot-id
+    credential: github-token
