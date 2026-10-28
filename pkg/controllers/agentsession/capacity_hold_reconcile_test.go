@@ -186,3 +186,64 @@ func TestReconcileCapacityHold_Detector(t *testing.T) {
 	require.NotNil(t, hold, "CapacityHold set for the stalled detector")
 	assert.Equal(t, metav1.ConditionTrue, hold.Status)
 }
+
+// A detector lost from under a RUNNING session is not held: the content guard
+// keeps its 5m fail-closed deadline mid-session, as a regressed bundle does.
+func TestReconcileCapacityHold_DetectorMidSessionFailsClosed(t *testing.T) {
+	nowT := time.Date(2026, 10, 28, 17, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return nowT }
+	ac := classWithBundle("acd")
+	sess := sessionCreatedAt("sd", "acd", nowT.Add(-2*time.Hour))
+	sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseRunning
+	det := capacityStalledDetector("sd", nowT.Add(-10*time.Minute))
+	r, c := fakeReconciler(t, clock, ac, sess, detectorSettings(t), det)
+
+	runReconciles(t, r, "sd", 5)
+
+	got := getSession(t, c, "sd")
+	require.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase,
+		"a running session's lost detector fails closed at the detector deadline")
+	assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionContentGuardHalt, got.Status.FailureReason)
+	assert.Nil(t, apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold),
+		"never held")
+}
+
+// With bundles Ready and a detector held, the stored hold condition stays put
+// across passes: channelsd keys the once-per-episode "queued" notice on its
+// transition time, so a time that moved while still held would re-post it.
+func TestReconcileCapacityHold_StableAcrossPasses(t *testing.T) {
+	nowT := time.Date(2026, 10, 28, 17, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return nowT }
+	ac := classWithBundle("ac1", spiceboxv1alpha1.ToolBundle{Name: "code", Class: "toolbelt"})
+	sess := sessionCreatedAt("s1", "ac1", nowT.Add(-12*time.Minute))
+	bundle := bundleWithPod("s1", "code", "s1-code-pod", nowT.Add(-12*time.Minute))
+	bundle.Status.Conditions = []metav1.Condition{{
+		Type: spiceboxv1alpha1.SpiceboxSessionConditionReady, Status: metav1.ConditionTrue,
+		Reason: "Ready", LastTransitionTime: metav1.NewTime(nowT.Add(-11 * time.Minute)),
+	}}
+	det := capacityStalledDetector("s1", nowT.Add(-10*time.Minute))
+	r, c := fakeReconciler(t, clock, ac, sess, bundle, detectorSettings(t), det)
+
+	runReconciles(t, r, "s1", 3)
+	first := apimeta.FindStatusCondition(getSession(t, c, "s1").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
+	require.NotNil(t, first, "the detector is held")
+	require.Equal(t, metav1.ConditionTrue, first.Status)
+
+	nowT = nowT.Add(time.Minute)
+	runReconciles(t, r, "s1", 3)
+	later := apimeta.FindStatusCondition(getSession(t, c, "s1").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
+	require.NotNil(t, later)
+	assert.Equal(t, metav1.ConditionTrue, later.Status, "still held")
+	assert.True(t, first.LastTransitionTime.Equal(&later.LastTransitionTime),
+		"the hold's transition time must not move while it stays held")
+}
+
+func capacityStalledDetector(sessName string, created time.Time) *corev1.Pod {
+	det := notReadyDetectorPod(sessName, "prompt-injection", created)
+	det.Status.Phase = corev1.PodPending
+	det.Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+		Reason: corev1.PodReasonUnschedulable, Message: "0/3 nodes are available: 3 Insufficient cpu.",
+	}}
+	return det
+}

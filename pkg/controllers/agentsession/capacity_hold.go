@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/controllers/conditions"
 )
 
 // Capacity hold: a session whose bundle or detector pod is Pending because the
@@ -74,15 +75,25 @@ func (r *Reconciler) effectiveCapacityHoldTimeout() time.Duration {
 }
 
 // capacityHoldDeadline returns the readiness deadline to enforce given the
-// current scheduling stall, and whether a capacity hold applies. A hold never
-// SHORTENS the base deadline (a slow-cold-start storage class's 20m stays 20m
-// under a shorter hold timeout).
-func (r *Reconciler) capacityHoldDeadline(stall schedulingStall, stalled bool, base time.Duration) (time.Duration, bool) {
+// current scheduling stall, and whether a capacity hold applies. A hold that
+// would not EXTEND the base deadline is no hold at all (a slow-cold-start
+// storage class's 20m under a 15m hold timeout): the session gets the base
+// deadline, no "queued" notice, and — if it times out — the ordinary failure
+// message rather than one claiming it was held for capacity.
+//
+// Only a BOOTING session (Pending, or not yet phased) is ever held. A Running
+// session that lost a pod keeps the ordinary fail-closed deadline — its
+// content guard or tools are down under live work, and the hold window,
+// measured from provisioning start, would misdescribe it anyway — and a
+// terminal session has nothing left to wait for (the provisioning stages
+// still run on a Failed session's re-reconciles).
+func (r *Reconciler) capacityHoldDeadline(sess *spiceboxv1alpha1.AgentSession, stall schedulingStall, stalled bool, base time.Duration) (time.Duration, bool) {
+	booting := sess.Status.Phase == "" || sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhasePending
 	hold := r.effectiveCapacityHoldTimeout()
-	if !stalled || hold <= 0 || !capacityShortfall(stall.reason) {
+	if !booting || !stalled || hold <= base || !capacityShortfall(stall.reason) {
 		return base, false
 	}
-	return max(base, hold), true
+	return hold, true
 }
 
 // capacityHoldMessage is the CapacityHold=True Message — the user-facing line
@@ -104,8 +115,16 @@ func capacityHoldMessage(until time.Time) string {
 func (r *Reconciler) syncCapacityHold(sess *spiceboxv1alpha1.AgentSession, held bool, stall schedulingStall, until time.Time) {
 	if held {
 		if stall.pending >= unschedulableGrace {
-			r.setTrueCondition(sess, spiceboxv1alpha1.AgentSessionConditionCapacityHold,
-				spiceboxv1alpha1.ReasonCapacityHoldWaiting, capacityHoldMessage(until))
+			// r.now() for the transition time, like releaseCapacityHold: the
+			// episode identity channelsd dedups on is this timestamp, and the
+			// restart epoch is compared against r.now().
+			conditions.Set(sess, &sess.Status.Conditions, metav1.Condition{
+				Type:               spiceboxv1alpha1.AgentSessionConditionCapacityHold,
+				Status:             metav1.ConditionTrue,
+				Reason:             spiceboxv1alpha1.ReasonCapacityHoldWaiting,
+				Message:            capacityHoldMessage(until),
+				LastTransitionTime: metav1.NewTime(r.now()),
+			})
 		}
 		return
 	}
@@ -118,8 +137,15 @@ func (r *Reconciler) releaseCapacityHold(sess *spiceboxv1alpha1.AgentSession) {
 	if !meta.IsStatusConditionTrue(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold) {
 		return
 	}
-	r.setFalseCondition(sess, spiceboxv1alpha1.AgentSessionConditionCapacityHold,
-		spiceboxv1alpha1.ReasonCapacityHoldReleased, "")
+	// The transition time is stamped from r.now(), not left to the wall clock:
+	// capacityHoldAdjustedStart compares it against provisioning start and
+	// r.now(), so all three must come from the same clock.
+	conditions.Set(sess, &sess.Status.Conditions, metav1.Condition{
+		Type:               spiceboxv1alpha1.AgentSessionConditionCapacityHold,
+		Status:             metav1.ConditionFalse,
+		Reason:             spiceboxv1alpha1.ReasonCapacityHoldReleased,
+		LastTransitionTime: metav1.NewTime(r.now()),
+	})
 }
 
 // expireCapacityHold records that a hold ran out without capacity arriving.
