@@ -755,6 +755,7 @@ type config struct {
 	nodePinnedStorageReclaimGrace time.Duration
 	idleStorageReclaimAfter       time.Duration
 	failedSandboxReapGrace        time.Duration
+	capacityHoldTimeout           time.Duration
 	oauthRefreshThreshold         time.Duration
 	workspaceStorageClass         string
 	workspaceSize                 string
@@ -878,6 +879,8 @@ func newCommand() *cobra.Command {
 		"When the workspace class is the node-local bundled class (ap-workspace-rwx), reclaim a SLEPT idle channel session's workspace + snapshot-store PVCs once it has been asleep this long, while keeping the session Idle and wakeable (wake re-provisions empty storage and re-clones). Bounds the node-local disk a parked, wakeable population holds: the idle-sleep reaper frees their CPU but keeps their PVCs, so without this their scratch accumulates until a node crosses its ephemeral-storage watermark. Ignored for cross-node RWX classes (no single node is at risk). Set to 0 to disable.")
 	fs.DurationVar(&cfg.failedSandboxReapGrace, "failed-sandbox-reap-grace", time.Minute,
 		"How long a Failed session's sandbox pods (bundle SpiceboxSessions + runner pod) are kept for debugging before teardown. The AgentSession itself is kept either way. Set to 0 (or negative) to disable reaping entirely (keep everything, for debugging).")
+	fs.DurationVar(&cfg.capacityHoldTimeout, "capacity-hold-timeout", time.Hour,
+		"How long a booting AgentSession whose sandbox/detector pods are Pending on a cluster capacity shortfall (Insufficient cpu/memory, too many pods) is HELD — queued with a notice in its channel, resuming by itself once the scheduler places the pod — instead of failing at the ordinary readiness deadline. Measured from provisioning start. Pods that can never fit, or are blocked by a taint or volume affinity, still fail at the ordinary deadline. Set to a negative value to disable holding.")
 	fs.DurationVar(&cfg.oauthRefreshThreshold, "oauth-refresh-threshold", 5*time.Minute,
 		"Default refresh threshold for type=oauth AgentIdentity credentials. AgentIdentities with spec.refreshThreshold override this per-identity.")
 	fs.StringVar(&cfg.workspaceStorageClass, "workspace-storage-class", "",
@@ -2675,6 +2678,7 @@ func run(cfg *config) {
 		DefaultChannelArchiveAfter:     cfg.defaultChannelArchiveAfter,
 		DefaultSessionSleepAfter:       cfg.defaultSessionSleepAfter,
 		FailedSandboxReapGrace:         cfg.failedSandboxReapGrace,
+		CapacityHoldTimeout:            cfg.capacityHoldTimeout,
 		DefaultSessionStorageRetention: cfg.sessionStorageRetention,
 		SessionGCAfter:                 cfg.sessionGCAfter,
 		NodePinnedStorageReclaimGrace:  cfg.nodePinnedStorageReclaimGrace,
