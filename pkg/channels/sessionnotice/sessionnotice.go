@@ -218,6 +218,9 @@ func CapacityHold(sess *spiceboxv1alpha1.AgentSession) (string, bool) {
 // CapacityHoldExpired reports whether the session failed because its capacity
 // hold ran out — the operator's CapacityHold=False/HoldExpired.
 func CapacityHoldExpired(sess *spiceboxv1alpha1.AgentSession) bool {
+	if sess == nil {
+		return false
+	}
 	c := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
 	return c != nil && c.Status == metav1.ConditionFalse && c.Reason == spiceboxv1alpha1.ReasonCapacityHoldExpired
 }

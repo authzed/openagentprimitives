@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 )
 
 func TestCapacityShortfall(t *testing.T) {
@@ -42,7 +44,7 @@ func TestCapacityHoldDeadline(t *testing.T) {
 	}{
 		{"default timeout, capacity stall: held for 1h", 0, short, true, 8 * time.Minute, time.Hour, true},
 		{"configured timeout, capacity stall: held for it", 30 * time.Minute, short, true, 8 * time.Minute, 30 * time.Minute, true},
-		{"hold shorter than base: held, base kept", 5 * time.Minute, short, true, 20 * time.Minute, 20 * time.Minute, true},
+		{"hold no longer than base: not held, base kept", 5 * time.Minute, short, true, 20 * time.Minute, 20 * time.Minute, false},
 		{"disabled: base deadline, not held", -1, short, true, 8 * time.Minute, 8 * time.Minute, false},
 		{"not stalled: base deadline, not held", 0, schedulingStall{}, false, 8 * time.Minute, 8 * time.Minute, false},
 		{"non-capacity stall: base deadline, not held", 0, taint, true, 8 * time.Minute, 8 * time.Minute, false},
@@ -50,8 +52,33 @@ func TestCapacityHoldDeadline(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &Reconciler{CapacityHoldTimeout: tc.timeout}
-			dl, held := r.capacityHoldDeadline(tc.stall, tc.stalled, tc.base)
+			sess := &spiceboxv1alpha1.AgentSession{}
+			sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhasePending
+			dl, held := r.capacityHoldDeadline(sess, tc.stall, tc.stalled, tc.base)
 			assert.Equal(t, tc.wantDl, dl)
+			assert.Equal(t, tc.wantHeld, held)
+		})
+	}
+}
+
+// Only a booting session is held; a Running or terminal one keeps the base.
+func TestCapacityHoldDeadline_OnlyWhileBooting(t *testing.T) {
+	short := schedulingStall{reason: "0/3 nodes are available: 3 Insufficient cpu."}
+	cases := []struct {
+		phase    string
+		wantHeld bool
+	}{
+		{"", true},
+		{spiceboxv1alpha1.AgentSessionPhasePending, true},
+		{spiceboxv1alpha1.AgentSessionPhaseRunning, false},
+		{spiceboxv1alpha1.AgentSessionPhaseFailed, false},
+		{spiceboxv1alpha1.AgentSessionPhaseIdle, false},
+	}
+	for _, tc := range cases {
+		t.Run("phase "+tc.phase, func(t *testing.T) {
+			sess := &spiceboxv1alpha1.AgentSession{}
+			sess.Status.Phase = tc.phase
+			_, held := (&Reconciler{}).capacityHoldDeadline(sess, short, true, 8*time.Minute)
 			assert.Equal(t, tc.wantHeld, held)
 		})
 	}
