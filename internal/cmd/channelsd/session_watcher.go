@@ -115,6 +115,17 @@ type sessionWatcher struct {
 	// final edit once per channelsd restart, same hazard as every other
 	// terminal-trigger marker in this file.
 	pinnedApplied map[string]string
+	// terminalFinalized tracks session UIDs whose "still working" indicators
+	// were already torn down on reaching a terminal phase (finalizeTerminal),
+	// so the 5s poll does it once. In-memory only, on purpose: a restart
+	// re-finalizing a recently-ended session is a harmless empty setStatus,
+	// and terminalFinalizeWindow keeps a restart from touching every terminal
+	// session the cluster has ever kept.
+	terminalFinalized map[string]bool
+	// holdNoticeReported tracks (uid -> CapacityHold LastTransitionTime) for
+	// the "queued for capacity" notice, the in-memory half of
+	// capacityHoldNoticeAnnotation.
+	holdNoticeReported map[string]string
 
 	// publish is the NATS publish closure. Wired by main.go to nc.Publish;
 	// tests override with a recording stub.
@@ -134,6 +145,8 @@ func newSessionWatcher(cli client.Client, senders outbound.SenderResolver, wd *s
 		schedNoticePosted:     map[string]bool{},
 		restartDeniedReported: map[string]string{},
 		pinnedApplied:         map[string]string{},
+		terminalFinalized:     map[string]bool{},
+		holdNoticeReported:    map[string]string{},
 	}
 }
 
@@ -205,13 +218,16 @@ func (w *sessionWatcher) reconcile(ctx context.Context, logger logr.Logger) {
 		// Idle path below, so without this its Yielded State would linger in
 		// the watchdog map for the process lifetime. Forget is idempotent
 		// (a delete on an absent key is a no-op), so running it every tick for
-		// terminal sessions is cheap.
-		if w.wd != nil {
-			switch sess.Status.Phase {
-			case spiceboxv1alpha1.AgentSessionPhaseSucceeded,
-				spiceboxv1alpha1.AgentSessionPhaseFailed:
+		// terminal sessions is cheap. finalizeTerminal additionally tears down
+		// the visible "working" indicators once, for a session the runner did
+		// not get to close out itself.
+		switch sess.Status.Phase {
+		case spiceboxv1alpha1.AgentSessionPhaseSucceeded,
+			spiceboxv1alpha1.AgentSessionPhaseFailed:
+			if w.wd != nil {
 				w.wd.Forget(sess.Namespace, sess.Name)
 			}
+			w.finalizeTerminal(ctx, logger, sess)
 		}
 		// Live pinned opening message: re-render a triggered session's
 		// thread-root status in place as it progresses (and once more, final,
@@ -262,6 +278,7 @@ func (w *sessionWatcher) reconcile(ctx context.Context, logger logr.Logger) {
 				spiceboxv1alpha1.AgentSessionConditionSandboxScheduling); cond != nil {
 				w.handleSandboxScheduling(ctx, logger, sess, cond)
 			}
+			w.maybePostCapacityHoldNotice(ctx, logger, sess)
 		}
 		if sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhaseAwaitingRetry {
 			if w.publish == nil {
@@ -758,7 +775,7 @@ func (w *sessionWatcher) reportFailure(sess *spiceboxv1alpha1.AgentSession) erro
 	}
 	// A session fails once, so its UID alone identifies the notice.
 	return w.publishNotice(sess, "notice-"+categories.AgentFailed+"-"+string(sess.UID),
-		buildFailureNotice(reason, condMsg))
+		buildFailureNotice(reason, condMsg, sessionnotice.CapacityHoldExpired(sess)))
 }
 
 // buildFailureNotice composes the user-facing message for a session that died.
@@ -767,11 +784,19 @@ func (w *sessionWatcher) reportFailure(sess *spiceboxv1alpha1.AgentSession) erro
 // controller text, sometimes a whole stack trace — so they travel in the
 // Excerpt, which every surface renders inert. The lead and next step are
 // written for a human who wants to know whether to start over.
-func buildFailureNotice(reason, msg string) *notice.Notice {
+//
+// holdExpired marks a session that never ran at all: it was queued for cluster
+// capacity and the hold ran out. "The agent stopped" would send the reader
+// looking for a bug, so that case says what actually happened.
+func buildFailureNotice(reason, msg string, holdExpired bool) *notice.Notice {
 	args := notice.Args{
 		Lead:     "The agent stopped and can't continue",
 		NextStep: "Start a new thread to try again.",
 		Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceParticipants},
+	}
+	if holdExpired {
+		args.Lead = "Couldn't get cluster capacity in time"
+		args.NextStep = "Try again once the cluster is less busy."
 	}
 	detail := strings.TrimSpace(msg)
 	if detail == "" {
@@ -935,6 +960,16 @@ func (w *sessionWatcher) pruneMarkers(items []spiceboxv1alpha1.AgentSession) {
 	for uid := range w.pinnedApplied {
 		if _, ok := live[uid]; !ok {
 			delete(w.pinnedApplied, uid)
+		}
+	}
+	for uid := range w.terminalFinalized {
+		if _, ok := live[uid]; !ok {
+			delete(w.terminalFinalized, uid)
+		}
+	}
+	for uid := range w.holdNoticeReported {
+		if _, ok := live[uid]; !ok {
+			delete(w.holdNoticeReported, uid)
 		}
 	}
 }

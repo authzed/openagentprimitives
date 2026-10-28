@@ -484,6 +484,29 @@ const (
 	// MonitoringPublish is configured: it is the primary signal channelsd
 	// reacts to, and must work on clusters with no NATS wiring.
 	AgentSessionConditionSandboxScheduling = "SandboxScheduling"
+	// AgentSessionConditionCapacityHold is True (ReasonCapacityHoldWaiting)
+	// while a session is HELD for cluster capacity: a bundle or detector pod is
+	// stuck Pending because the cluster is short of cpu/memory/pods — a
+	// shortfall that frees up on its own as other sessions finish — so instead
+	// of failing at the ordinary readiness deadline the session waits, up to
+	// the operator's --capacity-hold-timeout measured from provisioning start,
+	// and resumes by itself once the scheduler places the pod. Message is the
+	// user-facing statement, including when the hold gives up; channelsd posts
+	// it to the session's thread. False with ReasonCapacityHoldReleased once
+	// capacity arrived, or ReasonCapacityHoldExpired when the hold ran out and
+	// the session failed. Absent when no capacity hold ever applied.
+	//
+	// Distinct from SandboxScheduling, which reports ANY scheduler stall (a
+	// taint or a volume-affinity conflict too) with the scheduler's raw text:
+	// this one is the policy decision layered on the capacity-shaped subset.
+	AgentSessionConditionCapacityHold = "CapacityHold"
+)
+
+// AgentSessionConditionCapacityHold reasons.
+const (
+	ReasonCapacityHoldWaiting  = "WaitingForCapacity"
+	ReasonCapacityHoldReleased = "CapacityAvailable"
+	ReasonCapacityHoldExpired  = "HoldExpired"
 )
 
 // Settings reasons (shared by AgentClass + AgentSession SettingsAccepted and the
