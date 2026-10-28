@@ -15,6 +15,36 @@ const baseRequest: InteractionRequestInner = {
 };
 
 describe("InteractionCard", () => {
+  it("preserves exact included requests before and after approval replay", () => {
+    const consent = {
+      ...baseRequest,
+      category: "goal_execution_consent",
+      requestRef: "reminder",
+      body: "Only respond_to_user; fresh action approval required.",
+      details: { dueAt: "2030-01-01T12:00:00Z", recipient: "alice@example.com" },
+    };
+    const request = { ...baseRequest, category: "plan_phase", consents: [consent], details: [consent] };
+    const { container, rerender } = render(<InteractionCard request={request} onDecision={vi.fn()} />);
+    expect(screen.getByText("View exact requests included in this approval")).toBeTruthy();
+    const exact = container.querySelector("pre")!.textContent;
+    expect(exact).toContain("Only respond_to_user");
+    expect(exact).toContain("alice@example.com");
+    expect(container.querySelector("details")!.hasAttribute("open")).toBe(false);
+    const replay = JSON.parse(JSON.stringify(request));
+    rerender(
+      <InteractionCard
+        request={replay}
+        applied={{
+          agentSessionRef: request.agentSessionRef,
+          category: request.category,
+          requestRef: request.requestRef,
+          outcome: "approved",
+        }}
+        onDecision={vi.fn()}
+      />,
+    );
+    expect(container.querySelector("pre")!.textContent).toBe(exact);
+  });
   it("renders Lead/Body/Fields", () => {
     render(
       <InteractionCard

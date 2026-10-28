@@ -26,6 +26,9 @@ export interface SessionRow {
   // startedAt carries json:"startedAt,omitempty" — absent for a session whose
   // status has no start time yet, which is why it is optional here.
   startedAt?: string;
+  uid?: string;
+  goalCreated?: boolean;
+  openingSummary?: string;
 }
 
 // ListNotices is every way the list is incomplete. Zero values mean complete.

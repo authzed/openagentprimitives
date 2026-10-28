@@ -79,6 +79,22 @@ func RequestViewMessage(deps Deps, ns, name, text, via string, ext ExternalIdent
 			TeamScope:  ext.TeamScope,
 		},
 	}
+	return requestViewPayload(deps, ns, name, pl)
+}
+
+// RequestViewActor attests the authenticated author of an opening prompt
+// without delivering that prompt a second time. Only channelsd signs memory.
+func RequestViewActor(deps Deps, ns, name string, ext ExternalIdentity) (InboundDecision, error) {
+	return requestViewPayload(deps, ns, name, channelevents.ViewMessagePayload{
+		AttestOnly: true,
+		Author:     channelevents.ExternalIdentity{Kind: ext.Kind, ExternalID: ext.ExternalID, Email: ext.Email, TeamScope: ext.TeamScope},
+	})
+}
+
+func requestViewPayload(deps Deps, ns, name string, pl channelevents.ViewMessagePayload) (InboundDecision, error) {
+	if deps.NATSRequest == nil {
+		return InboundDecision{Outcome: OutcomeInternalError}, errors.New("channelkinds: no NATS request transport wired")
+	}
 	raw, err := channelevents.RequestIn(deps.NATSRequest, ns, name,
 		channelevents.KindViewMessage, pl, ViewMessageTimeout)
 	if err != nil {

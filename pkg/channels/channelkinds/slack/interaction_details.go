@@ -13,6 +13,7 @@
 package slack
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,37 @@ import (
 // populated. It is the sole Show-Details affordance — every decision category
 // renders through the unified Interaction model.
 const interactionDetailsActionID = "interaction_show_details"
+
+// Arrays contain the exact included requests. Plain text preserves their full
+// JSON without making user-authored mentions or links active in Slack.
+func renderRawInteractionDetailsModal(raw json.RawMessage, requestRef, sessRef string) ([]slackapi.Block, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || !json.Valid(raw) {
+		return nil, fmt.Errorf("invalid interaction details")
+	}
+	if raw[0] != '[' {
+		var d channelevents.ToolApprovalDetails
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return nil, err
+		}
+		return renderInteractionDetailsModal(d, requestRef, sessRef), nil
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, raw, "", "  "); err != nil {
+		return nil, err
+	}
+	runes := []rune(pretty.String())
+	if len(runes) > 95*2800 {
+		return nil, fmt.Errorf("exact interaction details exceed Slack modal capacity")
+	}
+	var blocks []slackapi.Block
+	for len(runes) > 0 {
+		n := min(len(runes), 2800)
+		blocks = append(blocks, slackapi.NewSectionBlock(slackapi.NewTextBlockObject("plain_text", string(runes[:n]), false, false), nil, nil))
+		runes = runes[n:]
+	}
+	return blocks, nil
+}
 
 // Per-slot rune caps for the modal's short fields.
 //
@@ -211,12 +243,12 @@ func (l *slackListener) handleInteractionDetailsAction(ctx context.Context, cb s
 		source := "degraded" // "cache" | "memory" | "degraded" — for the modal-opened log
 		if l.interactionDelivery != nil {
 			if raw, ok := l.interactionDelivery.getDetails(v.R); ok {
-				var d channelevents.ToolApprovalDetails
-				if err := json.Unmarshal(raw, &d); err != nil {
+				blocks, err := renderRawInteractionDetailsModal(raw, v.R, v.S)
+				if err != nil {
 					logger.Info("interaction_details: decode cached details failed",
 						"requestRef", v.R, "err", err.Error())
 				} else {
-					modalBlocks = renderInteractionDetailsModal(d, v.R, v.S)
+					modalBlocks = blocks
 					source = "cache"
 				}
 			}
@@ -225,9 +257,13 @@ func (l *slackListener) handleInteractionDetailsAction(ctx context.Context, cb s
 			// Cache miss (channelsd restarted, or the request resolved and its
 			// delivery entry was dropped). Fall back to the durable approval
 			// record the runner wrote at request time.
-			if d, ok := l.interactionDetailsFromMemory(ctx, v.R, v.S); ok {
-				modalBlocks = renderInteractionDetailsModal(d, v.R, v.S)
-				source = "memory"
+			if raw, ok := l.interactionDetailsFromMemory(ctx, v.R, v.S); ok {
+				blocks, err := renderRawInteractionDetailsModal(raw, v.R, v.S)
+				if err != nil {
+					logger.Info("interaction_details: decode persisted details failed", "requestRef", v.R, "err", err.Error())
+				} else {
+					modalBlocks, source = blocks, "memory"
+				}
 			}
 		}
 		if modalBlocks == nil {
@@ -260,25 +296,19 @@ func (l *slackListener) handleInteractionDetailsAction(ctx context.Context, cb s
 // memory is not wired, the record is absent, it carries no Details (a category
 // that publishes none), or the query/decode fails — every failure path is
 // logged, never silently dropped.
-func (l *slackListener) interactionDetailsFromMemory(ctx context.Context, requestID, sessRef string) (channelevents.ToolApprovalDetails, bool) {
+func (l *slackListener) interactionDetailsFromMemory(ctx context.Context, requestID, sessRef string) (json.RawMessage, bool) {
 	if l.deps.Memory == nil {
-		return channelevents.ToolApprovalDetails{}, false
+		return nil, false
 	}
 	rec, err := memapproval.RequestByID(ctx, l.deps.Memory,
 		memory.Scope{Kind: "session", ID: sessRef}, requestID)
 	if err != nil {
 		log.FromContext(ctx).Info("interaction_details: memory lookup failed",
 			"requestID", requestID, "sessRef", sessRef, "err", err.Error())
-		return channelevents.ToolApprovalDetails{}, false
+		return nil, false
 	}
 	if rec == nil || len(rec.Details) == 0 {
-		return channelevents.ToolApprovalDetails{}, false
+		return nil, false
 	}
-	var d channelevents.ToolApprovalDetails
-	if err := json.Unmarshal(rec.Details, &d); err != nil {
-		log.FromContext(ctx).Info("interaction_details: decode persisted details failed",
-			"requestID", requestID, "sessRef", sessRef, "err", err.Error())
-		return channelevents.ToolApprovalDetails{}, false
-	}
-	return d, true
+	return rec.Details, true
 }

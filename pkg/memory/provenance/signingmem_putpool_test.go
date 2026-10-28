@@ -43,6 +43,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,6 +134,24 @@ func sessionSigner(t *testing.T, seed byte) (*provenance.Signer, provenance.MapK
 	priv := testKey(seed)
 	s := provenance.NewSigner(priv, provenance.SessionPublisher(poolTestNS, poolTestSess))
 	return s, provenance.MapKeyLookup{{Publisher: s.Publisher(), KeyID: s.KeyID()}: pub(priv)}
+}
+
+// Pool writes must reject a missing timestamp before consuming a position too.
+func TestSigningMemory_PutToPool_ZeroTimestampDoesNotConsumeChainPosition(t *testing.T) {
+	registerObservationKind(t)
+	signer, keys := sessionSigner(t, 0x09)
+	client, _ := realMemoryAPI(t, keys, grantedPools{writeGrants: []string{"observation_dossier:case-timestamps"}})
+	signed := provenance.NewSigningMemory(client, signer)
+	pool := memory.Scope{Kind: "resource", ID: "observation_dossier:case-timestamps"}
+	session := memory.Scope{Kind: "session", ID: poolTestNS + "/" + poolTestSess}
+	entry := memory.Entry{Kind: observation.KindName, ID: "obs-zero", Content: json.RawMessage(`{"summary":"test"}`)}
+	_, err := signed.PutToPool(context.Background(), session, pool, entry)
+	require.ErrorContains(t, err, "zero CreatedAt")
+	entry.ID = "obs-next"
+	entry.CreatedAt = time.Now().UTC()
+	stored, err := signed.PutToPool(context.Background(), session, pool, entry)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), stored.Provenance.Seq)
 }
 
 // TestSigningMemory_PutToPool_SignsAndLandsThroughTheRealMemoryAPI is the test

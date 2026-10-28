@@ -12,6 +12,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
 	"github.com/authzed/openagentprimitives/pkg/controllers/conditions"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 )
 
 // HandleInteractionRequest is the category-generic inbound park handler. The
@@ -214,10 +215,66 @@ func (p *Pipeline) HandleInteractionApplied(ctx context.Context, env channeleven
 		return fmt.Errorf("decode interaction applied payload (session %s/%s): %w",
 			env.Session.Namespace, env.Session.Name, err)
 	}
+	unlock := p.lockInteraction(env.Session.Namespace, env.Session.Name, pl.RequestRef)
+	defer unlock()
 	var sess spiceboxv1alpha1.AgentSession
 	key := client.ObjectKey{Namespace: env.Session.Namespace, Name: env.Session.Name}
 	if err := p.K8s.Get(ctx, key, &sess); err != nil {
 		return fmt.Errorf("get session %s (requestRef %q): %w", key, pl.RequestRef, err)
+	}
+
+	// Timeout reports enter through IN only. Publish the retained winner after
+	// serialization with human decisions; never send a competing live verdict.
+	if pl.Outcome == channelevents.OutcomeExpired {
+		cached := false
+		if cat, ok := channelinteractions.Get(pl.Category); ok && cat.Resurface == channelinteractions.ResurfaceCached && p.Mem != nil {
+			record, found, err := parkedprompt.Find(ctx, p.Mem, promptScope(key.Namespace, key.Name), pl.RequestRef)
+			if err != nil {
+				return err
+			}
+			cached = found
+			if found {
+				if !record.Resolved {
+					frozen := pl
+					frozen.AgentSessionRef, frozen.ResponseRef, frozen.MintedURL = env.Session, "", ""
+					canonical, err := channelevents.BuildEnvelope(key.Namespace, key.Name, env.Kind, frozen)
+					if err != nil {
+						return err
+					}
+					raw, err := json.Marshal(canonical)
+					if err != nil {
+						return err
+					}
+					record, err = parkedprompt.ResolveWithOutcome(ctx, p.Mem, promptScope(key.Namespace, key.Name), pl.RequestRef, raw)
+					if err != nil {
+						return err
+					}
+				}
+				if len(record.Resolution) > 0 {
+					var canonical channelevents.Envelope
+					if err := json.Unmarshal(record.Resolution, &canonical); err != nil {
+						return err
+					}
+					var winner channelevents.InteractionAppliedPayload
+					if err := json.Unmarshal(canonical.Payload, &winner); err != nil {
+						return err
+					}
+					if winner.Outcome != channelevents.OutcomeExpired {
+						return nil
+					}
+					if record.ResolutionPending {
+						if err := p.deliverInteractionResolution(ctx, record); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		if !cached {
+			if err := channelevents.PublishOut(p.NATS.Publish, key.Namespace, key.Name, env.Kind, pl); err != nil {
+				return err
+			}
+		}
 	}
 	matchedIdx := -1
 	for i, e := range sess.Status.PendingInteractions {

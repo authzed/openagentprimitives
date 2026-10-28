@@ -288,3 +288,16 @@ func parseSessionFixedLeaf(subject, leaf string) (ns, name string, ok bool) {
 	}
 	return p[2], p[3], true
 }
+
+// ComponentDecision is outside every runner's per-session publish grant. Human
+// transports use it for decisions that must not be manufactured by a runner.
+func ComponentDecision(ns, name string) string {
+	return Root + ".component.interaction_decision." + ns + "." + name
+}
+func ParseComponentDecision(subject string) (ns, name string, ok bool) {
+	parts := strings.Split(subject, ".")
+	if len(parts) != 5 || parts[0] != Root || parts[1] != "component" || parts[2] != "interaction_decision" || parts[3] == "" || parts[4] == "" {
+		return "", "", false
+	}
+	return parts[3], parts[4], true
+}

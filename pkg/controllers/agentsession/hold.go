@@ -79,8 +79,12 @@ func mapSessionHoldToSession(_ context.Context, o client.Object) []reconcile.Req
 // releasedHoldFor filter this single List, so the List call -- and its
 // fail-closed error handling -- lives in exactly one place.
 func (r *Reconciler) holdsFor(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) ([]spiceboxv1alpha1.SessionHold, error) {
+	return holdsFor(ctx, r.Client, sess)
+}
+
+func holdsFor(ctx context.Context, c client.Reader, sess *spiceboxv1alpha1.AgentSession) ([]spiceboxv1alpha1.SessionHold, error) {
 	var list spiceboxv1alpha1.SessionHoldList
-	if err := r.Client.List(ctx, &list, client.InNamespace(sess.Namespace)); err != nil {
+	if err := c.List(ctx, &list, client.InNamespace(sess.Namespace)); err != nil {
 		return nil, fmt.Errorf("list SessionHolds in %s: %w", sess.Namespace, err)
 	}
 	var out []spiceboxv1alpha1.SessionHold
@@ -94,7 +98,15 @@ func (r *Reconciler) holdsFor(ctx context.Context, sess *spiceboxv1alpha1.AgentS
 
 // activeHoldFor returns the first unreleased SessionHold naming sess, or nil.
 func (r *Reconciler) activeHoldFor(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (*spiceboxv1alpha1.SessionHold, error) {
-	holds, err := r.holdsFor(ctx, sess)
+	return ActiveHold(ctx, r.Client, sess)
+}
+
+// ActiveHold returns the first unreleased SessionHold naming sess, or nil. It
+// is the one hold predicate for every writer that could otherwise destroy a
+// held session's evidence, including the goal dispatcher's deletes. A List
+// error is returned, never read as "no hold".
+func ActiveHold(ctx context.Context, c client.Reader, sess *spiceboxv1alpha1.AgentSession) (*spiceboxv1alpha1.SessionHold, error) {
+	holds, err := holdsFor(ctx, c, sess)
 	if err != nil {
 		return nil, err
 	}

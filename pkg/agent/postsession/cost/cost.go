@@ -31,6 +31,8 @@ type Deps struct {
 	Stamp func(ctx context.Context, c v1.EstimatedSessionCost) (v1.EstimatedSessionCost, error)
 	// Now supplies AsOf; nil ⇒ metav1.Now.
 	Now func() metav1.Time
+	// Quiet records accounting without sending a session-cost notice.
+	Quiet bool
 }
 
 // Reporter is the SessionEnd cost-estimate hook.
@@ -95,7 +97,7 @@ func (r *Reporter) Eval(ctx context.Context, in pipeline.Input) pipeline.Decisio
 		ByModel:        buckets,
 		ByTool:         toolBuckets,
 	}
-	if known && cost.Currency == "" {
+	if (known || billedToolTotal > 0) && cost.Currency == "" {
 		cost.Currency = "USD"
 	}
 	// Stamp on EVERY path (cheap, gives admin UI a live running spend). The
@@ -118,7 +120,7 @@ func (r *Reporter) Eval(ctx context.Context, in pipeline.Input) pipeline.Decisio
 	}
 
 	// Message ONLY on true completion/failure (never idle/await-user).
-	if e.Reason != "completed" && e.Reason != "failed" {
+	if r.d.Quiet || (e.Reason != "completed" && e.Reason != "failed") {
 		return pipeline.Decision{Verdict: pipeline.Allow}
 	}
 	return pipeline.Decision{

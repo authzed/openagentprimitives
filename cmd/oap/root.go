@@ -12,6 +12,7 @@ import (
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/clilogin"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktopcmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/directorycmd"
+	"github.com/authzed/openagentprimitives/cmd/oap/internal/goalscmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/identitycmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/installcmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/kgcmd"
@@ -74,6 +75,7 @@ func NewRootCmdWithGlobals(g *Globals) *cobra.Command {
 	root.AddCommand(directorycmd.NewCmd(g))
 	root.AddCommand(settingscmd.NewCmd(g))
 	root.AddCommand(memorycmd.NewCmd(g))
+	root.AddCommand(goalscmd.NewCmd(g))
 	root.AddCommand(auditcmd.NewCmd(g))
 	root.AddCommand(kgcmd.NewCmd(g))
 	root.AddCommand(pincmd.NewCmd(g))

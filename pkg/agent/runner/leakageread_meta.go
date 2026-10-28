@@ -1,7 +1,7 @@
 // pkg/agent/runner/leakageread_meta.go
 //
-// The read-side info-leakage gate for the one meta tool that reaches resources
-// outside the session.
+// The read-side information-flow gate for meta tools that read resources
+// outside the session, including memory search and durable goals.
 //
 // leakageGateApplies is `kind != tool.KindMeta`, and the comment above
 // gatePipeline states the premise that exemption rests on: a meta tool with a

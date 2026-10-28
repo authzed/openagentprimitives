@@ -123,7 +123,17 @@ const (
 	KindIdP   Kind = "idp"
 	KindFake  Kind = "fake"
 	KindBento Kind = "bento"
+	// KindCLI is a decider asserted by `oap session approve`: an approver
+	// email the caller supplies, not one a transport authenticated.
+	KindCLI Kind = "cli"
 )
+
+// SelfAsserted reports whether a decider of this kind is only what the CLI
+// process says it is, with no transport that authenticated the human:
+// `oap session approve`'s typed approver email (KindCLI) and `oap agent
+// chat`'s OS-username fallback (KindLocal). Chat's logged-in branch stamps
+// KindIdP from a verified login, the same shape the web UI uses.
+func (k Kind) SelfAsserted() bool { return k == KindCLI || k == KindLocal }
 
 // TeamScope is a workspace/team scope (e.g. a Slack team id). Values are
 // dynamic (not an enum); typed for uniform id safety.

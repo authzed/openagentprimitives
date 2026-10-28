@@ -89,7 +89,8 @@ func operatorOrderKey(ev lifecyclecore.Event, observedTurn int, uid string) life
 	block := channelevents.SeqBlockStart
 	switch ev.(type) {
 	case lifecyclecore.WakeRequested, lifecyclecore.RunnerCrash,
-		lifecyclecore.RetryTTLExpired, lifecyclecore.ArchiveSweep:
+		lifecyclecore.RetryTTLExpired, lifecyclecore.ArchiveSweep,
+		lifecyclecore.GoalRunConcluded, lifecyclecore.GoalRunFailed:
 		region = lifecyclecore.RegionOperatorPost
 		block = channelevents.SeqBlockEnd
 	}

@@ -53,6 +53,9 @@ const restorePollInterval = 5 * time.Second
 // service account may create a session that way (the finalizer admission
 // policy), which is why this create must stay on the operator's client.
 func EnsureChildSession(ctx context.Context, c client.Client, parent *spiceboxv1alpha1.AgentSession, pr *spiceboxv1alpha1.PendingRestart) (*spiceboxv1alpha1.AgentSession, error) {
+	if parent.Spec.GoalExecution != nil {
+		return nil, fmt.Errorf("goal execution cannot create a continuation")
+	}
 	desired := BuildChildSession(parent, pr)
 	if err := c.Create(ctx, desired); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
@@ -338,6 +341,15 @@ func (r *Reconciler) clearPriorRestartDenial(ctx context.Context, sess *spicebox
 // in flight and the outer Reconcile should continue normally.
 func (r *Reconciler) ReconcileRestart(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (proceed bool, res ctrl.Result, err error) {
 	pr := sess.Status.PendingRestart
+	if pr != nil && sess.Spec.GoalExecution != nil {
+		// Deny, not error: an error would requeue forever without telling the
+		// person who asked, and would block the rest of the reconcile behind a
+		// marker that can never succeed. The denial clears the marker and is
+		// relayed to the thread like any other refused restart.
+		log.FromContext(ctx).Info("restart refused: goal execution sessions are never continued",
+			"session", sess.Namespace+"/"+sess.Name, "goal", sess.Spec.GoalExecution.GoalID)
+		return r.denyRestart(ctx, sess, spiceboxv1alpha1.ReasonGoalExecutionNoRestart, goalRestartBody)
+	}
 	if pr == nil {
 		return true, ctrl.Result{}, nil
 	}

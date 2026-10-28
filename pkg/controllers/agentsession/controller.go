@@ -544,10 +544,36 @@ type ScopeDeleter interface {
 	DeleteScope(ctx context.Context, scope memory.Scope) error
 }
 
-// Reconciler reconciles AgentSession objects.
+// GoalRunVerdict is the goal dispatcher's verdict on a run it has retained:
+// its runner is no longer running and the session is kept for inspection.
+type GoalRunVerdict int
+
+const (
+	// GoalRunUndecided: not retained yet. The reconciler leaves the phase alone.
+	GoalRunUndecided GoalRunVerdict = iota
+	// GoalRunSucceeded: the run reported its result and left the session Idle.
+	GoalRunSucceeded
+	// GoalRunFailed: the run ended any other way.
+	GoalRunFailed
+)
+
+// GoalSessionValidator is the goal dispatcher's view of a goal session.
+type GoalSessionValidator interface {
+	// GoalSessionConcluded reports whether the session is the one its occurrence
+	// attached and that run has ended. A concluded session gets terminal
+	// reconciles only; it is never validated for activation. verdict further
+	// reports whether the dispatcher has retained the run and how it ended,
+	// which is what lets the reconciler move the session to a terminal phase so
+	// it is anchored and reaped within its inspection window.
+	GoalSessionConcluded(context.Context, *spiceboxv1alpha1.AgentSession) (concluded bool, verdict GoalRunVerdict, err error)
+	ValidateGoalSession(context.Context, *spiceboxv1alpha1.AgentSession) error
+	ConstrainGoalSettings(context.Context, *spiceboxv1alpha1.AgentSession, *spiceboxv1alpha1.EffectiveSettings) error
+}
+
 type Reconciler struct {
-	Client    client.Client
-	APIReader client.Reader
+	GoalValidator GoalSessionValidator
+	Client        client.Client
+	APIReader     client.Reader
 
 	// UsesLocalDevImages mirrors the resolved cloud kind's
 	// InstallProfile().UsesLocalDevImages(): true on local/desktop clusters,
@@ -1168,6 +1194,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if !sess.DeletionTimestamp.IsZero() {
 		return r.finalize(ctx, &sess)
 	}
+	// A goal session is validated against its occurrence before anything reads
+	// credentials or starts a pod. Once the run has ended, validation refuses by
+	// design, yet the dispatcher keeps the session through its inspection window
+	// and it still needs the terminal reconciles below (chain-head anchoring,
+	// reap, GC). goalConcluded routes it through those and returns before the
+	// AgentClass resolve, so nothing past that point — credentials, sandboxes,
+	// wake, the runner pod — can run for it.
+	goalConcluded, goalVerdict := false, GoalRunUndecided
+	if sess.Spec.GoalExecution != nil {
+		if r.GoalValidator == nil {
+			return ctrl.Result{}, fmt.Errorf("goal session validator unavailable")
+		}
+		concluded, verdict, err := r.GoalValidator.GoalSessionConcluded(ctx, &sess)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("goal session occurrence lookup: %w", err)
+		}
+		goalConcluded, goalVerdict = concluded, verdict
+		if !goalConcluded {
+			if err := r.GoalValidator.ValidateGoalSession(ctx, &sess); err != nil {
+				return ctrl.Result{}, fmt.Errorf("goal session activation refused: %w", err)
+			}
+		}
+	}
 	// Snapshot the session as read so every status write below sends only the
 	// fields this reconcile actually changes; agentstatus.WriteOwned diffs
 	// against it.
@@ -1249,6 +1298,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// proceed=false short-circuits the normal reconcile; the next watch event
 	// re-enters either to continue (idempotent) or to operate on the
 	// now-superseded parent.
+	// A goal run, concluded or not, is never forked: ReconcileRestart denies
+	// its marker before any fork step, so the requester is told rather than
+	// the marker sitting unanswered.
 	if proceed, res, err := r.ReconcileRestart(ctx, &sess); err != nil || !proceed {
 		return res, err
 	}
@@ -1260,6 +1312,32 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// crash-restart that re-reads an already-Failed session idempotent.
 	if sess.Status.StartFailure != nil && !isTerminalPhase(sess.Status.Phase) {
 		return r.markBootFailed(ctx, &sess, sess.Status.StartFailure.Reason, sess.Status.StartFailure.Message)
+	}
+
+	// A retained goal run is left in a non-terminal phase (usually the runner's
+	// Idle yield), and the goalConcluded return below skips every sweep that
+	// would move it on. Finish it here, ahead of chain-head anchoring, so the
+	// run is anchored and its pods reaped in this same reconcile rather than
+	// never. Success is concluded only from Idle; any other phase is not a
+	// clean end, whatever the verdict.
+	//
+	// A hold comes first. reconcileHold normally runs far below, past the
+	// goalConcluded return, so a hold on a concluded goal session would never
+	// be stamped, snapshotted or contained, and the dispatcher, which will not
+	// delete a held session, would wait on a runner nothing ever reaps.
+	if goalConcluded && !isTerminalPhase(sess.Status.Phase) {
+		if res, proceed, err := r.reconcileHold(ctx, &sess); err != nil || !proceed {
+			return res, err
+		}
+	}
+	goalHeld := false
+	if goalVerdict != GoalRunUndecided && !isTerminalPhase(sess.Status.Phase) {
+		failed := goalVerdict == GoalRunFailed || sess.Status.Phase != spiceboxv1alpha1.AgentSessionPhaseIdle
+		held, err := r.concludeGoalRun(ctx, &sess, failed)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		goalHeld = held
 	}
 
 	// Chain-head anchoring: once a session is terminal, compute its per-publisher
@@ -1372,6 +1450,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
+	if goalConcluded {
+		sess.Status.ObservedGeneration = sess.Generation
+		var requeue time.Duration
+		if !goalHeld {
+			// A hold's release re-reconciles through the SessionHold watch.
+			requeue = goalSettleRequeue(&sess, 0)
+		}
+		return ctrl.Result{RequeueAfter: requeue}, r.applyStatus(ctx, &sess)
+	}
+
 	// 1. Resolve AgentClass + gate on Valid=True.
 	var ac spiceboxv1alpha1.AgentClass
 	acKey := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Spec.Class}
@@ -1442,6 +1530,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, fmt.Errorf("resolve settings: %w", err)
 		}
 		sess.Status.EffectiveSettings = &eff
+		if sess.Spec.GoalExecution != nil {
+			if err := r.GoalValidator.ConstrainGoalSettings(ctx, &sess, &eff); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
 		// Catalog token: when the effective model came from the model catalog
 		// rather than bring-your-own, read the central token from its
 		// system-namespace Secret and repoint Model.APIKey at the per-session
@@ -2260,6 +2354,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if idleReclaimRequeue > 0 && (requeueAfter == 0 || idleReclaimRequeue < requeueAfter) {
 			requeueAfter = idleReclaimRequeue
 		}
+		requeueAfter = goalSettleRequeue(&sess, requeueAfter)
 		// A parked, not-woken, channel-attached Idle session is fully handled by
 		// the sweep above and must NOT fall through to the sidecar, detector and
 		// runner provisioning steps, which would re-create the pods the sleep
@@ -3339,7 +3434,7 @@ func (r *Reconciler) reflectRunnerPod(sess *spiceboxv1alpha1.AgentSession, pod *
 		// pre-start state anyway.
 		ready := false
 		for _, cs := range pod.Status.ContainerStatuses {
-			if cs.Name == runnerContainerName {
+			if cs.Name == RunnerContainerName {
 				ready = cs.Ready
 				break
 			}
@@ -3399,7 +3494,7 @@ func (r *Reconciler) reflectRunnerPod(sess *spiceboxv1alpha1.AgentSession, pod *
 	// not gated on `crashing` — and arm fastFail against a runner that never
 	// restarted.
 	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name != runnerContainerName {
+		if cs.Name != RunnerContainerName {
 			continue
 		}
 		sess.Status.RunnerRestarts = cs.RestartCount
@@ -3437,7 +3532,7 @@ type runnerCrashState struct {
 // the semantics of "down" and why a recovered container reports no crash.
 func runnerCrash(pod *corev1.Pod) runnerCrashState {
 	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name != runnerContainerName {
+		if cs.Name != RunnerContainerName {
 			continue
 		}
 		if cs.Ready {

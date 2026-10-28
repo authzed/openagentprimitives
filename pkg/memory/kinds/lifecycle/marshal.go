@@ -156,6 +156,10 @@ func typeNameOf(ev lc.Event) (string, error) {
 		return "archive_sweep", nil
 	case lc.Expired:
 		return "expired", nil
+	case lc.GoalRunConcluded:
+		return "goal_run_concluded", nil
+	case lc.GoalRunFailed:
+		return "goal_run_failed", nil
 	case lc.Sleep:
 		return "sleep", nil
 	// await within Running
@@ -300,6 +304,14 @@ func decodeEvent(typ string, raw json.RawMessage) (lc.Event, error) {
 		return ev, err
 	case "expired":
 		var ev lc.Expired
+		err := jsonInto(raw, &ev, typ)
+		return ev, err
+	case "goal_run_concluded":
+		var ev lc.GoalRunConcluded
+		err := jsonInto(raw, &ev, typ)
+		return ev, err
+	case "goal_run_failed":
+		var ev lc.GoalRunFailed
 		err := jsonInto(raw, &ev, typ)
 		return ev, err
 	case "sleep":

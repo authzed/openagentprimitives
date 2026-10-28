@@ -72,7 +72,7 @@ const (
 	// message. Distinct from ReasonPodCrashed (PodFailed phase), since these pods
 	// never reach PodFailed â they retry forever â so without this the bundle (and
 	// its waiting AgentSession) would hang silently.
-	ReasonPodStartFailed     = "PodStartFailed"
+	ReasonPodStartFailed = "PodStartFailed"
 	// ReasonWorkspaceProvisioningFailed marks a session whose workspace (or
 	// snapshot-store) PVC could not be provisioned by its StorageClass — an
 	// undersized request the backend rejects (Filestore's minimum share size),
@@ -84,12 +84,12 @@ const (
 	// generic "did not become Ready" text.
 	ReasonWorkspaceProvisioningFailed = "WorkspaceProvisioningFailed"
 	ReasonNodeEvicted                 = "NodeEvicted"
-	ReasonClassMissing       = "ClassMissing"
-	ReasonClassInvalid       = "ClassInvalid"
-	ReasonIdleTTL            = "IdleTTL"
-	ReasonMaxDuration        = "MaxDuration"
-	ReasonUserDelete         = "UserDelete"
-	ReasonToolspecNotInClass = "ToolspecNotInClass"
+	ReasonClassMissing                = "ClassMissing"
+	ReasonClassInvalid                = "ClassInvalid"
+	ReasonIdleTTL                     = "IdleTTL"
+	ReasonMaxDuration                 = "MaxDuration"
+	ReasonUserDelete                  = "UserDelete"
+	ReasonToolspecNotInClass          = "ToolspecNotInClass"
 )
 
 // ToolCall condition types.
@@ -919,6 +919,11 @@ const (
 	// ReasonForkNotAuthorized is the reason for AgentSessionConditionRestartDenied.
 	ReasonForkNotAuthorized = "ForkNotAuthorized"
 
+	// ReasonGoalExecutionNoRestart is the reason for RestartDenied=True on a
+	// goal session: a continuation would run with no occurrence, consent or
+	// bounds behind it, so goal runs are never forked or continued.
+	ReasonGoalExecutionNoRestart = "GoalExecutionNoRestart"
+
 	// ReasonRestartAttemptPending is the reason for
 	// AgentSessionConditionRestartDenied=False: the operator has picked up a new
 	// PendingRestart and cleared the previous attempt's verdict before running
@@ -963,6 +968,8 @@ const (
 const (
 	ReasonAgentSessionAgentWorkComplete = "AgentWorkComplete" // agent_work_complete tool was called
 	ReasonAgentSessionArchived          = "Archived"          // operator archive sweep transitioned Idle â Succeeded
+	ReasonAgentSessionGoalRunFailed     = "GoalRunFailed"     // goal dispatcher retained the run as failed; operator transitioned it to Failed
+	ReasonAgentSessionGoalRunConcluded  = "GoalRunConcluded"  // goal dispatcher retained the run; operator transitioned Idle to Succeeded
 )
 
 // AnnotationPinRefreeze requests that the dependency's pin baseline be
@@ -1493,6 +1500,11 @@ const AnnotationSessionOpening = "agentprimitives.authzed.com/session-opening"
 // after a successful post; left unset on a send failure so the next envelope
 // retries.
 const AnnotationSessionOpeningSent = "agentprimitives.authzed.com/session-opening-sent"
+
+// The transport message reference keeps edits on the summary itself, even
+// when an async session posts into an existing conversation thread.
+const AnnotationSessionOpeningMessageChannel = "agentprimitives.authzed.com/session-opening-message-channel"
+const AnnotationSessionOpeningMessageID = "agentprimitives.authzed.com/session-opening-message-id"
 
 // AnnotationTriggerOwnerSubject carries the subject-set reference of the
 // external account a triggered session's inbound belongs to — for a GitHub

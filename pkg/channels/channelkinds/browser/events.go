@@ -51,9 +51,17 @@ func (s *RecordingSink) Events() []any {
 // the name it carries the AGENT's text — the envelope kind is named for
 // the sub-channel ("user_message"), not the speaker.
 type MsgUserMessage struct {
-	Session     SessionRef      `json:"session"`
-	Text        string          `json:"text"`
-	Attachments []MsgAttachment `json:"attachments,omitempty"`
+	Delivery    *channelevents.DeliveryOperation `json:"delivery,omitempty"`
+	Session     SessionRef                       `json:"session"`
+	Text        string                           `json:"text"`
+	Attachments []MsgAttachment                  `json:"attachments,omitempty"`
+}
+
+// MsgSessionOpening is the inspectable opening notice, distinct from an agent
+// reply so live delivery and transcript bootstrap can share one card.
+type MsgSessionOpening struct {
+	Session SessionRef                    `json:"session"`
+	Opening *channelevents.SessionOpening `json:"opening"`
 }
 
 // MsgAttachment is one artifact the agent attached to a reply (respond_to_user's
