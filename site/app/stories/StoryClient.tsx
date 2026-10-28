@@ -27,7 +27,14 @@ export function ThemeCycleButton() {
       aria-label={`Theme: ${mode}`}
       onClick={next}
     >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+      >
         <circle cx="12" cy="12" r="8" />
         <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" />
       </svg>
@@ -73,7 +80,12 @@ export function DemoClip({
           type="button"
           onClick={() => setPlaying(true)}
           aria-label="Watch the demo"
-          style={{ all: "unset", display: "block", cursor: "pointer", width: "100%" }}
+          style={{
+            all: "unset",
+            display: "block",
+            cursor: "pointer",
+            width: "100%",
+          }}
         >
           <img src={still} alt={alt} />
           <span className="clip-play" aria-hidden="true">
@@ -140,7 +152,9 @@ export function CopyButton({ text }: { text: string }) {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      const ta = Object.assign(document.createElement("textarea"), { value: text });
+      const ta = Object.assign(document.createElement("textarea"), {
+        value: text,
+      });
       ta.style.cssText = "position:fixed;opacity:0";
       document.body.append(ta);
       ta.select();

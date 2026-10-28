@@ -196,7 +196,13 @@ export function storyGraph(
 // partial one is flagged by validators and earns nothing.
 function videoObject(clip: MediaAsset): Node[] {
   const content = clip.mp4 ?? clip.webm;
-  if (!clip.title || !clip.caption || !clip.poster || !clip.uploadDate || !content)
+  if (
+    !clip.title ||
+    !clip.caption ||
+    !clip.poster ||
+    !clip.uploadDate ||
+    !content
+  )
     return [];
   return [
     {
@@ -207,7 +213,9 @@ function videoObject(clip: MediaAsset): Node[] {
       uploadDate: clip.uploadDate,
       contentUrl: `${SITE_URL}${content}`,
       ...(clip.duration ? { duration: clip.duration } : {}),
-      ...(clip.transcript?.length ? { transcript: clip.transcript.join(" ") } : {}),
+      ...(clip.transcript?.length
+        ? { transcript: clip.transcript.join(" ") }
+        : {}),
       publisher: { "@id": ORG_ID },
     },
   ];

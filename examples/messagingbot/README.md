@@ -3,17 +3,16 @@
 # messagingbot
 
 A senior brand-designer agent, packaged as a `.oap` agent container. Give it a
-brief and it scopes the work, reads your design system and messaging from
-GitHub (read-only), and produces an on-brand **HTML** artifact: a landing
-section, an announcement, a one-pager, an email-ready block. Open the artifact
-in the live viewer, pin notes to the elements that are wrong, send them, and it
-revises the same artifact in place.
+brief and it scopes the work, reads your design system and messaging from GitHub
+(read-only), and produces an on-brand **HTML** artifact: a landing section, an
+announcement, a one-pager, an email-ready block. Open the artifact in the live
+viewer, pin notes to the elements that are wrong, send them, and it revises the
+same artifact in place.
 
 It is the open-source version of the brand agent we run internally, and it is
 built entirely from primitives OAP already has — the artifact system, the
-viewer's annotation interaction, agent skills, and a read-only toolspec. See
-the [case study](https://openap.org/stories/claude-design) for the
-walkthrough.
+viewer's annotation interaction, agent skills, and a read-only toolspec. See the
+[case study](https://openap.org/stories/claude-design) for the walkthrough.
 
 No channel is baked in. A Channel is per-install config, not part of the
 container; attach one after installing (see below).
@@ -38,11 +37,11 @@ install from the `githubToken` question and never travels with the container.
 
 ## Install questions
 
-| Question      | What it sets                                     | Default                           |
-| ------------- | ------------------------------------------------ | --------------------------------- |
-| `githubToken` | Secret `messagingbot-github`                     | (required)                        |
-| `brandRepos`  | appended to `spec.config.readableRepos`          | none: designs from skills alone   |
-| `skills`      | which `spec.skills` entries stay (`[?]` filter)  | `frontend-design`, `theme-factory` |
+| Question      | What it sets                                    | Default                            |
+| ------------- | ----------------------------------------------- | ---------------------------------- |
+| `githubToken` | Secret `messagingbot-github`                    | (required)                         |
+| `brandRepos`  | appended to `spec.config.readableRepos`         | none: designs from skills alone    |
+| `skills`      | which `spec.skills` entries stay (`[?]` filter) | `frontend-design`, `theme-factory` |
 
 ### Selectable skills
 
@@ -50,17 +49,17 @@ install from the `githubToken` question and never travels with the container.
 question binds to `AgentClass/messagingbot#spec.skills[?]`, a **filter** marker:
 the list is narrowed to the entries whose `name` you pick, in the order the
 AgentClass declares them. Picking a name that isn't on the menu fails the
-install instead of silently dropping it, and re-installing with the same
-answer is a byte-identical no-op.
+install instead of silently dropping it, and re-installing with the same answer
+is a byte-identical no-op.
 
-| Skill             | Source                                         | Why                                                                         |
-| ----------------- | ---------------------------------------------- | --------------------------------------------------------------------------- |
-| `frontend-design` | `github.com/anthropics/skills//skills/frontend-design` | A deliberate visual direction instead of templated defaults.        |
+| Skill             | Source                                                 | Why                                                                                         |
+| ----------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `frontend-design` | `github.com/anthropics/skills//skills/frontend-design` | A deliberate visual direction instead of templated defaults.                                |
 | `theme-factory`   | `github.com/anthropics/skills//skills/theme-factory`   | Ten preset palettes and font pairings, or a generated theme, when there is no brand system. |
 
 To add your own skill, such as your company's brand-voice skill, add a
-SkillSource for its repository and an entry to `spec.skills` with its
-canonical name, then add the name to the question's `enum`.
+SkillSource for its repository and an entry to `spec.skills` with its canonical
+name, then add the name to the question's `enum`.
 
 Both sources are pinned to a commit SHA. A skill is instructions the model
 follows, so a branch ref would let those instructions change under an unchanged
@@ -125,14 +124,14 @@ happen. The browser chat works too.
 
 ## Try it
 
-> Design a landing-page hero announcing our autopilot feature for warehouse
-> ops leads. Goal: book a demo. Use acme/design and acme/messaging.
+> Design a landing-page hero announcing our autopilot feature for warehouse ops
+> leads. Goal: book a demo. Use acme/design and acme/messaging.
 
 1. If the brief is thin, it asks 2–4 clarifying questions first.
 2. It posts a plan, loads its skills, and reads your repos.
 3. It returns an HTML artifact and offers the live view.
-4. In the viewer, annotate the elements you want changed and send the batch.
-   It revises the same artifact, and the revision history keeps every version.
+4. In the viewer, annotate the elements you want changed and send the batch. It
+   revises the same artifact, and the revision history keeps every version.
 
 ## Notes
 

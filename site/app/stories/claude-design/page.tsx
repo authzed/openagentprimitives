@@ -6,7 +6,12 @@ import { OG_IMAGE, SITE_NAME } from "@/lib/site";
 import { storyGraph, type FaqEntry } from "@/lib/structured-data";
 import lightInk from "../../../../docs/assets/brand/oap-wordmark-light.svg";
 import darkInk from "../../../../docs/assets/brand/oap-wordmark-dark.svg";
-import { BeforeAfter, CopyButton, DemoClip, ThemeCycleButton } from "../StoryClient";
+import {
+  BeforeAfter,
+  CopyButton,
+  DemoClip,
+  ThemeCycleButton,
+} from "../StoryClient";
 import "../stories.css";
 
 // "Build your own" story 01. The layout is the series template from the story
@@ -98,12 +103,20 @@ const FAQ: (FaqEntry & { id: string })[] = [
 ];
 
 function withCode(text: string): ReactNode {
-  return text.split(/(`[^`]+`)/).map((part, i) =>
-    part.startsWith("`") ? <code key={i}>{part.slice(1, -1)}</code> : part,
-  );
+  return text
+    .split(/(`[^`]+`)/)
+    .map((part, i) =>
+      part.startsWith("`") ? <code key={i}>{part.slice(1, -1)}</code> : part,
+    );
 }
 
-function OapA({ className = "icon-a", style }: { className?: string; style?: CSSProperties }) {
+function OapA({
+  className = "icon-a",
+  style,
+}: {
+  className?: string;
+  style?: CSSProperties;
+}) {
   return (
     <svg className={className} style={style}>
       <use href="#oap-a" />
@@ -117,7 +130,8 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
     need: "Somewhere people already ask for work",
     oap: (
       <>
-        A <a href="/docs/channels">channel</a>: a <a href="/docs/slack">Slack</a> thread or the{" "}
+        A <a href="/docs/channels">channel</a>: a{" "}
+        <a href="/docs/slack">Slack</a> thread or the{" "}
         <a href="/docs/browser-chat">browser chat</a>
       </>
     ),
@@ -127,7 +141,8 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
     need: "A durable, versioned home for rendered output",
     oap: (
       <>
-        <a href="/docs/artifacts">Artifacts</a>, with <a href="/docs/artifact-revisions">revisions</a>
+        <a href="/docs/artifacts">Artifacts</a>, with{" "}
+        <a href="/docs/artifact-revisions">revisions</a>
       </>
     ),
   },
@@ -136,8 +151,8 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
     need: "A way to point at an element and route the note back to the agent",
     oap: (
       <>
-        <a href="/docs/artifact-annotations">Artifact annotations</a>, the viewer&apos;s{" "}
-        <code>annotation_batch</code> interaction
+        <a href="/docs/artifact-annotations">Artifact annotations</a>, the
+        viewer&apos;s <code>annotation_batch</code> interaction
       </>
     ),
   },
@@ -146,7 +161,8 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
     need: "Read access to the brand's source of truth, and nothing more",
     oap: (
       <>
-        A read-only <code>gh</code> <a href="/docs/toolspec-validation">toolspec</a> bounded to approved
+        A read-only <code>gh</code>{" "}
+        <a href="/docs/toolspec-validation">toolspec</a> bounded to approved
         repositories
       </>
     ),
@@ -156,7 +172,8 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
     need: "Instructions on how to design well",
     oap: (
       <>
-        <a href="/docs/skills">Agent skills</a>: <code>frontend-design</code> and <code>theme-factory</code>
+        <a href="/docs/skills">Agent skills</a>: <code>frontend-design</code>{" "}
+        and <code>theme-factory</code>
       </>
     ),
   },
@@ -165,7 +182,8 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
     need: "A way to show model-written HTML without trusting it",
     oap: (
       <>
-        <a href="/docs/artifact-safety">Inert rendering</a>, so model-written HTML can&apos;t run scripts
+        <a href="/docs/artifact-safety">Inert rendering</a>, so model-written
+        HTML can&apos;t run scripts
       </>
     ),
   },
@@ -184,7 +202,12 @@ export default function Page() {
   const clip = getAsset("messagingbot-design");
   return (
     <div className="st">
-      <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
+      <svg
+        width="0"
+        height="0"
+        style={{ position: "absolute" }}
+        aria-hidden="true"
+      >
         <defs>
           {/* The OAP A, with its cut-out (OAP_TRI.authorized from the landing). */}
           <symbol id="oap-a" viewBox="6 7 36 32">
@@ -228,12 +251,15 @@ export default function Page() {
               </h1>
               <p className="subtitle">and it&apos;s fully open source!</p>
               <p className="lede">
-                <strong>Claude Design</strong> is Anthropic&apos;s tool for designing in conversation. Describe a
-                page, a deck or a prototype, and Claude builds it in your brand on a canvas beside the chat; then
-                you refine it together, by chatting, commenting on the design, or editing it directly, with every
-                version kept. We wanted the same tools and capabilities for our own team, but completely open. We
-                therefore built <strong>messagingbot</strong>, the design agent our marketing team uses, entirely out of pieces
-                OAP already ships.
+                <strong>Claude Design</strong> is Anthropic&apos;s tool for
+                designing in conversation. Describe a page, a deck or a
+                prototype, and Claude builds it in your brand on a canvas beside
+                the chat; then you refine it together, by chatting, commenting
+                on the design, or editing it directly, with every version kept.
+                We wanted the same tools and capabilities for our own team, but
+                completely open. We therefore built{" "}
+                <strong>messagingbot</strong>, the design agent our marketing
+                team uses, entirely out of pieces OAP already ships.
               </p>
               <div className="cta-row">
                 <a className="btn btn-ink" href="#try">
@@ -254,15 +280,19 @@ export default function Page() {
               )}
               <figcaption>
                 <span>
-                  messagingbot taking a brief, reading the brand repos, building a page, and revising it from notes
-                  pinned to the design.
+                  messagingbot taking a brief, reading the brand repos, building
+                  a page, and revising it from notes pinned to the design.
                 </span>
                 <span className="sim">Simulated · fictional company</span>
               </figcaption>
               {clip?.transcript && (
                 <details>
                   <summary>Transcript</summary>
-                  <div className="transcript" tabIndex={0} aria-label="Demo transcript">
+                  <div
+                    className="transcript"
+                    tabIndex={0}
+                    aria-label="Demo transcript"
+                  >
                     {clip.transcript.map((line, i) => (
                       <p key={i}>{line}</p>
                     ))}
@@ -280,15 +310,17 @@ export default function Page() {
               <div className="glance-cell">
                 <h3>What we built</h3>
                 <p>
-                  messagingbot, an agent that takes a marketing brief and builds an HTML page from your real design
-                  tokens and approved copy. Reviewers pin notes on the page and it revises from them.
+                  messagingbot, an agent that takes a marketing brief and builds
+                  an HTML page from your real design tokens and approved copy.
+                  Reviewers pin notes on the page and it revises from them.
                 </p>
               </div>
               <div className="glance-cell">
                 <h3>What it&apos;s made of</h3>
                 <p>
-                  An <a href="/docs/agentclass-agentsession">AgentClass</a>, a read-only GitHub{" "}
-                  <a href="/docs/safe-tools">toolspec</a>, two public <a href="/docs/skills">skills</a>, and the{" "}
+                  An <a href="/docs/agentclass-agentsession">AgentClass</a>, a
+                  read-only GitHub <a href="/docs/safe-tools">toolspec</a>, two
+                  public <a href="/docs/skills">skills</a>, and the{" "}
                   <a href="/docs/artifacts">artifact system</a> with its{" "}
                   <a href="/docs/artifact-annotations">annotations</a>.
                 </p>
@@ -296,8 +328,9 @@ export default function Page() {
               <div className="glance-cell">
                 <h3>What we didn&apos;t build</h3>
                 <p>
-                  The canvas, comment system, renderer, sandboxing and safe artifacts are part of OAP. We built on
-                  top of these primitives.
+                  The canvas, comment system, renderer, sandboxing and safe
+                  artifacts are part of OAP. We built on top of these
+                  primitives.
                 </p>
               </div>
               <div className="glance-cell try">
@@ -308,7 +341,8 @@ export default function Page() {
                   <CopyButton text={INSTALL} />
                 </div>
                 <a className="go" href={BUNDLE}>
-                  Open-source example bundle <span aria-hidden="true">&rarr;</span>
+                  Open-source example bundle{" "}
+                  <span aria-hidden="true">&rarr;</span>
                 </a>
               </div>
             </div>
@@ -324,16 +358,25 @@ export default function Page() {
                 <h2 className="h2">What is Claude Design?</h2>
               </div>
               <p className="lede">
-                <a href="https://claude.com/product/design">Claude Design</a> is Anthropic&apos;s visual design tool.
-                It{" "}
-                <a href="https://www.anthropic.com/news/claude-design-anthropic-labs">launched in April 2026</a> as an
-                Anthropic Labs research preview, and has since been folded into ordinary Claude conversations. You
-                describe what you want in chat, and Claude produces it on a canvas beside the conversation.
+                <a href="https://claude.com/product/design">Claude Design</a> is
+                Anthropic&apos;s visual design tool. It{" "}
+                <a href="https://www.anthropic.com/news/claude-design-anthropic-labs">
+                  launched in April 2026
+                </a>{" "}
+                as an Anthropic Labs research preview, and has since been folded
+                into ordinary Claude conversations. You describe what you want
+                in chat, and Claude produces it on a canvas beside the
+                conversation.
               </p>
             </div>
             <div className="feats">
               <div className="feat">
-                <svg viewBox="0 0 44 44" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <svg
+                  viewBox="0 0 44 44"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
                   <rect x="6" y="9" width="32" height="26" rx="3" />
                   <circle cx="14" cy="17" r="3" fill="currentColor" />
                   <circle cx="22" cy="17" r="3" />
@@ -342,38 +385,73 @@ export default function Page() {
                 </svg>
                 <h3>Brand setup</h3>
                 <p>
-                  During setup it builds a design system from your codebase and design files, and every project after
-                  that uses your colours, type, and components.
+                  During setup it builds a design system from your codebase and
+                  design files, and every project after that uses your colours,
+                  type, and components.
                 </p>
               </div>
               <div className="feat">
-                <svg viewBox="0 0 44 44" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <svg
+                  viewBox="0 0 44 44"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
                   <rect x="6" y="7" width="32" height="24" rx="3" />
                   <path d="M12 15h14M12 20h20" opacity=".5" />
                   <rect x="10" y="12" width="18" height="6" rx="1.5" />
-                  <circle cx="29" cy="31" r="5" fill="currentColor" stroke="none" />
+                  <circle
+                    cx="29"
+                    cy="31"
+                    r="5"
+                    fill="currentColor"
+                    stroke="none"
+                  />
                   <path d="M33 35l4 4" />
                 </svg>
                 <h3>Comments on the design</h3>
-                <p>You click an element on the page and leave a comment on it, and Claude works from that comment.</p>
+                <p>
+                  You click an element on the page and leave a comment on it,
+                  and Claude works from that comment.
+                </p>
               </div>
               <div className="feat">
-                <svg viewBox="0 0 44 44" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <svg
+                  viewBox="0 0 44 44"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
                   <rect x="14" y="6" width="24" height="18" rx="2.5" />
-                  <rect x="10" y="12" width="24" height="18" rx="2.5" fill="var(--card)" />
-                  <rect x="6" y="18" width="24" height="18" rx="2.5" fill="var(--card)" />
+                  <rect
+                    x="10"
+                    y="12"
+                    width="24"
+                    height="18"
+                    rx="2.5"
+                    fill="var(--card)"
+                  />
+                  <rect
+                    x="6"
+                    y="18"
+                    width="24"
+                    height="18"
+                    rx="2.5"
+                    fill="var(--card)"
+                  />
                   <path d="M11 27h14M11 31h9" />
                 </svg>
                 <h3>Versions and handoff</h3>
                 <p>
-                  Each round of feedback produces a new version, and a finished design can be handed off to Claude
-                  Code.
+                  Each round of feedback produces a new version, and a finished
+                  design can be handed off to Claude Code.
                 </p>
               </div>
             </div>
             <p className="after-feats">
-              This is quite similar to what our marketing team requested: a designer that already knows the brand
-              and can take notes on a draft.
+              This is quite similar to what our marketing team requested: a
+              designer that already knows the brand and can take notes on a
+              draft.
             </p>
           </div>
         </section>
@@ -389,10 +467,15 @@ export default function Page() {
                 </h2>
               </div>
               <p className="lede">
-                What a design agent needs, and the OAP primitive that already provides it.
+                What a design agent needs, and the OAP primitive that already
+                provides it.
               </p>
             </div>
-            <div className="ing" role="table" aria-label="Claude Design's parts and their OAP equivalents">
+            <div
+              className="ing"
+              role="table"
+              aria-label="Claude Design's parts and their OAP equivalents"
+            >
               <div className="ing-row th" role="row">
                 <span role="columnheader">Claude Design has</span>
                 <span role="columnheader">So you need</span>
@@ -419,7 +502,8 @@ export default function Page() {
             </div>
             <p className="ing-foot">
               <OapA />
-              Everything in the right column shipped with OAP before messagingbot existed.
+              Everything in the right column shipped with OAP before
+              messagingbot existed.
             </p>
           </div>
         </section>
@@ -435,15 +519,21 @@ export default function Page() {
                 </h2>
               </div>
               <p className="lede">
-                messagingbot is an agent definition, a read-only GitHub tool, two skills, and OAP&apos;s artifact
-                viewer. Below is each piece with the config that sets it up.
+                messagingbot is an agent definition, a read-only GitHub tool,
+                two skills, and OAP&apos;s artifact viewer. Below is each piece
+                with the config that sets it up.
               </p>
             </div>
 
             <div className="flow" aria-label="The five pieces">
               <a href="#step-1">
                 <span className="node">
-                  <svg viewBox="0 0 30 30" fill="none" stroke="currentColor" strokeWidth="1.4">
+                  <svg
+                    viewBox="0 0 30 30"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                  >
                     <path d="M5 7h20v13H13l-5 4v-4H5z" />
                     <path d="M13.5 11.5a1.8 1.8 0 1 1 2.4 1.7c-.6.2-.9.6-.9 1.2" />
                     <circle cx="15" cy="16.6" r=".7" fill="currentColor" />
@@ -465,9 +555,21 @@ export default function Page() {
               </a>
               <a href="#step-3">
                 <span className="node">
-                  <svg viewBox="0 0 30 30" fill="none" stroke="currentColor" strokeWidth="1.4">
+                  <svg
+                    viewBox="0 0 30 30"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                  >
                     <rect x="9" y="5" width="14" height="18" rx="2" />
-                    <rect x="6" y="8" width="14" height="18" rx="2" fill="var(--bg)" />
+                    <rect
+                      x="6"
+                      y="8"
+                      width="14"
+                      height="18"
+                      rx="2"
+                      fill="var(--bg)"
+                    />
                     <path d="M9.5 13h7M9.5 16.5h7M9.5 20h4" />
                   </svg>
                 </span>
@@ -477,10 +579,21 @@ export default function Page() {
               </a>
               <a href="#step-4">
                 <span className="node">
-                  <svg viewBox="0 0 30 30" fill="none" stroke="currentColor" strokeWidth="1.4">
+                  <svg
+                    viewBox="0 0 30 30"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                  >
                     <rect x="5" y="6" width="20" height="16" rx="2" />
                     <rect x="8.5" y="10" width="10" height="4" rx="1" />
-                    <circle cx="20" cy="21" r="3.2" fill="currentColor" stroke="none" />
+                    <circle
+                      cx="20"
+                      cy="21"
+                      r="3.2"
+                      fill="currentColor"
+                      stroke="none"
+                    />
                   </svg>
                 </span>
                 <span className="n">04</span>
@@ -489,7 +602,12 @@ export default function Page() {
               </a>
               <a href="#step-5">
                 <span className="node">
-                  <svg viewBox="0 0 30 30" fill="none" stroke="currentColor" strokeWidth="1.4">
+                  <svg
+                    viewBox="0 0 30 30"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                  >
                     <rect x="4" y="6" width="22" height="18" rx="2" />
                     <path d="M8.5 12l3.5 3-3.5 3M14.5 18.5h6" />
                   </svg>
@@ -506,16 +624,23 @@ export default function Page() {
                 <h3>A prompt that scopes the brief first</h3>
                 <div className="prose">
                   <p>
-                    Before it designs anything, messagingbot asks for the audience, the key message, the format, the
-                    call to action, and which repositories hold the brand. It then posts a plan and waits for answers.
+                    Before it designs anything, messagingbot asks for the
+                    audience, the key message, the format, the call to action,
+                    and which repositories hold the brand. It then posts a plan
+                    and waits for answers.
                   </p>
-                  <p>Without those answers the page tends to come out generic, so the prompt makes asking them the first step.</p>
+                  <p>
+                    Without those answers the page tends to come out generic, so
+                    the prompt makes asking them the first step.
+                  </p>
                 </div>
               </div>
               <div className="vis">
                 <p className="code-label">
                   From{" "}
-                  <a href={`${REPO}/tree/main/examples/messagingbot/manifests/agentclass.yaml`}>
+                  <a
+                    href={`${REPO}/tree/main/examples/messagingbot/manifests/agentclass.yaml`}
+                  >
                     examples/messagingbot/manifests/agentclass.yaml
                   </a>
                 </p>
@@ -534,16 +659,21 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 <h3>The brand, read-only</h3>
                 <div className="prose">
                   <p>
-                    messagingbot reads the brand with one tool, the GitHub CLI (<code>gh</code>), in a sandbox that
-                    can only reach GitHub. A <a href="/docs/safe-tools">toolspec</a> around it decides which calls go
-                    through, and it only allows reads from approved repositories.
+                    messagingbot reads the brand with one tool, the GitHub CLI (
+                    <code>gh</code>), in a sandbox that can only reach GitHub. A{" "}
+                    <a href="/docs/safe-tools">toolspec</a> around it decides
+                    which calls go through, and it only allows reads from
+                    approved repositories.
                   </p>
                   <p>
-                    The approved list (<code>config.readableRepos</code>) is set by whoever installs the agent: just
-                    the repositories that hold your design system and messaging. Even on those, messagingbot can only
-                    read — the three subcommands above, with <code>gh api</code> limited to GET requests. Any write,
-                    or any request for a repository not on the list, is refused before it reaches GitHub, regardless
-                    of what the prompt asks for.
+                    The approved list (<code>config.readableRepos</code>) is set
+                    by whoever installs the agent: just the repositories that
+                    hold your design system and messaging. Even on those,
+                    messagingbot can only read — the three subcommands above,
+                    with <code>gh api</code> limited to GET requests. Any write,
+                    or any request for a repository not on the list, is refused
+                    before it reaches GitHub, regardless of what the prompt asks
+                    for.
                   </p>
                 </div>
               </div>
@@ -554,27 +684,55 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                   aria-label="Two approved brand repositories pass the gate to GitHub; an unapproved repository is refused at the gate."
                 >
                   <svg viewBox="0 0 560 220" role="img">
-                    <title>The toolspec gate: approved repositories pass, anything else is refused</title>
+                    <title>
+                      The toolspec gate: approved repositories pass, anything
+                      else is refused
+                    </title>
                     <g fill="none" strokeWidth="2" strokeLinecap="round">
-                      <path d="M176 52 C 230 52, 236 112, 268 112" stroke="var(--state)" />
+                      <path
+                        d="M176 52 C 230 52, 236 112, 268 112"
+                        stroke="var(--state)"
+                      />
                       <path d="M176 112 L 268 112" stroke="var(--state)" />
-                      <path d="M176 172 C 216 172, 228 160, 240 150" stroke="var(--deny)" />
+                      <path
+                        d="M176 172 C 216 172, 228 160, 240 150"
+                        stroke="var(--deny)"
+                      />
                       <path d="M318 112 L 430 112" stroke="var(--state)" />
                     </g>
-                    <g stroke="var(--deny)" strokeWidth="2.2" strokeLinecap="round">
+                    <g
+                      stroke="var(--deny)"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                    >
                       <path d="M240 142 l12 12 M252 142 l-12 12" />
                     </g>
-                    <use href="#oap-a" x="252" y="70" width="84" height="74" style={{ color: "var(--heading)" }} />
+                    <use
+                      href="#oap-a"
+                      x="252"
+                      y="70"
+                      width="84"
+                      height="74"
+                      style={{ color: "var(--heading)" }}
+                    />
                     <g fontSize="12" fill="var(--fg)">
-                      <text x="12" y="48">acme/design</text>
-                      <text x="12" y="108">acme/messaging</text>
+                      <text x="12" y="48">
+                        acme/design
+                      </text>
+                      <text x="12" y="108">
+                        acme/messaging
+                      </text>
                       <text x="12" y="168" fill="var(--muted)">
                         acme/roadmap
                       </text>
                     </g>
                     <g fontSize="10" fill="var(--muted)">
-                      <text x="12" y="63">tokens, components</text>
-                      <text x="12" y="123">pillars, voice, copy</text>
+                      <text x="12" y="63">
+                        tokens, components
+                      </text>
+                      <text x="12" y="123">
+                        pillars, voice, copy
+                      </text>
                       <text x="12" y="183" fill="var(--deny)">
                         not in readableRepos
                       </text>
@@ -585,11 +743,31 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                         GET only · approved repos
                       </text>
                     </g>
-                    <rect x="432" y="90" width="112" height="44" rx="8" fill="var(--s2)" stroke="var(--line)" />
-                    <text x="488" y="117" textAnchor="middle" fontSize="12" fill="var(--fg)">
+                    <rect
+                      x="432"
+                      y="90"
+                      width="112"
+                      height="44"
+                      rx="8"
+                      fill="var(--s2)"
+                      stroke="var(--line)"
+                    />
+                    <text
+                      x="488"
+                      y="117"
+                      textAnchor="middle"
+                      fontSize="12"
+                      fill="var(--fg)"
+                    >
                       github.com
                     </text>
-                    <text x="252" y="208" fontSize="10.5" fill="var(--deny)" textAnchor="middle">
+                    <text
+                      x="252"
+                      y="208"
+                      fontSize="10.5"
+                      fill="var(--deny)"
+                      textAnchor="middle"
+                    >
                       refused before it reaches GitHub
                     </text>
                   </svg>
@@ -607,17 +785,21 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 <h3>Design skills the installer picks</h3>
                 <div className="prose">
                   <p>
-                    Brand tokens cover colour and type. For layout and visual judgment the agent uses{" "}
-                    <a href="/docs/skills">skills</a>, which are instructions it loads when they&apos;re relevant.
-                    The bundle includes two from Anthropic&apos;s public skills repository, pinned to a commit:{" "}
-                    <code>frontend-design</code> for visual direction, and <code>theme-factory</code>, which offers
-                    ten preset palettes for teams without a brand system.
+                    Brand tokens cover colour and type. For layout and visual
+                    judgment the agent uses <a href="/docs/skills">skills</a>,
+                    which are instructions it loads when they&apos;re relevant.
+                    The bundle includes two from Anthropic&apos;s public skills
+                    repository, pinned to a commit: <code>frontend-design</code>{" "}
+                    for visual direction, and <code>theme-factory</code>, which
+                    offers ten preset palettes for teams without a brand system.
                   </p>
                   <p>
-                    The bundle declares both and the installer chooses which ones the agent gets. The{" "}
-                    <code>[?]</code> at the end of the binding target filters <code>spec.skills</code> down to the
-                    chosen names, and the install fails if a name isn&apos;t in the list, so a typo can&apos;t leave
-                    the agent without a skill you asked for.
+                    The bundle declares both and the installer chooses which
+                    ones the agent gets. The <code>[?]</code> at the end of the
+                    binding target filters <code>spec.skills</code> down to the
+                    chosen names, and the install fails if a name isn&apos;t in
+                    the list, so a typo can&apos;t leave the agent without a
+                    skill you asked for.
                   </p>
                 </div>
               </div>
@@ -646,13 +828,17 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 <h3>Canvas and comments</h3>
                 <div className="prose">
                   <p>
-                    <code>artifacts.renderers</code> gives the agent the artifact tools, limited to HTML, so it can
-                    render a page, revise it, and share a live view. <code>session_views.interactions</code> lets a
-                    reviewer in that live view pin notes to parts of the page and send them back.
+                    <code>artifacts.renderers</code> gives the agent the
+                    artifact tools, limited to HTML, so it can render a page,
+                    revise it, and share a live view.{" "}
+                    <code>session_views.interactions</code> lets a reviewer in
+                    that live view pin notes to parts of the page and send them
+                    back.
                   </p>
                   <p>
-                    Those two settings cover the versions, preview and click-to-comment that this workflow uses from
-                    Claude Design&apos;s canvas.
+                    Those two settings cover the versions, preview and
+                    click-to-comment that this workflow uses from Claude
+                    Design&apos;s canvas.
                   </p>
                 </div>
               </div>
@@ -681,9 +867,14 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 <h3>Customize it</h3>
                 <div className="prose">
                   <p>
-                    You make messagingbot yours at install, by answering three questions: a read-only GitHub token,
-                    the repositories that hold your brand, and which skills to load. The bundle README covers{" "}
-                    <a href={`${BUNDLE}#read-only-access-three-rings`}>scoping the token</a>.
+                    You make messagingbot yours at install, by answering three
+                    questions: a read-only GitHub token, the repositories that
+                    hold your brand, and which skills to load. The bundle README
+                    covers{" "}
+                    <a href={`${BUNDLE}#read-only-access-three-rings`}>
+                      scoping the token
+                    </a>
+                    .
                   </p>
                 </div>
               </div>
@@ -692,7 +883,9 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                   <span className="c">$</span>
                   {" oap agent lint    examples/messagingbot\n"}
                   <span className="c">$</span>
-                  {" oap agent install examples/messagingbot --namespace default\n"}
+                  {
+                    " oap agent install examples/messagingbot --namespace default\n"
+                  }
                   <span className="c">$</span>
                   {" oap channel create --kind slack   "}
                   <span className="c"># bind it to messagingbot</span>
@@ -713,8 +906,9 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 </h2>
               </div>
               <p className="lede">
-                In the demo, Jordan (on a fictional marketing team) leaves two notes on revision 1, and messagingbot
-                addresses both in revision 2. Use the tabs to compare them.
+                In the demo, Jordan (on a fictional marketing team) leaves two
+                notes on revision 1, and messagingbot addresses both in revision
+                2. Use the tabs to compare them.
               </p>
             </div>
 
@@ -732,17 +926,28 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                   <h4>Annotations</h4>
                   <div className="note">
                     <div className="on">
-                      <span className="pin">1</span>jordan, on &quot;Smarter robots for a smarter...&quot;
+                      <span className="pin">1</span>jordan, on &quot;Smarter
+                      robots for a smarter...&quot;
                     </div>
-                    <p>Generic. Lead with our peak-season pillar, the outcome, not the AI.</p>
+                    <p>
+                      Generic. Lead with our peak-season pillar, the outcome,
+                      not the AI.
+                    </p>
                   </div>
                   <div className="note">
                     <div className="on">
-                      <span className="pin">2</span>jordan, on &quot;Learn more&quot;
+                      <span className="pin">2</span>jordan, on &quot;Learn
+                      more&quot;
                     </div>
-                    <p>Should be &quot;Book a demo&quot;, as a primary button in Signal Orange.</p>
+                    <p>
+                      Should be &quot;Book a demo&quot;, as a primary button in
+                      Signal Orange.
+                    </p>
                   </div>
-                  <p className="ba-send">Send bundles both notes into one batch, each with where on the page it was made.</p>
+                  <p className="ba-send">
+                    Send bundles both notes into one batch, each with where on
+                    the page it was made.
+                  </p>
                 </>
               }
               panel2={
@@ -766,7 +971,9 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                       <b>Change</b> primary CTA, Signal Orange
                     </div>
                   </div>
-                  <p className="ba-send">Revision 1 is still in the history, unchanged.</p>
+                  <p className="ba-send">
+                    Revision 1 is still in the history, unchanged.
+                  </p>
                 </>
               }
             />
@@ -782,9 +989,11 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 </div>
                 <h3>The note is attached to the element</h3>
                 <p>
-                  When Jordan clicks the headline in the viewer and types a note, the note is attached to that
-                  element. Pressing <strong>Send</strong> bundles every note up and sends them to the agent together,
-                  each with the details of where on the page it was made.
+                  When Jordan clicks the headline in the viewer and types a
+                  note, the note is attached to that element. Pressing{" "}
+                  <strong>Send</strong> bundles every note up and sends them to
+                  the agent together, each with the details of where on the page
+                  it was made.
                 </p>
               </div>
               <div className="beat">
@@ -793,10 +1002,12 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 </div>
                 <h3>OAP authorizes the feedback first</h3>
                 <p>
-                  Before the agent sees any of it, OAP checks that Jordan is allowed to view this exact artifact and
-                  to take part in the session. Jordan&apos;s notes reach the agent as <strong>Jordan&apos;s words</strong>,
-                  while anything taken from the page itself is treated as <strong>data</strong>, so text inside a
-                  design can&apos;t pose as an instruction.
+                  Before the agent sees any of it, OAP checks that Jordan is
+                  allowed to view this exact artifact and to take part in the
+                  session. Jordan&apos;s notes reach the agent as{" "}
+                  <strong>Jordan&apos;s words</strong>, while anything taken
+                  from the page itself is treated as <strong>data</strong>, so
+                  text inside a design can&apos;t pose as an instruction.
                 </p>
               </div>
               <div className="beat">
@@ -805,8 +1016,8 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 </div>
                 <h3>The agent revises the same artifact</h3>
                 <p>
-                  Revision 2 includes a change note that responds to each annotation. Revision 1 stays in the history
-                  as it was.
+                  Revision 2 includes a change note that responds to each
+                  annotation. Revision 1 stays in the history as it was.
                 </p>
               </div>
             </div>
@@ -824,65 +1035,187 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 </h2>
               </div>
               <p className="lede">
-                OAP is a secure foundation for building any agent: identity, authorization checked before every
-                action, sandboxed tools, safe artifacts and an audit trail all come with the platform. That made
-                messagingbot easy to build. We described the agent we wanted, and everything below came with it.
+                OAP is a secure foundation for building any agent: identity,
+                authorization checked before every action, sandboxed tools, safe
+                artifacts and an audit trail all come with the platform. That
+                made messagingbot easy to build. We described the agent we
+                wanted, and everything below came with it.
               </p>
             </div>
             <div className="why">
-              <WhyItem hue="var(--h0)" title="Runs in your cluster" icon={
-                <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M20 5l13 7.5v15L20 35 7 27.5v-15z" /><path d="M7 12.5L20 20l13-7.5M20 20v15" /></svg>
-              }>
-                messagingbot uses whatever model your cluster is configured with (Anthropic, OpenAI or OpenRouter).
-                Briefs and unreleased messaging stay on infrastructure you run.
+              <WhyItem
+                hue="var(--h0)"
+                title="Runs in your cluster"
+                icon={
+                  <svg
+                    viewBox="0 0 40 40"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <path d="M20 5l13 7.5v15L20 35 7 27.5v-15z" />
+                    <path d="M7 12.5L20 20l13-7.5M20 20v15" />
+                  </svg>
+                }
+              >
+                messagingbot uses whatever model your cluster is configured with
+                (Anthropic, OpenAI or OpenRouter). Briefs and unreleased
+                messaging stay on infrastructure you run.
               </WhyItem>
-              <WhyItem hue="var(--h1)" title="Works in Slack and the browser" icon={
-                <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M6 9h20v13H14l-5 4v-4H6z" /><path d="M30 15h4v13h-3v4l-5-4h-9v-2" /></svg>
-              }>
-                The same agent answers in a Slack thread or OAP&apos;s browser chat, and the conversation stays linked
-                to the design it produced.
+              <WhyItem
+                hue="var(--h1)"
+                title="Works in Slack and the browser"
+                icon={
+                  <svg
+                    viewBox="0 0 40 40"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <path d="M6 9h20v13H14l-5 4v-4H6z" />
+                    <path d="M30 15h4v13h-3v4l-5-4h-9v-2" />
+                  </svg>
+                }
+              >
+                The same agent answers in a Slack thread or OAP&apos;s browser
+                chat, and the conversation stays linked to the design it
+                produced.
               </WhyItem>
-              <WhyItem hue="var(--h2)" title="Reads only approved repositories" icon={
-                <svg viewBox="0 0 40 40"><use href="#oap-a" x="5" y="6" width="30" height="27" /></svg>
-              }>
-                The toolspec enforces the repository allowlist outside the model. There&apos;s also a read-only token
-                and a sandbox that can only reach GitHub, and none of the three rely on the model following
-                instructions.
+              <WhyItem
+                hue="var(--h2)"
+                title="Reads only approved repositories"
+                icon={
+                  <svg viewBox="0 0 40 40">
+                    <use href="#oap-a" x="5" y="6" width="30" height="27" />
+                  </svg>
+                }
+              >
+                The toolspec enforces the repository allowlist outside the
+                model. There&apos;s also a read-only token and a sandbox that
+                can only reach GitHub, and none of the three rely on the model
+                following instructions.
               </WhyItem>
-              <WhyItem hue="var(--h3)" title="Pages can't run scripts" icon={
-                <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="6" y="8" width="28" height="24" rx="3" /><path d="M6 14h28" /><path d="M15 21l10 6M25 21l-10 6" /></svg>
-              }>
-                Artifacts render <a href="/docs/artifact-safety">inert</a>, so scripts in a model-written page
-                don&apos;t execute when you open it.
+              <WhyItem
+                hue="var(--h3)"
+                title="Pages can't run scripts"
+                icon={
+                  <svg
+                    viewBox="0 0 40 40"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <rect x="6" y="8" width="28" height="24" rx="3" />
+                    <path d="M6 14h28" />
+                    <path d="M15 21l10 6M25 21l-10 6" />
+                  </svg>
+                }
+              >
+                Artifacts render <a href="/docs/artifact-safety">inert</a>, so
+                scripts in a model-written page don&apos;t execute when you open
+                it.
               </WhyItem>
-              <WhyItem hue="var(--h4)" title="Feedback is checked" icon={
-                <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="14" cy="15" r="6" /><path d="M14 12v3l2 1.5" /><path d="M22 22l12 0M22 27h12M22 32h8" /><path d="M6 30c1.5-4 4.5-6 8-6" /></svg>
-              }>
-                An annotation can only target an artifact its sender may view, and nothing scraped from the page
-                reaches the agent as an instruction.
+              <WhyItem
+                hue="var(--h4)"
+                title="Feedback is checked"
+                icon={
+                  <svg
+                    viewBox="0 0 40 40"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <circle cx="14" cy="15" r="6" />
+                    <path d="M14 12v3l2 1.5" />
+                    <path d="M22 22l12 0M22 27h12M22 32h8" />
+                    <path d="M6 30c1.5-4 4.5-6 8-6" />
+                  </svg>
+                }
+              >
+                An annotation can only target an artifact its sender may view,
+                and nothing scraped from the page reaches the agent as an
+                instruction.
               </WhyItem>
-              <WhyItem hue="var(--h0)" title="Versions and an audit log" icon={
-                <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="12" y="6" width="22" height="16" rx="2" /><rect x="9" y="11" width="22" height="16" rx="2" fill="var(--bg)" /><rect x="6" y="16" width="22" height="16" rx="2" fill="var(--bg)" /><path d="M10 24h14M10 28h9" /></svg>
-              }>
-                Revisions are immutable and can be <a href="/docs/artifact-annotations">tagged</a> (for example
-                &quot;approved hero&quot;). Each session&apos;s transcript is a signed, append-only{" "}
-                <a href="/docs/audit-log">audit log</a> you can verify offline to see what the agent read and what it
-                was asked to change.
+              <WhyItem
+                hue="var(--h0)"
+                title="Versions and an audit log"
+                icon={
+                  <svg
+                    viewBox="0 0 40 40"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <rect x="12" y="6" width="22" height="16" rx="2" />
+                    <rect
+                      x="9"
+                      y="11"
+                      width="22"
+                      height="16"
+                      rx="2"
+                      fill="var(--bg)"
+                    />
+                    <rect
+                      x="6"
+                      y="16"
+                      width="22"
+                      height="16"
+                      rx="2"
+                      fill="var(--bg)"
+                    />
+                    <path d="M10 24h14M10 28h9" />
+                  </svg>
+                }
+              >
+                Revisions are immutable and can be{" "}
+                <a href="/docs/artifact-annotations">tagged</a> (for example
+                &quot;approved hero&quot;). Each session&apos;s transcript is a
+                signed, append-only <a href="/docs/audit-log">audit log</a> you
+                can verify offline to see what the agent read and what it was
+                asked to change.
               </WhyItem>
-              <WhyItem hue="var(--h1)" title="Swappable parts" icon={
-                <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 14h22l-5-5M32 26H10l5 5" /></svg>
-              }>
-                Skills and brand repositories are chosen at install and the model is a cluster setting, so the same
-                bundle works for a different brand by pointing it at different repos.
+              <WhyItem
+                hue="var(--h1)"
+                title="Swappable parts"
+                icon={
+                  <svg
+                    viewBox="0 0 40 40"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <path d="M8 14h22l-5-5M32 26H10l5 5" />
+                  </svg>
+                }
+              >
+                Skills and brand repositories are chosen at install and the
+                model is a cluster setting, so the same bundle works for a
+                different brand by pointing it at different repos.
               </WhyItem>
-              <WhyItem hue="var(--h2)" title="Multiplayer, with the owner's say-so" icon={
-                <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="14" cy="14" r="5" /><path d="M5 31c0-5 4-8.5 9-8.5s9 3.5 9 8.5" /><circle cx="28" cy="16" r="4" /><path d="M25 23.5c1-.6 2-.9 3-.9 4 0 7 2.8 7 7" /><path d="M29 6.5l2 2 3.5-3.5" /></svg>
-              }>
+              <WhyItem
+                hue="var(--h2)"
+                title="Multiplayer, with the owner's say-so"
+                icon={
+                  <svg
+                    viewBox="0 0 40 40"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <circle cx="14" cy="14" r="5" />
+                    <path d="M5 31c0-5 4-8.5 9-8.5s9 3.5 9 8.5" />
+                    <circle cx="28" cy="16" r="4" />
+                    <path d="M25 23.5c1-.6 2-.9 3-.9 4 0 7 2.8 7 7" />
+                    <path d="M29 6.5l2 2 3.5-3.5" />
+                  </svg>
+                }
+              >
                 A design review is rarely one person, and{" "}
-                <a href="/docs/multiplayer-sessions">multiplayer sessions</a> work out of the box. A colleague in the
-                thread asks to join and suggest changes, and the session&apos;s owner approves them first. Once
-                approved, they can chat with messagingbot and pin notes on the design just like the person who
-                started it.
+                <a href="/docs/multiplayer-sessions">multiplayer sessions</a>{" "}
+                work out of the box. A colleague in the thread asks to join and
+                suggest changes, and the session&apos;s owner approves them
+                first. Once approved, they can chat with messagingbot and pin
+                notes on the design just like the person who started it.
               </WhyItem>
             </div>
           </div>
@@ -899,9 +1232,11 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 </h2>
                 <div className="prose">
                   <p>
-                    Claude Design does more today: direct editing on the canvas, slides and prototypes, export to
-                    tools like Canva, and handoff to Claude Code. Each could be added to messagingbot with parts OAP
-                    already has. Our designers just haven&apos;t needed them (yet).
+                    Claude Design does more today: direct editing on the canvas,
+                    slides and prototypes, export to tools like Canva, and
+                    handoff to Claude Code. Each could be added to messagingbot
+                    with parts OAP already has. Our designers just haven&apos;t
+                    needed them (yet).
                   </p>
                   <p>
                     messagingbot is open source, so if you need one first,{" "}
@@ -917,30 +1252,37 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 <div className="seam">
                   <b>More formats</b>
                   <p>
-                    Artifact renderers are <a href="/docs/artifacts">pluggable</a>, so slides or prototypes would be
-                    a new renderer or skill.
+                    Artifact renderers are{" "}
+                    <a href="/docs/artifacts">pluggable</a>, so slides or
+                    prototypes would be a new renderer or skill.
                   </p>
                 </div>
                 <div className="seam">
                   <b>Export to other tools</b>
                   <p>
-                    Connect the tool&apos;s API as an <a href="/docs/mcp-servers">MCP server</a> and give the agent a
-                    tool to publish with.
+                    Connect the tool&apos;s API as an{" "}
+                    <a href="/docs/mcp-servers">MCP server</a> and give the
+                    agent a tool to publish with.
                   </p>
                 </div>
                 <div className="seam">
                   <b>Handoff to code</b>
                   <p>
-                    OAP agents can <a href="/docs/subagents-delegation">delegate to other agents</a>, so a finished
-                    design can go to a coding agent like <a href="/docs/codebot">codebot</a>, which opens the pull
+                    OAP agents can{" "}
+                    <a href="/docs/subagents-delegation">
+                      delegate to other agents
+                    </a>
+                    , so a finished design can go to a coding agent like{" "}
+                    <a href="/docs/codebot">codebot</a>, which opens the pull
                     request.
                   </p>
                 </div>
                 <div className="seam">
                   <b>Design-system setup</b>
                   <p>
-                    A skill could read your codebase and draft a tokens file as an artifact for someone to review and
-                    commit, so the agent never needs write access.
+                    A skill could read your codebase and draft a tokens file as
+                    an artifact for someone to review and commit, so the agent
+                    never needs write access.
                   </p>
                 </div>
               </div>
@@ -982,8 +1324,9 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                   Try messagingbot <em>with your brand</em>
                 </h2>
                 <p className="lede">
-                  Install the bundle, answer the three install questions, and bind it to a Slack channel. The install
-                  is where you point it at your own design and messaging repos.
+                  Install the bundle, answer the three install questions, and
+                  bind it to a Slack channel. The install is where you point it
+                  at your own design and messaging repos.
                 </p>
                 <div className="cta-row">
                   <a className="btn btn-ink" href={BUNDLE}>
@@ -996,9 +1339,11 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
               </div>
               <div className="term">
                 <CopyButton text={INSTALL_ALL} />
-                <span className="p">$ </span>oap agent lint examples/messagingbot
+                <span className="p">$ </span>oap agent lint
+                examples/messagingbot
                 <br />
-                <span className="p">$ </span>oap agent install examples/messagingbot --namespace default
+                <span className="p">$ </span>oap agent install
+                examples/messagingbot --namespace default
                 <br />
                 <span className="p">$ </span>oap channel create --kind slack{" "}
                 <span className="c"># bind it to messagingbot</span>
@@ -1007,7 +1352,10 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
             <div className="deeper">
               <a href="/docs/artifacts">
                 <b>Artifacts</b>
-                <span>The durable, versioned home for everything messagingbot designs.</span>
+                <span>
+                  The durable, versioned home for everything messagingbot
+                  designs.
+                </span>
               </a>
               <a href="/docs/artifact-annotations">
                 <b>Annotations &amp; tags</b>
@@ -1060,8 +1408,9 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
               </div>
             </div>
             <p className="disclaimer">
-              The demo on this page is a scripted simulation of Slack and the artifact viewer; its company, people,
-              and repositories are fictional.
+              The demo on this page is a scripted simulation of Slack and the
+              artifact viewer; its company, people, and repositories are
+              fictional.
             </p>
           </div>
         </section>
@@ -1071,7 +1420,8 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
         <div className="rail">
           <span>
             Built by <a href="https://authzed.com/">AuthZed</a>, using{" "}
-            <a href="https://github.com/authzed/spicedb">SpiceDB</a>. Open source under the{" "}
+            <a href="https://github.com/authzed/spicedb">SpiceDB</a>. Open
+            source under the{" "}
             <a href={`${REPO}/blob/main/LICENSE`}>Apache 2.0 license</a>.
           </span>
           <span>

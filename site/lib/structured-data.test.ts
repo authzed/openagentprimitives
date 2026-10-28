@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { normalizeGuide } from "./nav";
 import { SITE_URL } from "./site";
-import { guideGraph, landingGraph, plainText, storyGraph } from "./structured-data";
+import {
+  guideGraph,
+  landingGraph,
+  plainText,
+  storyGraph,
+} from "./structured-data";
 
 type Node = Record<string, unknown>;
 const nodes = (g: Node) => g["@graph"] as Node[];
@@ -104,8 +109,13 @@ describe("storyGraph", () => {
   });
 
   it("FAQ answers are plain text: code spans stripped", () => {
-    const entities = byType(storyGraph(story, faq), "FAQPage")?.mainEntity as Node[] | undefined;
-    expect(entities?.[0]).toMatchObject({ name: "Why?", acceptedAnswer: { text: "Run oap agent install." } });
+    const entities = byType(storyGraph(story, faq), "FAQPage")?.mainEntity as
+      | Node[]
+      | undefined;
+    expect(entities?.[0]).toMatchObject({
+      name: "Why?",
+      acceptedAnswer: { text: "Run oap agent install." },
+    });
   });
 
   it("complete clip: VideoObject with absolute URLs and a joined transcript", () => {
@@ -117,12 +127,18 @@ describe("storyGraph", () => {
   });
 
   it("clip missing a required field: no VideoObject rather than a partial one", () => {
-    expect(byType(storyGraph(story, faq, { ...clip, uploadDate: undefined }), "VideoObject")).toBeUndefined();
+    expect(
+      byType(
+        storyGraph(story, faq, { ...clip, uploadDate: undefined }),
+        "VideoObject",
+      ),
+    ).toBeUndefined();
   });
 
   it("includes every node it references by @id", () => {
     const g = storyGraph(story, faq, clip);
     const ids = new Set(nodes(g).map((n) => n["@id"]));
-    for (const [, id] of JSON.stringify(g).matchAll(/\{"@id":"([^"]+)"\}/g)) expect(ids).toContain(id);
+    for (const [, id] of JSON.stringify(g).matchAll(/\{"@id":"([^"]+)"\}/g))
+      expect(ids).toContain(id);
   });
 });
