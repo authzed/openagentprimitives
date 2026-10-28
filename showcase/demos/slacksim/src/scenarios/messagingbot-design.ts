@@ -203,14 +203,16 @@ export function messagingbotDesign(): Story {
       },
       {
         id: "pin-cta",
-        caption: "And another on the button: wrong words, and the wrong colour.",
+        caption:
+          "And another on the button: wrong words, and the wrong colour.",
         hold: 800,
         run: (c) =>
           c.annotateArtifact({
             index: 2,
             targetId: "hero-cta",
             label: "Learn more",
-            comment: "Should be “Book a demo”, as a primary button in Signal Orange.",
+            comment:
+              "Should be “Book a demo”, as a primary button in Signal Orange.",
             intent: "change",
             author: "jordan",
           }),
@@ -242,9 +244,7 @@ export function messagingbotDesign(): Story {
         run: (c) => {
           c.closeArtifact();
           c.editMessage(MKT, CARD_TS, {
-            blocks: card(
-              "revision 2  ·  `latest` → v2  ·  revision 1 kept",
-            ),
+            blocks: card("revision 2  ·  `latest` → v2  ·  revision 1 kept"),
           });
           c.postReply(MKT, REQ_TS, AGENT, {
             text: "Revision 2 is up:\n1. Headline now leads with “Every pick, on time” — the peak-season pillar in `acme/messaging/pillars.md`.\n2. CTA is “Book a demo”, the primary button from `acme/design/components/button.md`.",

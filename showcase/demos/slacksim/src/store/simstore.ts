@@ -186,7 +186,10 @@ export class SimStore {
 
   /** Open the artifact viewer over the client — the "View live" click. */
   openArtifact(artifact: ArtifactView): void {
-    this.commit({ ...this.scenario, view: { ...this.scenario.view, artifact } });
+    this.commit({
+      ...this.scenario,
+      view: { ...this.scenario.view, artifact },
+    });
   }
 
   /** Pin a note to an element of the rendered artifact. */

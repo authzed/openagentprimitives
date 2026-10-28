@@ -50,7 +50,11 @@ export function ArtifactViewer({ artifact }: { artifact: ArtifactView }) {
   const pending = artifact.annotations.length;
 
   return (
-    <div className="av-app" role="dialog" aria-label={`${artifact.title} — live view`}>
+    <div
+      className="av-app"
+      role="dialog"
+      aria-label={`${artifact.title} — live view`}
+    >
       <header className="av-bar">
         <span className="av-icon">
           <Menu size={16} />
@@ -146,7 +150,8 @@ export function ArtifactViewer({ artifact }: { artifact: ArtifactView }) {
                 data-action-id="send_annotations"
                 disabled={pending === 0}
               >
-                <Send size={14} /> Send {pending} {pending === 1 ? "note" : "notes"}
+                <Send size={14} /> Send {pending}{" "}
+                {pending === 1 ? "note" : "notes"}
               </button>
             )}
           </div>
