@@ -878,6 +878,23 @@ type OpeningMessageEditor interface {
 	EditOpeningMessage(ctx context.Context, sess SessionInfo, content OpeningMessageContent) error
 }
 
+// SessionFinalizer is an OPTIONAL capability a Kind's Sender may implement to
+// take down every "still working" indicator it rendered for a session that has
+// ENDED — the in-progress items of a live plan card, any cached status
+// caption. The runner normally does this itself on its way out, but a session
+// the operator ends without it (a boot failure, a crashed or evicted runner)
+// never says goodbye, and a transport left showing an hourglass on a dead
+// session tells the reader it is still busy. channelsd's session watcher
+// type-asserts the resolved Sender on a terminal phase; a kind without the
+// capability is skipped.
+//
+// Must be idempotent and must leave already-settled indicators alone: it is
+// called for successful sessions too, and for any it can find state for.
+// failed selects the wording ("hit an error" vs "interrupted").
+type SessionFinalizer interface {
+	FinalizeSession(ctx context.Context, sess SessionInfo, failed bool) error
+}
+
 // SessionRelationLinker is an optional Kind capability: declare the subject-set
 // link-types this kind permits on agentsession#owner / #participant. The
 // guardian composer unions these (plus user) into the agentsession definition.

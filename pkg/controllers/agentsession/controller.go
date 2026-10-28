@@ -254,10 +254,11 @@ func bundleProvisioningTimedOut(provisioningStarted, now time.Time, deadline tim
 }
 
 // detectorProvisioningTimedOut is the detector twin of
-// bundleProvisioningTimedOut, measured against detectorReadyDeadline. A zero
-// provisioningStarted never times out (fail-safe).
-func detectorProvisioningTimedOut(provisioningStarted, now time.Time) bool {
-	return !provisioningStarted.IsZero() && now.Sub(provisioningStarted) > detectorReadyDeadline
+// bundleProvisioningTimedOut, measured against deadline — detectorReadyDeadline,
+// or the capacity-hold timeout while held. A zero provisioningStarted never
+// times out (fail-safe).
+func detectorProvisioningTimedOut(provisioningStarted, now time.Time, deadline time.Duration) bool {
+	return !provisioningStarted.IsZero() && now.Sub(provisioningStarted) > deadline
 }
 
 // earlierNonZero returns the earlier of cur and candidate, treating the zero
@@ -642,6 +643,14 @@ type Reconciler struct {
 	// stranding CPU, while the AgentSession itself stays for inspection. 0 or
 	// negative disables reaping. From --failed-sandbox-reap-grace (1m).
 	FailedSandboxReapGrace time.Duration
+
+	// CapacityHoldTimeout is how long a session whose bundle/detector pods are
+	// Pending on a cluster capacity shortfall is HELD — waiting for room rather
+	// than failing at the ordinary readiness deadline. Measured from
+	// provisioning start. 0 uses defaultCapacityHoldTimeout; negative disables
+	// the hold (capacity stalls fail at the ordinary deadline). From
+	// --capacity-hold-timeout. See capacity_hold.go.
+	CapacityHoldTimeout time.Duration
 
 	// SpiceDBDeleter, when non-nil, wipes all agentsession relationships in
 	// SpiceDB during finalization, before the finalizer is removed. Nil skips
@@ -1934,8 +1943,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				// creation — a userPassthrough session's credential-link wait must not
 				// count), fail closed and name the offending bundle(s): markBootFailed
 				// sets Phase=Failed, which channelsd relays to the channel.
-				bundleDeadline := r.effectiveBundleReadyDeadline(ctx)
-				if bundleProvisioningTimedOut(earliestBundleStart, r.now(), bundleDeadline) {
+				//
+				// Capacity hold: a pod Pending on a capacity SHORTFALL (the cluster
+				// is full, not misfit) stretches the deadline to the hold timeout,
+				// so a burst of sessions queues for room instead of failing
+				// together at 8m — see capacity_hold.go. Only PROVISIONING is
+				// held: a bundle that was already Ready and regressed mid-session
+				// is measured from its original creation, so a hold window would
+				// already be spent and its "waited an hour for room" message false.
+				bundlesWereReady := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionBundlesReady)
+				midSession := bundlesWereReady != nil && bundlesWereReady.Status == metav1.ConditionTrue
+				stall, stalled := r.firstSchedulingStall(ctx, sess.Namespace, notReadyPods)
+				bundleDeadline, held := r.capacityHoldDeadline(stall, stalled && !midSession, r.effectiveBundleReadyDeadline(ctx))
+				if bundleProvisioningTimedOut(capacityHoldAdjustedStart(&sess, earliestBundleStart, held, r.now()), r.now(), bundleDeadline) {
 					sess.Status.BundleSessions = bundleSessionStatuses
 					// Name the ACTUAL blocker. provablyUnschedulableBundle above only
 					// fast-fails a RESOURCE-ceiling block (request exceeds the largest
@@ -1947,8 +1967,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 					// likely an image pull" for a taint-blocked pod (as this once did)
 					// sends the user chasing a cause that isn't the problem.
 					var msg string
-					bundlesWereReady := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionBundlesReady)
-					if stall, ok := r.firstSchedulingStall(ctx, sess.Namespace, notReadyPods); ok {
+					if held {
+						r.expireCapacityHold(&sess, bundleDeadline)
+						msg = capacityHoldExpiredMessage(fmt.Sprintf("sandbox bundle(s) %v", notReadyBundles), bundleDeadline, stall)
+					} else if stalled {
 						msg = fmt.Sprintf("sandbox bundle(s) %v did not become Ready within %s of provisioning start: %s is unschedulable: %s",
 							notReadyBundles, bundleDeadline, stall.podName, strings.TrimSuffix(stall.reason, "."))
 					} else if bundlesWereReady != nil && bundlesWereReady.Status == metav1.ConditionTrue {
@@ -1992,7 +2014,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				// capacity warning to the monitoring channel. Fail-safe: no stall, or
 				// no pod, falls back to the generic message.
 				bundlesMsg := "waiting for bundle SpiceboxSessions to become Ready"
-				if stall, ok := r.firstSchedulingStall(ctx, sess.Namespace, notReadyPods); ok {
+				r.syncCapacityHold(&sess, held, stall, earliestBundleStart.Add(bundleDeadline))
+				if stalled {
 					bundlesMsg = stall.message()
 					r.maybeEmitUnschedulable(ctx, &sess, spiceboxv1alpha1.AgentSessionConditionBundlesReady, stall)
 				} else {
@@ -2006,7 +2029,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				r.setFalseCondition(&sess, spiceboxv1alpha1.AgentSessionConditionBundlesReady,
 					"BundlesProvisioning", bundlesMsg)
 				sess.Status.BundleSessions = bundleSessionStatuses
-				return ctrl.Result{RequeueAfter: 2 * time.Second}, r.applyStatus(ctx, &sess)
+				requeue := 2 * time.Second
+				if held {
+					requeue = capacityHoldRequeue
+				}
+				return ctrl.Result{RequeueAfter: requeue}, r.applyStatus(ctx, &sess)
 			}
 
 			sess.Status.BundleSessions = bundleSessionStatuses
@@ -2017,6 +2044,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			// to "Ready" with no intermediate not-stalled pass.
 			r.setTrueCondition(&sess, spiceboxv1alpha1.AgentSessionConditionSandboxScheduling,
 				spiceboxv1alpha1.ReasonSandboxScheduled, "")
+			r.releaseCapacityHold(&sess)
 		}
 	}
 
@@ -2959,11 +2987,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				// credential-link wait never counts — fail closed via
 				// ContentGuardHalt, naming the offending inspector(s). The session
 				// never runs unscanned.
-				if detectorProvisioningTimedOut(earliestDetectorStart, r.now()) {
+				//
+				// A detector Pending on a capacity shortfall is held exactly like a
+				// bundle (capacity_hold.go): the deadline stretches to the hold
+				// timeout instead of failing the burst at 5m.
+				stall, stalled := r.firstSchedulingStall(ctx, sess.Namespace, notReadyDetectorPods)
+				detectorDeadline, held := r.capacityHoldDeadline(stall, stalled, detectorReadyDeadline)
+				if detectorProvisioningTimedOut(capacityHoldAdjustedStart(&sess, earliestDetectorStart, held, r.now()), r.now(), detectorDeadline) {
+					if held {
+						r.expireCapacityHold(&sess, detectorDeadline)
+						return r.markBootFailed(ctx, &sess,
+							spiceboxv1alpha1.ReasonAgentSessionContentGuardHalt,
+							capacityHoldExpiredMessage(fmt.Sprintf("content-guard detector pod(s) for inspector(s) %v", notReadyInspectors), detectorDeadline, stall)+
+								"; failing closed (the session will not run unscanned)")
+					}
 					return r.markBootFailed(ctx, &sess,
 						spiceboxv1alpha1.ReasonAgentSessionContentGuardHalt,
 						fmt.Sprintf("content-guard detector pod(s) for inspector(s) %v never became Ready within %s; failing closed (the session will not run unscanned)",
-							notReadyInspectors, detectorReadyDeadline))
+							notReadyInspectors, detectorDeadline))
 				}
 				// Set a clear reason while awaiting the detector pod IP, then
 				// requeue — never leave a blank phase. A detector stuck
@@ -2971,7 +3012,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				// fans a one-shot capacity warning, instead of the generic awaiting
 				// text; same fail-safe path as bundles.
 				detectorMsg := "awaiting content-guard detector pod IP"
-				if stall, ok := r.firstSchedulingStall(ctx, sess.Namespace, notReadyDetectorPods); ok {
+				r.syncCapacityHold(&sess, held, stall, earliestDetectorStart.Add(detectorDeadline))
+				if stalled {
 					detectorMsg = stall.message()
 					r.maybeEmitUnschedulable(ctx, &sess, spiceboxv1alpha1.AgentSessionConditionRunnerReady, stall)
 				} else {
@@ -2988,13 +3030,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				if uerr := r.applyStatus(ctx, &sess); uerr != nil {
 					return ctrl.Result{}, uerr
 				}
-				return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+				requeue := 2 * time.Second
+				if held {
+					requeue = capacityHoldRequeue
+				}
+				return ctrl.Result{RequeueAfter: requeue}, nil
 			}
 			// Every detector pod reached Ready this pass, so clear any capacity
 			// stall recorded earlier — this pass may have jumped straight from
 			// "stalled" to "Ready" with no intermediate not-stalled pass.
 			r.setTrueCondition(&sess, spiceboxv1alpha1.AgentSessionConditionSandboxScheduling,
 				spiceboxv1alpha1.ReasonSandboxScheduled, "")
+			r.releaseCapacityHold(&sess)
 		} else {
 			// No detectors configured: clear any slice left by an inspector that
 			// has since been removed from settings.

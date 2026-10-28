@@ -397,6 +397,14 @@ func (w *statusWatchdog) tick(ctx context.Context, logger logger) {
 				fmt.Sprintf("notice-%s-%s-%d", categories.AgentStalled, sess.UID, consecutive),
 				watchdogTimeoutNotice(name, consecutive))
 			w.Forget(ns, name)
+			// The watchdog has stopped waiting, so the "⚠️ Taking longer"
+			// caption it raised must come down with it: the durable notice now
+			// says what happened, and a caption still reading "working" under
+			// it contradicts that. clearIndicator, not Clear — Clear would reset
+			// the stall streak this branch exists to count.
+			if err := w.clearIndicator(ctx, ns, name); err != nil {
+				logger.Error(err, "watchdog: clear indicator after stall timeout", "session", key)
+			}
 		}
 	}
 }
@@ -506,6 +514,13 @@ func waitFromStatus(sess *spiceboxv1alpha1.AgentSession) watchdog.Wait {
 	// the silence watchdog must not fire the generic "taking longer" warn over
 	// it. Generic over the reason (see startupWaitReasons).
 	if _, ok := startupWait(sess); ok {
+		return watchdog.WaitVisible
+	}
+	// Capacity hold: the operator is deliberately queueing this session for
+	// cluster room (up to --capacity-hold-timeout) and the session watcher has
+	// told the thread so. Silence is the expected state; a "taking longer" warn
+	// — or a stalled verdict a few minutes in — would contradict the notice.
+	if _, ok := sessionnotice.CapacityHold(sess); ok {
 		return watchdog.WaitVisible
 	}
 	// Since Slice C2 every approval family (tool_approval, info_leakage,
