@@ -41,6 +41,9 @@ func newAgentSignCmd(_ *apcmd.Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// <ref> is the user's own choice here, so a host the credential
+			// isn't for is a typo, not an untrusted ref: fail naming it.
+			opts.RequireCredentialHost = true
 			sigDigest, err := oci.Sign(cmd.Context(), ref, signer, opts)
 			if err != nil {
 				return err

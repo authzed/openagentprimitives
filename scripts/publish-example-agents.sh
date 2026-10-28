@@ -9,17 +9,30 @@
 #   TAG                    immutable tag for this publish (e.g. the short commit sha)
 #   SIGNING_KEY_FILE       PEM ECDSA private key used by `oap agent sign`
 #   VERIFY_KEY_FILE        matching PEM public key; every push is verified against it
-#   OAP_REGISTRY_USERNAME / OAP_REGISTRY_PASSWORD   registry push credentials
 # Optional:
+#   OAP_REGISTRY_USERNAME / OAP_REGISTRY_PASSWORD / OAP_REGISTRY_HOST
+#                          push credentials and the registry host they are for
+#                          (all three, or none for an anonymous local registry);
+#                          OAP_REGISTRY_HOST must be AGENTS_REPO's host
 #   PLAIN_HTTP=1           talk plain HTTP to the registry (local dry runs only)
 #
-# Each bundle is pushed as <AGENTS_REPO>/<agent-name>:<TAG> and :latest, where
-# <agent-name> is the name the loader derives (it can differ from the folder
-# name), signed once by digest, then verified anonymously through :latest so a
-# package that isn't public fails here rather than in a user's install.
+# Each bundle is pushed as <AGENTS_REPO>/<agent-name>:<TAG>, where <agent-name>
+# is the name the loader derives (it can differ from the folder name), signed
+# by digest, and verified anonymously by digest so a package that isn't public
+# fails here rather than in a user's install. Only then is :latest moved to that
+# digest: a failed sign or verify leaves :latest on its last good bundle.
 set -euo pipefail
 
 : "${OAP:?}" "${AGENTS_REPO:?}" "${TAG:?}" "${SIGNING_KEY_FILE:?}" "${VERIFY_KEY_FILE:?}"
+
+# oap itself enforces all-or-none for the three credential vars and refuses a
+# push whose ref is on a host other than OAP_REGISTRY_HOST; checking up front
+# fails before anything is packaged, naming both values.
+registry_host=${AGENTS_REPO%%/*}
+if [ -n "${OAP_REGISTRY_HOST:-}" ] && [ "$OAP_REGISTRY_HOST" != "$registry_host" ]; then
+  echo "OAP_REGISTRY_HOST ($OAP_REGISTRY_HOST) is not AGENTS_REPO's registry host ($registry_host)" >&2
+  exit 1
+fi
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
@@ -55,13 +68,15 @@ for dir in "${bundles[@]}"; do
 
   echo "::group::$dir -> $ref"
   digest=$("$OAP" agent push ${plain[@]+"${plain[@]}"} "$ref:$TAG" "$file")
+  "$OAP" agent sign ${plain[@]+"${plain[@]}"} "$ref@$digest" --key "$SIGNING_KEY_FILE"
+  OAP_REGISTRY_USERNAME='' OAP_REGISTRY_PASSWORD='' OAP_REGISTRY_HOST='' \
+    "$OAP" agent verify ${plain[@]+"${plain[@]}"} "$ref@$digest" --key "$VERIFY_KEY_FILE"
+  # Verified; only now may :latest move. Re-pushing the same file yields the
+  # same manifest, so the digest must match what was just signed.
   latest_digest=$("$OAP" agent push ${plain[@]+"${plain[@]}"} "$ref:latest" "$file")
   if [ "$digest" != "$latest_digest" ]; then
-    echo "$ref: :$TAG ($digest) and :latest ($latest_digest) differ; refusing to sign" >&2
+    echo "$ref: :latest ($latest_digest) is not the signed digest ($digest)" >&2
     exit 1
   fi
-  "$OAP" agent sign ${plain[@]+"${plain[@]}"} "$ref@$digest" --key "$SIGNING_KEY_FILE"
-  OAP_REGISTRY_USERNAME='' OAP_REGISTRY_PASSWORD='' \
-    "$OAP" agent verify ${plain[@]+"${plain[@]}"} "$ref:latest" --key "$VERIFY_KEY_FILE"
   echo "::endgroup::"
 done

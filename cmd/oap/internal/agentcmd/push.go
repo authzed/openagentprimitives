@@ -49,6 +49,9 @@ func newAgentPushCmd(_ *apcmd.Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// <ref> is the user's own choice here, so a host the credential
+			// isn't for is a typo, not an untrusted ref: fail naming it.
+			opts.RequireCredentialHost = true
 			dig, err := oci.Push(cmd.Context(), ref, packed, opts)
 			if err != nil {
 				return fmt.Errorf("push %s: %w", ref, err)
