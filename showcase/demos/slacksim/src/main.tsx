@@ -10,6 +10,7 @@ import { loadStory } from "./scenarios";
 import "./styles/tokens.css";
 import "./styles/slack.css";
 import "./styles/overlay.css";
+import "./styles/artifact.css";
 
 // Entry point. The capture engine loads this page with:
 //   ?scenario=<name>&theme=<light|dark>&scene=<id>
