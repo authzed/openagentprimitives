@@ -332,10 +332,11 @@ thread.
    verified webhook. A PR stacked on another open PR (its base is not the
    default branch) waits: it is reviewed once GitHub retargets it onto the
    default branch, which happens when the PR beneath it merges. Set
-   `skipStacked: false` to review PRs into any base branch. reviewbot claims the review with `claim_trigger_status`, a
-   no-argument call: the github channel kind owns the Check Run on the head
-   commit, so which pull request, which commit, and where the status lives all
-   come from the event rather than from anything the agent assembles.
+   `skipStacked: false` to review PRs into any base branch. reviewbot claims the
+   review with `claim_trigger_status`, a no-argument call: the github channel
+   kind owns the Check Run on the head commit, so which pull request, which
+   commit, and where the status lives all come from the event rather than from
+   anything the agent assembles.
 2. It clones the repository read-only (`gitlike_git`) — a **blobless partial**
    clone (`--filter=blob:none`) that keeps the full commit history — and checks
    out the head commit, diffing against a previously reviewed SHA (read back
