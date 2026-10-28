@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import type { CSSProperties, ReactNode } from "react";
 import { JsonLd } from "@/components/JsonLd";
-import { faqJsonLd, pageArticleJsonLd, videoJsonLd, type FaqItem } from "@/lib/jsonld";
 import { getAsset } from "@/lib/manifest";
 import { OG_IMAGE, SITE_NAME } from "@/lib/site";
+import { storyGraph, type FaqEntry } from "@/lib/structured-data";
 import lightInk from "../../../../docs/assets/brand/oap-wordmark-light.svg";
 import darkInk from "../../../../docs/assets/brand/oap-wordmark-dark.svg";
 import { BeforeAfter, CopyButton, DemoClip, ThemeCycleButton } from "../StoryClient";
@@ -59,7 +59,7 @@ export const metadata: Metadata = {
 
 // Answers are plain text so the reader and the FAQPage data say the same
 // words; a `backticked` span renders as code.
-const FAQ: FaqItem[] = [
+const FAQ: (FaqEntry & { id: string })[] = [
   {
     id: "faq-alternative",
     q: "Can I build a Claude Design alternative on OAP?",
@@ -182,7 +182,6 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
 
 export default function Page() {
   const clip = getAsset("messagingbot-design");
-  const video = clip ? videoJsonLd(clip) : null;
   return (
     <div className="st">
       <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
@@ -1082,17 +1081,20 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
       </footer>
 
       <JsonLd
-        data={pageArticleJsonLd({
-          headline: TITLE,
-          description: DESCRIPTION,
-          path: PATH,
-          keywords: KEYWORDS,
-          published: PUBLISHED,
-          updated: UPDATED,
-        })}
+        data={storyGraph(
+          {
+            title: TITLE,
+            description: DESCRIPTION,
+            path: PATH,
+            keywords: KEYWORDS,
+            published: PUBLISHED,
+            updated: UPDATED,
+            image: OG_IMAGE.url,
+          },
+          FAQ,
+          clip,
+        )}
       />
-      <JsonLd data={faqJsonLd(FAQ.map((f) => ({ ...f, a: f.a.replaceAll("`", "") })))} />
-      {video && <JsonLd data={video} />}
     </div>
   );
 }
