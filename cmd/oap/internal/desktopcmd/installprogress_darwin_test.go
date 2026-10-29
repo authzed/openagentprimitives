@@ -202,7 +202,7 @@ func TestRunInstallWithProgress_PanicStillClosesWindow(t *testing.T) {
 func TestInstallApproved_NoClusterShowsDialogWithoutWindow(t *testing.T) {
 	rec := stubInstallUI(t)
 	s := stateForTest(t) // no s.dg: the cluster isn't running
-	s.installApproved([]byte("unused"), "demo.oap", "Demo")
+	s.installApproved([]byte("unused"), "demo.oap", "Demo", bundleSource{})
 	assert.Equal(t, []string{"dialog"}, rec.events, "no progress window flashes up for an install that cannot start")
 	require.Len(t, rec.dialogs, 1)
 	assert.Equal(t, "Couldn't install Demo", rec.dialogs[0].title)
