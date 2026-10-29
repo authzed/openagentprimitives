@@ -28,7 +28,6 @@ import (
 	credkindregistry "github.com/authzed/openagentprimitives/pkg/platform/identity/credkind/registry"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/credresolve"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/externaltoken"
-	"github.com/authzed/openagentprimitives/pkg/tools/adoptkit"
 )
 
 // TokenGranter is the subset of *spicedb.Client reconcileCredentialGrants needs.
@@ -626,7 +625,7 @@ func (r *Reconciler) resolveGrantValue(
 	if r.SecretReader != nil {
 		credRef := types.NamespacedName{Namespace: src.Namespace, Name: src.Name}
 		ownerRef := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}
-		if aErr := adoptkit.AdoptSecret(ctx, r.SecretReader.Reader, r.Client, credRef, ownerRef, "AgentSession"); aErr != nil && !apierrors.IsNotFound(aErr) {
+		if aErr := r.adoptCredentialSecret(ctx, credRef, ownerRef); aErr != nil && !apierrors.IsNotFound(aErr) {
 			return "", fmt.Errorf("adopt credential Secret %s/%s: %w", src.Namespace, src.Name, aErr)
 		}
 		reader = r.SecretReader.Reader
