@@ -2,13 +2,17 @@ package workspace
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -125,11 +129,47 @@ func BuildSnapshotJob(cfg CPByPodConfig, src PVCRef, h SnapshotHandle) *batchv1.
 }
 
 func jobNameSnapshot(h SnapshotHandle) string {
-	return fmt.Sprintf("snap-%s-%s", h.SessionUID, h.turnSegment())
+	return boundedJobName(fmt.Sprintf("snap-%s-%s", h.SessionUID, h.turnSegment()))
 }
 
 func jobNameRestore(h SnapshotHandle, dst PVCRef) string {
-	return fmt.Sprintf("rest-%s-%s-%s", h.SessionUID, h.turnSegment(), dst.Name)
+	return boundedJobName(fmt.Sprintf("rest-%s-%s-%s", h.SessionUID, h.turnSegment(), dst.Name))
+}
+
+func jobNameGC(h SnapshotHandle) string {
+	return boundedJobName("gc-" + h.SessionUID + "-" + h.turnSegment())
+}
+
+// jobNameHashHexLen is how many hex characters of a hash of the full name
+// boundedJobName appends when it shortens one. Shortening alone is not
+// injective: two names sharing a long prefix (two forks of one parent, whose
+// qualifiers differ only near the end) would collapse to one Job, and the
+// second fork would silently restore the first fork's snapshot. 32 bits makes
+// that collision negligible.
+const jobNameHashHexLen = 8
+
+// boundedJobName fits name into the 63 bytes a Job name may use. A Job may be
+// NAMED with up to 253, but the Job controller copies its name into the pod
+// template as the job-name labels, and a label value is capped at 63, so the
+// apiserver refuses any Job whose name is longer. These names are a 5-byte
+// prefix, a 36-byte session UID and a turn segment that carries a fork's
+// qualifier (up to 40 bytes) and, for a restore, the destination PVC's name,
+// so a clean fork of any session with a non-trivial name could never be
+// snapshotted or restored.
+//
+// A name that already fits is returned unchanged, so every Job name that was
+// ever creatable keeps its name, and so does anything that recorded one. A
+// longer name keeps as much of its readable prefix as fits, then a hash of
+// the whole name; the trailing '-' a cut can leave is trimmed so the result
+// stays a valid DNS-1123 label.
+func boundedJobName(name string) string {
+	if len(name) <= validation.LabelValueMaxLength {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	suffix := "-" + hex.EncodeToString(sum[:])[:jobNameHashHexLen]
+	keep := validation.LabelValueMaxLength - len(suffix)
+	return strings.TrimRight(name[:keep], "-") + suffix
 }
 
 // SnapshotJobName is the canonical, deterministic name of the snapshot
@@ -328,7 +368,7 @@ func (s *CPByPod) GC(ctx context.Context, h SnapshotHandle) error {
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: s.cfg.Namespace,
-			Name:      "gc-" + h.SessionUID + "-" + h.turnSegment(),
+			Name:      jobNameGC(h),
 			Labels: map[string]string{
 				"app.kubernetes.io/component": "workspace-snapshot-gc",
 			},
