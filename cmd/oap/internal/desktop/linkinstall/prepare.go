@@ -179,12 +179,17 @@ const (
 	maxDescRunes = 300
 )
 
-// sanitize flattens bundle-supplied text to one line (control characters and
-// newlines become spaces, runs collapse) and caps it at max runes, so it can
-// never forge a header line in the dialog.
+// sanitize flattens bundle-supplied text to one line (every non-printable
+// rune becomes a space, runs collapse) and caps it at max runes, so it can
+// never forge a header line in the dialog. Non-printable covers more than
+// control characters: format runes such as U+202E RIGHT-TO-LEFT OVERRIDE and
+// U+200B ZERO WIDTH SPACE could visually reorder or hide text, and Go's %q
+// escapes them as \uXXXX, which AppleScript rejects as a syntax error, so the
+// dialog would then fail to show at all. unicode.IsPrint is the same set %q
+// leaves unescaped.
 func sanitize(s string, max int) string {
 	s = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if !unicode.IsPrint(r) {
 			return ' '
 		}
 		return r

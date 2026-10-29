@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/linkinstall"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/links"
@@ -23,8 +25,39 @@ var linkActions = map[string]func(*desktopState, links.Link){
 }
 
 // linkNotify surfaces a link outcome to the user. A package var so tests can
-// record notifications instead of running osascript.
-var linkNotify = func(msg string) { notify("OAP Desktop", msg) }
+// record notifications instead of running osascript. Rate limited: any web
+// page can fire oap:// links, and each refusal posts a banner, so without a
+// limit a page could keep the user's screen full of them. Every link outcome
+// is logged before it is notified, so a dropped banner loses nothing.
+var linkNotify = throttledNotify(
+	rate.NewLimiter(rate.Every(linkNotifyInterval), linkNotifyBurst),
+	func(msg string) { notify("OAP Desktop", msg) },
+	func(msg string) { onLinkNotifyDropped(msg) },
+)
+
+// linkNotifyBurst link banners may post back to back; after that, one more
+// is allowed per linkNotifyInterval. A real click produces at most two (a
+// "still starting" hold, then its outcome).
+const (
+	linkNotifyBurst    = 3
+	linkNotifyInterval = 20 * time.Second
+)
+
+// onLinkNotifyDropped records a banner the rate limit dropped. runDesktop
+// points it at st.logf, like onNotifyFailed.
+var onLinkNotifyDropped = func(msg string) {}
+
+// throttledNotify posts through post while limit allows, and hands every
+// other message to dropped.
+func throttledNotify(limit *rate.Limiter, post, dropped func(string)) func(string) {
+	return func(msg string) {
+		if !limit.Allow() {
+			dropped(msg)
+			return
+		}
+		post(msg)
+	}
+}
 
 // linkFetchTimeout bounds verify/resolve/pull for one link so a hung registry
 // cannot leave the install gate busy forever. The approval dialog runs inside
@@ -239,7 +272,7 @@ func (s *desktopState) runLinkInstall(l links.Link) {
 		return
 	}
 	s.logf("install link: %s ref=%q approved digest=%s verified=%t", l.Key, ref, p.Digest, p.Verified)
-	s.installApproved(data, ref, installDisplayName(p.Bundle, ref))
+	s.installApproved(data, ref, installDisplayName(p.Bundle, ref), bundleSource{Ref: ref, Digest: p.Digest})
 }
 
 // linkFailureMessage is the notification for a Prepare failure; show is
@@ -264,7 +297,9 @@ func linkFailureMessage(ref string, err error) (msg string, show bool) {
 	case errors.As(err, &verr):
 		return fmt.Sprintf("Couldn't verify %s was signed by the OAP project, so it wasn't installed.", ref), true
 	default:
-		return fmt.Sprintf("Couldn't download %s: %v", ref, err), true
+		// The raw error (registry host, response body) stays in the log;
+		// runLinkInstall has already written it there.
+		return fmt.Sprintf("Couldn't download %s. See logs for details.", ref), true
 	}
 }
 

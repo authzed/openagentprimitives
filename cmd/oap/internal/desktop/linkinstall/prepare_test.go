@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -291,6 +292,32 @@ func TestDialogText_LabelsPreventForgedLines(t *testing.T) {
 			assert.Equal(t, 1, sources)
 			assert.Equal(t, 1, sigs)
 			assert.Equal(t, "", lines[3])
+		})
+	}
+}
+
+// The dialog is passed to osascript through %q, which escapes any rune it
+// cannot print as \uXXXX; AppleScript has no such escape and refuses to run
+// the script. Format runes are also how a description would hide or reorder
+// text, so every one must be flattened before it reaches the dialog.
+func TestDialogText_NonPrintableBundleTextIsFlattened(t *testing.T) {
+	cases := []struct{ name, in string }{
+		{"zero width space", "Note\u200btaker"},
+		{"right-to-left override", "Note\u202etaker"},
+		{"byte order mark", "Note\ufefftaker"},
+		{"line separator", "Note\u2028taker"},
+		{"no-break space", "Note\u00a0taker"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+": becomes a plain space and quotes without escapes", func(t *testing.T) {
+			p := Prompt{Ref: "ghcr.io/acme/agents/demo-agent:1", Digest: digestA,
+				Bundle: &oap.Bundle{Manifest: &oap.Manifest{Agent: oap.Agent{Name: tc.in, Version: "1", Description: tc.in}}}}
+			_, msg := DialogText(p)
+			assert.Contains(t, msg, "Agent: Note taker v1")
+			assert.Contains(t, msg, "Description: Note taker")
+			quoted := fmt.Sprintf("%q", msg)
+			assert.NotContains(t, quoted, `\u`)
+			assert.NotContains(t, quoted, `\x`)
 		})
 	}
 }
