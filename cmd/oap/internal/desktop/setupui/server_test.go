@@ -349,6 +349,23 @@ func TestServer_LoopbackGuard(t *testing.T) {
 	}
 }
 
+// A cross-site page could otherwise load any of these in a hidden iframe:
+// the frame's own requests carry the loopback Origin, so LoopbackGuard's
+// Origin check alone does not stop it.
+func TestServer_EveryPageRefusesFraming(t *testing.T) {
+	_, base := startServer(t, setupui.NewTimeline(nil), nil)
+	for _, path := range []string{"/", "/installing?name=x", "/relay.js", "/relay.css", "/progress"} {
+		t.Run(path+": X-Frame-Options DENY and frame-ancestors 'none'", func(t *testing.T) {
+			resp, err := http.Get(base + path)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "DENY", resp.Header.Get("X-Frame-Options"))
+			assert.Equal(t, "frame-ancestors 'none'", resp.Header.Get("Content-Security-Policy"))
+		})
+	}
+}
+
 func TestServer_LoopbackGuardAllowsLocalOrigin(t *testing.T) {
 	_, base := startServer(t, setupui.NewTimeline(nil), nil)
 

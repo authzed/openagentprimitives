@@ -38,6 +38,8 @@ func TestLoopbackGuard(t *testing.T) {
 			rec := httptest.NewRecorder()
 			ok.ServeHTTP(rec, req)
 			assert.Equal(t, tc.wantStatus, rec.Code)
+			assert.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"), "every response refuses framing")
+			assert.Equal(t, "frame-ancestors 'none'", rec.Header().Get("Content-Security-Policy"))
 		})
 	}
 }

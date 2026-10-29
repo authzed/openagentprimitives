@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/linkinstall"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/links"
@@ -104,8 +106,8 @@ func TestLinkFailureMessage(t *testing.T) {
 		{name: "unusable ref: invalid-link message", err: fmt.Errorf("x: %w: %w", linkinstall.ErrInvalidRef, errors.New("bad ref")), want: "That isn't a valid OAP Desktop link.", wantShow: true},
 		{name: "signing key unavailable: key message", err: fmt.Errorf("x: %w: %w", linkinstall.ErrTrustedKey, errors.New("no PEM")), want: "Couldn't load OAP's signing key — see logs.", wantShow: true},
 		{name: "dialog failed: shown, not treated as a cancel", err: fmt.Errorf("x: %w: %w", linkinstall.ErrConfirmFailed, errors.New("no display")), want: "Couldn't show the install dialog — see logs.", wantShow: true},
-		{name: "digest mismatch: download message", err: linkinstall.ErrDigestMismatch, want: "Couldn't download " + testLinkRef + ": " + linkinstall.ErrDigestMismatch.Error(), wantShow: true},
-		{name: "other fetch error: download message", err: errors.New("pull: 404"), want: "Couldn't download " + testLinkRef + ": pull: 404", wantShow: true},
+		{name: "digest mismatch: download message without the raw error", err: linkinstall.ErrDigestMismatch, want: "Couldn't download " + testLinkRef + ". See logs for details.", wantShow: true},
+		{name: "registry error: download message without the raw error", err: errors.New("pull: GET https://registry.internal.example/v2/: 401 body"), want: "Couldn't download " + testLinkRef + ". See logs for details.", wantShow: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -373,4 +375,17 @@ func TestLinkConfirmDialog(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestThrottledNotifyDropsBannersPastTheBurst(t *testing.T) {
+	var posted, dropped []string
+	// rate.Every(time.Hour) so no token refills while the test runs.
+	n := throttledNotify(rate.NewLimiter(rate.Every(time.Hour), 2),
+		func(m string) { posted = append(posted, m) },
+		func(m string) { dropped = append(dropped, m) })
+	for _, m := range []string{"a", "b", "c", "d"} {
+		n(m)
+	}
+	assert.Equal(t, []string{"a", "b"}, posted, "the burst posts")
+	assert.Equal(t, []string{"c", "d"}, dropped, "everything past the burst is handed to dropped, not lost silently")
 }

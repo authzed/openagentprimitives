@@ -188,6 +188,20 @@ var errNeedsConfig = errors.New("agent needs configuration before it can be inst
 // before mutation. Capacity suggestions are accepted non-interactively;
 // adoption remains one native, path-qualified all-or-nothing dialog per node.
 func installOapFromPath(ctx context.Context, kb *kube.Bundle, out io.Writer, oapBytes []byte, namespace string) (*install.Result, error) {
+	return installOapBundle(ctx, kb, out, oapBytes, namespace, bundleSource{})
+}
+
+// bundleSource is the provenance stamped onto an install (see
+// install.InstallOpts.SourceKind). The zero value is a local file: its
+// digest is then the bundle's own oap.Digest. An install link is a registry
+// source, recorded with the link's ref and the OCI digest Prepare verified or
+// resolved, so the install can be traced back to exactly what was approved.
+type bundleSource struct {
+	Ref, Digest string
+}
+
+// installOapBundle is installOapFromPath with explicit provenance.
+func installOapBundle(ctx context.Context, kb *kube.Bundle, out io.Writer, oapBytes []byte, namespace string, src bundleSource) (*install.Result, error) {
 	b, err := oap.Unpack(oapBytes)
 	if err != nil {
 		return nil, fmt.Errorf("unpack .oap: %w", err)
@@ -195,11 +209,15 @@ func installOapFromPath(ctx context.Context, kb *kube.Bundle, out io.Writer, oap
 	if err := b.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid .oap bundle: %w", err)
 	}
-	digest, err := oap.Digest(oapBytes)
-	if err != nil {
-		return nil, fmt.Errorf("digest .oap: %w", err)
+	opts := install.InstallOpts{SourceKind: "file", SourceDigest: src.Digest}
+	if src.Ref != "" {
+		opts.SourceKind, opts.SourceRef = "registry", src.Ref
+	} else {
+		if opts.SourceDigest, err = oap.Digest(oapBytes); err != nil {
+			return nil, fmt.Errorf("digest .oap: %w", err)
+		}
 	}
-	workflow := newDesktopOapWorkflow(ctx, kb, out, b, namespace, digest)
+	workflow := newDesktopOapWorkflow(ctx, kb, out, b, namespace, opts)
 	plan, err := workflow.Plan(ctx, b, install.GraphAnswers{Interactive: false})
 	if err != nil {
 		var missing *install.MissingAnswersError
@@ -299,7 +317,7 @@ func (s *desktopState) installAgentFromFile() {
 		}
 	}
 
-	s.installApproved(data, label, installDisplayName(preview, label))
+	s.installApproved(data, label, installDisplayName(preview, label), bundleSource{})
 }
 
 // installApproved installs bundle bytes the user has already approved into
@@ -307,8 +325,9 @@ func (s *desktopState) installAgentFromFile() {
 // and oap:// install links. label names the source in logs (a file name or an
 // OCI ref); name is what the user sees (see installDisplayName). The outcome
 // is shown by runInstallWithProgress (installprogress_darwin.go): a progress
-// window while it runs, then the new chat or a dialog.
-func (s *desktopState) installApproved(data []byte, label, name string) {
+// window while it runs, then the new chat or a dialog. src is the provenance
+// recorded on the install.
+func (s *desktopState) installApproved(data []byte, label, name string, src bundleSource) {
 	s.mu.Lock()
 	dg := s.dg
 	s.mu.Unlock()
@@ -327,6 +346,6 @@ func (s *desktopState) installApproved(data []byte, label, name string) {
 	s.runInstallWithProgress(name, label, func() (*install.Result, error) {
 		s.setStatus(menubaricons.StateSetup, "Installing agent…", "OAP Desktop — installing agent…")
 		defer s.setStatus(menubaricons.StateRunning, "Running", "OAP Desktop — running")
-		return installOapFromPath(s.ctx, kb, s.logWriter(), data, demoChatNamespace)
+		return installOapBundle(s.ctx, kb, s.logWriter(), data, demoChatNamespace, src)
 	})
 }

@@ -212,6 +212,9 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 	onNotifyFailed = func(title string, err error) {
 		st.logf("notify(%q) failed: %v", title, err)
 	}
+	onLinkNotifyDropped = func(msg string) {
+		st.logf("link notification dropped by rate limit: %q", msg)
+	}
 
 	// Load the on-disk config, if any. A missing or invalid config is no
 	// longer a hard failure that exits the process (that was the old
