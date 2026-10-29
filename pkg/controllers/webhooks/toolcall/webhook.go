@@ -43,6 +43,9 @@ func (w *Webhook) Handle(_ context.Context, req admission.Request) admission.Res
 
 	switch req.Operation {
 	case admissionv1.Create:
+		if _, ok := tc.Labels[spiceboxv1alpha1.LabelToolCallRetired]; ok {
+			return admission.Denied("a ToolCall may not be created with the " + spiceboxv1alpha1.LabelToolCallRetired + " label; only the toolcall controller retires a finished call")
+		}
 		if !hasAgentSessionOwner(&tc) {
 			return admission.Denied("ToolCall must be owned by an AgentSession (ownerReference Kind=AgentSession); an unpinned ToolCall is refused")
 		}
@@ -66,6 +69,15 @@ func (w *Webhook) Handle(_ context.Context, req admission.Request) admission.Res
 		// creation. Status (a subresource) does not flow through this path.
 		if !reflect.DeepEqual(old.Spec, tc.Spec) {
 			return admission.Denied("ToolCall.spec is immutable once created (the runner's authorized tool/args/credentials cannot be rewritten before execution)")
+		}
+		// The retired label takes a ToolCall out of the operator's cache, so
+		// adding it to a call that has not finished would leave that call
+		// unexecuted and its finalizer unreachable. The stored (old) status is
+		// what decides, not anything the update carries.
+		_, wasRetired := old.Labels[spiceboxv1alpha1.LabelToolCallRetired]
+		_, isRetired := tc.Labels[spiceboxv1alpha1.LabelToolCallRetired]
+		if isRetired && !wasRetired && old.TerminalCondition() == "" {
+			return admission.Denied("the " + spiceboxv1alpha1.LabelToolCallRetired + " label may only be added to a ToolCall that has reached a terminal condition")
 		}
 		return admission.Allowed("")
 

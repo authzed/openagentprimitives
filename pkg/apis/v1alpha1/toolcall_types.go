@@ -16,6 +16,39 @@ import (
 // collide on an append-only write.
 const LabelToolUseID = "agentprimitives.authzed.com/toolUseID"
 
+// LabelToolCallRetired marks a ToolCall the toolcall controller is done with.
+// It reached a terminal condition, and the controller dropped its finalizer in
+// the same write that stamped this label. The operator's informer cache selects
+// only ToolCalls WITHOUT it (toolcall.CacheSelector), so a finished call leaves
+// operator memory but stays on the cluster for the runner, the CLI and
+// owner-ref GC. Without it the cache held every ToolCall of every session not
+// yet GC'd, a month of history by default, and that was most of the
+// operator's heap.
+//
+// Only a terminal ToolCall may carry it. The toolcall webhook refuses it on
+// create and on any update of a call that has not finished, because a label
+// that hid a live call from the cache would leave it unexecuted with a
+// finalizer nothing could remove.
+const LabelToolCallRetired = "agentprimitives.authzed.com/toolcall-retired"
+
+// TerminalCondition returns the type of the first terminal condition that is
+// True on tc (Succeeded, Failed, Timeout, Canceled), or "" if none.
+func (tc *ToolCall) TerminalCondition() string {
+	for _, c := range tc.Status.Conditions {
+		if c.Status != metav1.ConditionTrue {
+			continue
+		}
+		switch c.Type {
+		case ToolCallConditionSucceeded,
+			ToolCallConditionFailed,
+			ToolCallConditionTimeout,
+			ToolCallConditionCanceled:
+			return c.Type
+		}
+	}
+	return ""
+}
+
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,categories={authzed,spicebox},shortName=tc
 // +kubebuilder:subresource:status

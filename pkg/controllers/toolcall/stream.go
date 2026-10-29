@@ -199,7 +199,7 @@ func (r *Reconciler) watchStreamCompletion(
 			logger.Error(err, "stream watcher: get toolcall")
 			return
 		}
-		if terminalCondition(&fresh) != "" {
+		if fresh.TerminalCondition() != "" {
 			return // already finalized (e.g., delete-while-running)
 		}
 		exitCode := result.ExitCode

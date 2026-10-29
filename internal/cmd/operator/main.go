@@ -1310,6 +1310,9 @@ func run(cfg *config) {
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}:    {Label: adoptedSel},
 				&corev1.ConfigMap{}: {Label: adoptedSel},
+				// Only in-flight ToolCalls. Retired ones stay on the cluster
+				// but leave operator memory; see toolcall.CacheSelector.
+				&spiceboxv1alpha1.ToolCall{}: {Label: toolcall.CacheSelector()},
 			},
 		},
 	})
