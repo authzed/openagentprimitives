@@ -50,6 +50,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
 	"github.com/authzed/openagentprimitives/pkg/tools/skillbundle"
 	"github.com/authzed/openagentprimitives/pkg/tools/skills/canonical"
+	"github.com/authzed/openagentprimitives/pkg/tools/skills/pluginlayout"
 )
 
 // skillBundleTarKey is the data key under which the gzipped-tar bundle is
@@ -76,6 +77,7 @@ type skillEntry struct {
 	Body        string
 	Frontmatter spiceboxv1alpha1.SkillFrontmatter
 	Bundle      *spiceboxv1alpha1.SkillBundleRef
+	Plugin      *spiceboxv1alpha1.SkillPlugin
 }
 
 // mergeSkillEntries builds a canonical-name → skillEntry map from the namespace
@@ -91,6 +93,7 @@ func mergeSkillEntries(nsSkills []spiceboxv1alpha1.Skill, clusterSkills []spiceb
 			Body:        sk.Spec.Body,
 			Frontmatter: sk.Spec.Frontmatter,
 			Bundle:      sk.Spec.Bundle,
+			Plugin:      sk.Spec.Plugin,
 		}
 	}
 	for i := range clusterSkills {
@@ -101,6 +104,7 @@ func mergeSkillEntries(nsSkills []spiceboxv1alpha1.Skill, clusterSkills []spiceb
 				Body:        csk.Spec.Body,
 				Frontmatter: csk.Spec.Frontmatter,
 				Bundle:      csk.Spec.Bundle,
+				Plugin:      csk.Spec.Plugin,
 			}
 		}
 	}
@@ -260,7 +264,9 @@ func (r *Reconciler) resolveAndStageSkillBundles(
 		// determines the composed archive's bytes: the rendered SKILL.md (a
 		// pure function of Description/Frontmatter/Body, already in memory
 		// from the List above) plus the cached bundle's own digest, when
-		// present. Because skillbundle.TarGz is a deterministic function of
+		// present, plus the plugin context (appended only when there is one,
+		// so a standalone skill's fingerprint is unchanged by its existence).
+		// Because skillbundle.TarGz is a deterministic function of
 		// its input files, an unchanged sourceDigest guarantees an unchanged
 		// composed archive — which is what lets the check below skip the
 		// store.Get entirely (up to 1 MiB from a live, uncached read) when
@@ -271,7 +277,11 @@ func (r *Reconciler) resolveAndStageSkillBundles(
 		if entry.Bundle != nil {
 			bundleDigest = entry.Bundle.Digest
 		}
-		srcSum := sha256.Sum256([]byte(hex.EncodeToString(mdSum[:]) + "|" + bundleDigest))
+		srcInput := hex.EncodeToString(mdSum[:]) + "|" + bundleDigest
+		if fp := pluginFingerprint(entry.Plugin); fp != "" {
+			srcInput += "|plugin:" + fp
+		}
+		srcSum := sha256.Sum256([]byte(srcInput))
 		sourceDigest := hex.EncodeToString(srcSum[:])
 
 		// Already staged, unchanged: carry the status entry forward untouched.
@@ -336,8 +346,25 @@ func (r *Reconciler) resolveAndStageSkillBundles(
 					// never clobbers the freshly re-serialized SKILL.md.
 					continue
 				}
+				if pluginlayout.IsReserved(p) {
+					// Same defense for the plugin directory: its contents come
+					// from spec.plugin below and nowhere else, so a bundle
+					// cannot plant agents that skipped pluginFiles' checks.
+					logger.Info("resolveAndStageSkillBundles: dropping bundle file in the reserved plugin directory",
+						"session", sess.Namespace+"/"+sess.Name, "skill", name, "path", p)
+					continue
+				}
 				files[p] = b
 			}
+		}
+
+		plugin, skipped := pluginFiles(entry.Plugin)
+		for _, reason := range skipped {
+			logger.Info("resolveAndStageSkillBundles: plugin context partially staged",
+				"session", sess.Namespace+"/"+sess.Name, "skill", name, "reason", reason)
+		}
+		for p, b := range plugin {
+			files[p] = b
 		}
 
 		// archiveDigest is the sha256 of the ACTUAL archive bytes about to be

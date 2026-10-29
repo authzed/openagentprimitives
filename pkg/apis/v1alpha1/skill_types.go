@@ -76,6 +76,46 @@ type SkillSpec struct {
 	// disableRepoInstructions.
 	// +optional
 	RepoInstructions *SkillRepoInstructions `json:"repoInstructions,omitempty"`
+
+	// Plugin is the Claude Code plugin this skill was published inside, when
+	// it was discovered at <plugin>/skills/<name>/SKILL.md next to a
+	// <plugin>/.claude-plugin/plugin.json. It carries the plugin's name and
+	// its agents/*.md, which the skill's instructions may dispatch by name and
+	// which a skill staged on its own would otherwise lack. A disk-based
+	// consumer that understands plugins (claudeshim) loads the skill as part
+	// of a plugin rebuilt from this; every other consumer ignores it. nil for a
+	// standalone skill, and for every skill of a source that set
+	// disablePluginAgents. See pkg/tools/skills/pluginlayout.
+	// +optional
+	Plugin *SkillPlugin `json:"plugin,omitempty"`
+}
+
+// SkillPlugin is the slice of a Claude Code plugin that travels with one of
+// its skills: the name (the namespace its agents are dispatched under) and
+// its agent definitions. Hooks, MCP servers, commands and the plugin's other
+// skills deliberately never travel.
+type SkillPlugin struct {
+	// Name is the plugin manifest's name.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]+(-[a-z0-9]+)*$`
+	// +kubebuilder:validation:MaxLength=64
+	Name string `json:"name"`
+
+	// Agents are the plugin's agents/*.md definitions, verbatim.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=64
+	Agents []SkillPluginAgent `json:"agents,omitempty"`
+}
+
+// SkillPluginAgent is one agent definition file of a plugin.
+type SkillPluginAgent struct {
+	// Name is the file stem (agents/<name>.md).
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9_-]*$`
+	// +kubebuilder:validation:MaxLength=64
+	Name string `json:"name"`
+	// Content is the file's full text, frontmatter included.
+	Content string `json:"content"`
 }
 
 // SkillFrontmatter holds the optional agentskills.io frontmatter fields.
