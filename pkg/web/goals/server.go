@@ -66,9 +66,6 @@ type Server struct {
 	// ActorWait bounds the initial Create-to-attestation race; negative disables
 	// waiting in tests. Every result still requires a trusted actor record.
 	ActorWait time.Duration
-	// ColdRegistryUntil enables the operator's bounded startup grace for
-	// unknown bearers. Registered tokens still undergo the primary-token gate.
-	ColdRegistryUntil time.Time
 }
 
 type Request = domain.Request
@@ -99,7 +96,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Extras are read-only; only the token's primary session qualifies here.
 	if !known || info.Session != (memory.NamespacedName{Namespace: ns, Name: name}) {
-		if has && bearer != "" && s.Tokens != nil && !known && time.Now().Before(s.ColdRegistryUntil) {
+		if has && bearer != "" && s.Tokens != nil && !known && s.Tokens.Restoring() {
 			w.Header().Set("Retry-After", "1")
 			log.FromContext(r.Context()).Info("goal API: token registry warming; answering retryable 503", "session", ns+"/"+name)
 			http.Error(w, "goal service warming after operator restart; retry", http.StatusServiceUnavailable)

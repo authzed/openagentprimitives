@@ -1134,6 +1134,9 @@ func sessionsForAgentClassChange(items []spiceboxv1alpha1.AgentSession, acNs, ac
 
 // SetupWithManager registers the reconciler with the controller manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := r.setupTokenRestore(mgr); err != nil {
+		return fmt.Errorf("set up memory token restore: %w", err)
+	}
 	enqueue := handler.EnqueueRequestsFromMapFunc(r.watchedObjectRequests)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spiceboxv1alpha1.AgentSession{}).
@@ -1185,6 +1188,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// approval up front so they pass the facade's capability door, which denies
 	// any caller that arrives without one.
 	ctx = memory.WithSystemApproval(ctx, "operator:agentsession-controller")
+
+	// Nothing here runs until the startup token restore has finished. The
+	// restore re-registers every non-deleting session's token, and a finalize
+	// revoking one while the restore is between reading the session and
+	// registering it would see its revoke undone. Waiting closes that window
+	// outright, and costs nothing once the restore is done: it is a single
+	// closed-channel check.
+	if r.Tokens != nil {
+		if err := r.Tokens.WaitRestored(ctx); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 
 	var sess spiceboxv1alpha1.AgentSession
 	if cont, err := apreconcile.LoadInto(ctx, r.Client, req.NamespacedName, &sess); !cont {

@@ -1094,23 +1094,8 @@ type memHandlerDeps struct {
 //
 // Pure assembly, no behaviour of its own: same options, same order, same
 // conditional KG append as when this lived inline in run().
-// memoryColdRegistryGrace is how long after this operator process starts an
-// unregistered per-session bearer is answered 503 (retryable) rather than 401
-// (permanent). The in-process token registry is empty on every boot and the
-// AgentSession reconciler refills it per session (reregisterMemoryToken), so a
-// live runner writing in that window would otherwise take a terminal 401 the
-// instant the operator restarts — an OOM, a rollout — and fail its session with
-// MemoryUnavailable. The memory httpclient retries 5xx across a ~17s budget, so
-// a window comfortably shorter than this rides out with no session loss; 60s
-// leaves headroom over the reconcile-refill lag (observed ~12s) without letting
-// a genuinely forged bearer look transient for long. Only this production wiring
-// opts in — every in-process test harness Sets tokens synchronously, has no
-// window, and keeps the plain 401.
-const memoryColdRegistryGrace = 60 * time.Second
-
 func newMemHandlerOpts(d memHandlerDeps) []httpsrv.HandlerOption {
 	opts := []httpsrv.HandlerOption{
-		httpsrv.WithColdRegistryGrace(memoryColdRegistryGrace),
 		httpsrv.WithArtifact(d.K8sClient, d.ArtifactStore),
 		// GET /memory/_preferences and POST /memory/_preferences_commit both
 		// resolve the AgentSession/AgentClass/AgentSettings CRs the preference
@@ -2306,7 +2291,7 @@ func run(cfg *config) {
 	if spiceDBClient != nil {
 		goalAuth = spiceDBClient
 	}
-	goalHandler := &goalweb.Server{Service: goalService, Reader: mgr.GetAPIReader(), Memory: goalMemory, Tokens: memTokens, Keys: keyLookup, Auth: goalAuth, ColdRegistryUntil: time.Now().Add(memoryColdRegistryGrace)}
+	goalHandler := &goalweb.Server{Service: goalService, Reader: mgr.GetAPIReader(), Memory: goalMemory, Tokens: memTokens, Keys: keyLookup, Auth: goalAuth}
 	goalService.Auth = goalHandler
 	var eventHandler *eventweb.Server
 	var eventRouter *sessionevents.Router
