@@ -28,8 +28,11 @@ set -euo pipefail
 # oap itself enforces all-or-none for the three credential vars and refuses a
 # push whose ref is on a host other than OAP_REGISTRY_HOST; checking up front
 # fails before anything is packaged, naming both values.
+# Hosts compare case-insensitively, as oap compares them; tr rather than
+# ${var,,} so the script still runs on macOS's bash 3.2.
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 registry_host=${AGENTS_REPO%%/*}
-if [ -n "${OAP_REGISTRY_HOST:-}" ] && [ "$OAP_REGISTRY_HOST" != "$registry_host" ]; then
+if [ -n "${OAP_REGISTRY_HOST:-}" ] && [ "$(lower "$OAP_REGISTRY_HOST")" != "$(lower "$registry_host")" ]; then
   echo "OAP_REGISTRY_HOST ($OAP_REGISTRY_HOST) is not AGENTS_REPO's registry host ($registry_host)" >&2
   exit 1
 fi
