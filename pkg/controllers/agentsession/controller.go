@@ -60,7 +60,6 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/settings"
 	"github.com/authzed/openagentprimitives/pkg/platform/settingswiring"
 	"github.com/authzed/openagentprimitives/pkg/platform/workspace"
-	"github.com/authzed/openagentprimitives/pkg/tools/adoptkit"
 	"github.com/authzed/openagentprimitives/pkg/tools/skillbundle"
 	"github.com/authzed/openagentprimitives/pkg/web/secretoutsrv"
 	"github.com/authzed/openagentprimitives/pkg/x/besteffort"
@@ -3291,6 +3290,9 @@ func (r *Reconciler) finalize(ctx context.Context, sess *spiceboxv1alpha1.AgentS
 	// policy's job and is never wiped by session lifecycle.
 	key := memory.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}
 	r.Tokens.Revoke(key)
+	// Release this session's credential adoptions (and any other stale ones).
+	// Best-effort, like the rest of the teardown below.
+	r.pruneSessionAdoptions(ctx, sess)
 	// Tear down the runner via the factory. Owner-ref GC would delete the Pod
 	// anyway, but an explicit Stop lets the in-process factory cancel its
 	// goroutine deterministically. Best-effort: a failure is logged and the
@@ -3415,6 +3417,9 @@ func (r *Reconciler) reapSessionPods(ctx context.Context, sess *spiceboxv1alpha1
 			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
 		return ctrl.Result{}, fmt.Errorf("reap detector/cosidecar pods: %w", err)
 	}
+	// The session's credential adoptions go with its pods: a reaped session
+	// reads no credential until a wake, which adopts again first.
+	r.pruneSessionAdoptions(ctx, sess)
 	logger.Info("reaped session pods; AgentSession + PVCs + Secrets kept",
 		"session", sess.Namespace+"/"+sess.Name,
 		"grace", r.FailedSandboxReapGrace.String(),
@@ -3767,7 +3772,7 @@ func (r *Reconciler) materializeSidecarSecret(
 		if ref := k.SecretRef(*cred); ref != nil && ref.Name != "" {
 			credRef := types.NamespacedName{Namespace: ident.Namespace, Name: ref.Name}
 			ownerRef := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}
-			if aErr := adoptkit.AdoptSecret(ctx, r.SecretReader.Reader, r.Client, credRef, ownerRef, "AgentSession"); aErr != nil && !errors.IsNotFound(aErr) {
+			if aErr := r.adoptCredentialSecret(ctx, credRef, ownerRef); aErr != nil && !errors.IsNotFound(aErr) {
 				return fmt.Errorf("adopt credential Secret %q for sidecar %q: %w", ref.Name, rt.Ref, aErr)
 			}
 		}
@@ -3933,7 +3938,7 @@ func (r *Reconciler) materializePassthroughCredentials(
 		if r.SecretReader != nil {
 			credRef := types.NamespacedName{Namespace: spiceboxv1alpha1.IdentitiesNamespace, Name: ref.Name}
 			ownerRef := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}
-			if aErr := adoptkit.AdoptSecret(ctx, r.SecretReader.Reader, r.Client, credRef, ownerRef, "AgentSession"); aErr != nil && !errors.IsNotFound(aErr) {
+			if aErr := r.adoptCredentialSecret(ctx, credRef, ownerRef); aErr != nil && !errors.IsNotFound(aErr) {
 				return nil, fmt.Errorf("adopt master credential Secret %q for passthrough credential %q: %w", ref.Name, cred.Name, aErr)
 			}
 			credReader = r.SecretReader.Reader
