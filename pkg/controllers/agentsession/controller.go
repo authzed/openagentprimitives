@@ -1185,6 +1185,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// any caller that arrives without one.
 	ctx = memory.WithSystemApproval(ctx, "operator:agentsession-controller")
 
+	// Nothing here runs until the startup token restore has finished. The
+	// restore re-registers every non-deleting session's token, and a finalize
+	// revoking one while the restore is between reading the session and
+	// registering it would see its revoke undone. Waiting closes that window
+	// outright, and costs nothing once the restore is done: it is a single
+	// closed-channel check.
+	if r.Tokens != nil {
+		if err := r.Tokens.WaitRestored(ctx); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	var sess spiceboxv1alpha1.AgentSession
 	if cont, err := apreconcile.LoadInto(ctx, r.Client, req.NamespacedName, &sess); !cont {
 		return ctrl.Result{}, err
@@ -1291,7 +1303,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// session: the reap a few blocks down returns before it, on every reconcile,
 	// forever. See reregisterMemoryToken for why it can neither mint a token nor
 	// bring a revoked one back.
-	r.reregisterMemoryToken(ctx, &sess)
+	if _, err := r.reregisterMemoryToken(ctx, &sess); err != nil {
+		log.FromContext(ctx).Info("memory token: restoring this session's registration failed; its memory stays unreadable until a later reconcile restores it",
+			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+	}
 
 	// Restart-from-here: when PendingRestart is set, run the fork reconciler.
 	// proceed=false short-circuits the normal reconcile; the next watch event

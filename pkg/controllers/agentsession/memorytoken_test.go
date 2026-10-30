@@ -304,7 +304,8 @@ func TestReregisterMemoryToken_Refusals(t *testing.T) {
 				f.r.Tokens.Set(key, tc.preset, "")
 			}
 
-			f.r.reregisterMemoryToken(ctx, f.sess)
+			_, err := f.r.reregisterMemoryToken(ctx, f.sess)
+			require.NoError(t, err)
 
 			if tc.wantToken == "" {
 				assert.False(t, f.r.Tokens.Registered(key), "no registration expected")
