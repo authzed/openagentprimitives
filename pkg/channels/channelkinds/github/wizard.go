@@ -20,6 +20,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
@@ -235,6 +236,9 @@ func githubOutput(namespace string, answers map[string]string, provisionedHere b
 			},
 			GitHub: &spiceboxv1alpha1.GitHubChannelConfig{
 				AppSlug: answers[keySlug],
+				// A new Channel defers stacked PRs; the field's nil (an
+				// existing Channel) keeps reviewing every base. See SkipStacked.
+				SkipStacked: ptr.To(true),
 			},
 		},
 	}

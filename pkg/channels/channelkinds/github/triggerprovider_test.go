@@ -52,7 +52,7 @@ func TestTriggerProviderStateIn_ReadsBackWhatRenderPromptWrote(t *testing.T) {
 	ev.PullRequest.Title = "Add rate limiting"
 	ev.PullRequest.User.Login = "demo-user"
 
-	prompt := renderPrompt(ev)
+	prompt := renderPrompt(ev, false)
 	require.Contains(t, prompt, sha, "the fixture must actually put the sha in the prompt")
 
 	got := Kind{}.TriggerProviderStateIn(prompt)
