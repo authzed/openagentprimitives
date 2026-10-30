@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installing agent</title>
+<!-- Install-progress page: shown in a small native window (oap
+     desktop-window) while OAP Desktop installs an agent, then closed by the
+     menubar process when the install finishes. The relay-animated mark is the
+     same shared asset the setup page uses.
+
+     The agent name arrives as the `name` query parameter. It comes from a
+     bundle (author-controlled), so it is never interpolated into markup: the
+     script below caps it and writes it with textContent only. -->
+<link rel="stylesheet" href="relay.css">
+<script src="relay.js"></script>
+<style>
+  :root {
+    color-scheme: dark;
+    /* Same N1 palette rungs as index.html. */
+    --bg: #0c050f;            /* stone-975 */
+    --text: #dedddf;          /* stone-100 */
+    --text-dim: #aaa5ac;      /* stone-300 */
+    font-size: 15px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+  main { text-align: center; padding: 24px; max-width: 100%; }
+  .installing-mark { display: flex; justify-content: center; margin-bottom: 22px; color: var(--text); }
+  .installing-mark svg.mark { width: 72px; height: auto; }
+  h1 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 6px;
+    overflow-wrap: anywhere;
+  }
+  p { margin: 0; color: var(--text-dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="installing-mark" id="installing-mark"></div>
+  <h1 id="installing-heading">Installing agent…</h1>
+  <p>This window closes when the install finishes.</p>
+</main>
+<script>
+(function () {
+  "use strict";
+  // Cap in code points (not UTF-16 units) so a long name never splits a
+  // surrogate pair; the window is small and the full name is in the logs.
+  var MAX_NAME = 60;
+  var name = "";
+  try {
+    name = (new URLSearchParams(window.location.search).get("name") || "").trim();
+  } catch (e) {
+    name = "";
+  }
+  var chars = Array.from(name);
+  if (chars.length > MAX_NAME) name = chars.slice(0, MAX_NAME).join("") + "…";
+  if (name) {
+    document.getElementById("installing-heading").textContent = "Installing " + name + "…";
+    document.title = "Installing " + name;
+  }
+  OAPRelay.mount(document.getElementById("installing-mark")).setWorking(true);
+})();
+</script>
+</body>
+</html>

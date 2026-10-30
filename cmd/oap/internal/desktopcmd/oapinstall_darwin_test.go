@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -236,6 +238,21 @@ func TestInstallDialogText_PrefersDisplayNameThenName(t *testing.T) {
 	assert.Contains(t, msg, "does things")
 }
 
+func TestInstallDialogText_FlattensBundleText(t *testing.T) {
+	b := &oap.Bundle{Manifest: &oap.Manifest{Agent: oap.Agent{
+		Name: "raw-name", Version: "1\u202E", DisplayName: "Evil\nInstall verified agent",
+		Description: "does things\n\nVerified by OAP\u200B" + strings.Repeat("x", 400),
+	}}}
+	title, msg := installDialogText(b)
+	assert.Equal(t, "Evil Install verified agent", title, "a newline in the name cannot start a new dialog line")
+	desc, prompt, ok := strings.Cut(msg, "\n\n")
+	require.True(t, ok, "the description is separated from the prompt by the dialog's own blank line")
+	assert.NotContains(t, desc, "\n", "the description is one line")
+	assert.True(t, strings.HasPrefix(desc, "does things Verified by OAP x"))
+	assert.Equal(t, maxDialogDescriptionRunes+1, utf8.RuneCountInString(desc), "capped with an ellipsis")
+	assert.Equal(t, "Install Evil Install verified agent v1 into your local cluster?", prompt)
+}
+
 func TestAdoptDialogText(t *testing.T) {
 	title, msg := adoptDialogText([]install.Conflict{
 		{Kind: "AgentClass", Namespace: "demo", Name: "demo-agent"},
@@ -305,4 +322,38 @@ func TestReadmeTempPath_StaysInsideTempDir(t *testing.T) {
 	t.Run("ordinary name keeps its own basename", func(t *testing.T) {
 		assert.Equal(t, filepath.Join("/tmp", "demo-agent-README.md"), readmeTempPath("/tmp", "demo-agent"))
 	})
+}
+
+func TestClassifyInstallDialog(t *testing.T) {
+	// Real osascript failures, so the classifier sees the *exec.ExitError
+	// (with captured stderr) a dialog produces — no UI is shown.
+	_, cancelledOut := exec.Command("osascript", "-e", "error number -128").Output()
+	require.Error(t, cancelledOut, "osascript must exit non-zero for a -128 error")
+	_, failedOut := exec.Command("osascript", "-e", "error number -1700").Output()
+	require.Error(t, failedOut)
+
+	cases := []struct {
+		name    string
+		out     string
+		err     error
+		want    installChoice
+		wantErr bool
+	}{
+		{name: "Install button: confirm", out: "button returned:Install\n", want: installConfirm},
+		{name: "View README button: view readme", out: "button returned:View README\n", want: installViewReadme},
+		{name: "cancel button (-128): cancel, no error", err: cancelledOut, want: installCancel},
+		{name: "other osascript error: dialog failed with the error", err: failedOut, want: installDialogFailed, wantErr: true},
+		{name: "osascript missing: dialog failed with the error", err: exec.ErrNotFound, want: installDialogFailed, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := classifyInstallDialog([]byte(tc.out), tc.err)
+			assert.Equal(t, tc.want, got)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
