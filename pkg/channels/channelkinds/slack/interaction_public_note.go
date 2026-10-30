@@ -91,7 +91,7 @@ func (s *interactionSender) postPublicNote(ctx context.Context, sess channelkind
 	_, ts, err := s.client.PostMessageContext(ctx, channelID, opts...)
 	if err != nil && isUnsupportedBlocksErr(err) {
 		log.FromContext(ctx).Info("interaction sender: public-note container rejected; falling back to a plain section",
-			"requestRef", requestRef, "err", err.Error())
+			"requestRef", requestRef, "err", err.Error(), "slackDetail", blocksRejectionDetail(err))
 		opts[0] = slackapi.MsgOptionBlocks(slackapi.NewSectionBlock(
 			slackapi.NewTextBlockObject(slackapi.MarkdownType, publicNoteNotifyText(body), false, false), nil, nil))
 		_, ts, err = s.client.PostMessageContext(ctx, channelID, opts...)

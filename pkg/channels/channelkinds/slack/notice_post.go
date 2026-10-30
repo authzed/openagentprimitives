@@ -106,7 +106,7 @@ func (l *slackListener) postNoticeEphemeral(
 		// that rejects it must still get the message. Same degrade discipline
 		// sender_plan.go applies to plan/task_card.
 		logger.Info("slack: notice container rejected; falling back to plain blocks",
-			"category", n.Category(), "err", err.Error())
+			"category", n.Category(), "err", err.Error(), "slackDetail", blocksRejectionDetail(err))
 		_, err = l.api.PostEphemeralContext(ctx, channelID, userID,
 			slackapi.MsgOptionBlocks(buildNoticeFallbackBlocks(pl, tone, terminal, "")...),
 			slackapi.MsgOptionText(noticeNotifyText(pl), false),
@@ -167,7 +167,7 @@ func (l *slackListener) postNoticeInThread(
 	if _, _, err := l.api.PostMessageContext(ctx, channelID, opts...); err != nil {
 		if isUnsupportedBlocksErr(err) {
 			logger.Info("slack: notice container rejected in thread; falling back to plain blocks",
-				"category", n.Category(), "err", err.Error())
+				"category", n.Category(), "err", err.Error(), "slackDetail", blocksRejectionDetail(err))
 			fb := []slackapi.MsgOption{
 				slackapi.MsgOptionBlocks(buildNoticeFallbackBlocks(pl, tone, terminal, "")...),
 				slackapi.MsgOptionText(noticeNotifyText(pl), false),

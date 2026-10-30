@@ -36,3 +36,18 @@ func isUnsupportedBlocksErr(err error) bool {
 		return false
 	}
 }
+
+// blocksRejectionDetail returns Slack's per-block explanation for a rejected
+// Block Kit payload. Slack puts the offending field(s) in
+// ResponseMetadata.Messages (typically a json-pointer into /blocks), but
+// SlackErrorResponse.Error() surfaces only the bare code ("invalid_blocks"),
+// so without this the specific reason is lost at the degrade sites. Returns nil
+// when err is not a typed Slack error or carried no messages — a degrade log
+// then simply omits the detail rather than inventing one.
+func blocksRejectionDetail(err error) []string {
+	var sre slackapi.SlackErrorResponse
+	if !errors.As(err, &sre) {
+		return nil
+	}
+	return sre.ResponseMetadata.Messages
+}

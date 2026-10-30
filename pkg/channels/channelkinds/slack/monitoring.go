@@ -56,7 +56,7 @@ func (s *monitoringSender) SendMonitoring(ctx context.Context, ev channelevents.
 		slackapi.MsgOptionBlocks(buildMonitoringBlocks(ev)...), text)
 	if err != nil && isUnsupportedBlocksErr(err) {
 		log.FromContext(ctx).Info("slack monitoring: container rejected; falling back to plain text",
-			"source", ev.Source.Kind+"/"+ev.Source.Name, "condition", ev.Condition, "err", err.Error())
+			"source", ev.Source.Kind+"/"+ev.Source.Name, "condition", ev.Condition, "err", err.Error(), "slackDetail", blocksRejectionDetail(err))
 		_, _, err = s.client.PostMessageContext(ctx, channelID, text)
 	}
 	if err != nil {

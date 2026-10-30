@@ -249,7 +249,7 @@ func (s *slackSender) sendPlanUpdate(
 	newTS, wasPost, err := postOrUpdate(renderPlanBlocks(pl))
 	if err != nil && isUnsupportedBlocksErr(err) {
 		logger.Info("slack: plan/task_card blocks rejected; falling back to legacy emoji rendering",
-			"session", sess.Name, "err", err.Error())
+			"session", sess.Name, "err", err.Error(), "slackDetail", blocksRejectionDetail(err))
 		newTS, wasPost, err = postOrUpdate(renderPlanBlocksLegacy(pl))
 	}
 	if err != nil {
