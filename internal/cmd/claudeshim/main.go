@@ -11,9 +11,11 @@
 // SkillsMountPath doc and pkg/controllers/agentsession/bundles.go's
 // BuildBundleSession) — but Claude Code only discovers user-level skills at
 // $HOME/.claude/skills/. This shim bridges the two
-// (pkg/tools/toolchain/claude.LinkStagedSkills) on every invocation, then
-// hands off to the real binary via syscall.Exec (execve(2)), which REPLACES
-// this process's image rather than spawning a child.
+// (pkg/tools/toolchain/claude.BridgeStagedSkills) on every invocation — a
+// skill staged with plugin context is rebuilt into a plugin under $HOME and
+// named with --plugin-dir, so the plugin's agents register too — then hands
+// off to the real binary via syscall.Exec (execve(2)), which REPLACES this
+// process's image rather than spawning a child.
 //
 // That replacement is deliberate, not an optimization. A fork+wait hand-off
 // (os/exec.Command) creates a shim-parent / claude.real-child process tree,
@@ -99,31 +101,48 @@ func main() {
 // process image, so this function — and everything after its call site in
 // main — never runs again.
 func run(shimPath, skillsDir string, argv, environ []string, stderr io.Writer) error {
-	bridgeStagedSkills(skillsDir, environ, stderr)
+	pluginDirs := bridgeStagedSkills(skillsDir, environ, stderr)
 
 	real := realBinaryPath(shimPath)
-	// argv[0] becomes the resolved real path, mirroring how a shell `exec
-	// real "$@"` reproduces argv; argv[1:] is this shim's own argv minus its
-	// own name.
-	execArgv := append([]string{real}, argv[1:]...)
-	return syscall.Exec(real, execArgv, environ)
+	return syscall.Exec(real, execArgv(real, pluginDirs, argv), environ)
 }
 
-// bridgeStagedSkills links AP-staged skills into Claude Code's discovery
-// path. Any failure — including HOME being unset in the environment this
-// shim was launched with — is written to stderr and otherwise swallowed: the
-// caller must still hand off to claude.real, degraded but running, never
-// silently and never aborted.
-func bridgeStagedSkills(skillsDir string, environ []string, stderr io.Writer) {
+// execArgv builds the real binary's argv: argv[0] becomes the resolved real
+// path, mirroring how a shell `exec real "$@"` reproduces argv, then one
+// --plugin-dir per rebuilt plugin, then this shim's own argv minus its own
+// name, verbatim. The plugin flags go first because they are global options
+// Claude Code accepts ahead of any subcommand, so they cannot change how the
+// caller's own arguments parse.
+func execArgv(real string, pluginDirs, argv []string) []string {
+	out := make([]string, 0, 1+2*len(pluginDirs)+len(argv))
+	out = append(out, real)
+	for _, d := range pluginDirs {
+		out = append(out, "--plugin-dir", d)
+	}
+	if len(argv) > 1 {
+		out = append(out, argv[1:]...)
+	}
+	return out
+}
+
+// bridgeStagedSkills makes AP-staged skills visible to Claude Code and
+// returns the plugin directories to load. Any failure — including HOME being
+// unset in the environment this shim was launched with — is written to
+// stderr and otherwise swallowed: the caller must still hand off to
+// claude.real, degraded but running, never silently and never aborted. The
+// plugin directories that did assemble are returned even then.
+func bridgeStagedSkills(skillsDir string, environ []string, stderr io.Writer) []string {
 	home, ok := homeFromEnviron(environ)
 	if !ok {
 		fmt.Fprintf(stderr, "claudeshim: HOME not set; skipping staged-skill bridge (%s), continuing without them\n", skillsDir)
-		return
+		return nil
 	}
-	if err := claude.LinkStagedSkills(skillsDir, home); err != nil {
-		fmt.Fprintf(stderr, "claudeshim: bridging staged skills from %s into %s/.claude/skills failed, continuing without them: %v\n",
+	pluginDirs, err := claude.BridgeStagedSkills(skillsDir, home)
+	if err != nil {
+		fmt.Fprintf(stderr, "claudeshim: bridging staged skills from %s into %s failed, continuing degraded: %v\n",
 			skillsDir, home, err)
 	}
+	return pluginDirs
 }
 
 // realBinaryPath resolves the real Claude Code binary's path from where this

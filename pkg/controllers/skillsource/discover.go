@@ -7,11 +7,15 @@
 package skillsource
 
 import (
+	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
+	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/tools/skillbundle"
+	"github.com/authzed/openagentprimitives/pkg/tools/skills/pluginlayout"
 	"github.com/authzed/openagentprimitives/pkg/tools/skills/skillmd"
 	"github.com/authzed/openagentprimitives/pkg/tools/skills/validate"
 )
@@ -61,6 +65,16 @@ type DiscoveredSkill struct {
 	// BundleTarGz is the deterministic gzipped tar of all files under the
 	// skill directory except SKILL.md. Nil for instruction-only skills.
 	BundleTarGz []byte
+	// Plugin is the Claude Code plugin the skill was published inside (see
+	// discoverPlugin), or nil for a standalone skill.
+	Plugin *v1.SkillPlugin
+}
+
+// DiscoverOptions tunes one Discover pass. The zero value is the default.
+type DiscoverOptions struct {
+	// SkipPlugins materializes every skill as standalone, even one published
+	// inside a plugin — the source's spec.disablePluginAgents.
+	SkipPlugins bool
 }
 
 // Discover walks files (repo-root-relative path → content), finds every
@@ -70,7 +84,7 @@ type DiscoveredSkill struct {
 //
 // repoLocator is already normalized (caller passes canonical.Normalize(spec.RepoURL)).
 // ref is appended to the canonical name when non-empty; empty → unpinned name.
-func Discover(repoLocator, subpath, ref string, files map[string][]byte) ([]DiscoveredSkill, DiscoveredRepoInstructions, []string) {
+func Discover(repoLocator, subpath, ref string, files map[string][]byte, opts DiscoverOptions) ([]DiscoveredSkill, DiscoveredRepoInstructions, []string) {
 	var discovered []DiscoveredSkill
 	var problems []string
 
@@ -147,9 +161,20 @@ func Discover(repoLocator, subpath, ref string, files map[string][]byte) ([]Disc
 			}
 			if strings.HasPrefix(fp, skillDirPrefix) {
 				rel := strings.TrimPrefix(fp, skillDirPrefix)
-				if rel != "" {
-					relFiles[rel] = fc
+				if rel == "" {
+					continue
 				}
+				if pluginlayout.IsReserved(rel) {
+					// The reserved directory is filled from spec.plugin at
+					// staging and nowhere else; a skill shipping its own
+					// would otherwise smuggle agents past discoverPlugin's
+					// checks.
+					problems = append(problems, fmt.Sprintf(
+						"%s: dropping %s from the bundle: %s/ is reserved for the skill's plugin context",
+						canonicalName, fp, pluginlayout.Dir))
+					continue
+				}
+				relFiles[rel] = fc
 			}
 		}
 
@@ -164,7 +189,15 @@ func Discover(repoLocator, subpath, ref string, files map[string][]byte) ([]Disc
 			}
 		}
 
-		// Step 6: append the discovered skill.
+		// Step 6: capture the enclosing plugin, if any.
+		var plugin *v1.SkillPlugin
+		if !opts.SkipPlugins {
+			var pluginProblems []string
+			plugin, pluginProblems = discoverPlugin(canonicalName, skillDir, files)
+			problems = append(problems, pluginProblems...)
+		}
+
+		// Step 7: append the discovered skill.
 		discovered = append(discovered, DiscoveredSkill{
 			CanonicalName: canonicalName,
 			Description:   fm.Description,
@@ -173,6 +206,7 @@ func Discover(repoLocator, subpath, ref string, files map[string][]byte) ([]Disc
 			Subpath:       skillDir,
 			BundleDigest:  bundleDigest,
 			BundleTarGz:   bundleTarGz,
+			Plugin:        plugin,
 		})
 	}
 
@@ -205,6 +239,117 @@ func Discover(repoLocator, subpath, ref string, files map[string][]byte) ([]Disc
 	sort.Strings(problems)
 
 	return discovered, repoInstr, problems
+}
+
+// Agent-capture ceilings. They keep a plugin with an unusual number or size of
+// agents from pushing its Skill object toward etcd's limit; every agent is
+// inline on spec.plugin, and one plugin's agents ride on each of its skills.
+// maxPluginAgents MUST match the MaxItems marker on SkillPlugin.Agents: one
+// agent past it and the apiserver rejects the whole Skill write, which fails
+// the source's sync rather than just costing that skill an agent.
+const (
+	maxPluginAgents     = 64
+	maxPluginAgentBytes = 64 << 10
+	maxPluginTotalBytes = 256 << 10
+)
+
+// discoverPlugin returns the plugin a skill at skillDir was published inside,
+// or nil when it is standalone. A skill belongs to a plugin when its directory
+// is <root>/skills/<name> and <root>/.claude-plugin/plugin.json exists — the
+// layout Claude Code itself loads plugins from. <root> may be the repo root.
+//
+// It deliberately reads OUTSIDE the source's subpath: the subpath selects the
+// skill, and the skill's own instructions name the plugin's agents, so they
+// are part of what was selected. Only the manifest's name and the direct
+// agents/*.md children are read; see pluginlayout's package doc for why
+// nothing else is. Anything malformed is a problem, never a failure: the skill
+// still materializes, standalone or with the agents that did pass.
+func discoverPlugin(canonicalName, skillDir string, files map[string][]byte) (*v1.SkillPlugin, []string) {
+	if skillDir == "" {
+		return nil, nil
+	}
+	parent := path.Dir(skillDir)
+	if path.Base(parent) != pluginlayout.UpstreamSkillsDir {
+		return nil, nil
+	}
+	root := path.Dir(parent)
+	manifestPath := path.Join(root, pluginlayout.UpstreamManifestPath)
+	raw, ok := files[manifestPath]
+	if !ok {
+		return nil, nil
+	}
+
+	var problems []string
+	var manifest struct {
+		Name   string          `json:"name"`
+		Agents json.RawMessage `json:"agents"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return nil, []string{fmt.Sprintf("%s: treating as standalone: %s is not valid JSON: %v",
+			canonicalName, manifestPath, err)}
+	}
+	if !pluginlayout.ValidName(manifest.Name) {
+		return nil, []string{fmt.Sprintf("%s: treating as standalone: %s name %q is not a kebab-case plugin name",
+			canonicalName, manifestPath, manifest.Name)}
+	}
+	if declaresAgents(manifest.Agents) {
+		problems = append(problems, fmt.Sprintf(
+			"%s: %s declares custom agent paths, which are not captured; only %s/*.md is",
+			canonicalName, manifestPath, path.Join(root, pluginlayout.UpstreamAgentsDir)))
+	}
+
+	agentsPrefix := path.Join(root, pluginlayout.UpstreamAgentsDir) + "/"
+	var agents []v1.SkillPluginAgent
+	for fp, content := range files {
+		rel, ok := strings.CutPrefix(fp, agentsPrefix)
+		if !ok || strings.Contains(rel, "/") || !strings.HasSuffix(rel, pluginlayout.AgentExt) {
+			continue
+		}
+		name := strings.TrimSuffix(rel, pluginlayout.AgentExt)
+		switch {
+		case !pluginlayout.ValidAgentName(name):
+			problems = append(problems, fmt.Sprintf("%s: skipping plugin agent %s: %q is not a valid agent name",
+				canonicalName, fp, name))
+		case len(content) > maxPluginAgentBytes:
+			problems = append(problems, fmt.Sprintf("%s: skipping plugin agent %s: %d bytes exceeds the %d-byte limit",
+				canonicalName, fp, len(content), maxPluginAgentBytes))
+		default:
+			agents = append(agents, v1.SkillPluginAgent{Name: name, Content: string(content)})
+		}
+	}
+	sort.Slice(agents, func(i, j int) bool { return agents[i].Name < agents[j].Name })
+
+	// Over either ceiling, keep the alphabetical prefix that fits rather than
+	// an arbitrary subset, so the captured set is stable across passes.
+	if len(agents) > maxPluginAgents {
+		problems = append(problems, fmt.Sprintf(
+			"%s: capturing %d of %d plugin agents: the rest exceed the %d-agent limit",
+			canonicalName, maxPluginAgents, len(agents), maxPluginAgents))
+		agents = agents[:maxPluginAgents]
+	}
+	total := 0
+	for i, a := range agents {
+		total += len(a.Content)
+		if total > maxPluginTotalBytes {
+			problems = append(problems, fmt.Sprintf(
+				"%s: capturing %d of %d plugin agents: the rest exceed the %d-byte total limit",
+				canonicalName, i, len(agents), maxPluginTotalBytes))
+			agents = agents[:i]
+			break
+		}
+	}
+	return &v1.SkillPlugin{Name: manifest.Name, Agents: agents}, problems
+}
+
+// declaresAgents reports whether a plugin.json "agents" value actually names
+// something. An absent key, null, an empty string and an empty list all mean
+// the default agents/ directory, so none of them is worth a problem.
+func declaresAgents(raw json.RawMessage) bool {
+	switch strings.TrimSpace(string(raw)) {
+	case "", "null", `""`, "[]":
+		return false
+	}
+	return true
 }
 
 // isSkillMD reports whether path refers to a SKILL.md file (either at repo root

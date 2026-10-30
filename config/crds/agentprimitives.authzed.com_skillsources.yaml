@@ -84,6 +84,13 @@ spec:
                 - agentIdentity
                 - credential
                 type: object
+              disablePluginAgents:
+                description: |-
+                  DisablePluginAgents, when true, materializes every skill this source
+                  discovers as standalone, even one published inside a Claude Code plugin:
+                  no spec.plugin, so the plugin's agents are never captured from outside
+                  spec.subpath and never staged. Default (false) = enabled.
+                type: boolean
               disableRepoInstructions:
                 description: |-
                   DisableRepoInstructions, when true, stops this source from discovering and

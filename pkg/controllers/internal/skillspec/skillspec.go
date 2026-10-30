@@ -6,6 +6,8 @@
 package skillspec
 
 import (
+	"slices"
+
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/tools/skills/skillmd"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,7 +43,17 @@ func Equal(a, b v1.SkillSpec) bool {
 	if !repoInstructionsEqual(a.RepoInstructions, b.RepoInstructions) {
 		return false
 	}
+	if !pluginEqual(a.Plugin, b.Plugin) {
+		return false
+	}
 	return bundleEqual(a.Bundle, b.Bundle)
+}
+
+func pluginEqual(a, b *v1.SkillPlugin) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Name == b.Name && slices.Equal(a.Agents, b.Agents)
 }
 
 func frontmatterEqual(a, b v1.SkillFrontmatter) bool {

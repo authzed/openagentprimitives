@@ -20,6 +20,13 @@
 # into each skill BY its canonical name: the pin has to be set here, at the
 # source, not merely asserted where it is consumed.
 #
+# Both skills are published inside Claude Code plugins, and both dispatch
+# their plugin's own subagents (review-pr's bug-hunter, security-auditor, ...;
+# differential-review's adversarial-modeler). Discovery captures those agents
+# onto each Skill's spec.plugin even though they sit outside spec.subpath, and
+# the inner Claude Code loads each skill as part of its plugin, so the agents
+# are really there when the methodology calls for them.
+#
 # Both SkillSources are namespaced. metadata.namespace is intentionally
 # omitted on both — `oap agent install --namespace` stamps it, same as the
 # other reviewbot manifests.

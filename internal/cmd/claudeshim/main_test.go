@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -237,4 +238,62 @@ func TestRun_DegradesLoudlyOnBridgeFailureButStillHandsOff(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExecArgv(t *testing.T) {
+	cases := []struct {
+		name       string
+		pluginDirs []string
+		argv       []string
+		want       []string
+	}{
+		{
+			name: "no plugins: argv passes through unchanged",
+			argv: []string{"claude", "--print", "hi"},
+			want: []string{"/real", "--print", "hi"},
+		},
+		{
+			name:       "plugins: one --plugin-dir each, ahead of the caller's own args",
+			pluginDirs: []string{"/h/p/a", "/h/p/b"},
+			argv:       []string{"claude", "mcp", "list"},
+			want:       []string{"/real", "--plugin-dir", "/h/p/a", "--plugin-dir", "/h/p/b", "mcp", "list"},
+		},
+		{
+			name:       "bare invocation: just the flags",
+			pluginDirs: []string{"/h/p/a"},
+			argv:       []string{"claude"},
+			want:       []string{"/real", "--plugin-dir", "/h/p/a"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, execArgv("/real", tc.pluginDirs, tc.argv))
+		})
+	}
+}
+
+func TestRun_StagedPluginReachesRealBinaryAsPluginDir(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker.txt")
+	writeStubRealBinary(t, dir, marker, 0)
+
+	skills := t.TempDir()
+	skillDir := filepath.Join(skills, "code-review")
+	require.NoError(t, os.MkdirAll(filepath.Join(skillDir, ".oap-plugin", "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, ".oap-plugin", "plugin.json"), []byte(`{"name":"demo-plugin"}`), 0o644))
+	home := t.TempDir()
+
+	code, _, stderr := runViaHelperProcess(t, filepath.Join(dir, "claude"), skills,
+		[]string{"HOME=" + home}, []string{"--print", "hi"}, "")
+
+	require.Equal(t, 0, code, "stderr=%s", stderr)
+	assert.Empty(t, stderr)
+	body, err := os.ReadFile(marker)
+	require.NoError(t, err)
+	// The plugin dir's name ends in a content digest; the prefix and the
+	// argv shape around it are what the shim owns.
+	assert.Regexp(t,
+		"argv:--plugin-dir "+regexp.QuoteMeta(filepath.Join(home, ".oap", "claude-plugins", "demo-plugin-"))+"[0-9a-f]+ --print hi",
+		string(body))
 }
