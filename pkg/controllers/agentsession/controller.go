@@ -1134,9 +1134,6 @@ func sessionsForAgentClassChange(items []spiceboxv1alpha1.AgentSession, acNs, ac
 
 // SetupWithManager registers the reconciler with the controller manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := r.setupTokenRestore(mgr); err != nil {
-		return fmt.Errorf("set up memory token restore: %w", err)
-	}
 	enqueue := handler.EnqueueRequestsFromMapFunc(r.watchedObjectRequests)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spiceboxv1alpha1.AgentSession{}).
@@ -1307,7 +1304,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// session: the reap a few blocks down returns before it, on every reconcile,
 	// forever. See reregisterMemoryToken for why it can neither mint a token nor
 	// bring a revoked one back.
-	r.reregisterMemoryToken(ctx, &sess)
+	if _, err := r.reregisterMemoryToken(ctx, &sess); err != nil {
+		log.FromContext(ctx).Info("memory token: restoring this session's registration failed; its memory stays unreadable until a later reconcile restores it",
+			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+	}
 
 	// Restart-from-here: when PendingRestart is set, run the fork reconciler.
 	// proceed=false short-circuits the normal reconcile; the next watch event

@@ -518,22 +518,20 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		info, ok := h.reg.LookupInfo(token)
 		if !ok {
 			// Restore in progress. The token registry is process memory, empty
-			// on every boot, and the operator restores every live session's
-			// token in one pass once its caches have synced (agentsession
-			// RestoreTokenRegistry). Until that pass finishes, a bearer no
-			// session is registered under is far likelier a session not restored
-			// yet than a forged token, so answer 503 + Retry-After: the memory
-			// httpclient retries 5xx, and a terminal 401 would fail a live
-			// session with MemoryUnavailable just because the operator
-			// restarted. Once the pass is done the registry is complete, and an
-			// unknown bearer is a genuine auth failure: the 401 below. A
-			// registry never put in the restoring state (every in-process test
-			// harness) is complete from birth.
-			if h.reg.Restoring() {
-				log.FromContext(ctx).Info("memory API: bearer not registered while the token registry is still being restored after an operator restart; answering 503 (retryable)",
+			// on every boot, and the operator restores every bearer it served
+			// (each session's and each Workshop's) in one pass once its caches
+			// have synced (pkg/controllers/tokenrestore). Until that pass
+			// finishes, a bearer no session is registered under is far likelier
+			// a session not restored yet than a forged token, so answer 503 +
+			// Retry-After: the memory httpclient retries 5xx, and a terminal 401
+			// would fail a live session with MemoryUnavailable just because the
+			// operator restarted. Once the pass is done the registry is
+			// complete, and an unknown bearer is a genuine auth failure: the 401
+			// below. A registry never put in the restoring state (every
+			// in-process test harness) is complete from birth.
+			if tokens.RetryWhileRestoring(w, h.reg, "unavailable: token registry still warming after operator restart; retry") {
+				log.FromContext(ctx).Info("memory API: bearer not registered while the token registry is still being restored after an operator restart; answered 503 (retryable)",
 					"session", ns+"/"+name, "path", r.URL.Path)
-				w.Header().Set("Retry-After", "1")
-				http.Error(w, "unavailable: token registry still warming after operator restart; retry", http.StatusServiceUnavailable)
 				return
 			}
 			// Say WHICH of the two refusals this is. A registered token aimed at

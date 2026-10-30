@@ -6,7 +6,8 @@
 // Every map here is process memory: a restarted operator begins with an empty
 // registry while the per-session Secret holding each token — and every client
 // presenting one — survives untouched. Two things put tokens back. At startup
-// the operator restores every live session's token in one pass, and holds the
+// the operator restores every bearer it served (each live session's, each
+// Ready Workshop's) in one pass (pkg/controllers/tokenrestore), and holds the
 // registry in the "restoring" state (BeginRestore / FinishRestore) until that
 // pass is done, so an unknown bearer is answered "retry" rather than "refused"
 // for exactly as long as the registry is incomplete. And the reconciler
@@ -20,6 +21,7 @@ package tokens
 import (
 	"context"
 	"crypto/ed25519"
+	"net/http"
 	"sync"
 
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -120,6 +122,22 @@ func (r *Registry) WaitRestored(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// RetryWhileRestoring answers w with a retryable 503 + Retry-After when r is
+// still restoring, and reports whether it did. A caller that authenticates
+// bearers against r calls it on a registry MISS, before refusing the bearer:
+// mid-restore, an unknown bearer is far likelier a session not restored yet
+// than a forged token, and a 401 would fail that session for good. Once the
+// restore is done (or on a registry never put in the restoring state) it
+// writes nothing, and the caller's refusal stands. msg is the response body.
+func RetryWhileRestoring(w http.ResponseWriter, r *Registry, msg string) bool {
+	if r == nil || !r.Restoring() {
+		return false
+	}
+	w.Header().Set("Retry-After", "1")
+	http.Error(w, msg, http.StatusServiceUnavailable)
+	return true
 }
 
 // Set installs token for k, replacing (and invalidating) any prior token.

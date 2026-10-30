@@ -96,10 +96,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Extras are read-only; only the token's primary session qualifies here.
 	if !known || info.Session != (memory.NamespacedName{Namespace: ns, Name: name}) {
-		if has && bearer != "" && s.Tokens != nil && !known && s.Tokens.Restoring() {
-			w.Header().Set("Retry-After", "1")
-			log.FromContext(r.Context()).Info("goal API: token registry warming; answering retryable 503", "session", ns+"/"+name)
-			http.Error(w, "goal service warming after operator restart; retry", http.StatusServiceUnavailable)
+		if has && bearer != "" && !known && tokens.RetryWhileRestoring(w, s.Tokens, "goal service warming after operator restart; retry") {
+			log.FromContext(r.Context()).Info("goal API: token registry warming; answered retryable 503", "session", ns+"/"+name)
 			return
 		}
 		http.Error(w, "unauthorized", 401)

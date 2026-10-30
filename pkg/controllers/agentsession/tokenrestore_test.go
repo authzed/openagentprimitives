@@ -2,15 +2,17 @@ package agentsession
 
 import (
 	"context"
+	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -42,7 +44,7 @@ func tokenSecret(sess *spiceboxv1alpha1.AgentSession, token string) *corev1.Secr
 	}
 }
 
-func TestRestoreTokenRegistry(t *testing.T) {
+func TestRestoreTokens(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))
 	require.NoError(t, spiceboxv1alpha1.AddToScheme(scheme))
@@ -60,9 +62,9 @@ func TestRestoreTokenRegistry(t *testing.T) {
 	reg.BeginRestore()
 	r := &Reconciler{Client: c, Tokens: reg}
 
-	n, err := r.RestoreTokenRegistry(context.Background())
+	n, err := r.RestoreTokens(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 2, n, "every session not being deleted is looked at")
+	assert.Equal(t, 1, n, "counts the tokens registered, not the sessions looked at")
 
 	key := func(name string) memory.NamespacedName { return memory.NamespacedName{Namespace: "default", Name: name} }
 	got, ok := reg.Lookup("live-tok")
@@ -74,26 +76,34 @@ func TestRestoreTokenRegistry(t *testing.T) {
 	assert.True(t, reg.Restoring(), "ending the restoring state is the runnable's job, after the pass")
 }
 
-func TestTokenRestoreRunnable_FinishesRestore(t *testing.T) {
+func TestRestoreTokens_SecretReadFailureIsReturned(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))
 	require.NoError(t, spiceboxv1alpha1.AddToScheme(scheme))
-	live := restoreSession("live", false)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(live, tokenSecret(live, "live-tok")).Build()
+
+	broken := restoreSession("broken", false)
+	fine := restoreSession("fine", false)
+	brokenSecret := MemoryTokenSecretName(broken)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		broken, fine,
+		tokenSecret(broken, "broken-tok"),
+		tokenSecret(fine, "fine-tok"),
+	).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if key.Name == brokenSecret {
+				return errors.New("apiserver hiccup")
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
 
 	reg := tokens.NewRegistry()
-	reg.BeginRestore()
-	run := &tokenRestoreRunnable{r: &Reconciler{Client: c, Tokens: reg}, cache: syncedCache{}}
-	assert.False(t, run.NeedLeaderElection(), "every replica serves the memory API, so every replica restores")
+	r := &Reconciler{Client: c, Tokens: reg}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	require.NoError(t, run.Start(ctx))
-	assert.False(t, reg.Restoring(), "the restoring state ends once the pass is done")
-	_, ok := reg.Lookup("live-tok")
-	assert.True(t, ok, "and the token is in place before it ends")
+	n, err := r.RestoreTokens(context.Background())
+	assert.ErrorContains(t, err, "apiserver hiccup", "a failed read is returned so the pass is retried")
+	assert.Equal(t, 1, n, "and does not stop the other session's restore")
+	key := func(name string) memory.NamespacedName { return memory.NamespacedName{Namespace: "default", Name: name} }
+	assert.True(t, reg.Registered(key("fine")))
+	assert.False(t, reg.Registered(key("broken")))
 }
-
-type syncedCache struct{}
-
-func (syncedCache) WaitForCacheSync(context.Context) bool { return true }
