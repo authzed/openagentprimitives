@@ -201,8 +201,11 @@ func TestBuildJobs_AdHocTurnIndexProducesValidMetadata(t *testing.T) {
 			assert.Empty(t, validation.IsValidLabelValue(v),
 				"label %s=%q on Job %s must be a valid label value", k, v, job.Name)
 		}
-		assert.Empty(t, validation.IsDNS1123Subdomain(job.Name),
-			"Job name %q must be a valid DNS-1123 subdomain", job.Name)
+		// The Job controller copies the name into the pod template's job-name
+		// labels, so it must also be a valid LABEL value (63 bytes), not just
+		// a DNS-1123 subdomain (253).
+		assert.Empty(t, validation.IsDNS1123Label(job.Name),
+			"Job name %q must be a valid DNS-1123 label", job.Name)
 	}
 
 	assert.NotContains(t, h.PathSegment(), "-1",
@@ -243,10 +246,15 @@ func TestBuildJobs_QualifiedAdHocHandle_ValidMetadataAndDistinct(t *testing.T) {
 			assert.Empty(t, validation.IsValidLabelValue(v),
 				"label %s=%q on Job %s must be a valid label value", k, v, job.Name)
 		}
-		assert.Empty(t, validation.IsDNS1123Subdomain(job.Name),
-			"Job name %q must be a valid DNS-1123 subdomain", job.Name)
-		assert.Contains(t, job.Name, "parent-fk1", "the qualifier must appear in the Job name")
+		// The Job controller copies the name into the pod template's job-name
+		// labels, so it must also be a valid LABEL value (63 bytes), not just
+		// a DNS-1123 subdomain (253).
+		assert.Empty(t, validation.IsDNS1123Label(job.Name),
+			"Job name %q must be a valid DNS-1123 label", job.Name)
 	}
+	// The restore name also carries the destination PVC, so here it is long
+	// enough to be shortened; the snapshot name still reads in full.
+	assert.Contains(t, snapJob.Name, "parent-fk1", "the qualifier must appear in the snapshot Job name")
 	assert.Contains(t, fork1.PathSegment(), "adhoc-parent-fk1-",
 		"the qualifier must appear in the on-disk path segment")
 
@@ -265,6 +273,71 @@ func TestBuildJobs_QualifiedAdHocHandle_ValidMetadataAndDistinct(t *testing.T) {
 	assert.Empty(t, validation.IsDNS1123Subdomain(messyJob.Name))
 	assert.Contains(t, messyJob.Name, "adhoc-parentfork1-",
 		"invalid runes are dropped, valid ones lowercased")
+}
+
+// TestJobNames_LongNamesAreBoundedAndDistinct uses the names a real clean fork
+// produced: a 36-byte session UID, the child session's name as the qualifier,
+// and the child's workspace PVC as the restore destination. Unbounded, the
+// snapshot name was 87 bytes and the apiserver refused the Job, so the fork
+// started without its parent's workspace.
+func TestJobNames_LongNamesAreBoundedAndDistinct(t *testing.T) {
+	cfg := workspace.CPByPodConfig{Namespace: "default", SnapshotStorePVC: "store", Image: "busybox"}
+	src := workspace.PVCRef{Namespace: "default", Name: "demo-test-agent-gh-ea5224e4-workspace"}
+	dst := workspace.PVCRef{Namespace: "default", Name: "demo-test-agent-gh-ea5224e4-ic5b5ded-workspace"}
+	fork := func(qualifier string) workspace.SnapshotHandle {
+		return workspace.SnapshotHandle{
+			SessionUID: "762cd937-7ff7-4cb4-a4ae-9d6ac0aa0838",
+			TurnIndex:  -1,
+			Qualifier:  qualifier,
+		}
+	}
+	// Two children of one parent whose names differ only at the end: the
+	// shortened names must still not collide.
+	a, b := fork("demo-test-agent-gh-ea5224e4-ic5b5ded"), fork("demo-test-agent-gh-ea5224e4-ic5b5dee")
+
+	names := map[string]string{
+		"snapshot a": workspace.BuildSnapshotJob(cfg, src, a).Name,
+		"snapshot b": workspace.BuildSnapshotJob(cfg, src, b).Name,
+		"restore a":  workspace.BuildRestoreJob(cfg, a, dst).Name,
+		"restore b":  workspace.BuildRestoreJob(cfg, b, dst).Name,
+	}
+	for which, name := range names {
+		assert.Empty(t, validation.IsDNS1123Label(name), "%s Job name %q must fit a DNS-1123 label", which, name)
+		assert.True(t, strings.HasPrefix(name, "snap-762cd937-") || strings.HasPrefix(name, "rest-762cd937-"),
+			"%s Job name %q keeps its readable prefix", which, name)
+	}
+	assert.NotEqual(t, names["snapshot a"], names["snapshot b"], "forks differing only at the end get distinct snapshot Jobs")
+	assert.NotEqual(t, names["restore a"], names["restore b"], "and distinct restore Jobs")
+	assert.Equal(t, names["snapshot a"], workspace.SnapshotJobName(a), "SnapshotJobName agrees with the Job actually built")
+	// Pinned literals, not a self-comparison: a retried fork (in this process
+	// or after an operator restart) must find the Job an earlier attempt
+	// created, so any change to the shortening scheme has to show up here.
+	assert.Equal(t, "snap-762cd937-7ff7-4cb4-a4ae-9d6ac0aa0838-adhoc-demo-t-89ba8942", names["snapshot a"], "shortened snapshot name is stable across retries")
+	assert.Equal(t, "rest-762cd937-7ff7-4cb4-a4ae-9d6ac0aa0838-adhoc-demo-t-a5c88a24", names["restore a"], "shortened restore name is stable across retries")
+}
+
+// TestCPByPod_GC_LongNameIsBounded covers the cleanup Job, which GC builds
+// inline rather than through an exported builder: without bounding, a long
+// fork's snapshot directory could never be removed.
+func TestCPByPod_GC_LongNameIsBounded(t *testing.T) {
+	ctx := context.Background()
+	c := newFakeClient(t)
+	s := workspace.NewCPByPod(c, workspace.CPByPodConfig{Namespace: "default", SnapshotStorePVC: "store", Image: "busybox"})
+	h := workspace.SnapshotHandle{
+		SessionUID: "762cd937-7ff7-4cb4-a4ae-9d6ac0aa0838",
+		TurnIndex:  -1,
+		Qualifier:  "demo-test-agent-gh-ea5224e4-ic5b5ded",
+	}
+
+	require.NoError(t, s.GC(ctx, h))
+	require.NoError(t, s.GC(ctx, h), "a repeated GC must find its own Job, not create a second")
+
+	var jobs batchv1.JobList
+	require.NoError(t, c.List(ctx, &jobs))
+	require.Len(t, jobs.Items, 1)
+	name := jobs.Items[0].Name
+	assert.Empty(t, validation.IsDNS1123Label(name), "GC Job name %q must fit a DNS-1123 label", name)
+	assert.Equal(t, "gc-762cd937-7ff7-4cb4-a4ae-9d6ac0aa0838-adhoc-demo-tes-3aa6c5a0", name, "shortened GC name is stable across retries")
 }
 
 // TestSnapshotJobName_CanonicalFormat pins the exported helper as the single
