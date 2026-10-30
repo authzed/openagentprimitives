@@ -1,0 +1,100 @@
+name: Publish example agents
+
+# Packages every example under examples/, pushes it to GHCR as
+# ghcr.io/<repo>/agents/<agent-name>:<short-sha>, signs it with
+# OAP_AGENT_SIGNING_KEY, verifies it anonymously against the committed
+# pkg/platform/oap/trustedkeys/oap-agents.pub, and only then moves :latest to
+# it. OAP Desktop install links point at these refs.
+#
+# Runs only after CI has passed on a push to main — never for pull requests, so
+# fork PRs can't reach the signing key.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+# One place names the registry, so the push target and the host the push
+# credential is bound to can't drift apart.
+env:
+  REGISTRY: ghcr.io
+
+# Serialize publishes so two merges in quick succession don't interleave their
+# :latest pushes. GitHub keeps only the newest pending run per group, so a
+# burst of merges publishes the oldest in flight and the newest, not every one
+# in between; the tip job is what keeps :latest moving forward.
+concurrency:
+  group: publish-agents
+  cancel-in-progress: false
+
+jobs:
+  # CI runs complete in any order, and re-running an old commit's CI fires this
+  # workflow again for that commit. Only the current tip of main may publish,
+  # so :latest can never move back to an older build. A separate job, so the
+  # publish job is gated once as a whole rather than step by step.
+  tip:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.tip.outputs.publish }}
+    steps:
+      - name: Check head_sha is still the tip of main
+        id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          tip=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$tip" != "$SHA" ]; then
+            echo "::notice::$SHA is no longer the tip of main ($tip); skipping publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: tip
+    if: needs.tip.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build oap
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/oap" ./cmd/oap
+      - name: Package, push, sign and verify
+        env:
+          OAP: ${{ runner.temp }}/oap
+          AGENTS_REPO: ${{ env.REGISTRY }}/${{ github.repository }}/agents
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          SIGNING_KEY: ${{ secrets.OAP_AGENT_SIGNING_KEY }}
+          VERIFY_KEY_FILE: pkg/platform/oap/trustedkeys/oap-agents.pub
+          OAP_REGISTRY_HOST: ${{ env.REGISTRY }}
+          OAP_REGISTRY_USERNAME: ${{ github.actor }}
+          OAP_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "OAP_AGENT_SIGNING_KEY secret is not set" >&2
+            exit 1
+          fi
+          export SIGNING_KEY_FILE="$RUNNER_TEMP/signing.key"
+          trap 'rm -f "$SIGNING_KEY_FILE"' EXIT
+          (umask 077 && printf '%s\n' "$SIGNING_KEY" > "$SIGNING_KEY_FILE")
+          # Only the file is needed from here on; don't hand the raw PEM to
+          # every process the script starts.
+          unset SIGNING_KEY
+          export TAG="${SHA::12}"
+          scripts/publish-example-agents.sh

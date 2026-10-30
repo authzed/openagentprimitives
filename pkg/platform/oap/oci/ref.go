@@ -28,17 +28,44 @@ type Options struct {
 	// refusal (but never the link-local/metadata refusal — see guardHost).
 	PlainHTTP bool
 
-	// Credential, if non-nil, authenticates against ref's registry host
-	// (basic or bearer, per the distribution auth flow). Nil means anonymous
-	// access, which is fine for public pulls and the loopback test registry.
+	// Credential, if non-nil, authenticates against CredentialHost (basic or
+	// bearer, per the distribution auth flow). Nil means anonymous access,
+	// which is fine for public pulls and the loopback test registry.
 	Credential *auth.Credential
+
+	// CredentialHost is the one registry host ("host" or "host:port", as in
+	// registry.ParseReference(ref).Registry) Credential is offered to. A ref
+	// naming any other host is accessed anonymously: the ref often comes from
+	// someone other than the credential's owner (a pasted install link), and
+	// keying on the ref's own host would hand the credential to whichever
+	// registry that someone chose. Required when Credential is set, and must
+	// pass ValidateCredentialHost. Matched by hostsEqual: case-insensitive,
+	// port included, so "ghcr.io" does not cover "ghcr.io:8443".
+	CredentialHost string
+
+	// RequireCredentialHost turns a ref on a host other than CredentialHost
+	// into ErrCredentialHostMismatch instead of anonymous access. Set it when
+	// the caller picked ref itself (push, sign), where a mismatch is a typo
+	// that would otherwise surface as an unexplained 401. Leave it unset when
+	// ref may come from someone else (pull, install), where going anonymous
+	// is the protection.
+	RequireCredentialHost bool
+
+	// AllowPlainHTTPCredential permits sending Credential over PlainHTTP to a
+	// non-loopback CredentialHost, such as a LAN or docker-compose registry
+	// with no TLS. Without it that is ErrCredentialOverPlainHTTP, since anyone
+	// on the network path can read the credential. Loopback never needs it.
+	AllowPlainHTTPCredential bool
 
 	// AllowHosts is an explicit allowlist of registry hosts (as they appear
 	// in registry.ParseReference(ref).Registry — "host" or "host:port") that
 	// bypass guardHost's refusal entirely, including the always-on
 	// link-local/metadata refusal. Use this for a deliberately-trusted
 	// internal registry that would otherwise be classified as private-range
-	// or `.internal`.
+	// or `.internal`. Matched by hostsEqual against the ref's "host:port" and
+	// its bare host, so a portless entry covers every port: a broader match
+	// than CredentialHost's on purpose, since trusting a host to be dialed is
+	// a weaker grant than handing it a secret.
 	AllowHosts []string
 }
 
@@ -61,6 +88,8 @@ var ErrHostNotTrusted = errors.New("oap/oci: registry host not trusted")
 //     "metadata.google.internal") — ALWAYS refused, even with PlainHTTP. Cloud
 //     metadata SSRF is the top threat this guard exists for, so PlainHTTP —
 //     which legitimately relaxes the next rule — must not relax this one.
+//     The unspecified address (0.0.0.0, ::) is refused here too: dialing it
+//     reaches the local host, and no registry is legitimately addressed by it.
 //  3. Private-range IP literal (10/8, 172.16/12, 192.168/16, IPv6 ULA fc00::/7)
 //     or loopback (127/8, ::1, "localhost") — refused UNLESS opts.PlainHTTP.
 //     Local dev registries reached over PlainHTTP are legitimate and common;
@@ -70,7 +99,8 @@ var ErrHostNotTrusted = errors.New("oap/oci: registry host not trusted")
 //  4. Anything else (a public hostname/IP) — allowed.
 //
 // Classification is string/IP-literal based, inspecting ref's Registry field as
-// written. It does NOT resolve DNS and re-check the resolved address, so a
+// written, after registryHostAddr strips the port or bare IPv6 brackets and
+// unmaps IPv4-in-IPv6 ("[::ffff:169.254.169.254]" is the metadata IP). It does NOT resolve DNS and re-check the resolved address, so a
 // hostname that looks public but resolves to 169.254.169.254 — or is switched
 // to do so after this check (DNS rebinding) — is not caught here. Closing that
 // needs a resolve-then-dial-pinned transport, deeper than this ref-literal gate.
@@ -80,43 +110,40 @@ func guardHost(ref string, allow []string, plainHTTP bool) error {
 		return fmt.Errorf("parse oci ref %q: %w", ref, err)
 	}
 	host := parsed.Registry // "host" or "host:port"
-	hostOnly := host
-	if h, _, splitErr := net.SplitHostPort(host); splitErr == nil {
-		hostOnly = h
-	}
+	hostOnly, addr, isIP := registryHostAddr(host)
 
 	for _, a := range allow {
-		if a == host || a == hostOnly {
+		if hostsEqual(a, host) || hostsEqual(a, hostOnly) {
 			return nil
 		}
 	}
 
 	lowerHost := strings.ToLower(hostOnly)
 
-	addr, ipErr := netip.ParseAddr(hostOnly)
-	isIP := ipErr == nil
-
-	// Rule 2: link-local / metadata — always refused, PlainHTTP does not
-	// relax this.
+	// Rule 2: link-local / metadata / unspecified — always refused, PlainHTTP
+	// does not relax this.
 	if isIP && addr.IsLinkLocalUnicast() {
 		return fmt.Errorf("%w: %q is a link-local address (cloud metadata endpoints live here; never dialed, even with PlainHTTP)", ErrHostNotTrusted, host)
+	}
+	if isIP && addr.IsUnspecified() {
+		return fmt.Errorf("%w: %q is the unspecified address (dials the local host; never dialed unless allow-listed)", ErrHostNotTrusted, host)
 	}
 	if !isIP && isMetadataHostname(lowerHost) {
 		return fmt.Errorf("%w: %q looks like a cloud-metadata/internal hostname (never dialed unless allow-listed)", ErrHostNotTrusted, host)
 	}
 
 	// Rule 3: private-range / loopback — refused unless PlainHTTP.
-	if isIP && (addr.IsPrivate() || addr.IsLoopback()) {
-		if plainHTTP {
-			return nil
-		}
-		return fmt.Errorf("%w: %q is a private/loopback address (set PlainHTTP for a trusted local/dev registry, or allow-list the host)", ErrHostNotTrusted, host)
-	}
-	if !isIP && lowerHost == "localhost" {
+	if isLoopbackHost(host) {
 		if plainHTTP {
 			return nil
 		}
 		return fmt.Errorf("%w: %q is loopback (set PlainHTTP for a trusted local/dev registry, or allow-list the host)", ErrHostNotTrusted, host)
+	}
+	if isIP && addr.IsPrivate() {
+		if plainHTTP {
+			return nil
+		}
+		return fmt.Errorf("%w: %q is a private-range address (set PlainHTTP for a trusted local/dev registry, or allow-list the host)", ErrHostNotTrusted, host)
 	}
 
 	return nil
@@ -151,7 +178,11 @@ func repository(ref string, opts Options) (*remote.Repository, error) {
 		return nil, fmt.Errorf("parse oci ref %q: %w", ref, err)
 	}
 	repo.PlainHTTP = opts.PlainHTTP
-	if opts.Credential != nil {
+	useCred, err := credentialApplies(repo.Reference.Registry, opts)
+	if err != nil {
+		return nil, err
+	}
+	if useCred {
 		repo.Client = &auth.Client{
 			Client:     retry.DefaultClient,
 			Cache:      auth.NewCache(),
@@ -159,6 +190,105 @@ func repository(ref string, opts Options) (*remote.Repository, error) {
 		}
 	}
 	return repo, nil
+}
+
+// ErrCredentialOverPlainHTTP is returned when a credential would be sent to a
+// non-loopback host over plain HTTP, where anyone on the network path can
+// read it, without Options.AllowPlainHTTPCredential.
+var ErrCredentialOverPlainHTTP = errors.New("oap/oci: refusing to send registry credentials over plain HTTP to a non-loopback host")
+
+// ErrCredentialHostMismatch is returned under Options.RequireCredentialHost
+// when ref names a host other than Options.CredentialHost.
+var ErrCredentialHostMismatch = errors.New("oap/oci: ref's registry host is not the credential's host")
+
+// ValidateCredentialHost checks that host is a bare registry host exactly as
+// a ref would spell it ("ghcr.io", "localhost:5000", "[::1]:5000"), so it can
+// ever match one. Parsing goes through registry.ParseReference; on top of its
+// rules, an empty port ("ghcr.io:") and a trailing dot ("ghcr.io.") are
+// refused because no ref is written that way and the host would silently never
+// match.
+func ValidateCredentialHost(host string) error {
+	parsed, err := registry.ParseReference(host + "/x")
+	if err != nil || parsed.Registry != host {
+		return fmt.Errorf("oap/oci: credential host %q is not a bare registry host such as ghcr.io or localhost:5000", host)
+	}
+	hostOnly := host
+	if h, port, splitErr := net.SplitHostPort(host); splitErr == nil {
+		if port == "" {
+			return fmt.Errorf("oap/oci: credential host %q has an empty port", host)
+		}
+		hostOnly = h
+	}
+	if strings.HasSuffix(hostOnly, ".") {
+		return fmt.Errorf("oap/oci: credential host %q has a trailing dot", host)
+	}
+	return nil
+}
+
+// credentialApplies reports whether opts.Credential should be offered to
+// host. It is false for anonymous access and, unless RequireCredentialHost
+// makes it an error, for any host other than opts.CredentialHost. A
+// credential with no valid CredentialHost is an error rather than "offer it
+// everywhere", and so is a matching host reached over plain HTTP unless that
+// host is loopback or the caller set AllowPlainHTTPCredential.
+func credentialApplies(host string, opts Options) (bool, error) {
+	if opts.Credential == nil {
+		return false, nil
+	}
+	if opts.CredentialHost == "" {
+		return false, errors.New("oap/oci: Credential set without CredentialHost")
+	}
+	if err := ValidateCredentialHost(opts.CredentialHost); err != nil {
+		return false, err
+	}
+	if !hostsEqual(host, opts.CredentialHost) {
+		if opts.RequireCredentialHost {
+			return false, fmt.Errorf("%w: ref is on %q, credential is for %q", ErrCredentialHostMismatch, host, opts.CredentialHost)
+		}
+		return false, nil
+	}
+	if opts.PlainHTTP && !isLoopbackHost(host) && !opts.AllowPlainHTTPCredential {
+		return false, fmt.Errorf("%w: %q", ErrCredentialOverPlainHTTP, host)
+	}
+	return true, nil
+}
+
+// hostsEqual is the one equality rule for registry hosts across this package
+// (AllowHosts, CredentialHost): case-insensitive, since DNS names are, and
+// otherwise exact, so a port must match when both sides carry one.
+func hostsEqual(a, b string) bool {
+	return strings.EqualFold(a, b)
+}
+
+// isLoopbackHost reports whether host ("host" or "host:port") is "localhost"
+// or a loopback IP literal. guardHost and credentialApplies both classify
+// loopback through it, so the SSRF gate and the credential gate cannot drift.
+func isLoopbackHost(host string) bool {
+	hostOnly, addr, isIP := registryHostAddr(host)
+	if isIP {
+		return addr.IsLoopback()
+	}
+	return strings.EqualFold(hostOnly, "localhost")
+}
+
+// registryHostAddr splits a registry host as a ref spells it ("ghcr.io",
+// "10.0.0.5:5000", "[fd00::1]:5000", "[fd00::1]") into the bare host and, for
+// an IP literal, its address. net.SplitHostPort alone is not enough: it
+// rejects a bracketed IPv6 literal with no port, which would leave the
+// brackets on and let "[fe80::1]" pass as a hostname. An IPv4-in-IPv6 address
+// is unmapped so "[::ffff:10.0.0.1]" classifies as the IPv4 address it is.
+func registryHostAddr(host string) (hostOnly string, addr netip.Addr, isIP bool) {
+	hostOnly = host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		hostOnly = h
+	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		hostOnly = host[1 : len(host)-1]
+	}
+	addr, err := netip.ParseAddr(hostOnly)
+	if err != nil {
+		return hostOnly, netip.Addr{}, false
+	}
+	return hostOnly, addr.Unmap(), true
 }
 
 // PinnedRef rewrites ref to address the exact manifest named by dig: same

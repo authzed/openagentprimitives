@@ -26,7 +26,8 @@ func newAgentSignCmd(_ *apcmd.Globals) *cobra.Command {
 		Long: "Sign a pushed .oap agent container in its OCI registry.\n\n" +
 			"<ref> is an OCI reference (\"host[:port]/name[:tag]\") that must already\n" +
 			"have been pushed (see `oap agent push`). --key is a PEM-encoded ECDSA\n" +
-			"private key (PKCS#8 or SEC1).",
+			"private key (PKCS#8 or SEC1)." +
+			"\n\n" + registryAuthHelp,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
@@ -36,7 +37,14 @@ func newAgentSignCmd(_ *apcmd.Globals) *cobra.Command {
 				return fmt.Errorf("load signing key: %w", err)
 			}
 
-			sigDigest, err := oci.Sign(cmd.Context(), ref, signer, oci.Options{PlainHTTP: plainHTTP})
+			opts, err := registryOptions(plainHTTP)
+			if err != nil {
+				return err
+			}
+			// <ref> is the user's own choice here, so a host the credential
+			// isn't for is a typo, not an untrusted ref: fail naming it.
+			opts.RequireCredentialHost = true
+			sigDigest, err := oci.Sign(cmd.Context(), ref, signer, opts)
 			if err != nil {
 				return err
 			}

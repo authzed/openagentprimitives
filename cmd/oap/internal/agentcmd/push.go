@@ -25,7 +25,8 @@ func newAgentPushCmd(_ *apcmd.Globals) *cobra.Command {
 		Short: "Push a packed .oap agent container to an OCI registry",
 		Long: "Push a packed .oap agent container to an OCI registry.\n\n" +
 			"<path> is the path to a .oap produced by `oap agent package` ('-' reads it from stdin).\n" +
-			"<ref> is an OCI reference (\"host[:port]/name[:tag]\").",
+			"<ref> is an OCI reference (\"host[:port]/name[:tag]\")." +
+			"\n\n" + registryAuthHelp,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, path := args[0], args[1]
@@ -44,7 +45,14 @@ func newAgentPushCmd(_ *apcmd.Globals) *cobra.Command {
 				}
 			}
 
-			dig, err := oci.Push(cmd.Context(), ref, packed, oci.Options{PlainHTTP: plainHTTP})
+			opts, err := registryOptions(plainHTTP)
+			if err != nil {
+				return err
+			}
+			// <ref> is the user's own choice here, so a host the credential
+			// isn't for is a typo, not an untrusted ref: fail naming it.
+			opts.RequireCredentialHost = true
+			dig, err := oci.Push(cmd.Context(), ref, packed, opts)
 			if err != nil {
 				return fmt.Errorf("push %s: %w", ref, err)
 			}
