@@ -122,6 +122,9 @@ type Reconciler struct {
 }
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.Add(&strandedRetiredSweep{reader: mgr.GetAPIReader(), writer: mgr.GetClient()}); err != nil {
+		return fmt.Errorf("toolcall: registering the stranded-finalizer sweep: %w", err)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spiceboxv1alpha1.ToolCall{}).
 		Complete(r)
@@ -163,7 +166,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// reconcileStreaming carries the exec context's CancelFunc. Cancelling unblocks
 		// watchStreamCompletion, which finalizes the status via a conflict-retry update.
 		if hasTrueCondition(&tc, spiceboxv1alpha1.ToolCallConditionRunning) &&
-			terminalCondition(&tc) == "" {
+			tc.TerminalCondition() == "" {
 			if tc.Spec.Mode == spiceboxv1alpha1.ToolCallModeInteractive && r.Registry != nil {
 				r.Registry.CancelAndUnregister(tc.Namespace, tc.Name)
 			}
@@ -185,15 +188,18 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
+	// A terminal ToolCall is retired, not just skipped. This sits ABOVE the
+	// finalizer ensure on purpose: a retired call has had its finalizer
+	// removed, and the cache can still serve it for a moment after that write,
+	// so ensuring first would put the finalizer straight back.
+	if tc.TerminalCondition() != "" {
+		return ctrl.Result{}, r.retire(ctx, &tc)
+	}
+
 	// Ensure finalizer. Unlike the other reconcilers this does NOT requeue
 	// after adding the finalizer — the subsequent watch event re-enters.
 	if added, err := apreconcile.EnsureFinalizer(ctx, r.Client, &tc, spiceboxv1alpha1.FinalizerToolCall); added || err != nil {
 		return ctrl.Result{}, err
-	}
-
-	// Short-circuit once the ToolCall has reached a terminal condition.
-	if terminalCondition(&tc) != "" {
-		return ctrl.Result{}, nil
 	}
 
 	// Validate.
@@ -813,24 +819,6 @@ func (r *Reconciler) setTimeout(tc *spiceboxv1alpha1.ToolCall) {
 		Type: spiceboxv1alpha1.ToolCallConditionTimeout, Status: metav1.ConditionTrue,
 		Reason: spiceboxv1alpha1.ReasonDeadlineExceeded, Message: "tool exceeded spec.timeout",
 	})
-}
-
-// terminalCondition returns the name of the first terminal condition found on tc
-// (Succeeded, Failed, Timeout, Canceled), or "" if none.
-func terminalCondition(tc *spiceboxv1alpha1.ToolCall) string {
-	for _, c := range tc.Status.Conditions {
-		if c.Status != metav1.ConditionTrue {
-			continue
-		}
-		switch c.Type {
-		case spiceboxv1alpha1.ToolCallConditionSucceeded,
-			spiceboxv1alpha1.ToolCallConditionFailed,
-			spiceboxv1alpha1.ToolCallConditionTimeout,
-			spiceboxv1alpha1.ToolCallConditionCanceled:
-			return c.Type
-		}
-	}
-	return ""
 }
 
 func hasTrueCondition(tc *spiceboxv1alpha1.ToolCall, condType string) bool {

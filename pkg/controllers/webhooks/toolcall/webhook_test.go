@@ -121,3 +121,51 @@ func TestToolCallWebhook_Update_SpecImmutable(t *testing.T) {
 		})
 	}
 }
+
+func TestToolCallWebhook_RetiredLabel(t *testing.T) {
+	h := handler(t)
+	retired := func(tc *spiceboxv1alpha1.ToolCall) {
+		tc.Labels = map[string]string{spiceboxv1alpha1.LabelToolCallRetired: "true"}
+	}
+	finalized := func(tc *spiceboxv1alpha1.ToolCall) {
+		tc.Finalizers = append(tc.Finalizers, spiceboxv1alpha1.FinalizerToolCall)
+	}
+	terminal := func(tc *spiceboxv1alpha1.ToolCall) {
+		tc.Status.Conditions = []metav1.Condition{{
+			Type: spiceboxv1alpha1.ToolCallConditionSucceeded, Status: metav1.ConditionTrue,
+		}}
+	}
+
+	assert.False(t, h.Handle(context.Background(), createReq(t, toolCall("default", retired))).Allowed,
+		"create with the retired label: denied, it would hide the call from the operator before it ran")
+
+	cases := []struct {
+		name    string
+		old     *spiceboxv1alpha1.ToolCall
+		updated *spiceboxv1alpha1.ToolCall
+		allowed bool
+	}{
+		{"add to a terminal call: allowed (the controller's retire write)",
+			toolCall("default", terminal), toolCall("default", terminal, retired), true},
+		{"add to a call with no terminal condition: denied",
+			toolCall("default"), toolCall("default", retired), false},
+		{"add while only the incoming object claims terminal: denied, stored status decides",
+			toolCall("default"), toolCall("default", terminal, retired), false},
+		{"already retired, other metadata edit: allowed",
+			toolCall("default", terminal, retired), toolCall("default", terminal, retired, func(tc *spiceboxv1alpha1.ToolCall) { tc.Labels["x"] = "y" }), true},
+		{"add the label while keeping the finalizer: denied, the call would be stranded",
+			toolCall("default", terminal, finalized), toolCall("default", terminal, finalized, retired), false},
+		{"add the finalizer to a retired call: denied",
+			toolCall("default", terminal, retired), toolCall("default", terminal, retired, finalized), false},
+		{"drop the finalizer from a stranded retired call: allowed (the startup sweep's write)",
+			toolCall("default", terminal, retired, finalized), toolCall("default", terminal, retired), true},
+		{"other edit to a call already stranded with both: allowed, not made worse",
+			toolCall("default", terminal, retired, finalized), toolCall("default", terminal, retired, finalized, func(tc *spiceboxv1alpha1.ToolCall) { tc.Labels["x"] = "y" }), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := h.Handle(context.Background(), updateReq(t, tc.old, tc.updated))
+			assert.Equal(t, tc.allowed, resp.Allowed, "msg=%q", resp.Result.Message)
+		})
+	}
+}

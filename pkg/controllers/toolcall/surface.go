@@ -74,7 +74,7 @@ func (r *Reconciler) surfaceReconcileFailure(ctx context.Context, nn types.Names
 		// Deleted underneath us. Nothing is waiting on it any more.
 		return ctrl.Result{}, nil
 	}
-	if terminalCondition(&tc) != "" {
+	if tc.TerminalCondition() != "" {
 		return res, rerr
 	}
 

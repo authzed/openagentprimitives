@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -43,6 +44,9 @@ func (w *Webhook) Handle(_ context.Context, req admission.Request) admission.Res
 
 	switch req.Operation {
 	case admissionv1.Create:
+		if _, ok := tc.Labels[spiceboxv1alpha1.LabelToolCallRetired]; ok {
+			return admission.Denied("a ToolCall may not be created with the " + spiceboxv1alpha1.LabelToolCallRetired + " label; only the toolcall controller retires a finished call")
+		}
 		if !hasAgentSessionOwner(&tc) {
 			return admission.Denied("ToolCall must be owned by an AgentSession (ownerReference Kind=AgentSession); an unpinned ToolCall is refused")
 		}
@@ -67,11 +71,32 @@ func (w *Webhook) Handle(_ context.Context, req admission.Request) admission.Res
 		if !reflect.DeepEqual(old.Spec, tc.Spec) {
 			return admission.Denied("ToolCall.spec is immutable once created (the runner's authorized tool/args/credentials cannot be rewritten before execution)")
 		}
+		// The retired label takes a ToolCall out of the operator's cache, so
+		// adding it to a call that has not finished would leave that call
+		// unexecuted and its finalizer unreachable. The stored (old) status is
+		// what decides, not anything the update carries.
+		_, wasRetired := old.Labels[spiceboxv1alpha1.LabelToolCallRetired]
+		_, isRetired := tc.Labels[spiceboxv1alpha1.LabelToolCallRetired]
+		if isRetired && !wasRetired && old.TerminalCondition() == "" {
+			return admission.Denied("the " + spiceboxv1alpha1.LabelToolCallRetired + " label may only be added to a ToolCall that has reached a terminal condition")
+		}
+		// A retired call is out of the operator's cache, so nothing would ever
+		// remove a finalizer it carries and a cascade delete would leave it
+		// Terminating. Refuse any write that arrives at label+finalizer; one
+		// that already sits there (left by an older operator) may still be
+		// edited, including to drop the finalizer.
+		if isRetired && hasToolCallFinalizer(&tc) && (!wasRetired || !hasToolCallFinalizer(&old)) {
+			return admission.Denied("a ToolCall carrying the " + spiceboxv1alpha1.LabelToolCallRetired + " label may not also carry the " + spiceboxv1alpha1.FinalizerToolCall + " finalizer; the operator no longer watches it and could never remove it")
+		}
 		return admission.Allowed("")
 
 	default:
 		return admission.Allowed("")
 	}
+}
+
+func hasToolCallFinalizer(tc *spiceboxv1alpha1.ToolCall) bool {
+	return controllerutil.ContainsFinalizer(tc, spiceboxv1alpha1.FinalizerToolCall)
 }
 
 // hasAgentSessionOwner reports whether tc carries an AgentSession
