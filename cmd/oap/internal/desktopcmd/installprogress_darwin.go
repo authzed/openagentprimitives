@@ -39,6 +39,9 @@ const (
 	// maxDialogTitleRunes caps the bundle-supplied name where it lands in a
 	// window or dialog title.
 	maxDialogTitleRunes = 80
+	// maxDialogDescriptionRunes caps a bundle's description in the install
+	// confirm dialog.
+	maxDialogDescriptionRunes = 300
 
 	// Icons for installResultDialog (AppleScript `with icon` constants).
 	dialogIconStop    = "stop"
@@ -57,9 +60,11 @@ var (
 	openDashboardForConfig = (*desktopState).openDashboard
 	installNotify          = func(msg string) { notify("OAP Desktop", msg) }
 	installResultDialog    = func(title, message, icon, button string) error {
-		script := fmt.Sprintf(`display dialog %q with title %q buttons {%q} default button %q with icon %s`,
-			message, title, button, button, icon)
-		if out, err := exec.Command("osascript", "-e", script).CombinedOutput(); err != nil {
+		// icon is one of the dialogIcon* constants, an AppleScript identifier
+		// rather than text, so it is the one value spliced into the source.
+		if out, err := osascript(
+			`display dialog (item 1 of argv) with title (item 2 of argv) buttons {item 3 of argv} default button (item 3 of argv) with icon `+icon,
+			message, title, button).CombinedOutput(); err != nil {
 			return fmt.Errorf("show dialog: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 		return nil
@@ -87,15 +92,18 @@ func agentChatURL(base, namespace, agentClass string) string {
 	return strings.TrimRight(base, "/") + "/sessions?new=1&ns=" + url.QueryEscape(namespace) + "&agentClass=" + url.QueryEscape(agentClass)
 }
 
-// sanitizeDialogText makes s safe and readable inside an AppleScript string
-// literal: every control character (newlines included) becomes a space, runs
-// of whitespace collapse to one, and the result is capped at maxRunes runes
-// with a trailing ellipsis. Go's %q would otherwise emit escapes such as \x1b
-// that AppleScript does not understand.
+// sanitizeDialogText flattens s to one readable line for a dialog: every
+// non-printable rune (newlines, control characters, and format runes such as
+// U+202E RIGHT-TO-LEFT OVERRIDE or U+200B ZERO WIDTH SPACE that could reorder
+// or hide text) becomes a space, runs of spaces collapse to one, and the
+// result is capped at maxRunes runes with a trailing ellipsis.
 func sanitizeDialogText(s string, maxRunes int) string {
-	s = strings.Join(strings.FieldsFunc(s, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsControl(r)
-	}), " ")
+	s = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if !unicode.IsPrint(r) {
+			return ' '
+		}
+		return r
+	}, s)), " ")
 	if utf8.RuneCountInString(s) <= maxRunes {
 		return s
 	}

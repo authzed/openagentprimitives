@@ -86,6 +86,7 @@ func TestSanitizeDialogText(t *testing.T) {
 		{name: "newlines and tabs: flattened to single spaces", in: "line one\n\n\tline two\r\nthree", want: "line one line two three"},
 		{name: "other control chars: dropped to spaces, not passed to osascript", in: "a\x00b\x1bc\x7fd", want: "a b c d"},
 		{name: "leading/trailing whitespace: trimmed", in: "  \n x \n ", want: "x"},
+		{name: "format runes: RLO, zero-width space and BOM become spaces", in: "safe\u202Eexe.txt\u200Bx\uFEFFy", want: "safe exe.txt x y"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
