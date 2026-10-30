@@ -122,6 +122,9 @@ type Reconciler struct {
 }
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.Add(&strandedRetiredSweep{reader: mgr.GetAPIReader(), writer: mgr.GetClient()}); err != nil {
+		return fmt.Errorf("toolcall: registering the stranded-finalizer sweep: %w", err)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spiceboxv1alpha1.ToolCall{}).
 		Complete(r)

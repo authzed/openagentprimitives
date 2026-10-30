@@ -127,6 +127,9 @@ func TestToolCallWebhook_RetiredLabel(t *testing.T) {
 	retired := func(tc *spiceboxv1alpha1.ToolCall) {
 		tc.Labels = map[string]string{spiceboxv1alpha1.LabelToolCallRetired: "true"}
 	}
+	finalized := func(tc *spiceboxv1alpha1.ToolCall) {
+		tc.Finalizers = append(tc.Finalizers, spiceboxv1alpha1.FinalizerToolCall)
+	}
 	terminal := func(tc *spiceboxv1alpha1.ToolCall) {
 		tc.Status.Conditions = []metav1.Condition{{
 			Type: spiceboxv1alpha1.ToolCallConditionSucceeded, Status: metav1.ConditionTrue,
@@ -150,6 +153,14 @@ func TestToolCallWebhook_RetiredLabel(t *testing.T) {
 			toolCall("default"), toolCall("default", terminal, retired), false},
 		{"already retired, other metadata edit: allowed",
 			toolCall("default", terminal, retired), toolCall("default", terminal, retired, func(tc *spiceboxv1alpha1.ToolCall) { tc.Labels["x"] = "y" }), true},
+		{"add the label while keeping the finalizer: denied, the call would be stranded",
+			toolCall("default", terminal, finalized), toolCall("default", terminal, finalized, retired), false},
+		{"add the finalizer to a retired call: denied",
+			toolCall("default", terminal, retired), toolCall("default", terminal, retired, finalized), false},
+		{"drop the finalizer from a stranded retired call: allowed (the startup sweep's write)",
+			toolCall("default", terminal, retired, finalized), toolCall("default", terminal, retired), true},
+		{"other edit to a call already stranded with both: allowed, not made worse",
+			toolCall("default", terminal, retired, finalized), toolCall("default", terminal, retired, finalized, func(tc *spiceboxv1alpha1.ToolCall) { tc.Labels["x"] = "y" }), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

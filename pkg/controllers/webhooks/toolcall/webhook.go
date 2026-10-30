@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -79,11 +80,23 @@ func (w *Webhook) Handle(_ context.Context, req admission.Request) admission.Res
 		if isRetired && !wasRetired && old.TerminalCondition() == "" {
 			return admission.Denied("the " + spiceboxv1alpha1.LabelToolCallRetired + " label may only be added to a ToolCall that has reached a terminal condition")
 		}
+		// A retired call is out of the operator's cache, so nothing would ever
+		// remove a finalizer it carries and a cascade delete would leave it
+		// Terminating. Refuse any write that arrives at label+finalizer; one
+		// that already sits there (left by an older operator) may still be
+		// edited, including to drop the finalizer.
+		if isRetired && hasToolCallFinalizer(&tc) && (!wasRetired || !hasToolCallFinalizer(&old)) {
+			return admission.Denied("a ToolCall carrying the " + spiceboxv1alpha1.LabelToolCallRetired + " label may not also carry the " + spiceboxv1alpha1.FinalizerToolCall + " finalizer; the operator no longer watches it and could never remove it")
+		}
 		return admission.Allowed("")
 
 	default:
 		return admission.Allowed("")
 	}
+}
+
+func hasToolCallFinalizer(tc *spiceboxv1alpha1.ToolCall) bool {
+	return controllerutil.ContainsFinalizer(tc, spiceboxv1alpha1.FinalizerToolCall)
 }
 
 // hasAgentSessionOwner reports whether tc carries an AgentSession

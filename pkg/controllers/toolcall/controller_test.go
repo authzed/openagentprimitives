@@ -181,7 +181,9 @@ func TestToolCall_TimeoutMarksTimeout(t *testing.T) {
 
 // --- helpers ---
 
-func startManagerWithExec(t *testing.T, env *testenv.Env, binder *fake.Binder, store artifactstore.Store) {
+// startManagerWithExec returns the manager's cached client, for tests that
+// assert on what the operator's cache holds rather than what the API server does.
+func startManagerWithExec(t *testing.T, env *testenv.Env, binder *fake.Binder, store artifactstore.Store) client.Client {
 	t.Helper()
 	mgr, err := ctrl.NewManager(env.Cfg, ctrl.Options{
 		Scheme:  env.Scheme,
@@ -231,6 +233,7 @@ func startManagerWithExec(t *testing.T, env *testenv.Env, binder *fake.Binder, s
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() { _ = mgr.Start(ctx) }()
+	return mgr.GetClient()
 }
 
 // createReadyClassAndSession creates a SpiceboxClass with "echo" and "cat" tools (with toolspecs),
@@ -499,7 +502,7 @@ func TestToolCall_TerminalCallIsRetired(t *testing.T) {
 	env := testenv.Shared(t)
 	fakeExec := fake.New()
 	store := blobstore.NewMem()
-	startManagerWithExec(t, env, fakeExec, store)
+	cached := startManagerWithExec(t, env, fakeExec, store)
 
 	createReadyClassAndSession(t, env.Client, "cls-ret", "sess-ret")
 	fakeExec.Program("default/sess-ret-pod:sandbox", fake.Response{ExitCode: 0})
@@ -526,6 +529,13 @@ func TestToolCall_TerminalCallIsRetired(t *testing.T) {
 		"retired only after it reached a terminal condition")
 	assert.NotContains(t, got.Finalizers, spiceboxv1alpha1.FinalizerToolCall,
 		"finalizer removed in the retire write, or a cascade delete would strand the call Terminating")
+
+	// The point of retiring: the operator's cache lets go of the call. A
+	// selector that kept retired calls would leave every assertion above green.
+	eventually(t, 10*time.Second, func() bool {
+		var inCache spiceboxv1alpha1.ToolCall
+		return apierrors.IsNotFound(cached.Get(context.Background(), client.ObjectKeyFromObject(tc), &inCache))
+	})
 
 	// The object is out of the controller's view now; deleting it must not
 	// depend on a reconcile that will never come.

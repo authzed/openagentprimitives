@@ -6,6 +6,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -59,6 +60,64 @@ func (r *Reconciler) retire(ctx context.Context, tc *spiceboxv1alpha1.ToolCall) 
 		log.FromContext(ctx).Info("toolcall: retiring a terminal ToolCall failed; it stays cached until a retry succeeds",
 			"toolcall", tc.Namespace+"/"+tc.Name, "terminal", tc.TerminalCondition(), "err", err.Error())
 		return err
+	}
+	return nil
+}
+
+// strandedRetiredSweep removes FinalizerToolCall from every ToolCall that
+// already carries LabelToolCallRetired, once, at startup.
+//
+// The admission webhook refuses a write that arrives at label+finalizer, but
+// an object can still be in that state from before it ran: an operator rolled
+// back to a version that adds the finalizer to every cached call (and caches
+// retired ones, since it has no selector), then rolled forward again. Such a
+// call is invisible to this controller's cache, so without this sweep its
+// finalizer is never removed and a session GC or namespace delete leaves it
+// Terminating for good. It lists through the APIReader for the same reason.
+//
+// Best-effort: a failure is logged and the sweep moves on, because returning
+// an error from a Runnable stops the manager, and a stranded finished call is
+// not worth taking the operator down for. The next restart retries.
+type strandedRetiredSweep struct {
+	reader client.Reader
+	writer client.Client
+}
+
+// NeedLeaderElection keeps the sweep to the replica that owns ToolCall writes.
+func (s *strandedRetiredSweep) NeedLeaderElection() bool { return true }
+
+func (s *strandedRetiredSweep) Start(ctx context.Context) error {
+	logger := log.FromContext(ctx).WithName("toolcall-retired-sweep")
+	req, err := labels.NewRequirement(spiceboxv1alpha1.LabelToolCallRetired, selection.Exists, nil)
+	if err != nil {
+		logger.Info("building the retired-label selector failed; skipping the stranded-finalizer sweep", "err", err.Error())
+		return nil
+	}
+	var calls spiceboxv1alpha1.ToolCallList
+	if err := s.reader.List(ctx, &calls, client.MatchingLabelsSelector{Selector: labels.NewSelector().Add(*req)}); err != nil {
+		logger.Info("listing retired ToolCalls failed; stranded finalizers are retried on the next restart", "err", err.Error())
+		return nil
+	}
+	healed := 0
+	for i := range calls.Items {
+		tc := &calls.Items[i]
+		if !controllerutil.ContainsFinalizer(tc, spiceboxv1alpha1.FinalizerToolCall) {
+			continue
+		}
+		base := tc.DeepCopy()
+		controllerutil.RemoveFinalizer(tc, spiceboxv1alpha1.FinalizerToolCall)
+		if err := s.writer.Patch(ctx, tc, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			logger.Info("removing the finalizer from a retired ToolCall failed; retried on the next restart",
+				"toolcall", tc.Namespace+"/"+tc.Name, "err", err.Error())
+			continue
+		}
+		healed++
+	}
+	if healed > 0 {
+		logger.Info("removed the finalizer from retired ToolCalls an older operator left it on", "count", healed)
 	}
 	return nil
 }
