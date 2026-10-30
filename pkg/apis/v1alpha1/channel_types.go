@@ -306,6 +306,37 @@ type GitHubChannelConfig struct {
 	// ChannelMetaagentSpec.Enabled in this file.
 	// +optional
 	SkipDrafts *bool `json:"skipDrafts,omitempty"`
+
+	// SkipStacked defers pull requests that are STACKED on another branch —
+	// whose base is not the repository's default branch, which is how a PR
+	// that depends on an earlier, still-open PR is opened. Nil means false,
+	// so a Channel written before this field existed keeps reviewing into
+	// every base branch; `oap channel create` writes `true` for a new one.
+	//
+	// When true, such a PR is not reviewed while it is stacked (opening it,
+	// pushing to it, or marking it ready all wait), and it is reviewed when
+	// its base is changed to the default branch — an "edited" delivery,
+	// admitted without being listed in Events, but only when Events lists
+	// "opened": the retarget is the PR arriving on the default branch, and a
+	// Channel that does not review PRs as they arrive does not review this
+	// one either. A base change that keeps the base commit (a renamed default
+	// branch) is not a retarget and starts nothing.
+	//
+	// GitHub changes the base itself only when the PR it was stacked on
+	// merges AND that PR's branch is deleted, so pair this with the
+	// repository's "Automatically delete head branches" setting (or a
+	// stacking tool that retargets); otherwise, and when the lower PR is
+	// closed without merging, change the PR's base to the default branch by
+	// hand to start its review. Reviewing every PR of a ten-deep stack at
+	// once re-reviews each change in every PR above it, and starts a burst of
+	// sessions the cluster may not have room for.
+	//
+	// Leave it off for repositories that genuinely review into a non-default
+	// branch (release branches, long-lived integration branches): the check
+	// cannot tell those from a stack, and with it on they would never be
+	// reviewed.
+	// +optional
+	SkipStacked *bool `json:"skipStacked,omitempty"`
 }
 
 // SlackOutputDefaults governs where the FIRST outbound message of

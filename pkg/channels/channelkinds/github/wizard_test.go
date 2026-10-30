@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -124,6 +125,8 @@ func TestResult_ChannelShape(t *testing.T) {
 	assert.Equal(t, "demo-reviewbot-gh-creds", ch.Spec.CredentialsRef.SecretName)
 	require.NotNil(t, ch.Spec.GitHub)
 	assert.Equal(t, "demo-reviewbot", ch.Spec.GitHub.AppSlug)
+	assert.Equal(t, ptr.To(true), ch.Spec.GitHub.SkipStacked,
+		"a new Channel defers stacked PRs; only an existing one (nil) keeps reviewing every base")
 
 	require.NotNil(t, out.SecretManifest)
 	sec := out.SecretManifest
