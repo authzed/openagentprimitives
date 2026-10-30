@@ -89,3 +89,39 @@ func TestRunnable_CancelledMidPassNeverDeclaresTheRegistryComplete(t *testing.T)
 	require.NoError(t, run.Start(ctx))
 	assert.True(t, reg.Restoring(), "a partial registry is never declared complete")
 }
+
+// panicRestorer panics on every call.
+type panicRestorer struct{}
+
+func (panicRestorer) RestoreTokens(context.Context) (int, error) { panic("unadopted Secret") }
+
+func TestRunnable_PanickingRestorerIsSkippedNotRetried(t *testing.T) {
+	reg := tokens.NewRegistry()
+	ok := &fakeRestorer{}
+	run := newRunnable(reg, panicRestorer{}, ok)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	require.NotPanics(t, func() { require.NoError(t, run.Start(ctx)) })
+	assert.False(t, reg.Restoring(), "a panic does not hold the registry restoring")
+	assert.Equal(t, 1, ok.calls, "one pass: the panic neither failed it nor stopped the next restorer")
+	assert.Less(t, time.Since(start), time.Second, "no retry backoff was waited out")
+}
+
+func TestRunnable_GivesUpAfterTheDeadlineSoReconcilesAreNotHeldForever(t *testing.T) {
+	reg := tokens.NewRegistry()
+	stuck := &fakeRestorer{failures: 1 << 30}
+	run := newRunnable(reg, stuck)
+	run.GiveUpAfter = 1500 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	waited := make(chan error, 1)
+	go func() { waited <- reg.WaitRestored(ctx) }()
+
+	require.NoError(t, run.Start(ctx))
+	assert.False(t, reg.Restoring(), "a restore that never succeeds still ends, so WaitRestored returns")
+	require.NoError(t, <-waited)
+	assert.GreaterOrEqual(t, stuck.calls, 2, "it retried before giving up")
+}

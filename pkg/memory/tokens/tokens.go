@@ -93,6 +93,9 @@ func (r *Registry) FinishRestore() {
 // Restoring reports whether the startup restore is still in progress, so an
 // unknown bearer may yet belong to a session whose token is about to return.
 func (r *Registry) Restoring() bool {
+	if r == nil {
+		return false
+	}
 	r.mu.RLock()
 	ch := r.restored
 	r.mu.RUnlock()
@@ -124,15 +127,21 @@ func (r *Registry) WaitRestored(ctx context.Context) error {
 	}
 }
 
-// RetryWhileRestoring answers w with a retryable 503 + Retry-After when r is
-// still restoring, and reports whether it did. A caller that authenticates
-// bearers against r calls it on a registry MISS, before refusing the bearer:
-// mid-restore, an unknown bearer is far likelier a session not restored yet
-// than a forged token, and a 401 would fail that session for good. Once the
-// restore is done (or on a registry never put in the restoring state) it
-// writes nothing, and the caller's refusal stands. msg is the response body.
-func RetryWhileRestoring(w http.ResponseWriter, r *Registry, msg string) bool {
-	if r == nil || !r.Restoring() {
+// RetryWhileRestoring answers w with a retryable 503 + Retry-After when
+// restoring is true, and reports whether it did. A caller that authenticates
+// bearers against a Registry calls it on a lookup MISS, before refusing the
+// bearer: mid-restore, an unknown bearer is far likelier a session not
+// restored yet than a forged token, and a 401 would fail that session for
+// good. Once the restore is done (or on a registry never put in the restoring
+// state) it writes nothing, and the caller's refusal stands. msg is the
+// response body.
+//
+// restoring must be read with Registry.Restoring BEFORE the lookup that
+// missed. Read after it, a restore that registers the bearer and finishes in
+// between would turn that miss into a permanent 401 for a token that is now
+// valid.
+func RetryWhileRestoring(w http.ResponseWriter, restoring bool, msg string) bool {
+	if !restoring {
 		return false
 	}
 	w.Header().Set("Retry-After", "1")

@@ -28,6 +28,15 @@ import (
 // keeps that failure from either spinning or giving up.
 const retryCap = 30 * time.Second
 
+// defaultGiveUpAfter bounds how long a failing restore holds the registry in
+// the restoring state. Every AgentSession and Workshop Reconcile waits on that
+// state, so an error that never clears (a panic is skipped outright, but a
+// Secret read can also keep failing) must not stall them forever. Once
+// it is spent the registry is declared restored anyway: each owner's own
+// Reconcile re-registers a bearer the pass missed, as it did before this pass
+// existed, so giving up costs the missing owners a delay, not their bearer.
+const defaultGiveUpAfter = 5 * time.Minute
+
 // Restorer re-registers every live bearer one controller owns, reading each
 // back from where it is stored durably. It must be idempotent and must never
 // mint: a bearer already registered is left alone, and one whose stored value
@@ -63,6 +72,8 @@ type Runnable struct {
 	Cache     interface {
 		WaitForCacheSync(ctx context.Context) bool
 	}
+	// GiveUpAfter overrides defaultGiveUpAfter when positive.
+	GiveUpAfter time.Duration
 }
 
 func (*Runnable) NeedLeaderElection() bool { return false }
@@ -74,6 +85,10 @@ func (t *Runnable) Start(ctx context.Context) error {
 		// The manager is shutting down before its caches synced. Nothing is
 		// left to serve, so there is nothing to restore.
 		return nil
+	}
+	giveUpAfter := t.GiveUpAfter
+	if giveUpAfter <= 0 {
+		giveUpAfter = defaultGiveUpAfter
 	}
 	start := time.Now()
 	backoff := time.Second
@@ -90,6 +105,12 @@ func (t *Runnable) Start(ctx context.Context) error {
 		if ctx.Err() != nil {
 			// Shutting down mid-pass. The registry stays restoring: a partial
 			// registry must never be declared complete.
+			return nil
+		}
+		if time.Since(start) >= giveUpAfter {
+			t.Registry.FinishRestore()
+			logger.Error(err, "restoring the memory token registry kept failing; declaring it restored so reconciles can proceed. The bearers named here are refused until their owner's next Reconcile re-registers them",
+				"tokensRestored", total, "took", time.Since(start).String())
 			return nil
 		}
 		logger.Info("restoring the memory token registry failed; retrying, and unknown bearers are answered 'retry' until it succeeds",
@@ -110,7 +131,7 @@ func (t *Runnable) pass(ctx context.Context) (int, error) {
 	n := 0
 	var errs []error
 	for _, r := range t.Restorers {
-		got, err := r.RestoreTokens(ctx)
+		got, err := restore(ctx, r)
 		n += got
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%T: %w", r, err))
@@ -120,4 +141,24 @@ func (t *Runnable) pass(ctx context.Context) (int, error) {
 		errs = append(errs, err)
 	}
 	return n, errors.Join(errs...)
+}
+
+// restore runs one Restorer and recovers a panic. A Runnable has no panic
+// recovery of its own, so without this one Restorer's panic would crash the
+// operator on every boot. A Restorer that fans out to goroutines must recover
+// in each of them itself; this only covers the calling goroutine.
+//
+// A panic is logged and the Restorer counted as done, not failed: a panic
+// recurs on every retry, and retrying would hold every Reconcile behind
+// WaitRestored until the give-up. Each owner's Reconcile still re-registers
+// the bearers it held.
+func restore(ctx context.Context, r Restorer) (n int, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.FromContext(ctx).Error(fmt.Errorf("%v", p), "token restorer panicked; skipping it, its owner's reconciles will re-register its bearers",
+				"restorer", fmt.Sprintf("%T", r))
+			n, err = 0, nil
+		}
+	}()
+	return r.RestoreTokens(ctx)
 }

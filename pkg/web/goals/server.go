@@ -87,8 +87,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ns, name := parts[0], parts[1]
 	bearer, has := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	// Use one registry snapshot so concurrent token restoration cannot turn
-	// an unknown-token observation into a permanent refusal midway through.
+	// Read the restoring state BEFORE the lookup, so a restore that registers
+	// this bearer and finishes in between cannot turn the miss into a
+	// permanent refusal (see tokens.RetryWhileRestoring).
+	restoring := s.Tokens.Restoring()
 	var info tokens.TokenInfo
 	var known bool
 	if has && bearer != "" && s.Tokens != nil {
@@ -96,7 +98,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Extras are read-only; only the token's primary session qualifies here.
 	if !known || info.Session != (memory.NamespacedName{Namespace: ns, Name: name}) {
-		if has && bearer != "" && !known && tokens.RetryWhileRestoring(w, s.Tokens, "goal service warming after operator restart; retry") {
+		if has && bearer != "" && !known && tokens.RetryWhileRestoring(w, restoring, "goal service warming after operator restart; retry") {
 			log.FromContext(r.Context()).Info("goal API: token registry warming; answered retryable 503", "session", ns+"/"+name)
 			return
 		}

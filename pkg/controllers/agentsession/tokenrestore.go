@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 )
@@ -57,7 +58,7 @@ func (r *Reconciler) RestoreTokens(ctx context.Context) (int, error) {
 			continue
 		}
 		g.Go(func() error {
-			ok, err := r.reregisterMemoryToken(ctx, sess)
+			ok, err := r.restoreOne(ctx, sess)
 			mu.Lock()
 			defer mu.Unlock()
 			if ok {
@@ -75,4 +76,27 @@ func (r *Reconciler) RestoreTokens(ctx context.Context) (int, error) {
 		errs = append(errs, err)
 	}
 	return restored, errors.Join(errs...)
+}
+
+// restoreOne runs reregisterMemoryToken for one session and recovers a panic.
+// The guarded Secret reader panics on a Secret that exists without the adopted
+// label (--secret-guard-mode=panic). Inside Reconcile controller-runtime
+// recovers that and fails one session; here it would run on an errgroup
+// goroutine nothing recovers, and take the whole operator down on every boot,
+// before a single reconcile.
+//
+// A recovered panic is logged and the session SKIPPED, not returned as an
+// error: the guard panics on the same Secret every time, so retrying it would
+// only hold every Reconcile behind WaitRestored until the runnable gives up.
+// Skipped, the session is left to its own Reconcile, exactly as before this
+// pass existed.
+func (r *Reconciler) restoreOne(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (ok bool, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.FromContext(ctx).Error(fmt.Errorf("%v", p), "memory token restore panicked; skipping this session, its own reconcile will retry it",
+				"session", sess.Namespace+"/"+sess.Name)
+			ok, err = false, nil
+		}
+	}()
+	return r.reregisterMemoryToken(ctx, sess)
 }

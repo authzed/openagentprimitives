@@ -10,11 +10,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
 )
@@ -66,7 +68,9 @@ func TestRestoreTokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "counts the tokens registered, not the sessions looked at")
 
-	key := func(name string) memory.NamespacedName { return memory.NamespacedName{Namespace: "default", Name: name} }
+	key := func(name string) memory.NamespacedName {
+		return memory.NamespacedName{Namespace: "default", Name: name}
+	}
 	got, ok := reg.Lookup("live-tok")
 	assert.True(t, ok, "a live session's token is back")
 	assert.Equal(t, key("live"), got)
@@ -103,7 +107,49 @@ func TestRestoreTokens_SecretReadFailureIsReturned(t *testing.T) {
 	n, err := r.RestoreTokens(context.Background())
 	assert.ErrorContains(t, err, "apiserver hiccup", "a failed read is returned so the pass is retried")
 	assert.Equal(t, 1, n, "and does not stop the other session's restore")
-	key := func(name string) memory.NamespacedName { return memory.NamespacedName{Namespace: "default", Name: name} }
+	key := func(name string) memory.NamespacedName {
+		return memory.NamespacedName{Namespace: "default", Name: name}
+	}
 	assert.True(t, reg.Registered(key("fine")))
 	assert.False(t, reg.Registered(key("broken")))
+}
+
+// TestRestoreTokens_GuardPanicSkipsThatSession pins that the guarded reader's
+// panic on an unadopted Secret skips one session instead of crashing the
+// process. The pass runs on errgroup goroutines outside any Reconcile, so
+// nothing else would recover it, and the operator would crash on every boot.
+// It is not returned as an error either: it would recur on every retry and
+// hold every Reconcile behind WaitRestored.
+func TestRestoreTokens_GuardPanicSkipsThatSession(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, spiceboxv1alpha1.AddToScheme(scheme))
+
+	unadopted := restoreSession("unadopted", false)
+	adopted := restoreSession("adopted", false)
+	adoptedSecret := tokenSecret(adopted, "adopted-tok")
+	adoptedSecret.Labels = map[string]string{adoptguard.AdoptedLabel: "true"}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		unadopted, adopted,
+		tokenSecret(unadopted, "unadopted-tok"), // no adopted label: the guard panics on it
+		adoptedSecret,
+	).Build()
+
+	reg := tokens.NewRegistry()
+	r := &Reconciler{
+		Client:       c,
+		Tokens:       reg,
+		SecretReader: adoptguard.NewSecretReader(c, c, adoptguard.Panic, func(types.NamespacedName) bool { return false }),
+	}
+
+	var (
+		n   int
+		err error
+	)
+	require.NotPanics(t, func() { n, err = r.RestoreTokens(context.Background()) })
+	assert.NoError(t, err, "a panic is logged and skipped, not retried")
+	assert.Equal(t, 1, n, "the other session is still restored")
+	assert.True(t, reg.Registered(memory.NamespacedName{Namespace: "default", Name: "adopted"}))
+	assert.False(t, reg.Registered(memory.NamespacedName{Namespace: "default", Name: "unadopted"}),
+		"the skipped session is left to its own Reconcile")
 }

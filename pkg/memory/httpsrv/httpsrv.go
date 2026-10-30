@@ -515,6 +515,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ctx = h.mintPoolApprovals(ctx, ns, name, token, perm)
 		}
 	} else {
+		// Read before the lookup; see RetryWhileRestoring.
+		restoring := h.reg.Restoring()
 		info, ok := h.reg.LookupInfo(token)
 		if !ok {
 			// Restore in progress. The token registry is process memory, empty
@@ -529,7 +531,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// complete, and an unknown bearer is a genuine auth failure: the 401
 			// below. A registry never put in the restoring state (every
 			// in-process test harness) is complete from birth.
-			if tokens.RetryWhileRestoring(w, h.reg, "unavailable: token registry still warming after operator restart; retry") {
+			if tokens.RetryWhileRestoring(w, restoring, "unavailable: token registry still warming after operator restart; retry") {
 				log.FromContext(ctx).Info("memory API: bearer not registered while the token registry is still being restored after an operator restart; answered 503 (retryable)",
 					"session", ns+"/"+name, "path", r.URL.Path)
 				return
