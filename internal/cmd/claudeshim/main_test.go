@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -290,6 +291,9 @@ func TestRun_StagedPluginReachesRealBinaryAsPluginDir(t *testing.T) {
 	assert.Empty(t, stderr)
 	body, err := os.ReadFile(marker)
 	require.NoError(t, err)
-	assert.Contains(t, string(body),
-		"argv:--plugin-dir "+filepath.Join(home, ".oap", "claude-plugins", "demo-plugin")+" --print hi")
+	// The plugin dir's name ends in a content digest; the prefix and the
+	// argv shape around it are what the shim owns.
+	assert.Regexp(t,
+		"argv:--plugin-dir "+regexp.QuoteMeta(filepath.Join(home, ".oap", "claude-plugins", "demo-plugin-"))+"[0-9a-f]+ --print hi",
+		string(body))
 }

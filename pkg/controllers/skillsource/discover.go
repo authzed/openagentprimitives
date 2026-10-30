@@ -244,7 +244,11 @@ func Discover(repoLocator, subpath, ref string, files map[string][]byte, opts Di
 // Agent-capture ceilings. They keep a plugin with an unusual number or size of
 // agents from pushing its Skill object toward etcd's limit; every agent is
 // inline on spec.plugin, and one plugin's agents ride on each of its skills.
+// maxPluginAgents MUST match the MaxItems marker on SkillPlugin.Agents: one
+// agent past it and the apiserver rejects the whole Skill write, which fails
+// the source's sync rather than just costing that skill an agent.
 const (
+	maxPluginAgents     = 64
 	maxPluginAgentBytes = 64 << 10
 	maxPluginTotalBytes = 256 << 10
 )
@@ -288,7 +292,7 @@ func discoverPlugin(canonicalName, skillDir string, files map[string][]byte) (*v
 		return nil, []string{fmt.Sprintf("%s: treating as standalone: %s name %q is not a kebab-case plugin name",
 			canonicalName, manifestPath, manifest.Name)}
 	}
-	if len(manifest.Agents) > 0 {
+	if declaresAgents(manifest.Agents) {
 		problems = append(problems, fmt.Sprintf(
 			"%s: %s declares custom agent paths, which are not captured; only %s/*.md is",
 			canonicalName, manifestPath, path.Join(root, pluginlayout.UpstreamAgentsDir)))
@@ -315,8 +319,14 @@ func discoverPlugin(canonicalName, skillDir string, files map[string][]byte) (*v
 	}
 	sort.Slice(agents, func(i, j int) bool { return agents[i].Name < agents[j].Name })
 
-	// Over the total ceiling, keep the alphabetical prefix that fits rather
-	// than an arbitrary subset, so the captured set is stable across passes.
+	// Over either ceiling, keep the alphabetical prefix that fits rather than
+	// an arbitrary subset, so the captured set is stable across passes.
+	if len(agents) > maxPluginAgents {
+		problems = append(problems, fmt.Sprintf(
+			"%s: capturing %d of %d plugin agents: the rest exceed the %d-agent limit",
+			canonicalName, maxPluginAgents, len(agents), maxPluginAgents))
+		agents = agents[:maxPluginAgents]
+	}
 	total := 0
 	for i, a := range agents {
 		total += len(a.Content)
@@ -329,6 +339,17 @@ func discoverPlugin(canonicalName, skillDir string, files map[string][]byte) (*v
 		}
 	}
 	return &v1.SkillPlugin{Name: manifest.Name, Agents: agents}, problems
+}
+
+// declaresAgents reports whether a plugin.json "agents" value actually names
+// something. An absent key, null, an empty string and an empty list all mean
+// the default agents/ directory, so none of them is worth a problem.
+func declaresAgents(raw json.RawMessage) bool {
+	switch strings.TrimSpace(string(raw)) {
+	case "", "null", `""`, "[]":
+		return false
+	}
+	return true
 }
 
 // isSkillMD reports whether path refers to a SKILL.md file (either at repo root

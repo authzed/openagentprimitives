@@ -9,13 +9,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 
 	"sigs.k8s.io/yaml"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/tools/skills/pluginlayout"
+	"github.com/authzed/openagentprimitives/pkg/tools/skills/skillmd"
 )
 
 // strippedAgentFrontmatter are the agent frontmatter fields that would give
@@ -83,25 +84,16 @@ func pluginFingerprint(p *spiceboxv1alpha1.SkillPlugin) string {
 // those fields, is returned byte-for-byte; only a file that actually carried
 // one is re-serialized. Frontmatter that does not parse is an error rather
 // than a pass-through: a block this function cannot read is a block it cannot
-// vouch for.
+// vouch for. Fence detection is skillmd.Split's, so a leading byte-order mark
+// or a trailing space on a fence cannot hide a block from this function that
+// a more forgiving reader would still find.
 func stripAgentFrontmatter(content string) (string, error) {
-	const fence = "---"
-	text := strings.ReplaceAll(content, "\r\n", "\n")
-	if !strings.HasPrefix(text, fence+"\n") {
+	block, body, err := skillmd.Split([]byte(content))
+	if errors.Is(err, skillmd.ErrNoFrontmatter) {
 		return content, nil
 	}
-	rest := text[len(fence)+1:]
-	end := strings.Index(rest, "\n"+fence)
-	if end < 0 {
-		return "", fmt.Errorf("frontmatter has no closing %q fence", fence)
-	}
-	block := rest[:end]
-	after := rest[end+1+len(fence):]
-	// Drop the remainder of the closing fence line, keeping the body intact.
-	if nl := strings.Index(after, "\n"); nl >= 0 {
-		after = after[nl+1:]
-	} else {
-		after = ""
+	if err != nil {
+		return "", err
 	}
 
 	var fm map[string]any
@@ -122,5 +114,5 @@ func stripAgentFrontmatter(content string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("re-marshal frontmatter: %w", err)
 	}
-	return fence + "\n" + string(out) + fence + "\n" + after, nil
+	return "---\n" + string(out) + "---\n" + body, nil
 }

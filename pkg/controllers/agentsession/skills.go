@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -363,8 +364,10 @@ func (r *Reconciler) resolveAndStageSkillBundles(
 			logger.Info("resolveAndStageSkillBundles: plugin context partially staged",
 				"session", sess.Namespace+"/"+sess.Name, "skill", name, "reason", reason)
 		}
-		for p, b := range plugin {
-			files[p] = b
+		withPlugin := files
+		if len(plugin) > 0 {
+			withPlugin = maps.Clone(files)
+			maps.Copy(withPlugin, plugin)
 		}
 
 		// archiveDigest is the sha256 of the ACTUAL archive bytes about to be
@@ -374,11 +377,25 @@ func (r *Reconciler) resolveAndStageSkillBundles(
 		// sandbox pod's init container; it is deliberately distinct from
 		// sourceDigest above, which is a cheap pre-fetch fingerprint and does
 		// not equal the hash of these bytes.
-		archive, archiveDigest, tarErr := skillbundle.TarGz(files)
+		archive, archiveDigest, tarErr := skillbundle.TarGz(withPlugin)
 		if tarErr != nil {
 			logger.Info("resolveAndStageSkillBundles: failed to build the composed skill archive; skipping",
 				"session", sess.Namespace+"/"+sess.Name, "skill", name, "err", tarErr.Error())
 			continue
+		}
+		if len(archive) > configMapMaxBytes && len(plugin) > 0 {
+			// The plugin context is what tipped a skill that fits on its own
+			// over the ceiling. Losing the agents degrades the skill; losing
+			// the skill loses everything, so stage it standalone instead.
+			logger.Info("resolveAndStageSkillBundles: skill bundle with plugin context exceeds ConfigMap ceiling; staging it standalone",
+				"session", sess.Namespace+"/"+sess.Name, "skill", name,
+				"bytes", len(archive), "ceiling", configMapMaxBytes)
+			archive, archiveDigest, tarErr = skillbundle.TarGz(files)
+			if tarErr != nil {
+				logger.Info("resolveAndStageSkillBundles: failed to build the standalone skill archive; skipping",
+					"session", sess.Namespace+"/"+sess.Name, "skill", name, "err", tarErr.Error())
+				continue
+			}
 		}
 		if len(archive) > configMapMaxBytes {
 			// Large-bundle staging is deferred (spec §9): a ConfigMap cannot

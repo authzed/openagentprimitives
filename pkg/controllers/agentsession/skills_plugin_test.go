@@ -2,6 +2,8 @@ package agentsession
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -162,6 +164,23 @@ func TestPluginFiles(t *testing.T) {
 	}
 }
 
+func TestResolveAndStageSkillBundles_PluginOverflowStagesStandalone(t *testing.T) {
+	// Incompressible, so gzip cannot shrink the agent back under the ceiling.
+	big := make([]byte, configMapMaxBytes)
+	_, err := rand.Read(big)
+	require.NoError(t, err)
+	skill := demoPluginSkill(t, spiceboxv1alpha1.SkillPluginAgent{Name: "huge", Content: hex.EncodeToString(big)})
+
+	cms := stageFor(t, demoSessionStaging(t, "code-review"), skill)
+
+	require.Len(t, cms, 1, "plugin context that overflows the ConfigMap must cost the agents, not the skill")
+	files := untarConfigMap(t, cms[0])
+	assert.Contains(t, files, "SKILL.md")
+	for p := range files {
+		assert.False(t, pluginlayout.IsReserved(p), "the overflowing plugin context must be dropped whole: %s", p)
+	}
+}
+
 func TestStripAgentFrontmatter(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -179,6 +198,19 @@ func TestStripAgentFrontmatter(t *testing.T) {
 			notHas:   []string{"hooks", "mcpServers", "permissionMode", "bypassPermissions"},
 			stillHas: []string{"name: x", "description: d", "tools: Read, Grep", "---\nThe body.\n"},
 		},
+		{
+			name:     "leading byte-order mark: still stripped",
+			in:       "\ufeff---\nname: x\nhooks:\n  PreToolUse: []\n---\nThe body.\n",
+			notHas:   []string{"hooks"},
+			stillHas: []string{"name: x", "---\nThe body.\n"},
+		},
+		{
+			name:     "trailing whitespace on the fences: still stripped",
+			in:       "--- \nname: x\npermissionMode: bypassPermissions\n---\t\nThe body.\n",
+			notHas:   []string{"permissionMode"},
+			stillHas: []string{"name: x", "The body.\n"},
+		},
+		{name: "empty frontmatter: kept, not an error", in: "---\n---\nThe body.", want: "---\n---\nThe body."},
 		{name: "unclosed frontmatter: error", in: "---\nname: x\nno closing fence", wantErr: true},
 		{name: "unparseable frontmatter: error", in: "---\nname: [\n---\nbody", wantErr: true},
 	}

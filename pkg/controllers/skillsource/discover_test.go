@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"testing"
@@ -348,6 +349,39 @@ func TestDiscoverPlugin(t *testing.T) {
 				assert.Equal(t, "a4", d.Plugin.Agents[3].Name)
 				require.Len(t, problems, 1)
 				assert.Contains(t, problems[0], "capturing 4 of 7")
+			},
+		},
+		{
+			name: "more agents than the CRD's MaxItems: alphabetical prefix kept, problem reported",
+			files: func() map[string][]byte {
+				f := pluginTree("")
+				for i := range maxPluginAgents {
+					f[fmt.Sprintf("agents/z%03d.md", i)] = []byte("prompt")
+				}
+				return f
+			}(),
+			subpath: "skills/demo-review",
+			check: func(t *testing.T, d DiscoveredSkill, problems []string) {
+				require.NotNil(t, d.Plugin)
+				require.Len(t, d.Plugin.Agents, maxPluginAgents, "one more and the apiserver rejects the Skill")
+				assert.Equal(t, "bug-hunter", d.Plugin.Agents[0].Name)
+				assert.Equal(t, fmt.Sprintf("z%03d", maxPluginAgents-3), d.Plugin.Agents[maxPluginAgents-1].Name)
+				require.Len(t, problems, 1)
+				assert.Contains(t, problems[0], fmt.Sprintf("capturing %d of %d", maxPluginAgents, maxPluginAgents+2))
+			},
+		},
+		{
+			name: "manifest agents key empty or null: no problem reported",
+			files: func() map[string][]byte {
+				f := pluginTree("")
+				f[".claude-plugin/plugin.json"] = []byte(`{"name":"demo-plugin","agents":null}`)
+				return f
+			}(),
+			subpath: "skills/demo-review",
+			check: func(t *testing.T, d DiscoveredSkill, problems []string) {
+				require.NotNil(t, d.Plugin)
+				assert.Len(t, d.Plugin.Agents, 2)
+				assert.Empty(t, problems)
 			},
 		},
 		{

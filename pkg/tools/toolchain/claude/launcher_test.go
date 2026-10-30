@@ -3,6 +3,8 @@ package claude
 import (
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -63,8 +65,10 @@ func TestBridgeStagedSkills_RebuildsPluginForSkillWithPluginContext(t *testing.T
 	dirs, err := BridgeStagedSkills(skills, home)
 	require.NoError(t, err)
 
-	pdir := filepath.Join(home, pluginsSubdir, "demo-plugin")
-	assert.Equal(t, []string{pdir}, dirs)
+	require.Len(t, dirs, 1)
+	pdir := dirs[0]
+	assert.Equal(t, filepath.Join(home, pluginsSubdir), filepath.Dir(pdir))
+	assert.True(t, strings.HasPrefix(filepath.Base(pdir), "demo-plugin-"), "the plugin dir is named for the plugin plus a content digest: %s", pdir)
 
 	manifest, err := os.ReadFile(filepath.Join(pdir, ".claude-plugin", "plugin.json"))
 	require.NoError(t, err)
@@ -99,22 +103,59 @@ func TestBridgeStagedSkills_TwoSkillsOfOnePluginShareIt(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dirs[0], "skills", "review-b", "SKILL.md"))
 }
 
-func TestBridgeStagedSkills_ConflictingAgentKeepsFirstAndWarns(t *testing.T) {
+func TestBridgeStagedSkills_SamePluginNameDifferentAgentsLinksAllStandalone(t *testing.T) {
+	// Two skills from unrelated sources can both name their plugin
+	// "demo-plugin". Merging them would let whichever sorts first decide
+	// what demo-plugin:bug-hunter means for the other.
 	home, skills := t.TempDir(), t.TempDir()
 	stagePlugin(t, stageSkill(t, skills, "review-a"), `{"name":"demo-plugin"}`, map[string]string{"bug-hunter.md": "first"})
 	stagePlugin(t, stageSkill(t, skills, "review-b"), `{"name":"demo-plugin"}`, map[string]string{"bug-hunter.md": "second"})
+	stagePlugin(t, stageSkill(t, skills, "other"), `{"name":"other-plugin"}`, map[string]string{"x.md": "prompt"})
 
 	dirs, err := BridgeStagedSkills(skills, home)
 
 	require.Error(t, err, "a conflict must be reported, not swallowed")
-	assert.Contains(t, err.Error(), "bug-hunter.md")
-	require.Len(t, dirs, 1, "the conflict degrades one agent, not the plugin")
-	body, rerr := os.ReadFile(filepath.Join(dirs[0], "agents", "bug-hunter.md"))
-	require.NoError(t, rerr)
-	assert.Equal(t, "first", string(body))
-	assert.FileExists(t, filepath.Join(dirs[0], "skills", "review-b", "SKILL.md"), "the second skill still loads inside the plugin")
-	_, lerr := os.Lstat(filepath.Join(home, ".claude", "skills", "review-b"))
-	assert.ErrorIs(t, lerr, os.ErrNotExist, "and not a second time standalone")
+	assert.Contains(t, err.Error(), "demo-plugin")
+	require.Len(t, dirs, 1, "only the unconflicted plugin is loaded")
+	assert.True(t, strings.HasPrefix(filepath.Base(dirs[0]), "other-plugin-"))
+	for _, sk := range []string{"review-a", "review-b"} {
+		assert.FileExists(t, filepath.Join(home, ".claude", "skills", sk, "SKILL.md"),
+			"%s must still load, standalone and without either agent", sk)
+	}
+}
+
+func TestBridgeStagedSkills_ConcurrentInvocationsAllGetACompletePlugin(t *testing.T) {
+	// The runner runs a turn's tool calls in parallel, so several shims
+	// bridge into one home at once. None may delete or half-build the plugin
+	// another is about to load.
+	home, skills := t.TempDir(), t.TempDir()
+	for _, name := range []string{"review-a", "review-b"} {
+		stagePlugin(t, stageSkill(t, skills, name), `{"name":"demo-plugin"}`,
+			map[string]string{"bug-hunter.md": "prompt"})
+	}
+	stageSkill(t, skills, "standalone")
+
+	const n = 16
+	results := make([][]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() { results[i], errs[i] = BridgeStagedSkills(skills, home) })
+	}
+	wg.Wait()
+
+	for i := range n {
+		require.NoError(t, errs[i], "invocation %d", i)
+		require.Equal(t, results[0], results[i], "every invocation must name the same plugin dir")
+	}
+	require.Len(t, results[0], 1)
+	assert.FileExists(t, filepath.Join(results[0][0], "agents", "bug-hunter.md"))
+	assert.FileExists(t, filepath.Join(results[0][0], "skills", "review-a", "SKILL.md"))
+	assert.FileExists(t, filepath.Join(results[0][0], "skills", "review-b", "SKILL.md"))
+	assert.FileExists(t, filepath.Join(home, ".claude", "skills", "standalone", "SKILL.md"))
+	leftovers, err := filepath.Glob(filepath.Join(home, pluginsSubdir, ".*"))
+	require.NoError(t, err)
+	assert.Empty(t, leftovers, "no build dir or temp link may be left behind")
 }
 
 func TestBridgeStagedSkills_UnusableManifestFallsBackToStandalone(t *testing.T) {
@@ -156,7 +197,6 @@ func TestBridgeStagedSkills_IsIdempotentAndDropsUnstagedPlugins(t *testing.T) {
 	require.NoError(t, os.RemoveAll(filepath.Join(skills, "code-review")))
 	third, err := BridgeStagedSkills(skills, home)
 	require.NoError(t, err)
-	assert.Empty(t, third)
-	assert.NoDirExists(t, filepath.Join(home, pluginsSubdir, "demo-plugin"),
-		"a plugin whose skill is no longer staged must not linger")
+	assert.Empty(t, third, "a plugin whose skill is no longer staged must not be loaded")
+	assert.FileExists(t, filepath.Join(home, ".claude", "skills", "standalone", "SKILL.md"))
 }
