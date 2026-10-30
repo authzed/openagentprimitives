@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,37 +16,39 @@ func TestGate(t *testing.T) {
 		run  func(t *testing.T, g *Gate)
 	}{
 		{"ready and idle: RunNow", func(t *testing.T, g *Gate) {
-			d, rep := g.Offer("a", Ready)
-			assert.Equal(t, RunNow, d)
-			assert.Empty(t, rep)
+			assert.Equal(t, RunNow, g.Offer("a", Ready))
 		}},
 		{"ready twice: RunNow then RejectBusy", func(t *testing.T, g *Gate) {
-			d, _ := g.Offer("a", Ready)
+			d := g.Offer("a", Ready)
 			assert.Equal(t, RunNow, d)
-			d, _ = g.Offer("b", Ready)
+			d = g.Offer("b", Ready)
 			assert.Equal(t, RejectBusy, d)
 		}},
 		{"ready, Release, ready: RunNow both times", func(t *testing.T, g *Gate) {
-			d, _ := g.Offer("a", Ready)
+			d := g.Offer("a", Ready)
 			assert.Equal(t, RunNow, d)
 			g.Release()
-			d, _ = g.Offer("b", Ready)
+			d = g.Offer("b", Ready)
 			assert.Equal(t, RunNow, d)
 		}},
-		{"starting twice: Held then Held replacing the first", func(t *testing.T, g *Gate) {
-			d, rep := g.Offer("a", Starting)
-			assert.Equal(t, Held, d)
-			assert.Empty(t, rep)
-			d, rep = g.Offer("b", Starting)
-			assert.Equal(t, Held, d)
-			assert.Equal(t, "a", rep)
+		{"starting twice: Held then RejectPending, first link kept", func(t *testing.T, g *Gate) {
+			assert.Equal(t, Held, g.Offer("a", Starting))
+			assert.Equal(t, RejectPending, g.Offer("b", Starting))
+			l, ok := g.TakePending()
+			assert.True(t, ok)
+			assert.Equal(t, "a", l)
 		}},
-		{"starting, TakePending, ready: newest taken, then RejectBusy", func(t *testing.T, g *Gate) {
+		{"starting after DropPending: Held again", func(t *testing.T, g *Gate) {
+			g.Offer("a", Starting)
+			g.DropPending()
+			assert.Equal(t, Held, g.Offer("b", Starting))
+		}},
+		{"starting, TakePending, ready: held taken, then RejectBusy", func(t *testing.T, g *Gate) {
 			g.Offer("a", Starting)
 			l, ok := g.TakePending()
 			assert.True(t, ok)
 			assert.Equal(t, "a", l)
-			d, _ := g.Offer("b", Ready)
+			d := g.Offer("b", Ready)
 			assert.Equal(t, RejectBusy, d)
 		}},
 		{"starting, DropPending: returns held, then TakePending finds nothing", func(t *testing.T, g *Gate) {
@@ -58,21 +61,21 @@ func TestGate(t *testing.T) {
 			assert.Empty(t, l)
 		}},
 		{"unavailable: RejectUnavailable and nothing held", func(t *testing.T, g *Gate) {
-			d, _ := g.Offer("a", Unavailable)
+			d := g.Offer("a", Unavailable)
 			assert.Equal(t, RejectUnavailable, d)
 			_, ok := g.TakePending()
 			assert.False(t, ok)
 		}},
 		{"busy while starting: RejectBusy wins over Held", func(t *testing.T, g *Gate) {
 			g.Offer("a", Ready)
-			d, _ := g.Offer("b", Starting)
+			d := g.Offer("b", Starting)
 			assert.Equal(t, RejectBusy, d)
 			_, ok := g.DropPending()
 			assert.False(t, ok)
 		}},
 		{"unavailable leaves a held link untouched", func(t *testing.T, g *Gate) {
 			g.Offer("a", Starting)
-			d, _ := g.Offer("b", Unavailable)
+			d := g.Offer("b", Unavailable)
 			assert.Equal(t, RejectUnavailable, d)
 			l, ok := g.DropPending()
 			assert.True(t, ok)
@@ -90,7 +93,7 @@ func TestGate(t *testing.T) {
 		{"DropPending leaves busy untouched", func(t *testing.T, g *Gate) {
 			g.Offer("a", Ready)
 			g.DropPending()
-			d, _ := g.Offer("b", Ready)
+			d := g.Offer("b", Ready)
 			assert.Equal(t, RejectBusy, d)
 		}},
 	}
@@ -107,7 +110,7 @@ func TestGateConcurrentReadyOffersAdmitExactlyOne(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if d, _ := g.Offer("x", Ready); d == RunNow {
+			if d := g.Offer("x", Ready); d == RunNow {
 				runNow.Add(1)
 			}
 		}()
@@ -124,6 +127,29 @@ func TestStringers(t *testing.T) {
 	assert.Equal(t, "held", Held.String())
 	assert.Equal(t, "reject-unavailable", RejectUnavailable.String())
 	assert.Equal(t, "reject-busy", RejectBusy.String())
+	assert.Equal(t, "reject-pending", RejectPending.String())
+	assert.Equal(t, "reject-cooling-down", RejectCoolingDown.String())
+}
+
+func TestGateCoolDown(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	g := &Gate{Now: func() time.Time { return now }}
+
+	g.CoolDown(10 * time.Second)
+	assert.Equal(t, RejectCoolingDown, g.Offer("a", Ready), "ready during cooldown")
+	assert.Equal(t, RejectCoolingDown, g.Offer("a", Starting), "starting during cooldown: nothing held")
+	_, held := g.Pending()
+	assert.False(t, held)
+
+	g.CoolDown(time.Second)
+	now = now.Add(5 * time.Second)
+	assert.Equal(t, RejectCoolingDown, g.Offer("a", Ready), "a shorter CoolDown never shortens a running one")
+
+	now = now.Add(5 * time.Second)
+	assert.Equal(t, RunNow, g.Offer("a", Ready), "cooldown over")
+
+	g.CoolDown(time.Minute)
+	assert.Equal(t, RejectBusy, g.Offer("b", Ready), "busy wins over cooldown")
 }
 
 func TestGatePendingPeeksWithoutClaiming(t *testing.T) {

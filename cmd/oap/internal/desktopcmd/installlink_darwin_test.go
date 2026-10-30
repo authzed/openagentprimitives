@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,9 @@ func linkStateForTest(t *testing.T) *desktopState {
 	t.Helper()
 	s := stateForTest(t)
 	s.ctx = t.Context()
+	orig := linkCancelCooldown
+	linkCancelCooldown = 0 // only TestCancelCoolsDownTheNextLink is about it
+	t.Cleanup(func() { linkCancelCooldown = orig })
 	return s
 }
 
@@ -150,11 +154,17 @@ func TestInstallAgentFromLinkGateDecisions(t *testing.T) {
 		want      []string
 		wantFetch int
 		wantHeld  bool
+		// wantHeldLink is the link left held; empty means the one offered.
+		wantHeldLink string
 	}{
 		{name: "stopped: refused, nothing held", set: func(*desktopState) {}, want: []string{"Start OAP Desktop and finish setup, then click the link again."}},
 		{name: "failed: refused, nothing held", set: func(s *desktopState) { s.runErr = errors.New("boom") }, want: []string{"Start OAP Desktop and finish setup, then click the link again."}},
 		{name: "starting: held with notification", set: func(s *desktopState) { s.markBringUpStarting() }, want: []string{"OAP Desktop is still starting — the install will continue once it's ready."}, wantHeld: true},
-		{name: "busy: refused", set: func(s *desktopState) { s.running = true; _, _ = s.linkGate.Offer("other", linkinstall.Ready) }, want: []string{"Another agent install is already in progress."}},
+		{name: "busy: refused", set: func(s *desktopState) { s.running = true; s.linkGate.Offer("other", linkinstall.Ready) }, want: []string{"Another agent install is already in progress."}},
+		{name: "starting with a link already held: refused, first kept", set: func(s *desktopState) {
+			s.markBringUpStarting()
+			s.linkGate.Offer(testInstallLink(otherLinkRef), linkinstall.Starting)
+		}, want: []string{"Another agent install is already waiting for OAP Desktop to start."}, wantHeld: true, wantHeldLink: testInstallLink(otherLinkRef)},
 		{name: "ready, refused by allowlist: notified and gate released", set: func(s *desktopState) { s.running = true }, want: []string{"OAP Desktop only installs agents from sources in Settings → Install links. " + testLinkRef + " isn't one of them."}, wantFetch: 1},
 	}
 	for _, tc := range cases {
@@ -171,7 +181,11 @@ func TestInstallAgentFromLinkGateDecisions(t *testing.T) {
 			held, ok := s.linkGate.DropPending()
 			assert.Equal(t, tc.wantHeld, ok)
 			if tc.wantHeld {
-				assert.Equal(t, testInstallLink(testLinkRef), held)
+				want := tc.wantHeldLink
+				if want == "" {
+					want = testInstallLink(testLinkRef)
+				}
+				assert.Equal(t, want, held)
 			}
 		})
 	}
@@ -197,10 +211,32 @@ func TestRunNowAlwaysReleasesTheGate(t *testing.T) {
 			s := linkStateForTest(t)
 			s.running = true
 			s.handleLink(testInstallLink(testLinkRef))
-			d, _ := s.linkGate.Offer("next", linkinstall.Ready)
+			d := s.linkGate.Offer("next", linkinstall.Ready)
 			assert.Equal(t, linkinstall.RunNow, d)
 		})
 	}
+}
+
+// TestCancelCoolsDownTheNextLink: cancelling the approval dialog refuses links
+// for linkCancelCooldown, so a page cannot re-raise the dialog under a user
+// who is clicking to dismiss it; once it lapses links run again.
+func TestCancelCoolsDownTheNextLink(t *testing.T) {
+	got := captureLinkNotify(t)
+	fetched := recordFetches(t)
+	s := linkStateForTest(t)
+	linkCancelCooldown = time.Minute
+	now := time.Unix(1_000, 0)
+	s.linkGate.Now = func() time.Time { return now }
+	s.running = true
+
+	s.handleLink(testInstallLink(testLinkRef)) // cancelled at the dialog
+	s.handleLink(testInstallLink(otherLinkRef))
+	assert.Equal(t, []string{testLinkRef}, *fetched, "a link during the cooldown never fetches")
+	assert.Equal(t, []string{"You just cancelled an agent install. Wait a few seconds, then click the link again."}, *got)
+
+	now = now.Add(time.Minute)
+	s.handleLink(testInstallLink(otherLinkRef))
+	assert.Equal(t, []string{testLinkRef, otherLinkRef}, *fetched, "the link runs once the cooldown lapses")
 }
 
 // recordFetches stubs prepareLink to record each fetched ref and end the
@@ -240,7 +276,7 @@ func TestHeldLinkSurvivesAReadyLinkDuringTheRunningTransition(t *testing.T) {
 		"OAP Desktop is still starting — the install will continue once it's ready.",
 		"Another agent install is already in progress.",
 	}, *got)
-	d, _ := s.linkGate.Offer("next", linkinstall.Ready)
+	d := s.linkGate.Offer("next", linkinstall.Ready)
 	assert.Equal(t, linkinstall.RunNow, d, "the gate is released after the held install")
 }
 
@@ -250,7 +286,7 @@ func TestReleaseDrainsALeftoverHeldLink(t *testing.T) {
 	captureLinkNotify(t)
 	fetched := recordFetches(t)
 	s := linkStateForTest(t)
-	_, _ = s.linkGate.Offer(testInstallLink(testLinkRef), linkinstall.Starting)
+	s.linkGate.Offer(testInstallLink(testLinkRef), linkinstall.Starting)
 	s.running = true
 
 	s.handleLink(testInstallLink(otherLinkRef)) // RunNow; its release drains the held link
@@ -258,7 +294,7 @@ func TestReleaseDrainsALeftoverHeldLink(t *testing.T) {
 	assert.Equal(t, []string{otherLinkRef, testLinkRef}, *fetched, "the leftover held link runs once, after the in-flight one")
 	_, pending := s.linkGate.Pending()
 	assert.False(t, pending, "nothing left held")
-	d, _ := s.linkGate.Offer("next", linkinstall.Ready)
+	d := s.linkGate.Offer("next", linkinstall.Ready)
 	assert.Equal(t, linkinstall.RunNow, d, "the gate is released after the drained install")
 }
 
@@ -277,9 +313,9 @@ func TestDrainHeldLink(t *testing.T) {
 			captureLinkNotify(t)
 			fetched := recordFetches(t)
 			s := linkStateForTest(t)
-			_, _ = s.linkGate.Offer(testInstallLink(testLinkRef), linkinstall.Starting)
+			s.linkGate.Offer(testInstallLink(testLinkRef), linkinstall.Starting)
 			if tc.busy {
-				_, _ = s.linkGate.Offer("in-flight", linkinstall.Ready)
+				s.linkGate.Offer("in-flight", linkinstall.Ready)
 			}
 			s.running = tc.running
 
@@ -348,6 +384,16 @@ func TestStopTakingLinksForUninstall(t *testing.T) {
 	assert.Zero(t, *calls, "nothing reaches the fetch path")
 }
 
+// slowReader steps dialogClock past linkConfirmMinDwell on every read, so a
+// stubbed dialog that returns at once still counts as having been read.
+func slowReader(t *testing.T) {
+	t.Helper()
+	now := time.Unix(1_000, 0)
+	orig := dialogClock
+	dialogClock = func() time.Time { now = now.Add(linkConfirmMinDwell); return now }
+	t.Cleanup(func() { dialogClock = orig })
+}
+
 func TestLinkConfirmDialog(t *testing.T) {
 	boom := errors.New("osascript: no display")
 	cases := []struct {
@@ -363,6 +409,7 @@ func TestLinkConfirmDialog(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			slowReader(t)
 			orig := installConfirmDialog
 			installConfirmDialog = func(string, string, bool, string) (installChoice, error) { return tc.choice, tc.err }
 			t.Cleanup(func() { installConfirmDialog = orig })
@@ -375,6 +422,33 @@ func TestLinkConfirmDialog(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLinkConfirmDialogIgnoresAnInstantInstall: an Install chosen before
+// linkConfirmMinDwell re-shows the dialog with a warning; only an Install
+// after the dwell approves.
+func TestLinkConfirmDialogIgnoresAnInstantInstall(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	origClock := dialogClock
+	dialogClock = func() time.Time { return now }
+	t.Cleanup(func() { dialogClock = origClock })
+
+	var shown []string
+	dwells := []time.Duration{100 * time.Millisecond, 3 * time.Second}
+	orig := installConfirmDialog
+	installConfirmDialog = func(_, message string, _ bool, _ string) (installChoice, error) {
+		shown = append(shown, message)
+		now = now.Add(dwells[len(shown)-1])
+		return installConfirm, nil
+	}
+	t.Cleanup(func() { installConfirmDialog = orig })
+
+	got, err := linkConfirmDialog(linkinstall.Prompt{Ref: testLinkRef, Digest: "sha256:aa"})
+	require.NoError(t, err)
+	assert.True(t, got)
+	require.Len(t, shown, 2, "the instant Install shows the dialog again")
+	assert.NotContains(t, shown[0], linkConfirmTooFast)
+	assert.True(t, strings.HasPrefix(shown[1], linkConfirmTooFast), "the second showing says why it came back")
 }
 
 func TestThrottledNotifyDropsBannersPastTheBurst(t *testing.T) {
