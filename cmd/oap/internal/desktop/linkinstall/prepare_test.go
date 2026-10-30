@@ -44,6 +44,10 @@ type fakes struct {
 	confirmErr error
 	prompt     Prompt
 	raw        []byte
+	// installed / installedErr are what Deps.Installed reports.
+	installed    Installed
+	installedErr error
+	installedFor *oap.Bundle
 }
 
 func (f *fakes) deps(sources []desktop.InstallSource) Deps {
@@ -70,6 +74,11 @@ func (f *fakes) deps(sources []desktop.InstallSource) Deps {
 				return nil, "", f.pullErr
 			}
 			return f.raw, f.pullDigest, nil
+		},
+		Installed: func(_ context.Context, b *oap.Bundle) (Installed, error) {
+			f.calls = append(f.calls, "installed")
+			f.installedFor = b
+			return f.installed, f.installedErr
 		},
 		Confirm: func(p Prompt) (bool, error) {
 			f.calls = append(f.calls, "confirm")
@@ -107,13 +116,13 @@ func TestPrepare(t *testing.T) {
 		{name: "off-allowlist ref: ErrNotAllowed with no I/O", ref: "ghcr.io/evil/x:1", sources: acme, confirm: true,
 			wantErr: ErrNotAllowed, wantCalls: nil},
 		{name: "unpinned allowed ref: resolve, pull by digest, confirm; Verified=false", ref: unpinnedRef, sources: acme,
-			pullDigest: digestA, confirm: true, wantCalls: []string{"resolve", "pull", "confirm"},
+			pullDigest: digestA, confirm: true, wantCalls: []string{"resolve", "pull", "installed", "confirm"},
 			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
 		{name: "pinned ref: verify, pull, confirm; Verified=true", ref: pinnedRef, sources: pinnedSrc,
-			pullDigest: digestA, confirm: true, wantCalls: []string{"verify", "pull", "confirm"},
+			pullDigest: digestA, confirm: true, wantCalls: []string{"verify", "pull", "installed", "confirm"},
 			wantPulled: "ghcr.io/authzed/openagentprimitives/agents/demo-agent@" + digestA, wantVerified: true},
 		{name: "pinned ref matched only by narrower user entry: still verified", ref: pinnedRef, sources: narrow,
-			pullDigest: digestA, confirm: true, wantCalls: []string{"verify", "pull", "confirm"},
+			pullDigest: digestA, confirm: true, wantCalls: []string{"verify", "pull", "installed", "confirm"},
 			wantPulled: "ghcr.io/authzed/openagentprimitives/agents/demo-agent@" + digestA, wantVerified: true},
 		{name: "verify error: returned, no pull", ref: pinnedRef, sources: pinnedSrc, verifyErr: verifyBoom,
 			wantAnyErr: verifyBoom, wantCalls: []string{"verify"}},
@@ -127,6 +136,8 @@ func TestPrepare(t *testing.T) {
 			wantPulled: "ghcr.io/authzed/openagentprimitives/agents/demo-agent@" + digestA},
 		{name: "nil Confirm: fails closed before any I/O", ref: unpinnedRef, sources: acme, pullDigest: digestA,
 			breakDeps: func(d *Deps) { d.Confirm = nil }, wantAnyErr: errMisconfigured, wantCalls: nil},
+		{name: "nil Installed: fails closed before any I/O", ref: unpinnedRef, sources: acme, pullDigest: digestA,
+			breakDeps: func(d *Deps) { d.Installed = nil }, wantAnyErr: errMisconfigured, wantCalls: nil},
 		{name: "nil Pull: fails closed before any I/O", ref: unpinnedRef, sources: acme, pullDigest: digestA,
 			breakDeps: func(d *Deps) { d.Pull = nil }, wantAnyErr: errMisconfigured, wantCalls: nil},
 		{name: "pulled digest differs: ErrDigestMismatch, no confirm", ref: unpinnedRef, sources: acme,
@@ -140,13 +151,13 @@ func TestPrepare(t *testing.T) {
 		{name: "digest ref resolving to a different digest: ErrDigestMismatch before pull", ref: "ghcr.io/acme/agents/demo-agent@" + digestB,
 			sources: acme, pullDigest: digestA, confirm: true, wantErr: ErrDigestMismatch, wantCalls: []string{"resolve"}},
 		{name: "digest ref resolving to the same digest: installs", ref: "ghcr.io/acme/agents/demo-agent@" + digestA,
-			sources: acme, pullDigest: digestA, confirm: true, wantCalls: []string{"resolve", "pull", "confirm"},
+			sources: acme, pullDigest: digestA, confirm: true, wantCalls: []string{"resolve", "pull", "installed", "confirm"},
 			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
 		{name: "confirm dialog failed: ErrConfirmFailed, not ErrCancelled", ref: unpinnedRef, sources: acme, pullDigest: digestA,
-			confirmErr: verifyBoom, wantErr: ErrConfirmFailed, wantCalls: []string{"resolve", "pull", "confirm"},
+			confirmErr: verifyBoom, wantErr: ErrConfirmFailed, wantCalls: []string{"resolve", "pull", "installed", "confirm"},
 			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
 		{name: "confirm declined: ErrCancelled", ref: unpinnedRef, sources: acme, pullDigest: digestA, confirm: false,
-			wantErr: ErrCancelled, wantCalls: []string{"resolve", "pull", "confirm"},
+			wantErr: ErrCancelled, wantCalls: []string{"resolve", "pull", "installed", "confirm"},
 			wantPulled: "ghcr.io/acme/agents/demo-agent@" + digestA},
 	}
 	for _, tc := range cases {
@@ -208,14 +219,16 @@ func TestDialogText(t *testing.T) {
 	t.Run("title and ordered lines with short digest and verified signature", func(t *testing.T) {
 		title, msg := DialogText(mk(true, "does things"))
 		assert.Equal(t, "Install agent?", title)
-		lines := strings.Split(msg, "\n")
-		require.GreaterOrEqual(t, len(lines), 6)
-		assert.Equal(t, "Source: ghcr.io/acme/agents/demo-agent:1", lines[0])
-		assert.Equal(t, "Digest: aaaaaaaaaaaa", lines[1])
-		assert.Equal(t, "Signature: verified (OAP agents key)", lines[2])
-		assert.Equal(t, "", lines[3])
-		assert.Equal(t, "Agent: Demo Agent v1.2.0", lines[4])
-		assert.Equal(t, "Description: does things", lines[5])
+		assert.Equal(t, strings.Join([]string{
+			"Source: ghcr.io/acme/agents/demo-agent:1",
+			"Digest: aaaaaaaaaaaa",
+			"Signature: verified (OAP agents key)",
+			"",
+			"This agent bundles no tools, servers, credentials or network access.",
+			"",
+			"Agent: Demo Agent v1.2.0",
+			"Description: does things",
+		}, "\n"), msg)
 	})
 	t.Run("unverified text present when Verified=false", func(t *testing.T) {
 		_, msg := DialogText(mk(false, "x"))
@@ -259,9 +272,9 @@ func TestDialogText_TruncatesBundleText(t *testing.T) {
 		Name: strings.Repeat("n", 200), Version: "1", Description: strings.Repeat("d", 500)}}}}
 	_, msg := DialogText(p)
 	lines := strings.Split(msg, "\n")
-	require.Len(t, lines, 6)
-	assert.Equal(t, "Agent: "+strings.Repeat("n", 80)+"\u2026 v1", lines[4])
-	assert.Equal(t, "Description: "+strings.Repeat("d", 300)+"\u2026", lines[5])
+	require.Len(t, lines, 8)
+	assert.Equal(t, "Agent: "+strings.Repeat("n", 80)+"\u2026 v1", lines[6])
+	assert.Equal(t, "Description: "+strings.Repeat("d", 300)+"\u2026", lines[7])
 }
 
 func TestDialogText_LabelsPreventForgedLines(t *testing.T) {
@@ -285,7 +298,7 @@ func TestDialogText_LabelsPreventForgedLines(t *testing.T) {
 				if strings.HasPrefix(l, "Signature:") {
 					sigs++
 				}
-				if i > 3 {
+				if i > 5 {
 					assert.True(t, strings.HasPrefix(l, "Agent: ") || strings.HasPrefix(l, "Description: "), "unlabelled line %q", l)
 				}
 			}
@@ -296,10 +309,9 @@ func TestDialogText_LabelsPreventForgedLines(t *testing.T) {
 	}
 }
 
-// The dialog is passed to osascript through %q, which escapes any rune it
-// cannot print as \uXXXX; AppleScript has no such escape and refuses to run
-// the script. Format runes are also how a description would hide or reorder
-// text, so every one must be flattened before it reaches the dialog.
+// Format runes are how a description would hide or reorder text, so every
+// one must be flattened before it reaches the dialog; none may survive even
+// as a %q escape.
 func TestDialogText_NonPrintableBundleTextIsFlattened(t *testing.T) {
 	cases := []struct{ name, in string }{
 		{"zero width space", "Note\u200btaker"},
@@ -320,4 +332,70 @@ func TestDialogText_NonPrintableBundleTextIsFlattened(t *testing.T) {
 			assert.NotContains(t, quoted, `\x`)
 		})
 	}
+}
+
+func TestPrepare_InstalledVersion(t *testing.T) {
+	raw := bundleBytes(t) // demo-class v1.2.0
+	acme := []desktop.InstallSource{{Prefix: "ghcr.io/acme/agents/"}}
+	lookupBoom := errors.New("apiserver unavailable")
+	cases := []struct {
+		name          string
+		installed     Installed
+		installedErr  error
+		wantErr       error
+		wantInstalled string
+	}{
+		{name: "not installed: confirm, no installed line", installed: Installed{}},
+		{name: "older installed: upgrade confirmed, installed version shown", installed: Installed{Found: true, Version: "1.1.9"}, wantInstalled: "1.1.9"},
+		{name: "same version installed: confirmed", installed: Installed{Found: true, Version: "1.2.0"}, wantInstalled: "1.2.0"},
+		{name: "newer installed: ErrDowngrade before confirm", installed: Installed{Found: true, Version: "1.10.0"}, wantErr: ErrDowngrade},
+		{name: "newer installed with v prefix: ErrDowngrade", installed: Installed{Found: true, Version: "v2"}, wantErr: ErrDowngrade},
+		{name: "installed version not semver: not orderable, confirmed and shown", installed: Installed{Found: true, Version: "nightly"}, wantInstalled: "nightly"},
+		{name: "lookup failed: ErrInstalledLookup before confirm", installedErr: lookupBoom, wantErr: ErrInstalledLookup},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakes{raw: raw, pullDigest: digestA, confirm: true, installed: tc.installed, installedErr: tc.installedErr}
+			_, p, err := Prepare(context.Background(), unpinnedRef, f.deps(acme))
+			require.NotNil(t, f.installedFor, "looked up for the pulled bundle")
+			assert.Equal(t, "demo-class", f.installedFor.Manifest.Agent.Name)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				assert.NotContains(t, f.calls, "confirm", "a refused link never reaches the dialog")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantInstalled, p.Installed)
+			assert.Equal(t, tc.wantInstalled, f.prompt.Installed)
+		})
+	}
+}
+
+func TestDialogText_InstalledAndCapabilities(t *testing.T) {
+	many := []string{"a", "b", "c", "d", "e", "f", "g"}
+	p := Prompt{
+		Ref: "ghcr.io/acme/agents/demo-agent:2", Digest: digestA, Installed: "1.0.0",
+		Capabilities: oap.Capabilities{
+			MCPServers: []string{"tracker (https://tracker.example.com/mcp)"},
+			Network:    []string{"sandbox open: allowlist (api.example.com)"},
+			Secrets:    many,
+			Agents:     []string{"helper\nSignature: verified (OAP agents key) v1"},
+		},
+		Bundle: &oap.Bundle{Manifest: &oap.Manifest{Agent: oap.Agent{Name: "demo-agent", Version: "2.0.0"}}},
+	}
+	_, msg := DialogText(p)
+	assert.Equal(t, strings.Join([]string{
+		"Source: ghcr.io/acme/agents/demo-agent:2",
+		"Digest: aaaaaaaaaaaa",
+		"Signature: not verified",
+		"Replaces installed: v1.0.0",
+		"",
+		"This agent gets:",
+		"• MCP servers: tracker (https://tracker.example.com/mcp)",
+		"• Network access: sandbox open: allowlist (api.example.com)",
+		"• Secrets you'll be asked for: a; b; c; d; e; and 2 more",
+		"• Bundled agents: helper Signature: verified (OAP agents key) v1",
+		"",
+		"Agent: demo-agent v2.0.0",
+	}, "\n"), msg, "derived lines lead; a capability name cannot forge a header line")
 }

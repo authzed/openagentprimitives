@@ -375,7 +375,7 @@ func answeredGraphIdentity(root *oap.Bundle, requested string, answers GraphAnsw
 		return nil, err
 	}
 	rootObjects := objectsByPath[""]
-	rootClass, err := findAgentClass(rootObjects.answered)
+	rootClass, err := FindAgentClass(rootObjects.answered)
 	if err != nil {
 		return nil, err
 	}

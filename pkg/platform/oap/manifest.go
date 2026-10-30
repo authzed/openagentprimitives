@@ -46,7 +46,9 @@ type Manifest struct {
 // Agent is the bundled agent's own identity and version.
 type Agent struct {
 	Name string `json:"name"`
-	// The bundle's own version: recorded as install provenance, never compared.
+	// The bundle's own version: recorded as install provenance. Only the
+	// desktop install-link path compares it, to refuse a link that would
+	// downgrade an installed agent.
 	Version     string `json:"version"`
 	DisplayName string `json:"displayName,omitempty"`
 	Description string `json:"description,omitempty"`

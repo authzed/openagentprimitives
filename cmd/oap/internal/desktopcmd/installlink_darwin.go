@@ -10,11 +10,17 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/linkinstall"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/links"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/settingsui"
+	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/platform/oap"
+	"github.com/authzed/openagentprimitives/pkg/platform/oap/install"
+	"github.com/authzed/openagentprimitives/pkg/platform/oap/instance"
 	"github.com/authzed/openagentprimitives/pkg/platform/oap/oci"
 )
 
@@ -93,9 +99,10 @@ func (e *linkVerifyError) Unwrap() error { return e.err }
 
 // prepareLink runs linkinstall.Prepare with the real collaborators: the
 // allowlist from config.json (re-read per link, so a Settings save applies to
-// the next link), anonymous oci.Options (never AllowHosts), and the native
-// approval dialog. A package var so tests stub the network and the dialog.
-var prepareLink = func(ctx context.Context, supportDir, ref string) ([]byte, linkinstall.Prompt, error) {
+// the next link), anonymous oci.Options (never AllowHosts), the installed-
+// version lookup, and the native approval dialog. A package var so tests stub
+// the network and the dialog.
+var prepareLink = func(ctx context.Context, supportDir, ref string, installed func(context.Context, *oap.Bundle) (linkinstall.Installed, error)) ([]byte, linkinstall.Prompt, error) {
 	cfg, err := desktop.Load(supportDir)
 	if err != nil {
 		return nil, linkinstall.Prompt{}, fmt.Errorf("%w: %w", errLinkSettings, err)
@@ -111,8 +118,9 @@ var prepareLink = func(ctx context.Context, supportDir, ref string) ([]byte, lin
 			}
 			return d, nil
 		},
-		Pull:    func(ctx context.Context, ref string) ([]byte, string, error) { return oci.Pull(ctx, ref, opts) },
-		Confirm: linkConfirmDialog,
+		Pull:      func(ctx context.Context, ref string) ([]byte, string, error) { return oci.Pull(ctx, ref, opts) },
+		Installed: installed,
+		Confirm:   linkConfirmDialog,
 	})
 }
 
@@ -281,7 +289,7 @@ func (s *desktopState) runLinkInstall(l links.Link) {
 	ctx, cancel := context.WithTimeout(s.ctx, linkFetchTimeout)
 	defer cancel()
 	s.logf("install link: %s ref=%q fetching", l.Key, ref)
-	data, p, err := prepareLink(ctx, s.support, ref)
+	data, p, err := prepareLink(ctx, s.support, ref, s.installedLinkAgent)
 	if err != nil {
 		s.logf("install link: %s ref=%q not installed: %v", l.Key, ref, err)
 		if errors.Is(err, linkinstall.ErrCancelled) {
@@ -294,6 +302,54 @@ func (s *desktopState) runLinkInstall(l links.Link) {
 	}
 	s.logf("install link: %s ref=%q approved digest=%s verified=%t", l.Key, ref, p.Digest, p.Verified)
 	s.installApproved(data, ref, installDisplayName(p.Bundle, ref), bundleSource{Ref: ref, Digest: p.Digest})
+}
+
+// installedLinkAgent is linkinstall.Deps.Installed: the live AgentClass the
+// bundle would install over, in the namespace link installs land in, and the
+// version its oap-source provenance records (status's mirror when the
+// annotation was stripped). Not found is "not installed", not an error.
+func (s *desktopState) installedLinkAgent(ctx context.Context, b *oap.Bundle) (linkinstall.Installed, error) {
+	crs, err := b.CRs()
+	if err != nil {
+		return linkinstall.Installed{}, err
+	}
+	root, err := install.FindAgentClass(crs)
+	if err != nil {
+		return linkinstall.Installed{}, err
+	}
+	s.mu.Lock()
+	dg := s.dg
+	s.mu.Unlock()
+	if dg == nil {
+		return linkinstall.Installed{}, errClusterNotRunning
+	}
+	kb, err := dg.Bundle()
+	if err != nil {
+		return linkinstall.Installed{}, fmt.Errorf("connect to the local cluster: %w", err)
+	}
+	return installedAgentClass(ctx, kb.Controller, client.ObjectKey{Namespace: demoChatNamespace, Name: root.GetName()})
+}
+
+// installedAgentClass reads the installed version of the AgentClass at key.
+func installedAgentClass(ctx context.Context, c client.Reader, key client.ObjectKey) (linkinstall.Installed, error) {
+	var live spiceboxv1alpha1.AgentClass
+	if err := c.Get(ctx, key, &live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return linkinstall.Installed{}, nil
+		}
+		return linkinstall.Installed{}, fmt.Errorf("get AgentClass %s: %w", key, err)
+	}
+	if raw, ok := live.Annotations[instance.AnnotationOapSource]; ok {
+		src, err := instance.ParseOapSource(raw)
+		if err != nil {
+			return linkinstall.Installed{}, fmt.Errorf("AgentClass %s: %w", key, err)
+		}
+		return linkinstall.Installed{Found: true, Version: src.Version}, nil
+	}
+	if live.Status.OapInstall != nil {
+		return linkinstall.Installed{Found: true, Version: live.Status.OapInstall.Version}, nil
+	}
+	return linkinstall.Installed{Found: true}, nil
 }
 
 // linkFailureMessage is the notification for a Prepare failure; show is
@@ -313,6 +369,12 @@ func linkFailureMessage(ref string, err error) (msg string, show bool) {
 		return "That isn't a valid OAP Desktop link.", true
 	case errors.Is(err, linkinstall.ErrTrustedKey):
 		return "Couldn't load OAP's signing key — see logs.", true
+	case errors.Is(err, linkinstall.ErrDowngrade):
+		return fmt.Sprintf("%s is older than the agent already installed, so it wasn't installed. To roll back on purpose, use Install agent from .oap….", ref), true
+	case errors.Is(err, linkinstall.ErrInstalledLookup):
+		return "Couldn't check which version of this agent is installed, so it wasn't installed — see logs.", true
+	case errors.Is(err, linkinstall.ErrUnreadableBundle):
+		return fmt.Sprintf("Couldn't read what %s would install, so it wasn't installed — see logs.", ref), true
 	case errors.Is(err, linkinstall.ErrNotAllowed):
 		return fmt.Sprintf("OAP Desktop only installs agents from sources in Settings → Install links. %s isn't one of them.", ref), true
 	case errors.As(err, &verr):

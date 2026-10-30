@@ -427,10 +427,12 @@ func kindNameSet(crs []*unstructured.Unstructured) map[string]bool {
 	return set
 }
 
-// findAgentClass returns the bundle's AgentClass CR — a .oap describes exactly
-// one, so the first found is returned. Absent is a fail-closed error: Install
-// has nothing to name the install after and no owner for dep adoption.
-func findAgentClass(crs []*unstructured.Unstructured) (*unstructured.Unstructured, error) {
+// FindAgentClass returns the bundle's AgentClass CR — a .oap describes exactly
+// one, so the first found is returned. Its name is the install's default name
+// and it carries the oap-source provenance annotation. Absent is a fail-closed
+// error: Install has nothing to name the install after and no owner for dep
+// adoption.
+func FindAgentClass(crs []*unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	for _, cr := range crs {
 		if cr.GetKind() == "AgentClass" {
 			return cr, nil
