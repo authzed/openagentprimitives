@@ -3,6 +3,7 @@ package linkinstall
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Readiness is the local cluster's state as the caller observed it when a link
@@ -42,6 +43,11 @@ const (
 	RejectUnavailable
 	// RejectBusy: another link install is already in flight.
 	RejectBusy
+	// RejectPending: a link is already held for the end of bring-up. The
+	// first one keeps its place; a later one never silently displaces it.
+	RejectPending
+	// RejectCoolingDown: the user cancelled a link install moments ago.
+	RejectCoolingDown
 )
 
 func (d Decision) String() string {
@@ -54,37 +60,69 @@ func (d Decision) String() string {
 		return "reject-unavailable"
 	case RejectBusy:
 		return "reject-busy"
+	case RejectPending:
+		return "reject-pending"
+	case RejectCoolingDown:
+		return "reject-cooling-down"
 	}
 	return fmt.Sprintf("Decision(%d)", int(d))
 }
 
-// Gate serializes link installs and holds at most one link (the newest) while
-// the cluster starts. It is safe for concurrent use.
+// Gate serializes link installs, holds at most one link (the first) while the
+// cluster starts, and refuses links for a short while after the user cancels
+// one. It is safe for concurrent use; the zero value is ready.
 type Gate struct {
-	mu      sync.Mutex
-	pending string
-	busy    bool
+	mu            sync.Mutex
+	pending       string
+	busy          bool
+	cooldownUntil time.Time
+
+	// Now is the clock for the cancel cooldown; nil means time.Now. Tests
+	// set it to step time without sleeping.
+	Now func() time.Time
+}
+
+func (g *Gate) now() time.Time {
+	if g.Now != nil {
+		return g.Now()
+	}
+	return time.Now()
 }
 
 // Offer decides what to do with link given the cluster's readiness. Busy wins
-// over every readiness. When a Starting offer replaces an older held link, the
-// older one is returned as replaced ("" if none).
-func (g *Gate) Offer(link string, r Readiness) (d Decision, replaced string) {
+// over every readiness, then a cancel cooldown, then an already-held link.
+func (g *Gate) Offer(link string, r Readiness) Decision {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.busy {
-		return RejectBusy, ""
+		return RejectBusy
+	}
+	if g.now().Before(g.cooldownUntil) {
+		return RejectCoolingDown
 	}
 	switch r {
 	case Ready:
 		g.busy = true
-		return RunNow, ""
+		return RunNow
 	case Starting:
-		replaced = g.pending
+		if g.pending != "" {
+			return RejectPending
+		}
 		g.pending = link
-		return Held, replaced
+		return Held
 	default:
-		return RejectUnavailable, ""
+		return RejectUnavailable
+	}
+}
+
+// CoolDown refuses every offered link for d. Called when the user cancels an
+// install's approval dialog, so a page that fires a link again right away
+// cannot put the dialog back under a user who is clicking to dismiss it.
+func (g *Gate) CoolDown(d time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if until := g.now().Add(d); until.After(g.cooldownUntil) {
+		g.cooldownUntil = until
 	}
 }
 

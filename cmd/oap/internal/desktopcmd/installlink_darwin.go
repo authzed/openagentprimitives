@@ -64,6 +64,23 @@ func throttledNotify(limit *rate.Limiter, post, dropped func(string)) func(strin
 // Prepare but does not consult the context, so a slow reader is unaffected.
 const linkFetchTimeout = 5 * time.Minute
 
+// linkCancelCooldown is how long links are refused after the user cancels an
+// approval dialog. A var so tests that are not about the cooldown can zero it.
+var linkCancelCooldown = 10 * time.Second
+
+// linkConfirmMinDwell is how long the approval dialog must have been up before
+// an Install click counts. A dialog that appears under a click or keypress
+// already in progress (a page firing a link as the user clicks) can otherwise
+// be approved by it; a too-early Install shows the dialog again instead.
+const linkConfirmMinDwell = time.Second
+
+// linkConfirmTooFast is prepended to the dialog shown again after an Install
+// that came before linkConfirmMinDwell.
+const linkConfirmTooFast = "Install was chosen as soon as this dialog appeared. Review it, then choose Install again."
+
+// dialogClock times the approval dialog. A var so tests can step it.
+var dialogClock = time.Now
+
 // errLinkSettings marks a failure to read config.json (and so the allowlist).
 var errLinkSettings = errors.New("read OAP Desktop settings")
 
@@ -158,7 +175,7 @@ func (s *desktopState) installAgentFromLink(l links.Link) {
 	ref := l.Params["ref"]
 	s.mu.Lock()
 	r := linkReadiness(s.phaseLocked())
-	d, replaced := s.linkGate.Offer(l.Raw, r)
+	d := s.linkGate.Offer(l.Raw, r)
 	s.mu.Unlock()
 	s.logf("install link: %s ref=%q readiness=%s decision=%s", l.Key, ref, r, d)
 
@@ -167,10 +184,11 @@ func (s *desktopState) installAgentFromLink(l links.Link) {
 		linkNotify("Start OAP Desktop and finish setup, then click the link again.")
 	case linkinstall.RejectBusy:
 		linkNotify("Another agent install is already in progress.")
+	case linkinstall.RejectPending:
+		linkNotify("Another agent install is already waiting for OAP Desktop to start.")
+	case linkinstall.RejectCoolingDown:
+		linkNotify("You just cancelled an agent install. Wait a few seconds, then click the link again.")
 	case linkinstall.Held:
-		if replaced != "" {
-			s.logf("install link: %s ref=%q replaced an earlier pending link (%d bytes)", l.Key, ref, len(replaced))
-		}
 		linkNotify("OAP Desktop is still starting — the install will continue once it's ready.")
 	case linkinstall.RunNow:
 		defer s.releaseLinkGate()
@@ -266,6 +284,9 @@ func (s *desktopState) runLinkInstall(l links.Link) {
 	data, p, err := prepareLink(ctx, s.support, ref)
 	if err != nil {
 		s.logf("install link: %s ref=%q not installed: %v", l.Key, ref, err)
+		if errors.Is(err, linkinstall.ErrCancelled) {
+			s.linkGate.CoolDown(linkCancelCooldown)
+		}
 		if msg, show := linkFailureMessage(ref, err); show {
 			linkNotify(msg)
 		}
@@ -304,8 +325,9 @@ func linkFailureMessage(ref string, err error) (msg string, show bool) {
 }
 
 // linkConfirmDialog is linkinstall.Deps.Confirm: the always-shown approval
-// dialog, Cancel by default, looping on View README like the file flow. A
-// dialog that could not be shown is an error, never a decline.
+// dialog, Cancel by default, looping on View README like the file flow, and
+// on an Install chosen before linkConfirmMinDwell. A dialog that could not be
+// shown is an error, never a decline.
 func linkConfirmDialog(p linkinstall.Prompt) (bool, error) {
 	title, message := linkinstall.DialogText(p)
 	var readme []byte
@@ -316,12 +338,19 @@ func linkConfirmDialog(p linkinstall.Prompt) (bool, error) {
 			name = p.Bundle.Manifest.Agent.Name
 		}
 	}
+	shown := message
 	for {
-		choice, err := installConfirmDialog(title, message, len(readme) > 0, "Cancel")
+		start := dialogClock()
+		choice, err := installConfirmDialog(title, shown, len(readme) > 0, "Cancel")
 		switch choice {
 		case installViewReadme:
 			openReadme(name, readme)
+			shown = message
 		case installConfirm:
+			if dialogClock().Sub(start) < linkConfirmMinDwell {
+				shown = linkConfirmTooFast + "\n\n" + message
+				continue
+			}
 			return true, nil
 		case installDialogFailed:
 			return false, err
