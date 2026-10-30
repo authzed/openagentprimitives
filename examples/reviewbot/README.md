@@ -330,8 +330,10 @@ thread.
    `ready_for_review` by default (`spec.github.events`, and draft PRs are
    skipped unless the Channel opts in with `skipDrafts: false`) — delivers a
    verified webhook. A PR stacked on another open PR (its base is not the
-   default branch) waits: it is reviewed once GitHub retargets it onto the
-   default branch, which happens when the PR beneath it merges. Set
+   default branch) waits: it is reviewed once its base becomes the default
+   branch. GitHub retargets it automatically only when the PR beneath it merges
+   and that PR's branch is deleted, so turn on the repository's "Automatically
+   delete head branches" setting, or change the base by hand. Set
    `skipStacked: false` to review PRs into any base branch. reviewbot claims the
    review with `claim_trigger_status`, a no-argument call: the github channel
    kind owns the Check Run on the head commit, so which pull request, which

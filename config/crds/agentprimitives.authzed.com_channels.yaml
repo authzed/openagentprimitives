@@ -289,11 +289,15 @@ spec:
                       whose base is not the repository's default branch, which is how a PR
                       that depends on an earlier, still-open PR is opened. Nil means true:
                       such a PR is not reviewed while it is stacked (opening it, pushing to
-                      it, or marking it ready all wait), and it is reviewed once GitHub
-                      retargets it onto the default branch, which happens when the PR it was
-                      stacked on merges. Reviewing every PR of a ten-deep stack at once
-                      re-reviews each change in every PR above it, and starts a burst of
-                      sessions the cluster may not have room for.
+                      it, or marking it ready all wait), and it is reviewed when its base is
+                      changed to the default branch. GitHub makes that change itself only
+                      when the PR it was stacked on merges AND that PR's branch is deleted,
+                      so pair this with the repository's "Automatically delete head
+                      branches" setting (or a stacking tool that retargets); otherwise, and
+                      when the lower PR is closed without merging, change the PR's base to
+                      the default branch by hand to start its review. Reviewing every PR of
+                      a ten-deep stack at once re-reviews each change in every PR above it,
+                      and starts a burst of sessions the cluster may not have room for.
 
                       Set `skipStacked: false` for repositories that genuinely review into a
                       non-default branch (release branches, long-lived integration branches):

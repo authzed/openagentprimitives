@@ -13,6 +13,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/go-logr/logr"
+
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/factcontent"
@@ -156,23 +158,29 @@ func stacked(ev prEvent) bool {
 }
 
 // retargetedOffStack reports whether this delivery is the PR being moved OFF
-// a stack onto the default branch — GitHub's automatic retarget when the PR
-// it was stacked on merges (and its branch is deleted), or a stacking tool or
-// person doing the same by hand. It arrives as action "edited" with a base
-// change, which no Channel lists in spec.github.events, so it is admitted
-// explicitly: it is the moment a deferred stacked PR finally gets its review.
+// another branch onto the default branch — GitHub's automatic retarget when
+// the PR it was stacked on merges AND that PR's branch is deleted, or a
+// stacking tool or person doing the same by hand. It arrives as action
+// "edited" with a base change, which no Channel lists in spec.github.events,
+// so it is admitted explicitly: it is the moment a deferred stacked PR
+// finally gets its review.
+//
+// Unlike stacked, an unknown default branch is NOT admitted: failing open
+// there means reviewing a PR that would have been reviewed anyway, while
+// failing open here would admit any base change at all — including a move
+// from the default branch onto a stack.
 func retargetedOffStack(ev prEvent) bool {
-	if ev.Action != "edited" || ev.Changes.Base == nil || stacked(ev) {
+	if ev.Action != "edited" || ev.Changes.Base == nil {
 		return false
 	}
-	from := ev.Changes.Base.Ref.From
-	return from != "" && from != ev.Repository.DefaultBranch
+	def, from := ev.Repository.DefaultBranch, ev.Changes.Base.Ref.From
+	return def != "" && ev.PullRequest.Base.Ref == def && from != "" && from != def
 }
 
 // Translate maps a verified delivery to an inbound event, or to (nil, nil)
 // when the delivery is genuine but uninteresting — a 204 at the route, never
 // an error, because retrying would produce the same answer.
-func (receiver) Translate(_ context.Context, ch *spiceboxv1alpha1.Channel, r channelkinds.WebhookRequest) (*channelkinds.WebhookInbound, error) {
+func (receiver) Translate(ctx context.Context, ch *spiceboxv1alpha1.Channel, r channelkinds.WebhookRequest) (*channelkinds.WebhookInbound, error) {
 	if r.Headers.Get("X-GitHub-Event") != "pull_request" {
 		return nil, nil // ping and every other event type: verified, not interesting
 	}
@@ -208,7 +216,12 @@ func (receiver) Translate(_ context.Context, ch *spiceboxv1alpha1.Channel, r cha
 	}
 	// A PR stacked on another open PR waits for that one to merge: its review
 	// arrives with the retarget onto the default branch (retargetedOffStack).
+	// Logged because, unlike an uninteresting event, this is a PR someone is
+	// waiting on, and the deferral leaves no trace on the PR itself.
 	if skipStacked && stacked(ev) {
+		logr.FromContextOrDiscard(ctx).Info("github: deferring review of a stacked pull request until it is retargeted onto the default branch",
+			"channel", ch.Namespace+"/"+ch.Name, "repo", ev.Repository.FullName, "pr", ev.Number, "action", ev.Action,
+			"base", ev.PullRequest.Base.Ref, "defaultBranch", ev.Repository.DefaultBranch)
 		return nil, nil
 	}
 	if len(cfg.Repositories) > 0 && !slices.Contains(cfg.Repositories, ev.Repository.FullName) {
@@ -447,9 +460,12 @@ func renderPrompt(ev prEvent) string {
 	// envelope GitHub signed, not from the submitter's keyboard.
 	if retargetedOffStack(ev) {
 		// "was edited" would read as a title or description change; this is
-		// the stacked PR becoming reviewable, and the agent should know the
-		// diff it sees is now against the default branch.
-		fmt.Fprintf(&b, "Pull request %s#%d was retargeted onto the default branch: it had been stacked on another pull request, which has merged or moved.\n",
+		// the PR becoming reviewable, and the agent should know the diff it
+		// sees is now against the default branch. It states only what the
+		// envelope shows — the base changed — not why: a merged lower PR and
+		// a hand-moved release-branch PR arrive identically. The previous
+		// base's NAME is submitter-chosen, so it goes in the untrusted block.
+		fmt.Fprintf(&b, "Pull request %s#%d was retargeted onto the default branch from another base branch; the diff is now against the default branch.\n",
 			ev.Repository.FullName, ev.Number)
 	} else {
 		fmt.Fprintf(&b, "Pull request %s#%d was %s.\n", ev.Repository.FullName, ev.Number, ev.Action)
@@ -475,6 +491,9 @@ func renderPrompt(ev prEvent) string {
 		// again, already stated above and not submitter-chosen. The declining
 		// Check Run needs it, so it is carried — as untrusted data.
 		fmt.Fprintf(&b, "Head repository: %s\n", sanitizeUntrusted(ev.PullRequest.Head.Repo.FullName))
+	}
+	if retargetedOffStack(ev) {
+		fmt.Fprintf(&b, "Previous base branch: %s\n", sanitizeUntrusted(ev.Changes.Base.Ref.From))
 	}
 	fmt.Fprintf(&b, "%s\n", untrustedClose)
 

@@ -47,18 +47,20 @@ func TestTranslate_StackedPullRequests(t *testing.T) {
 		{name: "opened on the default branch: reviewed",
 			body: stackedBody(t, "opened", "main", "main", ""), wantReview: true},
 		{name: "opened stacked on another PR's branch: deferred (nil means skip)",
-			body: stackedBody(t, "opened", "evan/tiers-1-catalog", "main", "")},
+			body: stackedBody(t, "opened", "demo-contributor/stack-layer-1", "main", "")},
 		{name: "pushed to while stacked: deferred",
-			body: stackedBody(t, "synchronize", "evan/tiers-1-catalog", "main", "")},
+			body: stackedBody(t, "synchronize", "demo-contributor/stack-layer-1", "main", "")},
 		{name: "retargeted onto the default branch after the lower PR merged: reviewed, prompt says why",
-			body: stackedBody(t, "edited", "main", "main", "evan/tiers-1-catalog"), wantReview: true,
+			body: stackedBody(t, "edited", "main", "main", "demo-contributor/stack-layer-1"), wantReview: true,
 			wantPrompt: "retargeted onto the default branch"},
 		{name: "retargeted from one stack branch to another: still deferred",
-			body: stackedBody(t, "edited", "evan/tiers-2", "main", "evan/tiers-1-catalog")},
+			body: stackedBody(t, "edited", "demo-contributor/stack-layer-2", "main", "demo-contributor/stack-layer-1")},
 		{name: "edited without a base change (title/body edit): ignored",
 			body: stackedBody(t, "edited", "main", "main", "")},
 		{name: "no default branch in the payload: fail open, reviewed",
-			body: stackedBody(t, "opened", "evan/tiers-1-catalog", "", ""), wantReview: true},
+			body: stackedBody(t, "opened", "demo-contributor/stack-layer-1", "", ""), wantReview: true},
+		{name: "base change with no default branch in the payload: not a retarget, ignored",
+			body: stackedBody(t, "edited", "demo-contributor/stack-layer-1", "", "main")},
 		{name: "skipStacked=false, opened into a release branch: reviewed",
 			skipStacked: ptr.To(false), body: stackedBody(t, "opened", "release-1.4", "main", ""), wantReview: true},
 		{name: "skipStacked=false, retarget is not a listed event: ignored",
@@ -80,6 +82,8 @@ func TestTranslate_StackedPullRequests(t *testing.T) {
 			if tc.wantPrompt != "" {
 				assert.Contains(t, got.MessageText, tc.wantPrompt)
 				assert.NotContains(t, got.MessageText, "was edited", "a retarget must not read as an edit")
+				assert.Contains(t, got.MessageText, "Previous base branch: demo-contributor/stack-layer-1",
+					"the previous base is named, inside the untrusted block")
 			}
 		})
 	}
@@ -87,7 +91,7 @@ func TestTranslate_StackedPullRequests(t *testing.T) {
 
 // The opening line names the retarget instead of the raw "edited".
 func TestDescribeDelivery_Retarget(t *testing.T) {
-	body := stackedBody(t, "edited", "main", "main", "evan/tiers-1-catalog")
+	body := stackedBody(t, "edited", "main", "main", "demo-contributor/stack-layer-1")
 	var ev prEvent
 	require.NoError(t, json.Unmarshal(body, &ev))
 	_, facts := describeDelivery(formatChannelKey(ev.Repository.FullName, ev.Number), "pull_request", body)
