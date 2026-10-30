@@ -207,7 +207,9 @@ func TestValidateComponents(t *testing.T) {
 		{name: "rich_text usergroup element: rejected usergroup ping", json: `[{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"usergroup","usergroup_id":"S12345"}]}]}]`, wantErr: "usergroup"},
 		{name: "data_viz pie segment label <!channel>: rejected broadcast", json: `[{"type":"data_visualization","title":"Share","chart":{"type":"pie","segments":[{"label":"<!channel>","value":60}]}}]`, wantErr: "broadcast"},
 		{name: "data_viz bar series name <!subteam^>: rejected usergroup ping", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"bar","series":[{"name":"<!subteam^S1>","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon"]}}}]`, wantErr: "usergroup"},
-		{name: "data_viz axis category <!here>: rejected broadcast", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"line","series":[{"name":"S","data":[{"label":"<!here>","value":10}]}],"axis_config":{"categories":["<!here>"]}}}]`, wantErr: "broadcast"},
+		{name: "data_viz axis category <!here>: rejected broadcast", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"line","series":[{"name":"S","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["<!here>"]}}}]`, wantErr: "broadcast"},
+		{name: "data_viz x_label <!channel>: rejected broadcast", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"bar","series":[{"name":"S","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon"],"x_label":"<!channel>"}}}]`, wantErr: "broadcast"},
+		{name: "data_viz y_label <!subteam^>: rejected usergroup ping", json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"bar","series":[{"name":"S","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon"],"y_label":"<!subteam^S1>"}}}]`, wantErr: "usergroup"},
 
 		// --- one block slot is reserved for the sender's mention_only footer ---
 		{name: "49 blocks: accepted at the agent cap", json: repeatBlock(`{"type":"divider"}`, 49), wantErr: ""},
@@ -270,6 +272,94 @@ func TestValidateComponents(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestValidateDataVizErrorTargeting pins which error a chart gets when it
+// breaks more than one rule, and that dataVizLimitsHint rides only on the
+// series/category/label failures it describes.
+func TestValidateDataVizErrorTargeting(t *testing.T) {
+	longPing := `<!subteam^S0123456789AB>` // 24 chars: over the 20-char label cap
+	cases := []struct {
+		name    string
+		json    string
+		wantErr string
+		notErr  string
+	}{
+		{
+			name:    "60-char y_label: rejected without the series rule hint",
+			json:    `[{"type":"data_visualization","title":"x","chart":{"type":"bar","series":[{"name":"S","data":[{"label":"Mon","value":1}]}],"axis_config":{"categories":["Mon"],"y_label":"` + strings.Repeat("y", 60) + `"}}}]`,
+			wantErr: "axis_config.y_label is 60 chars",
+			notErr:  "Slack chart rules",
+		},
+		{
+			name:    "51-char title: rejected without the series rule hint",
+			json:    `[{"type":"data_visualization","title":"` + strings.Repeat("t", 51) + `","chart":{"type":"pie","segments":[{"label":"A","value":1}]}}]`,
+			wantErr: `"title" is 51 chars`,
+			notErr:  "Slack chart rules",
+		},
+		{
+			name:    "over-long usergroup category: rejected as a ping at its path, not as too long",
+			json:    vizBar(`["`+longPing+`"]`, `{"name":"S","data":[{"label":"Mon","value":1}]}`),
+			wantErr: "(in axis_config.categories[0])",
+			notErr:  "cannot be longer",
+		},
+		{
+			name:    "over-long usergroup pie label: rejected as a ping at its path, not as too long",
+			json:    vizPie(`{"label":"A","value":1},{"label":"` + longPing + `","value":1}`),
+			wantErr: "(in segments[1].label)",
+			notErr:  "cannot be longer",
+		},
+		{
+			name:    "over-long title with <!channel>: rejected as a ping, not as too long",
+			json:    `[{"type":"data_visualization","title":"<!channel> ` + strings.Repeat("t", 50) + `","chart":{"type":"pie","segments":[{"label":"A","value":1}]}}]`,
+			wantErr: "(in title)",
+			notErr:  "the limit is",
+		},
+		{
+			name:    "over-long y_label with <!channel>: rejected as a ping, not as too long",
+			json:    `[{"type":"data_visualization","title":"x","chart":{"type":"bar","series":[{"name":"S","data":[{"label":"Mon","value":1}]}],"axis_config":{"categories":["Mon"],"y_label":"<!channel> ` + strings.Repeat("y", 50) + `"}}}]`,
+			wantErr: "(in axis_config.y_label)",
+			notErr:  "the limit is",
+		},
+		{
+			name:    "whitespace-only category and point label: rejected with the first path",
+			json:    vizBar(`[" "]`, `{"name":"S","data":[{"label":" ","value":1}]}`),
+			wantErr: "series[0].data[0].label is whitespace-only",
+		},
+		{
+			name:    "whitespace-only series name: rejected with its path",
+			json:    vizBar(`["Mon"]`, `{"name":"  ","data":[{"label":"Mon","value":1}]}`),
+			wantErr: "series[0].name is whitespace-only",
+		},
+		{
+			name:    "whitespace-only pie segment label: rejected with its path",
+			json:    vizPie(`{"label":"A","value":1},{"label":" ","value":1}`),
+			wantErr: "segments[1].label is whitespace-only",
+		},
+		{
+			name:    "series rule failure: still carries the hint",
+			json:    vizManySeries(7),
+			wantErr: "Slack chart rules",
+		},
+		{
+			name: "axis labels left empty: accepted",
+			json: vizBar(`["Mon"]`, `{"name":"S","data":[{"label":"Mon","value":1}]}`),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateComponents([]byte(tc.json))
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+			if tc.notErr != "" {
+				assert.NotContains(t, err.Error(), tc.notErr)
+			}
 		})
 	}
 }

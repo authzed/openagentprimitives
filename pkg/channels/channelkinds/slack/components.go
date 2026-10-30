@@ -24,19 +24,20 @@ const (
 	// sender-appended mention_only "@-mention me to reply" footer, which a
 	// mention_only thread cannot do without (a bare reply there never routes).
 	// The validator has no routing-mode input, so it reserves the slot always.
-	maxAgentBlocks       = slackMaxBlocksPerMessage - 1
-	maxSectionTextLen    = slackSectionTextLimit
-	maxHeaderTextLen     = 150
-	maxContextElements   = 10
-	maxSectionFields     = 10
-	maxFieldTextLen      = 2000
-	maxMarkdownTextLen   = 12000
-	maxDataVizTitleLen   = 50
-	maxContainerChildren = 10
-	maxChartsPerMessage  = 2
-	maxTablesPerMessage  = 1
-	maxTableRows         = 100
-	maxTableColumns      = 20
+	maxAgentBlocks         = slackMaxBlocksPerMessage - 1
+	maxSectionTextLen      = slackSectionTextLimit
+	maxHeaderTextLen       = 150
+	maxContextElements     = 10
+	maxSectionFields       = 10
+	maxFieldTextLen        = 2000
+	maxMarkdownTextLen     = 12000
+	maxDataVizTitleLen     = 50
+	maxDataVizAxisLabelLen = 50
+	maxContainerChildren   = 10
+	maxChartsPerMessage    = 2
+	maxTablesPerMessage    = 1
+	maxTableRows           = 100
+	maxTableColumns        = 20
 )
 
 // componentFormattingInstructions is the model-facing authoring guide for the
@@ -57,7 +58,7 @@ const componentFormattingInstructions = `This channel can render structured Bloc
 	`"data_visualization" (a chart; REQUIRES a "title" ≤50 chars and a "chart" object. ` +
 	`pie: {"type":"pie","segments":[{"label":"Organic","value":60}]} — 1–6 segments. ` +
 	`bar/area/line: {"type":"bar","series":[{"name":"Signups","data":[{"label":"Mon","value":10}]}],"axis_config":{"categories":["Mon","Tue"]}} — each series uses "data" (not "data_points") and axis_config.categories is required. ` +
-	`Slack caps every chart: 1–6 series; 1–20 x-axis categories, all distinct; EXACTLY one data point per category per series, and each point's "label" must be the identical string as its category (not a reformatted date); bucket long time ranges into ≤20 points — do not emit a point per minute; all category labels, series names, and point labels 1–20 chars; pie segment values must be > 0 (omit zero buckets); ≤2 charts per message); ` +
+	`Slack caps every chart: 1–6 series; 1–20 x-axis categories, all distinct; EXACTLY one data point per category per series, and each point's "label" must be the identical string as its category (not a reformatted date); bucket long time ranges into ≤20 points — do not emit a point per minute; all category labels, series names, and point labels 1–20 chars and not blank; axis_config "x_label"/"y_label" are optional, ≤50 chars; pie segment values must be > 0 (omit zero buckets); ≤2 charts per message); ` +
 	`"plan" and "task_card" (task lists); ` +
 	`"card" (title/subtitle/body/subtext — NO action buttons, NO images yet); ` +
 	`"container" (groups 1–10 read-only child blocks in "child_blocks"; REQUIRES a "title" or "rich_text_title"). ` +
@@ -336,44 +337,53 @@ func validateTable(loc string, t *slackapi.TableBlock) error {
 // label matches it, 1–20-char labels, pie values > 0, and the title/axis-label
 // caps. Enforcing it here turns a would-be post-time invalid_blocks (which
 // degrades the whole reply to plain text, sender.go) into a located error the
-// agent can correct. The only rule kept locally is a whitespace-only title,
-// which Validate's length check lets through.
+// agent can correct.
 //
-// It also runs the no-mass-notification guard over EVERY free-form chart string
-// — the title plus segment labels, series names, data-point labels, axis
-// categories, and axis labels — not just the title. Those strings render in
-// Slack (a <!subteam^…> or <!channel> fits a 20-char label), so checking only
-// the title would leave a mass-ping path open. The set mirrors flattenDataViz,
-// so validation and the leakage-gate projection stay in sync.
+// The checks run in an order chosen for the model reading the error:
+//
+//  1. The no-mass-notification guard over EVERY free-form chart string, the
+//     title plus segment labels, series names, data-point labels, axis
+//     categories, and axis labels. Those strings render in Slack, so checking
+//     only the title would leave a mass-ping path open. It runs before every
+//     length check so an over-long <!subteam^…> or <!channel> string is told
+//     to drop the ping, not to shorten the string and still carry it.
+//  2. Title and axis-label lengths, locally. Validate would catch them too,
+//     but those errors must not carry dataVizLimitsHint, whose series and
+//     label rules say nothing about a 60-char y_label.
+//  3. Whitespace-only labels, which Validate's length check lets through.
+//  4. Validate, whose remaining failures are all series/category/label rules,
+//     so each one carries the full rule set.
 func validateDataViz(loc string, dv *slackapi.DataVisualizationBlock) error {
 	if strings.TrimSpace(dv.Title) == "" {
 		return blockErrf(loc, "data_visualization", "requires a non-empty \"title\" (≤%d chars)", maxDataVizTitleLen)
 	}
-	if err := dv.Validate(); err != nil {
-		return blockErrf(loc, "data_visualization", "%v. %s", err, dataVizLimitsHint)
-	}
-	if err := checkBroadcast(loc, "data_visualization", dv.Title); err != nil {
-		return err
-	}
-	var labels []string
-	switch c := dv.Chart.(type) {
-	case *slackapi.DataVisualizationPieChart:
-		for _, seg := range c.Segments {
-			labels = append(labels, seg.Label)
-		}
-	case *slackapi.DataVisualizationBarChart:
-		labels = vizSeriesStrings(c.Series, c.AxisConfig)
-	case *slackapi.DataVisualizationAreaChart:
-		labels = vizSeriesStrings(c.Series, c.AxisConfig)
-	case *slackapi.DataVisualizationLineChart:
-		labels = vizSeriesStrings(c.Series, c.AxisConfig)
-	default:
+	labels, ok := vizLabels(dv.Chart)
+	if !ok {
 		return blockErrf(loc, "data_visualization", "requires a \"chart\" object whose \"type\" is one of pie, bar, area, line")
 	}
+	if err := checkBroadcast(loc, "data_visualization", dv.Title); err != nil {
+		return fmt.Errorf("%w (in title)", err)
+	}
 	for _, l := range labels {
-		if err := checkBroadcast(loc, "data_visualization", l); err != nil {
-			return err
+		if err := checkBroadcast(loc, "data_visualization", l.value); err != nil {
+			return fmt.Errorf("%w (in %s)", err, l.path)
 		}
+	}
+	if n := runeLen(dv.Title); n > maxDataVizTitleLen {
+		return blockErrf(loc, "data_visualization", "\"title\" is %d chars; the limit is %d", n, maxDataVizTitleLen)
+	}
+	for _, l := range labels {
+		if n := runeLen(l.value); l.axis && n > maxDataVizAxisLabelLen {
+			return blockErrf(loc, "data_visualization", "%s is %d chars; the limit is %d", l.path, n, maxDataVizAxisLabelLen)
+		}
+	}
+	for _, l := range labels {
+		if !l.axis && l.value != "" && strings.TrimSpace(l.value) == "" {
+			return blockErrf(loc, "data_visualization", "%s is whitespace-only; every category, series name, and label needs visible text", l.path)
+		}
+	}
+	if err := dv.Validate(); err != nil {
+		return blockErrf(loc, "data_visualization", "%v. %s", err, dataVizLimitsHint)
 	}
 	return nil
 }
@@ -385,18 +395,63 @@ const dataVizLimitsHint = `Slack chart rules: 1–6 series (pie: 1–6 segments,
 	`each series has exactly one point per category, and each point's label must equal its category string; ` +
 	`every category, series name, and label is 1–20 characters`
 
-// vizSeriesStrings collects the free-form strings of a bar/area/line chart for
-// the broadcast guard.
-func vizSeriesStrings(series []slackapi.DataVisualizationDataSeries, axis slackapi.DataVisualizationAxisConfig) []string {
-	out := make([]string, 0, len(axis.Categories)+2)
-	for _, s := range series {
-		out = append(out, s.Name)
-		for _, p := range s.Data {
-			out = append(out, p.Label)
+// vizLabel is one free-form chart string, located for error messages. axis
+// marks the optional x_label/y_label, which may be empty and have their own cap.
+type vizLabel struct {
+	path  string
+	value string
+	axis  bool
+}
+
+// vizLabels collects a chart's free-form strings, below the title. ok is false
+// for a missing or unrecognized chart. It is the one walk over chart strings:
+// the broadcast guard here and the leakage-gate projection (flattenDataViz)
+// both read it, so a field added to a chart reaches both or neither.
+func vizLabels(chart slackapi.DataVisualizationChart) (labels []vizLabel, ok bool) {
+	switch c := chart.(type) {
+	case *slackapi.DataVisualizationPieChart:
+		if c == nil {
+			return nil, false
+		}
+		for i, seg := range c.Segments {
+			labels = append(labels, vizLabel{path: fmt.Sprintf("segments[%d].label", i), value: seg.Label})
+		}
+		return labels, true
+	case *slackapi.DataVisualizationBarChart:
+		if c == nil {
+			return nil, false
+		}
+		return vizSeriesLabels(c.Series, c.AxisConfig), true
+	case *slackapi.DataVisualizationAreaChart:
+		if c == nil {
+			return nil, false
+		}
+		return vizSeriesLabels(c.Series, c.AxisConfig), true
+	case *slackapi.DataVisualizationLineChart:
+		if c == nil {
+			return nil, false
+		}
+		return vizSeriesLabels(c.Series, c.AxisConfig), true
+	default:
+		return nil, false
+	}
+}
+
+// vizSeriesLabels collects the free-form strings of a bar/area/line chart.
+func vizSeriesLabels(series []slackapi.DataVisualizationDataSeries, axis slackapi.DataVisualizationAxisConfig) []vizLabel {
+	out := make([]vizLabel, 0, len(axis.Categories)+2)
+	for i, s := range series {
+		out = append(out, vizLabel{path: fmt.Sprintf("series[%d].name", i), value: s.Name})
+		for j, p := range s.Data {
+			out = append(out, vizLabel{path: fmt.Sprintf("series[%d].data[%d].label", i, j), value: p.Label})
 		}
 	}
-	out = append(out, axis.Categories...)
-	return append(out, axis.XLabel, axis.YLabel)
+	for i, c := range axis.Categories {
+		out = append(out, vizLabel{path: fmt.Sprintf("axis_config.categories[%d]", i), value: c})
+	}
+	return append(out,
+		vizLabel{path: "axis_config.x_label", value: axis.XLabel, axis: true},
+		vizLabel{path: "axis_config.y_label", value: axis.YLabel, axis: true})
 }
 
 func validateContainer(loc string, c *slackapi.ContainerBlock) error {
