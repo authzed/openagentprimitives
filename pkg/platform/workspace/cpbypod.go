@@ -151,8 +151,8 @@ const jobNameHashHexLen = 8
 // boundedJobName fits name into the 63 bytes a Job name may use. A Job may be
 // NAMED with up to 253, but the Job controller copies its name into the pod
 // template as the job-name labels, and a label value is capped at 63, so the
-// apiserver refuses any Job whose name is longer. These names are a 5-byte
-// prefix, a 36-byte session UID and a turn segment that carries a fork's
+// apiserver refuses any Job whose name is longer. These names are a short
+// prefix ("snap-", "rest-" or "gc-"), a 36-byte session UID and a turn segment that carries a fork's
 // qualifier (up to 40 bytes) and, for a restore, the destination PVC's name,
 // so a clean fork of any session with a non-trivial name could never be
 // snapshotted or restored.
