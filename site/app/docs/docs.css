@@ -327,6 +327,31 @@ body:has(.doc-app) {
   line-height: 1.6;
 }
 
+.doc-article table {
+  width: 100%;
+  margin: 20px 0;
+  border-collapse: collapse;
+  font-size: 14.5px;
+}
+.doc-article th,
+.doc-article td {
+  padding: 9px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--doc-border);
+}
+.doc-article th {
+  color: var(--doc-heading);
+  font-weight: 600;
+}
+/* Wide tables scroll inside the column instead of the page on phones. */
+@media (max-width: 720px) {
+  .doc-article table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
 /* Media */
 .doc-clip {
   margin: 28px 0;

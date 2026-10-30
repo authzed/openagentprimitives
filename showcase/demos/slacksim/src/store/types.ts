@@ -95,6 +95,42 @@ export interface ViewState {
   typingUserId?: string;
   /** App Home is open on this app's channel id (kind==='app'). */
   appHomeChannelId?: string;
+  /** The artifact viewer is open over the client (the "View live" tab). */
+  artifact?: ArtifactView;
+}
+
+/** One revision row in the artifact viewer's history sidebar. */
+export interface ArtifactRevision {
+  n: number;
+  /** The revision's change description, as the agent wrote it. */
+  note: string;
+}
+
+/** A note pinned to one element of the rendered artifact. */
+export interface ArtifactAnnotation {
+  index: number;
+  /** The id of the annotated element inside the artifact HTML. */
+  targetId: string;
+  /** The element's visible text, shown as the note card's reference. */
+  label: string;
+  comment: string;
+  /** The intent chip (change / question / bug / praise), when picked. */
+  intent?: string;
+  author: string;
+}
+
+/** The artifact viewer: OAP's live view of one artifact, opened from Slack. */
+export interface ArtifactView {
+  title: string;
+  description: string;
+  /** The revision on screen; also the head, which is all a demo needs. */
+  revision: number;
+  revisions: ArtifactRevision[];
+  /** The rendered artifact body (authored, deterministic scenario HTML). */
+  html: string;
+  annotations: ArtifactAnnotation[];
+  /** Set once the batch is sent; the panel then shows it as delivered. */
+  sentTo?: string;
 }
 
 export interface Scenario {
