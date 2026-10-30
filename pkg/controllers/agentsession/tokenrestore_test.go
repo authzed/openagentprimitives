@@ -8,8 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -152,4 +154,38 @@ func TestRestoreTokens_GuardPanicSkipsThatSession(t *testing.T) {
 	assert.True(t, reg.Registered(memory.NamespacedName{Namespace: "default", Name: "adopted"}))
 	assert.False(t, reg.Registered(memory.NamespacedName{Namespace: "default", Name: "unadopted"}),
 		"the skipped session is left to its own Reconcile")
+}
+
+func TestRestoreTokens_ForbiddenReadIsSkippedNotRetried(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, spiceboxv1alpha1.AddToScheme(scheme))
+
+	forbidden := restoreSession("forbidden", false)
+	fine := restoreSession("fine", false)
+	forbiddenSecret := MemoryTokenSecretName(forbidden)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		forbidden, fine,
+		tokenSecret(forbidden, "forbidden-tok"),
+		tokenSecret(fine, "fine-tok"),
+	).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if key.Name == forbiddenSecret {
+				return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, key.Name, errors.New("no RBAC"))
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+
+	reg := tokens.NewRegistry()
+	r := &Reconciler{Client: c, Tokens: reg}
+
+	n, err := r.RestoreTokens(context.Background())
+	assert.NoError(t, err, "Forbidden will not clear on retry, so it must not hold the registry restoring")
+	assert.Equal(t, 1, n)
+	key := func(name string) memory.NamespacedName {
+		return memory.NamespacedName{Namespace: "default", Name: name}
+	}
+	assert.True(t, reg.Registered(key("fine")))
+	assert.False(t, reg.Registered(key("forbidden")), "left to the session's own Reconcile")
 }

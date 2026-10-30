@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"golang.org/x/sync/errgroup"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -98,5 +99,13 @@ func (r *Reconciler) restoreOne(ctx context.Context, sess *spiceboxv1alpha1.Agen
 			ok, err = false, nil
 		}
 	}()
-	return r.reregisterMemoryToken(ctx, sess)
+	ok, err = r.reregisterMemoryToken(ctx, sess)
+	if apierrors.IsForbidden(err) {
+		// Permanent until someone changes RBAC, so retrying would only hold
+		// every Reconcile behind WaitRestored; skip it like a panic.
+		log.FromContext(ctx).Error(err, "memory token restore is forbidden to read this session's Secret; skipping it, its own reconcile will retry it",
+			"session", sess.Namespace+"/"+sess.Name)
+		return false, nil
+	}
+	return ok, err
 }

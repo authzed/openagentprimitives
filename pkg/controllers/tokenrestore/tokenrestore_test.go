@@ -125,3 +125,25 @@ func TestRunnable_GivesUpAfterTheDeadlineSoReconcilesAreNotHeldForever(t *testin
 	require.NoError(t, <-waited)
 	assert.GreaterOrEqual(t, stuck.calls, 2, "it retried before giving up")
 }
+
+// hangingRestorer blocks until its ctx is done, like a live GET on a stalled
+// apiserver connection.
+type hangingRestorer struct{}
+
+func (hangingRestorer) RestoreTokens(ctx context.Context) (int, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+func TestRunnable_AHungPassIsCutOffAtTheGiveUpDeadline(t *testing.T) {
+	reg := tokens.NewRegistry()
+	run := newRunnable(reg, hangingRestorer{})
+	run.GiveUpAfter = 500 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	require.NoError(t, run.Start(ctx))
+	assert.False(t, reg.Restoring(), "a pass that never returns still ends the restoring state at the deadline")
+	assert.Less(t, time.Since(start), 5*time.Second, "cut off at the give-up deadline, not at the test's timeout")
+}

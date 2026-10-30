@@ -64,6 +64,14 @@ func (r *Reconciler) RestoreTokens(ctx context.Context) (int, error) {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
+			if apierrors.IsForbidden(err) {
+				// Permanent until someone changes RBAC, so retrying would only
+				// hold every Reconcile behind WaitRestored. Step 8 of this
+				// Workshop's own Reconcile re-registers the bearer instead.
+				log.FromContext(ctx).Error(err, "workshop token restore is forbidden to read the bearer Secret; skipping it",
+					"workshop", ws.Namespace+"/"+ws.Name, "secret", secretKey.String())
+				continue
+			}
 			errs = append(errs, fmt.Errorf("workshop %s/%s: read bearer Secret %s: %w", ws.Namespace, ws.Name, secretKey, err))
 			continue
 		}

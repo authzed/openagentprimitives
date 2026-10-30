@@ -9,7 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -97,6 +99,33 @@ func TestRestoreTokens_SecretReadFailureIsReturned(t *testing.T) {
 	assert.Equal(t, 1, n, "and does not stop the other workshop's restore")
 	assert.True(t, reg.Registered(workshopTokenKey("fine")))
 	assert.False(t, reg.Registered(workshopTokenKey("broken")))
+}
+
+func TestRestoreTokens_ForbiddenReadIsSkippedNotRetried(t *testing.T) {
+	scheme := testfixtures.NewScheme(t)
+	forbiddenSecret := spiceboxv1alpha1.WorkshopTokenSecretName("forbidden")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		restoreWorkshop("forbidden", spiceboxv1alpha1.WorkshopPhaseReady, false),
+		restoreWorkshop("fine", spiceboxv1alpha1.WorkshopPhaseReady, false),
+		workshopBearerSecret("forbidden", "forbidden-tok"),
+		workshopBearerSecret("fine", "fine-tok"),
+	).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if key.Name == forbiddenSecret {
+				return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, key.Name, errors.New("no RBAC"))
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+
+	reg := tokens.NewRegistry()
+	r := &workshop.Reconciler{Client: c, Tokens: reg}
+
+	n, err := r.RestoreTokens(context.Background())
+	assert.NoError(t, err, "Forbidden will not clear on retry, so it must not hold the registry restoring")
+	assert.Equal(t, 1, n)
+	assert.True(t, reg.Registered(workshopTokenKey("fine")))
+	assert.False(t, reg.Registered(workshopTokenKey("forbidden")), "left to the Workshop's own Reconcile")
 }
 
 func TestReconcile_WaitsForTokenRestore(t *testing.T) {

@@ -94,7 +94,12 @@ func (t *Runnable) Start(ctx context.Context) error {
 	backoff := time.Second
 	total := 0
 	for {
-		restored, err := t.pass(ctx)
+		// Bound the pass itself, not just the retries: a live Secret GET that
+		// hangs would otherwise keep pass from ever returning, so the give-up
+		// below would never be reached and every Reconcile would wait forever.
+		passCtx, cancel := context.WithTimeout(ctx, giveUpAfter-time.Since(start))
+		restored, err := t.pass(passCtx)
+		cancel()
 		total += restored
 		if err == nil {
 			t.Registry.FinishRestore()
