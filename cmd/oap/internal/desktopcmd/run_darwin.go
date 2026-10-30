@@ -420,7 +420,7 @@ type desktopState struct {
 	runErr      error  // set by failBringUp on a hard bring-up failure; read by runDesktop after systray.Run returns
 	currentStep string // last step name passed to progressHook; names timeline.Fail() on a hard bring-up failure
 
-	// linkGate serializes oap:// install links and holds the newest one while
+	// linkGate serializes oap:// install links and holds the first one while
 	// bring-up runs (see installlink_darwin.go). It has its own lock; when
 	// both are taken, s.mu is taken first.
 	linkGate linkinstall.Gate
