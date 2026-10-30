@@ -263,7 +263,7 @@ func graphNamesForInstall(root *oap.Bundle, requested string) (string, instance.
 	if err != nil {
 		return "", nil, err
 	}
-	rootClass, err := findAgentClass(rootCRs)
+	rootClass, err := FindAgentClass(rootCRs)
 	if err != nil {
 		return "", nil, err
 	}

@@ -175,7 +175,7 @@ func Prepare(ctx context.Context, c client.Client, b *oap.Bundle, answers oap.An
 		return nil, err
 	}
 
-	agentClass, err := findAgentClass(crs)
+	agentClass, err := FindAgentClass(crs)
 	if err != nil {
 		return nil, err
 	}
