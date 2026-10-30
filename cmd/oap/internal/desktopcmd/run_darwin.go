@@ -1395,8 +1395,7 @@ func openDesktopLogFile(supportDir string) (*os.File, error) {
 // than silently dropped, but never treated as fatal — it's already the
 // fallback error-surfacing path.
 func notify(title, message string) {
-	script := fmt.Sprintf("display notification %q with title %q", message, title)
-	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
+	if err := osascript(`display notification (item 1 of argv) with title (item 2 of argv)`, message, title).Run(); err != nil {
 		notifyFailed(title, err)
 	}
 }
@@ -1415,8 +1414,8 @@ func notifyFailed(title string, err error) {
 // confirmDialog shows a native Yes/No confirmation via osascript and reports
 // whether the user chose the affirmative button.
 func confirmDialog(title, message string) bool {
-	script := fmt.Sprintf(`display dialog %q with title %q buttons {"Cancel", "Confirm"} default button "Cancel" cancel button "Cancel"`, message, title)
-	return exec.Command("osascript", "-e", script).Run() == nil
+	return osascript(`display dialog (item 1 of argv) with title (item 2 of argv) buttons {"Cancel", "Confirm"} default button "Cancel" cancel button "Cancel"`,
+		message, title).Run() == nil
 }
 
 // onReady builds the (fixed) menu-item set once — systray has no API to

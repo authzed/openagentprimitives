@@ -31,16 +31,19 @@ const (
 )
 
 // installDialogText derives the confirm dialog's title and body from the
-// bundle: displayName (falling back to agent.name) and the short description.
+// bundle: displayName (falling back to agent.name) and the short description,
+// each bundle-supplied field flattened by sanitizeDialogText so it cannot
+// forge a line of the dialog or hide text in it.
 func installDialogText(b *oap.Bundle) (title, message string) {
 	a := b.Manifest.Agent
 	title = a.DisplayName
 	if title == "" {
 		title = a.Name
 	}
-	message = fmt.Sprintf("Install %s v%s into your local cluster?", title, a.Version)
-	if a.Description != "" {
-		message = a.Description + "\n\n" + message
+	title = sanitizeDialogText(title, maxDialogTitleRunes)
+	message = fmt.Sprintf("Install %s v%s into your local cluster?", title, sanitizeDialogText(a.Version, maxDialogTitleRunes))
+	if desc := sanitizeDialogText(a.Description, maxDialogDescriptionRunes); desc != "" {
+		message = desc + "\n\n" + message
 	}
 	return title, message
 }
@@ -57,10 +60,9 @@ var installConfirmDialog = func(title, message string, hasReadme bool, defaultBu
 	if hasReadme {
 		buttons = `{"Cancel", "View README", "Install"}`
 	}
-	script := fmt.Sprintf(
-		`display dialog %q with title %q buttons %s default button %q cancel button "Cancel"`,
-		message, title, buttons, defaultButton)
-	out, err := exec.Command("osascript", "-e", script).Output()
+	out, err := osascript(
+		`display dialog (item 1 of argv) with title (item 2 of argv) buttons `+buttons+` default button (item 3 of argv) cancel button "Cancel"`,
+		message, title, defaultButton).Output()
 	return classifyInstallDialog(out, err)
 }
 
@@ -112,12 +114,11 @@ func adoptDialogText(conflicts []install.Conflict) (title, message string) {
 // the decision without osascript, mirroring how installConfirmDialog is
 // exercised.
 var desktopAdoptDialog = func(title, message string) bool {
-	script := fmt.Sprintf(
-		`display dialog %q with title %q buttons {"Cancel", "Adopt & Install"} default button "Cancel" cancel button "Cancel"`,
-		message, title)
 	// Default button is Cancel, not Adopt: a stray Return keypress must not
 	// seize somebody's object.
-	if _, err := exec.Command("osascript", "-e", script).Output(); err != nil {
+	if _, err := osascript(
+		`display dialog (item 1 of argv) with title (item 2 of argv) buttons {"Cancel", "Adopt & Install"} default button "Cancel" cancel button "Cancel"`,
+		message, title).Output(); err != nil {
 		return false // cancel button (non-zero exit) or no display
 	}
 	return true
@@ -252,8 +253,7 @@ func installOapBundle(ctx context.Context, kb *kube.Bundle, out io.Writer, oapBy
 // couldn't be shown (e.g. no display attached); either way the caller treats
 // it identically as "nothing to install", never as an error to surface.
 func chooseOapFile() (string, bool) {
-	script := `POSIX path of (choose file of type {"oap"} with prompt "Choose a .oap agent bundle")`
-	out, err := exec.Command("osascript", "-e", script).Output()
+	out, err := osascript(`POSIX path of (choose file of type {"oap"} with prompt "Choose a .oap agent bundle")`).Output()
 	if err != nil {
 		return "", false
 	}

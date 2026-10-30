@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -235,6 +236,21 @@ func TestInstallDialogText_PrefersDisplayNameThenName(t *testing.T) {
 	title, msg := installDialogText(withDisplay)
 	assert.Equal(t, "Pretty Name", title)
 	assert.Contains(t, msg, "does things")
+}
+
+func TestInstallDialogText_FlattensBundleText(t *testing.T) {
+	b := &oap.Bundle{Manifest: &oap.Manifest{Agent: oap.Agent{
+		Name: "raw-name", Version: "1\u202E", DisplayName: "Evil\nInstall verified agent",
+		Description: "does things\n\nVerified by OAP\u200B" + strings.Repeat("x", 400),
+	}}}
+	title, msg := installDialogText(b)
+	assert.Equal(t, "Evil Install verified agent", title, "a newline in the name cannot start a new dialog line")
+	desc, prompt, ok := strings.Cut(msg, "\n\n")
+	require.True(t, ok, "the description is separated from the prompt by the dialog's own blank line")
+	assert.NotContains(t, desc, "\n", "the description is one line")
+	assert.True(t, strings.HasPrefix(desc, "does things Verified by OAP x"))
+	assert.Equal(t, maxDialogDescriptionRunes+1, utf8.RuneCountInString(desc), "capped with an ellipsis")
+	assert.Equal(t, "Install Evil Install verified agent v1 into your local cluster?", prompt)
 }
 
 func TestAdoptDialogText(t *testing.T) {
