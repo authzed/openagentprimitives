@@ -16,6 +16,15 @@
 // periodic runDuration patch is itself an AgentSession update that re-triggers
 // this reconcile. A runner whose flusher stopped too is a dead pod, which the
 // pod-failure handling covers.
+//
+// What this does NOT bound: the input is runner-written (see runDuration in
+// the admission webhook's runnerWritableStatusFields), so a runner that
+// under-reports or freezes runDuration is never caught here. The backstop
+// targets a stuck runner whose flusher still reports honestly, not a hostile
+// one. A runner able to lie here already holds the session's credentials and
+// tool access, so overspending its own time budget is not the escalation that
+// matters; a runner-independent bound would key on an operator- or
+// kubelet-written signal (the runner pod's start time) instead.
 package agentsession
 
 import (
