@@ -4,7 +4,7 @@
 package skillmd
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -38,28 +38,63 @@ type Doc struct {
 
 const fence = "---"
 
+// bom is the UTF-8 byte-order mark some editors write at the start of a file.
+const bom = "\ufeff"
+
+// ErrNoFrontmatter is Split's report that content does not open with a
+// frontmatter fence.
+var ErrNoFrontmatter = errors.New("skillmd: missing opening '---' frontmatter fence")
+
+// Split separates a fenced YAML frontmatter block from the body that follows
+// it. It is the one frontmatter splitter for every markdown document AP reads
+// this way — a SKILL.md, and a plugin's agent definitions — so a document
+// that one reader treats as fenced is fenced for all of them.
+//
+// CRLF line endings and a leading UTF-8 byte-order mark are normalized away,
+// and a fence line may carry trailing whitespace: all three are things an
+// editor adds without the author noticing, and a reader that missed them
+// would see no frontmatter where another sees one. block may be empty (an
+// opening fence immediately followed by the closing one). body is everything
+// after the closing fence line, untrimmed. Content that does not open with a
+// fence returns ErrNoFrontmatter; an opening fence with no closing one is a
+// different error.
+func Split(content []byte) (block, body string, err error) {
+	text := strings.TrimPrefix(strings.ReplaceAll(string(content), "\r\n", "\n"), bom)
+	first, rest, _ := strings.Cut(text, "\n")
+	if !isFence(first) {
+		return "", "", ErrNoFrontmatter
+	}
+	for off := 0; off <= len(rest); {
+		line, next, more := strings.Cut(rest[off:], "\n")
+		if isFence(line) {
+			if more {
+				return rest[:max(off-1, 0)], next, nil
+			}
+			return rest[:max(off-1, 0)], "", nil
+		}
+		if !more {
+			break
+		}
+		off += len(line) + 1
+	}
+	return "", "", fmt.Errorf("skillmd: missing closing '---' frontmatter fence")
+}
+
+// isFence reports whether line is a frontmatter fence, ignoring trailing
+// whitespace.
+func isFence(line string) bool {
+	return strings.TrimRight(line, " \t") == fence
+}
+
 // Parse splits the frontmatter from the body and unmarshals the frontmatter.
 // The document MUST start with a "---" fence on its own line and contain a
-// closing "---" fence; everything after the closing fence is the body (trimmed).
+// closing "---" fence (see Split); everything after the closing fence is the
+// body (trimmed).
 func Parse(content []byte) (Doc, error) {
-	text := string(bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n")))
-	if !strings.HasPrefix(text, fence+"\n") {
-		return Doc{}, fmt.Errorf("skillmd: missing opening '---' frontmatter fence")
+	fmBlock, body, err := Split(content)
+	if err != nil {
+		return Doc{}, err
 	}
-	rest := text[len(fence)+1:]
-	end := strings.Index(rest, "\n"+fence)
-	if end < 0 {
-		return Doc{}, fmt.Errorf("skillmd: missing closing '---' frontmatter fence")
-	}
-	fmBlock := rest[:end]
-	body := rest[end+len("\n"+fence):]
-	// Drop the remainder of the closing fence line.
-	if nl := strings.Index(body, "\n"); nl >= 0 {
-		body = body[nl+1:]
-	} else {
-		body = ""
-	}
-
 	var fmStruct Frontmatter
 	if err := yaml.Unmarshal([]byte(fmBlock), &fmStruct); err != nil {
 		return Doc{}, fmt.Errorf("skillmd: frontmatter yaml: %w", err)

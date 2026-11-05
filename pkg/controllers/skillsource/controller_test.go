@@ -660,3 +660,57 @@ func TestReconcileRepoInstructionsTruncation(t *testing.T) {
 	assert.Contains(t, got.Status.DiscoveryProblems[0], "64 KiB",
 		"DiscoveryProblem must mention the 64 KiB cap")
 }
+
+// pluginRepo is a repo that is itself a Claude Code plugin, with its one skill
+// under the fixture SkillSource's "skills" subpath.
+func pluginRepo() map[string][]byte {
+	return map[string][]byte{
+		".claude-plugin/plugin.json": []byte(`{"name":"demo-plugin"}`),
+		"skills/skillone/SKILL.md":   []byte("---\nname: skillone\ndescription: Use for one.\n---\nLaunch the bug-hunter agent."),
+		"agents/bug-hunter.md":       []byte("---\nname: bug-hunter\ndescription: hunts\n---\nprompt"),
+	}
+}
+
+func TestReconcileMaterializesPluginContext(t *testing.T) {
+	cases := []struct {
+		name       string
+		disable    bool
+		wantPlugin bool
+	}{
+		{name: "default: spec.plugin carries the plugin name and its agents", wantPlugin: true},
+		{name: "disablePluginAgents: spec.plugin is nil", disable: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src, id, sec := fixtures()
+			src.Spec.DisablePluginAgents = tc.disable
+			c := newClient(t, src, id, sec)
+			r := newReconciler(c, bundlemem.New(), "abc123def456", pluginRepo())
+
+			reconcileSrc(t, r)
+
+			var skills v1.SkillList
+			require.NoError(t, c.List(context.Background(), &skills, client.InNamespace("ns")))
+			require.Len(t, skills.Items, 1)
+			first := skills.Items[0]
+			if !tc.wantPlugin {
+				assert.Nil(t, first.Spec.Plugin)
+				return
+			}
+			require.NotNil(t, first.Spec.Plugin)
+			assert.Equal(t, "demo-plugin", first.Spec.Plugin.Name)
+			require.Len(t, first.Spec.Plugin.Agents, 1)
+			assert.Equal(t, "bug-hunter", first.Spec.Plugin.Agents[0].Name)
+
+			// The Skill now carries a pointer + slice it did not before; a
+			// second identical pass must still leave it untouched, or every
+			// reconcile rewrites it.
+			reconcileSrc(t, r)
+			var second v1.Skill
+			require.NoError(t, c.Get(context.Background(),
+				types.NamespacedName{Namespace: "ns", Name: first.Name}, &second))
+			assert.Equal(t, first.ResourceVersion, second.ResourceVersion,
+				"an unchanged plugin must not rewrite the Skill")
+		})
+	}
+}

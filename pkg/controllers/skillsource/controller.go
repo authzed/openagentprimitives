@@ -118,7 +118,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Step 4: discover skills from the fetched tree (problems are advisory, not fatal).
 	discovered, repoInstrDiscovered, problems := Discover(
-		canonical.Normalize(src.Spec.RepoURL), src.Spec.Subpath, src.Spec.Ref, result.Files)
+		canonical.Normalize(src.Spec.RepoURL), src.Spec.Subpath, src.Spec.Ref, result.Files,
+		DiscoverOptions{SkipPlugins: src.Spec.DisablePluginAgents})
 	for _, p := range problems {
 		logger.Info("SkillSource discovery problem", "skillsource", src.Name,
 			"namespace", src.Namespace, "problem", p)

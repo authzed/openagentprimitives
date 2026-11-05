@@ -93,6 +93,7 @@ func DesiredSkillSpec(
 		Body:             d.Body,
 		Frontmatter:      skillspec.ToV1Frontmatter(d.Frontmatter),
 		RepoInstructions: repoInstr,
+		Plugin:           d.Plugin,
 		Source: &v1.SkillProvenance{
 			RepoLocator: canonical.Normalize(src.RepoURL),
 			Subpath:     d.Subpath,
@@ -176,7 +177,7 @@ func RecordSync(obj conditions.Generationer, st *v1.SkillSourceStatus, res SyncR
 			Status: metav1.ConditionTrue,
 			Reason: v1.ReasonSkillSourceSynced,
 			Message: fmt.Sprintf(
-				"synced; %d SKILL.md file(s) skipped as invalid — see status.discoveryProblems",
+				"synced; %d discovery problem(s) — see status.discoveryProblems",
 				len(res.Problems)),
 		})
 	}

@@ -32,5 +32,12 @@ tests); the bundle cache behind `skillbundle.Store`.
 - **Watching only `SkillSource` is not enough.** The clone credential is two
   hops away, and a change at either hop changes the bytes the next clone uses. A
   rotated PAT would otherwise be invisible until the sync interval elapsed.
+- **Plugin capture reads outside `spec.subpath`, on purpose.** A skill at
+  `<plugin>/skills/<name>/` beside `<plugin>/.claude-plugin/plugin.json` gets
+  the plugin's name and direct `agents/*.md` on `Skill.spec.plugin`, because the
+  skill's instructions dispatch those agents by name. Nothing else of the plugin
+  is read — no hooks, `.mcp.json`, commands, or sibling skills — and an upstream
+  `plugin.json` is never copied (`pkg/tools/skills/pluginlayout`).
+  `spec.disablePluginAgents` turns it off.
 - **`repoinstructions` is a prompt-injection surface.** The byte cap bounds
   prompt growth and blunts a hostile or oversized `AGENTS.md`/`CLAUDE.md`.

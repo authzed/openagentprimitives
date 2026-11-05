@@ -19,8 +19,9 @@
 # built below — takes the name bin/claude instead. Claude Code cannot see
 # AP-staged skill bundles (/skills/<name>/) on its own: it only discovers
 # user-level skills at $HOME/.claude/skills/. claudeshim bridges the two
-# (pkg/tools/toolchain/claude.LinkStagedSkills) on every invocation, then
-# exec's claude.real, faithfully passing through argv/env/stdio/the exit code.
+# (pkg/tools/toolchain/claude.BridgeStagedSkills) on every invocation, then
+# exec's claude.real, faithfully passing through argv/env/stdio/the exit code
+# (prefixed with one --plugin-dir per skill staged with plugin context).
 # See internal/cmd/claudeshim's package doc for the full contract, and
 # config/toolchains/claude.yaml's env comment for the pointer from the CR side.
 #

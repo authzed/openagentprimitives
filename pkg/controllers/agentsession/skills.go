@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,6 +51,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
 	"github.com/authzed/openagentprimitives/pkg/tools/skillbundle"
 	"github.com/authzed/openagentprimitives/pkg/tools/skills/canonical"
+	"github.com/authzed/openagentprimitives/pkg/tools/skills/pluginlayout"
 )
 
 // skillBundleTarKey is the data key under which the gzipped-tar bundle is
@@ -76,6 +78,7 @@ type skillEntry struct {
 	Body        string
 	Frontmatter spiceboxv1alpha1.SkillFrontmatter
 	Bundle      *spiceboxv1alpha1.SkillBundleRef
+	Plugin      *spiceboxv1alpha1.SkillPlugin
 }
 
 // mergeSkillEntries builds a canonical-name → skillEntry map from the namespace
@@ -91,6 +94,7 @@ func mergeSkillEntries(nsSkills []spiceboxv1alpha1.Skill, clusterSkills []spiceb
 			Body:        sk.Spec.Body,
 			Frontmatter: sk.Spec.Frontmatter,
 			Bundle:      sk.Spec.Bundle,
+			Plugin:      sk.Spec.Plugin,
 		}
 	}
 	for i := range clusterSkills {
@@ -101,6 +105,7 @@ func mergeSkillEntries(nsSkills []spiceboxv1alpha1.Skill, clusterSkills []spiceb
 				Body:        csk.Spec.Body,
 				Frontmatter: csk.Spec.Frontmatter,
 				Bundle:      csk.Spec.Bundle,
+				Plugin:      csk.Spec.Plugin,
 			}
 		}
 	}
@@ -260,7 +265,9 @@ func (r *Reconciler) resolveAndStageSkillBundles(
 		// determines the composed archive's bytes: the rendered SKILL.md (a
 		// pure function of Description/Frontmatter/Body, already in memory
 		// from the List above) plus the cached bundle's own digest, when
-		// present. Because skillbundle.TarGz is a deterministic function of
+		// present, plus the plugin context (appended only when there is one,
+		// so a standalone skill's fingerprint is unchanged by its existence).
+		// Because skillbundle.TarGz is a deterministic function of
 		// its input files, an unchanged sourceDigest guarantees an unchanged
 		// composed archive — which is what lets the check below skip the
 		// store.Get entirely (up to 1 MiB from a live, uncached read) when
@@ -271,7 +278,11 @@ func (r *Reconciler) resolveAndStageSkillBundles(
 		if entry.Bundle != nil {
 			bundleDigest = entry.Bundle.Digest
 		}
-		srcSum := sha256.Sum256([]byte(hex.EncodeToString(mdSum[:]) + "|" + bundleDigest))
+		srcInput := hex.EncodeToString(mdSum[:]) + "|" + bundleDigest
+		if fp := pluginFingerprint(entry.Plugin); fp != "" {
+			srcInput += "|plugin:" + fp
+		}
+		srcSum := sha256.Sum256([]byte(srcInput))
 		sourceDigest := hex.EncodeToString(srcSum[:])
 
 		// Already staged, unchanged: carry the status entry forward untouched.
@@ -336,8 +347,27 @@ func (r *Reconciler) resolveAndStageSkillBundles(
 					// never clobbers the freshly re-serialized SKILL.md.
 					continue
 				}
+				if pluginlayout.IsReserved(p) {
+					// Same defense for the plugin directory: its contents come
+					// from spec.plugin below and nowhere else, so a bundle
+					// cannot plant agents that skipped pluginFiles' checks.
+					logger.Info("resolveAndStageSkillBundles: dropping bundle file in the reserved plugin directory",
+						"session", sess.Namespace+"/"+sess.Name, "skill", name, "path", p)
+					continue
+				}
 				files[p] = b
 			}
+		}
+
+		plugin, skipped := pluginFiles(entry.Plugin)
+		for _, reason := range skipped {
+			logger.Info("resolveAndStageSkillBundles: plugin context partially staged",
+				"session", sess.Namespace+"/"+sess.Name, "skill", name, "reason", reason)
+		}
+		withPlugin := files
+		if len(plugin) > 0 {
+			withPlugin = maps.Clone(files)
+			maps.Copy(withPlugin, plugin)
 		}
 
 		// archiveDigest is the sha256 of the ACTUAL archive bytes about to be
@@ -347,11 +377,25 @@ func (r *Reconciler) resolveAndStageSkillBundles(
 		// sandbox pod's init container; it is deliberately distinct from
 		// sourceDigest above, which is a cheap pre-fetch fingerprint and does
 		// not equal the hash of these bytes.
-		archive, archiveDigest, tarErr := skillbundle.TarGz(files)
+		archive, archiveDigest, tarErr := skillbundle.TarGz(withPlugin)
 		if tarErr != nil {
 			logger.Info("resolveAndStageSkillBundles: failed to build the composed skill archive; skipping",
 				"session", sess.Namespace+"/"+sess.Name, "skill", name, "err", tarErr.Error())
 			continue
+		}
+		if len(archive) > configMapMaxBytes && len(plugin) > 0 {
+			// The plugin context is what tipped a skill that fits on its own
+			// over the ceiling. Losing the agents degrades the skill; losing
+			// the skill loses everything, so stage it standalone instead.
+			logger.Info("resolveAndStageSkillBundles: skill bundle with plugin context exceeds ConfigMap ceiling; staging it standalone",
+				"session", sess.Namespace+"/"+sess.Name, "skill", name,
+				"bytes", len(archive), "ceiling", configMapMaxBytes)
+			archive, archiveDigest, tarErr = skillbundle.TarGz(files)
+			if tarErr != nil {
+				logger.Info("resolveAndStageSkillBundles: failed to build the standalone skill archive; skipping",
+					"session", sess.Namespace+"/"+sess.Name, "skill", name, "err", tarErr.Error())
+				continue
+			}
 		}
 		if len(archive) > configMapMaxBytes {
 			// Large-bundle staging is deferred (spec §9): a ConfigMap cannot

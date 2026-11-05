@@ -28,6 +28,7 @@ cluster-scoped mirror of pkg/controllers/skillsource.
 | `spec.auth.secretRef` \* | `object` |  |
 | `spec.auth.secretRef.key` \* | `string` | Key is the data key within the Secret holding the value. |
 | `spec.auth.secretRef.name` \* | `string` | Name is the Secret's name, in the referring object's own namespace. |
+| `spec.disablePluginAgents` | `boolean` | DisablePluginAgents, when true, materializes every skill this source discovers as standalone, even one published inside a Claude Code plugin: no spec.plugin, so the plugin's agents are never captured from outside spec.subpath and never staged. Default (false) = enabled. |
 | `spec.disableRepoInstructions` | `boolean` | DisableRepoInstructions, when true, stops this source from discovering and attaching the repo-root agent-instructions file (AGENTS.md/CLAUDE.md) to the skills it materializes. Default (false) = enabled. |
 | `spec.ref` | `string` |  |
 | `spec.repoURL` \* | `string` |  |

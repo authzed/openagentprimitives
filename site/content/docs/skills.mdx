@@ -37,6 +37,24 @@ declared, git-backed origin. You register one with `oap skill source create <nam
 the controller clones the repo, finds every `SKILL.md` under it, and materializes one Skill per capability. The
 agent never gets a skill from a hand-edited blob.
 
+### Skills published inside a Claude Code plugin
+
+Many skills ship as one part of a Claude Code plugin, and their instructions hand work to the plugin's own
+subagents ("launch the bug-hunter agent"). When a discovered skill sits at `<plugin>/skills/<name>/SKILL.md`
+next to a `<plugin>/.claude-plugin/plugin.json`, the controller also captures the plugin's name and its
+`agents/*.md` onto the Skill. When the skill is staged into a sandbox, Claude Code loads it as part of that
+plugin, so the agents it names are actually there, under the `<plugin>:<agent>` names the plugin expects.
+
+Only the plugin's name and its agent definitions travel. The plugin's hooks, MCP servers, commands, settings
+and its other skills never do, and agent settings that would add hooks, MCP servers or a looser permission mode
+are removed before staging, so a plugin can't reach past the sandbox's tool controls. Set
+`disablePluginAgents: true` on the source to stage every skill on its own instead.
+
+A plugin captures at most 64 agents (256 KiB in total); past either limit the controller keeps the first ones by
+name and reports the rest on the source's status. If two skills enabled for the same agent name the same plugin
+but carry different agents — two unrelated sources that both called their plugin `review`, say — neither gets
+the other's agents: both are staged on their own, without any.
+
 ## Provenance: a skill can't claim an origin it doesn't have
 
 A skill's name encodes its authority — the source it came from — and the controller enforces that binding. A
