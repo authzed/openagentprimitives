@@ -234,9 +234,9 @@ func TestGoalsSurviveNewSessionWithTheSameHumanAndClass(t *testing.T) {
 	assert.Equal(t, 404, status)
 }
 
-func TestColdRegistryGrace(t *testing.T) {
+func TestRestoringRegistry(t *testing.T) {
 	f := fixture(t)
-	f.s.ColdRegistryUntil = time.Now().Add(time.Minute)
+	f.s.Tokens.BeginRestore()
 	for _, tc := range []struct {
 		token string
 		want  int
@@ -256,7 +256,7 @@ func TestColdRegistryGrace(t *testing.T) {
 			}
 		})
 	}
-	f.s.ColdRegistryUntil = time.Now().Add(-time.Second)
+	f.s.Tokens.FinishRestore()
 	r := httptest.NewRequest(http.MethodPost, "/goals/team/session", bytes.NewBufferString(`{"operation":"list"}`))
 	r.Header.Set("Authorization", "Bearer unknown-token")
 	w := httptest.NewRecorder()

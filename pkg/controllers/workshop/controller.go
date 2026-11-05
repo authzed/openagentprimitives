@@ -202,6 +202,15 @@ func (r *Reconciler) reader() client.Reader {
 // reconcile retries the layer that failed rather than the whole workshop
 // silently sitting half-provisioned.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Nothing here runs until the startup token restore has finished, so a
+	// teardown's Revoke can never land between the restore reading a Workshop
+	// and re-registering its bearer (RestoreTokens).
+	if r.Tokens != nil {
+		if err := r.Tokens.WaitRestored(ctx); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	var ws spiceboxv1alpha1.Workshop
 	if err := r.Client.Get(ctx, req.NamespacedName, &ws); err != nil {
 		if apierrors.IsNotFound(err) {

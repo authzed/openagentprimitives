@@ -1,8 +1,10 @@
 package tokens_test
 
 import (
+	"context"
 	"crypto/ed25519"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -159,4 +161,37 @@ func TestRegistry_PublisherKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRegistry_RestoreState(t *testing.T) {
+	t.Run("never begun: complete from birth, WaitRestored returns at once", func(t *testing.T) {
+		r := tokens.NewRegistry()
+		assert.False(t, r.Restoring())
+		assert.NoError(t, r.WaitRestored(context.Background()))
+		r.FinishRestore() // a no-op, not a panic
+		assert.False(t, r.Restoring())
+	})
+
+	t.Run("begun: restoring until finished, then complete; finish is idempotent", func(t *testing.T) {
+		r := tokens.NewRegistry()
+		r.BeginRestore()
+		r.BeginRestore() // idempotent
+		assert.True(t, r.Restoring())
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		assert.ErrorIs(t, r.WaitRestored(ctx), context.DeadlineExceeded, "blocks while restoring")
+
+		done := make(chan error, 1)
+		go func() { done <- r.WaitRestored(context.Background()) }()
+		r.FinishRestore()
+		r.FinishRestore() // idempotent
+		select {
+		case err := <-done:
+			assert.NoError(t, err, "a waiter is released by FinishRestore")
+		case <-time.After(5 * time.Second):
+			t.Fatal("WaitRestored did not return after FinishRestore")
+		}
+		assert.False(t, r.Restoring())
+	})
 }

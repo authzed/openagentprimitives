@@ -131,25 +131,6 @@ func componentPrincipalFrom(ctx context.Context) (string, bool) {
 // client + artifactstore) pass these to NewHandler.
 type HandlerOption func(*handler)
 
-// WithColdRegistryGrace turns on the cold-start grace on the per-session bearer
-// path: for grace after the handler is constructed, a bearer that no session is
-// registered under is answered 503 + Retry-After (retryable) instead of 401
-// (permanent). The operator's in-process token registry starts empty on every
-// process boot and the AgentSession reconciler refills it per session
-// (controllers/agentsession/memorytoken.go reregisterMemoryToken), so a live
-// runner writing in that window would otherwise take a terminal 401 — and fail
-// its session with MemoryUnavailable — the moment the operator restarts (an OOM,
-// a rollout). The memory httpclient already retries 5xx across its ~17s budget,
-// so a 503 rides the warm-up out with no client-side change.
-//
-// grace <= 0 (the default when this option is absent) disables the behavior and
-// preserves the plain 401 — which is what every in-process test harness wants,
-// since it Sets tokens synchronously and has no cold window. Only the operator's
-// production wiring opts in.
-func WithColdRegistryGrace(grace time.Duration) HandlerOption {
-	return func(h *handler) { h.coldGrace = grace }
-}
-
 // WithArtifact mounts /artifact/{ns}/{sess}/{render}/output, which serves
 // rendered ArtifactRender bytes, and /artifact-bundle/{ns}/{sess}/{render}/bundle,
 // which resolves a primary HTML artifact's same-session `artifact:HANDLE`
@@ -372,11 +353,6 @@ func NewHandler(mem memory.Memory, reg *tokens.Registry, opts ...HandlerOption) 
 	for _, opt := range opts {
 		opt(h)
 	}
-	// Stamp construction time AFTER options apply: coldGrace comes from an
-	// option, but startedAt is always the real wall-clock birth of this handler,
-	// so time.Since(startedAt) is the true process uptime the cold-start grace
-	// compares against.
-	h.startedAt = time.Now()
 	mux := http.NewServeMux()
 	mux.Handle("/memory/", h)
 	if h.k8sClient != nil && h.artifactStore != nil {
@@ -395,21 +371,6 @@ func NewHandler(mem memory.Memory, reg *tokens.Registry, opts ...HandlerOption) 
 type handler struct {
 	mem memory.Memory
 	reg *tokens.Registry
-
-	// startedAt / coldGrace govern the cold-start grace on the per-session
-	// bearer path (the else branch in ServeHTTP's auth block). For coldGrace
-	// after this handler is constructed, a bearer that no session is registered
-	// under is answered 503 + Retry-After (retryable) instead of 401
-	// (permanent). The operator's in-process token registry is empty on every
-	// process boot and the AgentSession reconciler refills it per session
-	// (controllers/agentsession/memorytoken.go), so a live runner writing in
-	// that window would otherwise take a terminal 401 — and a MemoryUnavailable
-	// session failure — the instant the operator restarts. coldGrace == 0 (the
-	// default when WithColdRegistryGrace is absent) disables it, which is why
-	// every in-process test harness — tokens Set synchronously, no window —
-	// keeps the plain 401. See WithColdRegistryGrace.
-	startedAt time.Time
-	coldGrace time.Duration
 
 	// Optional, set by WithArtifact: enables /artifact/{ns}/{sess}/{render}/output.
 	k8sClient     client.Client
@@ -554,25 +515,25 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ctx = h.mintPoolApprovals(ctx, ns, name, token, perm)
 		}
 	} else {
+		// Read before the lookup; see RetryWhileRestoring.
+		restoring := h.reg.Restoring()
 		info, ok := h.reg.LookupInfo(token)
 		if !ok {
-			// Cold-start grace. Within coldGrace of this process starting, a bearer
-			// no session is registered under is far likelier a session the operator
-			// has not RE-registered yet than a forged token: the registry is process
-			// memory, empty on every boot, refilled per session by the reconciler
-			// (controllers/agentsession/memorytoken.go reregisterMemoryToken).
-			// Answer 503 + Retry-After so the caller — the memory httpclient, which
-			// retries 5xx across a ~17s budget — rides the warm-up out, instead of a
-			// terminal 401 that fails a live session with MemoryUnavailable the
-			// instant the operator OOMs or rolls. Past the grace, or when it is
-			// disabled (coldGrace == 0, every in-process test harness), an unknown
-			// bearer is a genuine auth failure and falls through to the 401 below.
-			// See WithColdRegistryGrace.
-			if h.coldGrace > 0 && time.Since(h.startedAt) < h.coldGrace {
-				log.FromContext(ctx).Info("memory API: bearer not yet registered within the cold-start grace; answering 503 (retryable) — the operator likely restarted and has not re-reconciled this session yet",
-					"session", ns+"/"+name, "path", r.URL.Path, "uptime", time.Since(h.startedAt).String(), "grace", h.coldGrace.String())
-				w.Header().Set("Retry-After", "1")
-				http.Error(w, "unavailable: token registry still warming after operator restart; retry", http.StatusServiceUnavailable)
+			// Restore in progress. The token registry is process memory, empty
+			// on every boot, and the operator restores every bearer it served
+			// (each session's and each Workshop's) in one pass once its caches
+			// have synced (pkg/controllers/tokenrestore). Until that pass
+			// finishes, a bearer no session is registered under is far likelier
+			// a session not restored yet than a forged token, so answer 503 +
+			// Retry-After: the memory httpclient retries 5xx, and a terminal 401
+			// would fail a live session with MemoryUnavailable just because the
+			// operator restarted. Once the pass is done the registry is
+			// complete, and an unknown bearer is a genuine auth failure: the 401
+			// below. A registry never put in the restoring state (every
+			// in-process test harness) is complete from birth.
+			if tokens.RetryWhileRestoring(w, restoring, "unavailable: token registry still warming after operator restart; retry") {
+				log.FromContext(ctx).Info("memory API: bearer not registered while the token registry is still being restored after an operator restart; answered 503 (retryable)",
+					"session", ns+"/"+name, "path", r.URL.Path)
 				return
 			}
 			// Say WHICH of the two refusals this is. A registered token aimed at

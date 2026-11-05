@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"context"
+	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -58,17 +59,22 @@ import (
 // The registry lookup comes first so the steady state costs one RLock and a map
 // hit: the Secret is read only when this process does not already know the
 // session, which after the first pass is only true following a restart.
-func (r *Reconciler) reregisterMemoryToken(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) {
+//
+// It reports whether it registered a token, and returns an error only when the
+// Secret could not be read for a reason other than NotFound: the session's
+// memory then stays unreadable until a later attempt succeeds, and the startup
+// restore retries rather than declaring the registry complete without it.
+func (r *Reconciler) reregisterMemoryToken(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (bool, error) {
 	// Tests that exercise unrelated reconcile paths do not always wire a
 	// registry. Step 4's Set is deliberately left unguarded, so an operator
 	// genuinely running without one still fails loudly on the live path rather
 	// than losing every registration to a silent skip here.
 	if r.Tokens == nil {
-		return
+		return false, nil
 	}
 	key := memory.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}
 	if r.Tokens.Registered(key) {
-		return
+		return false, nil
 	}
 	secretName := MemoryTokenSecretName(sess)
 	sec, err := r.getSecret(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: secretName})
@@ -76,18 +82,18 @@ func (r *Reconciler) reregisterMemoryToken(ctx context.Context, sess *spiceboxv1
 		// NotFound is the ordinary state of a session whose Secret has not been
 		// minted yet (first reconcile) — there is nothing to restore and nothing
 		// to report. Any other read failure is a real one: the session's memory
-		// stays unreadable until a later reconcile succeeds, so say so.
-		if !errors.IsNotFound(err) {
-			log.FromContext(ctx).Info("memory token: reading the per-session Secret failed; this session's memory stays unreadable until a later reconcile restores its token",
-				"session", sess.Namespace+"/"+sess.Name, "secret", secretName, "err", err.Error())
+		// stays unreadable until a later attempt succeeds, so say so.
+		if errors.IsNotFound(err) {
+			return false, nil
 		}
-		return
+		return false, fmt.Errorf("memory token: read Secret %s/%s for session %s: %w",
+			sess.Namespace, secretName, sess.Name, err)
 	}
 	token := string(sec.Data[agentSessionSecretMemoryToken])
 	if token == "" {
 		log.FromContext(ctx).Info("memory token: the per-session Secret carries no token; the memory API will refuse every bearer presented for this session",
 			"session", sess.Namespace+"/"+sess.Name, "secret", secretName, "key", agentSessionSecretMemoryToken)
-		return
+		return false, nil
 	}
 	extras := make([]memory.NamespacedName, 0, len(sess.Status.BundleSessions))
 	for _, b := range sess.Status.BundleSessions {
@@ -115,6 +121,7 @@ func (r *Reconciler) reregisterMemoryToken(ctx context.Context, sess *spiceboxv1
 	// anything — a verify key only lets the facade check a signature it would
 	// otherwise reject.
 	r.registerAuditVerifyKey(sess)
+	return true, nil
 }
 
 // registerAuditVerifyKey installs this session's audit public key into the

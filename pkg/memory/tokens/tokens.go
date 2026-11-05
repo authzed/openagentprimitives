@@ -3,19 +3,25 @@
 // AgentSession reconciler calls Set on EVERY reconcile of a live session and
 // Revoke on deletion.
 //
-// Every map here is process memory, and nothing rebuilds it at startup: a
-// restarted operator begins with an empty registry while the per-session
-// Secret holding each token — and every client presenting one — survives
-// untouched. Re-installing a session's token is therefore the reconciler's
-// job on every pass, not only at creation (see the reconciler's
-// reregisterMemoryToken, which reads the durable value back out of the
-// Secret). Set on creation alone once left a finished session's memory
-// unreadable for the rest of the operator's life, answering every read with
-// a bare 401.
+// Every map here is process memory: a restarted operator begins with an empty
+// registry while the per-session Secret holding each token — and every client
+// presenting one — survives untouched. Two things put tokens back. At startup
+// the operator restores every bearer it served (each live session's, each
+// Ready Workshop's) in one pass (pkg/controllers/tokenrestore), and holds the
+// registry in the "restoring" state (BeginRestore / FinishRestore) until that
+// pass is done, so an unknown bearer is answered "retry" rather than "refused"
+// for exactly as long as the registry is incomplete. And the reconciler
+// re-installs a session's token on every pass, not only at creation (see the
+// reconciler's reregisterMemoryToken, which reads the durable value back out
+// of the Secret). Set on creation alone once left a finished session's memory
+// unreadable for the rest of the operator's life, answering every read with a
+// bare 401.
 package tokens
 
 import (
+	"context"
 	"crypto/ed25519"
+	"net/http"
 	"sync"
 
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -36,6 +42,12 @@ type Registry struct {
 	authzdToken    string                                        // system-level authzd read+append token
 	webdToken      string                                        // system-level READ-ONLY token (webd artifact view)
 	pubKeys        map[string]map[string]ed25519.PublicKey       // publisher → keyID → key
+
+	// restored is closed once the startup restore pass has run. nil means this
+	// registry was never put in the restoring state (every in-process test
+	// harness, which Sets tokens synchronously), so it is complete from birth.
+	restored   chan struct{}
+	finishOnce sync.Once
 }
 
 func NewRegistry() *Registry {
@@ -45,6 +57,96 @@ func NewRegistry() *Registry {
 		authzed: map[string]map[memory.NamespacedName]struct{}{},
 		pubKeys: map[string]map[string]ed25519.PublicKey{},
 	}
+}
+
+// BeginRestore puts the registry in the restoring state: it holds no tokens
+// yet, but the sessions they belong to still exist, and their runners are
+// still presenting them. Call it once, at construction, before anything can
+// serve a request against the registry.
+//
+// While restoring, Restoring reports true, and callers that authenticate
+// bearers answer an unknown one with a retryable 503 rather than a 401. A 401
+// fails a live session for good, and during a restore an unknown bearer is
+// far likelier a session not restored yet than a forged token. This replaces
+// a fixed post-boot grace, which measured nothing about the restore: on a
+// large install the restore outlasted it, and sessions it had not reached yet
+// were refused permanently.
+func (r *Registry) BeginRestore() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.restored == nil {
+		r.restored = make(chan struct{})
+	}
+}
+
+// FinishRestore ends the restoring state. Safe to call more than once, and a
+// no-op on a registry that never began restoring.
+func (r *Registry) FinishRestore() {
+	r.mu.RLock()
+	ch := r.restored
+	r.mu.RUnlock()
+	if ch != nil {
+		r.finishOnce.Do(func() { close(ch) })
+	}
+}
+
+// Restoring reports whether the startup restore is still in progress, so an
+// unknown bearer may yet belong to a session whose token is about to return.
+func (r *Registry) Restoring() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	ch := r.restored
+	r.mu.RUnlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return false
+	default:
+		return true
+	}
+}
+
+// WaitRestored blocks until the startup restore has finished or ctx ends.
+// It returns at once for a registry that never began restoring.
+func (r *Registry) WaitRestored(ctx context.Context) error {
+	r.mu.RLock()
+	ch := r.restored
+	r.mu.RUnlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// RetryWhileRestoring answers w with a retryable 503 + Retry-After when
+// restoring is true, and reports whether it did. A caller that authenticates
+// bearers against a Registry calls it on a lookup MISS, before refusing the
+// bearer: mid-restore, an unknown bearer is far likelier a session not
+// restored yet than a forged token, and a 401 would fail that session for
+// good. Once the restore is done (or on a registry never put in the restoring
+// state) it writes nothing, and the caller's refusal stands. msg is the
+// response body.
+//
+// restoring must be read with Registry.Restoring BEFORE the lookup that
+// missed. Read after it, a restore that registers the bearer and finishes in
+// between would turn that miss into a permanent 401 for a token that is now
+// valid.
+func RetryWhileRestoring(w http.ResponseWriter, restoring bool, msg string) bool {
+	if !restoring {
+		return false
+	}
+	w.Header().Set("Retry-After", "1")
+	http.Error(w, msg, http.StatusServiceUnavailable)
+	return true
 }
 
 // Set installs token for k, replacing (and invalidating) any prior token.
