@@ -364,6 +364,47 @@ func TestLoopBudgetExhausts(t *testing.T) {
 	}
 }
 
+// hangingProvider never answers: Send blocks until its ctx is cancelled,
+// the shape of a provider stream that went silent on a live connection.
+type hangingProvider struct{ llmfake.Provider }
+
+func (*hangingProvider) Send(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	<-ctx.Done()
+	return llm.Response{}, ctx.Err()
+}
+
+// TestLoop_HungProviderCall_FailsOnMaxDurationMidCall proves the time budget
+// fires DURING a provider call, not only between turns. Before the per-call
+// deadline, a Send that never returned held the session in Running
+// indefinitely — the budget check at the top of the next iteration was never
+// reached. The session must land on Failed/BudgetExceeded (not the retryable
+// provider-error path, even when channel-attached: retrying cannot recover
+// a spent budget).
+func TestLoop_HungProviderCall_FailsOnMaxDurationMidCall(t *testing.T) {
+	l, _, _ := newLoopFixtureWithProvider(t, &hangingProvider{})
+	l.ChannelAttached = true
+	l.Budget = runner.NewBudget(spiceboxv1alpha1.BudgetConfig{
+		MaxTurns:    50,
+		MaxTokens:   100000,
+		MaxDuration: metav1.Duration{Duration: 300 * time.Millisecond},
+	}, runner.NewRunClock(0, time.Now), time.Now())
+
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	done := make(chan error, 1)
+	go func() { done <- l.Run(ctx) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "Run records the budget failure and returns")
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run blocked in a provider call past maxDuration")
+	}
+
+	var got spiceboxv1alpha1.AgentSession
+	require.NoError(t, l.Status.Get(ctx, &got), "Get after Run")
+	assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+	assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
+}
+
 func TestLoopProviderError(t *testing.T) {
 	// Protocol-violation sites in loop.go intentionally use l.fail (not
 	// failProviderError) so they always land on Failed regardless of
