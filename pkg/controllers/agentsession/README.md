@@ -15,7 +15,7 @@ memory token and deletes the memory entry.
 | **Sidecars**               | `sidecars.go`, `sidecarpod.go`, [`cosidecar/`](cosidecar/)                                                                                              |
 | **Network**                | `netpol.go`, [`netpolrule/`](netpolrule/)                                                                                                               |
 | **Identity + credentials** | `owner_resolve.go`, `identitychoice.go`, `effectivemode.go`, `passthrough.go`, `passthrough_credhash.go`, `credential_grants.go`, `credentialupdate.go` |
-| **Lifecycle**              | `sleep.go`, `wake.go`, `archive.go`, `expiration.go`, `retry_ttl.go`                                                                                    |
+| **Lifecycle**              | `sleep.go`, `wake.go`, `archive.go`, `expiration.go`, `maxduration.go`, `retry_ttl.go`                                                                  |
 | **Restart / fork**         | `restart.go`, `restart_decide.go`, `restart_pvc.go`, `fork_host.go`                                                                                     |
 | **Other**                  | `authzsessionconfig.go`, `skills.go`, `metaagent_membership.go`, `explanation.go`                                                                       |
 

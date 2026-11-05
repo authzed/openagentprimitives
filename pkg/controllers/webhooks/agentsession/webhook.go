@@ -487,7 +487,8 @@ var runnerWritableStatusFields = map[string]string{
 	"startedAt":  "stamped by the runner's first PatchProgress when the phase leaves Pending",
 	"finishedAt": "stamped by the runner at terminal transition, alongside phase",
 	"runDuration": "the runner's own accumulated active run-time (PatchRunDuration); the operator reads it against the " +
-		"class's maxDuration budget, so inflating it only ends the forging session sooner",
+		"class's maxDuration budget (reconcileRunDuration fails a Running session past it), so inflating it " +
+		"only ends the forging session sooner",
 	"progress": "the per-turn/per-tool caption the runner publishes for the status surface",
 	"result":   "the agent's own summary + artifact refs, written by WriteSucceeded",
 	"pinnedMessage": "the runner's projection of the triggered session's opening-message status (badge/body/link), " +
@@ -594,10 +595,10 @@ var runnerWritableStatusFields = map[string]string{
 		"session's own retry of an already-idempotent write, denying its own starter no more than the runner could " +
 		"already withhold by declining to run at all — self-scoped, and any other session sharing that class/subject " +
 		"still attempts the same touch",
-		"slotPins": "a display-only mirror of slot pin state written by StatusPatcher (pkg/agent/runner/status.go). " +
-			"Every enforcement decision reads SpiceDB directly (the slot_pin tuple and the MUST_MATCH preconditions on " +
-			"grant writes), and the approval card derives move state from a live SpiceDB ReadPin rather than this field, " +
-			"so a forged value only misdescribes the forging session's own `oap session show` output and buys no authority anywhere",
+	"slotPins": "a display-only mirror of slot pin state written by StatusPatcher (pkg/agent/runner/status.go). " +
+		"Every enforcement decision reads SpiceDB directly (the slot_pin tuple and the MUST_MATCH preconditions on " +
+		"grant writes), and the approval card derives move state from a live SpiceDB ReadPin rather than this field, " +
+		"so a forged value only misdescribes the forging session's own `oap session show` output and buys no authority anywhere",
 }
 
 // Webhook validates AgentSession update admission requests.
