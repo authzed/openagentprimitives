@@ -12,6 +12,7 @@ package agentsession_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -968,4 +969,112 @@ func TestReconcileFieldIsolatedSidecar_CredentialStaysOutOfRunnerPod(t *testing.
 		"runner pod should exist")
 	assert.False(t, podReferencesSecret(&runnerPod, credSecretName),
 		"the isolated toolbox's upstreamAuth credential must NOT be reachable from the runner pod's spec (claim 3)")
+}
+
+// wakeWithSeparatePodSidecar drives a channel-attached session whose runner has
+// already run, with one secret-gated separate-pod sidecar (crash-looping when
+// crash is set, otherwise left still starting), parks it Idle with the runner
+// pod gone, stamps a wake as a new user message would, and reconciles. It
+// returns the session and whether a runner pod exists afterwards.
+func wakeWithSeparatePodSidecar(t *testing.T, name string, crash bool) (spiceboxv1alpha1.AgentSession, bool) {
+	t.Helper()
+	env := testenv.Shared(t)
+	ctx := context.Background()
+	r := newReconcilerWithArchive(t, env, 0)
+
+	box := name + "-box"
+	sessKey := types.NamespacedName{Namespace: "default", Name: name}
+	runnerKey := types.NamespacedName{Namespace: "default", Name: name + "-runner"}
+
+	tb := sidecarToolboxWithSecretInputs(t, box, "KUBECONFIG", "file:/root/.kube/config", "kubeconfig")
+	require.NoError(t, env.Client.Create(ctx, tb), "create SidecarToolbox")
+
+	ac := classWithArchiveAfter("ac-"+name, 0)
+	ac.Spec.SidecarToolboxes = []spiceboxv1alpha1.AgentClassSidecarToolboxRef{{Name: box, Ref: box}}
+	require.NoError(t, env.Client.Create(ctx, ac), "create AgentClass")
+	markValid(t, env, ac)
+
+	require.NoError(t, env.Client.Create(ctx, channelSession(name, ac.Name)), "create AgentSession")
+	require.NoError(t, env.Client.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretoutsrv.SecretOutputSecretName(name), Namespace: "default"},
+		Data:       map[string][]byte{"kubeconfig": []byte("kubeconfig-value")},
+	}), "create per-session secret-output Secret")
+
+	// The runner has already run (it produced the gating secret), so a sidecar
+	// crash is recorded for it rather than failing the session.
+	var live spiceboxv1alpha1.AgentSession
+	require.NoError(t, env.Client.Get(ctx, sessKey, &live))
+	meta.SetStatusCondition(&live.Status.Conditions, metav1.Condition{
+		Type:   string(spiceboxv1alpha1.AgentSessionConditionRunnerReady),
+		Status: metav1.ConditionTrue,
+		Reason: "RunnerReady",
+	})
+	require.NoError(t, env.Client.Status().Update(ctx, &live), "seed RunnerReady")
+
+	reconcileToWork(t, ctx, r, name)
+	if crash {
+		crashSidecarPod(t, ctx, env, name+"-sidecar-"+box, "boom")
+		reconcileToWork(t, ctx, r, name)
+	}
+
+	// Park the session: the runner exited and the session went Idle.
+	var runnerPod corev1.Pod
+	if err := env.Client.Get(ctx, runnerKey, &runnerPod); err == nil {
+		require.NoError(t, env.Client.Delete(ctx, &runnerPod), "delete the prior runner pod")
+	}
+	var idle spiceboxv1alpha1.AgentSession
+	require.NoError(t, env.Client.Get(ctx, sessKey, &idle))
+	idle.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseIdle
+	idleAt := metav1.Now()
+	idle.Status.LastIdleAt = &idleAt
+	require.NoError(t, env.Client.Status().Update(ctx, &idle), "set phase=Idle")
+
+	// A new user message arrives.
+	require.NoError(t, env.Client.Get(ctx, sessKey, &idle))
+	if idle.Annotations == nil {
+		idle.Annotations = map[string]string{}
+	}
+	idle.Annotations[spiceboxv1alpha1.AnnotationWakeRequestedAt] = time.Now().UTC().Format(time.RFC3339Nano)
+	require.NoError(t, env.Client.Update(ctx, &idle), "stamp wake annotation")
+
+	reconcileToWork(t, ctx, r, name)
+
+	var got spiceboxv1alpha1.AgentSession
+	require.NoError(t, env.Client.Get(ctx, sessKey, &got))
+	runnerExists := env.Client.Get(ctx, runnerKey, &runnerPod) == nil
+	return got, runnerExists
+}
+
+// TestReconcileSecretGatedSidecar_CrashLoopDoesNotBlockWake covers a parked
+// session whose separate-pod sidecar is crash-looping when a new user message
+// arrives. The failure is already recorded for the runner to surface, so it
+// must not gate anything: the wake has to be consumed and a fresh runner
+// started. Previously the sidecar step returned early on every pass, ahead of
+// the wake handling, so the wake was never consumed — and, because a pending
+// wake also suppresses the idle sweep, the session never slept or archived
+// either. The user's message went unanswered indefinitely.
+func TestReconcileSecretGatedSidecar_CrashLoopDoesNotBlockWake(t *testing.T) {
+	got, runnerExists := wakeWithSeparatePodSidecar(t, "s-wakecrash", true)
+
+	assert.NotNil(t, got.Status.LastWakeAt, "the wake must be consumed despite the crash-looping sidecar")
+	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseIdle, got.Status.Phase, "the session must leave Idle")
+	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase,
+		"a sidecar crash recorded for the runner must not fail the woken session")
+	require.Len(t, got.Status.ResolvedSidecarToolboxes, 1, "one resolved sidecar in status")
+	assert.NotNil(t, got.Status.ResolvedSidecarToolboxes[0].PodFailure,
+		"the failure stays recorded so the new runner can surface it")
+	assert.True(t, runnerExists, "a fresh runner pod must be created for the woken session")
+}
+
+// TestReconcileSecretGatedSidecar_StartingSidecarDoesNotBlockWake covers the
+// non-terminal half: a sidecar pod that is merely still starting may hold the
+// runner until it is Ready, but must not keep the wake from being consumed.
+func TestReconcileSecretGatedSidecar_StartingSidecarDoesNotBlockWake(t *testing.T) {
+	got, runnerExists := wakeWithSeparatePodSidecar(t, "s-wakestart", false)
+
+	assert.NotNil(t, got.Status.LastWakeAt, "the wake must be consumed while the sidecar is still starting")
+	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseIdle, got.Status.Phase, "the session must leave Idle")
+	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase,
+		"a still-starting sidecar must not fail the session")
+	assert.False(t, runnerExists, "the runner is held until a still-starting sidecar is Ready")
 }
