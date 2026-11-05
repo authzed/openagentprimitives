@@ -1406,6 +1406,17 @@ func run(cfg *config) error {
 					"sidecar", rt.Name)
 				continue
 			}
+			if rt.RunMode == "separate-pod" && rt.PodFailure != nil {
+				// The operator recorded this sidecar's pod as terminally failed
+				// (a crash loop, an unpullable image). It will not become Ready,
+				// so polling for its IP would only end in failing the whole
+				// session. Boot without it: the tool refresher reports the
+				// failure to the agent and user at the top of the first turn, and
+				// picks the sidecar up if its pod ever recovers.
+				slog.Info("separate-pod sidecar terminally failed; booting without it",
+					"sidecar", rt.Name, "reason", rt.PodFailure.Reason)
+				continue
+			}
 			if rt.RunMode == "separate-pod" {
 				// Pod exists (AwaitingSecret==false) but IP not yet reflected in
 				// status. Poll the AgentSession until it appears.
@@ -1429,9 +1440,16 @@ func run(cfg *config) error {
 						}
 					}
 					probeURL, ready = sidecarProbeURL(rt, os.Getenv)
-					if ready {
+					if ready || rt.PodFailure != nil {
 						break
 					}
+				}
+				if !ready && rt.PodFailure != nil {
+					// Recorded as terminally failed while we waited: same as the
+					// skip above — boot without it and let the refresher report it.
+					slog.Info("separate-pod sidecar terminally failed while awaiting its IP; booting without it",
+						"sidecar", rt.Name, "reason", rt.PodFailure.Reason)
+					continue
 				}
 				if !ready {
 					// Sidecar pod created (not AwaitingSecret) but never became

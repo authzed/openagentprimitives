@@ -204,11 +204,11 @@ const mcpAgentIdentityRequeueAfter = 5 * time.Second
 const detectorReadyDeadline = 5 * time.Minute
 
 // sidecarTerminalRequeue is the reflection interval for a separate-pod sidecar
-// wedged in a terminal state while the runner is live. The session is
-// deliberately NOT failed then (the agent is told instead), which would
-// otherwise hold the 2s not-ready cadence for the rest of the session's life.
-// The pod is owned and watched, so a real recovery still wakes the reconciler
-// immediately; this only bounds the idle polling in between.
+// wedged in a terminal state once the runner has started. The session is
+// deliberately NOT failed then (the agent is told instead), and the sidecar does
+// not gate the rest of the reconcile, so this only re-checks the pod at a
+// relaxed cadence. The pod is owned and watched, so a real recovery still wakes
+// the reconciler immediately.
 const sidecarTerminalRequeue = 30 * time.Second
 
 // bundleReadyDeadline bounds how long a session may sit in
@@ -2433,20 +2433,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	resolvedSidecars := make([]spiceboxv1alpha1.ResolvedSidecarToolbox, 0, len(ac.Spec.SidecarToolboxes))
 	anyAwaitingSecret := false
-	// sidecarSecretRequeue, when nonzero, is the requeue interval while a
-	// separate-pod sidecar still awaits its secret-output. It does NOT hold the
-	// runner — it only re-triggers this reconcile so the sidecar pod is created
-	// once the runner has produced the gating secret.
-	var sidecarSecretRequeue time.Duration
+	// sidecarRequeue, when nonzero, is the requeue interval the reconcile ends
+	// with on behalf of a separate-pod sidecar that does NOT hold the runner: one
+	// still awaiting its secret-output (re-triggered so the sidecar pod is
+	// created once the runner has produced the gating secret), or one that has
+	// terminally failed (re-checked at a relaxed cadence).
+	var sidecarRequeue time.Duration
 	// sidecarPodNotReady marks a satisfied separate-pod sidecar whose pod exists
-	// but has not reported a Ready PodIP yet, so the reconcile requeues to
-	// reflect the IP on a later pass. NOT a boot failure.
+	// and is still starting (no Ready PodIP yet, no terminal failure), or whose
+	// stale pod was just deleted for a token rotation, so the reconcile requeues
+	// to reflect the IP on a later pass. NOT a boot failure.
 	sidecarPodNotReady := false
 	// sidecarTerminalFailure marks a separate-pod sidecar wedged unrecoverably
-	// while the runner is already live, so the runner surfaces the failure rather
-	// than the session failing. It only slows the requeue — a pod that will not
-	// recover does not deserve a 2s poll for the rest of the session — and the
-	// pod stays watched, so a genuine recovery is still picked up promptly.
+	// after the runner has started, so the runner surfaces the failure rather
+	// than the session failing. Such a sidecar must not gate anything — waiting
+	// on a pod that will not recover would strand the session — so it only sets
+	// a relaxed requeue, and the pod stays watched, so a genuine recovery is
+	// still picked up promptly.
 	sidecarTerminalFailure := false
 	// pendingObservedPins collects per-sidecar ObservedPin records built while the
 	// original tb.Spec is still available, before the by-digest rewrite. They are
@@ -2699,12 +2702,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 						"session", sess.Namespace+"/"+sess.Name,
 						"sidecar", rt.Ref, "pod", rt.SidecarPodName)
 				} else if podIP == "" {
-					// Pod created but not Ready yet; requeue and reflect the
-					// PodIP on a later pass. Not a boot failure.
-					sidecarPodNotReady = true
-					log.FromContext(ctx).Info("sidecar pod not Ready yet; awaiting PodIP",
-						"session", sess.Namespace+"/"+sess.Name,
-						"sidecar", rt.Ref, "pod", rt.SidecarPodName)
+					// Pod created but not Ready yet. A terminally failed pod was
+					// recorded above and will not become Ready, so only a pod that
+					// is still starting is waited on: requeue and reflect the PodIP
+					// on a later pass. Not a boot failure.
+					if podState.Failure == nil {
+						sidecarPodNotReady = true
+						log.FromContext(ctx).Info("sidecar pod not Ready yet; awaiting PodIP",
+							"session", sess.Namespace+"/"+sess.Name,
+							"sidecar", rt.Ref, "pod", rt.SidecarPodName)
+					}
 				} else {
 					rt.SidecarPodIP = podIP
 				}
@@ -2797,21 +2804,30 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if uerr := r.applyStatus(ctx, &sess); uerr != nil {
 			return ctrl.Result{}, uerr
 		}
-		sidecarSecretRequeue = 5 * time.Second
+		sidecarRequeue = 5 * time.Second
 	}
-	// A satisfied separate-pod sidecar whose pod exists but is not Ready, or whose
+	// A separate-pod sidecar that terminally failed after the runner started
+	// must NOT hold the reconcile either. Its failure is already on the status
+	// snapshot for the runner to surface, and the pod will not recover on its
+	// own, so returning here would park the session for good: a pending wake
+	// (handled below) would never be consumed, and because a pending wake also
+	// suppresses the idle sweep, the session would never sleep or archive
+	// either. FALL THROUGH, so the wake is consumed and the runner is (re)created;
+	// just re-check the pod at a relaxed cadence.
+	if sidecarTerminalFailure && (sidecarRequeue == 0 || sidecarTerminalRequeue < sidecarRequeue) {
+		sidecarRequeue = sidecarTerminalRequeue
+	}
+	// A satisfied separate-pod sidecar whose pod is still starting, or whose
 	// stale pod was just deleted for a token rotation: persist the snapshot
 	// assigned above (SidecarPodName plus the NEW SecretTokenHash) and requeue.
 	// The next pass reflects the PodIP once Ready or recreates the replacement,
-	// and the persisted hash keeps the rotation from being re-detected. The runner
-	// pod may still be created meanwhile — it tolerates an unresolved
-	// SidecarPodIP.
-	if sidecarPodNotReady {
-		requeue := 2 * time.Second
-		if sidecarTerminalFailure {
-			requeue = sidecarTerminalRequeue
-		}
-		return ctrl.Result{RequeueAfter: requeue}, r.applyStatus(ctx, &sess)
+	// and the persisted hash keeps the rotation from being re-detected. This
+	// holds the runner (and every step below) until the pod is Ready or is
+	// classified as terminally failed above. It does NOT hold a pending wake:
+	// consuming the wake (whose pass ends early anyway) only moves the session
+	// from Idle to Pending, and the next pass waits here.
+	if sidecarPodNotReady && !shouldWake(&sess) {
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, r.applyStatus(ctx, &sess)
 	}
 
 	// 4e. Content-guard detector pods: for each enabled inspector implementing
@@ -3287,9 +3303,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	sess.Status.ObservedGeneration = sess.Generation
 	// RequeueAfter is nonzero only while a secret-gated sidecar awaits its secret,
-	// so the sidecar pod is created as soon as the runner produces it. The runner
-	// is already Running by now, so this blocks nothing.
-	return ctrl.Result{RequeueAfter: sidecarSecretRequeue}, r.applyStatus(ctx, &sess)
+	// so the sidecar pod is created as soon as the runner produces it, or while a
+	// sidecar sits terminally failed. The runner is already Running by now, so
+	// this blocks nothing.
+	return ctrl.Result{RequeueAfter: sidecarRequeue}, r.applyStatus(ctx, &sess)
 }
 
 func (r *Reconciler) finalize(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (ctrl.Result, error) {
