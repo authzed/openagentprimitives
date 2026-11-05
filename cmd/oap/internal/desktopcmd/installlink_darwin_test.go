@@ -18,6 +18,7 @@ import (
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/linkinstall"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/links"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/settingsui"
+	"github.com/authzed/openagentprimitives/pkg/platform/oap"
 )
 
 const testLinkRef = "ghcr.io/acme/agents/demo-agent:1.0"
@@ -39,7 +40,7 @@ func stubPrepareLink(t *testing.T, fn func(ctx context.Context, supportDir, ref 
 	t.Helper()
 	calls := 0
 	orig := prepareLink
-	prepareLink = func(ctx context.Context, supportDir, ref string) ([]byte, linkinstall.Prompt, error) {
+	prepareLink = func(ctx context.Context, supportDir, ref string, _ func(context.Context, *oap.Bundle) (linkinstall.Installed, error)) ([]byte, linkinstall.Prompt, error) {
 		calls++
 		return fn(ctx, supportDir, ref)
 	}
@@ -109,6 +110,9 @@ func TestLinkFailureMessage(t *testing.T) {
 		{name: "malformed install source: settings-invalid message", err: fmt.Errorf("x: %w: %w", linkinstall.ErrInvalidSource, errors.New("must end with '/'")), want: "OAP Desktop's install-link settings are invalid — check Settings → Install links.", wantShow: true},
 		{name: "unusable ref: invalid-link message", err: fmt.Errorf("x: %w: %w", linkinstall.ErrInvalidRef, errors.New("bad ref")), want: "That isn't a valid OAP Desktop link.", wantShow: true},
 		{name: "signing key unavailable: key message", err: fmt.Errorf("x: %w: %w", linkinstall.ErrTrustedKey, errors.New("no PEM")), want: "Couldn't load OAP's signing key — see logs.", wantShow: true},
+		{name: "downgrade: says why and how to roll back on purpose", err: fmt.Errorf("x: %w", linkinstall.ErrDowngrade), want: testLinkRef + " is older than the agent already installed, so it wasn't installed. To roll back on purpose, use Install agent from .oap….", wantShow: true},
+		{name: "installed lookup failed: see logs", err: fmt.Errorf("x: %w: %w", linkinstall.ErrInstalledLookup, errors.New("apiserver down")), want: "Couldn't check which version of this agent is installed, so it wasn't installed — see logs.", wantShow: true},
+		{name: "bundle unreadable: see logs", err: fmt.Errorf("x: %w: %w", linkinstall.ErrUnreadableBundle, errors.New("bad CR")), want: "Couldn't read what " + testLinkRef + " would install, so it wasn't installed — see logs.", wantShow: true},
 		{name: "dialog failed: shown, not treated as a cancel", err: fmt.Errorf("x: %w: %w", linkinstall.ErrConfirmFailed, errors.New("no display")), want: "Couldn't show the install dialog — see logs.", wantShow: true},
 		{name: "digest mismatch: download message without the raw error", err: linkinstall.ErrDigestMismatch, want: "Couldn't download " + testLinkRef + ". See logs for details.", wantShow: true},
 		{name: "registry error: download message without the raw error", err: errors.New("pull: GET https://registry.internal.example/v2/: 401 body"), want: "Couldn't download " + testLinkRef + ". See logs for details.", wantShow: true},
