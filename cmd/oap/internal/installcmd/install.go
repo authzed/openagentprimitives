@@ -535,6 +535,9 @@ func applyBaseRegion(ctx context.Context, dyn dynamic.Interface, docs []*unstruc
 		if err := mirrorOperatorSnapshotImage(d, mirrorMap, apimage.Operator.Name); err != nil {
 			return fmt.Errorf("mirror operator snapshot image: %w", err)
 		}
+		if err := preserveLiveMemoryLimits(ctx, dyn, d, m.rep.Info); err != nil {
+			return err
+		}
 		if err := m.apply(ctx, dyn, d, baseRegionLabel); err != nil {
 			return err
 		}
@@ -1421,9 +1424,7 @@ func RunInstall(ctx, recheckCtx context.Context, cfg InstallConfig) error {
 		Dynamic: bundle.Dynamic,
 		Typed:   bundle.Typed,
 		Apply: func(ctx context.Context, groups [][]byte) error {
-			return applyManifestGroups(ctx, bundle.Dynamic, groups, imagePullSecret, firstPartyRefs, mirrorMap, func(id string) {
-				rep.Info("applied %s", id)
-			})
+			return applyManifestGroups(ctx, bundle.Dynamic, groups, imagePullSecret, firstPartyRefs, mirrorMap, rep.Info)
 		},
 		Recheck: recheckCtx, // SIGINT-cancelable, not timeout-bound
 		// What this run applied. `oap install`'s interrupt handler reads it to
@@ -2673,12 +2674,13 @@ func spicedbClusterServing(typed kubernetes.Interface, ns, deployName string) pr
 // applyManifestGroups splits each manifest in groups into its documents, mirrors
 // dependency image refs (air-gapped installs), injects an imagePullSecret into
 // first-party Deployment docs when secret is set, and server-side-applies every
-// document via kube.Apply under the "ap-install" field manager. It is the shared
-// apply body used by the install pipeline's Apply closure; emit, when non-nil, is
-// called with a human-readable id per applied doc. injectImagePullSecret is a
+// document via kube.Apply under the "ap-install" field manager, keeping any live
+// container memory limit (preserveLiveMemoryLimits). It is the shared apply body
+// used by the install pipeline's Apply closure; info, when non-nil, narrates each
+// applied doc and each preserved limit. injectImagePullSecret is a
 // no-op for non-first-party (dependency) images, so passing firstPartyRefs for
 // every component is safe — only channelsd's first-party image is affected.
-func applyManifestGroups(ctx context.Context, dyn dynamic.Interface, groups [][]byte, secret string, firstPartyRefs map[string]bool, mirrorMap map[string]string, emit func(id string)) error {
+func applyManifestGroups(ctx context.Context, dyn dynamic.Interface, groups [][]byte, secret string, firstPartyRefs map[string]bool, mirrorMap map[string]string, info func(format string, args ...any)) error {
 	for _, m := range groups {
 		docs, err := manifests.Split(m)
 		if err != nil {
@@ -2693,11 +2695,14 @@ func applyManifestGroups(ctx context.Context, dyn dynamic.Interface, groups [][]
 					return fmt.Errorf("inject imagePullSecret into %s %s/%s: %w", d.GetKind(), d.GetNamespace(), d.GetName(), err)
 				}
 			}
+			if err := preserveLiveMemoryLimits(ctx, dyn, d, info); err != nil {
+				return err
+			}
 			if err := kube.Apply(ctx, dyn, d, "ap-install"); err != nil {
 				return fmt.Errorf("apply %s %s/%s: %w", d.GetKind(), d.GetNamespace(), d.GetName(), err)
 			}
-			if emit != nil {
-				emit(resourceID(d.GetKind(), d.GetNamespace(), d.GetName()))
+			if info != nil {
+				info("applied %s", resourceID(d.GetKind(), d.GetNamespace(), d.GetName()))
 			}
 		}
 	}
