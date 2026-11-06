@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	slackapi "github.com/slack-go/slack"
@@ -106,20 +107,76 @@ func plainRichText(s string) *slackapi.RichTextBlock {
 // before calling chat.postMessage vs chat.update.
 type planMessageMap struct {
 	mu sync.Mutex
-	m  map[string]string // key = "<ns>/<sess>::<planName>"
+	m  map[string]planMessage // key = "<ns>/<sess>::<planName>"
 }
 
-func newPlanMessageMap() *planMessageMap { return &planMessageMap{m: map[string]string{}} }
+// planMessage is one posted plan card: its ts, plus the channel and the last
+// payload rendered into it, which is what FinalizeSession needs to re-render
+// the card as stopped when its session ends without the runner doing so.
+// last is nil until a render through sendPlanUpdate succeeds.
+type planMessage struct {
+	ts        string
+	channelID string
+	last      *channelevents.PlanUpdatePayload
+}
+
+func newPlanMessageMap() *planMessageMap { return &planMessageMap{m: map[string]planMessage{}} }
+
+func (p *planMessageMap) sessionPrefix(sess channelkinds.SessionInfo) string {
+	return sess.Namespace + "/" + sess.Name + "::"
+}
 
 func (p *planMessageMap) key(sess channelkinds.SessionInfo, planName string) string {
-	return sess.Namespace + "/" + sess.Name + "::" + planName
+	return p.sessionPrefix(sess) + planName
 }
 
 func (p *planMessageMap) get(sess channelkinds.SessionInfo, planName string) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	ts, ok := p.m[p.key(sess, planName)]
-	return ts, ok
+	e, ok := p.m[p.key(sess, planName)]
+	return e.ts, ok
+}
+
+// remember records the payload just rendered into (sess, planName)'s card.
+// A no-op when no ts is recorded (the post failed).
+func (p *planMessageMap) remember(sess channelkinds.SessionInfo, planName, channelID string, pl channelevents.PlanUpdatePayload) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	k := p.key(sess, planName)
+	e, ok := p.m[k]
+	if !ok {
+		return
+	}
+	e.channelID, e.last = channelID, &pl
+	p.m[k] = e
+}
+
+// sessionCards returns every plan card recorded for sess, keyed by map key,
+// WITHOUT removing them: FinalizeSession drops each one (forget) only once it
+// is settled, so a card whose re-render failed is still here for the retry.
+func (p *planMessageMap) sessionCards(sess channelkinds.SessionInfo) map[string]planMessage {
+	prefix := p.sessionPrefix(sess)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := map[string]planMessage{}
+	for k, e := range p.m {
+		if strings.HasPrefix(k, prefix) {
+			out[k] = e
+		}
+	}
+	return out
+}
+
+// forget drops the card at key, if it is still the message with ts. The ts
+// check keeps a finalize from dropping a card a concurrent sendPlanUpdate just
+// replaced. Dropping settled cards also bounds a map that otherwise grows for
+// the process lifetime.
+func (p *planMessageMap) forget(key, ts string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.m[key]; ok && e.ts == ts {
+		delete(p.m, key)
+	}
 }
 
 // has reports whether a ts is recorded for (sess, planName). Used by
@@ -136,7 +193,7 @@ func (p *planMessageMap) has(sess channelkinds.SessionInfo, planName string) boo
 func (p *planMessageMap) set(sess channelkinds.SessionInfo, planName, ts string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.m[p.key(sess, planName)] = ts
+	p.m[p.key(sess, planName)] = planMessage{ts: ts}
 }
 
 // renderPlanBlocks emits the Block Kit primitive rendering of the
@@ -259,6 +316,7 @@ func (s *slackSender) sendPlanUpdate(
 	if newTS != "" && !s.planMessages.has(sess, pl.PlanName) {
 		s.planMessages.set(sess, pl.PlanName, newTS)
 	}
+	s.planMessages.remember(sess, pl.PlanName, channelID, pl)
 	if wasPost {
 		s.restoreStatus(ctx, sess)
 	}

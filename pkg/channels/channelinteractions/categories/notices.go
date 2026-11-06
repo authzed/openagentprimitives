@@ -86,6 +86,13 @@ const (
 	// non-terminal: the approval may still land.
 	StartAwaitingApproval = "start_awaiting_approval"
 
+	// SessionQueued — the session is held waiting for cluster capacity: its
+	// sandbox could not be scheduled because the cluster is full right now,
+	// and it will start by itself once room frees up (or give up at the time
+	// the notice names). Waiting, and non-terminal: the system is queueing as
+	// designed, and the reader's move is patience.
+	SessionQueued = "session_queued"
+
 	// AgentFailed — the session hit an unrecoverable fault and stopped.
 	//
 	// It reaches the user as a notice rather than as agent speech: published as
@@ -254,6 +261,7 @@ func registerNotices() {
 		// Waiting, not degraded: a parked start approval is the system
 		// working as configured, and the reader's move is patience.
 		{Name: StartAwaitingApproval, Tone: channelinteractions.ToneWaiting},
+		{Name: SessionQueued, Tone: channelinteractions.ToneWaiting},
 		{Name: ContinuationDenied, Tone: channelinteractions.ToneDegraded},
 		{Name: ForkDenied, Tone: channelinteractions.ToneDegraded},
 		{Name: ToolboxUnavailable, Tone: channelinteractions.ToneDegraded},
