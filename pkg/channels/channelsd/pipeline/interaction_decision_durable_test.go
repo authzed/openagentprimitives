@@ -161,3 +161,96 @@ func TestHandleInteractionDecision_NoDurablePromptRecord_StillDecides(t *testing
 	assert.Equal(t, 1, calls, "an un-noted prompt must still decide — absence of a record is not a resolution")
 	assert.True(t, sawPublishedKind(natsRec, channelevents.KindInteractionApplied), "Applied still publishes")
 }
+
+// The timeout can reach channelsd BEFORE the prompt does. The runner reports
+// the expiry on IN, which channelsd handles promptly, while the prompt itself
+// rides the OUT relay — observed on a live cluster running six minutes behind.
+// HandleInteractionApplied then finds no parked record to tombstone, the relay
+// notes the prompt afterward as live, and the card the approver finally sees
+// stays armed: a Slack approver card is an ephemeral, which chat.update cannot
+// edit to "expired". A click on it ran the handler in full — "approved", a grant
+// written — for a request the runner had abandoned minutes earlier, and nothing
+// ever acted on it.
+//
+// The request's own ExpiresAt is the witness that does not depend on that
+// ordering, so a click past it is refused and the prompt tombstoned.
+func TestHandleInteractionDecision_PastExpiresAt_NotedAfterTimeout_IsRejectedExpired(t *testing.T) {
+	registerInteractionCategory(t, channelinteractions.DecideApprovers)
+	calls := 0
+	channelinteractions.Bind(fixtureInteractionCategory, trackingHandler(&calls, channelinteractions.Outcome{
+		Result: channelevents.OutcomeApproved,
+	}, nil))
+
+	cli := newFakeK8sClientWithExistingSession(t, "U_ALICE")
+	sessKey := sessKeyForFixture()
+	natsRec := &fakeNATS{}
+	p := newTestPipeline(t, cli, &fakeAuthz{checkApproveResult: true}, natsRec)
+	now := time.Now()
+	p.Now = func() time.Time { return now }
+	mem := newTestMemory(t)
+	p.Mem = mem
+
+	// 1. The runner's deadline passes; its expiry lands with nothing noted yet.
+	expired, err := channelevents.BuildEnvelope(sessKey.Namespace, sessKey.Name,
+		channelevents.KindInteractionApplied,
+		channelevents.InteractionAppliedPayload{
+			AgentSessionRef: channelevents.SessionRef{Namespace: sessKey.Namespace, Name: sessKey.Name},
+			Category:        fixtureInteractionCategory,
+			RequestRef:      "req-1",
+			Outcome:         channelevents.OutcomeExpired,
+		})
+	require.NoError(t, err, "build timeout applied envelope")
+	require.NoError(t, p.HandleInteractionApplied(context.Background(), expired), "timeout applied")
+
+	// 2. The lagging relay notes the prompt afterward, as live.
+	alice := channelevents.ExternalIdentity{Kind: "slack", ExternalID: "U_ALICE", Email: "alice@example.com"}
+	req := approversFixtureRequest(alice)
+	deadline := now.Add(-8 * time.Minute)
+	req.ExpiresAt = &deadline
+	notePendingInteractionRequest(t, mem, sessKey, fixtureInteractionCategory, "req-1", req)
+	natsRec.subjects, natsRec.payloads = nil, nil
+
+	// 3. The approver clicks the still-armed card.
+	require.NoError(t, p.HandleInteractionDecision(context.Background(),
+		mustBuildInteractionDecision(t, sessKey, fixtureInteractionCategory, "req-1", "approve", alice)),
+		"click past the request's deadline")
+
+	assert.Equal(t, 0, calls, "the bound handler must NOT run for a request whose deadline has passed")
+	assert.False(t, sawPublishedKind(natsRec, channelevents.KindInteractionApplied),
+		"no interaction_applied: nothing was decided")
+	rej := findInteractionDecisionRejected(t, natsRec)
+	assert.Equal(t, "expired", rej.Class, "the clicker is told the request expired")
+	assert.Equal(t, alice.ExternalID, rej.Clicker.ExternalID, "rejection is addressed to the clicker")
+	assert.Empty(t, outstandingPrompts(t, p, sessKey), "the expired prompt is tombstoned so it is never re-surfaced")
+}
+
+// The deadline check must not refuse a click that lands in time.
+func TestHandleInteractionDecision_BeforeExpiresAt_StillDecides(t *testing.T) {
+	registerInteractionCategory(t, channelinteractions.DecideApprovers)
+	calls := 0
+	channelinteractions.Bind(fixtureInteractionCategory, trackingHandler(&calls, channelinteractions.Outcome{
+		Result: channelevents.OutcomeApproved,
+	}, nil))
+
+	cli := newFakeK8sClientWithExistingSession(t, "U_ALICE")
+	sessKey := sessKeyForFixture()
+	natsRec := &fakeNATS{}
+	p := newTestPipeline(t, cli, &fakeAuthz{checkApproveResult: true}, natsRec)
+	now := time.Now()
+	p.Now = func() time.Time { return now }
+	mem := newTestMemory(t)
+	p.Mem = mem
+
+	alice := channelevents.ExternalIdentity{Kind: "slack", ExternalID: "U_ALICE", Email: "alice@example.com"}
+	req := approversFixtureRequest(alice)
+	deadline := now.Add(time.Minute)
+	req.ExpiresAt = &deadline
+	notePendingInteractionRequest(t, mem, sessKey, fixtureInteractionCategory, "req-1", req)
+
+	require.NoError(t, p.HandleInteractionDecision(context.Background(),
+		mustBuildInteractionDecision(t, sessKey, fixtureInteractionCategory, "req-1", "approve", alice)),
+		"click before the deadline")
+
+	assert.Equal(t, 1, calls, "a click inside the window decides")
+	assert.True(t, sawPublishedKind(natsRec, channelevents.KindInteractionApplied), "Applied publishes")
+}
