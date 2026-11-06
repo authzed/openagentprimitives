@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -682,12 +683,28 @@ func (l *Loop) Run(ctx context.Context) error {
 		// registry is cleared unconditionally right after Send returns, on
 		// both the success and error paths, so a stale providerCancel can
 		// never be fired against a completed call.
-		sendCtx, sendCancel := context.WithCancelCause(ctx)
+		interruptCtx, sendCancel := context.WithCancelCause(ctx)
 		l.interrupts.setProvider(sendCancel)
+		// Bound the call by what is left of the time budget. Budget.Check runs
+		// only between turns, so a call that never returns would otherwise hold
+		// the session past maxDuration indefinitely. The interrupt cause still
+		// propagates: a child ctx reports its parent's cancel cause.
+		sendCtx, stopBudgetDeadline := interruptCtx, context.CancelFunc(func() {})
+		if remaining, reason, ok := l.Budget.Remaining(); ok {
+			sendCtx, stopBudgetDeadline = context.WithTimeoutCause(interruptCtx, remaining, budgetDeadlineError{reason: reason})
+		}
 		resp, err := l.Provider.Send(sendCtx, req)
 		l.interrupts.clearProvider()
+		stopBudgetDeadline()
 		sendCancel(nil)
 		if err != nil {
+			var budgetHit budgetDeadlineError
+			if errors.As(context.Cause(sendCtx), &budgetHit) {
+				slog.Default().Info("turn: LLM call cut off by the session's time budget",
+					"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name,
+					"turn", turnCount+1, "reason", budgetHit.reason, "err", err.Error())
+				return l.fail(ctx, budgetFailReason(budgetHit.reason), budgetHit.reason)
+			}
 			if context.Cause(sendCtx) == errInterruptedByUser {
 				// The user interrupted the LLM call to jump the queue. Not a
 				// provider failure — drain the held queue and continue.

@@ -114,3 +114,65 @@ func TestBudget_Check(t *testing.T) {
 		})
 	}
 }
+
+func TestBudget_Remaining(t *testing.T) {
+	// sessionStart offsets are wall-clock against time.Now, so assert the
+	// expiration rows with a tolerance rather than exactly.
+	const slack = 5 * time.Second
+	cases := []struct {
+		name         string
+		cfg          spiceboxv1alpha1.BudgetConfig
+		runElapsed   time.Duration
+		sessionStart time.Time
+		wantOK       bool
+		wantReason   string
+		want         time.Duration
+	}{
+		{
+			name:   "no time caps: ok=false, call unbounded by budget",
+			cfg:    cfg(50, 1000, 0),
+			wantOK: false,
+		},
+		{
+			name:       "maxDuration only: remaining = cap - run-time",
+			cfg:        cfg(0, 0, 2*time.Hour),
+			runElapsed: 90 * time.Minute,
+			wantOK:     true, wantReason: runner.BudgetReasonDuration, want: 30 * time.Minute,
+		},
+		{
+			name:       "maxDuration already spent: remaining <= 0",
+			cfg:        cfg(0, 0, time.Hour),
+			runElapsed: 2 * time.Hour,
+			wantOK:     true, wantReason: runner.BudgetReasonDuration, want: -time.Hour,
+		},
+		{
+			name: "sessionExpiration nearer than maxDuration: expiration wins",
+			cfg: spiceboxv1alpha1.BudgetConfig{
+				MaxDuration:       metav1.Duration{Duration: 2 * time.Hour},
+				SessionExpiration: metav1.Duration{Duration: time.Hour},
+			},
+			runElapsed:   time.Minute,
+			sessionStart: time.Now().Add(-50 * time.Minute),
+			wantOK:       true, wantReason: runner.BudgetReasonExpired, want: 10 * time.Minute,
+		},
+		{
+			name: "sessionExpiration ignored before sessionStart is stamped",
+			cfg: spiceboxv1alpha1.BudgetConfig{
+				SessionExpiration: metav1.Duration{Duration: time.Hour},
+			},
+			wantOK: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := runner.NewBudget(tc.cfg, runClockElapsed(tc.runElapsed), tc.sessionStart)
+			got, reason, ok := b.Remaining()
+			assert.Equal(t, tc.wantOK, ok)
+			if !tc.wantOK {
+				return
+			}
+			assert.Equal(t, tc.wantReason, reason)
+			assert.InDelta(t, tc.want, got, float64(slack))
+		})
+	}
+}

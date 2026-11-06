@@ -18,6 +18,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
+	"github.com/authzed/openagentprimitives/pkg/agent/llm/llmhttp"
 )
 
 type Provider struct {
@@ -30,8 +31,22 @@ func New(apiKey string) *Provider {
 	if apiKey == "" {
 		panic("anthropic.New: apiKey must be non-empty")
 	}
-	c := sdk.NewClient(option.WithAPIKey(apiKey))
+	c := NewSDKClient(apiKey)
 	return &Provider{client: &c}
+}
+
+// NewSDKClient builds an anthropic-sdk-go client on the shared bounded HTTP
+// client (llmhttp.Client: connect/header timeouts, HTTP/2 health pings, and a
+// stream-idle abort). It is the single place an Anthropic SDK client is
+// constructed, so no caller can fall back to the SDK's default client, which
+// has no timeouts and lets a silent stream block forever. Extra opts are
+// appended after the defaults (tests point WithBaseURL at a stub).
+func NewSDKClient(apiKey string, opts ...option.RequestOption) sdk.Client {
+	all := append([]option.RequestOption{
+		option.WithAPIKey(apiKey),
+		option.WithHTTPClient(llmhttp.Client()),
+	}, opts...)
+	return sdk.NewClient(all...)
 }
 
 // DefaultModelID is the model id used when the caller leaves Request.Model
