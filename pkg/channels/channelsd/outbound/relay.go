@@ -93,8 +93,14 @@ type Relay struct {
 	// why only the declining answer is ever remembered.
 	StreamDeclineTTL time.Duration
 
-	mu  sync.Mutex
-	sub *nats.Subscription
+	// MaxConcurrentSessions bounds how many sessions' envelopes are handled at
+	// once; zero means DefaultMaxConcurrentSessions. Envelopes for ONE session
+	// are always handled one at a time, in order.
+	MaxConcurrentSessions int
+
+	mu    sync.Mutex
+	sub   *nats.Subscription
+	lanes *sessionLanes
 
 	// declMu guards declinedStreams, which maps "<ns>/<name>" to the instant its
 	// stream-delta decline expires.
@@ -106,6 +112,9 @@ type Relay struct {
 	// noteDeliveryOutcome from writing status once per relayed envelope.
 	delivMu       sync.Mutex
 	delivOutcomes map[string]deliverableOutcome
+	// delivLocks serializes each Channel's Deliverable write (see
+	// lockDeliveryChannel); guarded by delivMu.
+	delivLocks map[string]*sync.Mutex
 }
 
 // defaultStreamDeclineTTL is how long a stream-delta decline is remembered when
@@ -145,14 +154,32 @@ func (r *Relay) Start(ctx context.Context) error {
 	// Every session's outbound tree, cluster-wide: the ns and name tokens are
 	// wildcarded and the kind suffix is left open. handle re-derives the
 	// session from each message's own subject.
-	sub, err := r.NC.Subscribe(subjects.AnyOutTree, func(msg *nats.Msg) {
+	//
+	// The callback only enqueues: sessionLanes runs handle concurrently across
+	// sessions and in order within one, so one session's slow delivery no
+	// longer holds up every other session's (see sessionLanes).
+	r.lanes = newSessionLanes(ctx, r.MaxConcurrentSessions, func(msg *nats.Msg) {
 		r.handle(ctx, msg)
+	})
+	lanes := r.lanes
+	sub, err := r.NC.Subscribe(subjects.AnyOutTree, func(msg *nats.Msg) {
+		lanes.dispatch(laneKey(msg.Subject), msg)
 	})
 	if err != nil {
 		return fmt.Errorf("subscribe: %w", err)
 	}
 	r.sub = sub
 	return nil
+}
+
+// laneKey is the session an out-subject belongs to. An unparseable subject
+// gets the empty key — one shared lane, where handle logs and drops it.
+func laneKey(subject string) string {
+	ns, name, ok := channelevents.ParseOutSubject(subject)
+	if !ok {
+		return ""
+	}
+	return ns + "/" + name
 }
 
 // Stop drains the subscription. Safe to call multiple times.
