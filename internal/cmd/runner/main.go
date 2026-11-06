@@ -32,6 +32,7 @@ import (
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/derivevalidator"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
@@ -255,6 +256,13 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+	// Route controller-runtime's logger through the same handler. Without it,
+	// every log.FromContext call in runner-side code (respond_to_user's
+	// fallback-notice failures, the dispatch loop, authz slot promotion) is
+	// discarded. SetLogger is first-write-wins and a transitive init() can
+	// claim it first (see internal/cmd/channelsd), so run() also carries the
+	// logger on rootCtx, which log.FromContext prefers.
+	ctrl.SetLogger(logr.FromSlogHandler(logger.Handler()))
 
 	// run() owns its own context + manual SIGTERM/SIGINT handling (see below),
 	// so the root command uses Execute() rather than ExecuteContext() — the
@@ -326,6 +334,14 @@ func newCommand() *cobra.Command {
 	return cmd
 }
 
+// loggingContext returns a background context carrying a logr view of the
+// default slog handler, so log.FromContext in runner-side code writes to the
+// runner's stderr even when controller-runtime's global logger was claimed by a
+// dependency before main ran.
+func loggingContext() context.Context {
+	return logf.IntoContext(context.Background(), logr.FromSlogHandler(slog.Default().Handler()))
+}
+
 func run(cfg *config) error {
 	hostname := cfg.hostname
 	ns := cfg.agentSessionNamespace
@@ -383,7 +399,7 @@ func run(cfg *config) error {
 	// SIGTERM handling. The signal-consuming goroutine is started below, once
 	// the signing memory + session scope exist, so it can record an explicit
 	// Stopped lifecycle transition before cancelling the loop.
-	rootCtx, cancel := context.WithCancel(context.Background())
+	rootCtx, cancel := context.WithCancel(loggingContext())
 	defer cancel()
 
 	// loopRef is stored once the runner Loop is fully constructed (below). The
