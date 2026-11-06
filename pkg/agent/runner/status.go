@@ -401,6 +401,7 @@ func (s *StatusPatcher) WriteFailed(ctx context.Context, reason, message string)
 	return s.mutate(ctx, func(sess *spiceboxv1alpha1.AgentSession) {
 		// Idempotent: don't overwrite a prior terminal state.
 		if isTerminal(sess.Status.Phase) {
+			fillFoldedFailure(sess, reason, message)
 			return
 		}
 		sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseFailed
@@ -934,6 +935,32 @@ func (s *StatusPatcher) AppendActiveWidget(ctx context.Context, ref spiceboxv1al
 	return s.c.Status().Patch(ctx,
 		&spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: s.key.Name, Namespace: s.key.Namespace}},
 		client.RawPatch(types.MergePatchType, []byte(patch)))
+}
+
+// fillFoldedFailure completes a Failed phase that carries no failure record,
+// without overwriting any record already written.
+//
+// Loop.fail emits the RunnerTerminal lifecycle event before it calls
+// WriteFailed, and the operator folds that event into phase=Failed and
+// FinishedAt but writes neither FailureReason nor the Failed condition. When
+// the operator's reconcile lands between the two, WriteFailed finds the phase
+// already terminal; skipping it there would lose the reason for good, leaving a
+// Failed session that never says why. Only the empty fields are filled, so a
+// failure another writer recorded (RunnerCrash, an expiry, a timeout backstop)
+// keeps its own reason, and a Succeeded session is never touched.
+func fillFoldedFailure(sess *spiceboxv1alpha1.AgentSession, reason, message string) {
+	if sess.Status.Phase != spiceboxv1alpha1.AgentSessionPhaseFailed {
+		return
+	}
+	if meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionFailed) == nil {
+		meta.SetStatusCondition(&sess.Status.Conditions, metav1.Condition{
+			Type: spiceboxv1alpha1.AgentSessionConditionFailed, Status: metav1.ConditionTrue,
+			Reason: reason, Message: message, ObservedGeneration: sess.Generation,
+		})
+	}
+	if sess.Status.FailureReason == "" {
+		sess.Status.FailureReason = reason
+	}
 }
 
 func isTerminal(phase string) bool {

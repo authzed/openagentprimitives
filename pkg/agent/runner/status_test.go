@@ -92,6 +92,64 @@ func TestWriteFailed(t *testing.T) {
 	assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionStalled, out.Status.FailureReason)
 }
 
+// The operator folds the runner's RunnerTerminal event into phase=Failed
+// without FailureReason or the Failed condition, and that fold can land before
+// the runner's own WriteFailed. WriteFailed must then fill in the record the
+// fold left out, and still never overwrite one another writer recorded.
+func TestWriteFailed_AfterTerminalPhase(t *testing.T) {
+	const reason, message = spiceboxv1alpha1.ReasonIdentityChoiceFailed, "session start halted: identity_choice_unavailable"
+	crashed := metav1.Condition{
+		Type: spiceboxv1alpha1.AgentSessionConditionFailed, Status: metav1.ConditionTrue,
+		Reason: spiceboxv1alpha1.ReasonAgentSessionRunnerCrash, Message: "runner restarted 3 times",
+		LastTransitionTime: metav1.Now(),
+	}
+	cases := []struct {
+		name        string
+		phase       string
+		failure     string
+		conds       []metav1.Condition
+		wantFailure string
+		wantCond    *metav1.Condition // nil: no Failed condition
+	}{
+		{name: "operator folded Failed first: reason and condition filled in",
+			phase: spiceboxv1alpha1.AgentSessionPhaseFailed, wantFailure: reason,
+			wantCond: &metav1.Condition{Reason: reason, Message: message}},
+		{name: "failure already recorded by another writer: left as it was",
+			phase: spiceboxv1alpha1.AgentSessionPhaseFailed, failure: spiceboxv1alpha1.ReasonAgentSessionRunnerCrash,
+			conds: []metav1.Condition{crashed}, wantFailure: spiceboxv1alpha1.ReasonAgentSessionRunnerCrash,
+			wantCond: &metav1.Condition{Reason: crashed.Reason, Message: crashed.Message}},
+		{name: "already Succeeded: no failure record written",
+			phase: spiceboxv1alpha1.AgentSessionPhaseSucceeded},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, sess := newFakeClientWithSession(t)
+			ctx := context.Background()
+			sess.Status.Phase = tc.phase
+			sess.Status.FailureReason = tc.failure
+			sess.Status.Conditions = tc.conds
+			require.NoError(t, c.Status().Update(ctx, sess), "seed the terminal status")
+
+			sp := runner.NewStatusPatcher(c, client.ObjectKeyFromObject(sess))
+			require.NoError(t, sp.WriteFailed(ctx, reason, message), "WriteFailed")
+
+			var out spiceboxv1alpha1.AgentSession
+			require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &out), "Get after WriteFailed")
+			assert.Equal(t, tc.phase, out.Status.Phase, "a terminal phase is never changed")
+			assert.Equal(t, tc.wantFailure, out.Status.FailureReason)
+			got := findCondition(out.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionFailed)
+			if tc.wantCond == nil {
+				assert.Nil(t, got, "no Failed condition")
+				return
+			}
+			require.NotNil(t, got, "Failed condition")
+			assert.Equal(t, metav1.ConditionTrue, got.Status)
+			assert.Equal(t, tc.wantCond.Reason, got.Reason)
+			assert.Equal(t, tc.wantCond.Message, got.Message)
+		})
+	}
+}
+
 func TestAppendRunnerNote(t *testing.T) {
 	c, sess := newFakeClientWithSession(t)
 	sp := runner.NewStatusPatcher(c, client.ObjectKeyFromObject(sess))

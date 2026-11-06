@@ -458,3 +458,62 @@ func TestHandle_BodyExactlyAtCap_IsNotRejected(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, rec.Code)
 	assert.Equal(t, 5<<20, sawLen, "a body exactly at the cap must reach Verify byte-for-byte, not truncated")
 }
+
+// deferringReceiver is a fakeReceiver that also reports deferrals, recording
+// each call so a test can assert when the route asks.
+type deferringReceiver struct {
+	fakeReceiver
+	reportErr error
+	reports   []string // providerAPIBaseURL of each ReportDeferral call
+	secrets   []channelkinds.WebhookSecrets
+}
+
+func (r *deferringReceiver) ReportDeferral(_ context.Context, _ *spiceboxv1alpha1.Channel, secrets channelkinds.WebhookSecrets, _ channelkinds.WebhookRequest, providerAPIBaseURL string) error {
+	r.reports = append(r.reports, providerAPIBaseURL)
+	r.secrets = append(r.secrets, secrets)
+	return r.reportErr
+}
+
+var _ channelkinds.WebhookDeferralReporter = (*deferringReceiver)(nil)
+
+// A receiver that can defer is asked to report only for a delivery it
+// answered (nil, nil) — never for one it is starting work on — and its
+// failure to report does not change the answer: the deferral already
+// happened, and a retry would defer again.
+func TestHandle_DeferralIsReportedOnlyForUninterestingDeliveries(t *testing.T) {
+	cases := []struct {
+		name        string
+		translate   *channelkinds.WebhookInbound
+		reportErr   error
+		wantStatus  int
+		wantReports int
+	}{
+		{name: "uninteresting or deferred: reported, 204",
+			wantStatus: http.StatusNoContent, wantReports: 1},
+		{name: "report failed: still 204, not a retryable status",
+			reportErr: errors.New("github: 502"), wantStatus: http.StatusNoContent, wantReports: 1},
+		{name: "interesting: published, never reported as deferred",
+			translate:  &channelkinds.WebhookInbound{ChannelKey: "pr:demo-org/demo-repo#7"},
+			wantStatus: http.StatusAccepted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rcv := &deferringReceiver{fakeReceiver: fakeReceiver{translate: tc.translate}, reportErr: tc.reportErr}
+			withKind(t, fakeKind{name: "demo", receiver: rcv})
+			ch := testChannel(t, "default", "demo-reviewbot-gh", "demo")
+			sec := testSecret(t, "default", "demo-reviewbot-gh-creds")
+
+			ui, err := channelwebhook.New(newFakeClient(t, ch, sec), func(string, []byte) error { return nil },
+				channelwebhook.WithProviderAPIBaseURL("http://provider.invalid"))
+			require.NoError(t, err)
+			rec := doPost(t, ui.Routes(nil)[0].Handler, "demo", "default", "demo-reviewbot-gh", []byte(`{}`))
+
+			assert.Equal(t, tc.wantStatus, rec.Code)
+			require.Len(t, rcv.reports, tc.wantReports)
+			if tc.wantReports > 0 {
+				assert.Equal(t, "http://provider.invalid", rcv.reports[0], "the route's provider override reaches the kind")
+				assert.Equal(t, sec.Data, rcv.secrets[0].Data, "the Channel's own credentials, the same Secret Verify used")
+			}
+		})
+	}
+}

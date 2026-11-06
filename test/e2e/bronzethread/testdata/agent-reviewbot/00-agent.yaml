@@ -118,6 +118,9 @@ spec:
     # request reads as coming from the app a maintainer installed.
     appSlug: demo-reviewbot
     events: ["opened", "synchronize", "reopened", "ready_for_review"]
+    # Set, not left to the default: an unset field keeps reviewing every base
+    # branch, and the stacked-pr scenarios exercise the deferral.
+    skipStacked: true
 ---
 apiVersion: agentprimitives.authzed.com/v1alpha1
 kind: Channel
