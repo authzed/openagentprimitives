@@ -292,13 +292,16 @@ spec:
                       every base branch; `oap channel create` writes `true` for a new one.
 
                       When true, such a PR is not reviewed while it is stacked (opening it,
-                      pushing to it, or marking it ready all wait), and it is reviewed when
-                      its base is changed to the default branch — an "edited" delivery,
-                      admitted without being listed in Events, but only when Events lists
-                      "opened": the retarget is the PR arriving on the default branch, and a
-                      Channel that does not review PRs as they arrive does not review this
-                      one either. A base change that keeps the base commit (a renamed default
-                      branch) is not a retarget and starts nothing.
+                      pushing to it, or marking it ready all wait), and each deferred delivery
+                      leaves a queued check run on the PR saying what it is waiting for. It is
+                      reviewed when its base is changed to the default branch — an "edited"
+                      delivery, admitted without being listed in Events whenever Events lists
+                      any review action (opened, reopened, ready_for_review, synchronize). A
+                      retarget that arrives while the PR is a draft is dropped like any draft,
+                      so ready_for_review is admitted the same way when drafts are skipped. A
+                      renamed default branch moves every open PR and is indistinguishable from
+                      a retarget, so it re-reviews each, most finding their head commit
+                      already concluded.
 
                       GitHub changes the base itself only when the PR it was stacked on
                       merges AND that PR's branch is deleted, so pair this with the
@@ -312,7 +315,9 @@ spec:
                       Leave it off for repositories that genuinely review into a non-default
                       branch (release branches, long-lived integration branches): the check
                       cannot tell those from a stack, and with it on they would never be
-                      reviewed.
+                      reviewed. The same goes for the old default branch after the default is
+                      switched to a different branch: PRs still open against it are deferred
+                      until their base is changed.
                     type: boolean
                 required:
                 - appSlug

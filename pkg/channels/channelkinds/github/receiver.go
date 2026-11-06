@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -17,6 +18,7 @@ import (
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/github/checkruns"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/factcontent"
 )
 
@@ -144,8 +146,9 @@ type prEvent struct {
 				From string `json:"from"`
 			} `json:"ref"`
 			// SHA.From is the base commit before the change: the tip of the
-			// branch the PR was stacked on. It tells a rename from a
-			// retarget, and bounds the review to the PR's own commits.
+			// branch the PR was stacked on. It bounds the review to the PR's
+			// own commits (renderPrompt); it does not decide admission
+			// (retargetedOffStack says why).
 			SHA struct {
 				From string `json:"from"`
 			} `json:"sha"`
@@ -176,21 +179,79 @@ func stacked(ev prEvent) bool {
 // failing open here would admit any base change at all — including a move
 // from the default branch onto a stack.
 //
-// A base change that keeps the base COMMIT is not a retarget either: that is
-// the default branch being renamed (GitHub moves every open PR from the old
-// name to the new one), and those PRs were reviewed under the old name. A
-// stack retarget always moves the base commit, because the default branch
-// gained the lower PR's merge. A payload without the previous commit is
-// judged on the branch names alone.
+// The base COMMIT is deliberately not consulted. A renamed default branch
+// (GitHub moves every open PR from the old name to the new one, keeping the
+// commit) is admitted too, and that costs one review per open PR, most of
+// which find their head commit already concluded and stop. Telling a rename
+// apart by "the commit did not move" also matched a lower PR that landed as
+// a fast-forward, whose tip IS the new base commit, and dropping that
+// delivery left the stacked PR with no review ever.
 func retargetedOffStack(ev prEvent) bool {
 	if ev.Action != "edited" || ev.Changes.Base == nil {
 		return false
 	}
 	def, from := ev.Repository.DefaultBranch, ev.Changes.Base.Ref.From
-	if fromSHA := ev.Changes.Base.SHA.From; fromSHA != "" && fromSHA == ev.PullRequest.Base.SHA {
-		return false
-	}
 	return def != "" && ev.PullRequest.Base.Ref == def && from != "" && from != def
+}
+
+// reviewActions are the pull_request actions that start a review when a
+// Channel lists them. A Channel listing ANY of them has had deliveries
+// deferred while a PR was stacked, so the deliveries that end a deferral are
+// admitted for it whichever of them it lists — gating them on one specific
+// action ("opened") stranded a Channel that reviews on ready_for_review alone.
+var reviewActions = []string{"opened", "reopened", "ready_for_review", "synchronize"}
+
+// verdict is what Translate decides about one decoded, in-scope delivery.
+type verdict int
+
+const (
+	// ignore: not an event this Channel reviews.
+	ignore verdict = iota
+	// deferStacked: an event this Channel reviews, on a PR stacked on
+	// another branch; ReportDeferral makes it visible on the PR.
+	deferStacked
+	// review: start (or continue) the PR's review.
+	review
+	// reviewRetarget: review a PR that just moved off a stack onto the
+	// default branch; the prompt says so.
+	reviewRetarget
+)
+
+// decide is the single place a delivery's fate is decided, shared by
+// Translate and ReportDeferral so the two can never disagree about which
+// deliveries were deferred.
+func decide(cfg *spiceboxv1alpha1.GitHubChannelConfig, ev prEvent) verdict {
+	if len(cfg.Repositories) > 0 && !slices.Contains(cfg.Repositories, ev.Repository.FullName) {
+		return ignore
+	}
+	// nil means false / true respectively - see the fields' doc comments.
+	skipStacked := cfg.SkipStacked != nil && *cfg.SkipStacked
+	skipDrafts := cfg.SkipDrafts == nil || *cfg.SkipDrafts
+	reviews := slices.ContainsFunc(cfg.Events, func(e string) bool { return slices.Contains(reviewActions, e) })
+
+	// The deliveries that end a stacked deferral, admitted without being
+	// listed in Events:
+	//   - the retarget onto the default branch (retargetedOffStack);
+	//   - ready_for_review, when drafts are skipped. A retarget that arrived
+	//     while the PR was a draft was dropped by the draft check below, so
+	//     marking it ready is the PR's next and possibly last arrival.
+	retargeted := skipStacked && reviews && retargetedOffStack(ev)
+	readied := skipStacked && reviews && skipDrafts && ev.Action == "ready_for_review"
+	if !slices.Contains(cfg.Events, ev.Action) && !retargeted && !readied {
+		return ignore
+	}
+	if ev.PullRequest.Draft && skipDrafts {
+		return ignore
+	}
+	// A PR stacked on another open PR waits for that one to merge: its review
+	// arrives with the retarget onto the default branch (retargetedOffStack).
+	if skipStacked && stacked(ev) {
+		return deferStacked
+	}
+	if retargeted {
+		return reviewRetarget
+	}
+	return review
 }
 
 // objectIDPattern is git's object-id shape (40 hex for SHA-1, 64 for
@@ -227,31 +288,15 @@ func (receiver) Translate(ctx context.Context, ch *spiceboxv1alpha1.Channel, r c
 		return nil, fmt.Errorf("github: pull_request payload has no repository or number (Channel %s/%s)", ch.Namespace, ch.Name)
 	}
 
-	// First, so nothing below (the stacked deferral's log line in
-	// particular) speaks about a repository this Channel never reviews.
-	if len(cfg.Repositories) > 0 && !slices.Contains(cfg.Repositories, ev.Repository.FullName) {
-		return nil, nil
-	}
-	// nil means false - see the field's doc comment. A retarget stands in for
-	// the PR arriving on the default branch, so it is admitted only where an
-	// arrival ("opened") is reviewed.
-	skipStacked := cfg.SkipStacked != nil && *cfg.SkipStacked
-	retargeted := skipStacked && slices.Contains(cfg.Events, "opened") && retargetedOffStack(ev)
-	if !slices.Contains(cfg.Events, ev.Action) && !retargeted {
-		return nil, nil
-	}
-	// nil means true - see the field's doc comment.
-	if ev.PullRequest.Draft && (cfg.SkipDrafts == nil || *cfg.SkipDrafts) {
-		return nil, nil
-	}
-	// A PR stacked on another open PR waits for that one to merge: its review
-	// arrives with the retarget onto the default branch (retargetedOffStack).
-	// Logged because, unlike an uninteresting event, this is a PR someone is
-	// waiting on, and the deferral leaves no trace on the PR itself.
-	if skipStacked && stacked(ev) {
+	v := decide(cfg, ev)
+	if v == deferStacked {
+		// Logged because, unlike an uninteresting event, this is a PR someone
+		// is waiting on. ReportDeferral also says so on the PR itself.
 		logr.FromContextOrDiscard(ctx).Info("github: deferring review of a stacked pull request until it is retargeted onto the default branch",
 			"channel", ch.Namespace+"/"+ch.Name, "repo", ev.Repository.FullName, "pr", ev.Number, "action", ev.Action,
 			"base", ev.PullRequest.Base.Ref, "defaultBranch", ev.Repository.DefaultBranch)
+	}
+	if v != review && v != reviewRetarget {
 		return nil, nil
 	}
 	// Fork PRs are NOT filtered here. Declining an interesting PR is different
@@ -265,11 +310,69 @@ func (receiver) Translate(ctx context.Context, ch *spiceboxv1alpha1.Channel, r c
 		// sides of the shape live together (channelkey.go).
 		ChannelKey:   formatChannelKey(ev.Repository.FullName, ev.Number),
 		AuthzSubject: ch.Spec.AuthzSubject,
-		MessageText:  renderPrompt(ev, retargeted),
+		MessageText:  renderPrompt(ev, v == reviewRetarget),
 		// Already read above to decide interestingness; "pull_request" is the
 		// only value that reaches here (every other event type returned above).
 		Event: "pull_request",
 	}, nil
+}
+
+var _ channelkinds.WebhookDeferralReporter = receiver{}
+
+// deferralReportTimeout bounds ReportDeferral's provider round trips (a token
+// mint, a head read, a check-run lookup and create). It runs inside the
+// webhook response, and GitHub abandons a delivery after ten seconds.
+const deferralReportTimeout = 6 * time.Second
+
+// ReportDeferral implements channelkinds.WebhookDeferralReporter: for a
+// delivery decide deferred, it leaves a queued check run on the PR naming
+// the base it is stacked on and what will start its review (checkRunSurface.Defer).
+//
+// It re-decodes the delivery rather than trusting a flag from Translate, and
+// asks the same decide — so the two cannot disagree. Any delivery decide did
+// not defer, or a payload Translate would have refused, is a no-op.
+func (receiver) ReportDeferral(ctx context.Context, ch *spiceboxv1alpha1.Channel, secrets channelkinds.WebhookSecrets, r channelkinds.WebhookRequest, providerAPIBaseURL string) error {
+	if r.Headers.Get("X-GitHub-Event") != "pull_request" || ch.Spec.GitHub == nil {
+		return nil
+	}
+	var ev prEvent
+	if err := json.Unmarshal(r.Body, &ev); err != nil || ev.Repository.FullName == "" || ev.Number <= 0 {
+		return nil // Translate already refused it, and said so
+	}
+	if decide(ch.Spec.GitHub, ev) != deferStacked {
+		return nil
+	}
+	owner, repo, ok := strings.Cut(ev.Repository.FullName, "/")
+	if !ok {
+		return fmt.Errorf("github: repository %q is not owner/name", ev.Repository.FullName)
+	}
+	surface, err := newCheckRunSurface(ch, checkruns.Repo{Owner: owner, Name: repo}, ev.Number, secrets, providerAPIBaseURL)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, deferralReportTimeout)
+	defer cancel()
+	return surface.Defer(ctx, "Review deferred: stacked pull request", deferralSummary(ev))
+}
+
+// deferralSummary tells the PR's author why nothing is reviewing it and what
+// to do about it, covering every way the wait can fail to end on its own: the
+// lower PR's branch kept, the lower PR closed unmerged, and a base that is not
+// a stack at all (a release branch, or a branch that used to be the default).
+//
+// Branch names are chosen by people with push access, and this renders as
+// markdown on the PR, so they are sanitized and stripped of backticks before
+// being set in code spans.
+func deferralSummary(ev prEvent) string {
+	code := func(s string) string {
+		return "`" + strings.ReplaceAll(strings.TrimSpace(sanitizeUntrusted(s)), "`", "") + "`"
+	}
+	base, def := code(ev.PullRequest.Base.Ref), code(ev.Repository.DefaultBranch)
+	return fmt.Sprintf("This pull request's base is %s, not the default branch %s, so its review is waiting until its base is changed to %s.\n\n"+
+		"- GitHub changes the base automatically when the pull request beneath this one merges **and** its branch is deleted (the repository's \"Automatically delete head branches\" setting does that).\n"+
+		"- If that branch is kept, or the pull request beneath this one was closed without merging, change this pull request's base to %s to start the review.\n"+
+		"- If %s is a long-lived branch rather than another pull request's branch (a release branch, or a former default branch), this Channel does not review pull requests into it; ask whoever runs it to set `skipStacked: false`.\n",
+		base, def, def, def, base)
 }
 
 // TriggerFacts derives what the signed envelope asserts about this pull request.
@@ -503,9 +606,15 @@ func renderPrompt(ev prEvent, retargeted bool) string {
 		// against it still contains them. The previous base commit is the
 		// lower PR's tip: diffing from it scopes the review to this PR's own
 		// commits. It is a commit id from the signed envelope, not text.
+		//
+		// The envelope does NOT say the lower PR merged: a base moved by hand
+		// after the lower PR was closed unmerged arrives identically, and
+		// then the commits below the previous base were never reviewed. So
+		// the narrowing is conditional on the agent establishing the merge,
+		// and the default when it cannot is the whole diff.
 		if from := ev.Changes.Base.SHA.From; objectIDPattern.MatchString(from) {
 			fmt.Fprintf(&b, "Previous base commit: %s\n", from)
-			fmt.Fprintln(&b, "Commits up to the previous base commit belong to the pull request this one was stacked on, which has merged; review only the changes after it, unless an earlier review of this pull request already covered this head commit, in which case there is nothing new to review.")
+			fmt.Fprintln(&b, "Commits up to the previous base commit came from the previous base branch. If you can confirm that branch's changes already landed on the default branch (the pull request this one was stacked on merged), they were reviewed there: review only the changes after the previous base commit. If they did not land (that pull request was closed without merging, or the base was moved by hand), or you cannot tell, review the whole diff against the default branch. Either way, if an earlier review of this pull request already covered this head commit, there is nothing new to review.")
 		}
 	} else {
 		fmt.Fprintf(&b, "Pull request %s#%d was %s.\n", ev.Repository.FullName, ev.Number, ev.Action)

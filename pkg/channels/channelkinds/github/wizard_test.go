@@ -127,6 +127,8 @@ func TestResult_ChannelShape(t *testing.T) {
 	assert.Equal(t, "demo-reviewbot", ch.Spec.GitHub.AppSlug)
 	assert.Equal(t, ptr.To(true), ch.Spec.GitHub.SkipStacked,
 		"a new Channel defers stacked PRs; only an existing one (nil) keeps reviewing every base")
+	assert.Contains(t, strings.Join(out.Notes, "\n"), "Automatically delete head branches",
+		"the deferral ends only on GitHub's retarget, which needs the setting repositories default to off")
 
 	require.NotNil(t, out.SecretManifest)
 	sec := out.SecretManifest

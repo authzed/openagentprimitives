@@ -332,16 +332,17 @@ thread.
    verified webhook. With `skipStacked: true` (which `oap channel create` sets
    for a new Channel; an existing one without the field keeps reviewing every
    base branch), a PR stacked on another open PR (its base is not the default
-   branch) waits: it is reviewed once its base becomes the default branch, and
-   only the commits after the previous base are reviewed. GitHub retargets it
-   automatically only when the PR beneath it merges and that PR's branch is
-   deleted, so turn on the repository's "Automatically delete head branches"
-   setting, or change the base by hand. Leave it off for repositories that
-   review into release branches. reviewbot claims the review with
-   `claim_trigger_status`, a no-argument call: the github channel kind owns the
-   Check Run on the head commit, so which pull request, which commit, and where
-   the status lives all come from the event rather than from anything the agent
-   assembles.
+   branch) waits, with a queued Check Run on the PR saying what it is waiting
+   for: it is reviewed once its base becomes the default branch, and when the PR
+   beneath it merged, only the commits after the previous base are reviewed.
+   GitHub retargets it automatically only when the PR beneath it merges and that
+   PR's branch is deleted, so turn on the repository's "Automatically delete
+   head branches" setting, or change the base by hand. Leave it off for
+   repositories that review into release branches. reviewbot claims the review
+   with `claim_trigger_status`, a no-argument call: the github channel kind owns
+   the Check Run on the head commit, so which pull request, which commit, and
+   where the status lives all come from the event rather than from anything the
+   agent assembles.
 2. It clones the repository read-only (`gitlike_git`) — a **blobless partial**
    clone (`--filter=blob:none`) that keeps the full commit history — and checks
    out the head commit, diffing against a previously reviewed SHA (read back

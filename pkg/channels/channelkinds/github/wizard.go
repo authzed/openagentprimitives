@@ -237,7 +237,8 @@ func githubOutput(namespace string, answers map[string]string, provisionedHere b
 			GitHub: &spiceboxv1alpha1.GitHubChannelConfig{
 				AppSlug: answers[keySlug],
 				// A new Channel defers stacked PRs; the field's nil (an
-				// existing Channel) keeps reviewing every base. See SkipStacked.
+				// existing Channel) keeps reviewing every base. See SkipStacked,
+				// and postSetupNotes for the repository setting it relies on.
 				SkipStacked: ptr.To(true),
 			},
 		},
@@ -322,9 +323,16 @@ func postSetupNotes(f postSetupFacts) []string {
 			"This run did not register that App, so it never changes its settings. If its webhook URL stops matching %s, this Channel reports the drift and leaves the App alone.",
 			f.channelName))
 	}
-	return append(notes, fmt.Sprintf(
-		"Confirm the App's installation grants access to every repository this Channel should review: %s",
-		installationsURL(f.ownerType, f.owner)))
+	return append(notes,
+		fmt.Sprintf(
+			"Confirm the App's installation grants access to every repository this Channel should review: %s",
+			installationsURL(f.ownerType, f.owner)),
+		// skipStacked is on for this Channel (see the manifest above), and its
+		// deferral ends only when GitHub retargets the stacked PR, which it
+		// does only when the lower PR's branch is deleted on merge. Repositories
+		// default to keeping it, so say so here, where the operator will read it.
+		"Pull requests stacked on another pull request's branch are not reviewed until their base becomes the default branch. GitHub changes that base itself only when the pull request beneath merges and its branch is deleted, so turn on \"Automatically delete head branches\" in each repository's settings; a deferred pull request carries a queued check run saying what it is waiting for. Set spec.github.skipStacked: false to review into every base branch instead.",
+	)
 }
 
 // appDisplayName derives the App's requested display name from the owner and

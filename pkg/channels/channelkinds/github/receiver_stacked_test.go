@@ -50,7 +50,7 @@ func stackedBody(t *testing.T, action, baseRef, defaultBranch, retargetedFrom st
 func asDraft(m map[string]any) { m["pull_request"].(map[string]any)["draft"] = true }
 
 // baseCommitUnchanged makes the base change keep the base commit, as a
-// default-branch rename does.
+// default-branch rename does, and as a lower PR merged by fast-forward does.
 func baseCommitUnchanged(m map[string]any) {
 	sha := m["pull_request"].(map[string]any)["base"].(map[string]any)["sha"]
 	m["changes"].(map[string]any)["base"].(map[string]any)["sha"] = map[string]any{"from": sha}
@@ -73,6 +73,7 @@ func TestTranslate_StackedPullRequests(t *testing.T) {
 		skipStacked *bool
 		events      []string // nil keeps testChannel's opened+synchronize
 		repos       []string
+		skipDrafts  *bool // nil keeps testChannel's true
 		body        []byte
 		wantReview  bool
 		wantPrompt  bool // the retarget prompt, with the previous base commit
@@ -97,13 +98,29 @@ func TestTranslate_StackedPullRequests(t *testing.T) {
 			skipStacked: on, body: stackedBody(t, "edited", "main", "main", stack1, asDraft)},
 		{name: "retargeted from one stack branch to another: still deferred",
 			skipStacked: on, body: stackedBody(t, "edited", stack2, "main", stack1)},
-		{name: "default branch renamed (base commit unchanged): not a retarget, ignored",
-			skipStacked: on, body: stackedBody(t, "edited", "main", "main", "master", baseCommitUnchanged)},
+		{name: "lower PR fast-forwarded (base commit unchanged): reviewed as a retarget",
+			skipStacked: on, body: stackedBody(t, "edited", "main", "main", stack1, baseCommitUnchanged), wantReview: true},
+		{name: "default branch renamed (base commit unchanged): indistinguishable, reviewed as a retarget",
+			skipStacked: on, body: stackedBody(t, "edited", "main", "main", "master", baseCommitUnchanged), wantReview: true},
 		{name: "edited without a base change (title/body edit): ignored",
 			skipStacked: on, body: stackedBody(t, "edited", "main", "main", "")},
-		{name: "retarget on a Channel that does not review opened PRs: ignored",
+		{name: "retarget on a Channel that reviews only ready_for_review: reviewed",
 			skipStacked: on, events: []string{"ready_for_review"},
+			body: stackedBody(t, "edited", "main", "main", stack1), wantReview: true, wantPrompt: true},
+		{name: "retarget on a Channel that reviews only pushes: reviewed",
+			skipStacked: on, events: []string{"synchronize"},
+			body: stackedBody(t, "edited", "main", "main", stack1), wantReview: true},
+		{name: "retarget on a Channel listing no review action: ignored",
+			skipStacked: on, events: []string{"closed"},
 			body: stackedBody(t, "edited", "main", "main", stack1)},
+		{name: "marked ready on the default branch, ready_for_review not listed, drafts skipped: reviewed (a draft retarget's only arrival)",
+			skipStacked: on, body: stackedBody(t, "ready_for_review", "main", "main", ""), wantReview: true},
+		{name: "marked ready while still stacked, ready_for_review not listed: deferred",
+			skipStacked: on, body: stackedBody(t, "ready_for_review", stack1, "main", "")},
+		{name: "marked ready, ready_for_review not listed, drafts reviewed: ignored (nothing was dropped)",
+			skipStacked: on, body: stackedBody(t, "ready_for_review", "main", "main", ""), skipDrafts: ptr.To(false)},
+		{name: "skipStacked unset, marked ready and not listed: ignored as before",
+			body: stackedBody(t, "ready_for_review", "main", "main", "")},
 		{name: "retarget in a repository outside the allowlist: ignored",
 			skipStacked: on, repos: []string{"demo-org/elsewhere"},
 			body: stackedBody(t, "edited", "main", "main", stack1)},
@@ -126,6 +143,9 @@ func TestTranslate_StackedPullRequests(t *testing.T) {
 				ch.Spec.GitHub.Events = tc.events
 			}
 			ch.Spec.GitHub.Repositories = tc.repos
+			if tc.skipDrafts != nil {
+				ch.Spec.GitHub.SkipDrafts = tc.skipDrafts
+			}
 
 			got, err := receiver{}.Translate(context.Background(), ch,
 				channelkinds.WebhookRequest{Headers: prHeaders("pull_request"), Body: tc.body})
@@ -142,6 +162,10 @@ func TestTranslate_StackedPullRequests(t *testing.T) {
 					"the lower PR's tip bounds the review to this PR's own commits")
 				assert.Contains(t, got.MessageText, "Previous base branch: "+stack1,
 					"the previous base is named, inside the untrusted block")
+				assert.NotContains(t, got.MessageText, "which has merged",
+					"the envelope does not say the lower PR merged; a hand-moved base arrives identically")
+				assert.Contains(t, got.MessageText, "or you cannot tell, review the whole diff",
+					"unreviewed lower commits are the default, not the exception")
 			}
 		})
 	}
