@@ -22,6 +22,23 @@ import (
 // (hundreds, for weeks), all for indicators long since gone.
 const terminalFinalizeWindow = time.Hour
 
+// terminalFinalizeMaxAttempts bounds how many ticks finalizeTerminal retries a
+// failing cleanup. A failure that persists (the channel was archived, the bot
+// removed: channel_not_found) would otherwise be retried every 5s for the whole
+// terminalFinalizeWindow — ~720 Slack calls per session, feeding the rate limit
+// live sessions share. Five covers a transient ratelimited or network error.
+const terminalFinalizeMaxAttempts = 5
+
+// terminalFinalizeState is finalizeTerminal's per-session progress: whether
+// the indicator clear already went out (so a retry does not re-send it),
+// how many attempts failed, and whether the session is done with — finalized,
+// or given up on.
+type terminalFinalizeState struct {
+	cleared  bool
+	failures int
+	done     bool
+}
+
 // capacityHoldNoticeAnnotation records the CapacityHold LastTransitionTime of
 // the hold episode whose "queued" notice was already posted, so a channelsd
 // restart mid-hold does not post it again. A new episode (a later hold, with a
@@ -45,34 +62,51 @@ const capacityHoldNoticeAnnotation = "agentprimitives.authzed.com/capacity-hold-
 //     kind can reach (Slack's plan cards).
 //
 // A failure of either is logged and NOT memoized, so the next tick retries —
-// the same discipline maybeClearIdle uses. The capacity-notice marker is
+// the same discipline maybeClearIdle uses — up to terminalFinalizeMaxAttempts,
+// after which it gives up (logged). A clear that already went out is not
+// re-sent on a retry. The capacity-notice marker is
 // dropped as well: its own clear branch only runs while Pending/Running, so a
 // session that fails mid-episode would otherwise strand it.
 func (w *sessionWatcher) finalizeTerminal(ctx context.Context, logger logr.Logger, sess *spiceboxv1alpha1.AgentSession) {
 	uid := string(sess.UID)
 	w.mu.Lock()
-	done := w.terminalFinalized[uid]
+	st := w.terminalFinalized[uid]
 	delete(w.schedNoticePosted, uid)
 	w.mu.Unlock()
-	if done {
+	if st.done {
 		return
 	}
 	if fin := sess.Status.FinishedAt; fin != nil && time.Since(fin.Time) > terminalFinalizeWindow {
-		w.mu.Lock()
-		w.terminalFinalized[uid] = true
-		w.mu.Unlock()
+		w.setTerminalFinalized(uid, terminalFinalizeState{done: true})
 		return
 	}
 	key := sess.Namespace + "/" + sess.Name
-	if err := w.wd.Clear(ctx, sess.Namespace, sess.Name); err != nil {
-		logger.Info("terminal cleanup: clearing the status indicator failed; retrying next tick",
-			"session", key, "phase", sess.Status.Phase, "err", err.Error())
-		return
+	// fail records a failed attempt; past the budget the session is given up
+	// on, with the indicator possibly still up — logged, so it is findable.
+	fail := func(what string, err error) {
+		st.failures++
+		if st.failures >= terminalFinalizeMaxAttempts {
+			st.done = true
+			logger.Info("terminal cleanup: giving up; the session's working indicator may stay up",
+				"session", key, "phase", sess.Status.Phase, "step", what,
+				"attempts", st.failures, "err", err.Error())
+		} else {
+			logger.Info("terminal cleanup failed; retrying next tick",
+				"session", key, "phase", sess.Status.Phase, "step", what,
+				"attempt", st.failures, "err", err.Error())
+		}
+		w.setTerminalFinalized(uid, st)
+	}
+	if !st.cleared {
+		if err := w.wd.Clear(ctx, sess.Namespace, sess.Name); err != nil {
+			fail("clear status indicator", err)
+			return
+		}
+		st.cleared = true
 	}
 	sender, err := w.senders.SenderFor(ctx, sess)
 	if err != nil {
-		logger.Info("terminal cleanup: resolve sender failed; retrying next tick",
-			"session", key, "err", err.Error())
+		fail("resolve sender", err)
 		return
 	}
 	if fin, ok := sender.(channelkinds.SessionFinalizer); ok {
@@ -82,13 +116,25 @@ func (w *sessionWatcher) finalizeTerminal(ctx context.Context, logger logr.Logge
 			Channel:     spiceboxv1alpha1.OutboundBinding(sess),
 			Annotations: sess.Annotations,
 		}, sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhaseFailed); err != nil {
-			logger.Info("terminal cleanup: finalizing the session's indicators failed; retrying next tick",
-				"session", key, "err", err.Error())
+			fail("finalize session indicators", err)
 			return
 		}
 	}
+	st.done = true
+	w.setTerminalFinalized(uid, st)
+}
+
+func (w *sessionWatcher) setTerminalFinalized(uid string, st terminalFinalizeState) {
 	w.mu.Lock()
-	w.terminalFinalized[uid] = true
+	w.terminalFinalized[uid] = st
+	w.mu.Unlock()
+}
+
+// resetTerminalFinalized forgets uid's finalize progress: the session is live
+// again, so its next ending must be finalized afresh.
+func (w *sessionWatcher) resetTerminalFinalized(uid string) {
+	w.mu.Lock()
+	delete(w.terminalFinalized, uid)
 	w.mu.Unlock()
 }
 

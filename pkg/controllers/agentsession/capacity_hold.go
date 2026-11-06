@@ -32,7 +32,10 @@ import (
 // so those keep the ordinary deadline and its specific failure message.
 
 // defaultCapacityHoldTimeout bounds a hold when --capacity-hold-timeout is
-// unset. Measured from provisioning start, like the readiness deadlines.
+// unset. Measured from the held stage's provisioning start, like the readiness
+// deadlines: the bundle hold from bundle creation, the detector hold from
+// detector creation. Detector pods are only created once every bundle is
+// Ready, so a session held at both stages can wait up to twice this in all.
 const defaultCapacityHoldTimeout = time.Hour
 
 // capacityHoldRequeue is the reconcile cadence while a session is held. A held
@@ -112,16 +115,25 @@ func capacityHoldMessage(until time.Time) string {
 // arrived, or the stall turned into something that is not a shortfall) flips a
 // True condition to False/CapacityAvailable; a session that was never held
 // gets no condition at all.
-func (r *Reconciler) syncCapacityHold(sess *spiceboxv1alpha1.AgentSession, held bool, stall schedulingStall, until time.Time) {
+//
+// reason names the stage holding (ReasonCapacityHoldWaiting for bundles,
+// ReasonCapacityHoldWaitingDetector for detectors), which is what lets the
+// bundle stage release ITS hold the moment the bundles land
+// (releaseCapacityHoldFor) without touching a detector hold that a later pass
+// set.
+func (r *Reconciler) syncCapacityHold(sess *spiceboxv1alpha1.AgentSession, held bool, stall schedulingStall, until time.Time, reason string) {
 	if held {
 		if stall.pending >= unschedulableGrace {
 			// r.now() for the transition time, like releaseCapacityHold: the
 			// episode identity channelsd dedups on is this timestamp, and the
-			// restart epoch is compared against r.now().
+			// restart epoch is compared against r.now(). A hold already True
+			// for this same stage keeps its transition time (SetStatusCondition
+			// only moves it on a status change), so a held session's episode
+			// is stable across passes.
 			conditions.Set(sess, &sess.Status.Conditions, metav1.Condition{
 				Type:               spiceboxv1alpha1.AgentSessionConditionCapacityHold,
 				Status:             metav1.ConditionTrue,
-				Reason:             spiceboxv1alpha1.ReasonCapacityHoldWaiting,
+				Reason:             reason,
 				Message:            capacityHoldMessage(until),
 				LastTransitionTime: metav1.NewTime(r.now()),
 			})
@@ -129,6 +141,26 @@ func (r *Reconciler) syncCapacityHold(sess *spiceboxv1alpha1.AgentSession, held 
 		return
 	}
 	r.releaseCapacityHold(sess)
+}
+
+// releaseCapacityHoldFor releases an active hold only when it is the given
+// stage's, and reports whether it did. The bundle stage calls it once every bundle is Ready: from there on
+// nothing the bundles wait on is held, and the provisioning stages between the
+// bundle and detector gates (a tool AgentIdentity not created yet, a sidecar
+// pod coming up) return early without ever reaching the final release — a hold
+// left True across them would keep reporting "queued for capacity" with a
+// give-up time that passes while nothing happens.
+//
+// A detector hold is left alone: with bundles Ready and a detector held,
+// releasing it here would flip it off and back on every pass, minting a new
+// episode (and a new "queued" notice) each time.
+func (r *Reconciler) releaseCapacityHoldFor(sess *spiceboxv1alpha1.AgentSession, reason string) bool {
+	c := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != reason {
+		return false
+	}
+	r.releaseCapacityHold(sess)
+	return true
 }
 
 // releaseCapacityHold flips an active hold to False/CapacityAvailable. A no-op

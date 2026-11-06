@@ -2028,7 +2028,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				// capacity warning to the monitoring channel. Fail-safe: no stall, or
 				// no pod, falls back to the generic message.
 				bundlesMsg := "waiting for bundle SpiceboxSessions to become Ready"
-				r.syncCapacityHold(&sess, held, stall, earliestBundleStart.Add(bundleDeadline))
+				r.syncCapacityHold(&sess, held, stall, earliestBundleStart.Add(bundleDeadline), spiceboxv1alpha1.ReasonCapacityHoldWaiting)
 				if stalled {
 					bundlesMsg = stall.message()
 					r.maybeEmitUnschedulable(ctx, &sess, spiceboxv1alpha1.AgentSessionConditionBundlesReady, stall)
@@ -2058,6 +2058,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			// to "Ready" with no intermediate not-stalled pass.
 			r.setTrueCondition(&sess, spiceboxv1alpha1.AgentSessionConditionSandboxScheduling,
 				spiceboxv1alpha1.ReasonSandboxScheduled, "")
+			// The bundles a hold was waiting on are up, so their hold ends HERE,
+			// not at the final release below: the stages in between can return
+			// early on a wait that has nothing to do with capacity — some (a
+			// tool AgentIdentity not created yet) without writing status at all.
+			// So the release is persisted now. That also makes a detector hold
+			// set later this pass a NEW episode, with its own transition time
+			// and give-up time: left in memory, the status write would diff the
+			// True→False→True flip away against the stored True and keep the
+			// bundle episode's notice, whose give-up time is no longer right.
+			if r.releaseCapacityHoldFor(&sess, spiceboxv1alpha1.ReasonCapacityHoldWaiting) {
+				if err := r.applyStatus(ctx, &sess); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
 		}
 	}
 
@@ -3028,7 +3042,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				// fans a one-shot capacity warning, instead of the generic awaiting
 				// text; same fail-safe path as bundles.
 				detectorMsg := "awaiting content-guard detector pod IP"
-				r.syncCapacityHold(&sess, held, stall, earliestDetectorStart.Add(detectorDeadline))
+				r.syncCapacityHold(&sess, held, stall, earliestDetectorStart.Add(detectorDeadline), spiceboxv1alpha1.ReasonCapacityHoldWaitingDetector)
 				if stalled {
 					detectorMsg = stall.message()
 					r.maybeEmitUnschedulable(ctx, &sess, spiceboxv1alpha1.AgentSessionConditionRunnerReady, stall)
@@ -3064,13 +3078,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	// Capacity hold release: the ONE place a hold is let go once everything it
-	// could have been waiting on is up. Both the bundle and detector stages
-	// return early while they hold, so reaching here means neither does.
-	// Releasing in each stage's own "all ready" branch instead would, with
-	// bundles Ready and a detector held, flip the in-memory condition off and
-	// back on every pass — invisible today only because the status write diffs
-	// against the stored object, which is not a property to lean on.
+	// Capacity hold release, catch-all: reaching here means neither the bundle
+	// nor the detector stage is holding (both return early while they do). The
+	// bundle stage already released its own hold when the bundles landed
+	// (releaseCapacityHoldFor), so in practice this ends a DETECTOR hold; a
+	// no-op when nothing is held.
 	r.releaseCapacityHold(&sess)
 
 	// 5a. Wake-annotation detection: transition Idle → Pending so the pod-creation

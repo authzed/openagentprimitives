@@ -247,3 +247,80 @@ func capacityStalledDetector(sessName string, created time.Time) *corev1.Pod {
 	}}
 	return det
 }
+
+// readyBundle is a bundle SpiceboxSession whose pod has landed and is Ready.
+func readyBundle(sessName string, created, readyAt time.Time) *spiceboxv1alpha1.SpiceboxSession {
+	b := bundleWithPod(sessName, "code", sessName+"-code-pod", created)
+	b.Status.Conditions = []metav1.Condition{{
+		Type: spiceboxv1alpha1.SpiceboxSessionConditionReady, Status: metav1.ConditionTrue,
+		Reason: "Ready", LastTransitionTime: metav1.NewTime(readyAt),
+	}}
+	return b
+}
+
+// heldForBundles seeds an active bundle-stage CapacityHold=True from since.
+func heldForBundles(sess *spiceboxv1alpha1.AgentSession, since time.Time) {
+	sess.Status.Conditions = append(sess.Status.Conditions, metav1.Condition{
+		Type:               spiceboxv1alpha1.AgentSessionConditionCapacityHold,
+		Status:             metav1.ConditionTrue,
+		Reason:             spiceboxv1alpha1.ReasonCapacityHoldWaiting,
+		Message:            "gives up at 17:48 UTC",
+		LastTransitionTime: metav1.NewTime(since),
+	})
+}
+
+// Once the held bundles land, the hold must come down on that pass — even when
+// a later, non-capacity provisioning stage (here: a tool AgentIdentity that does
+// not exist yet) returns before the end of provisioning. A hold left True there
+// keeps the "queued for capacity" state up, silences the stall watchdog, and
+// lets the posted give-up time pass with nothing happening.
+func TestReconcileCapacityHold_ReleasedWhenBundlesLandDespiteLaterWait(t *testing.T) {
+	nowT := time.Date(2026, 10, 28, 17, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return nowT }
+	ac := classWithBundle("ac1", spiceboxv1alpha1.ToolBundle{Name: "code", Class: "toolbelt"})
+	ac.Spec.AgentIdentity = "not-created-yet"
+	sess := sessionCreatedAt("s1", "ac1", nowT.Add(-30*time.Minute))
+	heldForBundles(sess, nowT.Add(-25*time.Minute))
+	r, c := fakeReconciler(t, clock, ac, sess, readyBundle("s1", nowT.Add(-30*time.Minute), nowT.Add(-time.Minute)))
+
+	runReconciles(t, r, "s1", 3)
+
+	hold := apimeta.FindStatusCondition(getSession(t, c, "s1").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
+	require.NotNil(t, hold)
+	assert.Equal(t, metav1.ConditionFalse, hold.Status, "bundles are Ready: nothing is held any more")
+	assert.Equal(t, spiceboxv1alpha1.ReasonCapacityHoldReleased, hold.Reason)
+}
+
+// A bundle hold handed straight to a detector hold is a NEW episode: its own
+// transition time (so channelsd posts a fresh notice) and its own give-up time,
+// rather than the bundle episode's notice, whose give-up time is now wrong.
+func TestReconcileCapacityHold_DetectorAfterBundleHoldIsNewEpisode(t *testing.T) {
+	nowT := time.Date(2026, 10, 28, 17, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return nowT }
+	ac := classWithBundle("ac1", spiceboxv1alpha1.ToolBundle{Name: "code", Class: "toolbelt"})
+	sess := sessionCreatedAt("s1", "ac1", nowT.Add(-40*time.Minute))
+	bundleHeld := nowT.Add(-35 * time.Minute)
+	heldForBundles(sess, bundleHeld)
+	det := capacityStalledDetector("s1", nowT.Add(-2*time.Minute))
+	r, c := fakeReconciler(t, clock, ac, sess, readyBundle("s1", nowT.Add(-40*time.Minute), nowT.Add(-3*time.Minute)),
+		detectorSettings(t), det)
+
+	runReconciles(t, r, "s1", 3)
+	got := getSession(t, c, "s1")
+	hold := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
+	require.NotNil(t, hold)
+	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+	assert.Equal(t, metav1.ConditionTrue, hold.Status, "the detector is held")
+	assert.Equal(t, spiceboxv1alpha1.ReasonCapacityHoldWaitingDetector, hold.Reason)
+	assert.False(t, hold.LastTransitionTime.Time.Equal(bundleHeld), "a new episode, not the bundle one")
+	assert.Contains(t, hold.Message, "gives up at 17:58 UTC", "the detector's own window, from detector creation")
+
+	// And it stays put across later passes: the bundle-ready release must not
+	// flip the detector's hold off and on.
+	nowT = nowT.Add(time.Minute)
+	runReconciles(t, r, "s1", 3)
+	later := apimeta.FindStatusCondition(getSession(t, c, "s1").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
+	require.NotNil(t, later)
+	assert.Equal(t, metav1.ConditionTrue, later.Status)
+	assert.True(t, hold.LastTransitionTime.Equal(&later.LastTransitionTime), "transition time stable while held")
+}

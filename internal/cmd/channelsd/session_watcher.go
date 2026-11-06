@@ -115,13 +115,16 @@ type sessionWatcher struct {
 	// final edit once per channelsd restart, same hazard as every other
 	// terminal-trigger marker in this file.
 	pinnedApplied map[string]string
-	// terminalFinalized tracks session UIDs whose "still working" indicators
-	// were already torn down on reaching a terminal phase (finalizeTerminal),
-	// so the 5s poll does it once. In-memory only, on purpose: a restart
+	// terminalFinalized tracks, per session UID, the progress of tearing down
+	// its "still working" indicators on reaching a terminal phase
+	// (finalizeTerminal), so the 5s poll does it once — and gives up after
+	// terminalFinalizeMaxAttempts failures. Dropped when the session goes back
+	// to work (an archived session resumed by a new inbound), so its NEXT
+	// ending is finalized too. In-memory only, on purpose: a restart
 	// re-finalizing a recently-ended session is a harmless empty setStatus,
 	// and terminalFinalizeWindow keeps a restart from touching every terminal
 	// session the cluster has ever kept.
-	terminalFinalized map[string]bool
+	terminalFinalized map[string]terminalFinalizeState
 	// holdNoticeReported tracks (uid -> CapacityHold LastTransitionTime) for
 	// the "queued for capacity" notice, the in-memory half of
 	// capacityHoldNoticeAnnotation.
@@ -145,7 +148,7 @@ func newSessionWatcher(cli client.Client, senders outbound.SenderResolver, wd *s
 		schedNoticePosted:     map[string]bool{},
 		restartDeniedReported: map[string]string{},
 		pinnedApplied:         map[string]string{},
-		terminalFinalized:     map[string]bool{},
+		terminalFinalized:     map[string]terminalFinalizeState{},
 		holdNoticeReported:    map[string]string{},
 	}
 }
@@ -228,6 +231,10 @@ func (w *sessionWatcher) reconcile(ctx context.Context, logger logr.Logger) {
 				w.wd.Forget(sess.Namespace, sess.Name)
 			}
 			w.finalizeTerminal(ctx, logger, sess)
+		default:
+			// Live again (or never ended): a finalize recorded for an earlier
+			// ending no longer describes this session.
+			w.resetTerminalFinalized(string(sess.UID))
 		}
 		// Live pinned opening message: re-render a triggered session's
 		// thread-root status in place as it progresses (and once more, final,
@@ -761,6 +768,28 @@ func buildRestartDeniedNotice(reason, message string) *notice.Notice {
 // not the permanent every-5s-forever re-failure that routing it to a default
 // sender (which can never render an interaction_request) produced.
 func (w *sessionWatcher) reportFailure(sess *spiceboxv1alpha1.AgentSession) error {
+	// A session fails once, so its UID alone identifies the notice.
+	return w.publishNotice(sess, "notice-"+categories.AgentFailed+"-"+string(sess.UID),
+		failureNoticeFor(sess))
+}
+
+// failureNoticeFor picks the failure notice's reason and detail from sess.
+//
+// A capacity hold that ran out is the one case where the Failed condition's
+// message is NOT shown: it carries the scheduler's per-node breakdown, the pod
+// names and a `kubectl -n <ns> describe pod` hint — operator detail that stays
+// on the condition for `kubectl` / `oap` readers, but means nothing to (and
+// leaks cluster internals to) everyone in a shared channel. The hold's own
+// message, "waited 1h0m0s for cluster capacity and none freed up", says what a
+// participant needs.
+func failureNoticeFor(sess *spiceboxv1alpha1.AgentSession) *notice.Notice {
+	if sessionnotice.CapacityHoldExpired(sess) {
+		var holdMsg string
+		if c := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold); c != nil {
+			holdMsg = c.Message
+		}
+		return buildFailureNotice("", holdMsg, true)
+	}
 	reason := sess.Status.FailureReason
 	if reason == "" {
 		reason = "unknown"
@@ -773,9 +802,7 @@ func (w *sessionWatcher) reportFailure(sess *spiceboxv1alpha1.AgentSession) erro
 			break
 		}
 	}
-	// A session fails once, so its UID alone identifies the notice.
-	return w.publishNotice(sess, "notice-"+categories.AgentFailed+"-"+string(sess.UID),
-		buildFailureNotice(reason, condMsg, sessionnotice.CapacityHoldExpired(sess)))
+	return buildFailureNotice(reason, condMsg, false)
 }
 
 // buildFailureNotice composes the user-facing message for a session that died.

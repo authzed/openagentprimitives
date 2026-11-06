@@ -151,21 +151,32 @@ func (p *planMessageMap) remember(sess channelkinds.SessionInfo, planName, chann
 	p.m[k] = e
 }
 
-// takeSession removes and returns every plan card recorded for sess. The
-// session has ended, so nothing will update these cards again; dropping them
-// also bounds a map that otherwise grows for the process lifetime.
-func (p *planMessageMap) takeSession(sess channelkinds.SessionInfo) []planMessage {
+// sessionCards returns every plan card recorded for sess, keyed by map key,
+// WITHOUT removing them: FinalizeSession drops each one (forget) only once it
+// is settled, so a card whose re-render failed is still here for the retry.
+func (p *planMessageMap) sessionCards(sess channelkinds.SessionInfo) map[string]planMessage {
 	prefix := p.sessionPrefix(sess)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var out []planMessage
+	out := map[string]planMessage{}
 	for k, e := range p.m {
 		if strings.HasPrefix(k, prefix) {
-			out = append(out, e)
-			delete(p.m, k)
+			out[k] = e
 		}
 	}
 	return out
+}
+
+// forget drops the card at key, if it is still the message with ts. The ts
+// check keeps a finalize from dropping a card a concurrent sendPlanUpdate just
+// replaced. Dropping settled cards also bounds a map that otherwise grows for
+// the process lifetime.
+func (p *planMessageMap) forget(key, ts string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.m[key]; ok && e.ts == ts {
+		delete(p.m, key)
+	}
 }
 
 // has reports whether a ts is recorded for (sess, planName). Used by

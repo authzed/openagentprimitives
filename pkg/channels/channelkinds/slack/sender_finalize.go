@@ -26,7 +26,10 @@ var _ channelkinds.SessionFinalizer = (*slackSender)(nil)
 // So each card still showing an in-progress item, and not already paused, is
 // re-rendered from its last payload as paused with a stopped banner. Cards that
 // are finished, or that the runner already paused, are left exactly as they
-// are. Every card for the session is dropped from the map either way.
+// are. A card is dropped from the map once it is settled — re-rendered, or
+// needing nothing — but a card whose re-render FAILED is kept, so the
+// watcher's retry on its next tick (finalizeTerminal does not memoize a
+// failure) re-renders it rather than finding nothing left to do.
 //
 // Plan cards are tracked in process memory, so a card posted before a channelsd
 // restart is beyond reach here; that is the accepted limit of a best-effort
@@ -38,9 +41,10 @@ func (s *slackSender) FinalizeSession(ctx context.Context, sess channelkinds.Ses
 		cause = channelevents.PauseCauseFailed
 	}
 	var errs []error
-	for _, card := range s.planMessages.takeSession(sess) {
+	for key, card := range s.planMessages.sessionCards(sess) {
 		if card.last == nil || card.last.Paused || card.channelID == "" ||
 			!slices.ContainsFunc(card.last.Items, func(it channelevents.PlanItemRef) bool { return it.Status == "in_progress" }) {
+			s.planMessages.forget(key, card.ts)
 			continue
 		}
 		pl := *card.last
@@ -53,7 +57,9 @@ func (s *slackSender) FinalizeSession(ctx context.Context, sess channelkinds.Ses
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("slack sender: finalize plan %q: %w", pl.PlanName, err))
+			continue
 		}
+		s.planMessages.forget(key, card.ts)
 	}
 	return errors.Join(errs...)
 }
