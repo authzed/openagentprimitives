@@ -2347,6 +2347,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return res, err
 	}
 
+	// maxDuration backstop: a Running session whose runner-reported run-time is
+	// well past its budget has a runner that stopped enforcing it (wedged in a
+	// call that never returns). Fail it so the terminal path reaps the runner.
+	// After reconcileHold for the same terminal-sticky reason as the sweeps
+	// below. See maxduration.go.
+	if failed, err := r.reconcileRunDuration(ctx, &sess); err != nil {
+		return ctrl.Result{}, err
+	} else if failed {
+		// Phase → Failed; the status watch re-reconciles into the reap path.
+		return ctrl.Result{}, nil
+	}
+
 	// 4c. Idle-sleep and archive sweep: an Idle channel-attached session past
 	// sleepAfter has its pods reaped but stays Idle and wakeable; past
 	// archiveAfter it transitions Idle→Succeeded. Sleep runs first, and

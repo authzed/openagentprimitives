@@ -487,7 +487,9 @@ var runnerWritableStatusFields = map[string]string{
 	"startedAt":  "stamped by the runner's first PatchProgress when the phase leaves Pending",
 	"finishedAt": "stamped by the runner at terminal transition, alongside phase",
 	"runDuration": "the runner's own accumulated active run-time (PatchRunDuration); the operator reads it against the " +
-		"class's maxDuration budget, so inflating it only ends the forging session sooner",
+		"class's maxDuration budget (reconcileRunDuration fails a Running session past it), so inflating it " +
+		"only ends the forging session sooner. Under-reporting or freezing it evades that backstop, which is why " +
+		"the backstop is scoped to a stuck-but-honest runner and not offered as a bound on a hostile one",
 	"progress": "the per-turn/per-tool caption the runner publishes for the status surface",
 	"result":   "the agent's own summary + artifact refs, written by WriteSucceeded",
 	"pinnedMessage": "the runner's projection of the triggered session's opening-message status (badge/body/link), " +
