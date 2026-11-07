@@ -3,6 +3,8 @@ package outbound
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +13,9 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 )
 
 func laneMsg(key string, i int) *nats.Msg {
@@ -22,7 +27,7 @@ func laneMsg(key string, i int) *nats.Msg {
 func TestSessionLanes_BlockedSessionDoesNotHoldUpOthers(t *testing.T) {
 	release := make(chan struct{})
 	delivered := make(chan string, 1)
-	lanes := newSessionLanes(context.Background(), 4, func(m *nats.Msg) {
+	lanes := newSessionLanes(context.Background(), 4, 0, func(m *nats.Msg) {
 		if m.Subject == "slow" {
 			<-release
 			return
@@ -47,7 +52,7 @@ func TestSessionLanes_PreservesOrderWithinASession(t *testing.T) {
 	const sessions, perSession = 8, 200
 	var mu sync.Mutex
 	seen := map[string][]string{}
-	lanes := newSessionLanes(context.Background(), 3, func(m *nats.Msg) {
+	lanes := newSessionLanes(context.Background(), 3, 0, func(m *nats.Msg) {
 		mu.Lock()
 		seen[m.Subject] = append(seen[m.Subject], string(m.Data))
 		mu.Unlock()
@@ -74,7 +79,7 @@ func TestSessionLanes_PreservesOrderWithinASession(t *testing.T) {
 func TestSessionLanes_BoundsConcurrency(t *testing.T) {
 	const limit = 3
 	var running, peak atomic.Int32
-	lanes := newSessionLanes(context.Background(), limit, func(*nats.Msg) {
+	lanes := newSessionLanes(context.Background(), limit, 0, func(*nats.Msg) {
 		n := running.Add(1)
 		for {
 			p := peak.Load()
@@ -96,11 +101,131 @@ func TestSessionLanes_BoundsConcurrency(t *testing.T) {
 }
 
 func TestSessionLanes_IdleLaneIsRetired(t *testing.T) {
-	lanes := newSessionLanes(context.Background(), 2, func(*nats.Msg) {})
+	lanes := newSessionLanes(context.Background(), 2, 0, func(*nats.Msg) {})
 	lanes.dispatch("s", laneMsg("s", 0))
 	lanes.wait()
 
 	lanes.mu.Lock()
 	defer lanes.mu.Unlock()
 	assert.Empty(t, lanes.lanes, "a drained lane is removed, so idle sessions hold no goroutine or entry")
+}
+
+// A wedged delivery must not hold its concurrency slot forever: channel-kind
+// API clients are not guaranteed a timeout of their own, and enough wedged
+// sessions at once would put every other session back in line.
+func TestRelay_WedgedDeliveryReleasesItsSlotAtTheDeadline(t *testing.T) {
+	nc := connectNATS(t)
+	bar := defaultSession()
+	bar.Name = "bar"
+	bar.Spec.InputChannel.NATSSubjectPrefix = "ap.session.default.bar"
+	cli := fakeClientWith(t, defaultSession(), bar)
+
+	sndr := &wedgingSender{wedge: "foo", abandoned: make(chan struct{}, 1)}
+	startRelay(t, nc, cli, &fixedResolver{s: sndr}, func(r *Relay) {
+		r.MaxConcurrentSessions = 1 // one slot: foo's wedged send holds it
+		r.HandleTimeout = 200 * time.Millisecond
+	})
+
+	msg := channelevents.OutboundUserMessagePayload{Text: "hi"}
+	publishOut(t, nc, "default", "foo", string(channelevents.KindUserMessage), buildEnv(t, "foo", channelevents.KindUserMessage, msg))
+	publishOut(t, nc, "default", "bar", string(channelevents.KindUserMessage), buildEnv(t, "bar", channelevents.KindUserMessage, msg))
+
+	require.True(t, waitUntil(t, 5*time.Second, func() bool { return sndr.delivered("bar") }),
+		"bar was never delivered: foo's wedged send kept the only slot")
+	select {
+	case <-sndr.abandoned:
+	default:
+		t.Fatal("foo's send was never cancelled, so its slot was not released by the deadline")
+	}
+}
+
+// wedgingSender never returns for one session until its context ends, and
+// records deliveries for every other.
+type wedgingSender struct {
+	wedge     string
+	abandoned chan struct{}
+	mu        sync.Mutex
+	got       []string
+}
+
+func (s *wedgingSender) Send(ctx context.Context, sess channelkinds.SessionInfo, _ channelevents.Envelope) (channelkinds.SubChannelSendResult, error) {
+	if sess.Name == s.wedge {
+		<-ctx.Done()
+		// Non-blocking: the relay's failure fallback sends again on the same
+		// (already expired) context, and only the first abandonment matters.
+		select {
+		case s.abandoned <- struct{}{}:
+		default:
+		}
+		return channelkinds.SubChannelSendResult{}, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.got = append(s.got, sess.Name)
+	return channelkinds.SubChannelSendResult{}, nil
+}
+
+func (s *wedgingSender) delivered(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Contains(s.got, name)
+}
+
+func TestSessionLanes_FullLaneDropsNewestAndKeepsOthersFlowing(t *testing.T) {
+	release, wedged := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var handled []string
+	lanes := newSessionLanes(context.Background(), 4, 3, func(m *nats.Msg) {
+		if m.Subject == "stuck" && string(m.Data) == "0" {
+			close(wedged)
+			<-release
+		}
+		mu.Lock()
+		handled = append(handled, m.Subject+":"+string(m.Data))
+		mu.Unlock()
+	})
+
+	// Message 0 is taken off the queue and wedges; then 1-3 fill the lane to
+	// its cap of 3, and 4 and 5 are dropped.
+	lanes.dispatch("stuck", laneMsg("stuck", 0))
+	<-wedged
+	for i := 1; i <= 5; i++ {
+		lanes.dispatch("stuck", laneMsg("stuck", i))
+	}
+	lanes.dispatch("other", laneMsg("other", 0))
+	require.True(t, waitUntil(t, 5*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(handled, "other:0")
+	}), "another session must keep flowing past a full lane")
+
+	lanes.mu.Lock()
+	assert.Equal(t, 2, lanes.lanes["stuck"].dropped, "the two envelopes past the cap were dropped, not queued")
+	lanes.mu.Unlock()
+
+	close(release)
+	lanes.wait()
+	mu.Lock()
+	defer mu.Unlock()
+	var stuck []string
+	for _, h := range handled {
+		if strings.HasPrefix(h, "stuck:") {
+			stuck = append(stuck, h)
+		}
+	}
+	assert.Equal(t, []string{"stuck:0", "stuck:1", "stuck:2", "stuck:3"}, stuck,
+		"what was queued is delivered in order; what was dropped never is")
+}
+
+func TestSessionLanes_WaitCtxBoundedByContext(t *testing.T) {
+	release := make(chan struct{})
+	lanes := newSessionLanes(context.Background(), 1, 0, func(*nats.Msg) { <-release })
+	lanes.dispatch("s", laneMsg("s", 0))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	assert.ErrorIs(t, lanes.waitCtx(ctx), context.DeadlineExceeded, "a busy lane outlasting ctx reports ctx's error")
+
+	close(release)
+	assert.NoError(t, lanes.waitCtx(context.Background()), "and returns cleanly once the lane drains")
 }

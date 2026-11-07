@@ -7,6 +7,7 @@ package outbound
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"sync"
@@ -98,6 +99,14 @@ type Relay struct {
 	// are always handled one at a time, in order.
 	MaxConcurrentSessions int
 
+	// MaxLaneBacklog caps how many envelopes one session may have queued;
+	// zero means DefaultMaxLaneBacklog. See DefaultMaxLaneBacklog.
+	MaxLaneBacklog int
+
+	// HandleTimeout bounds how long one envelope's delivery may take; zero
+	// means DefaultHandleTimeout. See DefaultHandleTimeout.
+	HandleTimeout time.Duration
+
 	mu    sync.Mutex
 	sub   *nats.Subscription
 	lanes *sessionLanes
@@ -158,8 +167,18 @@ func (r *Relay) Start(ctx context.Context) error {
 	// The callback only enqueues: sessionLanes runs handle concurrently across
 	// sessions and in order within one, so one session's slow delivery no
 	// longer holds up every other session's (see sessionLanes).
-	r.lanes = newSessionLanes(ctx, r.MaxConcurrentSessions, func(msg *nats.Msg) {
-		r.handle(ctx, msg)
+	timeout := r.HandleTimeout
+	if timeout <= 0 {
+		timeout = DefaultHandleTimeout
+	}
+	r.lanes = newSessionLanes(ctx, r.MaxConcurrentSessions, r.MaxLaneBacklog, func(msg *nats.Msg) {
+		hctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		r.handle(hctx, msg)
+		if errors.Is(hctx.Err(), context.DeadlineExceeded) {
+			log.FromContext(ctx).Info("outbound relay: delivery exceeded its deadline and was abandoned",
+				"subject", msg.Subject, "deadline", timeout.String())
+		}
 	})
 	lanes := r.lanes
 	sub, err := r.NC.Subscribe(subjects.AnyOutTree, func(msg *nats.Msg) {
@@ -172,6 +191,14 @@ func (r *Relay) Start(ctx context.Context) error {
 	return nil
 }
 
+// DefaultHandleTimeout bounds one envelope's delivery when
+// Relay.HandleTimeout is unset. Channel-kind API clients are not guaranteed a
+// timeout of their own, and a delivery that never returns holds one of the
+// MaxConcurrentSessions slots for good: enough of them and every other session
+// waits again. Generous, because one envelope can legitimately carry file
+// uploads; an abandoned delivery fails through the ordinary send-error path.
+const DefaultHandleTimeout = 2 * time.Minute
+
 // laneKey is the session an out-subject belongs to. An unparseable subject
 // gets the empty key — one shared lane, where handle logs and drops it.
 func laneKey(subject string) string {
@@ -182,16 +209,31 @@ func laneKey(subject string) string {
 	return ns + "/" + name
 }
 
-// Stop drains the subscription. Safe to call multiple times.
-func (r *Relay) Stop(_ context.Context) error {
+// Stop drains the subscription, then waits for the envelopes already queued
+// to be delivered, both bounded by ctx. Draining a subscription only stops new
+// envelopes arriving: the ones already handed to a session's lane are still
+// owed to the user. Returns ctx's error when ctx ends first. Safe to call
+// multiple times.
+func (r *Relay) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sub == nil {
 		return nil
 	}
-	err := r.sub.Drain()
+	sub, lanes := r.sub, r.lanes
 	r.sub = nil
-	return err
+	// Subscribe to the closed status BEFORE draining, or the transition can
+	// be missed.
+	closed := sub.StatusChanged(nats.SubscriptionClosed)
+	if err := sub.Drain(); err != nil {
+		return err
+	}
+	select {
+	case <-closed:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return lanes.waitCtx(ctx)
 }
 
 // touchOnDelta invokes touch when an AssistantStreamDelta payload represents
@@ -481,9 +523,11 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 		return
 	}
 
-	// Everything below this point costs at least one API-server round-trip, on
-	// the single goroutine nats.go dispatches this subscription's callbacks on.
-	// The two guards here are the ones that can answer from process-local state.
+	// Everything below this point may cost an API-server round-trip (the relay
+	// client serves its hot-path reads from a cache, but a miss goes direct),
+	// on this session's lane — which holds one of the relay's bounded
+	// concurrency slots while it waits. The two guards here are the ones that
+	// can answer from process-local state.
 
 	// Consumer-supplied pre-Get scope: a subscriber that already knows it can
 	// never deliver for this session says so without a lookup. nil ⇒ no-op.
@@ -497,8 +541,8 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 	//
 	// The cost is one Get per human-directed envelope on consumers that set
 	// this. That respects what the seam is for: its own doc says it exists to
-	// spare a round-trip on the single serialized callback goroutine in front
-	// of the hot path — stream deltas, one per token. Cards are rare, and the
+	// spare a round-trip in front of the hot path — stream deltas, one per
+	// token, each holding a concurrency slot. Cards are rare, and the
 	// ownership decision still happens, one step later, where the session and
 	// its lineage can actually be read.
 	if r.Accept != nil && !isHumanDirected(env.Kind) && !r.Accept(ns, name) {
