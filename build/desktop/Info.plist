@@ -43,5 +43,18 @@
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<!-- oap:// install links (oap://install/agent?v=1&ref=…) — received as
+	     kAEGetURL Apple Events by cmd/oap/internal/desktopcmd/urlevents_darwin.m. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.authzed.oap.link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>oap</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

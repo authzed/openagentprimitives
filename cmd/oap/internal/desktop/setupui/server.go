@@ -13,12 +13,13 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/x/safehttp"
 )
 
-// staticFS embeds the self-contained setup page (inline CSS/JS, no
-// external/CDN resources — it must work fully offline behind the loopback
-// server and inside a webview). See static/index.html for the page's own
-// notes on how it consumes the routes below.
+// staticFS embeds the setup page, the install-progress page and the relay
+// mark they share (relay.js + relay.css) — all same-origin, no external/CDN
+// resources: they must work fully offline behind the loopback server and
+// inside a webview. See static/index.html for the page's own notes on how it
+// consumes the routes below.
 //
-//go:embed static/index.html
+//go:embed static/index.html static/installing.html static/relay.js static/relay.css
 var staticFS embed.FS
 
 // OnConfigFunc is invoked with a validated desktop.Config when the setup
@@ -111,6 +112,11 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/progress", s.handleProgress)
 	mux.HandleFunc("/config", s.handleConfig)
 	mux.HandleFunc("/open-dashboard", s.handleOpenDashboard)
+	// The install-progress page OAP Desktop shows in a small native window
+	// while it installs an agent, plus the relay mark both pages share.
+	mux.HandleFunc("/installing", serveStatic("static/installing.html", "text/html; charset=utf-8"))
+	mux.HandleFunc("/relay.js", serveStatic("static/relay.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("/relay.css", serveStatic("static/relay.css", "text/css; charset=utf-8"))
 
 	srv := &http.Server{Handler: desktop.LoopbackGuard(mux)}
 	safehttp.HardenServer(srv)
@@ -165,6 +171,27 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(b)
+}
+
+// serveStatic returns a GET-only handler serving one embedded file verbatim.
+// The install-progress page takes its agent name from the query string, but
+// only its own script reads it (into textContent): the served bytes never
+// depend on the request.
+func serveStatic(name, contentType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		b, err := staticFS.ReadFile(name)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("setupui: %s missing (embed error)", name), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		_, _ = w.Write(b)
+	}
 }
 
 // handleProgress is the one-shot JSON poll fallback for clients that don't

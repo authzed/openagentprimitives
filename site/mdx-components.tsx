@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Clip, Screenshot, ScreenshotSeries } from "@/components/media";
 import { Callout } from "@/components/Callout";
 import { Coverage } from "@/components/Coverage";
+import { InstallInDesktop } from "@/components/InstallInDesktop";
 import { linkKind } from "@/lib/links";
 
 // The component set every guide gets without importing anything. Custom
@@ -13,6 +14,7 @@ const components: MDXComponents = {
   ScreenshotSeries,
   Callout,
   Coverage,
+  InstallInDesktop,
   a: ({ href = "", ...props }) => {
     switch (linkKind(href)) {
       case "docs":

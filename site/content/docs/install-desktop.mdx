@@ -66,6 +66,22 @@ Picking **New chat…** opens the session picker in that tab — choose an agent
 
 <Screenshot name="web-newsession" />
 
+<h2 id="install-links">Install links</h2>
+
+The agent docs carry an **Install in OAP Desktop** button next to the equivalent `oap agent install` command. Clicking
+it opens the app, which **always asks before installing** anything.
+
+- **Allowlist.** Desktop only accepts agents from the sources listed under **Settings → General → Install links**.
+  The default is `ghcr.io/authzed/openagentprimitives/`, and agents from it must also carry a valid OAP project
+  signature.
+- **Not open yet.** Clicking a link when OAP Desktop isn't open launches it, and the install waits until
+  start-up finishes.
+- **After you approve.** A small window shows the install's progress. When it finishes, a new chat with the agent
+  opens in your browser; if it fails, a dialog says why. This also applies to **Install agent from .oap…**.
+- **Stopped or not set up.** A link is refused with a notification only while OAP Desktop is stopped, failed to
+  start, or hasn't finished setup.
+- **No app?** The CLI command beside each button does the same install.
+
 <Callout kind="tip" title="It's really local">
   The desktop stack runs entirely inside a VM on your machine, over a loopback connection. It's single-user by
   design and reachable only from your Mac — good for trying agents, developing, and demos.

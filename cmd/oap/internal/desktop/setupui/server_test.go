@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -348,6 +349,23 @@ func TestServer_LoopbackGuard(t *testing.T) {
 	}
 }
 
+// A cross-site page could otherwise load any of these in a hidden iframe:
+// the frame's own requests carry the loopback Origin, so LoopbackGuard's
+// Origin check alone does not stop it.
+func TestServer_EveryPageRefusesFraming(t *testing.T) {
+	_, base := startServer(t, setupui.NewTimeline(nil), nil)
+	for _, path := range []string{"/", "/installing?name=x", "/relay.js", "/relay.css", "/progress"} {
+		t.Run(path+": X-Frame-Options DENY and frame-ancestors 'none'", func(t *testing.T) {
+			resp, err := http.Get(base + path)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "DENY", resp.Header.Get("X-Frame-Options"))
+			assert.Equal(t, "frame-ancestors 'none'", resp.Header.Get("Content-Security-Policy"))
+		})
+	}
+}
+
 func TestServer_LoopbackGuardAllowsLocalOrigin(t *testing.T) {
 	_, base := startServer(t, setupui.NewTimeline(nil), nil)
 
@@ -446,4 +464,67 @@ func scanNextData(scanner *bufio.Scanner) ([]byte, error) {
 		return nil, err
 	}
 	return nil, context.DeadlineExceeded
+}
+
+// getBody GETs base+path and returns the status, Content-Type and body.
+func getBody(t *testing.T, base, path string) (int, string, string) {
+	t.Helper()
+	resp, err := http.Get(base + path)
+	require.NoError(t, err, "GET %s", path)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err, "read %s body", path)
+	return resp.StatusCode, resp.Header.Get("Content-Type"), string(body)
+}
+
+// TestServer_RelayAssetsServedAndSharedByBothPages pins the relay mark as ONE
+// shared asset pair: both the setup page and the installing page load it,
+// rather than each carrying its own copy of the animation.
+func TestServer_RelayAssetsServedAndSharedByBothPages(t *testing.T) {
+	_, base := startServer(t, setupui.NewTimeline(nil), nil)
+
+	assets := []struct{ path, contentType, marker string }{
+		{path: "/relay.js", contentType: "javascript", marker: "buildRelayMark"},
+		{path: "/relay.css", contentType: "text/css", marker: "--relay-1"},
+	}
+	for _, a := range assets {
+		status, ct, body := getBody(t, base, a.path)
+		assert.Equal(t, http.StatusOK, status, "%s status", a.path)
+		assert.Contains(t, ct, a.contentType, "%s content type", a.path)
+		assert.Contains(t, body, a.marker, "%s content", a.path)
+	}
+
+	for _, page := range []string{"/", "/installing?name=x"} {
+		_, _, html := getBody(t, base, page)
+		assert.Contains(t, html, `src="relay.js"`, "%s must load the shared relay script", page)
+		assert.Contains(t, html, `href="relay.css"`, "%s must load the shared relay styles", page)
+		assert.NotContains(t, html, "function relayTick", "%s must not carry its own copy of the animation", page)
+	}
+}
+
+// TestServer_InstallingPage_NameNeverInMarkup: the name comes from a bundle
+// (attacker-controllable) and must reach the page only through script and
+// textContent — the served HTML is the same bytes whatever the name.
+func TestServer_InstallingPage_NameNeverInMarkup(t *testing.T) {
+	_, base := startServer(t, setupui.NewTimeline(nil), nil)
+
+	const hostile = `<img src=x onerror=alert(1)>Evil`
+	status, ct, html := getBody(t, base, "/installing?name="+url.QueryEscape(hostile))
+	assert.Equal(t, http.StatusOK, status)
+	assert.Contains(t, ct, "text/html")
+	assert.NotContains(t, html, "onerror=alert", "the raw name must not be in the markup")
+	assert.NotContains(t, html, "Evil")
+	assert.Contains(t, html, "textContent", "the name is set via textContent")
+	assert.Contains(t, html, `id="installing-mark"`)
+
+	_, _, plain := getBody(t, base, "/installing")
+	assert.Equal(t, plain, html, "the page is static: the name must not change the served bytes")
+}
+
+func TestServer_InstallingWrongMethod(t *testing.T) {
+	_, base := startServer(t, setupui.NewTimeline(nil), nil)
+	resp, err := http.Post(base+"/installing", "text/plain", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }

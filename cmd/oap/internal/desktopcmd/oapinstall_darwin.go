@@ -25,43 +25,71 @@ const (
 	installCancel installChoice = iota
 	installViewReadme
 	installConfirm
+	// installDialogFailed means the dialog could not be shown (no display,
+	// osascript failure). It is not a cancel: the user never saw the prompt.
+	installDialogFailed
 )
 
 // installDialogText derives the confirm dialog's title and body from the
-// bundle: displayName (falling back to agent.name) and the short description.
+// bundle: displayName (falling back to agent.name) and the short description,
+// each bundle-supplied field flattened by sanitizeDialogText so it cannot
+// forge a line of the dialog or hide text in it.
 func installDialogText(b *oap.Bundle) (title, message string) {
 	a := b.Manifest.Agent
 	title = a.DisplayName
 	if title == "" {
 		title = a.Name
 	}
-	message = fmt.Sprintf("Install %s v%s into your local cluster?", title, a.Version)
-	if a.Description != "" {
-		message = a.Description + "\n\n" + message
+	title = sanitizeDialogText(title, maxDialogTitleRunes)
+	message = fmt.Sprintf("Install %s v%s into your local cluster?", title, sanitizeDialogText(a.Version, maxDialogTitleRunes))
+	if desc := sanitizeDialogText(a.Description, maxDialogDescriptionRunes); desc != "" {
+		message = desc + "\n\n" + message
 	}
 	return title, message
 }
 
 // installConfirmDialog shows a native confirm dialog before installing. When
-// hasReadme is true it offers a "View README" button. Returns the user's
-// choice; a cancel / dialog error maps to installCancel (install nothing).
-func installConfirmDialog(title, message string, hasReadme bool) installChoice {
+// hasReadme is true it offers a "View README" button. defaultButton names the
+// button Return presses ("Install" for a file the user just picked, "Cancel"
+// for an install link). Returns the user's choice; the Cancel button maps to
+// installCancel, and any other failure to installDialogFailed with the error.
+// Either way nothing is installed. A package var so tests drive the callers
+// without osascript.
+var installConfirmDialog = func(title, message string, hasReadme bool, defaultButton string) (installChoice, error) {
 	buttons := `{"Cancel", "Install"}`
 	if hasReadme {
 		buttons = `{"Cancel", "View README", "Install"}`
 	}
-	script := fmt.Sprintf(
-		`display dialog %q with title %q buttons %s default button "Install" cancel button "Cancel"`,
-		message, title, buttons)
-	out, err := exec.Command("osascript", "-e", script).Output()
+	out, err := osascript(
+		`display dialog (item 1 of argv) with title (item 2 of argv) buttons `+buttons+` default button (item 3 of argv) cancel button "Cancel"`,
+		message, title, defaultButton).Output()
+	return classifyInstallDialog(out, err)
+}
+
+// osascriptUserCanceled is the AppleScript error number osascript reports
+// (on stderr, with a non-zero exit) when the dialog's cancel button is chosen.
+const osascriptUserCanceled = "(-128)"
+
+// classifyInstallDialog maps osascript's result for the install dialog onto
+// a choice. Only the cancel button's -128 error is a cancel; every other
+// error is installDialogFailed, returned with the error so it gets logged.
+func classifyInstallDialog(out []byte, err error) (installChoice, error) {
 	if err != nil {
-		return installCancel // cancel button (osascript exits non-zero) or no display
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && strings.Contains(string(exitErr.Stderr), osascriptUserCanceled) {
+			return installCancel, nil
+		}
+		return installDialogFailed, fmt.Errorf("show install dialog: %w", err)
 	}
 	if strings.Contains(string(out), "View README") {
-		return installViewReadme
+		return installViewReadme, nil
 	}
-	return installConfirm
+	return installConfirm, nil
 }
+
+// dialogFailedMessage is the notification when the install dialog could not
+// be shown, for both the file picker and install links.
+const dialogFailedMessage = "Couldn't show the install dialog — see logs."
 
 // adoptDialogText renders the adopt confirmation. The menu bar has no
 // multi-select affordance, so the dialog is all-or-nothing — which makes
@@ -86,12 +114,11 @@ func adoptDialogText(conflicts []install.Conflict) (title, message string) {
 // the decision without osascript, mirroring how installConfirmDialog is
 // exercised.
 var desktopAdoptDialog = func(title, message string) bool {
-	script := fmt.Sprintf(
-		`display dialog %q with title %q buttons {"Cancel", "Adopt & Install"} default button "Cancel" cancel button "Cancel"`,
-		message, title)
 	// Default button is Cancel, not Adopt: a stray Return keypress must not
 	// seize somebody's object.
-	if _, err := exec.Command("osascript", "-e", script).Output(); err != nil {
+	if _, err := osascript(
+		`display dialog (item 1 of argv) with title (item 2 of argv) buttons {"Cancel", "Adopt & Install"} default button "Cancel" cancel button "Cancel"`,
+		message, title).Output(); err != nil {
 		return false // cancel button (non-zero exit) or no display
 	}
 	return true
@@ -162,6 +189,20 @@ var errNeedsConfig = errors.New("agent needs configuration before it can be inst
 // before mutation. Capacity suggestions are accepted non-interactively;
 // adoption remains one native, path-qualified all-or-nothing dialog per node.
 func installOapFromPath(ctx context.Context, kb *kube.Bundle, out io.Writer, oapBytes []byte, namespace string) (*install.Result, error) {
+	return installOapBundle(ctx, kb, out, oapBytes, namespace, bundleSource{})
+}
+
+// bundleSource is the provenance stamped onto an install (see
+// install.InstallOpts.SourceKind). The zero value is a local file: its
+// digest is then the bundle's own oap.Digest. An install link is a registry
+// source, recorded with the link's ref and the OCI digest Prepare verified or
+// resolved, so the install can be traced back to exactly what was approved.
+type bundleSource struct {
+	Ref, Digest string
+}
+
+// installOapBundle is installOapFromPath with explicit provenance.
+func installOapBundle(ctx context.Context, kb *kube.Bundle, out io.Writer, oapBytes []byte, namespace string, src bundleSource) (*install.Result, error) {
 	b, err := oap.Unpack(oapBytes)
 	if err != nil {
 		return nil, fmt.Errorf("unpack .oap: %w", err)
@@ -169,11 +210,15 @@ func installOapFromPath(ctx context.Context, kb *kube.Bundle, out io.Writer, oap
 	if err := b.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid .oap bundle: %w", err)
 	}
-	digest, err := oap.Digest(oapBytes)
-	if err != nil {
-		return nil, fmt.Errorf("digest .oap: %w", err)
+	opts := install.InstallOpts{SourceKind: "file", SourceDigest: src.Digest}
+	if src.Ref != "" {
+		opts.SourceKind, opts.SourceRef = "registry", src.Ref
+	} else {
+		if opts.SourceDigest, err = oap.Digest(oapBytes); err != nil {
+			return nil, fmt.Errorf("digest .oap: %w", err)
+		}
 	}
-	workflow := newDesktopOapWorkflow(ctx, kb, out, b, namespace, digest)
+	workflow := newDesktopOapWorkflow(ctx, kb, out, b, namespace, opts)
 	plan, err := workflow.Plan(ctx, b, install.GraphAnswers{Interactive: false})
 	if err != nil {
 		var missing *install.MissingAnswersError
@@ -208,8 +253,7 @@ func installOapFromPath(ctx context.Context, kb *kube.Bundle, out io.Writer, oap
 // couldn't be shown (e.g. no display attached); either way the caller treats
 // it identically as "nothing to install", never as an error to surface.
 func chooseOapFile() (string, bool) {
-	script := `POSIX path of (choose file of type {"oap"} with prompt "Choose a .oap agent bundle")`
-	out, err := exec.Command("osascript", "-e", script).Output()
+	out, err := osascript(`POSIX path of (choose file of type {"oap"} with prompt "Choose a .oap agent bundle")`).Output()
 	if err != nil {
 		return "", false
 	}
@@ -233,86 +277,75 @@ func (s *desktopState) installAgentFromFile() {
 	if !ok {
 		return // user cancelled (or no display) — not an error, nothing to notify
 	}
+	label := filepath.Base(path)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		s.logf("install agent: read %s: %v", path, err)
-		notify("OAP Desktop", fmt.Sprintf("Could not read %s: %v", filepath.Base(path), err))
-		return
-	}
-
-	s.mu.Lock()
-	dg := s.dg
-	s.mu.Unlock()
-	if dg == nil {
-		s.logf("install agent: no running cluster yet")
-		notify("OAP Desktop", "The local cluster isn't running yet — try again once OAP Desktop finishes starting up.")
-		return
-	}
-	kb, err := dg.Bundle()
-	if err != nil {
-		s.logf("install agent: connect to local cluster: %v", err)
-		notify("OAP Desktop", fmt.Sprintf("Could not connect to the local cluster: %v", err))
+		notify("OAP Desktop", fmt.Sprintf("Could not read %s: %v", label, err))
 		return
 	}
 
 	// Confirm-with-preview: if the bundle ships a README, let the user read it
 	// and confirm before we apply anything. A README-less bundle keeps the
 	// one-click behavior (no dialog).
-	if preview, uerr := oap.Unpack(data); uerr == nil && len(preview.Readme) > 0 {
+	// An unpack failure here is not reported on its own: installOapFromPath
+	// unpacks again and reports it as the install's failure.
+	preview, uerr := oap.Unpack(data)
+	if uerr != nil {
+		preview = nil
+	}
+	if preview != nil && len(preview.Readme) > 0 {
 		title, message := installDialogText(preview)
 	confirm:
 		for {
-			switch installConfirmDialog(title, message, true) {
+			choice, derr := installConfirmDialog(title, message, true, "Install")
+			switch choice {
 			case installViewReadme:
 				openReadme(preview.Manifest.Agent.Name, preview.Readme)
 				continue
 			case installConfirm:
 				break confirm
+			case installDialogFailed:
+				s.logf("install agent: %s: %v", label, derr)
+				notify("OAP Desktop", dialogFailedMessage)
+				return
 			default: // installCancel
-				s.logf("install agent: %s cancelled at confirm dialog", filepath.Base(path))
+				s.logf("install agent: %s cancelled at confirm dialog", label)
 				return
 			}
 		}
 	}
 
-	s.setStatus(menubaricons.StateSetup, "Installing agent…", "OAP Desktop — installing agent…")
-	defer s.setStatus(menubaricons.StateRunning, "Running", "OAP Desktop — running")
+	s.installApproved(data, label, installDisplayName(preview, label), bundleSource{})
+}
 
-	result, err := installOapFromPath(s.ctx, kb, s.logWriter(), data, demoChatNamespace)
-	switch {
-	case errors.Is(err, errNeedsConfig):
-		s.logf("install agent: %s needs configuration, nothing installed", filepath.Base(path))
-		notify("OAP Desktop", "This agent needs configuration — install it from the dashboard.")
-		s.openDashboard()
-	case err != nil:
-		s.logf("install agent: %s: %v", filepath.Base(path), err)
-		notify("OAP Desktop", fmt.Sprintf("Could not install %s: %v", filepath.Base(path), err))
-	default:
-		// result.Adopted is logged here even when empty (kinds/secrets already
-		// are) — per Result.Adopted's own doc comment, adoption is recorded
-		// NOWHERE on the seized object itself, so this log line is one of the
-		// only durable records that it happened.
-		s.logf("install agent: installed %s (kinds=%v secrets=%d adopted=%v)", result.Name, result.AppliedKinds, result.SecretsCreated, result.Adopted)
-		// Surface every non-fatal warning (e.g. a capacity clamp notice) to the
-		// desktop log, and pop ONE notification when there is at least one — the
-		// full text is in the log; the banner just says to go look.
-		for _, warn := range result.Warnings {
-			s.logf("install agent: %s: %s", result.Name, warn)
-		}
-		switch {
-		case len(result.Adopted) > 0 && len(result.Warnings) > 0:
-			notify("OAP Desktop", fmt.Sprintf("Installed %s — adopted %d pre-existing object(s) and %d other note(s), see logs", result.Name, len(result.Adopted), len(result.Warnings)))
-		case len(result.Adopted) > 0:
-			// Adoption overwrote an object this install did not create; the
-			// notification exists specifically so a menu-bar user (who never
-			// sees a --adopt flag or a confirm prompt's object list scroll by)
-			// still learns that it happened.
-			notify("OAP Desktop", fmt.Sprintf("Installed %s — adopted %d pre-existing object(s), see logs", result.Name, len(result.Adopted)))
-		case len(result.Warnings) > 0:
-			notify("OAP Desktop", fmt.Sprintf("Installed %s with %d note(s) — see logs", result.Name, len(result.Warnings)))
-		default:
-			notify("OAP Desktop", fmt.Sprintf("Installed %s", result.Name))
-		}
+// installApproved installs bundle bytes the user has already approved into
+// demoChatNamespace — the post-approval half shared by the .oap file picker
+// and oap:// install links. label names the source in logs (a file name or an
+// OCI ref); name is what the user sees (see installDisplayName). The outcome
+// is shown by runInstallWithProgress (installprogress_darwin.go): a progress
+// window while it runs, then the new chat or a dialog. src is the provenance
+// recorded on the install.
+func (s *desktopState) installApproved(data []byte, label, name string, src bundleSource) {
+	s.mu.Lock()
+	dg := s.dg
+	s.mu.Unlock()
+	// Fail before the progress window opens: an install that cannot start
+	// should not flash a window up first.
+	if dg == nil {
+		s.reportInstallOutcome(name, label, nil, errClusterNotRunning)
+		return
 	}
+	kb, err := dg.Bundle()
+	if err != nil {
+		s.reportInstallOutcome(name, label, nil, fmt.Errorf("could not connect to the local cluster: %w", err))
+		return
+	}
+
+	s.runInstallWithProgress(name, label, func() (*install.Result, error) {
+		s.setStatus(menubaricons.StateSetup, "Installing agent…", "OAP Desktop — installing agent…")
+		defer s.setStatus(menubaricons.StateRunning, "Running", "OAP Desktop — running")
+		return installOapBundle(s.ctx, kb, s.logWriter(), data, demoChatNamespace, src)
+	})
 }

@@ -3,6 +3,8 @@
 package desktopcmd
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 	webview "github.com/webview/webview_go"
 
@@ -27,17 +29,20 @@ import (
 // command on every other platform with a Run that fails closed instead.
 func NewWindowCmd(_ *apcmd.Globals) *cobra.Command {
 	var url, title string
+	var width, height int
 	cmd := &cobra.Command{
 		Use:    "desktop-window",
 		Short:  "Internal: run the oap desktop setup window (native webview)",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runDesktopWindow(url, title)
+			return runDesktopWindow(url, title, width, height)
 		},
 	}
 	cmd.Flags().StringVar(&url, "url", "", "URL of the local setup UI server to display (required)")
 	cmd.Flags().StringVar(&title, "title", "OAP Desktop", "Window title")
+	cmd.Flags().IntVar(&width, "width", defaultWindowWidth, "Initial window width in points")
+	cmd.Flags().IntVar(&height, "height", defaultWindowHeight, "Initial window height in points")
 	_ = cmd.MarkFlagRequired("url")
 	return cmd
 }
@@ -48,7 +53,10 @@ func NewWindowCmd(_ *apcmd.Globals) *cobra.Command {
 // child process, never sharing a process with systray. Returns once the
 // user closes the window (or the process is killed by the parent's
 // stopSetupUI on menubar quit/exit).
-func runDesktopWindow(url, title string) error {
+func runDesktopWindow(url, title string, width, height int) error {
+	if width <= 0 || height <= 0 {
+		return fmt.Errorf("desktop-window: --width and --height must be positive (got %dx%d)", width, height)
+	}
 	w := webview.New(false)
 	defer w.Destroy()
 
@@ -68,9 +76,10 @@ func runDesktopWindow(url, title string) error {
 	installEditMenu()
 
 	w.SetTitle(title)
-	// Sensible default size for the config form + timeline page; HintNone
-	// means this is just the starting size — the window stays resizable.
-	w.SetSize(760, 640, webview.HintNone)
+	// The starting size (defaults fit the config form + timeline page; the
+	// install-progress window passes a smaller one). HintNone means this is
+	// just the starting size — the window stays resizable.
+	w.SetSize(width, height, webview.HintNone)
 	w.Navigate(url)
 	w.Run()
 	return nil

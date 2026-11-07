@@ -11,6 +11,9 @@ const baseConfig: ConfigResponse = {
   healthNotifications: true,
   passwordSet: true,
   configPath: "/tmp/support/config.json",
+  installSources: ["ghcr.io/authzed/openagentprimitives/"],
+  installSourcesDefault: true,
+  pinnedInstallPrefix: "ghcr.io/authzed/openagentprimitives/",
 };
 
 // stubFetch dispatches on "METHOD /path" so a test can supply per-route
@@ -159,5 +162,85 @@ describe("GeneralTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /view logs/i }));
     await waitFor(() => expect(calls).toContain("POST /api/reveal/logs"));
+  });
+
+  describe("install links", () => {
+    // stubWithBodies serves GET /api/config from a mutable config and records
+    // each PUT /api/config body, so a test can assert exactly what was sent.
+    function stubWithBodies(cfg: ConfigResponse) {
+      const puts: Record<string, unknown>[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const method = (init?.method ?? "GET").toUpperCase();
+          const path = new URL(String(input), "http://settings.local").pathname;
+          if (method === "GET" && path === "/api/config") return jsonResponse(cfg);
+          if (method === "PUT" && path === "/api/config") {
+            puts.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+            return jsonResponse({ outcomes: [] });
+          }
+          throw new Error(`unstubbed fetch: ${method} ${path}`);
+        }),
+      );
+      return puts;
+    }
+
+    it("lists each prefix with a Remove button and labels the pinned one signature-checked", async () => {
+      const cfg = {
+        ...baseConfig,
+        installSources: ["ghcr.io/authzed/openagentprimitives/", "ghcr.io/acme/agents/"],
+      };
+      stubWithBodies(cfg);
+      render(<GeneralTab apiBase="/api" running={true} kubectlCurrent={false} />);
+      await waitFor(() => expect(screen.getByText("ghcr.io/acme/agents/")).toBeTruthy());
+      expect(screen.getByRole("heading", { name: "Install links" })).toBeTruthy();
+      expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(2);
+      expect(screen.getAllByText("signature-checked")).toHaveLength(1);
+    });
+
+    it("sends installSources containing a newly added prefix on save", async () => {
+      const puts = stubWithBodies(baseConfig);
+      render(<GeneralTab apiBase="/api" running={true} kubectlCurrent={false} />);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add" })).toBeTruthy());
+      fireEvent.change(screen.getByLabelText(/new install prefix/i), {
+        target: { value: "ghcr.io/acme/agents/" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      fireEvent.click(screen.getByRole("button", { name: /save general settings/i }));
+      await waitFor(() => expect(puts).toHaveLength(1));
+      expect(puts[0].installSources).toEqual(["ghcr.io/authzed/openagentprimitives/", "ghcr.io/acme/agents/"]);
+    });
+
+    it("omits installSources from a save that did not touch the list", async () => {
+      const puts = stubWithBodies(baseConfig);
+      render(<GeneralTab apiBase="/api" running={true} kubectlCurrent={false} />);
+      await waitFor(() => expect(screen.getByLabelText(/notify on cluster health issues/i)).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: /save general settings/i }));
+      await waitFor(() => expect(puts).toHaveLength(1));
+      expect(puts[0]).not.toHaveProperty("installSources");
+      expect(puts[0]).not.toHaveProperty("resetInstallSources");
+    });
+
+    it("sends resetInstallSources: true from Reset to default", async () => {
+      const puts = stubWithBodies(baseConfig);
+      render(<GeneralTab apiBase="/api" running={true} kubectlCurrent={false} />);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Reset to default" })).not.toBeDisabled());
+      fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+      await waitFor(() => expect(puts).toHaveLength(1));
+      expect(puts[0].resetInstallSources).toBe(true);
+      expect(puts[0]).not.toHaveProperty("installSources");
+    });
+
+    it("shows 'Install links are turned off' for an empty list and sends [] after removing the last entry", async () => {
+      const puts = stubWithBodies(baseConfig);
+      render(<GeneralTab apiBase="/api" running={true} kubectlCurrent={false} />);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy());
+      expect(screen.queryByText("Install links are turned off")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+      expect(screen.getByText("Install links are turned off")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: /save general settings/i }));
+      await waitFor(() => expect(puts).toHaveLength(1));
+      expect(puts[0].installSources).toEqual([]);
+    });
   });
 });

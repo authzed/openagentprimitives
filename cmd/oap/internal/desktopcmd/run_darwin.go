@@ -35,6 +35,7 @@ import (
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/apcmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/demo"
+	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/linkinstall"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/menubaricons"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/menubaricons/assets"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/desktop/settingsui"
@@ -187,12 +188,32 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 	}
 	defer logFile.Close()
 
+	// Single-instance guard, taken before orphan cleanup below: a second copy
+	// (the .app started by an install link while `oap desktop` runs in a
+	// terminal) would otherwise kill the first copy's live VM as an "orphan".
+	// The fd stays open, and so the lock held, until the process exits.
+	lock, err := acquireInstanceLock(support)
+	if err != nil {
+		fmt.Fprintf(logFile, "[%s] desktop: not starting: %v\n", time.Now().Format(time.RFC3339), err)
+		if errors.Is(err, errAlreadyRunning) {
+			notify("OAP Desktop", alreadyRunningMessage)
+		}
+		return fmt.Errorf("desktop: %w", err)
+	}
+	defer lock.Close()
+
 	st := &desktopState{
 		ctx:       ctx,
 		out:       out,
 		logFile:   logFile,
 		support:   support,
 		resources: resources,
+	}
+	onNotifyFailed = func(title string, err error) {
+		st.logf("notify(%q) failed: %v", title, err)
+	}
+	onLinkNotifyDropped = func(msg string) {
+		st.logf("link notification dropped by rate limit: %q", msg)
 	}
 
 	// Load the on-disk config, if any. A missing or invalid config is no
@@ -212,6 +233,11 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 		cfg = desktop.Config{}
 	}
 	st.initialConfig = cfg
+	if !st.needsConfigAtStart {
+		// onReady will start bring-up; say so now, so an oap:// link that
+		// cold-launched the app is held rather than refused.
+		st.markBringUpStarting()
+	}
 
 	st.eng = st.newEngine()
 
@@ -317,6 +343,15 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 		st.quit()
 	}()
 
+	// oap:// links: register the Apple Event handler on this (main,
+	// OS-locked) thread before the run loop starts, so a link that
+	// cold-launched the app is caught, and start consuming links.
+	onURLEventDropped = func(length int) {
+		st.logf("install link: dropped incoming link (queue full, %d bytes)", length)
+	}
+	installURLEventHandler()
+	go st.watchURLEvents()
+
 	systray.Run(st.onReady, st.onExit)
 
 	st.mu.Lock()
@@ -384,6 +419,11 @@ type desktopState struct {
 	pf          *portforward.PortForwarder
 	runErr      error  // set by failBringUp on a hard bring-up failure; read by runDesktop after systray.Run returns
 	currentStep string // last step name passed to progressHook; names timeline.Fail() on a hard bring-up failure
+
+	// linkGate serializes oap:// install links and holds the first one while
+	// bring-up runs (see installlink_darwin.go). It has its own lock; when
+	// both are taken, s.mu is taken first.
+	linkGate linkinstall.Gate
 
 	// webdPort is the stable loopback port chosen (once, via
 	// desktop.PickStablePort) at the start of bringUp, BEFORE Install/Configure
@@ -1351,21 +1391,31 @@ func openDesktopLogFile(supportDir string) (*os.File, error) {
 }
 
 // notify shows a native macOS notification banner via osascript. Best-effort:
-// a failure here (e.g. no display attached) is itself logged to stderr rather
+// a failure here (e.g. no display attached) is reported by notifyFailed rather
 // than silently dropped, but never treated as fatal — it's already the
 // fallback error-surfacing path.
 func notify(title, message string) {
-	script := fmt.Sprintf("display notification %q with title %q", message, title)
-	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "oap desktop: notify(%q) failed: %v\n", title, err)
+	if err := osascript(`display notification (item 1 of argv) with title (item 2 of argv)`, message, title).Run(); err != nil {
+		notifyFailed(title, err)
 	}
+}
+
+// onNotifyFailed also records a failed notification in the desktop log:
+// stderr goes nowhere in a launched .app. runDesktop points it at st.logf
+// before starting anything that can notify.
+var onNotifyFailed = func(title string, err error) {}
+
+// notifyFailed reports a notification osascript could not post.
+func notifyFailed(title string, err error) {
+	fmt.Fprintf(os.Stderr, "oap desktop: notify(%q) failed: %v\n", title, err)
+	onNotifyFailed(title, err)
 }
 
 // confirmDialog shows a native Yes/No confirmation via osascript and reports
 // whether the user chose the affirmative button.
 func confirmDialog(title, message string) bool {
-	script := fmt.Sprintf(`display dialog %q with title %q buttons {"Cancel", "Confirm"} default button "Cancel" cancel button "Cancel"`, message, title)
-	return exec.Command("osascript", "-e", script).Run() == nil
+	return osascript(`display dialog (item 1 of argv) with title (item 2 of argv) buttons {"Cancel", "Confirm"} default button "Cancel" cancel button "Cancel"`,
+		message, title).Run() == nil
 }
 
 // onReady builds the (fixed) menu-item set once — systray has no API to
@@ -1565,6 +1615,7 @@ func (s *desktopState) watchKubectlContext() {
 // invariant the task requires ("bring-up starts exactly once").
 func (s *desktopState) startBringUp(cfg desktop.Config) {
 	s.bringUpOnce.Do(func() {
+		s.markBringUpStarting()
 		go s.bringUp(cfg)
 	})
 }
@@ -1642,7 +1693,12 @@ func (s *desktopState) bringUp(cfg desktop.Config) {
 	// item was unlocked early (installHook -> enableKubectlMenuItem, when k3s
 	// began serving); enableRunningMenu enables the rest — dashboard, install
 	// agent, new chat, sessions, status — and re-enables kubectl idempotently.
-	s.enableRunningMenu()
+	// enableRunningMenu claims a link held during bring-up in the same
+	// critical section that flips running, so a link arriving now is refused
+	// as busy rather than stranding it. Launch it before the slow refreshes.
+	if held, claimed := s.enableRunningMenu(); claimed {
+		go s.runClaimedLink(held)
+	}
 	// The VM kubeconfig now exists (writeKubeconfig ran as part of Up), so
 	// the checkmark can reflect reality; outside the lock above since
 	// refreshKubectlCheckmark takes s.mu itself.
@@ -1669,12 +1725,15 @@ func (s *desktopState) bringUp(cfg desktop.Config) {
 // handler goroutine that races onReady's (systray-thread) menu-item
 // construction (see onReady's doc); the guards make that race harmless instead
 // of a nil-pointer panic.
-func (s *desktopState) enableRunningMenu() {
+func (s *desktopState) enableRunningMenu() (heldLink string, claimed bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// running gates watchSessions' periodic list (see watchSessions) and
 	// mirrors the "Active sessions" parent's enabled state.
 	s.running = true
+	// Claim an oap:// link held during bring-up atomically with the flip
+	// (lock order s.mu -> gate); the caller runs it via runClaimedLink.
+	heldLink, claimed = s.linkGate.TakePending()
 	for _, it := range []*systray.MenuItem{
 		s.dashboardItem, s.installAgentItem, s.sessionsItem, s.newChatItem,
 		s.kubectlItem, s.stopItem, s.uninstallItem, s.statusItem,
@@ -1683,6 +1742,7 @@ func (s *desktopState) enableRunningMenu() {
 			it.Enable()
 		}
 	}
+	return heldLink, claimed
 }
 
 // enableKubectlMenuItem unlocks ONLY the "Use oap cluster for kubectl" item and
@@ -1738,6 +1798,7 @@ func (s *desktopState) failBringUp(err error) {
 	step := s.currentStep
 	s.mu.Unlock()
 	s.timeline.Fail(step, time.Now().UnixMilli(), err.Error())
+	s.dropHeldLink("OAP Desktop couldn't start, so the agent install link was cancelled.")
 }
 
 func (s *desktopState) setStatus(state menubaricons.State, title, tooltip string) {
@@ -1923,6 +1984,28 @@ func (s *desktopState) openSettings() {
 	}()
 }
 
+// phase reports the desktop lifecycle phase. It backs both the settings UI's
+// state and the install-link gate's readiness (linkReadiness).
+func (s *desktopState) phase() settingsui.State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.phaseLocked()
+}
+
+// phaseLocked is phase with s.mu already held.
+func (s *desktopState) phaseLocked() settingsui.State {
+	switch {
+	case s.running:
+		return settingsui.State{Running: true, Phase: "running"}
+	case s.runErr != nil:
+		return settingsui.State{Phase: "failed", Step: s.currentStep}
+	case s.currentStep != "":
+		return settingsui.State{Phase: "starting", Step: s.currentStep}
+	default:
+		return settingsui.State{Phase: "stopped"}
+	}
+}
+
 // settingsDeps builds the settings server's collaborator seam. Every
 // closure here either reads a set-once desktopState field directly (support,
 // logf) or takes the same lock the field's other readers/writers already
@@ -1934,20 +2017,7 @@ func (s *desktopState) settingsDeps() settingsui.Deps {
 		SupportDir: s.support,
 		AppVersion: oapVersion(),
 		Logf:       s.logf,
-		State: func() settingsui.State {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			switch {
-			case s.running:
-				return settingsui.State{Running: true, Phase: "running"}
-			case s.runErr != nil:
-				return settingsui.State{Phase: "failed", Step: s.currentStep}
-			case s.currentStep != "":
-				return settingsui.State{Phase: "starting", Step: s.currentStep}
-			default:
-				return settingsui.State{Phase: "stopped"}
-			}
-		},
+		State:      s.phase,
 		Clients: func() (*kube.Bundle, error) {
 			s.mu.Lock()
 			dg := s.dg
@@ -2564,12 +2634,13 @@ func (s *desktopState) stopCluster() {
 	// this commits no in-flight or later health tick can override the
 	// StateShuttingDown/StateStopped icons — making "lifecycle transition always
 	// wins" airtight.
-	s.running = false
+	s.markStoppedLocked()
 	if pf := s.pf; pf != nil {
 		pf.Stop()
 		s.pf = nil
 	}
 	s.mu.Unlock()
+	s.dropHeldLink("The local cluster was stopped, so the pending agent install was cancelled.")
 
 	s.setStatus(menubaricons.StateShuttingDown, "Stopping…", "OAP Desktop — stopping…")
 	if err := s.eng.Down(s.ctx); err != nil {
@@ -2605,6 +2676,7 @@ func (s *desktopState) uninstall() {
 		s.pf = nil
 	}
 	s.mu.Unlock()
+	s.stopTakingLinksForUninstall()
 
 	s.setStatus(menubaricons.StateUninstalling, "Uninstalling…", "OAP Desktop — uninstalling…")
 	if err := s.eng.Uninstall(s.ctx); err != nil {
