@@ -171,8 +171,13 @@ func (r *Relay) Start(ctx context.Context) error {
 	if timeout <= 0 {
 		timeout = DefaultHandleTimeout
 	}
+	// Deliveries are bounded by their own deadline, not by ctx: ctx is the
+	// process's root and is cancelled the moment shutdown begins, which would
+	// cut off every message still queued. Stop owns how long shutdown waits
+	// for them. WithoutCancel keeps ctx's values (the logger).
+	deliveryCtx := context.WithoutCancel(ctx)
 	r.lanes = newSessionLanes(ctx, r.MaxConcurrentSessions, r.MaxLaneBacklog, func(msg *nats.Msg) {
-		hctx, cancel := context.WithTimeout(ctx, timeout)
+		hctx, cancel := context.WithTimeout(deliveryCtx, timeout)
 		defer cancel()
 		r.handle(hctx, msg)
 		if errors.Is(hctx.Err(), context.DeadlineExceeded) {
@@ -199,6 +204,11 @@ func (r *Relay) Start(ctx context.Context) error {
 // uploads; an abandoned delivery fails through the ordinary send-error path.
 const DefaultHandleTimeout = 2 * time.Minute
 
+// StopGracePeriod is how long a process shutting down should let Stop drain
+// queued deliveries. It has to fit inside the pod's termination grace period
+// (30s by default) with room for the rest of shutdown.
+const StopGracePeriod = 20 * time.Second
+
 // laneKey is the session an out-subject belongs to. An unparseable subject
 // gets the empty key — one shared lane, where handle logs and drops it.
 func laneKey(subject string) string {
@@ -214,6 +224,10 @@ func laneKey(subject string) string {
 // envelopes arriving: the ones already handed to a session's lane are still
 // owed to the user. Returns ctx's error when ctx ends first. Safe to call
 // multiple times.
+//
+// ctx is the shutdown grace period, so it must not be one shutdown has
+// already cancelled — a caller deferring Stop pairs it with a fresh bounded
+// context (see StopGracePeriod), or Stop returns at once and drains nothing.
 func (r *Relay) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

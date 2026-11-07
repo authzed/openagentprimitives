@@ -44,9 +44,9 @@ const DefaultMaxLaneBacklog = 10000
 // before its resolution).
 //
 // A lane's goroutine exits as soon as its queue is empty, so idle sessions cost
-// nothing. The queue is unbounded on purpose: blocking the NATS callback on one
-// full lane would put every session back in one line, and dropping would lose
-// user-visible output. A growing lane is logged instead.
+// nothing. The queue is capped (see DefaultMaxLaneBacklog), and a full lane
+// drops rather than blocks: blocking the NATS callback on one session would
+// put every session back in one line. A growing lane is logged.
 type sessionLanes struct {
 	handle     func(*nats.Msg)
 	slots      chan struct{} // counting semaphore over concurrently-running handlers

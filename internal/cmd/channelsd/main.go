@@ -863,7 +863,15 @@ func run(rootCtx context.Context, cfg *config) error {
 	if err := relay.Start(rootCtx); err != nil {
 		return fmt.Errorf("relay start: %w", err)
 	}
-	defer relay.Stop(rootCtx) //nolint:errcheck
+	// Not rootCtx: it is already cancelled when this runs, and Stop's ctx is
+	// the grace period for delivering what is still queued.
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), outbound.StopGracePeriod)
+		defer cancel()
+		if err := relay.Stop(stopCtx); err != nil {
+			logger.Info("outbound relay: shutdown did not finish delivering queued messages", "err", err.Error())
+		}
+	}()
 
 	// Interrupt-applied bridge: subscribes to .out.interrupt_applied and, for
 	// SLACK-input sessions only, republishes the runner's interrupt outcome as

@@ -229,3 +229,50 @@ func TestSessionLanes_WaitCtxBoundedByContext(t *testing.T) {
 	close(release)
 	assert.NoError(t, lanes.waitCtx(context.Background()), "and returns cleanly once the lane drains")
 }
+
+// Shutdown cancels the process's root context — the one the relay was started
+// with — before Stop runs. A queued or in-flight delivery must not be cut off
+// by that: it is still owed to the user, and Stop's own context is what bounds
+// how long shutdown waits for it.
+func TestRelay_RootContextCancelDoesNotCutOffDelivery(t *testing.T) {
+	nc := connectNATS(t)
+	cli := fakeClientWith(t, defaultSession())
+	sndr := &gatedSender{entered: make(chan struct{}), release: make(chan struct{})}
+	r := &Relay{NC: nc, K8s: cli, Senders: &fixedResolver{s: sndr}}
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	require.NoError(t, r.Start(rootCtx), "Relay.Start")
+
+	publishOut(t, nc, "default", "foo", string(channelevents.KindUserMessage),
+		buildEnv(t, "foo", channelevents.KindUserMessage, channelevents.OutboundUserMessagePayload{Text: "hi"}))
+	<-sndr.entered
+
+	cancelRoot() // SIGTERM: the root context goes first
+	stopped := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		stopped <- r.Stop(ctx)
+	}()
+	close(sndr.release)
+
+	require.NoError(t, <-stopped, "Stop drains within its own grace period")
+	assert.NoError(t, sndr.ctxErr, "the delivery's context outlived the root context's cancellation")
+}
+
+// gatedSender blocks its first Send until released, then records whether the
+// context it was handed had been cancelled by then.
+type gatedSender struct {
+	entered, release chan struct{}
+	once             sync.Once
+	ctxErr           error
+}
+
+func (s *gatedSender) Send(ctx context.Context, _ channelkinds.SessionInfo, _ channelevents.Envelope) (channelkinds.SubChannelSendResult, error) {
+	first := false
+	s.once.Do(func() { first = true; close(s.entered) })
+	if first {
+		<-s.release
+		s.ctxErr = ctx.Err()
+	}
+	return channelkinds.SubChannelSendResult{}, ctx.Err()
+}
