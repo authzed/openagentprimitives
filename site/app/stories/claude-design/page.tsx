@@ -1,23 +1,20 @@
 import type { Metadata } from "next";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { JsonLd } from "@/components/JsonLd";
+import { SiteFooter } from "@/components/SiteFooter";
+import { SiteNav } from "@/components/SiteNav";
 import { getAsset } from "@/lib/manifest";
 import { OG_IMAGE, SITE_NAME } from "@/lib/site";
 import { storyGraph, type FaqEntry } from "@/lib/structured-data";
-import lightInk from "../../../../docs/assets/brand/oap-wordmark-light.svg";
-import darkInk from "../../../../docs/assets/brand/oap-wordmark-dark.svg";
-import {
-  BeforeAfter,
-  CopyButton,
-  DemoClip,
-  ThemeCycleButton,
-} from "../StoryClient";
+import { BeforeAfter, CopyButton, DemoClip } from "../StoryClient";
+import "../../(landing)/landing.css";
 import "../stories.css";
 
-// "Build your own" story 01. The layout is the series template from the story
-// design file: hero, at-a-glance, the original, ingredients, the build steps,
-// see it work, why OAP, still ahead, FAQ, try it, and the series strip. The
-// claims follow examples/messagingbot; keep them in step with the bundle.
+// A "Build your own" story: a familiar product as the anchor, then the same
+// thing rebuilt from OAP's primitives, for a visitor who knows the product but
+// not OAP. Order: hero, at a glance, the original, ingredients, the build, see
+// it work, why OAP, still ahead, FAQ, try it. The claims follow
+// examples/messagingbot; keep them in step with the bundle.
 
 const PATH = "/stories/claude-design";
 const TITLE = "We built our own Claude Design";
@@ -33,16 +30,24 @@ const KEYWORDS = [
   "agent skills",
 ];
 const PUBLISHED = "2026-10-22";
-const UPDATED = "2026-10-26";
+const UPDATED = "2026-11-06";
 
 const REPO = "https://github.com/authzed/openagentprimitives";
 const BUNDLE = `${REPO}/tree/main/examples/messagingbot`;
-const INSTALL = "oap agent install examples/messagingbot";
-const INSTALL_ALL = [
-  "oap agent lint examples/messagingbot",
-  "oap agent install examples/messagingbot --namespace default",
-  "oap channel create --kind slack",
-].join("\n");
+
+// Step 2 of "Try it"; step 1 (installing OAP) links to its own guide.
+// `oap agent install` takes a local bundle, so it runs from a repo clone.
+const INSTALL: { note?: string; cmd?: string }[] = [
+  { note: "# from a clone of the repo" },
+  { cmd: "oap agent install examples/messagingbot --namespace default" },
+  { cmd: "oap channel create --kind slack" },
+];
+const INSTALL_TEXT = INSTALL.map((l) => l.note ?? l.cmd).join("\n");
+
+// The toolspec's own refusal message, verbatim from
+// examples/messagingbot/manifests/toolspec.yaml (the repository ring).
+const REFUSAL =
+  "This repository is not one messagingbot may read (spec.config.readableRepos, set by the operator at install). Ask the user which approved repository holds what you need.";
 
 export const metadata: Metadata = {
   title: { absolute: `${TITLE} · OAP stories` },
@@ -68,27 +73,22 @@ const FAQ: (FaqEntry & { id: string })[] = [
   {
     id: "faq-alternative",
     q: "Can I build a Claude Design alternative on OAP?",
-    a: "Yes. messagingbot reproduces the core Claude Design workflow on OAP: a brief in chat, a design grounded in your brand system, click-to-comment feedback on the rendered page, and versioned revisions. It is built from an AgentClass, a read-only GitHub toolspec, two agent skills, and the artifact system, with no new platform code.",
+    a: "Yes. messagingbot reproduces the core Claude Design workflow on OAP: a brief in chat, a design grounded in your brand system, click-to-comment feedback on the rendered page, and versioned revisions. It is built from an agent definition, a read-only GitHub tool, two agent skills, and OAP's artifact system, with no new platform code.",
   },
   {
     id: "faq-code",
     q: "Do I have to write code to run it?",
-    a: "No. messagingbot ships as an example agent bundle. Install it with `oap agent install examples/messagingbot`, answer three questions (a read-only GitHub token, your brand repositories, and which skills to load), and bind it to a Slack channel or use the browser chat.",
+    a: "No. messagingbot ships as an example agent bundle in the OAP repository. Install it with `oap agent install examples/messagingbot`, answer three questions (a GitHub token, your brand repositories, and which skills to load), and bind it to a Slack channel or use the browser chat.",
   },
   {
     id: "faq-brand",
     q: "Where does messagingbot get our brand from?",
-    a: "From the GitHub repositories you name at install, such as one holding colour and type tokens and one holding approved messaging. It reads them read-only through the gh CLI, and the toolspec refuses any repository that is not on the approved list.",
-  },
-  {
-    id: "faq-comments",
-    q: "How do inline comments on the design work?",
-    a: "Open the artifact in the live viewer, click an element, and type a note. Pressing Send bundles your notes up and sends them to the agent with the details of where each was made. OAP first checks that you may view that artifact; the agent then revises the same artifact and records a change note for each comment.",
+    a: "From the GitHub repositories you name at install, such as one holding colour and type tokens and one holding approved messaging. It reads them through the gh CLI, and its toolspec refuses writes and any repository that is not on the approved list.",
   },
   {
     id: "faq-safe",
     q: "Is it safe to open HTML a model wrote?",
-    a: "Yes. OAP renders every artifact inert: you see the page, but nothing in it can run. messagingbot is also instructed to produce HTML and CSS only.",
+    a: "Yes. OAP renders every artifact inert: you see the page, but no script in it runs. messagingbot is also instructed to produce HTML and CSS only.",
   },
   {
     id: "faq-model",
@@ -110,15 +110,9 @@ function withCode(text: string): ReactNode {
     );
 }
 
-function OapA({
-  className = "icon-a",
-  style,
-}: {
-  className?: string;
-  style?: CSSProperties;
-}) {
+function OapA({ className = "icon-a" }: { className?: string }) {
   return (
-    <svg className={className} style={style}>
+    <svg className={className} aria-hidden="true">
       <use href="#oap-a" />
     </svg>
   );
@@ -149,21 +143,15 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
   {
     has: "Click-to-comment",
     need: "A way to point at an element and route the note back to the agent",
-    oap: (
-      <>
-        <a href="/docs/artifact-annotations">Artifact annotations</a>, the
-        viewer&apos;s <code>annotation_batch</code> interaction
-      </>
-    ),
+    oap: <a href="/docs/artifact-annotations">Artifact annotations</a>,
   },
   {
     has: "Your design system",
     need: "Read access to the brand's source of truth, and nothing more",
     oap: (
       <>
-        A read-only <code>gh</code>{" "}
-        <a href="/docs/toolspec-validation">toolspec</a> bounded to approved
-        repositories
+        A <a href="/docs/toolspec-validation">toolspec</a> that limits the
+        GitHub CLI to reads of approved repositories
       </>
     ),
   },
@@ -180,12 +168,7 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
   {
     has: "A safe preview",
     need: "A way to show model-written HTML without trusting it",
-    oap: (
-      <>
-        <a href="/docs/artifact-safety">Inert rendering</a>, so model-written
-        HTML can&apos;t run scripts
-      </>
-    ),
+    oap: <a href="/docs/artifact-safety">Inert rendering</a>,
   },
   {
     has: "A history",
@@ -201,7 +184,7 @@ const INGREDIENTS: { has: string; need: string; oap: ReactNode }[] = [
 export default function Page() {
   const clip = getAsset("messagingbot-design");
   return (
-    <div className="st">
+    <div className="lp st">
       <svg
         width="0"
         height="0"
@@ -220,52 +203,47 @@ export default function Page() {
         </defs>
       </svg>
 
-      <header className="nav">
-        <div className="rail">
-          <a href="/" aria-label="Open Agent Primitives home">
-            <img className="wm wm-light" src={lightInk.src} alt="OAP" />
-            <img className="wm wm-dark" src={darkInk.src} alt="OAP" />
-          </a>
-          <span className="crumb">
-            <a href="#more">Stories</a> / 01
-          </span>
-          <nav className="nav-links">
-            <a href="/docs/what-is-oap">Docs</a>
-            <a href={REPO}>GitHub</a>
-            <ThemeCycleButton />
-            <a className="btn btn-ink" href="#try">
-              Install messagingbot
-            </a>
-          </nav>
-        </div>
-      </header>
+      <SiteNav
+        cta={{
+          href: "#try",
+          label: (
+            <span>
+              Install<span className="st-nav-long"> messagingbot</span>
+            </span>
+          ),
+        }}
+      >
+        <a className="lp-nav-keep" href="/docs/what-is-oap">
+          Docs
+        </a>
+        <a href="#build">How it&apos;s built</a>
+        <a href="#pin">See it work</a>
+      </SiteNav>
 
       <main>
         {/* HERO */}
         <section className="hero">
           <div className="rail">
             <div>
-              <p className="kicker">Build your own · Story 01</p>
               <h1>
                 We built our own <em>Claude Design</em>
               </h1>
-              <p className="subtitle">and it&apos;s fully open source!</p>
+              <p className="subtitle">
+                We built it on OAP, open-source building blocks for running AI
+                agents on your own infra and with the models you choose. The
+                agent never decides what it&apos;s allowed to do; OAP does.
+              </p>
               <p className="lede">
                 <strong>Claude Design</strong> is Anthropic&apos;s tool for
-                designing in conversation. Describe a page, a deck or a
-                prototype, and Claude builds it in your brand on a canvas beside
-                the chat; then you refine it together, by chatting, commenting
-                on the design, or editing it directly, with every version kept.
-                We wanted the same tools and capabilities for our own team, but
-                completely open. We therefore built{" "}
-                <strong>messagingbot</strong>, the design agent our marketing
-                team uses, entirely out of pieces OAP already ships.
+                designing in conversation: describe a page, Claude builds it in
+                your brand, and you refine it by commenting on the design.{" "}
+                <strong>messagingbot</strong> is our version.
               </p>
               <div className="cta-row">
-                <a className="btn btn-ink" href="#try">
+                <a className="lp-btn lp-btn--primary" href="#try">
                   Install messagingbot
                 </a>
-                <a className="btn btn-ghost" href={BUNDLE}>
+                <a className="lp-btn lp-btn--ghost" href={BUNDLE}>
                   View the bundle on GitHub
                 </a>
               </div>
@@ -280,8 +258,8 @@ export default function Page() {
               )}
               <figcaption>
                 <span>
-                  messagingbot taking a brief, reading the brand repos, building
-                  a page, and revising it from notes pinned to the design.
+                  messagingbot taking a brief, reading the brand, building a
+                  page, and revising it from notes pinned to the design.
                 </span>
                 <span className="sim">Simulated · fictional company</span>
               </figcaption>
@@ -305,58 +283,54 @@ export default function Page() {
 
         {/* AT A GLANCE */}
         <section className="glance" aria-label="At a glance">
-          <div className="rail">
-            <div className="glance-grid">
-              <div className="glance-cell">
-                <h3>What we built</h3>
-                <p>
-                  messagingbot, an agent that takes a marketing brief and builds
-                  an HTML page from your real design tokens and approved copy.
-                  Reviewers pin notes on the page and it revises from them.
-                </p>
-              </div>
-              <div className="glance-cell">
-                <h3>What it&apos;s made of</h3>
-                <p>
-                  An <a href="/docs/agentclass-agentsession">AgentClass</a>, a
-                  read-only GitHub <a href="/docs/safe-tools">toolspec</a>, two
-                  public <a href="/docs/skills">skills</a>, and the{" "}
-                  <a href="/docs/artifacts">artifact system</a> with its{" "}
-                  <a href="/docs/artifact-annotations">annotations</a>.
-                </p>
-              </div>
-              <div className="glance-cell">
-                <h3>What we didn&apos;t build</h3>
-                <p>
-                  The canvas, comment system, renderer, sandboxing and safe
-                  artifacts are part of OAP. We built on top of these
-                  primitives.
-                </p>
-              </div>
-              <div className="glance-cell try">
-                <h3>Try it</h3>
-                <div className="term">
-                  <span className="p">$ </span>
-                  {INSTALL}
-                  <CopyButton text={INSTALL} />
-                </div>
-                <a className="go" href={BUNDLE}>
-                  Open-source example bundle{" "}
-                  <span aria-hidden="true">&rarr;</span>
-                </a>
-              </div>
+          <div className="glance-grid">
+            <div className="glance-cell">
+              <p className="glance-h">What we built</p>
+              <p>
+                messagingbot, an agent that takes a marketing brief and builds
+                an HTML page from your real design tokens and approved copy.
+                Reviewers pin notes on the page and it revises from them.
+              </p>
+            </div>
+            <div className="glance-cell">
+              <p className="glance-h">What it&apos;s made of</p>
+              <p>
+                Five pieces of configuration: a{" "}
+                <a href="/docs/agentclass-agentsession">prompt</a>, a{" "}
+                <a href="/docs/safe-tools">read-only GitHub tool</a>, two{" "}
+                <a href="/docs/skills">design skills</a>, OAP&apos;s{" "}
+                <a href="/docs/artifacts">canvas</a> with{" "}
+                <a href="/docs/artifact-annotations">comments</a>, and three
+                install questions.
+              </p>
+            </div>
+            <div className="glance-cell">
+              <p className="glance-h">What we didn&apos;t build</p>
+              <p>
+                The canvas, the comment system, the renderer, the sandbox and
+                the permission checks. Those are OAP; messagingbot is
+                configuration on top.
+              </p>
+            </div>
+            <div className="glance-cell deny">
+              <p className="glance-h">What it can&apos;t do</p>
+              <p>
+                Slip your unreleased roadmap into public copy. It reads only the
+                brand sources you approve; a request for anything else is
+                refused, whatever the prompt says.
+              </p>
+              <a className="go" href="#step-2">
+                See the refusal <span aria-hidden="true">&rarr;</span>
+              </a>
             </div>
           </div>
         </section>
 
-        {/* 1. THE THING */}
+        {/* THE ORIGINAL */}
         <section id="what">
           <div className="rail">
             <div className="head">
-              <div>
-                <p className="kicker">The original</p>
-                <h2 className="h2">What is Claude Design?</h2>
-              </div>
+              <h2 className="h2">What is Claude Design?</h2>
               <p className="lede">
                 <a href="https://claude.com/product/design">Claude Design</a> is
                 Anthropic&apos;s visual design tool. It{" "}
@@ -376,6 +350,7 @@ export default function Page() {
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="1.5"
+                  aria-hidden="true"
                 >
                   <rect x="6" y="9" width="32" height="26" rx="3" />
                   <circle cx="14" cy="17" r="3" fill="currentColor" />
@@ -396,6 +371,7 @@ export default function Page() {
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="1.5"
+                  aria-hidden="true"
                 >
                   <rect x="6" y="7" width="32" height="24" rx="3" />
                   <path d="M12 15h14M12 20h20" opacity=".5" />
@@ -421,6 +397,7 @@ export default function Page() {
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="1.5"
+                  aria-hidden="true"
                 >
                   <rect x="14" y="6" width="24" height="18" rx="2.5" />
                   <rect
@@ -429,7 +406,7 @@ export default function Page() {
                     width="24"
                     height="18"
                     rx="2.5"
-                    fill="var(--card)"
+                    fill="var(--lp-bg)"
                   />
                   <rect
                     x="6"
@@ -437,7 +414,7 @@ export default function Page() {
                     width="24"
                     height="18"
                     rx="2.5"
-                    fill="var(--card)"
+                    fill="var(--lp-bg)"
                   />
                   <path d="M11 27h14M11 31h9" />
                 </svg>
@@ -449,23 +426,17 @@ export default function Page() {
               </div>
             </div>
             <p className="after-feats">
-              This is quite similar to what our marketing team requested: a
-              designer that already knows the brand and can take notes on a
-              draft.
+              That is close to what our marketing team asked for: a designer
+              that already knows the brand and can take notes on a draft.
             </p>
           </div>
         </section>
 
-        {/* INGREDIENTS (series signature) */}
+        {/* INGREDIENTS */}
         <section id="ingredients">
           <div className="rail">
             <div className="head">
-              <div>
-                <p className="kicker">The ingredients</p>
-                <h2 className="h2">
-                  What you need to <em>build one</em>
-                </h2>
-              </div>
+              <h2 className="h2">What you need to build one</h2>
               <p className="lede">
                 What a design agent needs, and the OAP primitive that already
                 provides it.
@@ -508,20 +479,16 @@ export default function Page() {
           </div>
         </section>
 
-        {/* 2. HOW WE BUILT IT */}
+        {/* HOW WE BUILT IT */}
         <section id="build">
           <div className="rail">
             <div className="head">
-              <div>
-                <p className="kicker">How we built it</p>
-                <h2 className="h2">
-                  The five pieces of <em>messagingbot</em>
-                </h2>
-              </div>
+              <h2 className="h2">The five pieces of messagingbot</h2>
               <p className="lede">
-                messagingbot is an agent definition, a read-only GitHub tool,
-                two skills, and OAP&apos;s artifact viewer. Below is each piece
-                with the config that sets it up.
+                messagingbot adds no new platform code. It is a small bundle
+                that tells OAP how this agent should behave, what it may touch,
+                and what to ask whoever installs it. Each piece below sits next
+                to the configuration that sets it up.
               </p>
             </div>
 
@@ -533,6 +500,7 @@ export default function Page() {
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.4"
+                    aria-hidden="true"
                   >
                     <path d="M5 7h20v13H13l-5 4v-4H5z" />
                     <path d="M13.5 11.5a1.8 1.8 0 1 1 2.4 1.7c-.6.2-.9.6-.9 1.2" />
@@ -545,7 +513,7 @@ export default function Page() {
               </a>
               <a href="#step-2">
                 <span className="node">
-                  <svg viewBox="0 0 30 30">
+                  <svg viewBox="0 0 30 30" aria-hidden="true">
                     <use href="#oap-a" x="5" y="5" width="20" height="20" />
                   </svg>
                 </span>
@@ -560,6 +528,7 @@ export default function Page() {
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.4"
+                    aria-hidden="true"
                   >
                     <rect x="9" y="5" width="14" height="18" rx="2" />
                     <rect
@@ -568,7 +537,7 @@ export default function Page() {
                       width="14"
                       height="18"
                       rx="2"
-                      fill="var(--bg)"
+                      fill="var(--lp-bg)"
                     />
                     <path d="M9.5 13h7M9.5 16.5h7M9.5 20h4" />
                   </svg>
@@ -584,6 +553,7 @@ export default function Page() {
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.4"
+                    aria-hidden="true"
                   >
                     <rect x="5" y="6" width="20" height="16" rx="2" />
                     <rect x="8.5" y="10" width="10" height="4" rx="1" />
@@ -607,6 +577,7 @@ export default function Page() {
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.4"
+                    aria-hidden="true"
                   >
                     <rect x="4" y="6" width="22" height="18" rx="2" />
                     <path d="M8.5 12l3.5 3-3.5 3M14.5 18.5h6" />
@@ -638,74 +609,62 @@ export default function Page() {
               <div className="vis">
                 <p className="code-label">
                   From{" "}
-                  <a
-                    href={`${REPO}/tree/main/examples/messagingbot/manifests/agentclass.yaml`}
-                  >
-                    examples/messagingbot/manifests/agentclass.yaml
+                  <a href={`${BUNDLE}/manifests/agentclass.yaml`}>
+                    manifests/agentclass.yaml
                   </a>
                 </p>
-                <pre className="code">{`Read the brief and decide what's missing. A good marketing piece needs,
-at minimum: the audience, the goal/outcome, the medium/format, the
-single key message, and the call-to-action. If any are unclear, ask 2-4
-sharp clarifying questions ... BEFORE designing.
+                <pre className="code wrap">{`Read the brief and decide what's missing. A good marketing piece needs, at minimum: the audience, the goal/outcome, the medium/format, the single key message, and the call-to-action. If any are unclear, ask 2-4 sharp clarifying questions ... BEFORE designing.
 
 Never invent a colour, font, or claim that isn't grounded in what you read.`}</pre>
               </div>
             </div>
 
-            <div className="step" id="step-2">
+            <div className="step step-peak" id="step-2">
               <div>
                 <span className="step-num">02</span>
                 <h3>The brand, read-only</h3>
                 <div className="prose">
                   <p>
-                    messagingbot reads the brand with one tool, the GitHub CLI (
-                    <code>gh</code>), in a sandbox that can only reach GitHub. A{" "}
-                    <a href="/docs/safe-tools">toolspec</a> around it decides
-                    which calls go through, and it only allows reads from
-                    approved repositories.
+                    messagingbot reads the brand with one tool, the GitHub CLI.
+                    A <a href="/docs/safe-tools">toolspec</a> around it decides
+                    which calls go through: read requests only, and only on the
+                    repositories whoever installed the agent approved, such as
+                    the ones holding your design tokens and messaging.
                   </p>
                   <p>
-                    The approved list (<code>config.readableRepos</code>) is set
-                    by whoever installs the agent: just the repositories that
-                    hold your design system and messaging. Even on those,
-                    messagingbot can only read — the three subcommands above,
-                    with <code>gh api</code> limited to GET requests. Any write,
-                    or any request for a repository not on the list, is refused
-                    before it reaches GitHub, regardless of what the prompt asks
-                    for.
+                    Anything else is{" "}
+                    <strong>refused before it reaches GitHub</strong>, and the
+                    agent is told why. The check runs outside the model, so no
+                    prompt can talk its way past it.
                   </p>
                 </div>
               </div>
               <div className="vis">
-                <figure
-                  className="gate"
-                  style={{ margin: 0 }}
-                  aria-label="Two approved brand repositories pass the gate to GitHub; an unapproved repository is refused at the gate."
-                >
-                  <svg viewBox="0 0 560 220" role="img">
-                    <title>
-                      The toolspec gate: approved repositories pass, anything
-                      else is refused
-                    </title>
+                <figure className="gate">
+                  <svg
+                    viewBox="0 0 560 230"
+                    role="img"
+                    aria-label="Two approved brand repositories pass the toolspec gate to GitHub; an unapproved repository is refused at the gate."
+                  >
                     <g fill="none" strokeWidth="2" strokeLinecap="round">
                       <path
                         d="M176 52 C 230 52, 236 112, 268 112"
-                        stroke="var(--state)"
+                        stroke="var(--lp-muted)"
                       />
-                      <path d="M176 112 L 268 112" stroke="var(--state)" />
+                      <path d="M176 112 L 268 112" stroke="var(--lp-muted)" />
                       <path
                         d="M176 172 C 216 172, 228 160, 240 150"
-                        stroke="var(--deny)"
+                        stroke="var(--lp-deny)"
+                        strokeWidth="2.6"
                       />
-                      <path d="M318 112 L 430 112" stroke="var(--state)" />
+                      <path d="M318 112 L 430 112" stroke="var(--lp-muted)" />
                     </g>
                     <g
-                      stroke="var(--deny)"
-                      strokeWidth="2.2"
+                      stroke="var(--lp-deny)"
+                      strokeWidth="2.8"
                       strokeLinecap="round"
                     >
-                      <path d="M240 142 l12 12 M252 142 l-12 12" />
+                      <path d="M238 140 l14 14 M252 140 l-14 14" />
                     </g>
                     <use
                       href="#oap-a"
@@ -713,34 +672,34 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                       y="70"
                       width="84"
                       height="74"
-                      style={{ color: "var(--heading)" }}
+                      style={{ color: "var(--lp-heading)" }}
                     />
-                    <g fontSize="12" fill="var(--fg)">
+                    <g fontSize="14" fill="var(--lp-fg)">
                       <text x="12" y="48">
                         acme/design
                       </text>
                       <text x="12" y="108">
                         acme/messaging
                       </text>
-                      <text x="12" y="168" fill="var(--muted)">
+                      <text x="12" y="168">
                         acme/roadmap
                       </text>
                     </g>
-                    <g fontSize="10" fill="var(--muted)">
-                      <text x="12" y="63">
+                    <g fontSize="12" fill="var(--lp-muted)">
+                      <text x="12" y="65">
                         tokens, components
                       </text>
-                      <text x="12" y="123">
+                      <text x="12" y="125">
                         pillars, voice, copy
                       </text>
-                      <text x="12" y="183" fill="var(--deny)">
-                        not in readableRepos
+                      <text x="12" y="185" fill="var(--lp-deny)">
+                        not approved
                       </text>
                       <text x="294" y="170" textAnchor="middle">
                         toolspec
                       </text>
-                      <text x="294" y="184" textAnchor="middle">
-                        GET only · approved repos
+                      <text x="294" y="186" textAnchor="middle">
+                        reads · approved repos
                       </text>
                     </g>
                     <rect
@@ -748,34 +707,63 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                       y="90"
                       width="112"
                       height="44"
-                      rx="8"
-                      fill="var(--s2)"
-                      stroke="var(--line)"
+                      rx="6"
+                      fill="var(--lp-surface-2)"
+                      stroke="var(--lp-line)"
                     />
                     <text
                       x="488"
                       y="117"
                       textAnchor="middle"
-                      fontSize="12"
-                      fill="var(--fg)"
+                      fontSize="14"
+                      fill="var(--lp-fg)"
                     >
                       github.com
                     </text>
                     <text
-                      x="252"
-                      y="208"
-                      fontSize="10.5"
-                      fill="var(--deny)"
+                      x="245"
+                      y="218"
+                      fontSize="14"
+                      fill="var(--lp-deny)"
                       textAnchor="middle"
                     >
                       refused before it reaches GitHub
                     </text>
                   </svg>
+                  {/* The same gate as a list, for widths where the diagram's
+                      labels would shrink below reading size. */}
+                  <ul className="gate-list">
+                    <li>
+                      <span>acme/design</span>
+                      <b>read</b>
+                    </li>
+                    <li>
+                      <span>acme/messaging</span>
+                      <b>read</b>
+                    </li>
+                    <li className="no">
+                      <span>acme/roadmap</span>
+                      <b>refused before it reaches GitHub</b>
+                    </li>
+                  </ul>
                 </figure>
-                <pre className="code">
-                  <span className="k">allowSubcommands</span>
-                  {`: ["api", "repo view", "auth status"]`}
-                </pre>
+                <figure className="refusal">
+                  <figcaption>
+                    What messagingbot gets back when it asks for acme/roadmap
+                  </figcaption>
+                  <div className="refusal-call">
+                    <span className="p">$ </span>gh api
+                    repos/acme/roadmap/readme
+                  </div>
+                  <p className="refusal-msg">{REFUSAL}</p>
+                  <p className="refusal-src">
+                    The message is the toolspec&apos;s own, from{" "}
+                    <a href={`${BUNDLE}/manifests/toolspec.yaml`}>
+                      manifests/toolspec.yaml
+                    </a>
+                    .
+                  </p>
+                </figure>
               </div>
             </div>
 
@@ -787,19 +775,16 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                   <p>
                     Brand tokens cover colour and type. For layout and visual
                     judgment the agent uses <a href="/docs/skills">skills</a>,
-                    which are instructions it loads when they&apos;re relevant.
-                    The bundle includes two from Anthropic&apos;s public skills
-                    repository, pinned to a commit: <code>frontend-design</code>{" "}
-                    for visual direction, and <code>theme-factory</code>, which
-                    offers ten preset palettes for teams without a brand system.
+                    instructions it loads when they&apos;re relevant. The bundle
+                    includes two from Anthropic&apos;s public skills repository,
+                    pinned to a commit: <code>frontend-design</code> for visual
+                    direction, and <code>theme-factory</code>, which offers ten
+                    preset palettes for teams without a brand system.
                   </p>
                   <p>
-                    The bundle declares both and the installer chooses which
-                    ones the agent gets. The <code>[?]</code> at the end of the
-                    binding target filters <code>spec.skills</code> down to the
-                    chosen names, and the install fails if a name isn&apos;t in
-                    the list, so a typo can&apos;t leave the agent without a
-                    skill you asked for.
+                    Whoever installs it picks which ones the agent gets, and a
+                    misspelled name fails the install instead of quietly leaving
+                    a skill out.
                   </p>
                 </div>
               </div>
@@ -817,7 +802,8 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                   <span className="k">default</span>
                   {": [frontend-design, theme-factory]\n  "}
                   <span className="k">binding</span>
-                  {':\n    - target: "AgentClass/messagingbot#spec.skills[?]"'}
+                  {":\n    - target:\n        "}
+                  {'"AgentClass/messagingbot#spec.skills[?]"'}
                 </pre>
               </div>
             </div>
@@ -828,16 +814,14 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 <h3>Canvas and comments</h3>
                 <div className="prose">
                   <p>
-                    <code>artifacts.renderers</code> gives the agent the
-                    artifact tools, limited to HTML, so it can render a page,
-                    revise it, and share a live view.{" "}
-                    <code>session_views.interactions</code> lets a reviewer in
-                    that live view pin notes to parts of the page and send them
-                    back.
+                    Two settings give messagingbot its canvas. The first lets it
+                    render HTML pages, revise them, and share a live view. The
+                    second lets a reviewer in that live view pin notes to parts
+                    of the page and send them back.
                   </p>
                   <p>
-                    Those two settings cover the versions, preview and
-                    click-to-comment that this workflow uses from Claude
+                    Together they cover the versions, preview and
+                    click-to-comment this workflow uses from Claude
                     Design&apos;s canvas.
                   </p>
                 </div>
@@ -868,11 +852,11 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 <div className="prose">
                   <p>
                     You make messagingbot yours at install, by answering three
-                    questions: a read-only GitHub token, the repositories that
-                    hold your brand, and which skills to load. The bundle README
-                    covers{" "}
+                    questions: a GitHub token, the repositories that hold your
+                    brand, and which skills to load. Give it a read-only token;
+                    the bundle README covers{" "}
                     <a href={`${BUNDLE}#read-only-access-three-rings`}>
-                      scoping the token
+                      scoping it
                     </a>
                     .
                   </p>
@@ -899,16 +883,11 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
         <section id="pin">
           <div className="rail">
             <div className="head">
-              <div>
-                <p className="kicker">See it work</p>
-                <h2 className="h2">
-                  What happens when you <em>pin a note</em>
-                </h2>
-              </div>
+              <h2 className="h2">What happens when you pin a note</h2>
               <p className="lede">
                 In the demo, Jordan (on a fictional marketing team) leaves two
-                notes on revision 1, and messagingbot addresses both in revision
-                2. Use the tabs to compare them.
+                notes on revision 1, and messagingbot answers both in revision
+                2. Switch to revision 2 to see the result.
               </p>
             </div>
 
@@ -923,7 +902,7 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
               }}
               panel1={
                 <>
-                  <h4>Annotations</h4>
+                  <p className="ba-h">Annotations</p>
                   <div className="note">
                     <div className="on">
                       <span className="pin">1</span>jordan, on &quot;Smarter
@@ -945,14 +924,15 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                     </p>
                   </div>
                   <p className="ba-send">
-                    Send bundles both notes into one batch, each with where on
-                    the page it was made.
+                    Each note is pinned to the element it&apos;s about. Send
+                    delivers both together, and OAP first checks that Jordan may
+                    view this design and take part in the session.
                   </p>
                 </>
               }
               panel2={
                 <>
-                  <h4>Change note</h4>
+                  <p className="ba-h">Change note</p>
                   <div className="note done">
                     <div className="on">
                       <span className="pin">1</span>headline
@@ -972,54 +952,15 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                     </div>
                   </div>
                   <p className="ba-send">
-                    Revision 1 is still in the history, unchanged.
+                    Same artifact, new revision. Revision 1 is still in the
+                    history, unchanged.
                   </p>
                 </>
               }
             />
             <div className="ba-foot">
-              <span>Shots from the artifact viewer.</span>
+              <span>The artifact viewer, from the scripted demo.</span>
               <span className="sim">Simulated · fictional company</span>
-            </div>
-
-            <div className="beats">
-              <div className="beat">
-                <div className="chk">
-                  <i>1</i>Pin
-                </div>
-                <h3>The note is attached to the element</h3>
-                <p>
-                  When Jordan clicks the headline in the viewer and types a
-                  note, the note is attached to that element. Pressing{" "}
-                  <strong>Send</strong> bundles every note up and sends them to
-                  the agent together, each with the details of where on the page
-                  it was made.
-                </p>
-              </div>
-              <div className="beat">
-                <div className="chk">
-                  <i>2</i>Check
-                </div>
-                <h3>OAP authorizes the feedback first</h3>
-                <p>
-                  Before the agent sees any of it, OAP checks that Jordan is
-                  allowed to view this exact artifact and to take part in the
-                  session. Jordan&apos;s notes reach the agent as{" "}
-                  <strong>Jordan&apos;s words</strong>, while anything taken
-                  from the page itself is treated as <strong>data</strong>, so
-                  text inside a design can&apos;t pose as an instruction.
-                </p>
-              </div>
-              <div className="beat">
-                <div className="chk">
-                  <i>3</i>Revise
-                </div>
-                <h3>The agent revises the same artifact</h3>
-                <p>
-                  Revision 2 includes a change note that responds to each
-                  annotation. Revision 1 stays in the history as it was.
-                </p>
-              </div>
             </div>
           </div>
         </section>
@@ -1028,23 +969,65 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
         <section id="why">
           <div className="rail">
             <div className="head">
-              <div>
-                <p className="kicker">Why OAP</p>
-                <h2 className="h2">
-                  Why it was <em>easy on OAP</em>
-                </h2>
-              </div>
+              <h2 className="h2">
+                Why it was <em>easy on OAP</em>
+              </h2>
               <p className="lede">
-                OAP is a secure foundation for building any agent: identity,
-                authorization checked before every action, sandboxed tools, safe
-                artifacts and an audit trail all come with the platform. That
-                made messagingbot easy to build. We described the agent we
-                wanted, and everything below came with it.
+                We chose OAP because a design agent your whole team uses needs
+                more than a canvas. Everything below comes with the platform, so
+                we described the agent and switched it on.
               </p>
             </div>
             <div className="why">
               <WhyItem
-                hue="var(--h0)"
+                title="Guardrails outside the model"
+                icon={
+                  <svg viewBox="0 0 40 40" aria-hidden="true">
+                    <use href="#oap-a" x="5" y="6" width="30" height="27" />
+                  </svg>
+                }
+              >
+                The repository gate, inert rendering and the check on every
+                reviewer are OAP&apos;s, not code in the bundle, and no prompt
+                can switch them off. <a href="#step-2">See the refusal</a>.
+              </WhyItem>
+              <WhyItem
+                title="A record you can verify"
+                icon={
+                  <svg
+                    viewBox="0 0 40 40"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    aria-hidden="true"
+                  >
+                    <rect x="12" y="6" width="22" height="16" rx="2" />
+                    <rect
+                      x="9"
+                      y="11"
+                      width="22"
+                      height="16"
+                      rx="2"
+                      fill="var(--lp-bg)"
+                    />
+                    <rect
+                      x="6"
+                      y="16"
+                      width="22"
+                      height="16"
+                      rx="2"
+                      fill="var(--lp-bg)"
+                    />
+                    <path d="M10 24h14M10 28h9" />
+                  </svg>
+                }
+              >
+                Revisions can&apos;t be changed after the fact, and each
+                session&apos;s transcript is a signed{" "}
+                <a href="/docs/audit-log">audit log</a> you can verify offline:
+                what the agent read, and who asked for what.
+              </WhyItem>
+              <WhyItem
                 title="Runs in your cluster"
                 icon={
                   <svg
@@ -1052,25 +1035,26 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.5"
+                    aria-hidden="true"
                   >
                     <path d="M20 5l13 7.5v15L20 35 7 27.5v-15z" />
                     <path d="M7 12.5L20 20l13-7.5M20 20v15" />
                   </svg>
                 }
               >
-                messagingbot uses whatever model your cluster is configured with
-                (Anthropic, OpenAI or OpenRouter). Briefs and unreleased
-                messaging stay on infrastructure you run.
+                The agent, its designs and its logs live on infrastructure you
+                run. The model is whichever provider your cluster is configured
+                with: Anthropic, OpenAI or OpenRouter.
               </WhyItem>
               <WhyItem
-                hue="var(--h1)"
-                title="Works in Slack and the browser"
+                title="Where your team already talks"
                 icon={
                   <svg
                     viewBox="0 0 40 40"
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.5"
+                    aria-hidden="true"
                   >
                     <path d="M6 9h20v13H14l-5 4v-4H6z" />
                     <path d="M30 15h4v13h-3v4l-5-4h-9v-2" />
@@ -1082,100 +1066,6 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 produced.
               </WhyItem>
               <WhyItem
-                hue="var(--h2)"
-                title="Reads only approved repositories"
-                icon={
-                  <svg viewBox="0 0 40 40">
-                    <use href="#oap-a" x="5" y="6" width="30" height="27" />
-                  </svg>
-                }
-              >
-                The toolspec enforces the repository allowlist outside the
-                model. There&apos;s also a read-only token and a sandbox that
-                can only reach GitHub, and none of the three rely on the model
-                following instructions.
-              </WhyItem>
-              <WhyItem
-                hue="var(--h3)"
-                title="Pages can't run scripts"
-                icon={
-                  <svg
-                    viewBox="0 0 40 40"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  >
-                    <rect x="6" y="8" width="28" height="24" rx="3" />
-                    <path d="M6 14h28" />
-                    <path d="M15 21l10 6M25 21l-10 6" />
-                  </svg>
-                }
-              >
-                Artifacts render <a href="/docs/artifact-safety">inert</a>, so
-                scripts in a model-written page don&apos;t execute when you open
-                it.
-              </WhyItem>
-              <WhyItem
-                hue="var(--h4)"
-                title="Feedback is checked"
-                icon={
-                  <svg
-                    viewBox="0 0 40 40"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  >
-                    <circle cx="14" cy="15" r="6" />
-                    <path d="M14 12v3l2 1.5" />
-                    <path d="M22 22l12 0M22 27h12M22 32h8" />
-                    <path d="M6 30c1.5-4 4.5-6 8-6" />
-                  </svg>
-                }
-              >
-                An annotation can only target an artifact its sender may view,
-                and nothing scraped from the page reaches the agent as an
-                instruction.
-              </WhyItem>
-              <WhyItem
-                hue="var(--h0)"
-                title="Versions and an audit log"
-                icon={
-                  <svg
-                    viewBox="0 0 40 40"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  >
-                    <rect x="12" y="6" width="22" height="16" rx="2" />
-                    <rect
-                      x="9"
-                      y="11"
-                      width="22"
-                      height="16"
-                      rx="2"
-                      fill="var(--bg)"
-                    />
-                    <rect
-                      x="6"
-                      y="16"
-                      width="22"
-                      height="16"
-                      rx="2"
-                      fill="var(--bg)"
-                    />
-                    <path d="M10 24h14M10 28h9" />
-                  </svg>
-                }
-              >
-                Revisions are immutable and can be{" "}
-                <a href="/docs/artifact-annotations">tagged</a> (for example
-                &quot;approved hero&quot;). Each session&apos;s transcript is a
-                signed, append-only <a href="/docs/audit-log">audit log</a> you
-                can verify offline to see what the agent read and what it was
-                asked to change.
-              </WhyItem>
-              <WhyItem
-                hue="var(--h1)"
                 title="Swappable parts"
                 icon={
                   <svg
@@ -1183,17 +1073,17 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.5"
+                    aria-hidden="true"
                   >
                     <path d="M8 14h22l-5-5M32 26H10l5 5" />
                   </svg>
                 }
               >
                 Skills and brand repositories are chosen at install and the
-                model is a cluster setting, so the same bundle works for a
-                different brand by pointing it at different repos.
+                model is a cluster setting, so the same bundle works for another
+                brand by pointing it at different repos.
               </WhyItem>
               <WhyItem
-                hue="var(--h2)"
                 title="Multiplayer, with the owner's say-so"
                 icon={
                   <svg
@@ -1201,6 +1091,7 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="1.5"
+                    aria-hidden="true"
                   >
                     <circle cx="14" cy="14" r="5" />
                     <path d="M5 31c0-5 4-8.5 9-8.5s9 3.5 9 8.5" />
@@ -1210,12 +1101,10 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                   </svg>
                 }
               >
-                A design review is rarely one person, and{" "}
-                <a href="/docs/multiplayer-sessions">multiplayer sessions</a>{" "}
-                work out of the box. A colleague in the thread asks to join and
-                suggest changes, and the session&apos;s owner approves them
-                first. Once approved, they can chat with messagingbot and pin
-                notes on the design just like the person who started it.
+                A colleague in the thread asks to join, the session&apos;s owner
+                approves, and then they can chat with messagingbot and pin notes
+                too. <a href="/docs/multiplayer-sessions">Multiplayer</a> works
+                out of the box.
               </WhyItem>
             </div>
           </div>
@@ -1226,21 +1115,18 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
           <div className="rail">
             <div className="ahead">
               <div>
-                <p className="kicker">Comparison</p>
-                <h2 className="h2" style={{ marginBottom: 22 }}>
-                  Where Claude Design is still ahead
-                </h2>
+                <h2 className="h2">Where Claude Design is still ahead</h2>
                 <div className="prose">
                   <p>
                     Claude Design does more today: direct editing on the canvas,
                     slides and prototypes, export to tools like Canva, and
-                    handoff to Claude Code. Each could be added to messagingbot
-                    with parts OAP already has. Our designers just haven&apos;t
-                    needed them (yet).
+                    handoff to Claude Code. Most of these could be added to
+                    messagingbot with parts OAP already has; our marketing team
+                    just hasn&apos;t needed them yet.
                   </p>
                   <p>
                     messagingbot is open source, so if you need one first,{" "}
-                    <a href={BUNDLE}>contributions are welcome</a>!
+                    <a href={BUNDLE}>contributions are welcome</a>.
                   </p>
                 </div>
               </div>
@@ -1254,7 +1140,7 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                   <p>
                     Artifact renderers are{" "}
                     <a href="/docs/artifacts">pluggable</a>, so slides or
-                    prototypes would be a new renderer or skill.
+                    prototypes would be a new renderer, which is new code.
                   </p>
                 </div>
                 <div className="seam">
@@ -1290,17 +1176,14 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
           </div>
         </section>
 
-        {/* FAQ */}
+        {/* FAQ, then further reading */}
         <section id="faq">
           <div className="rail">
             <div className="head">
-              <div>
-                <p className="kicker">FAQ</p>
-                <h2 className="h2">Frequently asked questions</h2>
-              </div>
+              <h2 className="h2">Frequently asked questions</h2>
             </div>
             <div className="faq">
-              {[FAQ.slice(0, 4), FAQ.slice(4)].map((col, c) => (
+              {[FAQ.slice(0, 3), FAQ.slice(3)].map((col, c) => (
                 <div key={c}>
                   {col.map((it) => (
                     <details key={it.id} id={it.id}>
@@ -1310,44 +1193,6 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                   ))}
                 </div>
               ))}
-            </div>
-          </div>
-        </section>
-
-        {/* 3. TRY IT */}
-        <section id="try">
-          <div className="rail">
-            <div className="try-band">
-              <div>
-                <p className="kicker">Try it</p>
-                <h2 className="h2" style={{ marginBottom: 16 }}>
-                  Try messagingbot <em>with your brand</em>
-                </h2>
-                <p className="lede">
-                  Install the bundle, answer the three install questions, and
-                  bind it to a Slack channel. The install is where you point it
-                  at your own design and messaging repos.
-                </p>
-                <div className="cta-row">
-                  <a className="btn btn-ink" href={BUNDLE}>
-                    View the bundle on GitHub
-                  </a>
-                  <a className="btn btn-ghost" href="/docs/what-is-oap">
-                    New to OAP?
-                  </a>
-                </div>
-              </div>
-              <div className="term">
-                <CopyButton text={INSTALL_ALL} />
-                <span className="p">$ </span>oap agent lint
-                examples/messagingbot
-                <br />
-                <span className="p">$ </span>oap agent install
-                examples/messagingbot --namespace default
-                <br />
-                <span className="p">$ </span>oap channel create --kind slack{" "}
-                <span className="c"># bind it to messagingbot</span>
-              </div>
             </div>
             <div className="deeper">
               <a href="/docs/artifacts">
@@ -1380,55 +1225,79 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
                 </span>
               </a>
             </div>
-          </div>
-        </section>
-
-        {/* SERIES */}
-        <section id="more">
-          <div className="rail">
-            <p className="kicker">Build your own</p>
-            <div className="series">
-              <a className="story here" href={PATH}>
-                <span className="no">01 · you are here</span>
-                <b>
-                  <span className="pre">We built our own</span>Claude Design
-                </b>
-              </a>
-              <div className="story soon">
-                <span className="no">02 · next story</span>
-                <b>
-                  <span className="pre">We built our own</span>...
-                </b>
-              </div>
-              <div className="story soon">
-                <span className="no">03</span>
-                <b>
-                  <span className="pre">We built our own</span>...
-                </b>
-              </div>
-            </div>
             <p className="disclaimer">
               The demo on this page is a scripted simulation of Slack and the
               artifact viewer; its company, people, and repositories are
-              fictional.
+              fictional. The configuration shown is the real bundle.
             </p>
+          </div>
+        </section>
+
+        {/* TRY IT: the page ends on the action */}
+        <section id="try">
+          <div className="rail">
+            <div className="try-band">
+              <div>
+                <h2 className="h2">Try messagingbot with your brand</h2>
+                <p className="lede">
+                  Two steps: get OAP running, then install the bundle. Its
+                  install questions are where you point it at your own design
+                  and messaging repos.
+                </p>
+              </div>
+              <ol className="try-steps">
+                <li>
+                  <p className="try-step-h">
+                    <span aria-hidden="true">1</span>Install OAP
+                  </p>
+                  <p>
+                    One command brings it up on a laptop or a Mac. The guide
+                    lists what you need first.
+                  </p>
+                  <a
+                    className="lp-btn lp-btn--primary"
+                    href="/docs/install-overview"
+                  >
+                    Install OAP
+                  </a>
+                </li>
+                <li>
+                  <p className="try-step-h">
+                    <span aria-hidden="true">2</span>Install messagingbot
+                  </p>
+                  <div className="term">
+                    <CopyButton text={INSTALL_TEXT} />
+                    {INSTALL.map((l, i) =>
+                      l.note ? (
+                        <span className="term-line term-note" key={i}>
+                          {l.note}
+                        </span>
+                      ) : (
+                        <span className="term-line" key={i}>
+                          <span className="p">$ </span>
+                          {l.cmd}
+                        </span>
+                      ),
+                    )}
+                  </div>
+                  <p className="try-note">
+                    The repository allowlist blocks from the first call.
+                    OAP&apos;s per-person permission checks start by logging
+                    what they would deny, and block once you switch them to
+                    enforcing.
+                  </p>
+                  <a className="try-more" href={BUNDLE}>
+                    View the bundle on GitHub{" "}
+                    <span aria-hidden="true">&rarr;</span>
+                  </a>
+                </li>
+              </ol>
+            </div>
           </div>
         </section>
       </main>
 
-      <footer>
-        <div className="rail">
-          <span>
-            Built by <a href="https://authzed.com/">AuthZed</a>, using{" "}
-            <a href="https://github.com/authzed/spicedb">SpiceDB</a>. Open
-            source under the{" "}
-            <a href={`${REPO}/blob/main/LICENSE`}>Apache 2.0 license</a>.
-          </span>
-          <span>
-            <a href="/docs/what-is-oap">Docs</a> · <a href={REPO}>GitHub</a>
-          </span>
-        </div>
-      </footer>
+      <SiteFooter />
 
       <JsonLd
         data={storyGraph(
@@ -1450,18 +1319,16 @@ Never invent a colour, font, or claim that isn't grounded in what you read.`}</p
 }
 
 function WhyItem({
-  hue,
   title,
   icon,
   children,
 }: {
-  hue: string;
   title: string;
   icon: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div className="why-item" style={{ "--hue": hue } as CSSProperties}>
+    <div className="why-item">
       {icon}
       <div>
         <h3>{title}</h3>
