@@ -1837,6 +1837,34 @@ func (s *AgentClassSpec) GetOwnerCeiling() *OwnerCeiling {
 	return s.Authz.OwnerCeiling
 }
 
+// ResolvesCredentialsInRunner reports whether any tool this class offers
+// resolves its upstream credential inside the runner: MCPServers (auth
+// headers) and ToolBundles (sandbox env). Only then does the runner read the
+// class's AgentIdentity, and only then does the per-session Role grant it.
+// SidecarToolboxes resolve controller-side and do not count.
+//
+// The runner and the AgentSession controller MUST both gate on this one
+// predicate. When they disagreed, a sidecar-only class's runner read an
+// AgentIdentity its Role never granted, and every session failed with
+// MCPAuthResolutionFailed.
+func (s *AgentClassSpec) ResolvesCredentialsInRunner() bool {
+	if s == nil {
+		return false
+	}
+	return len(s.MCPServers) > 0 || len(s.ToolBundles) > 0
+}
+
+// ConsumesAgentIdentity reports whether anything this class offers draws a
+// credential from its AgentIdentity: the runner-side tools of
+// ResolvesCredentialsInRunner, plus SidecarToolboxes, whose upstream
+// credential the controller resolves from the same identity.
+func (s *AgentClassSpec) ConsumesAgentIdentity() bool {
+	if s == nil {
+		return false
+	}
+	return s.ResolvesCredentialsInRunner() || len(s.SidecarToolboxes) > 0
+}
+
 // rosterPinRE matches the one pin form a roster entry may carry. Anything
 // else after an "@" is NOT a pin: it stays part of the literal entry, and the
 // CRD-level item pattern refuses it at admission — SplitRosterEntry never

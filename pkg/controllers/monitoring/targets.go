@@ -113,6 +113,13 @@ func Targets() []Target {
 					Level:         channelevents.MonitoringLevelWarning,
 					Category:      "reconcile",
 				},
+				{
+					ConditionType: spiceboxv1alpha1.AgentClassConditionAgentIdentityInUse,
+					BadStatus:     metav1.ConditionFalse,
+					Level:         channelevents.MonitoringLevelWarning,
+					Category:      "credential",
+					Hint:          "add the tool that uses the identity to AgentClass {name}, or drop its spec.agentIdentity",
+				},
 			},
 		},
 		{

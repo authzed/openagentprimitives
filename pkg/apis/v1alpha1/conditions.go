@@ -308,6 +308,16 @@ const (
 	// diagnostic, same as CapabilitiesValid: does NOT block readiness, since
 	// nothing about this is a spec error, only an easy-to-miss omission.
 	AgentClassConditionSubagentsCapabilityGranted = "SubagentsCapabilityGranted"
+	// AgentClassConditionAgentIdentityInUse is True when spec.agentIdentity is
+	// empty, names an AgentIdentity with no credentials, or something the
+	// class offers draws on it (AgentClassSpec.ConsumesAgentIdentity: an
+	// MCPServer, a ToolBundle, or a SidecarToolbox). False when the class
+	// names an AgentIdentity that carries credentials but no tool consumes
+	// them — usually a tool ref dropped from the class while the identity
+	// stayed bound. Purely diagnostic, same as CapabilitiesValid: does NOT
+	// block readiness. The monitoring watcher posts the False transition to
+	// role=monitoring Channels.
+	AgentClassConditionAgentIdentityInUse = "AgentIdentityInUse"
 )
 
 // AgentClass reasons.
@@ -452,6 +462,13 @@ const (
 	// non-empty but spec.capabilities has no "subagents" entry: the roster
 	// exists but nothing offers the delegate tool that would use it.
 	ReasonSubagentsCapabilityMissing = "SubagentsCapabilityMissing"
+
+	// ReasonAgentIdentityInUse is the Reason on
+	// AgentClassConditionAgentIdentityInUse when status=True.
+	ReasonAgentIdentityInUse = "AgentIdentityInUse"
+	// ReasonAgentIdentityUnused is set when the class names an AgentIdentity
+	// carrying credentials but offers no tool that consumes any of them.
+	ReasonAgentIdentityUnused = "AgentIdentityUnused"
 )
 
 // AgentSession condition types.
