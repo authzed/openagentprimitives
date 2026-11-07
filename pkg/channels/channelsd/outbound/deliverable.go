@@ -11,6 +11,7 @@ package outbound
 
 import (
 	"context"
+	"sync"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -63,6 +64,15 @@ func (r *Relay) noteDeliveryOutcome(ctx context.Context, ns string, binding *spi
 	}
 	key := ns + "/" + binding.Name
 
+	// One outcome per Channel at a time, held across the read, the patch and
+	// the memo write. Sessions sharing a Channel are relayed concurrently, and
+	// with only the memo locked a failure and a success could each patch and
+	// then record in opposite orders — leaving the memo disagreeing with the
+	// live condition, which then suppresses every later write that would fix
+	// it. Writes happen only when the outcome changes, so this rarely waits.
+	unlock := r.lockDeliveryChannel(key)
+	defer unlock()
+
 	r.delivMu.Lock()
 	prev, known := r.delivOutcomes[key]
 	r.delivMu.Unlock()
@@ -108,4 +118,21 @@ func (r *Relay) rememberDeliveryOutcome(key string, o deliverableOutcome) {
 		r.delivOutcomes = make(map[string]deliverableOutcome)
 	}
 	r.delivOutcomes[key] = o
+}
+
+// lockDeliveryChannel serializes noteDeliveryOutcome per Channel key. The lock
+// map is bounded like delivOutcomes, by the Channels actually routed through.
+func (r *Relay) lockDeliveryChannel(key string) (unlock func()) {
+	r.delivMu.Lock()
+	if r.delivLocks == nil {
+		r.delivLocks = make(map[string]*sync.Mutex)
+	}
+	l, ok := r.delivLocks[key]
+	if !ok {
+		l = &sync.Mutex{}
+		r.delivLocks[key] = l
+	}
+	r.delivMu.Unlock()
+	l.Lock()
+	return l.Unlock
 }

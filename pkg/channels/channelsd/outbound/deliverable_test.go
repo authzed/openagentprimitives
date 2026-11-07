@@ -2,6 +2,7 @@ package outbound
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -201,4 +202,76 @@ func TestRelay_EnvelopeSpecificFailure_FallbackSuccessRestoresDeliverable(t *tes
 		c := getDeliverable(t, cli)
 		return c != nil && c.Status == metav1.ConditionTrue
 	}), "Deliverable must converge to True once the fallback send proves the channel works")
+}
+
+// pausingStatusClient pauses a Deliverable=False status patch AFTER it lands
+// and before the caller continues, so a test can run another outcome to
+// completion in exactly that window.
+type pausingStatusClient struct {
+	client.Client
+	landed, resume chan struct{}
+}
+
+func (c *pausingStatusClient) Status() client.SubResourceWriter {
+	return pausingStatusWriter{SubResourceWriter: c.Client.Status(), c: c}
+}
+
+type pausingStatusWriter struct {
+	client.SubResourceWriter
+	c *pausingStatusClient
+}
+
+func (w pausingStatusWriter) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+	err := w.SubResourceWriter.Patch(ctx, obj, patch, opts...)
+	if ch, ok := obj.(*spiceboxv1alpha1.Channel); ok {
+		for _, c := range ch.Status.Conditions {
+			if c.Type == spiceboxv1alpha1.ChannelConditionDeliverable && c.Status == metav1.ConditionFalse {
+				close(w.c.landed)
+				<-w.c.resume
+			}
+		}
+	}
+	return err
+}
+
+// Sessions sharing a Channel are relayed concurrently, so a failure and a
+// success can record at the same time. The memo must end up agreeing with the
+// live condition; when it did not, it suppressed every later write that would
+// have corrected the condition, leaving the Channel reported deliverable while
+// it was failing (or the reverse) indefinitely.
+func TestNoteDeliveryOutcome_ConcurrentOutcomesLeaveMemoMatchingLiveCondition(t *testing.T) {
+	inner := fakeClientWithChannelStatus(t, deliverableChannel())
+	cli := &pausingStatusClient{Client: inner, landed: make(chan struct{}), resume: make(chan struct{})}
+	r := &Relay{K8s: cli, RecordDeliverability: true}
+	binding := &spiceboxv1alpha1.ChannelBinding{Name: "c1", Kind: "fake"}
+
+	failed := make(chan struct{})
+	go func() {
+		defer close(failed)
+		r.noteDeliveryOutcome(context.Background(), "default", binding, errors.New("not_in_channel"))
+	}()
+	<-cli.landed // the failure's patch has landed; its memo write has not
+
+	succeeded := make(chan struct{})
+	go func() {
+		defer close(succeeded)
+		r.noteDeliveryOutcome(context.Background(), "default", binding, nil)
+	}()
+	// Give the success every chance to run to completion inside the window. It
+	// must instead be held until the failure has recorded.
+	select {
+	case <-succeeded:
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(cli.resume)
+	<-failed
+	<-succeeded
+
+	live := getDeliverable(t, inner)
+	require.NotNil(t, live, "a Deliverable condition was written")
+	r.delivMu.Lock()
+	memo := r.delivOutcomes["default/c1"]
+	r.delivMu.Unlock()
+	assert.Equal(t, live.Status == metav1.ConditionTrue, memo.ok,
+		"the memo agrees with the live condition, so the next differing outcome is still written")
 }
