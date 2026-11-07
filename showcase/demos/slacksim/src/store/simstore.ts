@@ -1,5 +1,10 @@
 import { deriveRollups, type MessageBody } from "./scenario";
-import type { Scenario, SimMessage } from "./types";
+import type {
+  ArtifactAnnotation,
+  ArtifactView,
+  Scenario,
+  SimMessage,
+} from "./types";
 import type { OverlayControl } from "../runtime/overlay";
 
 // A small observable store over a Scenario. Mutations are immutable (each
@@ -167,6 +172,61 @@ export class SimStore {
       view: { ...this.scenario.view, typingUserId: userId },
     });
   }
+
+  // ---- artifact viewer ----------------------------------------------------
+
+  private patchArtifact(patch: Partial<ArtifactView>): void {
+    const cur = this.scenario.view.artifact;
+    if (!cur) return;
+    this.commit({
+      ...this.scenario,
+      view: { ...this.scenario.view, artifact: { ...cur, ...patch } },
+    });
+  }
+
+  /** Open the artifact viewer over the client — the "View live" click. */
+  openArtifact(artifact: ArtifactView): void {
+    this.commit({
+      ...this.scenario,
+      view: { ...this.scenario.view, artifact },
+    });
+  }
+
+  /** Pin a note to an element of the rendered artifact. */
+  annotateArtifact(annotation: ArtifactAnnotation): void {
+    const cur = this.scenario.view.artifact;
+    if (!cur) return;
+    this.patchArtifact({
+      annotations: [...cur.annotations, annotation],
+      sentTo: undefined,
+    });
+  }
+
+  /** Send the pending annotation batch back to the agent. */
+  sendAnnotations(agentName: string): void {
+    this.patchArtifact({ sentTo: agentName });
+  }
+
+  /** A new revision lands: new body, a history row, and a cleared batch. */
+  reviseArtifact(html: string, note: string): void {
+    const cur = this.scenario.view.artifact;
+    if (!cur) return;
+    const n = cur.revision + 1;
+    this.patchArtifact({
+      html,
+      revision: n,
+      revisions: [{ n, note }, ...cur.revisions],
+      annotations: [],
+      sentTo: undefined,
+    });
+  }
+
+  closeArtifact(): void {
+    this.commit({
+      ...this.scenario,
+      view: { ...this.scenario.view, artifact: undefined },
+    });
+  }
 }
 
 // The control surface the capture engine binds to. Kept minimal and stable —
@@ -183,6 +243,11 @@ export interface ShowcaseControl extends OverlayControl {
   appHome: SimStore["appHome"];
   setStatus: SimStore["setStatus"];
   typing: SimStore["typing"];
+  openArtifact: SimStore["openArtifact"];
+  annotateArtifact: SimStore["annotateArtifact"];
+  sendAnnotations: SimStore["sendAnnotations"];
+  reviseArtifact: SimStore["reviseArtifact"];
+  closeArtifact: SimStore["closeArtifact"];
 }
 
 export function bindControl(
@@ -199,6 +264,11 @@ export function bindControl(
     appHome: store.appHome.bind(store),
     setStatus: store.setStatus.bind(store),
     typing: store.typing.bind(store),
+    openArtifact: store.openArtifact.bind(store),
+    annotateArtifact: store.annotateArtifact.bind(store),
+    sendAnnotations: store.sendAnnotations.bind(store),
+    reviseArtifact: store.reviseArtifact.bind(store),
+    closeArtifact: store.closeArtifact.bind(store),
     ...overlay,
   };
   window.__showcase = control;

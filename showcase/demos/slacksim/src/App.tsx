@@ -5,6 +5,7 @@ import { Sidebar } from "./chrome/Sidebar";
 import { MessagePane } from "./chrome/MessagePane";
 import { AppHome } from "./chrome/AppHome";
 import { ThreadPanel } from "./chrome/ThreadPanel";
+import { ArtifactViewer } from "./chrome/ArtifactViewer";
 
 export function App({
   initialTheme = "dark",
@@ -48,6 +49,9 @@ export function App({
           />
         )}
       </div>
+      {scenario.view.artifact && (
+        <ArtifactViewer artifact={scenario.view.artifact} />
+      )}
     </div>
   );
 }
