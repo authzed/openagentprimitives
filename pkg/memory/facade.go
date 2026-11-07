@@ -288,6 +288,9 @@ func (m *Local) Put(ctx context.Context, e Entry) (Entry, error) {
 				ErrInvalidEntry, i, lnk.ID, lnk.Kind, target.IDPrefix())
 		}
 	}
+	if err := checkStorable(e); err != nil {
+		return Entry{}, fmt.Errorf("memory.Put: %w: %s %s: %v", ErrInvalidEntry, e.Kind, e.ID, err)
+	}
 	// releaseAppendOnly ends the append-only critical section. It stays a no-op
 	// for a mutable Kind, which never takes the lock: last-writer-wins is that
 	// path's defined behavior, so serializing it would buy nothing and cost

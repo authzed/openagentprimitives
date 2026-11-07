@@ -534,3 +534,25 @@ func TestAppender_AttachmentContentRoundTrip(t *testing.T) {
 	assert.Equal(t, in.Content[1].Attachment.TextRef, block.Attachment.TextRef)
 	assert.Equal(t, in.Content[1].Attachment.Pages, block.Attachment.Pages)
 }
+
+// TestAppender_NULToolResultIsInvalidEntry pins the second half of the
+// demo-reviewbot failure: a tool_result carrying NUL (raw `git show` of a
+// binary) used to reach Postgres, fail as a 500 with SQLSTATE 22P05, and be
+// retried eight times before the session was marked MemoryUnavailable. The
+// facade now refuses it up front as ErrInvalidEntry — a 400 httpclient does
+// not retry — on every backend, inmem included.
+func TestAppender_NULToolResultIsInvalidEntry(t *testing.T) {
+	a := newAppender(t)
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+
+	err := a.Append(ctx, memory.Turn{
+		Index: 0, Role: "user",
+		Content: []memory.ContentBlock{{
+			Type:       "tool_result",
+			ToolResult: &memory.ToolResultBlock{ToolUseID: "tu-1", Content: "\x7fELF\x02\x01\x01\x00"},
+		}},
+		CreatedAt: time.Unix(0, 0).UTC(),
+	})
+	require.ErrorIs(t, err, memory.ErrInvalidEntry)
+	assert.ErrorContains(t, err, "NUL")
+}
