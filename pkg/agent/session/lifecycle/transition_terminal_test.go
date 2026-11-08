@@ -114,6 +114,15 @@ func TestTransitionTerminal(t *testing.T) {
 		got, _ := Transition(State{Phase: PhaseSucceeded}.OrDefault(), Expired{})
 		assert.Equal(t, PhaseSucceeded, got.Phase)
 	})
+	t.Run("run duration exceeded: live Running → Failed[BudgetExceeded]", func(t *testing.T) {
+		got, _ := Transition(State{Phase: PhaseRunning, Region: RegionRunner}.OrDefault(), RunDurationExceeded{})
+		assert.Equal(t, PhaseFailed, got.Phase)
+		assert.Equal(t, "BudgetExceeded", got.FailureReason)
+	})
+	t.Run("run duration exceeded on already-terminal (Succeeded): sticky, untouched", func(t *testing.T) {
+		got, _ := Transition(State{Phase: PhaseSucceeded}.OrDefault(), RunDurationExceeded{})
+		assert.Equal(t, PhaseSucceeded, got.Phase)
+	})
 	t.Run("goal run concluded: Idle → Succeeded, not archived (never wakeable)", func(t *testing.T) {
 		got, _ := Transition(State{Phase: PhaseIdle, Region: RegionOperatorPost}.OrDefault(), GoalRunConcluded{})
 		assert.Equal(t, PhaseSucceeded, got.Phase)

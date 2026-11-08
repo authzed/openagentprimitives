@@ -296,6 +296,11 @@ func transitionTerminal(s State, e Event) (State, []Effect) {
 		// no-ops this for terminal sessions.
 		return fail(s, "SessionExpired", e)
 
+	case RunDurationExceeded:
+		// Same reason the runner records for its own maxDuration stop, so every
+		// consumer of a budget failure treats the two identically.
+		return fail(s, "BudgetExceeded", e)
+
 	case GoalRunFailed:
 		// fail() sets Phase=Failed + FailureReason; the sticky guard no-ops it
 		// for a session that is already terminal.
