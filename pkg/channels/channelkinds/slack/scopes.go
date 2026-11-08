@@ -32,12 +32,12 @@ var _ channelkinds.ScopeRefresher = (*slackListener)(nil)
 // agentClassRefreshInterval bounds how often one listener re-reads its bound
 // AgentClass. The reconcile tick runs every 5s; reading the class on every one
 // of them would cost one GET per slack Channel per 5s — N/5 QPS against
-// channelsd's client, which takes client-go's DefaultQPS of 5 because
-// rest.InClusterConfig leaves QPS zero. At 25 Channels that alone saturates the
-// limiter, and inbound message handling (AgentSession creates, Secret reads)
-// queues behind it. Throttling to once a minute makes the steady-state cost
-// N/60 QPS while keeping the condition fresh within a minute of a capability
-// edit.
+// channelsd's client, whose budget (kube.DefaultQPS) is shared with inbound
+// message handling (AgentSession creates, Secret reads) and the outbound
+// relay. A cost that scales with the Channel count should not be spent
+// re-confirming a value that rarely changes, so throttling to once a minute
+// makes the steady-state cost N/60 QPS while keeping the condition fresh
+// within a minute of a capability edit.
 //
 // A rebind is NOT subject to this: scopeFeaturesFor invalidates the cache the
 // moment spec.agentClass names a different class, so re-pointing a Channel at
