@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -18,6 +19,7 @@ import (
 	memapproval "github.com/authzed/openagentprimitives/pkg/memory/kinds/approval"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	"github.com/authzed/openagentprimitives/pkg/x/besteffort"
 )
 
 // HandleInteractionDecision is the category-generic decision pipe: validate,
@@ -137,6 +139,28 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 	if raised, ok := p.requestCategoryWitness(ctx, ns, name, pl.RequestRef, rec, req); ok && raised != pl.Category {
 		logger.Info("interaction decision: category mismatches the request as raised; rejecting", "raisedCategory", raised)
 		return p.publishDecisionRejected(ctx, env.Session, pl, "category_mismatch", "this action no longer matches the pending request", nil, "")
+	}
+
+	// Deadline: a click past the request's own ExpiresAt decides nothing. The
+	// tombstone above is not enough on its own, because the expiry and the
+	// prompt reach channelsd on different subjects: the runner reports its
+	// timeout on IN, while the prompt rides the OUT relay, and when the relay
+	// lags the expiry lands first, finds no record to tombstone, and the prompt
+	// is then noted as live. The card stays armed — a Slack approver card is an
+	// ephemeral, which a timeout cannot edit — and a click on it ran the handler
+	// for a request the runner had already abandoned, so the approval did
+	// nothing while reporting "approved". The deadline is the one witness that
+	// does not depend on that ordering.
+	if req != nil && req.ExpiresAt != nil && !p.nowOrWallClock().Before(*req.ExpiresAt) {
+		logger.Info("interaction decision: request is past its deadline; rejecting as expired",
+			"expiresAt", req.ExpiresAt.UTC().Format(time.RFC3339))
+		// Tombstone so the dead prompt is never re-surfaced and every later
+		// click short-circuits as already resolved. Logged, not fatal: the
+		// rejection below still tells the clicker.
+		besteffort.Log(logger.Info, "interaction decision: tombstone expired prompt",
+			parkedprompt.Resolve(ctx, p.Mem, promptScope(ns, name), pl.RequestRef))
+		return p.publishDecisionRejected(ctx, env.Session, pl, "expired",
+			"this request expired before it was decided, so approving it now does nothing — ask the agent to try again", nil, "")
 	}
 
 	if identity.Kind(pl.Decider.Kind).SelfAsserted() && requiresChannelDecider(cat, req) {

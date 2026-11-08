@@ -19,7 +19,7 @@ type InteractionDecisionRejectedPayload struct {
 	// ResponseRef is the surface-opaque handle for editing the clicker's own
 	// artifact (Slack: response_url), round-tripped from the decision.
 	ResponseRef string `json:"responseRef,omitempty"`
-	// Class is machine-readable: "not_authorized" | "already_resolved" |
+	// Class is machine-readable: "not_authorized" | "already_resolved" | "expired" |
 	// "handler_error" | "category_mismatch".
 	Class  string `json:"class"`
 	Reason string `json:"reason,omitempty"`
