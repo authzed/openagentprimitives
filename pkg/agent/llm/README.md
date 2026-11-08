@@ -24,6 +24,7 @@ to its native mechanism or ignores it.
 | [`openrouter`](./openrouter/)     | OpenRouter adapter over the same Chat Completions wire, plus routing config and reported cost.                                       |
 | [`openaicompat`](./openaicompat/) | The Chat Completions wire translation shared by `openai` and `openrouter`.                                                           |
 | [`fake`](./fake/)                 | Scripted provider for tests.                                                                                                         |
+| [`llmhttp`](./llmhttp/)           | The bounded HTTP client every provider SDK is built on: connect/header timeouts, HTTP/2 pings, and a stream-idle abort.              |
 
 ## Constraints
 
@@ -35,6 +36,10 @@ to its native mechanism or ignores it.
   flags have one table. `pkg/x/llmpricing` projects from it; do not start a
   parallel map.
 - **`fake` is not init-registered.** Tests wire it directly.
+- **Build SDK clients through `anthropic.NewSDKClient` or
+  `openaicompat.NewClient`**, never the bare SDK constructor. Both attach
+  `llmhttp.Client()`; an SDK's default client has no timeouts, so a stream that
+  goes silent blocks the caller forever.
 
 ## See also
 

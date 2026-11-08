@@ -56,3 +56,33 @@ func (b *Budget) Check(turns int32, inputTokens, outputTokens int64) string {
 	}
 	return ""
 }
+
+// Remaining reports how long an in-flight call may run before a time-based cap
+// (maxDuration run-time, or sessionExpiration wall-clock) trips, and which cap
+// it is — the nearer of the two. ok is false when neither cap is configured.
+//
+// Check only runs between turns, so without this a call that never returns
+// (a stalled provider stream) holds the session past its budget indefinitely.
+// The loop bounds each provider call by this window so the budget fires
+// mid-call. A cap already reached yields remaining <= 0.
+func (b *Budget) Remaining() (remaining time.Duration, reason string, ok bool) {
+	if b.cfg.MaxDuration.Duration > 0 {
+		remaining, reason, ok = b.cfg.MaxDuration.Duration-b.runClock.Elapsed(), BudgetReasonDuration, true
+	}
+	if b.cfg.SessionExpiration.Duration > 0 && !b.sessionStartedAt.IsZero() {
+		exp := b.cfg.SessionExpiration.Duration - b.now().Sub(b.sessionStartedAt)
+		if !ok || exp < remaining {
+			remaining, reason, ok = exp, BudgetReasonExpired, true
+		}
+	}
+	return remaining, reason, ok
+}
+
+// budgetDeadlineError is the cancel cause of a provider call cut off by
+// Budget.Remaining, so the loop can tell a budget stop from a provider error
+// or a user interrupt. reason is the BudgetReason* that tripped.
+type budgetDeadlineError struct{ reason string }
+
+func (e budgetDeadlineError) Error() string {
+	return "LLM call exceeded the session's time budget (" + e.reason + ")"
+}
