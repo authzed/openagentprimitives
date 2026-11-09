@@ -44,7 +44,11 @@ type RenderConfig struct {
 	// operator webhook serving cert; you provide spicebox-webhook-tls + the VWC
 	// caBundle yourself (for clusters without cert-manager).
 	ExternalWebhookTLS bool
-	Strat              cloud.Strategy
+	// Overlays are user kustomize Component directories, copied into the
+	// output and listed under `components:` in the order given — the same
+	// directories `oap install --overlay` accepts.
+	Overlays []string
+	Strat    cloud.Strategy
 }
 
 func NewRenderCmd(g *apcmd.Globals) *cobra.Command {
@@ -84,6 +88,7 @@ func NewRenderCmd(g *apcmd.Globals) *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Routing.trustedHostname, "trusted-hostname", "", "Bare hostname for webd's trusted origin; emits a Gateway + HTTPRoute (opt-in). Requires --gateway-class. Omit to bring your own ingress.")
 	cmd.Flags().StringVar(&cfg.Routing.sandboxHostname, "sandbox-hostname", "", "Bare hostname for webd's artifact-viewer sandbox origin (adds a second HTTPS listener + HTTPRoute). Requires --trusted-hostname.")
 	cmd.Flags().StringVar(&cfg.Routing.gatewayClass, "gateway-class", "", "GatewayClass name for the emitted Gateway (required with --trusted-hostname; render cannot auto-detect it).")
+	cmd.Flags().StringArrayVar(&cfg.Overlays, "overlay", nil, overlayFlagUsage)
 	cmd.Flags().BoolVar(&validate, "validate", false, "After rendering, lint the overlay for completeness and consistency")
 	return cmd
 }
@@ -113,6 +118,11 @@ func runRender(ctx context.Context, out io.Writer, g *apcmd.Globals, cfg RenderC
 	}
 
 	if err := validateRenderFlags(cfg); err != nil {
+		return err
+	}
+	// The same validation `oap install --overlay` runs, so an overlay set that
+	// one path refuses for conflicting the other refuses too.
+	if _, err := loadOverlays(out, cfg.Overlays); err != nil {
 		return err
 	}
 

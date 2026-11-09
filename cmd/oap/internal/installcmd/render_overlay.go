@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
@@ -165,6 +166,9 @@ func WriteOverlay(cfg RenderConfig) error {
 	if err := writeDependencyComponents(cfg); err != nil {
 		return err
 	}
+	if err := writeUserOverlays(cfg); err != nil {
+		return err
+	}
 
 	k, err := renderKustomization(cfg)
 	if err != nil {
@@ -215,10 +219,19 @@ func renderKustomization(cfg RenderConfig) ([]byte, error) {
 		"kind: Kustomization\n" +
 		resources +
 		patches
-	if names := enabledComponentNames(cfg); len(names) > 0 {
+	var components []string
+	for _, n := range enabledComponentNames(cfg) {
+		components = append(components, "components/"+n)
+	}
+	// User overlays come after oap's own components so they can patch those
+	// too; oap's `patches:` above still apply last, as on `oap install`.
+	for i, dir := range cfg.Overlays {
+		components = append(components, userOverlayPath(i, dir))
+	}
+	if len(components) > 0 {
 		k += "components:\n"
-		for _, n := range names {
-			k += "  - components/" + n + "\n"
+		for _, c := range components {
+			k += "  - " + c + "\n"
 		}
 	}
 	return []byte(k), nil
@@ -235,4 +248,47 @@ func buildOverlay(dir string) ([]byte, error) {
 		return nil, fmt.Errorf("kustomize build %s: %w", dir, err)
 	}
 	return res.AsYaml()
+}
+
+// userOverlaysDir holds copies of the --overlay directories inside the render
+// output, so the output stays self-contained for a GitOps controller that only
+// sees the committed directory.
+const userOverlaysDir = "overlays"
+
+// userOverlayPath is overlay i's directory relative to the output root. The
+// index keeps two overlays with the same basename apart and records the
+// application order in the path itself.
+func userOverlayPath(i int, dir string) string {
+	return fmt.Sprintf("%s/%02d-%s", userOverlaysDir, i, filepath.Base(filepath.Clean(dir)))
+}
+
+// writeUserOverlays replaces OutputDir/overlays with copies of cfg.Overlays.
+// Replacing rather than merging is what keeps the output a pure function of the
+// flags: an overlay dropped from the command line must not linger on disk. An
+// overlay that lives inside that directory is refused, since replacing it would
+// delete the source.
+func writeUserOverlays(cfg RenderConfig) error {
+	root := filepath.Join(cfg.OutputDir, userOverlaysDir)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	for _, dir := range cfg.Overlays {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		if rel, err := filepath.Rel(absRoot, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("overlay %s is inside %s, which render regenerates; keep overlays outside the output directory", dir, root)
+		}
+	}
+	if err := os.RemoveAll(root); err != nil {
+		return err
+	}
+	for i, dir := range cfg.Overlays {
+		if err := os.CopyFS(filepath.Join(cfg.OutputDir, userOverlayPath(i, dir)), os.DirFS(dir)); err != nil {
+			return fmt.Errorf("copy overlay %s: %w", dir, err)
+		}
+	}
+	return nil
 }

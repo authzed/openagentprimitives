@@ -32,6 +32,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	idpregistry "github.com/authzed/openagentprimitives/pkg/platform/identity/idp/registry"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
+	"github.com/authzed/openagentprimitives/pkg/platform/manifests/overlay"
 )
 
 // wizardMode controls how (or whether) the settings wizard runs after a
@@ -99,6 +100,7 @@ func NewInitCmd(g *apcmd.Globals) *cobra.Command {
 	var externalSpiceDBToken string
 	var externalSpiceDBInsecure bool
 	var acceptExisting bool
+	var overlayDirs []string
 	// dm is populated below via settingscmd.RegisterDefaultModelFlags(cmd), after cmd
 	// exists. The RunE closure captures the variable (not its zero value at
 	// closure-literal time) — by the time cobra invokes RunE, dm has already
@@ -110,6 +112,12 @@ func NewInitCmd(g *apcmd.Globals) *cobra.Command {
 		Short: "Bring up agent-primitives end-to-end (build + install + check)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateInitFlags(localMode, clusterKindFlag, developMode, externalSpiceDBEndpoint, externalSpiceDBToken, acceptExisting, skipInstall); err != nil {
+				return err
+			}
+			// Before the build step: a broken or conflicting overlay must not
+			// cost the user a full image build to discover.
+			overlays, err := loadOverlays(cmd.OutOrStdout(), overlayDirs)
+			if err != nil {
 				return err
 			}
 			// --local is sugar for --cluster-kind=local; validateInitFlags has
@@ -138,11 +146,12 @@ func NewInitCmd(g *apcmd.Globals) *cobra.Command {
 			// check are done, on every kind, instead of blocking on a
 			// foreground tunnel whose death left that ConfigMap advertising a
 			// URL that forwarded nothing.
-			return runInit(cmd.Context(), cmd.OutOrStdout(), g, skipBuild, skipInstall, timeout, tags, pinningMode, clusterKind, allowNonLocal, r, wizardFlag, defaultsFlag, imagePullSecret, mirrorDeps, createRegistry, noIdp, noMonitoring, *dm, artifactStoreURL, externalSpiceDBEndpoint, externalSpiceDBToken, externalSpiceDBInsecure, acceptExisting)
+			return runInit(cmd.Context(), cmd.OutOrStdout(), g, skipBuild, skipInstall, timeout, tags, pinningMode, clusterKind, allowNonLocal, r, wizardFlag, defaultsFlag, imagePullSecret, mirrorDeps, createRegistry, noIdp, noMonitoring, *dm, artifactStoreURL, externalSpiceDBEndpoint, externalSpiceDBToken, externalSpiceDBInsecure, acceptExisting, overlays)
 		},
 	}
 	cmd.Flags().BoolVar(&skipBuild, "skip-build", false, "Skip oap build all")
 	cmd.Flags().BoolVar(&skipInstall, "skip-install", false, "Skip oap install")
+	cmd.Flags().StringArrayVar(&overlayDirs, "overlay", nil, overlayFlagUsage)
 	cmd.Flags().DurationVar(&timeout, "timeout", timeout, "Overall deadline for the install + check loop")
 	cmd.Flags().StringVar(&tags.Operator, "operator-image", "", "Override operator image")
 	cmd.Flags().StringVar(&tags.Runner, "runner-image", "", "Override runner image")
@@ -298,7 +307,7 @@ func validateInitFlags(localMode bool, clusterKind string, developMode bool, ext
 // prompts for it instead (see there). A non-empty result skips the bundled
 // SpiceDB install (RunInstall) and, after install completes, best-effort
 // applies the base schema to the caller's endpoint (applySchemaToEndpoint).
-func runInit(ctx context.Context, out io.Writer, g *apcmd.Globals, skipBuild, skipInstall bool, timeout time.Duration, tags manifests.Tags, pinningMode string, clusterKind string, allowNonLocal bool, r WebdRoutingOpts, wizardFlag, defaultsFlag bool, imagePullSecret string, mirrorDeps, createRegistry bool, noIdp bool, noMonitoring bool, dm settingscmd.DefaultModelOpts, artifactStoreURL string, externalSpiceDBEndpoint, externalSpiceDBToken string, externalSpiceDBInsecure bool, acceptExisting bool) error {
+func runInit(ctx context.Context, out io.Writer, g *apcmd.Globals, skipBuild, skipInstall bool, timeout time.Duration, tags manifests.Tags, pinningMode string, clusterKind string, allowNonLocal bool, r WebdRoutingOpts, wizardFlag, defaultsFlag bool, imagePullSecret string, mirrorDeps, createRegistry bool, noIdp bool, noMonitoring bool, dm settingscmd.DefaultModelOpts, artifactStoreURL string, externalSpiceDBEndpoint, externalSpiceDBToken string, externalSpiceDBInsecure bool, acceptExisting bool, overlays *overlay.Set) error {
 	if err := validPinningMode(pinningMode); err != nil {
 		return err
 	}
@@ -492,6 +501,7 @@ func runInit(ctx context.Context, out io.Writer, g *apcmd.Globals, skipBuild, sk
 			WithoutBuilder:      true,
 			BuilderStarters:     nil,
 			Rail:                nil, // today's linear `oap init` draws no wizard rail
+			Overlays:            overlays,
 		}); err != nil {
 			return err
 		}
