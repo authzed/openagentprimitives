@@ -1,0 +1,57 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: spicebox-webd
+  namespace: agentprimitives-system
+spec:
+  gatewayClassName: eg
+  listeners:
+  - hostname: webd.example.com
+    name: trusted-https
+    port: 443
+    protocol: HTTPS
+    tls:
+      certificateRefs:
+      - name: spicebox-webd-trusted-tls
+      mode: Terminate
+  - hostname: sandbox.example.com
+    name: sandbox-https
+    port: 443
+    protocol: HTTPS
+    tls:
+      certificateRefs:
+      - name: spicebox-webd-sandbox-tls
+      mode: Terminate
+  - name: acme-http
+    port: 80
+    protocol: HTTP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: spicebox-webd-trusted
+  namespace: agentprimitives-system
+spec:
+  hostnames:
+  - webd.example.com
+  parentRefs:
+  - name: spicebox-webd
+  rules:
+  - backendRefs:
+    - name: spicebox-webd
+      port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: spicebox-webd-sandbox
+  namespace: agentprimitives-system
+spec:
+  hostnames:
+  - sandbox.example.com
+  parentRefs:
+  - name: spicebox-webd
+  rules:
+  - backendRefs:
+    - name: spicebox-webd
+      port: 8080

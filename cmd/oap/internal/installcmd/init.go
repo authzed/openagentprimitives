@@ -3,8 +3,6 @@ package installcmd
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -14,9 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +28,7 @@ import (
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/settingscmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/wait"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	idpregistry "github.com/authzed/openagentprimitives/pkg/platform/identity/idp/registry"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
@@ -1102,27 +1099,10 @@ func ensureMemoryTokenSecret(ctx context.Context, restCfg *rest.Config, name str
 	if err != nil {
 		return err
 	}
-	var existing corev1.Secret
-	if err := cli.Get(ctx, types.NamespacedName{
-		Namespace: "agentprimitives-system",
-		Name:      name,
-	}, &existing); err == nil {
-		return nil // already exists; idempotent
-	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get %s secret: %w", name, err)
-	}
-
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Errorf("generate token: %w", err)
-	}
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: "agentprimitives-system",
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{"token": []byte(hex.EncodeToString(buf))},
-	}
-	return cli.Create(ctx, sec)
+	// The mint logic lives in pkg/platform/bootstrap so the operator's leader-only
+	// bootstrap Runnable and this install fast path share ONE idempotent
+	// Create-if-absent path. A direct client.New client reads live (not a
+	// label-filtered cache), so it is safe as both reader and writer here.
+	_, err = bootstrap.EnsureTokenSecret(ctx, cli, cli, bootstrap.TokenSecretNamespace, name)
+	return err
 }
