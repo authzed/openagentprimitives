@@ -82,3 +82,25 @@ func writeDependencyComponents(cfg RenderConfig) error {
 	}
 	return nil
 }
+
+// renderOverlayBase returns the bundled manifests a render with cfg emits — the
+// core install, channelsd, NATS and each enabled dependency component — for
+// validating --overlay against. Unsubstituted: validation only needs the
+// resources' identities and shapes.
+func renderOverlayBase(cfg RenderConfig) ([][]byte, error) {
+	out := [][]byte{manifests.Install}
+	loads := []func() ([][]byte, error){manifests.ChannelsD, manifests.NATS}
+	for _, d := range dependencyComponents {
+		if d.enabled(cfg) {
+			loads = append(loads, d.load)
+		}
+	}
+	for _, load := range loads {
+		docs, err := load()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, docs...)
+	}
+	return out, nil
+}

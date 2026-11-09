@@ -50,6 +50,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
+	"github.com/authzed/openagentprimitives/pkg/platform/manifests/overlay"
 	apnats "github.com/authzed/openagentprimitives/pkg/platform/nats"
 )
 
@@ -114,6 +115,7 @@ func NewInstallCmd(g *apcmd.Globals) *cobra.Command {
 	timeout := installDefaultTimeout
 	externalToolTimeout := 30 * time.Minute
 	var (
+		overlayDirs         []string
 		workspaceClass      string
 		noWorkspaceRWX      bool
 		workspaceRecheck    bool
@@ -148,6 +150,12 @@ func NewInstallCmd(g *apcmd.Globals) *cobra.Command {
 			// while refusing is still free. RunInstall re-checks, because it
 			// is exported and `oap init` reaches it without passing here.
 			if err := apcmd.ValidateDryRunMode(dryRun); err != nil {
+				return err
+			}
+			// Same reasoning: a broken or conflicting overlay is refused before
+			// the cluster is touched.
+			overlays, err := loadOverlays(cmd.OutOrStdout(), overlay.Base, overlayDirs)
+			if err != nil {
 				return err
 			}
 			// sigCtx is canceled only by SIGINT; it is NOT subject to the install
@@ -256,6 +264,7 @@ func NewInstallCmd(g *apcmd.Globals) *cobra.Command {
 				WithoutBuilder:      withoutBuilder,
 				BuilderStarters:     builderStarters,
 				Rail:                nil, // no wizard rail on a standalone `oap install`
+				Overlays:            overlays,
 			})
 			// Part 2: On SIGINT, decide what to do about what was applied.
 			// sigCtx.Err() != nil means SIGINT fired; the timeout only cancels ctx,
@@ -295,6 +304,7 @@ func NewInstallCmd(g *apcmd.Globals) *cobra.Command {
 	cmd.Flags().StringVar(&tags.Operator, "operator-image", "", "Override operator image (default: spicebox-operator:dev)")
 	cmd.Flags().StringVar(&tags.Runner, "runner-image", "", "Override runner image (default: agentprimitives-runner:dev)")
 	cmd.Flags().StringVar(&tags.Registry, "image-registry", "", "Rewrite first-party images to <registry>/<name>:<tag> (remote clusters; build+push via `oap init`/`oap build --image-registry`)")
+	cmd.Flags().StringArrayVar(&overlayDirs, "overlay", nil, overlayFlagUsage)
 	apcmd.DryRunModeFlag(cmd, &dryRun)
 	cmd.Flags().DurationVar(&timeout, "timeout", timeout, "Timeout for K8s-side install work (does not bound external CLI calls; see --external-tool-timeout)")
 	cmd.Flags().DurationVar(&externalToolTimeout, "external-tool-timeout", externalToolTimeout, "Timeout for a single external CLI call (gcloud); generous because cloud LROs like GKE node-pool recreation run for many minutes")
@@ -725,6 +735,10 @@ type InstallConfig struct {
 	// Only the unified init wizard passes a non-nil rail, to draw its step
 	// gutter beside the install checklist.
 	Rail progress.RailProvider
+	// Overlays are the validated --overlay Components, laid over every
+	// first-party document before install's own per-document rewrites. Nil
+	// (the zero value, and every caller without --overlay) applies nothing.
+	Overlays *overlay.Set
 }
 
 func RunInstall(ctx, recheckCtx context.Context, cfg InstallConfig) error {
@@ -879,6 +893,11 @@ func RunInstall(ctx, recheckCtx context.Context, cfg InstallConfig) error {
 	docs, err := manifests.Split(yaml)
 	if err != nil {
 		return err
+	}
+	for _, d := range docs {
+		if err := cfg.Overlays.Apply(d); err != nil {
+			return err
+		}
 	}
 
 	if dryRun == apcmd.DryRunClient {
@@ -1417,7 +1436,7 @@ func RunInstall(ctx, recheckCtx context.Context, cfg InstallConfig) error {
 		Dynamic: bundle.Dynamic,
 		Typed:   bundle.Typed,
 		Apply: func(ctx context.Context, groups [][]byte) error {
-			return applyManifestGroups(ctx, bundle.Dynamic, groups, imagePullSecret, firstPartyRefs, mirrorMap, func(id string) {
+			return applyManifestGroups(ctx, bundle.Dynamic, groups, cfg.Overlays, imagePullSecret, firstPartyRefs, mirrorMap, func(id string) {
 				rep.Info("applied %s", id)
 			})
 		},
@@ -2669,18 +2688,23 @@ func spicedbClusterServing(typed kubernetes.Interface, ns, deployName string) pr
 // applyManifestGroups splits each manifest in groups into its documents, mirrors
 // dependency image refs (air-gapped installs), injects an imagePullSecret into
 // first-party Deployment docs when secret is set, and server-side-applies every
-// document via kube.Apply under the "ap-install" field manager. It is the shared
+// document via kube.Apply under the "ap-install" field manager. overlays are laid
+// over each document first, so install's own rewrites still win on the fields
+// they set. It is the shared
 // apply body used by the install pipeline's Apply closure; emit, when non-nil, is
 // called with a human-readable id per applied doc. injectImagePullSecret is a
 // no-op for non-first-party (dependency) images, so passing firstPartyRefs for
 // every component is safe — only channelsd's first-party image is affected.
-func applyManifestGroups(ctx context.Context, dyn dynamic.Interface, groups [][]byte, secret string, firstPartyRefs map[string]bool, mirrorMap map[string]string, emit func(id string)) error {
+func applyManifestGroups(ctx context.Context, dyn dynamic.Interface, groups [][]byte, overlays *overlay.Set, secret string, firstPartyRefs map[string]bool, mirrorMap map[string]string, emit func(id string)) error {
 	for _, m := range groups {
 		docs, err := manifests.Split(m)
 		if err != nil {
 			return fmt.Errorf("split manifest: %w", err)
 		}
 		for _, d := range docs {
+			if err := overlays.Apply(d); err != nil {
+				return err
+			}
 			if err := mirrorImageRefs(d, mirrorMap); err != nil {
 				return fmt.Errorf("mirror image refs: %w", err)
 			}

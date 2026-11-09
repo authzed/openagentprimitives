@@ -102,6 +102,13 @@ prints the app-internal secrets you still need to provide. It cannot verify that
 a *linked* or externally-provided Secret actually exists in the cluster — that is
 a cluster-state fact `oap check` reports after the sync.
 
+## Customize with overlays
+
+`--overlay <dir>` (repeatable) layers your own kustomize Components over the
+render: each is copied into `overlays/` and listed under `components:`. They are
+the same overlays `oap install --overlay` takes, checked the same way; see
+[Customizing the install](/docs/install-overlays).
+
 ## Verify the synced cluster
 
 After Argo CD / Flux reports synced, confirm the install is healthy with the
