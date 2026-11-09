@@ -11,19 +11,19 @@ const overlayFlagUsage = "Layer a local kustomize Component directory over the i
 	"Use it for changes that must survive re-installs and upgrades, such as a raised memory limit. " +
 	"Overlays that set the same field to different values are refused before anything is installed"
 
-// loadOverlays validates the --overlay directories against every manifest oap
-// ships and says which resources they change. It runs before any cluster call,
-// so a broken or conflicting overlay costs nothing. No dirs returns a nil Set,
-// which applies nothing.
-func loadOverlays(out io.Writer, dirs []string) (*overlay.Set, error) {
+// loadOverlays validates the --overlay directories against base and says which
+// resources they change. It runs before any cluster call, so a broken or
+// conflicting overlay costs nothing. No dirs returns a nil Set, which applies
+// nothing.
+func loadOverlays(out io.Writer, base func() ([][]byte, error), dirs []string) (*overlay.Set, error) {
 	if len(dirs) == 0 {
 		return nil, nil
 	}
-	base, err := overlay.Base()
+	b, err := base()
 	if err != nil {
 		return nil, err
 	}
-	s, err := overlay.Load(base, dirs)
+	s, err := overlay.Load(b, dirs)
 	if err != nil {
 		return nil, err
 	}

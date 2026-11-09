@@ -1,8 +1,10 @@
 package overlay
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -215,4 +217,79 @@ func TestChangedLeaves_KeysNamedListsByName(t *testing.T) {
 	}}
 	got := changedLeaves(a, b)
 	assert.Equal(t, map[string]any{"/cs/[y]/v": "2", "/cs/[z]/name": "z", "/cs/[z]/v": "3"}, got)
+}
+
+// An overlay that changes a list with no merge key (container args) must not
+// carry the bundle's copy of that list along with it: install rewrites the
+// runner image ref inside those args before applying, and the overlay is laid
+// over that rewritten document, not over the bundle.
+func TestApply_ListWithoutMergeKeyKeepsInstallRewrites(t *testing.T) {
+	dir := writeOverlay(t, componentHeader+"patches:\n- target:\n    kind: Deployment\n    name: spicebox-operator\n  patch: |-\n    - op: add\n      path: /spec/template/spec/containers/0/args/-\n      value: --extra-flag\n", nil)
+	s, err := Load(testBase(t), []string{dir})
+	require.NoError(t, err)
+
+	d := bundledDoc(t, "Deployment", "spicebox-operator")
+	raw, err := json.Marshal(d.Object)
+	require.NoError(t, err)
+	rewritten := strings.ReplaceAll(string(raw), "agentprimitives-runner:dev", "registry.example/agentprimitives-runner@sha256:abc")
+	require.NoError(t, json.Unmarshal([]byte(rewritten), &d.Object))
+
+	require.NoError(t, s.Apply(d))
+	args, _, err := unstructured.NestedStringSlice(container(t, d, "operator"), "args")
+	require.NoError(t, err)
+	assert.Contains(t, args, "--extra-flag")
+	assert.Contains(t, args, "--runner-image=registry.example/agentprimitives-runner@sha256:abc")
+	assert.NotContains(t, args, "--runner-image=agentprimitives-runner:dev")
+}
+
+// A kind outside the client-go scheme (oap's own CRs) goes through the same
+// rebuild: the overlay's change lands and install's substitution of an image
+// ref elsewhere in the resource survives.
+func TestApply_CustomResourceKeepsInstallRewrites(t *testing.T) {
+	dir := writeOverlay(t, componentHeader+"patches:\n- target:\n    kind: SpiceboxToolchain\n    name: claude\n  patch: |-\n    - op: add\n      path: /spec/provides/-\n      value: claude-extra\n", nil)
+	s, err := Load(testBase(t), []string{dir})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"SpiceboxToolchain.agentprimitives.authzed.com claude"}, s.Patched())
+
+	d := bundledDoc(t, "SpiceboxToolchain", "claude")
+	require.NoError(t, unstructured.SetNestedField(d.Object, "registry.example/ap-toolchain-claude@sha256:abc", "spec", "source", "image"))
+	require.NoError(t, s.Apply(d))
+
+	provides, _, err := unstructured.NestedStringSlice(d.Object, "spec", "provides")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"claude", "claude-code", "claude-extra"}, provides)
+	image, _, err := unstructured.NestedString(d.Object, "spec", "source", "image")
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example/ap-toolchain-claude@sha256:abc", image)
+}
+
+func TestLoad_Refusals(t *testing.T) {
+	t.Run("symlink inside an overlay: refused as not a regular file", func(t *testing.T) {
+		dir := operatorMemoryOverlay(t, "2Gi")
+		require.NoError(t, os.Symlink(filepath.Join(dir, "memory.yaml"), filepath.Join(dir, "link.yaml")))
+		_, err := Load(testBase(t), []string{dir})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "link.yaml is not a regular file")
+	})
+
+	t.Run("one overlay removes a field another sets: conflict shows the removal", func(t *testing.T) {
+		remove := writeOverlay(t, componentHeader+"patches:\n- target:\n    kind: Deployment\n    name: spicebox-operator\n  patch: |-\n    - op: remove\n      path: /spec/template/spec/containers/0/resources/limits/memory\n", nil)
+		_, err := Load(testBase(t), []string{remove, operatorMemoryOverlay(t, "4Gi")})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "/[operator]/resources/limits/memory")
+		assert.Contains(t, err.Error(), "(removed)")
+		assert.Contains(t, err.Error(), `"4Gi"`)
+	})
+}
+
+func TestChangedLeaves_KeysListsByFirstFittingMergeKey(t *testing.T) {
+	a := map[string]any{"mounts": []any{
+		map[string]any{"mountPath": "/a", "readOnly": true},
+		map[string]any{"mountPath": "/b", "readOnly": true},
+	}}
+	b := map[string]any{"mounts": []any{
+		map[string]any{"mountPath": "/a", "readOnly": true},
+		map[string]any{"mountPath": "/b", "readOnly": false},
+	}}
+	assert.Equal(t, map[string]any{"/mounts/[/b]/readOnly": false}, changedLeaves(a, b))
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/apimage"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
+	"github.com/authzed/openagentprimitives/pkg/platform/manifests/overlay"
 )
 
 // memoryOverlayDir writes a kustomize Component raising container's memory
@@ -55,7 +56,7 @@ func containerMemoryLimit(t *testing.T, obj map[string]any, container string) st
 
 func TestLoadOverlays_NoDirsIsNilAndSilent(t *testing.T) {
 	var out bytes.Buffer
-	s, err := loadOverlays(&out, nil)
+	s, err := loadOverlays(&out, overlay.Base, nil)
 	require.NoError(t, err)
 	assert.Nil(t, s)
 	assert.Empty(t, out.String())
@@ -63,14 +64,14 @@ func TestLoadOverlays_NoDirsIsNilAndSilent(t *testing.T) {
 
 func TestLoadOverlays_NarratesPatchedResources(t *testing.T) {
 	var out bytes.Buffer
-	s, err := loadOverlays(&out, []string{memoryOverlayDir(t, "spicebox-operator", "operator", "2Gi")})
+	s, err := loadOverlays(&out, overlay.Base, []string{memoryOverlayDir(t, "spicebox-operator", "operator", "2Gi")})
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.Contains(t, out.String(), "overlay patches Deployment.apps agentprimitives-system/spicebox-operator")
 }
 
 func TestApplyManifestGroups_OverlayAppliedBeforeInstallRewrites(t *testing.T) {
-	ov, err := loadOverlays(io.Discard, []string{memoryOverlayDir(t, "spicebox-channelsd", "channelsd", "1Gi")})
+	ov, err := loadOverlays(io.Discard, overlay.Base, []string{memoryOverlayDir(t, "spicebox-channelsd", "channelsd", "1Gi")})
 	require.NoError(t, err)
 	groups, err := manifests.ChannelsD()
 	require.NoError(t, err)
@@ -141,6 +142,41 @@ func TestRender_Overlays(t *testing.T) {
 		assert.NoDirExists(t, out)
 	})
 
+	t.Run("overlay for a component render does not emit: refused up front, naming the flag", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "deploy")
+		pg := memoryOverlayDir(t, "spicebox-postgres", "postgres", "2Gi")
+		err := runRender(context.Background(), io.Discard, offline, gke(out, pg), false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "spicebox-postgres")
+		assert.Contains(t, err.Error(), "--with-postgres")
+		assert.NoDirExists(t, out)
+
+		cfg := gke(out, pg)
+		cfg.WithPostgres = true
+		require.NoError(t, runRender(context.Background(), io.Discard, offline, cfg, false))
+	})
+
+	t.Run("render and install produce the same overlaid fields", func(t *testing.T) {
+		out := t.TempDir()
+		ov := memoryOverlayDir(t, "spicebox-operator", "operator", "2Gi")
+		require.NoError(t, runRender(context.Background(), io.Discard, offline, gke(out, ov), false))
+		built, err := buildOverlay(out)
+		require.NoError(t, err)
+		rendered := findDoc(t, built, "Deployment", "spicebox-operator")
+
+		set, err := loadOverlays(io.Discard, overlay.Base, []string{ov})
+		require.NoError(t, err)
+		installed := findDoc(t, manifests.Install, "Deployment", "spicebox-operator")
+		require.NoError(t, set.Apply(installed))
+
+		resources := func(d *unstructured.Unstructured) any {
+			cs, _, err := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
+			require.NoError(t, err)
+			return cs[0].(map[string]any)["resources"]
+		}
+		assert.Equal(t, resources(installed), resources(rendered))
+	})
+
 	t.Run("overlay inside the output's overlays dir: refused", func(t *testing.T) {
 		out := t.TempDir()
 		inside := filepath.Join(out, userOverlaysDir, "mine")
@@ -152,4 +188,17 @@ func TestRender_Overlays(t *testing.T) {
 		assert.Contains(t, err.Error(), "keep overlays outside the output directory")
 		assert.DirExists(t, inside, "the source overlay must not be deleted")
 	})
+}
+
+func findDoc(t *testing.T, yaml []byte, kind, name string) *unstructured.Unstructured {
+	t.Helper()
+	docs, err := manifests.Split(yaml)
+	require.NoError(t, err)
+	for _, d := range docs {
+		if d.GetKind() == kind && d.GetName() == name {
+			return d
+		}
+	}
+	require.FailNowf(t, "missing doc", "%s %s", kind, name)
+	return nil
 }

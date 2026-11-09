@@ -154,7 +154,7 @@ func NewInstallCmd(g *apcmd.Globals) *cobra.Command {
 			}
 			// Same reasoning: a broken or conflicting overlay is refused before
 			// the cluster is touched.
-			overlays, err := loadOverlays(cmd.OutOrStdout(), overlayDirs)
+			overlays, err := loadOverlays(cmd.OutOrStdout(), overlay.Base, overlayDirs)
 			if err != nil {
 				return err
 			}

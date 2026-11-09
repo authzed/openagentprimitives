@@ -116,7 +116,7 @@ func NewInitCmd(g *apcmd.Globals) *cobra.Command {
 			}
 			// Before the build step: a broken or conflicting overlay must not
 			// cost the user a full image build to discover.
-			overlays, err := loadOverlays(cmd.OutOrStdout(), overlayDirs)
+			overlays, err := loadOverlays(cmd.OutOrStdout(), overlay.Base, overlayDirs)
 			if err != nil {
 				return err
 			}

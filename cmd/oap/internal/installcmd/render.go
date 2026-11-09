@@ -120,10 +120,11 @@ func runRender(ctx context.Context, out io.Writer, g *apcmd.Globals, cfg RenderC
 	if err := validateRenderFlags(cfg); err != nil {
 		return err
 	}
-	// The same validation `oap install --overlay` runs, so an overlay set that
-	// one path refuses for conflicting the other refuses too.
-	if _, err := loadOverlays(out, cfg.Overlays); err != nil {
-		return err
+	// The same checks `oap install --overlay` runs, but against what this
+	// render emits: a patch for a component render leaves out would otherwise
+	// pass here and fail opaquely in the final kustomize build.
+	if _, err := loadOverlays(out, func() ([][]byte, error) { return renderOverlayBase(cfg) }, cfg.Overlays); err != nil {
+		return fmt.Errorf("%w (render emits the core install, channelsd and NATS, plus only the dependency components enabled by flags, such as --with-postgres)", err)
 	}
 
 	// Registry digest resolution is the ONLY remote call render makes, and it is

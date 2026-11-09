@@ -9,8 +9,9 @@
 // install` layers it over the documents it is about to apply, and `oap render`
 // lists it under the rendered kustomization's `components:`.
 //
-// Load builds every overlay against the full set of first-party manifests oap
-// ships and refuses, before anything touches a cluster:
+// Load builds every overlay against a base — Base, every first-party manifest
+// `oap install` can apply, or the narrower set a render emits — and refuses,
+// before anything touches a cluster:
 //
 //   - a patch that matches no resource (kustomize's own check — a typo'd
 //     Deployment name fails instead of being silently ignored);
@@ -20,11 +21,13 @@
 //     built on its own and the fields it changes are compared; agreeing values
 //     are not a conflict.
 //
-// The result is a per-resource patch, derived once, that Apply lays over a
-// document at the moment install writes it. Deriving a patch rather than
-// substituting the built document is what keeps install's own per-document
-// rewrites (image refs, pull secrets, mirrors) intact: a strategic-merge patch
-// carries only the fields the overlays changed.
+// Apply then lays the overlays over a document at the moment install writes it,
+// by running kustomize again with that document — as install holds it, after
+// its own image substitution — swapped into the base. Kustomize therefore
+// patches exactly what install applies. A patch derived once from the bundled
+// base could not: a list with no merge key (container args) is carried whole,
+// so the bundle's copy of it would undo install's rewrite of an image ref
+// inside it.
 package overlay
 
 import (
@@ -39,12 +42,9 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
-	jsonpatch "github.com/evanphx/json-patch/v5"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/util/strategicpatch"
-	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 	"sigs.k8s.io/yaml"
@@ -52,12 +52,19 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
 )
 
-// Set is a validated set of overlays, reduced to one patch per resource they
-// change. A nil *Set is valid and applies nothing, so callers without overlays
-// need no branch.
+// Set is a validated set of overlays. A nil *Set is valid and applies nothing,
+// so callers without overlays need no branch.
 type Set struct {
-	dirs    []string
-	patches map[resID]resourcePatch
+	dirs []string
+	// patched holds the resources the overlays change; Apply rebuilds only
+	// those, and passes every other document through untouched.
+	patched map[resID]bool
+
+	// mu serializes Apply: every call rewrites the shared base in fsys. The
+	// install pipeline applies components concurrently.
+	mu       sync.Mutex
+	fsys     filesys.FileSystem
+	baseDocs []*unstructured.Unstructured
 }
 
 // resID identifies a resource across the base and the built output. Version is
@@ -83,15 +90,6 @@ func idOf(u *unstructured.Unstructured) resID {
 	return resID{Group: gvk.Group, Kind: gvk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()}
 }
 
-// resourcePatch is the change the overlays make to one resource: a
-// strategic-merge patch for kinds the client-go scheme knows (so lists such as
-// containers merge by key), an RFC 7386 JSON merge patch for everything else.
-type resourcePatch struct {
-	strategic bool
-	gvk       schema.GroupVersionKind
-	data      []byte
-}
-
 // Base returns the documents an overlay is validated against: every first-party
 // manifest `oap install` can apply. It is the same set whether or not a given
 // optional component is enabled on this install, so whether an overlay is valid
@@ -110,8 +108,7 @@ func Base() ([][]byte, error) {
 	return out, nil
 }
 
-// Load reads each overlay directory, validates the set against base, and
-// derives the per-resource patches. Directories apply in the order given. An
+// Load reads each overlay directory and validates the set against base. Directories apply in the order given. An
 // empty dirs returns a nil Set.
 func Load(base [][]byte, dirs []string) (*Set, error) {
 	if len(dirs) == 0 {
@@ -155,27 +152,25 @@ func Load(base [][]byte, dirs []string) (*Set, error) {
 		return nil, err
 	}
 
-	all := make([]int, len(dirs))
-	for i := range all {
-		all[i] = i
-	}
-	built, err := build(fsys, all)
+	s := &Set{dirs: slices.Clone(dirs), patched: map[resID]bool{}, fsys: fsys, baseDocs: baseDocs}
+	built, err := s.buildAll()
 	if err != nil {
 		return nil, fmt.Errorf("overlays: %w", err)
 	}
-	s := &Set{dirs: slices.Clone(dirs), patches: map[resID]resourcePatch{}}
 	for id, doc := range built {
-		orig := baseByID[id]
-		if reflect.DeepEqual(orig.Object, doc.Object) {
-			continue
+		if !reflect.DeepEqual(baseByID[id].Object, doc.Object) {
+			s.patched[id] = true
 		}
-		p, err := derivePatch(orig, doc)
-		if err != nil {
-			return nil, fmt.Errorf("overlays: derive patch for %s: %w", id, err)
-		}
-		s.patches[id] = p
 	}
 	return s, nil
+}
+
+func (s *Set) buildAll() (map[resID]*unstructured.Unstructured, error) {
+	all := make([]int, len(s.dirs))
+	for i := range all {
+		all[i] = i
+	}
+	return build(s.fsys, all)
 }
 
 // Dirs returns the overlay directories in application order.
@@ -191,74 +186,49 @@ func (s *Set) Patched() []string {
 	if s == nil {
 		return nil
 	}
-	out := make([]string, 0, len(s.patches))
-	for id := range s.patches {
+	out := make([]string, 0, len(s.patched))
+	for id := range s.patched {
 		out = append(out, id.String())
 	}
 	sort.Strings(out)
 	return out
 }
 
-// Apply lays the overlays' patch for d's resource over d in place. A resource
-// no overlay touches, and any call on a nil Set, leaves d unchanged.
+// Apply lays the overlays over d in place. A resource no overlay changes, and
+// any call on a nil Set, leaves d unchanged. For one they change, the overlays
+// are rebuilt with d in its bundled counterpart's place, so they patch d itself
+// and every field they leave alone keeps the value install gave it.
 func (s *Set) Apply(d *unstructured.Unstructured) error {
 	if s == nil {
 		return nil
 	}
-	p, ok := s.patches[idOf(d)]
-	if !ok {
+	id := idOf(d)
+	if !s.patched[id] {
 		return nil
 	}
-	orig, err := json.Marshal(d.Object)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	docs := make([]*unstructured.Unstructured, len(s.baseDocs))
+	for i, b := range s.baseDocs {
+		if idOf(b) == id {
+			docs[i] = d
+		} else {
+			docs[i] = b
+		}
+	}
+	if err := writeBase(s.fsys, docs); err != nil {
+		return fmt.Errorf("apply overlays to %s: %w", id, err)
+	}
+	built, err := s.buildAll()
 	if err != nil {
-		return err
+		return fmt.Errorf("apply overlays to %s: %w", id, err)
 	}
-	var patched []byte
-	if p.strategic {
-		obj, err := scheme.Scheme.New(p.gvk)
-		if err != nil {
-			return err
-		}
-		patched, err = strategicpatch.StrategicMergePatch(orig, p.data, obj)
-		if err != nil {
-			return fmt.Errorf("apply overlay to %s: %w", idOf(d), err)
-		}
-	} else {
-		patched, err = jsonpatch.MergePatch(orig, p.data)
-		if err != nil {
-			return fmt.Errorf("apply overlay to %s: %w", idOf(d), err)
-		}
+	out, ok := built[id]
+	if !ok {
+		return fmt.Errorf("apply overlays to %s: missing from the build", id)
 	}
-	obj := map[string]any{}
-	if err := json.Unmarshal(patched, &obj); err != nil {
-		return err
-	}
-	d.Object = obj
+	d.Object = out.Object
 	return nil
-}
-
-func derivePatch(orig, mod *unstructured.Unstructured) (resourcePatch, error) {
-	a, err := json.Marshal(orig.Object)
-	if err != nil {
-		return resourcePatch{}, err
-	}
-	b, err := json.Marshal(mod.Object)
-	if err != nil {
-		return resourcePatch{}, err
-	}
-	gvk := orig.GroupVersionKind()
-	if obj, err := scheme.Scheme.New(gvk); err == nil {
-		data, err := strategicpatch.CreateTwoWayMergePatch(a, b, obj)
-		if err != nil {
-			return resourcePatch{}, err
-		}
-		return resourcePatch{strategic: true, gvk: gvk, data: data}, nil
-	}
-	data, err := jsonpatch.CreateMergePatch(a, b)
-	if err != nil {
-		return resourcePatch{}, err
-	}
-	return resourcePatch{gvk: gvk, data: data}, nil
 }
 
 const (
@@ -436,10 +406,12 @@ func sameResources(base, built map[resID]*unstructured.Unstructured) error {
 type removedMarker struct{}
 
 // changedLeaves returns every leaf path whose value differs between a and b,
-// mapped to b's value. A list of objects that all carry a string "name" is
-// keyed by name, matching how a strategic-merge patch addresses containers,
-// env vars and ports, so two overlays touching different containers never
-// collide on a shared index.
+// mapped to b's value. A list of objects is keyed by the first of listKeys
+// that every item in both lists carries uniquely, matching how a
+// strategic-merge patch addresses containers, env vars, ports and mounts, so
+// two overlays touching different items never collide on a shared index. A
+// list no key fits is compared whole, which can report a conflict between
+// overlays that touched different items but never misses a real one.
 func changedLeaves(a, b any) map[string]any {
 	out := map[string]any{}
 	walkDiff("", a, b, out)
@@ -470,18 +442,16 @@ func walkDiff(p string, a, b any, out map[string]any) {
 	al, aok := a.([]any)
 	bl, bok := b.([]any)
 	if aok && bok {
-		if ak, ok := byName(al); ok {
-			if bk, ok := byName(bl); ok {
-				for k := range union(ak, bk) {
-					bv, bin := bk[k]
-					if !bin {
-						out[p+"/["+k+"]"] = removedMarker{}
-						continue
-					}
-					walkDiff(p+"/["+k+"]", ak[k], bv, out)
+		if ak, bk, ok := keyedLists(al, bl); ok {
+			for k := range union(ak, bk) {
+				bv, bin := bk[k]
+				if !bin {
+					out[p+"/["+k+"]"] = removedMarker{}
+					continue
 				}
-				return
+				walkDiff(p+"/["+k+"]", ak[k], bv, out)
 			}
+			return
 		}
 	}
 	if bm, ok := b.(map[string]any); ok && a == nil {
@@ -493,18 +463,38 @@ func walkDiff(p string, a, b any, out map[string]any) {
 	out[p] = b
 }
 
-func byName(l []any) (map[string]any, bool) {
+// listKeys are the strategic-merge keys of the lists in the manifests oap
+// ships: "name" for containers, env, volumes and named ports; mountPath for
+// volumeMounts; containerPort for unnamed container ports.
+var listKeys = []string{"name", "mountPath", "containerPort"}
+
+func keyedLists(a, b []any) (map[string]any, map[string]any, bool) {
+	for _, key := range listKeys {
+		ak, aok := byKey(a, key)
+		bk, bok := byKey(b, key)
+		if aok && bok {
+			return ak, bk, true
+		}
+	}
+	return nil, nil, false
+}
+
+func byKey(l []any, key string) (map[string]any, bool) {
 	m := make(map[string]any, len(l))
 	for _, item := range l {
 		obj, ok := item.(map[string]any)
 		if !ok {
 			return nil, false
 		}
-		name, ok := obj["name"].(string)
+		v, ok := obj[key]
 		if !ok {
 			return nil, false
 		}
-		m[name] = obj
+		k := fmt.Sprint(v)
+		if _, dup := m[k]; dup {
+			return nil, false
+		}
+		m[k] = obj
 	}
 	return m, true
 }
