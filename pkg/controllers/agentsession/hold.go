@@ -220,6 +220,16 @@ func (r *Reconciler) reconcileHold(ctx context.Context, sess *spiceboxv1alpha1.A
 		}
 	}
 
+	// The reap below gives the session's admission back
+	// (Admitted=False/Reclaimed), recorded in the status write that persists
+	// the Held projection — a held session reserves nothing for its line, and
+	// on release it rejoins the back of the line through the gate like any
+	// cold wake. Decided before the projection: a pre-admission session is
+	// recognised only while its phase is not yet Held. A session admission
+	// never knew of is left without a condition. Idempotent on later passes:
+	// a released session is no longer Admitted=True.
+	r.releaseAdmissionOnReclaim(sess)
+
 	// Project the Held phase through the lifecycle machine, exactly as the
 	// other early-return paths do, so phase stays a projection of the log
 	// rather than a string this file invents.
