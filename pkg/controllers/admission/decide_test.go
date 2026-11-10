@@ -243,3 +243,21 @@ func TestDecideCapBlocked(t *testing.T) {
 		})
 	}
 }
+
+// A holder's unplaced pods are reserved one at a time, best effort: one that
+// cannot be placed (the model is wrong about it, or it is waiting on a node
+// to free) must not stop the others from being reserved, or a waiting head
+// would be admitted into space the holder's other pods are about to take.
+func TestDecideReservesHolderUnplacedPodsIndividually(t *testing.T) {
+	in := Input{
+		Waiting: []Candidate{cand("w", "l", 1, false, 600)},
+		Holders: []Holder{{
+			Key: key("h"), Line: "l",
+			Demand: Demand{Pods: []PodDemand{pod("h-small", 600), pod("h-huge", 4000)}},
+			// h-huge fits no node; h-small will land on n1.
+			Unplaced: Demand{Pods: []PodDemand{pod("h-small", 600), pod("h-huge", 4000)}},
+		}},
+		Model: NewNodeModel([]corev1.Node{testNode("n1", "1", "8Gi", "10")}, nil),
+	}
+	assert.Empty(t, Decide(in).Admit, "the holder's placeable pod is reserved even though its other pod is not")
+}

@@ -2,6 +2,9 @@ package agentsession
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,7 +19,9 @@ import (
 
 	_ "github.com/authzed/openagentprimitives/pkg/agent/harness/apnative" // the default harness the runner pod is built with
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz/contentguard"
 	_ "github.com/authzed/openagentprimitives/pkg/authz/contentguard/kinds/promptinjection" // a DetectorProvider inspector
+	contentguardregistry "github.com/authzed/openagentprimitives/pkg/authz/contentguard/registry"
 	"github.com/authzed/openagentprimitives/pkg/controllers/admission"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession/cosidecar"
 	"github.com/authzed/openagentprimitives/pkg/platform/podspec"
@@ -222,6 +227,59 @@ func TestDemandForErrors(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.contains)
 			assert.Empty(t, got.Pods, "no partial demand on error")
+		})
+	}
+}
+
+// nilDetectorInspector is a DetectorProvider that resolves no detector.
+type nilDetectorInspector struct{}
+
+func (nilDetectorInspector) ID() string { return "test-nil-detector" }
+func (nilDetectorInspector) Configure(json.RawMessage) (contentguard.Instance, error) {
+	return nil, errors.New("not used")
+}
+func (nilDetectorInspector) Detector(json.RawMessage) (*contentguard.DetectorSpec, error) {
+	return nil, nil
+}
+
+var registerNilDetector sync.Once
+
+// promptInjectionID is the promptinjection kind's registry ID.
+const promptInjectionID = "prompt-injection"
+
+// A detector-requiring inspector that cannot produce its detector fails
+// closed either way, but says which way: a config error is wrapped (so a
+// caller can inspect it) and a nil spec gets its own message rather than
+// "detector X: <nil>".
+func TestResolveContentGuardDetectorsErrors(t *testing.T) {
+	registerNilDetector.Do(func() { contentguardregistry.Register(nilDetectorInspector{}) })
+	cases := []struct {
+		name      string
+		inspector spiceboxv1alpha1.ContentInspectorConfig
+		wantMsg   string
+		wantWrap  bool
+	}{
+		{
+			name:      "config the inspector rejects: error wraps the inspector's",
+			inspector: spiceboxv1alpha1.ContentInspectorConfig{ID: promptInjectionID, Config: apiextv1.JSON{Raw: []byte(`{not json`)}},
+			wantMsg:   `content-guard detector "` + promptInjectionID + `"`,
+			wantWrap:  true,
+		},
+		{
+			name:      "inspector resolves no detector spec: its own message, no <nil>",
+			inspector: spiceboxv1alpha1.ContentInspectorConfig{ID: "test-nil-detector", Config: apiextv1.JSON{Raw: []byte(`{}`)}},
+			wantMsg:   `content-guard detector "test-nil-detector": the inspector resolved no detector spec`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := resolveContentGuardDetectors(&spiceboxv1alpha1.EffectiveSettings{
+				ContentInspectors: []spiceboxv1alpha1.ContentInspectorConfig{tc.inspector},
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantMsg)
+			assert.NotContains(t, err.Error(), "<nil>")
+			assert.Equal(t, tc.wantWrap, errors.Unwrap(err) != nil, "wrapped with %%w")
 		})
 	}
 }

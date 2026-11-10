@@ -158,8 +158,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 		return ctrl.Result{}, err
 	}
 	var waiting, holding, preAdmission []*spiceboxv1alpha1.AgentSession
+	var errs []error
 	for i := range sessions {
 		sess := &sessions[i]
+		if !isWaiting(sess) {
+			if err := r.clearPosition(ctx, sess); err != nil {
+				errs = append(errs, err)
+			}
+		}
 		switch {
 		case isTerminal(sess):
 			// Never a holder, even while still Admitted=True with pods: any
@@ -173,12 +179,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 		}
 	}
 	if len(waiting) == 0 && (len(preAdmission) == 0 || !r.Enabled) {
-		return requeue, nil
+		return requeue, errors.Join(errs...)
 	}
 	now := r.now()
 
 	if !r.Enabled {
-		var errs []error
 		for _, sess := range waiting {
 			if err := r.admit(ctx, sess, now, spiceboxv1alpha1.ReasonAdmitted, "Session admission is disabled; admitted at once."); err != nil {
 				errs = append(errs, err)
@@ -187,7 +192,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 		return requeue, errors.Join(errs...)
 	}
 
-	var errs []error
 	pods, podsKnown := r.listPods(ctx)
 	adopted, adoptErrs := r.adoptPreAdmission(ctx, preAdmission, pods, podsKnown, now)
 	errs = append(errs, adoptErrs...)
@@ -739,6 +743,24 @@ func (r *Reconciler) admit(ctx context.Context, sess *spiceboxv1alpha1.AgentSess
 		log.FromContext(ctx).Info("admission: writing Admitted=True failed; the next pass retries",
 			"session", sess.Namespace+"/"+sess.Name, "class", lineOf(sess), "err", err.Error())
 		return fmt.Errorf("admit %s/%s: %w", sess.Namespace, sess.Name, err)
+	}
+	return nil
+}
+
+// clearPosition removes a line position left on a session that is no longer
+// waiting — it went terminal, was parked, or was admitted by a write that did
+// not clear it — so its thread never shows a place in line it does not have.
+// A no-op, with no write, when there is nothing to clear.
+func (r *Reconciler) clearPosition(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) error {
+	if sess.Status.Admission == nil {
+		return nil
+	}
+	original := sess.DeepCopy()
+	sess.Status.Admission = nil
+	if err := agentstatus.WriteOwned(ctx, r.Client, sess, original, spiceboxv1alpha1.OwnerOperator); err != nil {
+		log.FromContext(ctx).Info("admission: clearing a stale line position failed; the next pass retries",
+			"session", sess.Namespace+"/"+sess.Name, "class", lineOf(sess), "phase", sess.Status.Phase, "err", err.Error())
+		return fmt.Errorf("clear admission position for %s/%s: %w", sess.Namespace, sess.Name, err)
 	}
 	return nil
 }

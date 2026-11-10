@@ -88,8 +88,11 @@ func resolveContentGuardDetectors(eff *spiceboxv1alpha1.EffectiveSettings) ([]sp
 			continue
 		}
 		ds, err := dp.Detector(ci.Config.Raw)
-		if err != nil || ds == nil {
-			return nil, fmt.Errorf("content-guard detector %q: %v", ci.ID, err)
+		if err != nil {
+			return nil, fmt.Errorf("content-guard detector %q: %w", ci.ID, err)
+		}
+		if ds == nil {
+			return nil, fmt.Errorf("content-guard detector %q: the inspector resolved no detector spec for its config", ci.ID)
 		}
 		// Use the image exactly as declared in the inspector config: pinned
 		// by digest it launches the exact bytes, by tag it launches by tag.

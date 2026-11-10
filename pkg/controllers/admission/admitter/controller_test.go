@@ -878,3 +878,21 @@ func TestBoundPodsMatchesPoolNamedSandboxPod(t *testing.T) {
 	assert.ElementsMatch(t, []string{"rb-runner", "warmpool-x7k2p"}, names, "both the runner and the pool-named sandbox pod are bound")
 	assert.Empty(t, unplaced("default", d, pods, true).Pods, "nothing left unplaced")
 }
+
+// A session that is no longer waiting must not keep showing a line position
+// ("3rd in line") it no longer has: the pass clears a stale status.admission.
+func TestAdmitterClearsStalePosition(t *testing.T) {
+	stale := func(s *spiceboxv1alpha1.AgentSession) *spiceboxv1alpha1.AgentSession {
+		s.Status.Admission = &spiceboxv1alpha1.AdmissionStatus{Position: 3, LineLength: 5, JoinedAt: s.CreationTimestamp}
+		return s
+	}
+	failed := stale(waitingSession("rb-failed", 0))
+	failed.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseFailed
+	parked := stale(waitingSession("rb-parked", 0))
+	parked.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseAwaitingCredentials
+
+	r, c, _ := newReconciler(t, true, roomFor(1), failed, parked)
+	runPass(t, r)
+	assert.Nil(t, getSession(t, c, "rb-failed").Status.Admission, "a Failed session holds no line position")
+	assert.Nil(t, getSession(t, c, "rb-parked").Status.Admission, "a parked session holds no line position")
+}

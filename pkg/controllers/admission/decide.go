@@ -84,9 +84,15 @@ func (l *lineState) capBlocked() bool {
 // in.Holders.
 func Decide(in Input) Decision {
 	for _, h := range in.Holders {
-		// A failure means the pods already landed on nodes the snapshot
-		// accounts for; the holder is admitted either way.
-		_ = in.Model.Reserve(h.Unplaced)
+		// Each unplaced pod is reserved on its own, best effort: they are not
+		// yet on any node the snapshot counts, but they will be, so the room
+		// they take must not go to a waiting head. A pod the model cannot
+		// place (the model disagrees with the scheduler, or the pod waits on a
+		// node to free) is simply not reserved; the holder stays admitted
+		// either way, and its other pods are still reserved.
+		for _, p := range h.Unplaced.Pods {
+			in.Model.Reserve(Demand{Pods: []PodDemand{p}})
+		}
 	}
 
 	lines := map[string]*lineState{}
