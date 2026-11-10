@@ -1,0 +1,214 @@
+{
+  "name": "admission-child-at-cap",
+  "description": "A lead delegates to a coder whose class is already at its concurrency cap, and the delegation still completes: the delegate tool result the lead is handed is the child's own answer, not a timeout.\n\ncap-coder sets maxConcurrentSessions: 1. The holder thread is a direct coder session that takes the line's one slot and parks in await_user_message, so it is still holding when the lead delegates. The queued thread is a second direct coder session that arrives while the holder holds, and waits behind the cap. The lead's delegated child then joins the SAME coder line, behind queued in arrival order, at cap. A delegated child is never blocked by its class's cap (and is not counted toward it), and children go first in their line, so the child is admitted at once and its answer reaches the lead.\n\nWhat is claimed, and how each claim is read from the run:\n- the delegation completed: the lead's delegate step asserts the TOOL RESULT is not an error and contains the child's return_result text (lastToolResultContains). A child held behind the cap would leave the parent's delegate call polling until it gave up, and the step would never see that text;\n- the cap was in force while the child ran: queued, which arrived before the lead, is admitted strictly after the lead and after the holder. Without the cap queued would be admitted as soon as it arrived.\n\nThe holder finishes only once the lead is Idle (waitFor), so the coder line is at cap for the lead's whole delegation, and queued's slot comes from the holder sleeping afterwards. Capacity is four session pod sets, more than the run ever holds, so the cap and not cluster room is what queues queued.",
+  "agentDir": "testdata/admission-child-at-cap/manifests",
+  "agentClass": "cap-lead",
+  "defaultUser": "user@example.com",
+  "admission": {
+    "capacitySessions": 4
+  },
+  "userTurns": [
+    {
+      "text": "hold the standing coder slot",
+      "thread": "holder",
+      "channel": "cap-coder-fake"
+    },
+    {
+      "text": "tidy the import blocks when you can",
+      "thread": "queued",
+      "channel": "cap-coder-fake",
+      "waitFor": [
+        {
+          "thread": "holder",
+          "until": "awaitingInput"
+        }
+      ]
+    },
+    {
+      "text": "have the coder fix the flaky retry test",
+      "thread": "lead",
+      "channel": "cap-lead-fake",
+      "waitFor": [
+        {
+          "thread": "holder",
+          "until": "awaitingInput"
+        }
+      ]
+    },
+    {
+      "text": "holder may finish now",
+      "thread": "holder",
+      "channel": "cap-coder-fake",
+      "waitFor": [
+        {
+          "thread": "lead",
+          "until": "idle"
+        }
+      ]
+    }
+  ],
+  "llm": [
+    {
+      "thread": "holder",
+      "expect": {
+        "userTextContains": "hold the standing coder slot"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "holding the coder slot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "holder",
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "await_user_message",
+            "args": {}
+          }
+        }
+      ]
+    },
+    {
+      "thread": "holder",
+      "expect": {
+        "userTextContains": "holder may finish now"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "held the coder slot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "queued",
+      "expect": {
+        "userTextContains": "tidy the import blocks when you can"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "import blocks tidied"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "queued",
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "tidied the import blocks"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "lead",
+      "expect": {
+        "userTextContains": "have the coder fix the flaky retry test"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "delegate",
+            "args": {
+              "agent": "cap-coder",
+              "task": "repair the payments retry test so it stops flaking"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "agentClass": "cap-coder",
+      "expect": {
+        "userTextContains": "repair the payments retry test so it stops flaking"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "return_result",
+            "args": {
+              "result": "Payments retry test repaired: the backoff now resets between attempts."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "lead",
+      "expect": {
+        "lastToolResult": "delegate",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "the backoff now resets between attempts"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "The coder repaired the retry test."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "lead",
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "had the coder repair the retry test"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "admission": {
+      "admittedBefore": [
+        {
+          "first": "holder",
+          "then": "queued"
+        },
+        {
+          "first": "lead",
+          "then": "queued"
+        }
+      ]
+    }
+  }
+}

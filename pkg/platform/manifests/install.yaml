@@ -1580,6 +1580,14 @@ spec:
                 required:
                 - prompt
                 type: object
+              maxConcurrentSessions:
+                description: |-
+                  MaxConcurrentSessions: at most this many of this agent's sessions hold
+                  capacity at once. Delegated child sessions are not counted and are
+                  never blocked by it. Unset means no limit.
+                format: int32
+                minimum: 1
+                type: integer
               mcpServers:
                 description: |-
                   MCPServers references MCPServer CRs in the same namespace whose

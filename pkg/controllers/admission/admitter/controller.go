@@ -20,6 +20,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -195,6 +196,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 			Demand:   d,
 		})
 	}
+	in.Caps, in.Waiting = r.capLines(ctx, in.Waiting, byKey)
 
 	pods, podsKnown := r.listPods(ctx)
 	pool := reclaimPool{
@@ -248,6 +250,50 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 		errs = append(errs, r.requestReclaims(ctx, in.Waiting, dec, &pool, in.Model, now)...)
 	}
 	return requeue, errors.Join(errs...)
+}
+
+// capLines reads spec.maxConcurrentSessions from the AgentClass of every line
+// with a waiting candidate, keyed by line as Decide expects. A class that does
+// not exist has no cap (pricing has already refused its sessions when it
+// prices from the class). A class that cannot be read fails closed: that
+// line's non-child candidates sit this pass out, since admitting them could
+// exceed a cap nobody could check; its children stay, as a cap never blocks
+// them.
+func (r *Reconciler) capLines(ctx context.Context, waiting []admission.Candidate,
+	sessions map[types.NamespacedName]*spiceboxv1alpha1.AgentSession,
+) (map[string]int32, []admission.Candidate) {
+	caps := map[string]int32{}
+	unreadable := map[string]bool{}
+	checked := map[string]bool{}
+	for _, c := range waiting {
+		if checked[c.Line] {
+			continue
+		}
+		checked[c.Line] = true
+		sess := sessions[c.Key]
+		var ac spiceboxv1alpha1.AgentClass
+		if err := r.Client.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: sess.Spec.Class}, &ac); err != nil {
+			if !apierrors.IsNotFound(err) {
+				log.FromContext(ctx).Info("admission: cannot read the class's session cap; its non-delegated sessions keep waiting this pass",
+					"class", c.Line, "err", err.Error())
+				unreadable[c.Line] = true
+			}
+			continue
+		}
+		if limit := ac.Spec.MaxConcurrentSessions; limit != nil {
+			caps[c.Line] = *limit
+		}
+	}
+	if len(unreadable) == 0 {
+		return caps, waiting
+	}
+	kept := waiting[:0:0]
+	for _, c := range waiting {
+		if c.Child || !unreadable[c.Line] {
+			kept = append(kept, c)
+		}
+	}
+	return caps, kept
 }
 
 // isWarmIdle matches a holder whose pods could be given back early: Idle,

@@ -553,3 +553,95 @@ func markReclaimed(t *testing.T, c client.Client, name string) {
 	})
 	require.NoError(t, c.Status().Update(context.Background(), s), "mark %s reclaimed", name)
 }
+
+// cappedClass is testClass with spec.maxConcurrentSessions set.
+func cappedClass(limit int32) *spiceboxv1alpha1.AgentClass {
+	return &spiceboxv1alpha1.AgentClass{
+		ObjectMeta: metav1.ObjectMeta{Name: testClass, Namespace: "default"},
+		Spec:       spiceboxv1alpha1.AgentClassSpec{MaxConcurrentSessions: &limit},
+	}
+}
+
+// admittedRunning is a non-child session already holding its admission.
+func admittedRunning(name string) *spiceboxv1alpha1.AgentSession {
+	s := waitingSession(name, 0)
+	s.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseRunning
+	s.Status.Conditions = []metav1.Condition{{
+		Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionTrue,
+		Reason: spiceboxv1alpha1.ReasonAdmitted, LastTransitionTime: metav1.NewTime(baseTime),
+	}}
+	return s
+}
+
+// childOf marks s as a session delegated by parent.
+func childOf(s *spiceboxv1alpha1.AgentSession, parent string) *spiceboxv1alpha1.AgentSession {
+	s.Spec.Parent = &spiceboxv1alpha1.NamespacedRef{Namespace: "default", Name: parent}
+	return s
+}
+
+func TestAdmitterConcurrencyCap(t *testing.T) {
+	t.Run("class cap 1 with one admitted parent: its waiting child is admitted; a waiting non-child is not", func(t *testing.T) {
+		r, c, _ := newReconciler(t, true, roomFor(5),
+			cappedClass(1),
+			admittedRunning("rb-parent"),
+			waitingSession("rb-other", time.Minute),
+			childOf(waitingSession("rb-child", 2*time.Minute), "rb-parent"),
+		)
+		runPass(t, r)
+		assertAdmitted(t, getSession(t, c, "rb-child"))
+		assertPosition(t, getSession(t, c, "rb-other"), 1, 1)
+	})
+
+	t.Run("class cap 2 with one admitted parent: the oldest waiting non-child takes the second slot, the next waits", func(t *testing.T) {
+		r, c, _ := newReconciler(t, true, roomFor(5),
+			cappedClass(2),
+			admittedRunning("rb-parent"),
+			waitingSession("rb-a", time.Minute),
+			waitingSession("rb-b", 2*time.Minute),
+		)
+		runPass(t, r)
+		assertAdmitted(t, getSession(t, c, "rb-a"))
+		assertPosition(t, getSession(t, c, "rb-b"), 1, 1)
+	})
+
+	t.Run("no AgentClass to read a cap from: the line is uncapped, every waiting session that fits is admitted", func(t *testing.T) {
+		r, c, _ := newReconciler(t, true, roomFor(5),
+			admittedRunning("rb-parent"),
+			waitingSession("rb-a", time.Minute),
+			waitingSession("rb-b", 2*time.Minute),
+		)
+		runPass(t, r)
+		assertAdmitted(t, getSession(t, c, "rb-a"))
+		assertAdmitted(t, getSession(t, c, "rb-b"))
+	})
+
+	t.Run("AgentClass read fails: the line's non-children keep waiting unpositioned, its child is still admitted", func(t *testing.T) {
+		c := fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(
+				cappedClass(1),
+				admittedRunning("rb-parent"),
+				waitingSession("rb-other", time.Minute),
+				childOf(waitingSession("rb-child", 2*time.Minute), "rb-parent"),
+			).
+			WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*spiceboxv1alpha1.AgentClass); ok {
+						return fmt.Errorf("apiserver unavailable")
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
+		r := &Reconciler{
+			Client: c, Capacity: roomFor(5), Enabled: true,
+			Now: func() time.Time { return passTime }, Demand: oneCPUDemand,
+		}
+		runPass(t, r)
+		assertAdmitted(t, getSession(t, c, "rb-child"))
+		other := getSession(t, c, "rb-other")
+		assert.False(t, admission.IsAdmitted(other), "rb-other not admitted past a cap it could not read")
+		assert.Nil(t, other.Status.Admission, "rb-other not positioned")
+	})
+}

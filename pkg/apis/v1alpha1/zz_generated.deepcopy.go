@@ -183,6 +183,11 @@ func (in *AgentClassSpec) DeepCopyInto(out *AgentClassSpec) {
 		*out = new(BudgetConfig)
 		**out = **in
 	}
+	if in.MaxConcurrentSessions != nil {
+		in, out := &in.MaxConcurrentSessions, &out.MaxConcurrentSessions
+		*out = new(int32)
+		**out = **in
+	}
 	if in.BoundEntities != nil {
 		in, out := &in.BoundEntities, &out.BoundEntities
 		*out = make([]AuthzSlot, len(*in))
