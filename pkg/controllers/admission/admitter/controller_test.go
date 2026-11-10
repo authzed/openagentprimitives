@@ -282,3 +282,68 @@ func TestUnplacedDemand(t *testing.T) {
 		})
 	}
 }
+
+// TestAdmitterWatchNamespaces pins the --watch-namespaces contract: under
+// namespaced RBAC a cluster-wide list 403s, so with a watch set the pass lists
+// sessions one namespace at a time and never touches any other namespace.
+func TestAdmitterWatchNamespaces(t *testing.T) {
+	inNamespace := func(s *spiceboxv1alpha1.AgentSession, ns string) *spiceboxv1alpha1.AgentSession {
+		s.Namespace = ns
+		return s
+	}
+	cases := []struct {
+		name         string
+		namespaces   []string
+		wantLists    []string
+		wantAdmitted []string
+	}{
+		{
+			name:       "watch set: one namespaced list per watched namespace, unwatched sessions untouched",
+			namespaces: []string{"team-a", "team-b"},
+			wantLists:  []string{"team-a", "team-b"}, wantAdmitted: []string{"team-a/rb-a", "team-b/rb-b"},
+		},
+		{
+			name:      "no watch set: one cluster-wide list, every namespace admitted",
+			wantLists: []string{""}, wantAdmitted: []string{"other/rb-c", "team-a/rb-a", "team-b/rb-b"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var lists []string
+			c := fake.NewClientBuilder().
+				WithScheme(testScheme(t)).
+				WithObjects(
+					inNamespace(waitingSession("rb-a", time.Minute), "team-a"),
+					inNamespace(waitingSession("rb-b", 2*time.Minute), "team-b"),
+					inNamespace(waitingSession("rb-c", 3*time.Minute), "other"),
+				).
+				WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+						if _, ok := list.(*spiceboxv1alpha1.AgentSessionList); ok {
+							lo := (&client.ListOptions{}).ApplyOptions(opts)
+							lists = append(lists, lo.Namespace)
+						}
+						return cl.List(ctx, list, opts...)
+					},
+				}).
+				Build()
+			r := &Reconciler{
+				Client: c, Capacity: roomFor(5), Enabled: true, Namespaces: tc.namespaces,
+				Now: func() time.Time { return passTime }, Demand: oneCPUDemand,
+			}
+			runPass(t, r)
+			assert.Equal(t, tc.wantLists, lists, "AgentSession list scopes")
+
+			var all spiceboxv1alpha1.AgentSessionList
+			require.NoError(t, c.List(context.Background(), &all), "list all")
+			var admitted []string
+			for i := range all.Items {
+				if admission.IsAdmitted(&all.Items[i]) {
+					admitted = append(admitted, all.Items[i].Namespace+"/"+all.Items[i].Name)
+				}
+			}
+			assert.ElementsMatch(t, tc.wantAdmitted, admitted, "admitted sessions")
+		})
+	}
+}

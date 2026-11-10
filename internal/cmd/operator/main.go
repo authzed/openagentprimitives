@@ -11,10 +11,12 @@ import (
 	"github.com/google/uuid"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	runtimedebug "runtime/debug"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -2771,8 +2773,11 @@ func run(cfg *config) {
 	if err := (&admitter.Reconciler{
 		Client:    mgr.GetClient(),
 		APIReader: mgr.GetAPIReader(),
-		Capacity:  admissionCapacity,
-		Enabled:   cfg.sessionAdmission,
+		// The same namespace set the manager cache is scoped to, so the
+		// uncached session list stays inside the RBAC a watch set grants.
+		Namespaces: slices.Sorted(maps.Keys(cacheNamespaces(cfg.watchNamespaces, operatorNamespace(cfg.podNamespace)))),
+		Capacity:   admissionCapacity,
+		Enabled:    cfg.sessionAdmission,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to register admission controller")
 		os.Exit(1)

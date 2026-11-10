@@ -68,6 +68,12 @@ type Reconciler struct {
 	// session as still waiting, free its capacity, and let the pass admit a
 	// second session into the same space. Nil falls back to Client.
 	APIReader client.Reader
+	// Namespaces is the operator's watch set (--watch-namespaces). When set,
+	// sessions are listed one namespace at a time: the APIReader list is
+	// uncached, so a cluster-wide one would 403 under the per-namespace RBAC a
+	// watch set exists for, and would reach sessions in namespaces this
+	// operator does not own. Empty means cluster-wide.
+	Namespaces []string
 	// Capacity snapshots what the cluster can still place. Nil, or a snapshot
 	// error, means unknown capacity: every waiting session fits.
 	Capacity admission.CapacitySource
@@ -131,13 +137,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 	logger := log.FromContext(ctx)
 	requeue := ctrl.Result{RequeueAfter: resyncInterval}
 
-	var list spiceboxv1alpha1.AgentSessionList
-	if err := r.sessionReader().List(ctx, &list); err != nil {
-		return ctrl.Result{}, fmt.Errorf("admission pass: list AgentSessions: %w", err)
+	sessions, err := r.listSessions(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 	var waiting, holding []*spiceboxv1alpha1.AgentSession
-	for i := range list.Items {
-		sess := &list.Items[i]
+	for i := range sessions {
+		sess := &sessions[i]
 		switch {
 		case isTerminal(sess):
 			// Never a holder, even while still Admitted=True with pods: any
@@ -222,6 +228,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 		}
 	}
 	return requeue, errors.Join(errs...)
+}
+
+// listSessions lists every AgentSession the operator owns: cluster-wide with
+// no watch set, else one namespaced list per watched namespace. Any failed
+// list fails the pass (logged by the caller's error return) rather than
+// deciding lines from a partial view.
+func (r *Reconciler) listSessions(ctx context.Context) ([]spiceboxv1alpha1.AgentSession, error) {
+	if len(r.Namespaces) == 0 {
+		var list spiceboxv1alpha1.AgentSessionList
+		if err := r.sessionReader().List(ctx, &list); err != nil {
+			return nil, fmt.Errorf("admission pass: list AgentSessions: %w", err)
+		}
+		return list.Items, nil
+	}
+	var out []spiceboxv1alpha1.AgentSession
+	for _, ns := range r.Namespaces {
+		var list spiceboxv1alpha1.AgentSessionList
+		if err := r.sessionReader().List(ctx, &list, client.InNamespace(ns)); err != nil {
+			return nil, fmt.Errorf("admission pass: list AgentSessions in namespace %q: %w", ns, err)
+		}
+		out = append(out, list.Items...)
+	}
+	return out, nil
 }
 
 // snapshot returns the capacity model, or an unknown one when there is no
