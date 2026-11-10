@@ -1,0 +1,144 @@
+# Fixture for the admission-burst bundle: two agents sharing one cluster.
+#
+# burst-reviewer is the reviewbot shape — two sandbox bundles per session, so a
+# session's pod set is more than one pod and "all or none" means something.
+# burst-notes is a second agent with its own line. Both run with the plan gate
+# off and tool calls permissive: what the bundle pins is WHEN each session gets
+# to run, and a gate in front of the tool call would only add scenery.
+#
+# burst-reviewer's channels.sleepAfter is one second, on purpose. A finished
+# (Idle) session keeps its admission until it sleeps, so the sleep reap is what
+# hands its room to the next session in line; a long grace would only slow the
+# scenario.
+apiVersion: v1
+kind: Secret
+metadata: {name: burst-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: burst-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: burst-gh-token, namespace: default}
+type: Opaque
+stringData: {token: "ghp_unusedTheSandboxNeverExecutes"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxToolspec
+metadata: {name: ts-burst-gh, namespace: default}
+spec:
+  name: ts-burst-gh
+  version: "1"
+  toolkit: {name: gh, revision: "2026-05-01"}
+  allowSubcommands: ["pr view"]
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata: {name: cls-burst-gh, namespace: default}
+spec:
+  image: registry.example.com/gh-toolbelt:latest
+  resources: {cpu: "100m", memory: "64Mi", ephemeralStorage: "16Mi"}
+  tools:
+    - {name: gh, command: ["/usr/bin/gh"]}
+  toolspecs:
+    - {name: ts-burst-gh}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: burst-identity, namespace: default}
+spec:
+  description: "Fixture identity for the admission burst bundle."
+  credentials:
+    # The gh toolkit declares a sensitive GITHUB_TOKEN, so a class is not Valid
+    # until a credential of this name backs it. Never read: nothing executes.
+    - name: github-token
+      type: static
+      static: {secretRef: {name: burst-gh-token, key: token}}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: burst-reviewer, namespace: default}
+spec:
+  displayName: BurstReviewer
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: burst-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture reviewer for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You review pull requests with the gitlike_gh tool.
+  agentIdentity: burst-identity
+  authz:
+    toolCalls: {mode: permissive}
+    planGate: {mode: disabled}
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  channels: {sleepAfter: 1s}
+  toolBundles:
+    - {name: "gitlike", class: "cls-burst-gh", toolspecs: ["ts-burst-gh"]}
+    - {name: "scratch", class: "cls-burst-gh", toolspecs: ["ts-burst-gh"]}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: burst-notes, namespace: default}
+spec:
+  displayName: BurstNotes
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: burst-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture note-taker for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You check pull request status with the gitlike_gh tool.
+  agentIdentity: burst-identity
+  authz:
+    toolCalls: {mode: permissive}
+    planGate: {mode: disabled}
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  # Longer than the reviewer's: a3's room should come from a2 finishing, not
+  # from this session sleeping. See the bundle description.
+  channels: {sleepAfter: 10s}
+  toolBundles:
+    - {name: "gitlike", class: "cls-burst-gh", toolspecs: ["ts-burst-gh"]}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: burst-reviewer-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: burst-reviewer
+  credentialsRef: {secretName: burst-fake-creds}
+  fake: {echo: false}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: burst-notes-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: burst-notes
+  credentialsRef: {secretName: burst-fake-creds}
+  fake: {echo: false}
+---
+# The tuple that makes `gh pr view` on demo-org/demo-repo resolve to ALLOW, so
+# every session's call succeeds for the session's own reasons. The harness also
+# waits on RelationshipsApplied, which a schema-only bootstrap never gets.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata: {name: burst-repo, namespace: default}
+spec:
+  relationships:
+    - resource: {type: github_repo_url, id: "aHR0cHM6Ly9naXRodWIuY29tL2RlbW8tb3JnL2RlbW8tcmVwbw"}
+      relation: owner
+      subject: {type: user, id: "user@example.com", canonicalize: true}
