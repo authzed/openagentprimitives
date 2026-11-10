@@ -390,8 +390,9 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 			wantReaped: true, wantMisfit: true,
 		},
 		{
-			name:    "admitted after a cold wake, pods unschedulable 2m: released, JoinedAt unchanged",
+			name:    "admitted after a cold wake 10m ago, session created 3h ago, pods unschedulable 2m: released and re-queued, not failed, JoinedAt is the wake",
 			enabled: true, admitted: true, pending: 2 * time.Minute, schedMsg: capacitySchedMsg, woken: true,
+			createdAgo: 3 * time.Hour,
 			wantReaped: true, wantMisfit: true,
 		},
 		{

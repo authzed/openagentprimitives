@@ -49,19 +49,17 @@ func admittedCondition(sess *v1alpha1.AgentSession) *metav1.Condition {
 	return meta.FindStatusCondition(sess.Status.Conditions, v1alpha1.AgentSessionConditionAdmitted)
 }
 
-// JoinedAt is when the session took its place in line. A wake that came after
-// the last admission transition re-queues the session, so it counts; a wake
-// the session was later released after (e.g. a placement misfit) does not, and
-// the session keeps its original place at creationTimestamp.
+// JoinedAt is when the session took its place in line, which orders it there:
+// its last wake if it has one, else its creation. A cold wake re-joins the
+// back of the line, so it counts; a warm wake never left the line, and a
+// release (a placement misfit) keeps the place the session already had. The
+// waiting timeout is not measured from here but from gate arrival
+// (WaitingSince).
 func JoinedAt(sess *v1alpha1.AgentSession) time.Time {
-	wake := sess.Status.LastWakeAt
-	if wake == nil {
-		return sess.CreationTimestamp.Time
+	if wake := sess.Status.LastWakeAt; wake != nil {
+		return wake.Time
 	}
-	if c := admittedCondition(sess); c != nil && !wake.Time.After(c.LastTransitionTime.Time) {
-		return sess.CreationTimestamp.Time
-	}
-	return wake.Time
+	return sess.CreationTimestamp.Time
 }
 
 // WaitingSince is when the session's current wait began: JoinedAt, or the

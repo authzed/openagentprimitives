@@ -175,11 +175,12 @@ func (r *Reconciler) placementMisfit(sess *spiceboxv1alpha1.AgentSession, stall 
 // status write leaves the session admitted, and the next pass decides afresh
 // from whatever still stands.
 //
-// The session keeps its place: admission.JoinedAt reads only creation and
-// wake times, so it re-joins at the front of its line (it was admitted
+// The session keeps its place: admission.JoinedAt is its last wake (a cold
+// wake re-joined the line then) or its creation, never an admission
+// transition, so it re-joins at the front of its line (it was admitted
 // fairly; the model was wrong, not the session). admission.WaitingSince
-// restarts at this release, so the capacity-hold timeout gives it a fresh
-// window rather than the remainder of its first one.
+// restarts when it is queued again at the gate, so the capacity-hold timeout
+// gives it a fresh window rather than the remainder of its first one.
 //
 // That fresh window is why the release is bounded by JoinedAt instead. A
 // stall the admitter's model cannot see — a shortfall on the only nodes the

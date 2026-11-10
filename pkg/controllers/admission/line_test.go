@@ -58,9 +58,14 @@ func TestJoinedAt(t *testing.T) {
 			at(2 * time.Minute),
 		},
 		{
-			"released by misfit after its last wake (lastWakeAt t1, Admitted=False at t2>t1): creationTimestamp",
+			"cold wake, admitted, then released by a misfit (lastWakeAt t1, Admitted=False at t2>t1): lastWakeAt",
 			withWake(withAdmitted(sessionAt(0), metav1.ConditionFalse, 2*time.Minute), time.Minute),
-			at(0),
+			at(time.Minute),
+		},
+		{
+			"wake in the same second as the admission transition: lastWakeAt",
+			withWake(withAdmitted(sessionAt(0), metav1.ConditionTrue, time.Minute), time.Minute),
+			at(time.Minute),
 		},
 		{
 			"woke with no Admitted condition yet: lastWakeAt",
