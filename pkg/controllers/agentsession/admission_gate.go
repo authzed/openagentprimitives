@@ -5,11 +5,15 @@
 // a booting session creates none of its pods until admitted — and hands
 // admission back (Admitted=False/Reclaimed) at the moment its pods are
 // reclaimed, so the admitter never counts capacity a session no longer holds.
+// Its safety net hands admission back too (Admitted=False/PlacementMismatch)
+// when an admitted set the scheduler cannot place would otherwise hold its
+// placed half while the rest waits.
 package agentsession
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -103,4 +107,67 @@ func (r *Reconciler) releaseAdmissionOnReclaim(sess *spiceboxv1alpha1.AgentSessi
 		LastTransitionTime: metav1.NewTime(r.now()),
 	})
 	return true
+}
+
+// admissionMisfitGrace is how long an admitted session's bundle pod may stay
+// unschedulable on a capacity shortfall before the session gives its pods back
+// and returns to its line. The admitter's model said the whole set fits; a pod
+// still unplaced this long later means the model was wrong (a pod it did not
+// know about, a node draining), and holding the placed half while the rest
+// waits is the hold-and-wait admission exists to end.
+const admissionMisfitGrace = 2 * time.Minute
+
+// placementMisfit reports whether this pass must release an admitted session
+// whose set the scheduler could not place. stalled is the bundle stage's own
+// scheduling-stall verdict (already false for a bundle that regressed
+// mid-session, which the ordinary deadline handles).
+//
+// Only a capacity SHORTFALL counts, for the same reason only a shortfall is
+// held (capacityShortfall): a pod blocked by a taint or a volume-affinity
+// conflict would be re-admitted at once, fail to place again, and cycle
+// forever with its waiting-timeout clock restarting at every release. Left
+// alone, it keeps the ordinary readiness deadline and its specific failure
+// message.
+func (r *Reconciler) placementMisfit(sess *spiceboxv1alpha1.AgentSession, stall schedulingStall, stalled bool) bool {
+	if !r.AdmissionEnabled || !stalled || !admission.IsAdmitted(sess) {
+		return false
+	}
+	booting := sess.Status.Phase == "" || sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhasePending
+	return booting && capacityShortfall(stall.reason) && stall.pending >= admissionMisfitGrace
+}
+
+// releaseMisfit reaps an admitted session's pods and records
+// Admitted=False/PlacementMismatch, so the admitter re-queues it. The release
+// is written only after the reap succeeds — released while its pods still
+// stood, the admitter would count their capacity twice. A failed reap or
+// status write leaves the session admitted, and the next pass decides afresh
+// from whatever still stands.
+//
+// The session keeps its place: admission.JoinedAt reads only creation and
+// wake times, so it re-joins at the front of its line (it was admitted
+// fairly; the model was wrong, not the session). admission.WaitingSince
+// restarts at this release, so the capacity-hold timeout gives it a fresh
+// window rather than the remainder of its first one.
+func (r *Reconciler) releaseMisfit(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, stall schedulingStall) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	logger.Info("admitted session's pods could not be placed; releasing them and re-queueing it at its place in line",
+		"session", sess.Namespace+"/"+sess.Name, "class", sess.Spec.Class,
+		"pod", stall.podName, "unschedulableFor", stall.pending.String(),
+		"schedulerMessage", stall.reason)
+	if _, err := r.reapSessionPods(ctx, sess); err != nil {
+		return ctrl.Result{}, err // already logged inside reapSessionPods; retried next pass
+	}
+	conditions.Set(sess, &sess.Status.Conditions, metav1.Condition{
+		Type:               spiceboxv1alpha1.AgentSessionConditionAdmitted,
+		Status:             metav1.ConditionFalse,
+		Reason:             spiceboxv1alpha1.ReasonAdmissionMisfit,
+		Message:            fmt.Sprintf("%s could not be placed for %s (%s); its pods were released and it waits at its place in line", stall.podName, stall.pending.Round(time.Second), strings.TrimSuffix(stall.reason, ".")),
+		LastTransitionTime: metav1.NewTime(r.now()),
+	})
+	if err := r.applyStatus(ctx, sess); err != nil {
+		logger.Info("misfit: recording the admission release failed; will retry",
+			"session", sess.Namespace+"/"+sess.Name, "class", sess.Spec.Class, "err", err.Error())
+		return ctrl.Result{}, fmt.Errorf("record placement-mismatch release: %w", err)
+	}
+	return ctrl.Result{RequeueAfter: capacityHoldRequeue}, nil
 }

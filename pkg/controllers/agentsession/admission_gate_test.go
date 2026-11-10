@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/controllers/admission"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 )
@@ -283,3 +284,96 @@ func TestAdmissionGate_SleepReleasesInOneWrite(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// An ADMITTED booting session whose bundle pod the scheduler still cannot
+// place after admissionMisfitGrace gives its pods back and returns to its line
+// (Admitted=False/PlacementMismatch), keeping its place: JoinedAt does not
+// move. Short of the grace, with admission off, or on a stall another session
+// finishing cannot cure, nothing is released.
+func TestAdmissionGate_Misfit(t *testing.T) {
+	nowT := time.Date(2026, 11, 10, 17, 0, 0, 0, time.UTC)
+	codeBundle := spiceboxv1alpha1.ToolBundle{Name: "code", Class: "toolbelt"}
+
+	cases := []struct {
+		name     string
+		enabled  bool          // Reconciler.AdmissionEnabled
+		admitted bool          // the session carries Admitted=True
+		pending  time.Duration // how long the bundle pod has been unschedulable
+		schedMsg string
+		woken    bool // the session was cold-woken before this admission
+
+		wantReaped      bool
+		wantMisfit      bool // Admitted=False/PlacementMismatch at now
+		wantAdmittedNil bool // no Admitted condition at all
+	}{
+		{
+			name:    "admitted, pods unschedulable 2m: pods reaped, Admitted=False/PlacementMismatch, JoinedAt unchanged",
+			enabled: true, admitted: true, pending: 2 * time.Minute, schedMsg: capacitySchedMsg,
+			wantReaped: true, wantMisfit: true,
+		},
+		{
+			name:    "admitted after a cold wake, pods unschedulable 2m: released, JoinedAt unchanged",
+			enabled: true, admitted: true, pending: 2 * time.Minute, schedMsg: capacitySchedMsg, woken: true,
+			wantReaped: true, wantMisfit: true,
+		},
+		{
+			name:    "admitted, pods unschedulable 1m (inside the misfit grace): pods kept, still admitted",
+			enabled: true, admitted: true, pending: time.Minute, schedMsg: capacitySchedMsg,
+		},
+		{
+			name:    "admitted, taint-only stall 2m: not a capacity misfit, pods kept, still admitted",
+			enabled: true, admitted: true, pending: 2 * time.Minute,
+			schedMsg: "0/6 nodes are available: 6 node(s) had untolerated taint(s).",
+		},
+		{
+			name:     "admission off, pods unschedulable 2m: pods kept under the pod-level hold, no Admitted condition",
+			pending:  2 * time.Minute,
+			schedMsg: capacitySchedMsg, wantAdmittedNil: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := func() time.Time { return nowT }
+			started := nowT.Add(-tc.pending)
+
+			ac := classWithBundle("ac1", codeBundle)
+			sess := sessionCreatedAt("s1", "ac1", nowT.Add(-20*time.Minute))
+			if tc.woken {
+				wake := metav1.NewTime(nowT.Add(-10 * time.Minute))
+				sess.Status.LastWakeAt = &wake
+			}
+			if tc.admitted {
+				withAdmittedCondition(sess, metav1.ConditionTrue, spiceboxv1alpha1.ReasonAdmitted, started.Add(-time.Second))
+			}
+			joinedBefore := admission.JoinedAt(sess)
+			bundle := bundleWithPod("s1", "code", "s1-code-pod", started)
+			pod := pendingUnschedulablePod("s1-code-pod", "uid-1", started, tc.schedMsg)
+
+			r, c := fakeReconciler(t, clock, ac, sess, bundle, pod)
+			r.AdmissionEnabled = tc.enabled
+			runReconciles(t, r, "s1", 3)
+
+			got := getSession(t, c, "s1")
+			assert.Equal(t, !tc.wantReaped,
+				exists(t, c, agentsession.BundleSessionName(&got, codeBundle), &spiceboxv1alpha1.SpiceboxSession{}),
+				"bundle SpiceboxSession present")
+			assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase, "session must not fail")
+			assert.Equal(t, joinedBefore.UTC(), admission.JoinedAt(&got).UTC(), "JoinedAt must not move: the session keeps its place in line")
+
+			adm := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+			switch {
+			case tc.wantAdmittedNil:
+				assert.Nil(t, adm, "no Admitted condition")
+			case tc.wantMisfit:
+				require.NotNil(t, adm, "Admitted condition")
+				assert.Equal(t, metav1.ConditionFalse, adm.Status)
+				assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionMisfit, adm.Reason)
+				assert.Equal(t, nowT, adm.LastTransitionTime.Time.UTC(), "transition stamped from the reconciler clock")
+				assert.Equal(t, nowT, admission.WaitingSince(&got).UTC(), "the waiting-timeout clock restarts at the release")
+			default:
+				require.NotNil(t, adm, "Admitted condition")
+				assert.Equal(t, metav1.ConditionTrue, adm.Status, "still admitted")
+			}
+		})
+	}
+}

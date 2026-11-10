@@ -1991,6 +1991,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				bundlesWereReady := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionBundlesReady)
 				midSession := bundlesWereReady != nil && bundlesWereReady.Status == metav1.ConditionTrue
 				stall, stalled := r.firstSchedulingStall(ctx, sess.Namespace, notReadyPods)
+				// Admission's safety net: an admitted set the scheduler still
+				// cannot place goes back to its line instead of holding the
+				// placed half (admission_gate.go). Ahead of the deadline, which
+				// a re-queued session must not be failed by.
+				if r.placementMisfit(&sess, stall, stalled && !midSession) {
+					sess.Status.BundleSessions = bundleSessionStatuses
+					return r.releaseMisfit(ctx, &sess, stall)
+				}
 				bundleDeadline, held := r.capacityHoldDeadline(&sess, stall, stalled && !midSession, r.effectiveBundleReadyDeadline(ctx))
 				if bundleProvisioningTimedOut(capacityHoldAdjustedStart(&sess, earliestBundleStart, held, r.now()), r.now(), bundleDeadline) {
 					sess.Status.BundleSessions = bundleSessionStatuses
