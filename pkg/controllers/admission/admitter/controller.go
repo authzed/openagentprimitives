@@ -197,8 +197,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 	}
 
 	pods, podsKnown := r.listPods(ctx)
-	var warm []admission.WarmIdle
-	warmByKey := map[types.NamespacedName]*spiceboxv1alpha1.AgentSession{}
+	pool := reclaimPool{
+		sessions: map[types.NamespacedName]*spiceboxv1alpha1.AgentSession{},
+		inFlight: map[string][]admission.PlacedPod{},
+	}
 	for _, sess := range holding {
 		d, err := r.demand(ctx, sess)
 		if err != nil {
@@ -215,10 +217,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 			Demand:   d,
 			Unplaced: unplaced(sess.Namespace, d, pods, podsKnown),
 		})
-		if w, ok := warmIdle(sess, d, pods, podsKnown); ok {
-			warm = append(warm, w)
-			warmByKey[w.Key] = sess
+		if podsKnown && isWarmIdle(sess) {
+			pool.addWarm(sess, boundPods(sess.Namespace, d, pods))
 		}
+	}
+	if podsKnown {
+		r.addDrainingReclaims(ctx, &pool, sessions, pods)
 	}
 
 	in.Model = r.snapshot(ctx)
@@ -241,7 +245,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 		}
 	}
 	if in.Model.Known() {
-		errs = append(errs, r.requestReclaims(ctx, in.Waiting, dec, warm, warmByKey, in.Model, now)...)
+		errs = append(errs, r.requestReclaims(ctx, in.Waiting, dec, &pool, in.Model, now)...)
 	}
 	return requeue, errors.Join(errs...)
 }
@@ -257,19 +261,15 @@ func isWarmIdle(sess *spiceboxv1alpha1.AgentSession) bool {
 		sess.Status.LastIdleAt != nil
 }
 
-// warmIdle builds the WarmIdle for a holder that is warm idle: its pod set's
-// pods (matched by name, as unplaced does) that are bound to a node and still
-// running, priced from the live pod spec — what the capacity snapshot counts
-// against that node, so it is what a reclaim gives back. Not ok when the
-// session is not warm idle, the pod list failed, or none of its pods holds
-// capacity: there is nothing to free.
-func warmIdle(sess *spiceboxv1alpha1.AgentSession, d admission.Demand, pods podIndex, known bool) (admission.WarmIdle, bool) {
-	if !known || !isWarmIdle(sess) {
-		return admission.WarmIdle{}, false
-	}
+// boundPods is the part of a session's pod set the capacity snapshot counts
+// against a node: its demand's pods (matched by name, as unplaced does) that
+// are bound and not finished, priced from the live pod spec. A pod already
+// marked for deletion is included — the snapshot still counts it until it is
+// gone — so it is exactly what a reclaim gives back.
+func boundPods(namespace string, d admission.Demand, pods podIndex) []admission.PlacedPod {
 	var placed []admission.PlacedPod
 	for _, p := range d.Pods {
-		pod, ok := pods[types.NamespacedName{Namespace: sess.Namespace, Name: p.Name}]
+		pod, ok := pods[types.NamespacedName{Namespace: namespace, Name: p.Name}]
 		if !ok || pod.Spec.NodeName == "" ||
 			pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			continue
@@ -280,25 +280,103 @@ func warmIdle(sess *spiceboxv1alpha1.AgentSession, d admission.Demand, pods podI
 			PodDemand: admission.PodDemand{Name: pod.Name, CPUMilli: cpu, MemBytes: mem, EphemeralBytes: eph},
 		})
 	}
+	return placed
+}
+
+// reclaimPool is what a pass may plan reclaims from, per line.
+//
+// inFlight is the capacity reclaims requested on an earlier pass are already
+// giving back: the bound pods of a session carrying the reclaim request but
+// not yet slept, and of a slept session released for a reclaim whose pods are
+// still being torn down. The snapshot still counts those pods, so without
+// crediting them every pass between the request and the last pod's deletion —
+// and the admitter is woken by each of those status writes and pod events —
+// would see the head still not fit and reclaim the next-oldest warm session
+// too, cascading through the line for one head.
+type reclaimPool struct {
+	warm     []admission.WarmIdle
+	sessions map[types.NamespacedName]*spiceboxv1alpha1.AgentSession
+	inFlight map[string][]admission.PlacedPod
+}
+
+// addWarm files a warm Idle holder's bound pods: as in flight when a reclaim
+// is already requested (so it is not chosen again), else as a candidate. A
+// session with no bound pods has nothing to give back and is skipped.
+func (p *reclaimPool) addWarm(sess *spiceboxv1alpha1.AgentSession, placed []admission.PlacedPod) {
 	if len(placed) == 0 {
-		return admission.WarmIdle{}, false
+		return
 	}
-	return admission.WarmIdle{
-		Key:       client.ObjectKeyFromObject(sess),
-		Line:      lineOf(sess),
-		IdleSince: sess.Status.LastIdleAt.Time,
-		Pods:      placed,
-	}, true
+	line := lineOf(sess)
+	if _, requested := sess.Annotations[spiceboxv1alpha1.AnnotationReclaimRequested]; requested {
+		p.inFlight[line] = append(p.inFlight[line], placed...)
+		return
+	}
+	key := client.ObjectKeyFromObject(sess)
+	p.warm = append(p.warm, admission.WarmIdle{Key: key, Line: line, IdleSince: sess.Status.LastIdleAt.Time, Pods: placed})
+	p.sessions[key] = sess
+}
+
+// isDrainingReclaim matches a session the sleep path has already released for
+// a reclaim (slept, Admitted=False/Reclaimed). It is neither a holder nor
+// waiting, but its pods may still be terminating.
+func isDrainingReclaim(sess *spiceboxv1alpha1.AgentSession) bool {
+	if sess.Status.SleptAt == nil {
+		return false
+	}
+	cond := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+	return cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == spiceboxv1alpha1.ReasonAdmissionReclaimed
+}
+
+// addDrainingReclaims credits the still-listed bound pods of every draining
+// reclaim to its line. A slept session stays Admitted=False/Reclaimed for as
+// long as it sleeps, so pricing is skipped unless one of its pods (runner pod
+// by session label, sandbox pod by its bundle SpiceboxSession's label) is
+// still listed — the common case is a long-gone pod set.
+func (r *Reconciler) addDrainingReclaims(ctx context.Context, pool *reclaimPool, sessions []spiceboxv1alpha1.AgentSession, pods podIndex) {
+	labelled := map[types.NamespacedName]bool{}
+	for _, pod := range pods {
+		for _, l := range []string{sessionPodLabel, sandboxPodLabel} {
+			if v := pod.Labels[l]; v != "" {
+				labelled[types.NamespacedName{Namespace: pod.Namespace, Name: v}] = true
+			}
+		}
+	}
+	hasPods := func(sess *spiceboxv1alpha1.AgentSession) bool {
+		if labelled[types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}] {
+			return true
+		}
+		for _, b := range sess.Status.BundleSessions {
+			if labelled[types.NamespacedName{Namespace: sess.Namespace, Name: b.SpiceboxSessionName}] {
+				return true
+			}
+		}
+		return false
+	}
+	for i := range sessions {
+		sess := &sessions[i]
+		if !isDrainingReclaim(sess) || !hasPods(sess) {
+			continue
+		}
+		d, err := r.demand(ctx, sess)
+		if err != nil {
+			log.FromContext(ctx).Info("admission: cannot price a reclaimed session's terminating pods; not crediting them to its line",
+				"session", sess.Namespace+"/"+sess.Name, "class", lineOf(sess), "err", err.Error())
+			continue
+		}
+		line := lineOf(sess)
+		pool.inFlight[line] = append(pool.inFlight[line], boundPods(sess.Namespace, d, pods)...)
+	}
 }
 
 // requestReclaims asks for the warm Idle sessions PlanReclaim picks for each
 // line's head (its still-waiting position 1) to be slept early. model is the
-// one Decide reserved into, so this pass's admissions are respected. Lines go
-// in name order; each plan's frees and its head's demand are applied to model
-// before the next line plans, so two lines never count the same free space.
+// one Decide reserved into, so this pass's admissions are respected. Before a
+// line plans, its in-flight reclaims are freed on model, so only the shortfall
+// they do not already cover is reclaimed. Lines go in name order; each line's
+// frees and its head's demand are applied to model before the next line plans,
+// so two lines never count the same free space.
 func (r *Reconciler) requestReclaims(ctx context.Context, waiting []admission.Candidate, dec admission.Decision,
-	warm []admission.WarmIdle, warmByKey map[types.NamespacedName]*spiceboxv1alpha1.AgentSession,
-	model admission.CapacityModel, now time.Time,
+	pool *reclaimPool, model admission.CapacityModel, now time.Time,
 ) []error {
 	var heads []admission.Candidate
 	for _, c := range waiting {
@@ -308,24 +386,31 @@ func (r *Reconciler) requestReclaims(ctx context.Context, waiting []admission.Ca
 	}
 	slices.SortFunc(heads, func(a, b admission.Candidate) int { return strings.Compare(a.Line, b.Line) })
 
-	pods := make(map[types.NamespacedName][]admission.PlacedPod, len(warm))
-	for _, w := range warm {
+	pods := make(map[types.NamespacedName][]admission.PlacedPod, len(pool.warm))
+	for _, w := range pool.warm {
 		pods[w.Key] = w.Pods
 	}
 	var errs []error
 	for _, head := range heads {
-		plan := admission.PlanReclaim(head, warm, model, now, r.MinWarm)
-		if len(plan) == 0 {
-			continue
-		}
+		inFlight := pool.inFlight[head.Line]
+		model.Free(inFlight)
+		plan := admission.PlanReclaim(head, pool.warm, model, now, r.MinWarm)
 		for _, key := range plan {
 			model.Free(pods[key])
-			if err := r.requestReclaim(ctx, warmByKey[key], head.Key, now); err != nil {
+			if err := r.requestReclaim(ctx, pool.sessions[key], head.Key, now); err != nil {
 				errs = append(errs, err)
 			}
 		}
-		// PlanReclaim proved the head fits once the plan's pods are freed.
-		_ = model.Reserve(head.Demand)
+		if len(plan) == 0 && len(inFlight) == 0 {
+			continue
+		}
+		// Hold the freed space for this head so a later line cannot plan on it.
+		// With a plan, PlanReclaim proved the head fits; a failure means that
+		// invariant broke. With only in-flight frees it may simply not fit yet.
+		if !model.Reserve(head.Demand) && len(plan) > 0 {
+			log.FromContext(ctx).Info("admission: head does not fit after its planned reclaims were freed; the plan's fit check and the model disagree",
+				"class", head.Line, "head", head.Key.String(), "reclaims", len(plan))
+		}
 	}
 	return errs
 }

@@ -367,7 +367,10 @@ func warmIdleSession(name string, idleFor time.Duration) *spiceboxv1alpha1.Agent
 // requesting what oneCPUDemand prices.
 func boundRunnerPod(sessName string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: sessName + "-runner", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: sessName + "-runner", Namespace: "default",
+			Labels: map[string]string{sessionPodLabel: sessName},
+		},
 		Spec: corev1.PodSpec{
 			NodeName: "node-a",
 			Containers: []corev1.Container{{
@@ -473,4 +476,80 @@ func TestAdmitterEarlyReclaim(t *testing.T) {
 		assert.Equal(t, earlier, getSession(t, c, "rb-old").Annotations[spiceboxv1alpha1.AnnotationReclaimRequested],
 			"the first request's time stands")
 	})
+}
+
+// TestAdmitterReclaimInFlightIsCredited pins that one head gets one reclaim:
+// between the request and the reclaimed pods actually leaving the node, every
+// pass (each woken by the sleep's status write or a pod event) still sees the
+// head not fit in the snapshot. Crediting the in-flight reclaim's bound pods
+// keeps those passes from reclaiming the next-oldest warm session too.
+func TestAdmitterReclaimInFlightIsCredited(t *testing.T) {
+	const minWarm = 5 * time.Minute
+	cases := []struct {
+		name    string
+		advance func(t *testing.T, c client.Client) // what happened to rb-1 between passes
+	}{
+		{
+			name:    "reclaim requested but not yet slept: second pass annotates nothing new",
+			advance: func(*testing.T, client.Client) {},
+		},
+		{
+			name: "slept and Admitted=False/Reclaimed, pod still bound: second pass annotates nothing new",
+			advance: func(t *testing.T, c client.Client) {
+				markReclaimed(t, c, "rb-1")
+			},
+		},
+		{
+			name: "slept and Admitted=False/Reclaimed, pod terminating (DeletionTimestamp): second pass annotates nothing new",
+			advance: func(t *testing.T, c client.Client) {
+				markReclaimed(t, c, "rb-1")
+				var pod corev1.Pod
+				require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "rb-1-runner"}, &pod))
+				require.NoError(t, c.Delete(context.Background(), &pod), "delete held by a finalizer: pod lingers terminating")
+				require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(&pod), &pod))
+				require.NotNil(t, pod.DeletionTimestamp, "pod is terminating")
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pod1 := boundRunnerPod("rb-1")
+			pod1.Finalizers = []string{"test/hold"}
+			r, c, _ := newReconciler(t, true, nil,
+				cpuNode(3),
+				warmIdleSession("rb-1", 30*time.Minute), pod1,
+				warmIdleSession("rb-2", 20*time.Minute), boundRunnerPod("rb-2"),
+				warmIdleSession("rb-3", 10*time.Minute), boundRunnerPod("rb-3"),
+				waitingSession("rb-wait", time.Minute),
+			)
+			r.Capacity = admission.KubeCapacitySource{Reader: c}
+			r.MinWarm = minWarm
+
+			runPass(t, r)
+			require.Contains(t, getSession(t, c, "rb-1").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested, "pass 1 reclaims the oldest")
+			require.NotContains(t, getSession(t, c, "rb-2").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested, "pass 1 reclaims only one")
+
+			tc.advance(t, c)
+			runPass(t, r)
+			for _, name := range []string{"rb-2", "rb-3"} {
+				assert.NotContains(t, getSession(t, c, name).Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
+					"%s: the in-flight reclaim already covers the head", name)
+			}
+		})
+	}
+}
+
+// markReclaimed does what the sleep path's status write does: SleptAt and
+// Admitted=False/Reclaimed. The reclaim annotation stays (it is removed only
+// after the reap) and the pods are left for the test to dispose of.
+func markReclaimed(t *testing.T, c client.Client, name string) {
+	t.Helper()
+	s := getSession(t, c, name)
+	slept := metav1.NewTime(passTime)
+	s.Status.SleptAt = &slept
+	meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+		Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionFalse,
+		Reason: spiceboxv1alpha1.ReasonAdmissionReclaimed, LastTransitionTime: metav1.NewTime(passTime),
+	})
+	require.NoError(t, c.Status().Update(context.Background(), s), "mark %s reclaimed", name)
 }
