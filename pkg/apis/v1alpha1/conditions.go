@@ -511,6 +511,29 @@ const (
 	ReasonCapacityHoldExpired         = "HoldExpired"
 )
 
+// AgentSession admission.
+const (
+	// AgentSessionConditionAdmitted is True while the operator has admitted the
+	// session's whole pod set against its AgentClass's line, and False once the
+	// session has been released back to the line (reclaimed, or a placement
+	// misfit). Absent until the session first joins a line.
+	AgentSessionConditionAdmitted = "Admitted"
+)
+
+// AgentSessionConditionAdmitted reasons.
+const (
+	ReasonAdmitted = "Admitted"
+	// ReasonAdmissionReclaimed marks a session released so a session ahead of
+	// it in line could be admitted.
+	ReasonAdmissionReclaimed = "Reclaimed"
+	// ReasonAdmissionMisfit marks a session released because its pods did not
+	// fit where they were placed.
+	ReasonAdmissionMisfit = "PlacementMismatch"
+	// ReasonCapacityHoldWaitingAdmission is the CapacityHold reason while a
+	// session waits in line to be admitted.
+	ReasonCapacityHoldWaitingAdmission = "WaitingForAdmission"
+)
+
 // Settings reasons (shared by AgentClass + AgentSession SettingsAccepted and the
 // Settings CR SelfConsistent conditions).
 const (
