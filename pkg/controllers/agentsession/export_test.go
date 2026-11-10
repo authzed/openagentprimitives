@@ -5,6 +5,7 @@ package agentsession
 
 import (
 	"context"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -67,4 +68,10 @@ func SidecarPodFailureForTest(pod *corev1.Pod) *spiceboxv1alpha1.SidecarPodFailu
 // the detector pod) without an envtest apiserver. Test-only.
 func (r *Reconciler) EnsureDetectorPodForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, spec cosidecar.Spec, pod *corev1.Pod) error {
 	return r.ensureDetectorPod(ctx, sess, spec, pod)
+}
+
+// ReconcileSleepForTest exposes the unexported reconcileSleep so
+// agentsession_test can drive the idle-sleep reap directly. Test-only.
+func (r *Reconciler) ReconcileSleepForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alpha1.AgentClass) (bool, time.Duration, error) {
+	return r.reconcileSleep(ctx, sess, class)
 }

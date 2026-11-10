@@ -651,6 +651,14 @@ type Reconciler struct {
 	// --capacity-hold-timeout. See capacity_hold.go.
 	CapacityHoldTimeout time.Duration
 
+	// AdmissionEnabled gates a booting session's pods on admission: while true,
+	// a Pending session creates none of its pods (bundle SpiceboxSessions,
+	// separate-pod sidecars, detectors, runner) until the admitter sets
+	// Admitted=True, and it gives up once it has waited unadmitted past
+	// CapacityHoldTimeout. The zero value (false) is ungated — today's
+	// behaviour. See admission_gate.go.
+	AdmissionEnabled bool
+
 	// SpiceDBDeleter, when non-nil, wipes all agentsession relationships in
 	// SpiceDB during finalization, before the finalizer is removed. Nil skips
 	// SpiceDB cleanup, logged rather than silent.
@@ -1456,6 +1464,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{RequeueAfter: remaining}, nil
 		case reapActionReap:
 			res, err := r.reapSessionPods(ctx, &sess)
+			// The reaped pods' capacity is free, so the session's admission
+			// goes back to its line. Written after the reap succeeds, never
+			// before: released while its pods still stood, the admitter would
+			// count their capacity twice. A session not Admitted=True is
+			// untouched, so this writes nothing on later passes.
+			if err == nil && r.releaseAdmissionOnReclaim(&sess) {
+				if serr := r.applyStatus(ctx, &sess); serr != nil {
+					log.FromContext(ctx).Info("reap: recording admission release failed; will retry",
+						"session", sess.Namespace+"/"+sess.Name, "err", serr.Error())
+					return ctrl.Result{}, fmt.Errorf("record admission release after reap: %w", serr)
+				}
+			}
 			if err == nil && reclaimAfter > 0 && (res.RequeueAfter == 0 || reclaimAfter < res.RequeueAfter) {
 				res.RequeueAfter = reclaimAfter
 			}
@@ -1728,6 +1748,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.ResolveAndWriteOwners(ctx, &sess, inputCh, &ac); err != nil {
 		log.FromContext(ctx).Info("owner resolution failed; session left ownerless (fail-closed)",
 			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+	}
+
+	// 2-pre. Admission. With admission on, a booting session that is not yet
+	// admitted creates NONE of its pods — bundles, separate-pod sidecars,
+	// detectors and runner all sit below this line — and waits in line here
+	// until the admitter sets Admitted=True. Everything above (settings, the
+	// start/identity/credential gates, owner resolution) has already run: the
+	// admitter needs status.effectiveSettings to size the session's demand.
+	if r.awaitingAdmission(&sess) {
+		return r.waitForAdmission(ctx, &sess)
+	}
+	// Admitted (or admission off): a wait-in-line hold ends here, persisted now
+	// for the same reason the bundle stage persists its own release — so a
+	// bundle-capacity hold set later this pass is a NEW episode with its own
+	// give-up time rather than diffed away against the stored True.
+	if r.releaseCapacityHoldFor(&sess, spiceboxv1alpha1.ReasonCapacityHoldWaitingAdmission) {
+		if err := r.applyStatus(ctx, &sess); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// 2. Bundle SpiceboxSessions, or the vacuous NoBundles path. Only an

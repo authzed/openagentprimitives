@@ -90,6 +90,11 @@ func (r *Reconciler) reconcileSleep(ctx context.Context, sess *spiceboxv1alpha1.
 	patched := sess.DeepCopy()
 	now := metav1.NewTime(r.now())
 	patched.Status.SleptAt = &now
+	// The reap below gives the session's place back to its line. Recorded in
+	// THIS write, beside SleptAt: a wake clears SleptAt, so a release written
+	// separately could be lost in between, leaving the session admitted with
+	// no pods and its capacity counted twice.
+	r.releaseAdmissionOnReclaim(patched)
 	if err := agentstatus.WriteOwned(ctx, r.Client, patched, sess, spiceboxv1alpha1.OwnerOperator); err != nil {
 		return false, 0, fmt.Errorf("stamp SleptAt: %w", err)
 	}
