@@ -666,3 +666,80 @@ func TestAdmitterConcurrencyCap(t *testing.T) {
 		assert.Nil(t, other.Status.Admission, "rb-other not positioned")
 	})
 }
+
+// preAdmissionSession is a session that started its pods before admission was
+// switched on: in phase, with its runner pod recorded on status, and no
+// Admitted condition at all.
+func preAdmissionSession(name string, phase string) *spiceboxv1alpha1.AgentSession {
+	s := waitingSession(name, 0)
+	s.Status.Phase = phase
+	s.Status.Conditions = nil
+	s.Status.RunnerPodName = name + "-runner"
+	return s
+}
+
+// TestAdmitterAdoptsPreAdmissionSessions pins the rollout: a session whose
+// pods predate admission is adopted (Admitted=True/Adopted) and counted as a
+// holder — toward its line's cap, and its unplaced pods reserved — rather
+// than gated with its pods up or left uncounted.
+func TestAdmitterAdoptsPreAdmissionSessions(t *testing.T) {
+	assertAdopted := func(t *testing.T, s *spiceboxv1alpha1.AgentSession) {
+		t.Helper()
+		cond := meta.FindStatusCondition(s.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+		if assert.NotNil(t, cond, "%s: Admitted condition", s.Name) {
+			assert.Equal(t, metav1.ConditionTrue, cond.Status, "%s: adopted as admitted", s.Name)
+			assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionAdopted, cond.Reason, "%s: reason", s.Name)
+		}
+	}
+
+	t.Run("Running pre-admission session with a bound pod, class cap 1: adopted, and the cap holds the waiting session back", func(t *testing.T) {
+		r, c, _ := newReconciler(t, true, roomFor(5),
+			cappedClass(1),
+			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhaseRunning), boundRunnerPod("rb-old"),
+			waitingSession("rb-a", time.Minute),
+		)
+		runPass(t, r)
+		assertAdopted(t, getSession(t, c, "rb-old"))
+		assertPosition(t, getSession(t, c, "rb-a"), 1, 1)
+	})
+
+	t.Run("Pending pre-admission session with an unbound pod, room for one: adopted, its unplaced pod reserved, the waiting session waits", func(t *testing.T) {
+		pod := boundRunnerPod("rb-old")
+		pod.Spec.NodeName = ""
+		pod.Status.Phase = corev1.PodPending
+		r, c, _ := newReconciler(t, true, roomFor(1),
+			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhasePending), pod,
+			waitingSession("rb-a", time.Minute),
+		)
+		runPass(t, r)
+		assertAdopted(t, getSession(t, c, "rb-old"))
+		assertPosition(t, getSession(t, c, "rb-a"), 1, 1)
+	})
+
+	t.Run("pre-admission session with nothing waiting: still adopted", func(t *testing.T) {
+		r, c, _ := newReconciler(t, true, roomFor(1),
+			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhaseIdle), boundRunnerPod("rb-old"),
+		)
+		runPass(t, r)
+		assertAdopted(t, getSession(t, c, "rb-old"))
+	})
+
+	t.Run("pre-admission status but no pod listed: not adopted (nothing to hold)", func(t *testing.T) {
+		r, c, _ := newReconciler(t, true, roomFor(1),
+			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhaseRunning),
+			waitingSession("rb-a", time.Minute),
+		)
+		runPass(t, r)
+		assert.Nil(t, meta.FindStatusCondition(getSession(t, c, "rb-old").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted),
+			"no pods: not a holder")
+		assertAdmitted(t, getSession(t, c, "rb-a"))
+	})
+
+	t.Run("Enabled=false: nothing adopted", func(t *testing.T) {
+		r, c, _ := newReconciler(t, false, roomFor(1),
+			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhaseRunning), boundRunnerPod("rb-old"),
+		)
+		runPass(t, r)
+		assert.Nil(t, meta.FindStatusCondition(getSession(t, c, "rb-old").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted))
+	})
+}

@@ -85,6 +85,36 @@ func IsQueued(sess *v1alpha1.AgentSession) bool {
 	return c != nil && c.Status == metav1.ConditionFalse && c.Reason == v1alpha1.ReasonAdmissionQueued
 }
 
+// PreAdmission reports whether the session started its pods before admission
+// was switched on: it has never had an Admitted condition, is not terminal,
+// and its status records pods — a runner pod or a bundle SpiceboxSession. The
+// reconciler's gate lets such a session through (it already holds what it
+// would have been admitted for, and gating it would freeze it with its pods
+// up), and the admitter adopts it (Admitted=True/Adopted) so it is counted as
+// a holder.
+//
+// A session whose pods were reaped while it stays non-terminal — slept, or
+// Held — is excluded: its status still names the pods it had, but it holds
+// nothing, and its next wake must queue like any cold wake.
+func PreAdmission(sess *v1alpha1.AgentSession) bool {
+	switch sess.Status.Phase {
+	case v1alpha1.AgentSessionPhaseSucceeded, v1alpha1.AgentSessionPhaseFailed, v1alpha1.AgentSessionPhaseHeld:
+		return false
+	}
+	if sess.Status.SleptAt != nil || admittedCondition(sess) != nil {
+		return false
+	}
+	if sess.Status.RunnerPodName != "" {
+		return true
+	}
+	for _, b := range sess.Status.BundleSessions {
+		if b.SpiceboxSessionName != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // IsAdmitted reports whether the session's Admitted condition is True.
 func IsAdmitted(sess *v1alpha1.AgentSession) bool {
 	return meta.IsStatusConditionTrue(sess.Status.Conditions, v1alpha1.AgentSessionConditionAdmitted)

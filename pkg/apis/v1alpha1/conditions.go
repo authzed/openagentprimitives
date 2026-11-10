@@ -529,6 +529,10 @@ const (
 	// considers only sessions carrying it, so a session parked at an earlier
 	// gate never reserves anything.
 	ReasonAdmissionQueued = "Queued"
+	// ReasonAdmissionAdopted marks a session whose pods were created before
+	// admission was switched on: the admitter adopts it as admitted, so it is
+	// counted as a holder rather than gated with its pods already up.
+	ReasonAdmissionAdopted = "Adopted"
 	// ReasonAdmissionReclaimed marks a session released so a session ahead of
 	// it in line could be admitted.
 	ReasonAdmissionReclaimed = "Reclaimed"

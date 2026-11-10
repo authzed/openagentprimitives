@@ -66,6 +66,8 @@ func TestAdmissionGate(t *testing.T) {
 		// wantQueuedAt, when set, is the expected Admitted=False/Queued
 		// transition time: the moment the session reached the gate.
 		wantQueuedAt time.Time
+		// wantNoAdmittedCnd: the gate wrote no Admitted condition at all.
+		wantNoAdmittedCnd bool
 	}{
 		{
 			name:    "Pending, queued 2m ago: no SpiceboxSession; CapacityHold=True/WaitingForAdmission after grace",
@@ -156,6 +158,18 @@ func TestAdmissionGate(t *testing.T) {
 			wantQueuedAt: nowT,
 		},
 		{
+			name:    "pre-admission: booted before admission (bundle recorded, no Admitted condition), long ago: proceeds, not queued, not failed",
+			enabled: true, bundles: true, createdAt: -3 * time.Hour,
+			prep: func(s *spiceboxv1alpha1.AgentSession) {
+				s.Status.Phase = spiceboxv1alpha1.AgentSessionPhasePending
+				s.Status.BundleSessions = []spiceboxv1alpha1.ResolvedBundle{{
+					Name: codeBundle.Name, SpiceboxSessionName: agentsession.BundleSessionName(s, codeBundle),
+				}}
+			},
+			wantPods:          true,
+			wantNoAdmittedCnd: true,
+		},
+		{
 			name:    "AdmissionEnabled=false: bundle SpiceboxSession created without Admitted",
 			bundles: true, createdAt: -2 * time.Minute,
 			wantPods: true,
@@ -203,6 +217,10 @@ func TestAdmissionGate(t *testing.T) {
 				assert.Equal(t, tc.wantHoldReason, hold.Reason)
 			}
 
+			if tc.wantNoAdmittedCnd {
+				assert.Nil(t, apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted),
+					"no Admitted condition: the gate let it through without queueing it")
+			}
 			if !tc.wantQueuedAt.IsZero() {
 				adm := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
 				if assert.NotNil(t, adm, "Admitted condition") {
@@ -349,6 +367,43 @@ func TestAdmissionGate_SleepReleasesInOneWrite(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, adm.Status)
 	assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionReclaimed, adm.Reason)
 	assert.Equal(t, nowT, adm.LastTransitionTime.Time.UTC(), "transition stamped from the reconciler clock")
+}
+
+// A pre-admission session (pods started before admission, no Admitted
+// condition) that sleeps gives its place up like an admitted one:
+// Admitted=False/Reclaimed in the sleep's write. Without it the session would
+// look pre-admission again once a wake clears SleptAt, and bypass the gate
+// with no pods.
+func TestAdmissionGate_PreAdmissionSleepReleases(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	nowT := time.Date(2026, 11, 10, 17, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return nowT }
+
+	idle := metav1.NewTime(nowT.Add(-time.Hour))
+	sess := sessionCreatedAt("s1", "ac1", nowT.Add(-2*time.Hour))
+	sess.Spec.InputChannel = &spiceboxv1alpha1.ChannelBinding{Name: "chan-1", Kind: "fake", Key: "thread-1"}
+	sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseIdle
+	sess.Status.LastIdleAt = &idle
+	sess.Status.RunnerPodName = "s1-runner"
+	ac := classWithBundle("ac1")
+
+	r, c := fakeReconciler(t, clock, ac, sess)
+	r.AdmissionEnabled = true
+	r.DefaultSessionSleepAfter = 10 * time.Minute
+
+	live := getSession(t, c, "s1")
+	require.True(t, admission.PreAdmission(&live), "fixture is pre-admission")
+	slept, _, err := r.ReconcileSleepForTest(ctx, &live, ac)
+	require.NoError(t, err)
+	require.True(t, slept, "past-grace Idle session sleeps")
+
+	got := getSession(t, c, "s1")
+	adm := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+	require.NotNil(t, adm, "Admitted condition")
+	assert.Equal(t, metav1.ConditionFalse, adm.Status)
+	assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionReclaimed, adm.Reason)
+	got.Status.SleptAt = nil
+	assert.False(t, admission.PreAdmission(&got), "after a wake clears SleptAt it is a normal session that queues")
 }
 
 func ptrTo[T any](v T) *T { return &v }

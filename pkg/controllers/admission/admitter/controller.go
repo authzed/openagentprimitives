@@ -153,7 +153,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	var waiting, holding []*spiceboxv1alpha1.AgentSession
+	var waiting, holding, preAdmission []*spiceboxv1alpha1.AgentSession
 	for i := range sessions {
 		sess := &sessions[i]
 		switch {
@@ -162,11 +162,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 			// pods it has placed already reduce node headroom in the snapshot.
 		case admission.IsAdmitted(sess):
 			holding = append(holding, sess)
+		case admission.PreAdmission(sess):
+			preAdmission = append(preAdmission, sess)
 		case isWaiting(sess):
 			waiting = append(waiting, sess)
 		}
 	}
-	if len(waiting) == 0 {
+	if len(waiting) == 0 && (len(preAdmission) == 0 || !r.Enabled) {
 		return requeue, nil
 	}
 	now := r.now()
@@ -174,10 +176,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 	if !r.Enabled {
 		var errs []error
 		for _, sess := range waiting {
-			if err := r.admit(ctx, sess, now, "Session admission is disabled; admitted at once."); err != nil {
+			if err := r.admit(ctx, sess, now, spiceboxv1alpha1.ReasonAdmitted, "Session admission is disabled; admitted at once."); err != nil {
 				errs = append(errs, err)
 			}
 		}
+		return requeue, errors.Join(errs...)
+	}
+
+	var errs []error
+	pods, podsKnown := r.listPods(ctx)
+	adopted, adoptErrs := r.adoptPreAdmission(ctx, preAdmission, pods, podsKnown, now)
+	errs = append(errs, adoptErrs...)
+	holding = append(holding, adopted...)
+	if len(waiting) == 0 {
 		return requeue, errors.Join(errs...)
 	}
 
@@ -202,7 +213,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 	}
 	in.Caps, in.Waiting = r.capLines(ctx, in.Waiting, byKey)
 
-	pods, podsKnown := r.listPods(ctx)
 	pool := reclaimPool{
 		sessions: map[types.NamespacedName]*spiceboxv1alpha1.AgentSession{},
 		inFlight: map[string][]admission.PlacedPod{},
@@ -239,9 +249,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 
 	dec := admission.Decide(in)
 
-	var errs []error
 	for _, key := range dec.Admit {
-		if err := r.admit(ctx, byKey[key], now, "The session's whole pod set fits the cluster."); err != nil {
+		if err := r.admit(ctx, byKey[key], now, spiceboxv1alpha1.ReasonAdmitted, "The session's whole pod set fits the cluster."); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -377,13 +386,14 @@ func isDrainingReclaim(sess *spiceboxv1alpha1.AgentSession) bool {
 	return cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == spiceboxv1alpha1.ReasonAdmissionReclaimed
 }
 
-// addDrainingReclaims credits the still-listed bound pods of every draining
-// reclaim to its line. A slept session stays Admitted=False/Reclaimed for as
-// long as it sleeps, so pricing is skipped unless one of its pods (runner pod
-// by session label, sandbox pod by its bundle SpiceboxSession's label) is
-// still listed — the common case is a long-gone pod set.
-func (r *Reconciler) addDrainingReclaims(ctx context.Context, pool *reclaimPool, sessions []spiceboxv1alpha1.AgentSession, pods podIndex) {
-	labelled := map[types.NamespacedName]bool{}
+// sessionsWithPods is every session (by namespace/name) that has at least one
+// listed pod: its runner, detector or sidecar pods by the session label, its
+// sandbox pods by their bundle SpiceboxSession's label — which a pod adopted
+// from a SandboxWarmPool also carries, under a pool-minted name.
+type sessionsWithPods map[types.NamespacedName]bool
+
+func indexSessionsWithPods(pods podIndex) sessionsWithPods {
+	labelled := sessionsWithPods{}
 	for _, pod := range pods {
 		for _, l := range []string{sessionPodLabel, sandboxPodLabel} {
 			if v := pod.Labels[l]; v != "" {
@@ -391,20 +401,63 @@ func (r *Reconciler) addDrainingReclaims(ctx context.Context, pool *reclaimPool,
 			}
 		}
 	}
-	hasPods := func(sess *spiceboxv1alpha1.AgentSession) bool {
-		if labelled[types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}] {
+	return labelled
+}
+
+// has reports whether sess has a listed pod.
+func (l sessionsWithPods) has(sess *spiceboxv1alpha1.AgentSession) bool {
+	if l[types.NamespacedName{Namespace: sess.Namespace, Name: sess.Name}] {
+		return true
+	}
+	for _, b := range sess.Status.BundleSessions {
+		if l[types.NamespacedName{Namespace: sess.Namespace, Name: b.SpiceboxSessionName}] {
 			return true
 		}
-		for _, b := range sess.Status.BundleSessions {
-			if labelled[types.NamespacedName{Namespace: sess.Namespace, Name: b.SpiceboxSessionName}] {
-				return true
-			}
-		}
-		return false
 	}
+	return false
+}
+
+// adoptPreAdmission writes Admitted=True/Adopted on every pre-admission
+// session (admission.PreAdmission) that still has a listed pod, and returns
+// them so this pass counts them as holders. One with no listed pod holds
+// nothing and is left alone; so is every one when the pod list failed, since
+// adopting a session with no pods would reserve capacity for nothing.
+func (r *Reconciler) adoptPreAdmission(ctx context.Context, sessions []*spiceboxv1alpha1.AgentSession,
+	pods podIndex, podsKnown bool, now time.Time,
+) ([]*spiceboxv1alpha1.AgentSession, []error) {
+	if len(sessions) == 0 || !podsKnown {
+		return nil, nil
+	}
+	withPods := indexSessionsWithPods(pods)
+	var adopted []*spiceboxv1alpha1.AgentSession
+	var errs []error
+	for _, sess := range sessions {
+		if !withPods.has(sess) {
+			continue
+		}
+		log.FromContext(ctx).Info("admission: adopting a session whose pods predate admission",
+			"session", sess.Namespace+"/"+sess.Name, "class", lineOf(sess), "phase", sess.Status.Phase)
+		if err := r.admit(ctx, sess, now, spiceboxv1alpha1.ReasonAdmissionAdopted,
+			"The session's pods were created before admission was enabled; adopted as admitted."); err != nil {
+			errs = append(errs, err)
+		}
+		// Counted as a holder either way: its pods are up whether or not the
+		// write landed, and the next pass retries the write.
+		adopted = append(adopted, sess)
+	}
+	return adopted, errs
+}
+
+// addDrainingReclaims credits the still-listed bound pods of every draining
+// reclaim to its line. A slept session stays Admitted=False/Reclaimed for as
+// long as it sleeps, so pricing is skipped unless one of its pods (runner pod
+// by session label, sandbox pod by its bundle SpiceboxSession's label) is
+// still listed — the common case is a long-gone pod set.
+func (r *Reconciler) addDrainingReclaims(ctx context.Context, pool *reclaimPool, sessions []spiceboxv1alpha1.AgentSession, pods podIndex) {
+	withPods := indexSessionsWithPods(pods)
 	for i := range sessions {
 		sess := &sessions[i]
-		if !isDrainingReclaim(sess) || !hasPods(sess) {
+		if !isDrainingReclaim(sess) || !withPods.has(sess) {
 			continue
 		}
 		d, err := r.demand(ctx, sess)
@@ -564,13 +617,14 @@ func unplaced(namespace string, d admission.Demand, pods podIndex, known bool) a
 	return out
 }
 
-// admit writes Admitted=True at now and clears the session's line position.
-func (r *Reconciler) admit(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, now time.Time, message string) error {
+// admit writes Admitted=True with reason at now and clears the session's line
+// position.
+func (r *Reconciler) admit(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, now time.Time, reason, message string) error {
 	original := sess.DeepCopy()
 	meta.SetStatusCondition(&sess.Status.Conditions, metav1.Condition{
 		Type:               spiceboxv1alpha1.AgentSessionConditionAdmitted,
 		Status:             metav1.ConditionTrue,
-		Reason:             spiceboxv1alpha1.ReasonAdmitted,
+		Reason:             reason,
 		Message:            message,
 		ObservedGeneration: sess.Generation,
 		LastTransitionTime: metav1.NewTime(now),

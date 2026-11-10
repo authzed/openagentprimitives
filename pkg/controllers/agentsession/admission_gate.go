@@ -39,8 +39,13 @@ import (
 //
 // A warm wake — Idle back to Pending while still Admitted=True — is not
 // gated: the session never gave up its place, so it provisions at once.
+//
+// Nor is a session that booted before admission was switched on
+// (admission.PreAdmission): it already has pods, so gating it would leave
+// them up while it waited for a second copy of its set. It is let through,
+// with no Queued marker, and the admitter adopts it as a holder.
 func (r *Reconciler) awaitingAdmission(sess *spiceboxv1alpha1.AgentSession) bool {
-	if !r.AdmissionEnabled || admission.IsAdmitted(sess) {
+	if !r.AdmissionEnabled || admission.IsAdmitted(sess) || admission.PreAdmission(sess) {
 		return false
 	}
 	return sess.Status.Phase == "" || sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhasePending
@@ -121,11 +126,17 @@ func admissionWaitExpiredMessage(waited time.Duration) string {
 
 // releaseAdmissionOnReclaim records, on sess, that the session's pods are being
 // reclaimed: Admitted True→False/Reclaimed. The caller persists it in the same
-// status write that records the reclaim. A session that is not Admitted=True
-// is left untouched — admission off, or never admitted — so no condition
-// appears on sessions that never had one. Reports whether it changed sess.
+// status write that records the reclaim, and calls it before marking the
+// session slept or Held. A session that is neither Admitted=True nor (with
+// admission on) pre-admission is left untouched — admission off, or never
+// admitted — so no condition appears on sessions that never had one.
+//
+// A pre-admission session not yet adopted gets the release too: once its
+// pods are gone, a wake that clears SleptAt would otherwise make it look
+// pre-admission again and let it past the gate with nothing reserved.
+// Reports whether it changed sess.
 func (r *Reconciler) releaseAdmissionOnReclaim(sess *spiceboxv1alpha1.AgentSession) bool {
-	if !admission.IsAdmitted(sess) {
+	if !admission.IsAdmitted(sess) && (!r.AdmissionEnabled || !admission.PreAdmission(sess)) {
 		return false
 	}
 	// r.now() for the transition time: admission.JoinedAt and WaitingSince

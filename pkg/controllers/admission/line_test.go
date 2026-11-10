@@ -148,6 +148,57 @@ func TestIsQueued(t *testing.T) {
 	}
 }
 
+func TestPreAdmission(t *testing.T) {
+	withPods := func(mut func(s *v1alpha1.AgentSession)) *v1alpha1.AgentSession {
+		s := sessionAt(0)
+		s.Status.Phase = v1alpha1.AgentSessionPhasePending
+		mut(s)
+		return s
+	}
+	runner := func(s *v1alpha1.AgentSession) { s.Status.RunnerPodName = "s-runner" }
+	bundle := func(s *v1alpha1.AgentSession) {
+		s.Status.BundleSessions = []v1alpha1.ResolvedBundle{{Name: "code", SpiceboxSessionName: "s-code"}}
+	}
+	cases := []struct {
+		name string
+		sess *v1alpha1.AgentSession
+		want bool
+	}{
+		{"Pending, bundle sessions recorded, no Admitted condition: pre-admission", withPods(bundle), true},
+		{"Running, runner pod recorded, no Admitted condition: pre-admission", withPods(func(s *v1alpha1.AgentSession) {
+			runner(s)
+			s.Status.Phase = v1alpha1.AgentSessionPhaseRunning
+		}), true},
+		{"warm Idle, runner pod recorded, no Admitted condition: pre-admission", withPods(func(s *v1alpha1.AgentSession) {
+			runner(s)
+			s.Status.Phase = v1alpha1.AgentSessionPhaseIdle
+		}), true},
+		{"Pending, nothing recorded: a new session, not pre-admission", withPods(func(*v1alpha1.AgentSession) {}), false},
+		{"has an Admitted condition: admission already knows it", withPods(func(s *v1alpha1.AgentSession) {
+			bundle(s)
+			s.Status.Conditions = []metav1.Condition{{Type: v1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionFalse, Reason: v1alpha1.ReasonAdmissionQueued}}
+		}), false},
+		{"slept (pods reaped): not pre-admission", withPods(func(s *v1alpha1.AgentSession) {
+			runner(s)
+			s.Status.Phase = v1alpha1.AgentSessionPhaseIdle
+			s.Status.SleptAt = mtime(time.Minute)
+		}), false},
+		{"Held (pods reaped): not pre-admission", withPods(func(s *v1alpha1.AgentSession) {
+			runner(s)
+			s.Status.Phase = v1alpha1.AgentSessionPhaseHeld
+		}), false},
+		{"terminal: not pre-admission", withPods(func(s *v1alpha1.AgentSession) {
+			runner(s)
+			s.Status.Phase = v1alpha1.AgentSessionPhaseSucceeded
+		}), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, PreAdmission(tc.sess))
+		})
+	}
+}
+
 func TestDemandTotal(t *testing.T) {
 	d := Demand{Pods: []PodDemand{
 		{Name: "runner", CPUMilli: 500, MemBytes: 1 << 20, EphemeralBytes: 9},
