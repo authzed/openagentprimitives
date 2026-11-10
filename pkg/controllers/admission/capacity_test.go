@@ -211,3 +211,56 @@ func TestNodeModelTotals(t *testing.T) {
 		})
 	}
 }
+
+// A node's NoSchedule/NoExecute taints keep a pod off it unless the pod
+// tolerates them, as the scheduler would; PreferNoSchedule does not. Without
+// this the model counts a tainted pool as room, admits a set the scheduler
+// then cannot place, and the misfit safety net reaps and re-admits it in a
+// loop.
+func TestNodeModelReserveRespectsTaints(t *testing.T) {
+	gpuTaint := corev1.Taint{Key: "nvidia.com/gpu", Value: "true", Effect: corev1.TaintEffectNoSchedule}
+	tainted := func(effect corev1.TaintEffect) corev1.Node {
+		n := testNode("gpu", "8", "8Gi", "10")
+		taint := gpuTaint
+		taint.Effect = effect
+		n.Spec.Taints = []corev1.Taint{taint}
+		return n
+	}
+	tolerating := pod("p", 1000)
+	tolerating.Tolerations = []corev1.Toleration{{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule}}
+	cases := []struct {
+		name  string
+		nodes []corev1.Node
+		pod   PodDemand
+		want  bool
+	}{
+		{"only a NoSchedule-tainted node, pod does not tolerate: does not fit", []corev1.Node{tainted(corev1.TaintEffectNoSchedule)}, pod("p", 1000), false},
+		{"only a NoExecute-tainted node, pod does not tolerate: does not fit", []corev1.Node{tainted(corev1.TaintEffectNoExecute)}, pod("p", 1000), false},
+		{"only a NoSchedule-tainted node, pod tolerates it: fits", []corev1.Node{tainted(corev1.TaintEffectNoSchedule)}, tolerating, true},
+		{"only a PreferNoSchedule-tainted node: fits (a preference, not a bar)", []corev1.Node{tainted(corev1.TaintEffectPreferNoSchedule)}, pod("p", 1000), true},
+		{"a tainted big node beside an untainted small one, pod too big for the small: does not fit",
+			[]corev1.Node{tainted(corev1.TaintEffectNoSchedule), testNode("small", "500m", "1Gi", "10")}, pod("p", 1000), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewNodeModel(tc.nodes, nil)
+			require.True(t, m.Known())
+			assert.Equal(t, tc.want, m.Reserve(Demand{Pods: []PodDemand{tc.pod}}))
+		})
+	}
+}
+
+func TestPodDemandFor(t *testing.T) {
+	tol := corev1.Toleration{Key: "pool", Operator: corev1.TolerationOpEqual, Value: "agents", Effect: corev1.TaintEffectNoSchedule}
+	spec := corev1.PodSpec{
+		Tolerations: []corev1.Toleration{tol},
+		Containers: []corev1.Container{{Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+			corev1.ResourceCPU: resource.MustParse("250m"), corev1.ResourceMemory: resource.MustParse("64Mi"),
+		}}}},
+	}
+	got := PodDemandFor("runner", &spec)
+	assert.Equal(t, "runner", got.Name)
+	assert.Equal(t, int64(250), got.CPUMilli)
+	assert.Equal(t, int64(64<<20), got.MemBytes)
+	assert.Equal(t, []corev1.Toleration{tol}, got.Tolerations, "the pod's tolerations ride along for the node model")
+}

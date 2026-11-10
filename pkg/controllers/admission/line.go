@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -19,6 +20,9 @@ import (
 type PodDemand struct {
 	Name                               string
 	CPUMilli, MemBytes, EphemeralBytes int64
+	// Tolerations are the pod's own, from its built spec: a node model places
+	// the pod only on a node whose NoSchedule/NoExecute taints it tolerates.
+	Tolerations []corev1.Toleration
 }
 
 // Demand is the whole pod set a session needs admitted together.

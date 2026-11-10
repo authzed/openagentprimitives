@@ -533,6 +533,12 @@ const (
 	// admission was switched on: the admitter adopts it as admitted, so it is
 	// counted as a holder rather than gated with its pods already up.
 	ReasonAdmissionAdopted = "Adopted"
+	// ReasonAdmittedUnknownCapacity marks a session admitted while the
+	// admitter had no reliable view of cluster capacity (no node data, a
+	// failed snapshot, or a namespace-scoped operator that cannot see other
+	// namespaces' pods). Nothing proved its set fits, so a stall is not
+	// treated as a misfit: its pods keep the ordinary pod-level hold.
+	ReasonAdmittedUnknownCapacity = "AdmittedUnknownCapacity"
 	// ReasonAdmissionReclaimed marks a session released so a session ahead of
 	// it in line could be admitted.
 	ReasonAdmissionReclaimed = "Reclaimed"

@@ -425,14 +425,16 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 	const mixedSchedMsg = "0/4 nodes are available: 3 Insufficient cpu, 1 node(s) had untolerated taint(s)."
 
 	cases := []struct {
-		name       string
-		enabled    bool          // Reconciler.AdmissionEnabled
-		admitted   bool          // the session carries Admitted=True
-		pending    time.Duration // how long the bundle pod has been unschedulable
-		createdAgo time.Duration // session creation (its JoinedAt); 0 = 20m
-		schedMsg   string
-		woken      bool // the session was cold-woken before this admission
-		heldBefore bool // the bundle stage already set CapacityHold=True/Waiting
+		name     string
+		enabled  bool // Reconciler.AdmissionEnabled
+		admitted bool // the session carries Admitted=True
+		// admittedReason is the Admitted=True reason; "" = Admitted.
+		admittedReason string
+		pending        time.Duration // how long the bundle pod has been unschedulable
+		createdAgo     time.Duration // session creation (its JoinedAt); 0 = 20m
+		schedMsg       string
+		woken          bool // the session was cold-woken before this admission
+		heldBefore     bool // the bundle stage already set CapacityHold=True/Waiting
 
 		wantReaped      bool
 		wantMisfit      bool // Admitted=False/PlacementMismatch at now
@@ -455,6 +457,11 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 			enabled: true, admitted: true, pending: 2 * time.Minute, createdAgo: 70 * time.Minute,
 			schedMsg: mixedSchedMsg, heldBefore: true,
 			wantReaped: true, wantMisfit: true, wantFailed: true,
+		},
+		{
+			name:    "admitted under unknown capacity, pods unschedulable 2m: no misfit release, pods kept under the pod-level hold, still admitted",
+			enabled: true, admitted: true, admittedReason: spiceboxv1alpha1.ReasonAdmittedUnknownCapacity,
+			pending: 2 * time.Minute, schedMsg: capacitySchedMsg,
 		},
 		{
 			name:    "admitted, pods unschedulable 1m (inside the misfit grace): pods kept, still admitted",
@@ -487,7 +494,11 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 				sess.Status.LastWakeAt = &wake
 			}
 			if tc.admitted {
-				withAdmittedCondition(sess, metav1.ConditionTrue, spiceboxv1alpha1.ReasonAdmitted, started.Add(-time.Second))
+				reason := tc.admittedReason
+				if reason == "" {
+					reason = spiceboxv1alpha1.ReasonAdmitted
+				}
+				withAdmittedCondition(sess, metav1.ConditionTrue, reason, started.Add(-time.Second))
 			}
 			if tc.heldBefore {
 				sess.Status.Conditions = append(sess.Status.Conditions, metav1.Condition{

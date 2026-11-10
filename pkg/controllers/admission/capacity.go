@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/authzed/openagentprimitives/pkg/platform/schedfit"
@@ -61,9 +62,21 @@ func (s KubeCapacitySource) Snapshot(ctx context.Context) (CapacityModel, error)
 	return NewNodeModel(nodes.Items, pods.Items), nil
 }
 
+// PodDemandFor prices one pod from its spec the way the capacity snapshot
+// counts it (schedfit.EffectiveRequests), carrying its tolerations so a node
+// model places it only where the scheduler could.
+func PodDemandFor(name string, spec *corev1.PodSpec) PodDemand {
+	cpu, mem, eph := schedfit.EffectiveRequests(spec)
+	return PodDemand{Name: name, CPUMilli: cpu, MemBytes: mem, EphemeralBytes: eph, Tolerations: spec.Tolerations}
+}
+
 type nodeSlot struct {
 	name                               string
 	cpuMilli, memBytes, ephemeralBytes int64
+	// taints are the node's NoSchedule and NoExecute taints: a pod is placed
+	// here only if it tolerates every one. PreferNoSchedule is a preference
+	// the scheduler may override, so it is not recorded.
+	taints []corev1.Taint
 	// pods is the remaining pod slots; unlimitedPods is set when the node
 	// reports no `pods` allocatable (fake or unusual nodes), so it is not
 	// read as zero.
@@ -73,7 +86,36 @@ type nodeSlot struct {
 
 func (n *nodeSlot) fits(p PodDemand) bool {
 	return p.CPUMilli <= n.cpuMilli && p.MemBytes <= n.memBytes &&
-		p.EphemeralBytes <= n.ephemeralBytes && (n.unlimitedPods || n.pods >= 1)
+		p.EphemeralBytes <= n.ephemeralBytes && (n.unlimitedPods || n.pods >= 1) &&
+		n.tolerates(p.Tolerations)
+}
+
+// tolerates reports whether tols tolerate every one of the node's recorded
+// taints, matched by the upstream Toleration.ToleratesTaint. Comparison
+// operators (Lt/Gt) are matched as disabled, the scheduler's default: a pod
+// relying on them is kept off the node rather than admitted onto it.
+func (n *nodeSlot) tolerates(tols []corev1.Toleration) bool {
+	logger := klog.Background()
+	for i := range n.taints {
+		if !slices.ContainsFunc(tols, func(t corev1.Toleration) bool {
+			return t.ToleratesTaint(logger, &n.taints[i], false)
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
+// blockingTaints is the subset of a node's taints that keep an intolerant pod
+// off it.
+func blockingTaints(node corev1.Node) []corev1.Taint {
+	var out []corev1.Taint
+	for _, t := range node.Spec.Taints {
+		if t.Effect == corev1.TaintEffectNoSchedule || t.Effect == corev1.TaintEffectNoExecute {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func (n *nodeSlot) take(p PodDemand) {
@@ -92,7 +134,8 @@ type nodeModel struct {
 }
 
 // NewNodeModel builds a model from node headroom. Unschedulable nodes are
-// skipped. With no nodes, or none reporting allocatable, the model is unknown.
+// skipped, and a node's NoSchedule/NoExecute taints are recorded so Reserve
+// places only pods that tolerate them. With no nodes, or none reporting allocatable, the model is unknown.
 func NewNodeModel(nodes []corev1.Node, pods []corev1.Pod) CapacityModel {
 	m := &nodeModel{}
 	if !schedfit.CeilingFromNodes(nodes).Known {
@@ -115,6 +158,7 @@ func NewNodeModel(nodes []corev1.Node, pods []corev1.Pod) CapacityModel {
 			ephemeralBytes: h.EphemeralBytes,
 			pods:           h.Pods,
 			unlimitedPods:  !hasPods,
+			taints:         blockingTaints(nodes[i]),
 		})
 	}
 	return m

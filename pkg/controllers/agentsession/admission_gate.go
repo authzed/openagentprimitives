@@ -171,8 +171,17 @@ const admissionMisfitGrace = 2 * time.Minute
 // forever with its waiting-timeout clock restarting at every release. Left
 // alone, it keeps the ordinary readiness deadline and its specific failure
 // message.
+//
+// A session admitted under an unknown capacity model
+// (ReasonAdmittedUnknownCapacity) is skipped as well: no fit check admitted
+// it, so a stall is not the model being wrong, and releasing it would only
+// re-admit it at once into the same stall. Its pods keep the pod-level
+// capacity hold and that hold's deadline.
 func (r *Reconciler) placementMisfit(sess *spiceboxv1alpha1.AgentSession, stall schedulingStall, stalled bool) bool {
 	if !r.AdmissionEnabled || !stalled || !admission.IsAdmitted(sess) {
+		return false
+	}
+	if c := conditions.Find(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted); c.Reason == spiceboxv1alpha1.ReasonAdmittedUnknownCapacity {
 		return false
 	}
 	booting := sess.Status.Phase == "" || sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhasePending

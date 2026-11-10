@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,7 +37,6 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/admission"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentstatus"
-	"github.com/authzed/openagentprimitives/pkg/platform/schedfit"
 )
 
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentsessions,verbs=get;list;watch;patch
@@ -88,6 +88,10 @@ type Reconciler struct {
 	// ask for them back early for a session of its line that does not fit
 	// (--admission-min-warm).
 	MinWarm time.Duration
+	// capacityUnknown is whether the previous pass found capacity unknown, so
+	// the reason is logged once on a known→unknown transition rather than on
+	// every pass (the admitter is woken by every session and pod event).
+	capacityUnknown atomic.Bool
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// Demand prices a session's whole pod set. Nil means the default: get the
@@ -241,16 +245,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 		r.addDrainingReclaims(ctx, &pool, sessions, pods)
 	}
 
-	in.Model = r.snapshot(ctx)
-	if !in.Model.Known() {
-		logger.Info("admission: cluster capacity unknown; admitting in line order", "waiting", len(in.Waiting))
-	}
+	in.Model = r.snapshot(ctx, len(in.Waiting))
 	in.TotalCPUMilli, in.TotalMemBytes = in.Model.Totals()
 
 	dec := admission.Decide(in)
 
+	// Under an unknown model nothing proved the set fits, so the reconciler
+	// must not read a later stall as the model being wrong: the reason tells
+	// its misfit release to leave the session to the pod-level hold.
+	reason, message := spiceboxv1alpha1.ReasonAdmitted, "The session's whole pod set fits the cluster."
+	if !in.Model.Known() {
+		reason, message = spiceboxv1alpha1.ReasonAdmittedUnknownCapacity,
+			"Cluster capacity is unknown to the operator; admitted in line order without a fit check."
+	}
 	for _, key := range dec.Admit {
-		if err := r.admit(ctx, byKey[key], now, spiceboxv1alpha1.ReasonAdmitted, "The session's whole pod set fits the cluster."); err != nil {
+		if err := r.admit(ctx, byKey[key], now, reason, message); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -333,10 +342,9 @@ func boundPods(namespace string, d admission.Demand, pods podIndex) []admission.
 			pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			continue
 		}
-		cpu, mem, eph := schedfit.EffectiveRequests(&pod.Spec)
 		placed = append(placed, admission.PlacedPod{
 			Node:      pod.Spec.NodeName,
-			PodDemand: admission.PodDemand{Name: pod.Name, CPUMilli: cpu, MemBytes: mem, EphemeralBytes: eph},
+			PodDemand: admission.PodDemandFor(pod.Name, &pod.Spec),
 		})
 	}
 	return placed
@@ -563,15 +571,40 @@ func (r *Reconciler) listSessions(ctx context.Context) ([]spiceboxv1alpha1.Agent
 }
 
 // snapshot returns the capacity model, or an unknown one when there is no
-// source or the snapshot fails (logged): missing data must not block sessions.
-func (r *Reconciler) snapshot(ctx context.Context) admission.CapacityModel {
-	if r.Capacity == nil {
+// source, when the snapshot fails, or when the operator is namespace-scoped:
+// missing data must not block sessions. The reason is logged once per
+// known→unknown transition (see capacityUnknown).
+//
+// A namespace-scoped operator (a watch set) sees only its own namespaces'
+// pods, so node headroom computed from them overstates what is free by every
+// pod in every other namespace. An optimistic model admits sets the scheduler
+// cannot place, and the misfit release then reaps and re-admits them in a
+// loop; an unknown one admits in line order and leaves stalls to the
+// pod-level hold.
+func (r *Reconciler) snapshot(ctx context.Context, waiting int) admission.CapacityModel {
+	unknown := func(why string, kv ...any) admission.CapacityModel {
+		if !r.capacityUnknown.Swap(true) {
+			log.FromContext(ctx).Info("admission: cluster capacity unknown; admitting in line order without a fit check",
+				append([]any{"reason", why, "waiting", waiting}, kv...)...)
+		}
 		return admission.NewNodeModel(nil, nil)
+	}
+	if len(r.Namespaces) > 0 {
+		return unknown("the operator is namespace-scoped (--watch-namespaces) and cannot see other namespaces' pods",
+			"namespaces", r.Namespaces)
+	}
+	if r.Capacity == nil {
+		return unknown("no capacity source is configured")
 	}
 	m, err := r.Capacity.Snapshot(ctx)
 	if err != nil {
-		log.FromContext(ctx).Info("admission: capacity snapshot failed; treating capacity as unknown", "err", err.Error())
-		return admission.NewNodeModel(nil, nil)
+		return unknown("the capacity snapshot failed", "err", err.Error())
+	}
+	if !m.Known() {
+		return unknown("no node reports allocatable resources")
+	}
+	if r.capacityUnknown.Swap(false) {
+		log.FromContext(ctx).Info("admission: cluster capacity known again; admitting by fit")
 	}
 	return m
 }

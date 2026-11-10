@@ -13,7 +13,6 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/admission"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession/cosidecar"
 	"github.com/authzed/openagentprimitives/pkg/platform/podspec"
-	"github.com/authzed/openagentprimitives/pkg/platform/schedfit"
 	"github.com/authzed/openagentprimitives/pkg/tools/toolchain/resolve"
 	"github.com/authzed/openagentprimitives/pkg/web/secretoutsrv"
 )
@@ -30,7 +29,8 @@ const demandPlaceholderImage = "demand-estimate"
 // creates nothing.
 //
 // Each pod is rendered by the same builder the reconciler uses to create it,
-// then priced by schedfit.EffectiveRequests:
+// then priced by admission.PodDemandFor (schedfit.EffectiveRequests, plus the
+// pod's tolerations for the node model's taint check):
 //
 //   - the runner (BuildRunnerPod, as PodRunnerFactory calls it), with the
 //     in-pod sidecars it carries;
@@ -120,8 +120,7 @@ func DemandFor(ctx context.Context, c client.Reader, sess *spiceboxv1alpha1.Agen
 
 	d := admission.Demand{Pods: make([]admission.PodDemand, 0, len(pods))}
 	for _, p := range pods {
-		cpu, mem, eph := schedfit.EffectiveRequests(&p.Spec)
-		d.Pods = append(d.Pods, admission.PodDemand{Name: p.Name, CPUMilli: cpu, MemBytes: mem, EphemeralBytes: eph})
+		d.Pods = append(d.Pods, admission.PodDemandFor(p.Name, &p.Spec))
 	}
 	return d, nil
 }

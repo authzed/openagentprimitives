@@ -255,15 +255,42 @@ func TestAdmitterPass(t *testing.T) {
 		assertAdmitted(t, getSession(t, c, "rb-b"))
 	})
 
-	t.Run("capacity snapshot fails: capacity unknown, every waiting session admitted in line order", func(t *testing.T) {
+	t.Run("capacity snapshot fails: capacity unknown, every waiting session admitted as AdmittedUnknownCapacity", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, failingSource{},
 			waitingSession("rb-a", time.Minute),
 			waitingSession("rb-b", 2*time.Minute),
 		)
 		runPass(t, r)
-		assertAdmitted(t, getSession(t, c, "rb-a"))
-		assertAdmitted(t, getSession(t, c, "rb-b"))
+		assertAdmittedUnknown(t, getSession(t, c, "rb-a"))
+		assertAdmittedUnknown(t, getSession(t, c, "rb-b"))
 	})
+
+	t.Run("namespace-scoped operator (watch set): capacity treated as unknown even with no room, admitted as AdmittedUnknownCapacity", func(t *testing.T) {
+		r, c, _ := newReconciler(t, true, roomFor(0),
+			waitingSession("rb-a", time.Minute),
+		)
+		r.Namespaces = []string{"default"}
+		runPass(t, r)
+		assertAdmittedUnknown(t, getSession(t, c, "rb-a"))
+	})
+
+	t.Run("known capacity: admitted with reason Admitted", func(t *testing.T) {
+		r, c, _ := newReconciler(t, true, roomFor(1), waitingSession("rb-a", time.Minute))
+		runPass(t, r)
+		assertAdmitted(t, getSession(t, c, "rb-a"))
+	})
+}
+
+// assertAdmittedUnknown asserts s was admitted under an unknown capacity
+// model, which the reconciler's misfit release must leave alone.
+func assertAdmittedUnknown(t *testing.T, s *spiceboxv1alpha1.AgentSession) {
+	t.Helper()
+	cond := meta.FindStatusCondition(s.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+	if !assert.NotNil(t, cond, "%s: Admitted condition", s.Name) {
+		return
+	}
+	assert.Equal(t, metav1.ConditionTrue, cond.Status, "%s: Admitted status", s.Name)
+	assert.Equal(t, spiceboxv1alpha1.ReasonAdmittedUnknownCapacity, cond.Reason, "%s: Admitted reason", s.Name)
 }
 
 type failingSource struct{}
