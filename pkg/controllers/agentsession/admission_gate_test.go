@@ -288,33 +288,49 @@ func ptrTo[T any](v T) *T { return &v }
 // An ADMITTED booting session whose bundle pod the scheduler still cannot
 // place after admissionMisfitGrace gives its pods back and returns to its line
 // (Admitted=False/PlacementMismatch), keeping its place: JoinedAt does not
-// move. Short of the grace, with admission off, or on a stall another session
-// finishing cannot cure, nothing is released.
+// move, and the bundle stage's stale CapacityHold goes with the pods. Short of
+// the grace, with admission off, or on a stall another session finishing
+// cannot cure, nothing is released. Once the session has been in line longer
+// than the capacity-hold timeout since it joined, the release fails it
+// instead, so a stall the admitter's model cannot see cannot cycle forever.
 func TestAdmissionGate_Misfit(t *testing.T) {
 	nowT := time.Date(2026, 11, 10, 17, 0, 0, 0, time.UTC)
 	codeBundle := spiceboxv1alpha1.ToolBundle{Name: "code", Class: "toolbelt"}
+	// A shortfall on the nodes the pod tolerates, beside a tainted node the
+	// admitter's model still counts as room: capacityShortfall says yes, and
+	// the model re-admits at once after every release.
+	const mixedSchedMsg = "0/4 nodes are available: 3 Insufficient cpu, 1 node(s) had untolerated taint(s)."
 
 	cases := []struct {
-		name     string
-		enabled  bool          // Reconciler.AdmissionEnabled
-		admitted bool          // the session carries Admitted=True
-		pending  time.Duration // how long the bundle pod has been unschedulable
-		schedMsg string
-		woken    bool // the session was cold-woken before this admission
+		name       string
+		enabled    bool          // Reconciler.AdmissionEnabled
+		admitted   bool          // the session carries Admitted=True
+		pending    time.Duration // how long the bundle pod has been unschedulable
+		createdAgo time.Duration // session creation (its JoinedAt); 0 = 20m
+		schedMsg   string
+		woken      bool // the session was cold-woken before this admission
+		heldBefore bool // the bundle stage already set CapacityHold=True/Waiting
 
 		wantReaped      bool
 		wantMisfit      bool // Admitted=False/PlacementMismatch at now
+		wantFailed      bool // Failed/BundleFailed, CapacityHold=False/HoldExpired
 		wantAdmittedNil bool // no Admitted condition at all
 	}{
 		{
-			name:    "admitted, pods unschedulable 2m: pods reaped, Admitted=False/PlacementMismatch, JoinedAt unchanged",
-			enabled: true, admitted: true, pending: 2 * time.Minute, schedMsg: capacitySchedMsg,
+			name:    "admitted, pods unschedulable 2m: pods reaped, Admitted=False/PlacementMismatch, JoinedAt unchanged, CapacityHold released",
+			enabled: true, admitted: true, pending: 2 * time.Minute, schedMsg: capacitySchedMsg, heldBefore: true,
 			wantReaped: true, wantMisfit: true,
 		},
 		{
 			name:    "admitted after a cold wake, pods unschedulable 2m: released, JoinedAt unchanged",
 			enabled: true, admitted: true, pending: 2 * time.Minute, schedMsg: capacitySchedMsg, woken: true,
 			wantReaped: true, wantMisfit: true,
+		},
+		{
+			name:    "admitted, mixed taint+Insufficient stall, released and re-admitted repeatedly: fails once JoinedAt+timeout passes",
+			enabled: true, admitted: true, pending: 2 * time.Minute, createdAgo: 70 * time.Minute,
+			schedMsg: mixedSchedMsg, heldBefore: true,
+			wantReaped: true, wantMisfit: true, wantFailed: true,
 		},
 		{
 			name:    "admitted, pods unschedulable 1m (inside the misfit grace): pods kept, still admitted",
@@ -335,15 +351,27 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			clock := func() time.Time { return nowT }
 			started := nowT.Add(-tc.pending)
+			createdAgo := tc.createdAgo
+			if createdAgo == 0 {
+				createdAgo = 20 * time.Minute
+			}
 
 			ac := classWithBundle("ac1", codeBundle)
-			sess := sessionCreatedAt("s1", "ac1", nowT.Add(-20*time.Minute))
+			sess := sessionCreatedAt("s1", "ac1", nowT.Add(-createdAgo))
 			if tc.woken {
 				wake := metav1.NewTime(nowT.Add(-10 * time.Minute))
 				sess.Status.LastWakeAt = &wake
 			}
 			if tc.admitted {
 				withAdmittedCondition(sess, metav1.ConditionTrue, spiceboxv1alpha1.ReasonAdmitted, started.Add(-time.Second))
+			}
+			if tc.heldBefore {
+				sess.Status.Conditions = append(sess.Status.Conditions, metav1.Condition{
+					Type: spiceboxv1alpha1.AgentSessionConditionCapacityHold, Status: metav1.ConditionTrue,
+					Reason:             spiceboxv1alpha1.ReasonCapacityHoldWaiting,
+					Message:            "The cluster is out of room right now; this will start on its own once capacity frees up (gives up at 17:58 UTC).",
+					LastTransitionTime: metav1.NewTime(started.Add(30 * time.Second)),
+				})
 			}
 			joinedBefore := admission.JoinedAt(sess)
 			bundle := bundleWithPod("s1", "code", "s1-code-pod", started)
@@ -357,8 +385,28 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 			assert.Equal(t, !tc.wantReaped,
 				exists(t, c, agentsession.BundleSessionName(&got, codeBundle), &spiceboxv1alpha1.SpiceboxSession{}),
 				"bundle SpiceboxSession present")
-			assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase, "session must not fail")
 			assert.Equal(t, joinedBefore.UTC(), admission.JoinedAt(&got).UTC(), "JoinedAt must not move: the session keeps its place in line")
+
+			hold := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
+			if tc.wantFailed {
+				require.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase, "a session in line past the timeout fails")
+				assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBundleFail, got.Status.FailureReason)
+				if assert.NotNil(t, hold, "CapacityHold condition") {
+					assert.Equal(t, metav1.ConditionFalse, hold.Status)
+					assert.Equal(t, spiceboxv1alpha1.ReasonCapacityHoldExpired, hold.Reason)
+				}
+				fc := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionFailed)
+				if assert.NotNil(t, fc, "Failed condition") {
+					assert.Contains(t, fc.Message, "waited 1h0m0s for cluster capacity")
+					assert.Contains(t, fc.Message, "Insufficient cpu")
+				}
+			} else {
+				assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase, "session must not fail")
+				if tc.wantMisfit && tc.heldBefore && assert.NotNil(t, hold, "CapacityHold condition") {
+					assert.Equal(t, metav1.ConditionFalse, hold.Status, "the bundle stage's hold goes with the released pods")
+					assert.Equal(t, spiceboxv1alpha1.ReasonCapacityHoldReleased, hold.Reason)
+				}
+			}
 
 			adm := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
 			switch {
@@ -369,7 +417,9 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 				assert.Equal(t, metav1.ConditionFalse, adm.Status)
 				assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionMisfit, adm.Reason)
 				assert.Equal(t, nowT, adm.LastTransitionTime.Time.UTC(), "transition stamped from the reconciler clock")
-				assert.Equal(t, nowT, admission.WaitingSince(&got).UTC(), "the waiting-timeout clock restarts at the release")
+				if !tc.wantFailed {
+					assert.Equal(t, nowT, admission.WaitingSince(&got).UTC(), "the waiting-timeout clock restarts at the release")
+				}
 			default:
 				require.NotNil(t, adm, "Admitted condition")
 				assert.Equal(t, metav1.ConditionTrue, adm.Status, "still admitted")

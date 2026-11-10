@@ -148,12 +148,28 @@ func (r *Reconciler) placementMisfit(sess *spiceboxv1alpha1.AgentSession, stall 
 // fairly; the model was wrong, not the session). admission.WaitingSince
 // restarts at this release, so the capacity-hold timeout gives it a fresh
 // window rather than the remainder of its first one.
+//
+// That fresh window is why the release is bounded by JoinedAt instead. A
+// stall the admitter's model cannot see — a shortfall on the only nodes the
+// pod tolerates, beside tainted nodes the model still counts — re-admits the
+// session at once, stalls again, and releases again: WaitingSince and the
+// bundle deadline both restart every cycle, so neither would ever fire. Once
+// the session has been in line longer than the capacity-hold timeout since it
+// joined, the release becomes the same failure the waiting timeout gives.
+//
+// The bundle stage's CapacityHold=True ("gives up at …") is released in the
+// same write: its give-up time described pods that no longer exist, and left
+// standing, every later stall would rewrite it into a fresh "queued" notice.
 func (r *Reconciler) releaseMisfit(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, stall schedulingStall) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	logger.Info("admitted session's pods could not be placed; releasing them and re-queueing it at its place in line",
+	timeout := r.effectiveCapacityHoldTimeout()
+	joined := admission.JoinedAt(sess)
+	expired := timeout > 0 && r.now().Sub(joined) > timeout
+	logger.Info("admitted session's pods could not be placed; releasing them",
 		"session", sess.Namespace+"/"+sess.Name, "class", sess.Spec.Class,
 		"pod", stall.podName, "unschedulableFor", stall.pending.String(),
-		"schedulerMessage", stall.reason)
+		"schedulerMessage", stall.reason, "joinedAt", joined.UTC().Format(time.RFC3339),
+		"failingAfterCapacityHoldTimeout", expired)
 	if _, err := r.reapSessionPods(ctx, sess); err != nil {
 		return ctrl.Result{}, err // already logged inside reapSessionPods; retried next pass
 	}
@@ -161,9 +177,15 @@ func (r *Reconciler) releaseMisfit(ctx context.Context, sess *spiceboxv1alpha1.A
 		Type:               spiceboxv1alpha1.AgentSessionConditionAdmitted,
 		Status:             metav1.ConditionFalse,
 		Reason:             spiceboxv1alpha1.ReasonAdmissionMisfit,
-		Message:            fmt.Sprintf("%s could not be placed for %s (%s); its pods were released and it waits at its place in line", stall.podName, stall.pending.Round(time.Second), strings.TrimSuffix(stall.reason, ".")),
+		Message:            fmt.Sprintf("%s could not be placed for %s (%s); its pods were released", stall.podName, stall.pending.Round(time.Second), strings.TrimSuffix(stall.reason, ".")),
 		LastTransitionTime: metav1.NewTime(r.now()),
 	})
+	if expired {
+		r.expireCapacityHold(sess, timeout)
+		return r.markBootFailed(ctx, sess, spiceboxv1alpha1.ReasonAgentSessionBundleFail,
+			capacityHoldExpiredMessage("sandbox bundle(s)", timeout, stall))
+	}
+	r.releaseCapacityHold(sess)
 	if err := r.applyStatus(ctx, sess); err != nil {
 		logger.Info("misfit: recording the admission release failed; will retry",
 			"session", sess.Namespace+"/"+sess.Name, "class", sess.Spec.Class, "err", err.Error())
