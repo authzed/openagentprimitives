@@ -347,3 +347,130 @@ func TestAdmitterWatchNamespaces(t *testing.T) {
 		})
 	}
 }
+
+// warmIdleSession is an admitted, channel-attached Idle session that went idle
+// idleFor before the pass and has not slept: its pods still hold capacity.
+func warmIdleSession(name string, idleFor time.Duration) *spiceboxv1alpha1.AgentSession {
+	s := waitingSession(name, 0)
+	s.Spec.InputChannel = &spiceboxv1alpha1.ChannelBinding{Name: "chan-1", Kind: "fake", Key: name}
+	s.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseIdle
+	idleAt := metav1.NewTime(passTime.Add(-idleFor))
+	s.Status.LastIdleAt = &idleAt
+	s.Status.Conditions = []metav1.Condition{{
+		Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionTrue,
+		Reason: spiceboxv1alpha1.ReasonAdmitted, LastTransitionTime: metav1.NewTime(baseTime),
+	}}
+	return s
+}
+
+// boundRunnerPod is the session's oneCPUDemand pod, bound to node-a and
+// requesting what oneCPUDemand prices.
+func boundRunnerPod(sessName string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: sessName + "-runner", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			NodeName: "node-a",
+			Containers: []corev1.Container{{
+				Name: "runner",
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("1"),
+					corev1.ResourceMemory: resource.MustParse("1Mi"),
+				}},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// cpuNode is node-a with cpus whole CPUs allocatable.
+func cpuNode(cpus int64) *corev1.Node {
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status: corev1.NodeStatus{Allocatable: corev1.ResourceList{
+			corev1.ResourceCPU:    *resource.NewQuantity(cpus, resource.DecimalSI),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+			corev1.ResourcePods:   resource.MustParse("110"),
+		}},
+	}
+}
+
+// TestAdmitterEarlyReclaim covers the reclaim request a pass makes for a line
+// whose head does not fit: it annotates the warm Idle sessions of that line
+// PlanReclaim picks, priced from the live pods the cluster snapshot also sees.
+func TestAdmitterEarlyReclaim(t *testing.T) {
+	const minWarm = 5 * time.Minute
+	cases := []struct {
+		name          string
+		objs          []client.Object
+		wantAnnotated []string
+		wantClean     []string
+	}{
+		{
+			name: "line has a waiting head, one warm idle past minWarm: reclaim annotation set on it only",
+			objs: []client.Object{
+				cpuNode(2),
+				warmIdleSession("rb-old", 10*time.Minute), boundRunnerPod("rb-old"),
+				warmIdleSession("rb-young", time.Minute), boundRunnerPod("rb-young"),
+				waitingSession("rb-wait", time.Minute),
+			},
+			wantAnnotated: []string{"rb-old"},
+			wantClean:     []string{"rb-young", "rb-wait"},
+		},
+		{
+			name: "no waiting head: no annotation",
+			objs: []client.Object{
+				cpuNode(1),
+				warmIdleSession("rb-old", 10*time.Minute), boundRunnerPod("rb-old"),
+			},
+			wantClean: []string{"rb-old"},
+		},
+		{
+			name: "the head fits without a reclaim: admitted, no annotation",
+			objs: []client.Object{
+				cpuNode(2),
+				warmIdleSession("rb-old", 10*time.Minute), boundRunnerPod("rb-old"),
+				waitingSession("rb-wait", time.Minute),
+			},
+			wantClean: []string{"rb-old", "rb-wait"},
+		},
+		{
+			name: "only warm idle is younger than minWarm: no annotation",
+			objs: []client.Object{
+				cpuNode(1),
+				warmIdleSession("rb-young", time.Minute), boundRunnerPod("rb-young"),
+				waitingSession("rb-wait", time.Minute),
+			},
+			wantClean: []string{"rb-young", "rb-wait"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, c, _ := newReconciler(t, true, nil, tc.objs...)
+			r.Capacity = admission.KubeCapacitySource{Reader: c}
+			r.MinWarm = minWarm
+			runPass(t, r)
+
+			for _, name := range tc.wantAnnotated {
+				got := getSession(t, c, name)
+				assert.Equal(t, passTime.Format(time.RFC3339), got.Annotations[spiceboxv1alpha1.AnnotationReclaimRequested],
+					"%s: reclaim requested at the pass's Now", name)
+			}
+			for _, name := range tc.wantClean {
+				assert.NotContains(t, getSession(t, c, name).Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
+					"%s: no reclaim requested", name)
+			}
+		})
+	}
+
+	t.Run("a reclaim already requested: the annotation is not rewritten", func(t *testing.T) {
+		old := warmIdleSession("rb-old", 10*time.Minute)
+		earlier := baseTime.Format(time.RFC3339)
+		old.Annotations = map[string]string{spiceboxv1alpha1.AnnotationReclaimRequested: earlier}
+		r, c, _ := newReconciler(t, true, nil, cpuNode(1), old, boundRunnerPod("rb-old"), waitingSession("rb-wait", time.Minute))
+		r.Capacity = admission.KubeCapacitySource{Reader: c}
+		r.MinWarm = minWarm
+		runPass(t, r)
+		assert.Equal(t, earlier, getSession(t, c, "rb-old").Annotations[spiceboxv1alpha1.AnnotationReclaimRequested],
+			"the first request's time stands")
+	})
+}

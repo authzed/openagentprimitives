@@ -2363,6 +2363,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// period sleep again instead of idleSleepDue reading it as already-slept.
 		sess.Status.SleptAt = nil
 	}
+	// The same catch-all for the admitter's reclaim request: one a session left
+	// Idle before honoring is stale, and must not sleep it on its next Idle.
+	if err := r.clearStaleReclaimRequest(ctx, &sess); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Forensic hold: an unreleased SessionHold naming this session forces
 	// phase=Held and reaps the session's pods (containment). Must run before

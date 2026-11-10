@@ -15,6 +15,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -33,9 +35,10 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/admission"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentstatus"
+	"github.com/authzed/openagentprimitives/pkg/platform/schedfit"
 )
 
-// +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentsessions,verbs=get;list;watch
+// +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentsessions,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentsessions/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
@@ -80,6 +83,10 @@ type Reconciler struct {
 	// Enabled false admits every waiting session at once, with no capacity
 	// check (--session-admission=false).
 	Enabled bool
+	// MinWarm is how long an Idle session keeps its warm pods before a pass may
+	// ask for them back early for a session of its line that does not fit
+	// (--admission-min-warm).
+	MinWarm time.Duration
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// Demand prices a session's whole pod set. Nil means the default: get the
@@ -190,6 +197,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 	}
 
 	pods, podsKnown := r.listPods(ctx)
+	var warm []admission.WarmIdle
+	warmByKey := map[types.NamespacedName]*spiceboxv1alpha1.AgentSession{}
 	for _, sess := range holding {
 		d, err := r.demand(ctx, sess)
 		if err != nil {
@@ -206,6 +215,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 			Demand:   d,
 			Unplaced: unplaced(sess.Namespace, d, pods, podsKnown),
 		})
+		if w, ok := warmIdle(sess, d, pods, podsKnown); ok {
+			warm = append(warm, w)
+			warmByKey[w.Key] = sess
+		}
 	}
 
 	in.Model = r.snapshot(ctx)
@@ -227,7 +240,115 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 			errs = append(errs, err)
 		}
 	}
+	if in.Model.Known() {
+		errs = append(errs, r.requestReclaims(ctx, in.Waiting, dec, warm, warmByKey, in.Model, now)...)
+	}
 	return requeue, errors.Join(errs...)
+}
+
+// isWarmIdle matches a holder whose pods could be given back early: Idle,
+// channel-attached (the AgentSession reconciler's sleep path, which honors the
+// reclaim request, runs only for those), not yet slept, with a known idle
+// start for PlanReclaim's minWarm check.
+func isWarmIdle(sess *spiceboxv1alpha1.AgentSession) bool {
+	return sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhaseIdle &&
+		sess.Spec.InputChannel != nil &&
+		sess.Status.SleptAt == nil &&
+		sess.Status.LastIdleAt != nil
+}
+
+// warmIdle builds the WarmIdle for a holder that is warm idle: its pod set's
+// pods (matched by name, as unplaced does) that are bound to a node and still
+// running, priced from the live pod spec — what the capacity snapshot counts
+// against that node, so it is what a reclaim gives back. Not ok when the
+// session is not warm idle, the pod list failed, or none of its pods holds
+// capacity: there is nothing to free.
+func warmIdle(sess *spiceboxv1alpha1.AgentSession, d admission.Demand, pods podIndex, known bool) (admission.WarmIdle, bool) {
+	if !known || !isWarmIdle(sess) {
+		return admission.WarmIdle{}, false
+	}
+	var placed []admission.PlacedPod
+	for _, p := range d.Pods {
+		pod, ok := pods[types.NamespacedName{Namespace: sess.Namespace, Name: p.Name}]
+		if !ok || pod.Spec.NodeName == "" ||
+			pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		cpu, mem, eph := schedfit.EffectiveRequests(&pod.Spec)
+		placed = append(placed, admission.PlacedPod{
+			Node:      pod.Spec.NodeName,
+			PodDemand: admission.PodDemand{Name: pod.Name, CPUMilli: cpu, MemBytes: mem, EphemeralBytes: eph},
+		})
+	}
+	if len(placed) == 0 {
+		return admission.WarmIdle{}, false
+	}
+	return admission.WarmIdle{
+		Key:       client.ObjectKeyFromObject(sess),
+		Line:      lineOf(sess),
+		IdleSince: sess.Status.LastIdleAt.Time,
+		Pods:      placed,
+	}, true
+}
+
+// requestReclaims asks for the warm Idle sessions PlanReclaim picks for each
+// line's head (its still-waiting position 1) to be slept early. model is the
+// one Decide reserved into, so this pass's admissions are respected. Lines go
+// in name order; each plan's frees and its head's demand are applied to model
+// before the next line plans, so two lines never count the same free space.
+func (r *Reconciler) requestReclaims(ctx context.Context, waiting []admission.Candidate, dec admission.Decision,
+	warm []admission.WarmIdle, warmByKey map[types.NamespacedName]*spiceboxv1alpha1.AgentSession,
+	model admission.CapacityModel, now time.Time,
+) []error {
+	var heads []admission.Candidate
+	for _, c := range waiting {
+		if pos, ok := dec.Positions[c.Key]; ok && pos.Index == 1 {
+			heads = append(heads, c)
+		}
+	}
+	slices.SortFunc(heads, func(a, b admission.Candidate) int { return strings.Compare(a.Line, b.Line) })
+
+	pods := make(map[types.NamespacedName][]admission.PlacedPod, len(warm))
+	for _, w := range warm {
+		pods[w.Key] = w.Pods
+	}
+	var errs []error
+	for _, head := range heads {
+		plan := admission.PlanReclaim(head, warm, model, now, r.MinWarm)
+		if len(plan) == 0 {
+			continue
+		}
+		for _, key := range plan {
+			model.Free(pods[key])
+			if err := r.requestReclaim(ctx, warmByKey[key], head.Key, now); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		// PlanReclaim proved the head fits once the plan's pods are freed.
+		_ = model.Reserve(head.Demand)
+	}
+	return errs
+}
+
+// requestReclaim stamps AnnotationReclaimRequested on sess with a
+// metadata-only merge patch, unless a request is already there: a later pass
+// re-planning the same reclaim must leave the first request's time alone.
+func (r *Reconciler) requestReclaim(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, head types.NamespacedName, now time.Time) error {
+	if _, ok := sess.Annotations[spiceboxv1alpha1.AnnotationReclaimRequested]; ok {
+		return nil
+	}
+	logger := log.FromContext(ctx)
+	logger.Info("admission: requesting early reclaim of a warm idle session for its line's waiting head",
+		"session", sess.Namespace+"/"+sess.Name, "class", lineOf(sess), "head", head.String())
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`,
+		spiceboxv1alpha1.AnnotationReclaimRequested, now.UTC().Format(time.RFC3339))
+	target := &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: sess.Name, Namespace: sess.Namespace}}
+	if err := r.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		logger.Info("admission: writing the reclaim request failed; the next pass retries",
+			"session", sess.Namespace+"/"+sess.Name, "class", lineOf(sess), "err", err.Error())
+		return fmt.Errorf("request reclaim of %s/%s: %w", sess.Namespace, sess.Name, err)
+	}
+	return nil
 }
 
 // listSessions lists every AgentSession the operator owns: cluster-wide with

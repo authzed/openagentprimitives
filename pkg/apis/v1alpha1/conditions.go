@@ -1051,6 +1051,15 @@ const (
 	// coalesces rather than duplicating.
 	AnnotationUIServeRequestedAt = "agentprimitives.authzed.com/ui-serve-requested-at"
 
+	// AnnotationReclaimRequested asks the operator to put a warm Idle session
+	// to sleep now, ahead of its sleepAfter grace, because a session of the
+	// same AgentClass is waiting in the admission line and freeing this one's
+	// pods lets it in. Written by the admitter (RFC3339 of the pass that asked;
+	// left alone if already present); the AgentSession reconciler's sleep path
+	// honors it — still behind the SessionHold guard — and removes it once the
+	// session is slept, or as stale once the session has left Idle.
+	AnnotationReclaimRequested = "agentprimitives.authzed.com/reclaim-requested"
+
 	// AnnotationSidecarFailureReported carries, as a JSON object, the
 	// sidecar-name â failure-fingerprint map the runner has already reported to
 	// the user â the durable half of its once-per-failure contract, since a

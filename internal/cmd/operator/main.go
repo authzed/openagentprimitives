@@ -764,9 +764,9 @@ type config struct {
 	// sessionAdmission gates every booting AgentSession's pods on the
 	// admitter's whole-set, fair-share decision; false admits at once.
 	sessionAdmission bool
-	// admissionMinWarm is parsed and stored only; its consumer (how long an
-	// idle session keeps its admission before it may be reclaimed) is not
-	// wired yet.
+	// admissionMinWarm is how long an idle session keeps its admission (and
+	// warm pods) before the admitter may reclaim it early for a session of its
+	// AgentClass waiting in line.
 	admissionMinWarm              time.Duration
 	oauthRefreshThreshold         time.Duration
 	workspaceStorageClass         string
@@ -896,7 +896,7 @@ func newCommand() *cobra.Command {
 	fs.BoolVar(&cfg.sessionAdmission, "session-admission", true,
 		"Admit each booting AgentSession's whole pod set against node capacity before any of its pods is created, in join order with fair share between AgentClasses; sessions that do not fit wait in line. Set to false to admit every session at once (pods then queue in the scheduler as before).")
 	fs.DurationVar(&cfg.admissionMinWarm, "admission-min-warm", 5*time.Minute,
-		"Minimum time an idle AgentSession keeps its admission (and warm pods) before it may be reclaimed for a session waiting in line.")
+		"Minimum time an idle AgentSession keeps its admission (and warm pods) before the admitter may put it to sleep early, ahead of its sleepAfter grace, to make room for a session of the same AgentClass waiting in line. A held (SessionHold) session is never reclaimed. Only applies with --session-admission.")
 	fs.DurationVar(&cfg.oauthRefreshThreshold, "oauth-refresh-threshold", 5*time.Minute,
 		"Default refresh threshold for type=oauth AgentIdentity credentials. AgentIdentities with spec.refreshThreshold override this per-identity.")
 	fs.StringVar(&cfg.workspaceStorageClass, "workspace-storage-class", "",
@@ -2778,6 +2778,7 @@ func run(cfg *config) {
 		Namespaces: slices.Sorted(maps.Keys(cacheNamespaces(cfg.watchNamespaces, operatorNamespace(cfg.podNamespace)))),
 		Capacity:   admissionCapacity,
 		Enabled:    cfg.sessionAdmission,
+		MinWarm:    cfg.admissionMinWarm,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to register admission controller")
 		os.Exit(1)

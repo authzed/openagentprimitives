@@ -12,6 +12,9 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -56,6 +59,11 @@ func idleSleepDue(sleptAt, lastIdleAt *metav1.Time, sleepAfter time.Duration, no
 // and wakeable. Returns (slept, requeueAfter, err). Preconditions: caller
 // confirmed sess.Spec.InputChannel != nil, phase == Idle, and
 // !shouldWake(sess).
+//
+// The admitter's reclaim request (AnnotationReclaimRequested) makes the sleep
+// due now, whatever SleepAfter says — including when idle sleep is disabled —
+// but never past the SessionHold guard. The annotation is removed once the
+// session is slept.
 func (r *Reconciler) reconcileSleep(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alpha1.AgentClass) (bool, time.Duration, error) {
 	// Evidence outranks GC. Archiving or reaping a held session would let the
 	// forensic subject expire on a timer, which is exactly the failure mode that
@@ -78,7 +86,20 @@ func (r *Reconciler) reconcileSleep(ctx context.Context, sess *spiceboxv1alpha1.
 	if class != nil && class.Spec.Channels != nil && class.Spec.Channels.SleepAfter.Duration > 0 {
 		sleepAfter = class.Spec.Channels.SleepAfter.Duration
 	}
+	reclaim := reclaimRequested(sess)
+	if reclaim && sess.Status.SleptAt != nil {
+		// Already slept, so the request is fulfilled: a previous pass slept the
+		// session but failed to remove the annotation. Remove it now; sleeping
+		// again would reap nothing.
+		return false, 0, r.clearReclaimRequest(ctx, sess)
+	}
 	due, remaining := idleSleepDue(sess.Status.SleptAt, sess.Status.LastIdleAt, sleepAfter, r.now())
+	if reclaim && !due {
+		log.FromContext(ctx).Info("sleeping idle session early: its AgentClass has a session waiting for the capacity",
+			"session", sess.Namespace+"/"+sess.Name, "class", sess.Spec.Class,
+			"reclaimRequested", sess.Annotations[spiceboxv1alpha1.AnnotationReclaimRequested])
+		due, remaining = true, 0
+	}
 	if !due {
 		return false, remaining, nil // remaining==0 when disabled/already-slept/no-clock
 	}
@@ -101,5 +122,53 @@ func (r *Reconciler) reconcileSleep(ctx context.Context, sess *spiceboxv1alpha1.
 	if _, err := r.reapSessionPods(ctx, sess); err != nil {
 		return false, 0, err // already logged inside; retry
 	}
+	// The annotation is metadata and SleptAt is status: two subresources, so
+	// they cannot share the write above. It is removed only AFTER the status
+	// write and the reap succeed, so a failure anywhere earlier leaves the
+	// request in place for the retry; a failure here leaves a slept session
+	// still carrying it, which the already-slept branch above clears on the
+	// next pass without sleeping again.
+	if reclaim {
+		if err := r.clearReclaimRequest(ctx, sess); err != nil {
+			return true, 0, err
+		}
+	}
 	return true, 0, nil
+}
+
+// reclaimRequested reports whether the admitter has asked for this session to
+// be slept early (AnnotationReclaimRequested).
+func reclaimRequested(sess *spiceboxv1alpha1.AgentSession) bool {
+	_, ok := sess.Annotations[spiceboxv1alpha1.AnnotationReclaimRequested]
+	return ok
+}
+
+// clearStaleReclaimRequest removes a reclaim request from a session that is no
+// longer Idle — it woke, or was held, before the sleep path acted on it. Left
+// in place, it would sleep the session the moment it next went Idle, long
+// after the admission line that asked for the capacity moved on. An Idle
+// session's request is left for reconcileSleep.
+func (r *Reconciler) clearStaleReclaimRequest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) error {
+	if sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhaseIdle || !reclaimRequested(sess) {
+		return nil
+	}
+	log.FromContext(ctx).Info("clearing a stale reclaim request: the session left Idle before it was slept",
+		"session", sess.Namespace+"/"+sess.Name, "class", sess.Spec.Class, "phase", sess.Status.Phase)
+	return r.clearReclaimRequest(ctx, sess)
+}
+
+// clearReclaimRequest removes AnnotationReclaimRequested with a metadata-only
+// merge patch, sent on a fresh object carrying just the key so the server's
+// response cannot overwrite the caller's in-memory status; the caller's copy
+// drops the annotation to match.
+func (r *Reconciler) clearReclaimRequest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) error {
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:null}}}`, spiceboxv1alpha1.AnnotationReclaimRequested)
+	target := &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: sess.Name, Namespace: sess.Namespace}}
+	if err := r.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		log.FromContext(ctx).Info("removing the reclaim-requested annotation failed; retried on the next reconcile",
+			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
+		return fmt.Errorf("clear reclaim-requested annotation on %s/%s: %w", sess.Namespace, sess.Name, err)
+	}
+	delete(sess.Annotations, spiceboxv1alpha1.AnnotationReclaimRequested)
+	return nil
 }
