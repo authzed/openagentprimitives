@@ -9,6 +9,7 @@ package schedfit
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/dustin/go-humanize"
 	corev1 "k8s.io/api/core/v1"
@@ -139,9 +140,15 @@ func HeadroomOn(node corev1.Node, pods []corev1.Pod) Headroom {
 // Native sidecars are the exception: an init container with restartPolicy
 // Always keeps running alongside the app containers for the pod's lifetime, so
 // it ADDS to the sum like an app container instead of merely setting a floor.
+//
+// A resource with a limit but no request is priced at its limit, which is the
+// default the API server applies at admission. Live pods already carry it; a
+// PodSpec a controller has built but not yet created does not (the sandbox
+// builder sets Limits alone), and reading Requests alone would price it at
+// zero.
 func EffectiveRequests(spec *corev1.PodSpec) (cpuMilli, memBytes, ephBytes int64) {
 	for i := range spec.Containers {
-		req := spec.Containers[i].Resources.Requests
+		req := requestsOf(&spec.Containers[i])
 		cpuMilli += milli(req, corev1.ResourceCPU)
 		memBytes += value(req, corev1.ResourceMemory)
 		ephBytes += value(req, corev1.ResourceEphemeralStorage)
@@ -152,7 +159,7 @@ func EffectiveRequests(spec *corev1.PodSpec) (cpuMilli, memBytes, ephBytes int64
 		if !isSidecar(&spec.InitContainers[i]) {
 			continue
 		}
-		req := spec.InitContainers[i].Resources.Requests
+		req := requestsOf(&spec.InitContainers[i])
 		cpuMilli += milli(req, corev1.ResourceCPU)
 		memBytes += value(req, corev1.ResourceMemory)
 		ephBytes += value(req, corev1.ResourceEphemeralStorage)
@@ -161,12 +168,29 @@ func EffectiveRequests(spec *corev1.PodSpec) (cpuMilli, memBytes, ephBytes int64
 		if isSidecar(&spec.InitContainers[i]) {
 			continue
 		}
-		req := spec.InitContainers[i].Resources.Requests
+		req := requestsOf(&spec.InitContainers[i])
 		cpuMilli = max(cpuMilli, milli(req, corev1.ResourceCPU))
 		memBytes = max(memBytes, value(req, corev1.ResourceMemory))
 		ephBytes = max(ephBytes, value(req, corev1.ResourceEphemeralStorage))
 	}
 	return cpuMilli, memBytes, ephBytes
+}
+
+// requestsOf returns a container's requests as the API server would default
+// them: each resource that has a limit and no request is requested at its
+// limit. The container itself is not modified.
+func requestsOf(c *corev1.Container) corev1.ResourceList {
+	req := maps.Clone(c.Resources.Requests)
+	for name, limit := range c.Resources.Limits {
+		if _, ok := req[name]; ok {
+			continue
+		}
+		if req == nil {
+			req = corev1.ResourceList{}
+		}
+		req[name] = limit
+	}
+	return req
 }
 
 // isSidecar reports whether an init container is a native sidecar — restartPolicy

@@ -29,6 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz/contentguard"
+	contentguardregistry "github.com/authzed/openagentprimitives/pkg/authz/contentguard/registry"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession/cosidecar"
 	"github.com/authzed/openagentprimitives/pkg/platform/podstatus"
 )
@@ -59,6 +61,81 @@ func (r *Reconciler) ensureDetectorPod(ctx context.Context, sess *spiceboxv1alph
 		return fmt.Errorf("create detector pod %q: %w", spec.Ref, err)
 	}
 	return nil
+}
+
+// resolveContentGuardDetectors returns one detector per enabled content
+// inspector that implements contentguard.DetectorProvider, in settings order.
+// Port and PodName are left for placeContentGuardDetectors. A nil eff yields
+// none.
+//
+// An inspector that implements DetectorProvider but cannot produce a detector
+// is an error, never a skip: a detector-requiring inspector that can't resolve
+// its image must not silently run unscanned.
+func resolveContentGuardDetectors(eff *spiceboxv1alpha1.EffectiveSettings) ([]spiceboxv1alpha1.ResolvedContentGuardDetector, error) {
+	if eff == nil {
+		return nil, nil
+	}
+	var out []spiceboxv1alpha1.ResolvedContentGuardDetector
+	for _, ci := range eff.ContentInspectors {
+		insp, ok := contentguardregistry.Get(ci.ID)
+		if !ok {
+			// Webhook already rejected unknown IDs; defensive skip.
+			continue
+		}
+		dp, ok := insp.(contentguard.DetectorProvider)
+		if !ok {
+			// Inspector does not need a detector sidecar (e.g. url-allowlist).
+			continue
+		}
+		ds, err := dp.Detector(ci.Config.Raw)
+		if err != nil || ds == nil {
+			return nil, fmt.Errorf("content-guard detector %q: %v", ci.ID, err)
+		}
+		// Use the image exactly as declared in the inspector config: pinned
+		// by digest it launches the exact bytes, by tag it launches by tag.
+		// There is no probe path here as there is for SidecarToolbox.
+		out = append(out, spiceboxv1alpha1.ResolvedContentGuardDetector{
+			Inspector:  ci.ID,
+			Image:      ds.Image,
+			HealthPath: ds.HealthPath,
+		})
+	}
+	return out, nil
+}
+
+// placeContentGuardDetectors stamps each detector's Port and PodName. Ports
+// are allocated in the SAME key space as the session's sidecar refs so a
+// detector never collides with a sidecar.
+func placeContentGuardDetectors(sess *spiceboxv1alpha1.AgentSession, dets []spiceboxv1alpha1.ResolvedContentGuardDetector, sidecarRefs []string) {
+	keys := append([]string{}, sidecarRefs...)
+	for _, d := range dets {
+		keys = append(keys, "det-"+d.Inspector)
+	}
+	ports := AllocatePorts(keys)
+	for i := range dets {
+		dets[i].Port = ports["det-"+dets[i].Inspector]
+		dets[i].PodName = "sidecar-" + sess.Name + "-" + dets[i].Inspector
+	}
+}
+
+// detectorPodSpec is the cosidecar descriptor a detector pod is built from.
+func detectorPodSpec(sess *spiceboxv1alpha1.AgentSession, det spiceboxv1alpha1.ResolvedContentGuardDetector, imagePullSecret string) cosidecar.Spec {
+	return cosidecar.Spec{
+		Ref: det.Inspector,
+		// Pin the NetworkPolicy name to the one cleanupOrphanedSidecarPods reaps
+		// by. On cosidecar's default name, removing an inspector mid-session
+		// reaps the detector pod by label but orphans its NetworkPolicy until
+		// session GC. BuildPod names the pod by Ref, so only the NP name is
+		// affected.
+		Name:            SidecarNetworkPolicyName(sess, det.Inspector),
+		Image:           det.Image,
+		Port:            det.Port,
+		Health:          cosidecar.Healthcheck{Path: det.HealthPath},
+		ImagePullSecret: imagePullSecret,
+		// Zero egress: the detector ingests potentially hostile tool text and
+		// must not be able to exfiltrate it to external endpoints.
+		Egress: cosidecar.EgressPolicy{Denied: true},
+	}
 }
 
 // SidecarPodName returns the deterministic name for a session's separate

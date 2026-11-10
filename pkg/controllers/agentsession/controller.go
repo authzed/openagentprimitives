@@ -2862,57 +2862,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// clear AwaitingDetector reason set meanwhile so the wait is never silent.
 	// The loop is generic — it never branches on inspector id.
 	{
-		var resolvedDetectors []spiceboxv1alpha1.ResolvedContentGuardDetector
-		var detKeys []string
 		// Collect the detector-requiring inspectors and their specs.
-		if eff := sess.Status.EffectiveSettings; eff != nil {
-			for _, ci := range eff.ContentInspectors {
-				insp, ok := contentguardregistry.Get(ci.ID)
-				if !ok {
-					// Webhook already rejected unknown IDs; defensive skip.
-					continue
-				}
-				dp, ok := insp.(contentguard.DetectorProvider)
-				if !ok {
-					// Inspector does not need a detector sidecar (e.g. url-allowlist).
-					continue
-				}
-				raw := ci.Config.Raw
-				ds, derr := dp.Detector(raw)
-				if derr != nil || ds == nil {
-					// Fail-closed: a detector-requiring inspector that can't resolve
-					// its image must not silently run unscanned.
-					return r.markBootFailed(ctx, &sess,
-						spiceboxv1alpha1.ReasonAgentSessionContentGuardHalt,
-						fmt.Sprintf("content-guard detector %q: %v", ci.ID, derr))
-				}
-				// Use the image exactly as declared in the inspector config: pinned
-				// by digest it launches the exact bytes, by tag it launches by tag.
-				// There is no probe path here as there is for SidecarToolbox.
-				img := ds.Image
-				resolvedDetectors = append(resolvedDetectors, spiceboxv1alpha1.ResolvedContentGuardDetector{
-					Inspector:  ci.ID,
-					Image:      img,
-					HealthPath: ds.HealthPath,
-				})
-				detKeys = append(detKeys, "det-"+ci.ID)
-			}
+		resolvedDetectors, derr := resolveContentGuardDetectors(sess.Status.EffectiveSettings)
+		if derr != nil {
+			// Fail-closed: a detector-requiring inspector that can't resolve
+			// its image must not silently run unscanned.
+			return r.markBootFailed(ctx, &sess,
+				spiceboxv1alpha1.ReasonAgentSessionContentGuardHalt, derr.Error())
 		}
 
 		if len(resolvedDetectors) > 0 {
-			// Allocate ports in the SAME key space as sidecar ports so they never
-			// collide. Derive the sidecar key slice from the resolved snapshot.
-			sidecarKeySlice := make([]string, 0, len(resolvedSidecars))
+			sidecarRefs := make([]string, 0, len(resolvedSidecars))
 			for _, rt := range resolvedSidecars {
-				sidecarKeySlice = append(sidecarKeySlice, rt.Ref)
+				sidecarRefs = append(sidecarRefs, rt.Ref)
 			}
-			allKeys := append(append([]string{}, sidecarKeySlice...), detKeys...)
-			ports := AllocatePorts(allKeys)
-			for i := range resolvedDetectors {
-				det := &resolvedDetectors[i]
-				det.Port = ports["det-"+det.Inspector]
-				det.PodName = "sidecar-" + sess.Name + "-" + det.Inspector
-			}
+			placeContentGuardDetectors(&sess, resolvedDetectors, sidecarRefs)
 
 			// Create each detector pod + its deny-all-egress NetworkPolicy, and
 			// reflect the pod IP. Hold runner-pod creation until every PodIP is known.
@@ -2934,22 +2898,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			var terminalDetectorFailures []string
 			for i := range resolvedDetectors {
 				det := &resolvedDetectors[i]
-				spec := cosidecar.Spec{
-					Ref: det.Inspector,
-					// Pin the NetworkPolicy name to the one
-					// cleanupOrphanedSidecarPods reaps by. On cosidecar's default
-					// name, removing an inspector mid-session reaps the detector pod
-					// by label but orphans its NetworkPolicy until session GC.
-					// BuildPod names the pod by Ref, so only the NP name is affected.
-					Name:            SidecarNetworkPolicyName(&sess, det.Inspector),
-					Image:           det.Image,
-					Port:            det.Port,
-					Health:          cosidecar.Healthcheck{Path: det.HealthPath},
-					ImagePullSecret: r.ImagePullSecret,
-					// Zero egress: the detector ingests potentially hostile tool text
-					// and must not be able to exfiltrate it to external endpoints.
-					Egress: cosidecar.EgressPolicy{Denied: true},
-				}
+				spec := detectorPodSpec(&sess, *det, r.ImagePullSecret)
 				pod, _, perr := cosidecar.BuildPod(&sess, spec)
 				if perr != nil {
 					return r.markBootFailed(ctx, &sess,
