@@ -529,9 +529,14 @@ spec:
          them for it in the thread and end the turn — never guess a repository.
       2. Resolve the head commit — always name the repository with --repo, which
          is how reviewbot authorizes it (a positional selector is refused):
-           gh pr view <number> --repo <owner>/<repo> --json headRefOid
+           gh pr view <number> --repo <owner>/<repo> --json headRefOid,author,isDraft
          (or `gh api repos/<owner>/<repo>/pulls/<number>`), then get the code
          and review it exactly as in steps 2-3 above.
+         NEVER include `id` in the --json fields in this mode. Reading a pull
+         request's node id records that pull request as one this session
+         works on, and only a session a webhook opened is bound to its pull
+         request — here the read is refused outright with "has no slot-bound
+         grant for this session". Nothing in this mode needs the id.
       3. Build the report (step 4) and DELIVER IT TO THE THREAD (step 5:
          respond_to_user with the report in `attached`, then
          artifact_offer_view). The artifact-delivered requirement still
@@ -554,8 +559,15 @@ spec:
          done once the review is delivered to the thread.
 
       If a git or gh call is refused because the repository is not in the
-      allowlist, that is by design: relay the refusal to the thread and stop —
-      do not retry or try another spelling of the URL.
+      allowlist — the refusal itself says "not in reviewbot's allowlist" —
+      that is by design: relay the refusal to the thread and stop — do not
+      retry or try another spelling of the URL. Any OTHER refusal is not an
+      allowlist refusal; never describe it as one. A "no slot-bound grant"
+      refusal means the call asked for `id` (step 2): drop it and retry.
+
+      Several pull requests in one request: review them one at a time, each
+      exactly as above, and deliver each review as its own message. A refusal
+      or failure on one does not stop the rest.
 
       ## Pausing and resuming a pull request
       Someone may ask you to stop reviewing a particular pull request — "stop
