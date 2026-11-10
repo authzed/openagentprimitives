@@ -124,4 +124,6 @@ func TestBundle_ThreadsAndOpeningText(t *testing.T) {
 	assert.Equal(t, "review pull request 1", b.OpeningText("a1"), "the first turn, not the follow-up")
 	assert.Empty(t, b.OpeningText("zz"))
 	assert.Empty(t, runnableBundle().Threads(), "a single-session bundle names no threads")
+	assert.Empty(t, runnableBundle().OpeningText(""),
+		"the unnamed thread has no opening text, so an unscoped step stays unscoped")
 }

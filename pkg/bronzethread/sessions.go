@@ -91,8 +91,12 @@ func (b Bundle) Threads() []string {
 // OpeningText is the text of the first user turn on thread: the message that
 // opened that thread's session, and so the first user message of every model
 // request the session makes. It is how a thread-scoped step recognizes its
-// session's requests.
+// session's requests. The unnamed thread has none: an unscoped step must match
+// every session's requests, including a delegated child's.
 func (b Bundle) OpeningText(thread string) string {
+	if thread == "" {
+		return ""
+	}
 	for _, ut := range b.UserTurns {
 		if ut.Thread == thread {
 			return ut.Text
