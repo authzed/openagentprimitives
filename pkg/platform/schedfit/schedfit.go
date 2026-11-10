@@ -50,6 +50,11 @@ type Headroom struct {
 	CPUMilli       int64
 	MemBytes       int64
 	EphemeralBytes int64
+
+	// Pods is the node's allocatable pod count minus its non-terminal pods,
+	// floored at zero. A node that reports no `pods` allocatable yields 0 here;
+	// callers that need "unlimited" must check the node's allocatable themselves.
+	Pods int64
 }
 
 // CeilingFromNodes computes the per-dimension maximum allocatable across nodes.
@@ -103,6 +108,7 @@ func HeadroomOn(node corev1.Node, pods []corev1.Pod) Headroom {
 		CPUMilli:       milli(alloc, corev1.ResourceCPU),
 		MemBytes:       value(alloc, corev1.ResourceMemory),
 		EphemeralBytes: value(alloc, corev1.ResourceEphemeralStorage),
+		Pods:           value(alloc, corev1.ResourcePods),
 	}
 	for i := range pods {
 		p := &pods[i]
@@ -112,18 +118,20 @@ func HeadroomOn(node corev1.Node, pods []corev1.Pod) Headroom {
 		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 			continue
 		}
-		cpu, mem, eph := effectiveRequests(p)
+		cpu, mem, eph := EffectiveRequests(&p.Spec)
+		h.Pods--
 		h.CPUMilli -= cpu
 		h.MemBytes -= mem
 		h.EphemeralBytes -= eph
 	}
+	h.Pods = max(h.Pods, 0)
 	h.CPUMilli = max(h.CPUMilli, 0)
 	h.MemBytes = max(h.MemBytes, 0)
 	h.EphemeralBytes = max(h.EphemeralBytes, 0)
 	return h
 }
 
-// effectiveRequests implements the Kubernetes effective pod request:
+// EffectiveRequests implements the Kubernetes effective pod request:
 // max(largest init-container request, sum of container requests), per
 // dimension. Init containers run to completion before the containers start, so
 // the scheduler reserves whichever is larger — not their sum.
@@ -131,29 +139,29 @@ func HeadroomOn(node corev1.Node, pods []corev1.Pod) Headroom {
 // Native sidecars are the exception: an init container with restartPolicy
 // Always keeps running alongside the app containers for the pod's lifetime, so
 // it ADDS to the sum like an app container instead of merely setting a floor.
-func effectiveRequests(p *corev1.Pod) (cpuMilli, memBytes, ephBytes int64) {
-	for i := range p.Spec.Containers {
-		req := p.Spec.Containers[i].Resources.Requests
+func EffectiveRequests(spec *corev1.PodSpec) (cpuMilli, memBytes, ephBytes int64) {
+	for i := range spec.Containers {
+		req := spec.Containers[i].Resources.Requests
 		cpuMilli += milli(req, corev1.ResourceCPU)
 		memBytes += value(req, corev1.ResourceMemory)
 		ephBytes += value(req, corev1.ResourceEphemeralStorage)
 	}
 	// Sidecars first: they belong IN the sum that the init-container floor below
 	// is then measured against, not compared to it.
-	for i := range p.Spec.InitContainers {
-		if !isSidecar(&p.Spec.InitContainers[i]) {
+	for i := range spec.InitContainers {
+		if !isSidecar(&spec.InitContainers[i]) {
 			continue
 		}
-		req := p.Spec.InitContainers[i].Resources.Requests
+		req := spec.InitContainers[i].Resources.Requests
 		cpuMilli += milli(req, corev1.ResourceCPU)
 		memBytes += value(req, corev1.ResourceMemory)
 		ephBytes += value(req, corev1.ResourceEphemeralStorage)
 	}
-	for i := range p.Spec.InitContainers {
-		if isSidecar(&p.Spec.InitContainers[i]) {
+	for i := range spec.InitContainers {
+		if isSidecar(&spec.InitContainers[i]) {
 			continue
 		}
-		req := p.Spec.InitContainers[i].Resources.Requests
+		req := spec.InitContainers[i].Resources.Requests
 		cpuMilli = max(cpuMilli, milli(req, corev1.ResourceCPU))
 		memBytes = max(memBytes, value(req, corev1.ResourceMemory))
 		ephBytes = max(ephBytes, value(req, corev1.ResourceEphemeralStorage))
@@ -172,15 +180,15 @@ func isSidecar(c *corev1.Container) bool {
 //
 // Prefer this over calling Exceeds per container. Kubernetes places a pod
 // atomically, so what has to fit is the pod's effective request — see
-// effectiveRequests — and checking containers one at a time under-detects: three
+// EffectiveRequests — and checking containers one at a time under-detects: three
 // 2Gi containers each clear a 4Gi ceiling while the pod they belong to needs 6Gi
-// and can never be placed. Sharing effectiveRequests with HeadroomOn keeps the
+// and can never be placed. Sharing EffectiveRequests with HeadroomOn keeps the
 // "what does this pod actually cost" rule in exactly one place.
 func ExceedsPod(label string, pod *corev1.Pod, c Ceiling) (string, bool) {
 	if pod == nil || !c.Known {
 		return "", false
 	}
-	cpuMilli, memBytes, ephBytes := effectiveRequests(pod)
+	cpuMilli, memBytes, ephBytes := EffectiveRequests(&pod.Spec)
 	req := corev1.ResourceList{}
 	if cpuMilli > 0 {
 		req[corev1.ResourceCPU] = *resource.NewMilliQuantity(cpuMilli, resource.DecimalSI)
