@@ -1770,27 +1770,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			var earliestBundleStart time.Time
 			bundleSessionStatuses := make([]spiceboxv1alpha1.ResolvedBundle, 0, len(ac.Spec.ToolBundles))
 			for _, b := range ac.Spec.ToolBundles {
-				identity := b.AgentIdentity
-				if identity == "" {
-					identity = sess.Spec.AgentIdentity
-				}
-				if identity == "" {
-					identity = ac.Spec.AgentIdentity
-				}
-
 				if err := r.ensureSandboxNetworkPolicy(ctx, &sess, b); err != nil {
 					return ctrl.Result{}, err
 				}
-				// The tier-resolved sandbox backend for this bundle, or nil when no
-				// tier expressed a preference — BuildBundleSession then leaves
-				// spec.sandbox unset, so the SpiceboxClass's own setting stands.
-				var resolvedSandbox *spiceboxv1alpha1.SandboxBackend
-				if eff := sess.Status.EffectiveSettings; eff != nil {
-					if backend, ok := eff.Sandbox[b.Name]; ok {
-						resolvedSandbox = &backend
-					}
-				}
-				desired := BuildBundleSession(&sess, b, identity, claimName, sess.Status.ResolvedSkillBundles, resolvedSandbox, ac.Spec.Config)
+				desired := desiredBundleSession(&sess, &ac, b, claimName)
+				identity := desired.Spec.Agent
 				// Server-side apply (idempotent re-create).
 				if err := r.Client.Patch(ctx, desired,
 					client.Apply, client.ForceOwnership, client.FieldOwner("agentsession-bundle"),

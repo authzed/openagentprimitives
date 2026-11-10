@@ -127,25 +127,14 @@ func DemandFor(ctx context.Context, c client.Reader, sess *spiceboxv1alpha1.Agen
 }
 
 // demandBundlePod renders the sandbox pod one tool bundle will run in. It
-// mirrors the reconciler's bundle loop (identity and tier-resolved backend
-// into BuildBundleSession) and the SpiceboxSession reconciler's bind (class
+// takes the reconciler's own desiredBundleSession (identity and tier-resolved
+// backend) and mirrors the SpiceboxSession reconciler's bind (class
 // snapshot, image default, toolchain resolution), then calls podspec.Build —
 // the builder both registered sandbox backends render through.
 func demandBundlePod(ctx context.Context, c client.Reader, sess *spiceboxv1alpha1.AgentSession, ac *spiceboxv1alpha1.AgentClass, b spiceboxv1alpha1.ToolBundle) (*corev1.Pod, error) {
-	identity := b.AgentIdentity
-	if identity == "" {
-		identity = sess.Spec.AgentIdentity
-	}
-	if identity == "" {
-		identity = ac.Spec.AgentIdentity
-	}
-	var resolvedSandbox *spiceboxv1alpha1.SandboxBackend
-	if backend, ok := sess.Status.EffectiveSettings.Sandbox[b.Name]; ok {
-		resolvedSandbox = &backend
-	}
 	// No claim name: whether the workspace is shared depends on the operator's
 	// configured StorageClass, and only changes the pod's volumes.
-	bs := BuildBundleSession(sess, b, identity, "", sess.Status.ResolvedSkillBundles, resolvedSandbox, ac.Spec.Config)
+	bs := desiredBundleSession(sess, ac, b, "")
 
 	var cls spiceboxv1alpha1.SpiceboxClass
 	if err := c.Get(ctx, types.NamespacedName{Name: b.Class}, &cls); err != nil {
