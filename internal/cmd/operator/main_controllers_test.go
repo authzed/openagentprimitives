@@ -61,6 +61,7 @@ func TestOperatorRegistersExpectedControllers(t *testing.T) {
 		"AgentClass":                 true,
 		"Channel":                    true,
 		"AgentSession":               true,
+		"Admission":                  true,
 		"GuardianAgentSessionGrants": true,
 		"MonitoringWatchers":         true,
 		"UserIdentity":               true,

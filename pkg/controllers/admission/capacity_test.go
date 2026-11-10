@@ -177,3 +177,37 @@ func TestKubeCapacitySourceSnapshot(t *testing.T) {
 	assert.False(t, m.Reserve(Demand{Pods: []PodDemand{pod("x", 500)}}), "the listed pod's request is booked")
 	assert.True(t, m.Reserve(Demand{Pods: []PodDemand{pod("x", 300)}}))
 }
+
+func TestNodeModelTotals(t *testing.T) {
+	cordoned := testNode("c", "4", "4Gi", "10")
+	cordoned.Spec.Unschedulable = true
+	cases := []struct {
+		name             string
+		nodes            []corev1.Node
+		wantCPU, wantMem int64
+	}{
+		{
+			name:    "two schedulable nodes: allocatable summed, unaffected by pods placed on them",
+			nodes:   []corev1.Node{testNode("a", "1", "1Gi", "10"), testNode("b", "2", "2Gi", "10")},
+			wantCPU: 3000, wantMem: 3 << 30,
+		},
+		{
+			name:    "an unschedulable node: excluded from the totals",
+			nodes:   []corev1.Node{testNode("a", "1", "1Gi", "10"), cordoned},
+			wantCPU: 1000, wantMem: 1 << 30,
+		},
+		{name: "no nodes: unknown, zero totals"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewNodeModel(tc.nodes, []corev1.Pod{testPod("a", "600m")})
+			require.True(t, m.Reserve(Demand{Pods: []PodDemand{pod("x", 100)}}), "Reserve")
+			cpu, mem := m.Totals()
+			assert.Equal(t, tc.wantCPU, cpu, "cpu total")
+			assert.Equal(t, tc.wantMem, mem, "memory total")
+			cpu, mem = m.Clone().Totals()
+			assert.Equal(t, tc.wantCPU, cpu, "clone cpu total")
+			assert.Equal(t, tc.wantMem, mem, "clone memory total")
+		})
+	}
+}

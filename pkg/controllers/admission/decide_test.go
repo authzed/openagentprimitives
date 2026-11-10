@@ -27,8 +27,9 @@ func (m *slotModel) Reserve(d Demand) bool {
 	m.slots -= len(d.Pods)
 	return true
 }
-func (m *slotModel) Free([]PlacedPod)     {}
-func (m *slotModel) Clone() CapacityModel { c := *m; return &c }
+func (m *slotModel) Free([]PlacedPod)       {}
+func (m *slotModel) Clone() CapacityModel   { c := *m; return &c }
+func (m *slotModel) Totals() (int64, int64) { return 0, 0 }
 
 func key(name string) types.NamespacedName {
 	return types.NamespacedName{Namespace: "ns", Name: name}

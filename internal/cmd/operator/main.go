@@ -102,6 +102,8 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/onepassword" // register onepassword relsync.Kind for the relationshipsource controller (relsync.Get); also reachable transitively via the relsource/imports blank import above, but this is the explicit wiring site for THIS aspect, not an accident of that one
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/slack"       // register slack kind for channel-controller validation
 	"github.com/authzed/openagentprimitives/pkg/cli/clikit"
+	sessionadmission "github.com/authzed/openagentprimitives/pkg/controllers/admission"
+	"github.com/authzed/openagentprimitives/pkg/controllers/admission/admitter"
 	agentclassctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentclass"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentidentity"
 	agentsessionctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
@@ -757,6 +759,13 @@ type config struct {
 	idleStorageReclaimAfter       time.Duration
 	failedSandboxReapGrace        time.Duration
 	capacityHoldTimeout           time.Duration
+	// sessionAdmission gates every booting AgentSession's pods on the
+	// admitter's whole-set, fair-share decision; false admits at once.
+	sessionAdmission bool
+	// admissionMinWarm is parsed and stored only; its consumer (how long an
+	// idle session keeps its admission before it may be reclaimed) is not
+	// wired yet.
+	admissionMinWarm              time.Duration
 	oauthRefreshThreshold         time.Duration
 	workspaceStorageClass         string
 	workspaceSize                 string
@@ -882,6 +891,10 @@ func newCommand() *cobra.Command {
 		"How long a Failed session's sandbox pods (bundle SpiceboxSessions + runner pod) are kept for debugging before teardown. The AgentSession itself is kept either way. Set to 0 (or negative) to disable reaping entirely (keep everything, for debugging).")
 	fs.DurationVar(&cfg.capacityHoldTimeout, "capacity-hold-timeout", time.Hour,
 		"How long a booting AgentSession whose sandbox/detector pods are Pending on a cluster capacity shortfall (Insufficient cpu/memory, too many pods) is HELD — queued with a notice in its channel, resuming by itself once the scheduler places the pod — instead of failing at the ordinary readiness deadline. Measured from provisioning start. Pods that can never fit, or are blocked by a taint or volume affinity, still fail at the ordinary deadline. Set to a negative value to disable holding.")
+	fs.BoolVar(&cfg.sessionAdmission, "session-admission", true,
+		"Admit each booting AgentSession's whole pod set against node capacity before any of its pods is created, in join order with fair share between AgentClasses; sessions that do not fit wait in line. Set to false to admit every session at once (pods then queue in the scheduler as before).")
+	fs.DurationVar(&cfg.admissionMinWarm, "admission-min-warm", 5*time.Minute,
+		"Minimum time an idle AgentSession keeps its admission (and warm pods) before it may be reclaimed for a session waiting in line.")
 	fs.DurationVar(&cfg.oauthRefreshThreshold, "oauth-refresh-threshold", 5*time.Minute,
 		"Default refresh threshold for type=oauth AgentIdentity credentials. AgentIdentities with spec.refreshThreshold override this per-identity.")
 	fs.StringVar(&cfg.workspaceStorageClass, "workspace-storage-class", "",
@@ -2668,6 +2681,7 @@ func run(cfg *config) {
 		DefaultSessionSleepAfter:       cfg.defaultSessionSleepAfter,
 		FailedSandboxReapGrace:         cfg.failedSandboxReapGrace,
 		CapacityHoldTimeout:            cfg.capacityHoldTimeout,
+		AdmissionEnabled:               cfg.sessionAdmission,
 		DefaultSessionStorageRetention: cfg.sessionStorageRetention,
 		SessionGCAfter:                 cfg.sessionGCAfter,
 		NodePinnedStorageReclaimGrace:  cfg.nodePinnedStorageReclaimGrace,
@@ -2747,6 +2761,23 @@ func run(cfg *config) {
 		os.Exit(1)
 	}
 	log.Info("registered controller", "name", "AgentSession", "operatorURL", operatorURL)
+
+	// The admitter decides which booting sessions the reconciler above may
+	// create pods for. Leader-only (the controller-runtime default), so one
+	// operator admits against the free space at a time. Capacity is declared
+	// as the interface and assigned a concrete value, never a typed-nil
+	// pointer (CLAUDE.md, nil interfaces).
+	var admissionCapacity sessionadmission.CapacitySource = sessionadmission.KubeCapacitySource{Reader: mgr.GetClient()}
+	if err := (&admitter.Reconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Capacity:  admissionCapacity,
+		Enabled:   cfg.sessionAdmission,
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to register admission controller")
+		os.Exit(1)
+	}
+	log.Info("registered controller", "name", "Admission", "enabled", cfg.sessionAdmission)
 
 	// Workshop provisions/tears down a builder session's isolated namespace,
 	// exact RBAC, SpiceDB tuple and bearer token (spec §1.2/§1.3). spiceDBClient

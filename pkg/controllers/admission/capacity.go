@@ -30,6 +30,10 @@ type CapacityModel interface {
 	Free(pods []PlacedPod)
 	// Clone returns an independent copy.
 	Clone() CapacityModel
+	// Totals is the cluster's schedulable size — allocatable summed over the
+	// nodes the model places on — which Decide's dominant share is measured
+	// against. Zero when unknown; it does not shrink as Reserve places pods.
+	Totals() (cpuMilli, memBytes int64)
 }
 
 // CapacitySource produces a CapacityModel snapshot. It is the seam a future
@@ -82,6 +86,9 @@ func (n *nodeSlot) take(p PodDemand) {
 type nodeModel struct {
 	known bool
 	nodes []nodeSlot
+	// totalCPUMilli and totalMemBytes are allocatable summed over the
+	// schedulable nodes, fixed at construction.
+	totalCPUMilli, totalMemBytes int64
 }
 
 // NewNodeModel builds a model from node headroom. Unschedulable nodes are
@@ -97,6 +104,9 @@ func NewNodeModel(nodes []corev1.Node, pods []corev1.Pod) CapacityModel {
 			continue
 		}
 		h := schedfit.HeadroomOn(nodes[i], pods)
+		alloc := nodes[i].Status.Allocatable
+		m.totalCPUMilli += alloc.Cpu().MilliValue()
+		m.totalMemBytes += alloc.Memory().Value()
 		_, hasPods := nodes[i].Status.Allocatable[corev1.ResourcePods]
 		m.nodes = append(m.nodes, nodeSlot{
 			name:           nodes[i].Name,
@@ -158,5 +168,9 @@ func (m *nodeModel) Free(pods []PlacedPod) {
 }
 
 func (m *nodeModel) Clone() CapacityModel {
-	return &nodeModel{known: m.known, nodes: slices.Clone(m.nodes)}
+	return &nodeModel{known: m.known, nodes: slices.Clone(m.nodes), totalCPUMilli: m.totalCPUMilli, totalMemBytes: m.totalMemBytes}
+}
+
+func (m *nodeModel) Totals() (cpuMilli, memBytes int64) {
+	return m.totalCPUMilli, m.totalMemBytes
 }
