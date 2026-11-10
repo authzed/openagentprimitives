@@ -90,12 +90,16 @@ func DemandFor(ctx context.Context, c client.Reader, sess *spiceboxv1alpha1.Agen
 	}
 	pods = append(pods, runner)
 
+	// A bundle's sandbox pod is keyed by its SpiceboxSession, not its name: a
+	// pod adopted from a SandboxWarmPool has a pool-minted one.
+	sandboxSessions := make(map[string]string, len(ac.Spec.ToolBundles))
 	for _, b := range ac.Spec.ToolBundles {
 		pod, err := demandBundlePod(ctx, c, sess, ac, b)
 		if err != nil {
 			return admission.Demand{}, err
 		}
 		pods = append(pods, pod)
+		sandboxSessions[pod.Name] = BundleSessionName(sess, b)
 	}
 
 	for _, det := range dets {
@@ -120,7 +124,9 @@ func DemandFor(ctx context.Context, c client.Reader, sess *spiceboxv1alpha1.Agen
 
 	d := admission.Demand{Pods: make([]admission.PodDemand, 0, len(pods))}
 	for _, p := range pods {
-		d.Pods = append(d.Pods, admission.PodDemandFor(p.Name, &p.Spec))
+		pd := admission.PodDemandFor(p.Name, &p.Spec)
+		pd.SandboxSession = sandboxSessions[p.Name]
+		d.Pods = append(d.Pods, pd)
 	}
 	return d, nil
 }

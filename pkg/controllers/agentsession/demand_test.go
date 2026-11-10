@@ -129,9 +129,13 @@ func TestDemandForMatchesBuiltPods(t *testing.T) {
 		{one, 1000, 1024},
 	} {
 		bundle := spiceboxv1alpha1.ToolBundle{Name: "b-" + tc.class.Name, Class: tc.class.Name}
-		pod, berr := podspec.Build(BuildBundleSession(sess, bundle, "", "", nil, nil, nil), tc.class.Spec)
+		bs := BuildBundleSession(sess, bundle, "", "", nil, nil, nil)
+		pod, berr := podspec.Build(bs, tc.class.Spec)
 		require.NoError(t, berr, "build bundle pod for %s", tc.class.Name)
 		want := podDemandOf(pod)
+		// A sandbox pod is matched to its demand by its bundle SpiceboxSession's
+		// label, not its name: a pod adopted from a warm pool has a pool name.
+		want.SandboxSession = bs.Name
 
 		assert.Equal(t, want, byName[pod.Name], "bundle %s demand equals the built pod's effective requests", bundle.Name)
 		assert.Equal(t, tc.cpuMilli, byName[pod.Name].CPUMilli,

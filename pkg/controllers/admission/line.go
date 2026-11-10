@@ -23,6 +23,11 @@ type PodDemand struct {
 	// Tolerations are the pod's own, from its built spec: a node model places
 	// the pod only on a node whose NoSchedule/NoExecute taints it tolerates.
 	Tolerations []corev1.Toleration
+	// SandboxSession is set on a tool bundle's sandbox pod: the name of the
+	// bundle SpiceboxSession it runs for. Such a pod is found by that
+	// SpiceboxSession's label rather than by Name, because one adopted from a
+	// SandboxWarmPool carries a pool-minted name.
+	SandboxSession string
 }
 
 // Demand is the whole pod set a session needs admitted together.

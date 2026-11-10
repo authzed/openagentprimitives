@@ -305,19 +305,26 @@ func (failingSource) Snapshot(context.Context) (admission.CapacityModel, error) 
 func TestUnplacedDemand(t *testing.T) {
 	d := admission.Demand{Pods: []admission.PodDemand{
 		{Name: "bound", CPUMilli: 1}, {Name: "pending", CPUMilli: 2}, {Name: "missing", CPUMilli: 4},
+		// A sandbox pod adopted from a SandboxWarmPool: bound under a
+		// pool-minted name, found by its bundle SpiceboxSession's label.
+		{Name: "s1-code-pod", SandboxSession: "s1-code", CPUMilli: 8},
 	}}
-	pods := podIndex{
-		{Namespace: "default", Name: "bound"}:   &corev1.Pod{Spec: corev1.PodSpec{NodeName: "node-a"}},
-		{Namespace: "default", Name: "pending"}: &corev1.Pod{},
-	}
+	pods := newPodIndex([]corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "bound", Namespace: "default"}, Spec: corev1.PodSpec{NodeName: "node-a"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pending", Namespace: "default"}},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "warmpool-x7k2p", Namespace: "default", Labels: map[string]string{sandboxPodLabel: "s1-code"}},
+			Spec:       corev1.PodSpec{NodeName: "node-a"},
+		},
+	})
 	cases := []struct {
 		name  string
 		pods  podIndex
 		known bool
 		want  []string
 	}{
-		{name: "pods listed: pending and missing pods are unplaced", pods: pods, known: true, want: []string{"pending", "missing"}},
-		{name: "pod list failed: every pod counted unplaced", known: false, want: []string{"bound", "pending", "missing"}},
+		{name: "pods listed: pending and missing pods are unplaced, the pool-named sandbox pod is placed", pods: pods, known: true, want: []string{"pending", "missing"}},
+		{name: "pod list failed: every pod counted unplaced", known: false, want: []string{"bound", "pending", "missing", "s1-code-pod"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -844,4 +851,30 @@ func TestAdmitterCapReclaim(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A warm idle holder whose sandbox pod was adopted from a SandboxWarmPool has
+// that pod under a pool-minted name. Matched by name, it was never counted as
+// bound: its demand stayed "unplaced" (reserved on top of the snapshot, which
+// already counts it — a double count for life), and an early reclaim could
+// not credit what it gives back. Matched by its bundle SpiceboxSession's
+// label, it is the bundle entry's pod.
+func TestBoundPodsMatchesPoolNamedSandboxPod(t *testing.T) {
+	d := admission.Demand{Pods: []admission.PodDemand{
+		{Name: "rb-runner", CPUMilli: 1000},
+		{Name: "rb-code-pod", SandboxSession: "rb-code", CPUMilli: 500},
+	}}
+	runner := boundRunnerPod("rb")
+	sandbox := boundRunnerPod("ignored")
+	sandbox.Name = "warmpool-x7k2p"
+	sandbox.Labels = map[string]string{sandboxPodLabel: "rb-code"}
+	pods := newPodIndex([]corev1.Pod{*runner, *sandbox})
+
+	got := boundPods("default", d, pods)
+	var names []string
+	for _, p := range got {
+		names = append(names, p.Name)
+	}
+	assert.ElementsMatch(t, []string{"rb-runner", "warmpool-x7k2p"}, names, "both the runner and the pool-named sandbox pod are bound")
+	assert.Empty(t, unplaced("default", d, pods, true).Pods, "nothing left unplaced")
 }

@@ -331,16 +331,15 @@ func isWarmIdle(sess *spiceboxv1alpha1.AgentSession) bool {
 }
 
 // boundPods is the part of a session's pod set the capacity snapshot counts
-// against a node: its demand's pods (matched by name, as unplaced does) that
-// are bound and not finished, priced from the live pod spec. A pod already
-// marked for deletion is included — the snapshot still counts it until it is
-// gone — so it is exactly what a reclaim gives back.
+// against a node: its demand's pods (matched by podIndex.lookup, as unplaced
+// does) that are bound and not finished, priced from the live pod spec. A pod
+// already marked for deletion is included — the snapshot still counts it
+// until it is gone — so it is exactly what a reclaim gives back.
 func boundPods(namespace string, d admission.Demand, pods podIndex) []admission.PlacedPod {
 	var placed []admission.PlacedPod
 	for _, p := range d.Pods {
-		pod, ok := pods[types.NamespacedName{Namespace: namespace, Name: p.Name}]
-		if !ok || pod.Spec.NodeName == "" ||
-			pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		pod := pods.lookup(namespace, p)
+		if pod == nil || !isBound(pod) {
 			continue
 		}
 		placed = append(placed, admission.PlacedPod{
@@ -412,7 +411,7 @@ type sessionsWithPods map[types.NamespacedName]bool
 
 func indexSessionsWithPods(pods podIndex) sessionsWithPods {
 	labelled := sessionsWithPods{}
-	for _, pod := range pods {
+	for _, pod := range pods.byName {
 		for _, l := range []string{sessionPodLabel, sandboxPodLabel} {
 			if v := pod.Labels[l]; v != "" {
 				labelled[types.NamespacedName{Namespace: pod.Namespace, Name: v}] = true
@@ -633,8 +632,61 @@ func (r *Reconciler) snapshot(ctx context.Context, waiting int) admission.Capaci
 	return m
 }
 
-// podIndex is the cluster's pods by namespace/name.
-type podIndex map[types.NamespacedName]*corev1.Pod
+// podIndex is the cluster's pods, looked up for a session's demand entries by
+// role: a sandbox pod by its bundle SpiceboxSession's label (sandboxPodLabel),
+// every other pod by name.
+//
+// The split is because a pod adopted from a SandboxWarmPool keeps the
+// pool-minted name it was created under; tryAdopt injects the
+// SpiceboxSession label onto it, and that label is the only stable link. The
+// runner, detector and separate-pod sidecar pods are always created by this
+// operator under the deterministic name their PodDemand carries.
+type podIndex struct {
+	byName    map[types.NamespacedName]*corev1.Pod
+	bySandbox map[types.NamespacedName][]*corev1.Pod
+}
+
+func newPodIndex(pods []corev1.Pod) podIndex {
+	idx := podIndex{
+		byName:    make(map[types.NamespacedName]*corev1.Pod, len(pods)),
+		bySandbox: map[types.NamespacedName][]*corev1.Pod{},
+	}
+	for i := range pods {
+		p := &pods[i]
+		idx.byName[client.ObjectKeyFromObject(p)] = p
+		if v := p.Labels[sandboxPodLabel]; v != "" {
+			k := types.NamespacedName{Namespace: p.Namespace, Name: v}
+			idx.bySandbox[k] = append(idx.bySandbox[k], p)
+		}
+	}
+	return idx
+}
+
+// lookup finds the pod a demand entry in namespace describes, or nil. Of
+// several pods labelled for one sandbox (a replacement beside a terminating
+// predecessor), a bound, unfinished one is preferred: that is the pod the
+// snapshot is counting against a node.
+func (idx podIndex) lookup(namespace string, p admission.PodDemand) *corev1.Pod {
+	if p.SandboxSession == "" {
+		return idx.byName[types.NamespacedName{Namespace: namespace, Name: p.Name}]
+	}
+	cands := idx.bySandbox[types.NamespacedName{Namespace: namespace, Name: p.SandboxSession}]
+	for _, pod := range cands {
+		if isBound(pod) {
+			return pod
+		}
+	}
+	if len(cands) > 0 {
+		return cands[0]
+	}
+	return nil
+}
+
+// isBound reports whether the snapshot counts pod against a node: bound and
+// not finished.
+func isBound(pod *corev1.Pod) bool {
+	return pod.Spec.NodeName != "" && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed
+}
 
 // listPods indexes every pod for the unplaced-demand check. A list error is
 // logged and reported as not known, so every holder pod counts as unplaced.
@@ -642,18 +694,14 @@ func (r *Reconciler) listPods(ctx context.Context) (podIndex, bool) {
 	var pods corev1.PodList
 	if err := r.Client.List(ctx, &pods); err != nil {
 		log.FromContext(ctx).Info("admission: list pods failed; counting every admitted session's pods as unplaced", "err", err.Error())
-		return nil, false
+		return podIndex{}, false
 	}
-	idx := make(podIndex, len(pods.Items))
-	for i := range pods.Items {
-		idx[client.ObjectKeyFromObject(&pods.Items[i])] = &pods.Items[i]
-	}
-	return idx, true
+	return newPodIndex(pods.Items), true
 }
 
 // unplaced is the part of a holder's demand the capacity snapshot does not
-// already account for, matched to pods by name in the session's namespace
-// (DemandFor names each PodDemand after the pod its builder creates):
+// already account for, each entry matched to its pod in the session's
+// namespace by podIndex.lookup:
 //
 //   - a pod bound to a node (spec.nodeName set) is in the snapshot: placed;
 //   - a pod that exists but is not yet bound, or does not exist yet, is not:
@@ -665,7 +713,7 @@ func unplaced(namespace string, d admission.Demand, pods podIndex, known bool) a
 	var out admission.Demand
 	for _, p := range d.Pods {
 		if known {
-			if pod, ok := pods[types.NamespacedName{Namespace: namespace, Name: p.Name}]; ok && pod.Spec.NodeName != "" {
+			if pod := pods.lookup(namespace, p); pod != nil && pod.Spec.NodeName != "" {
 				continue
 			}
 		}
