@@ -93,6 +93,11 @@ func TestWaitingSince(t *testing.T) {
 			at(0),
 		},
 		{
+			"queued at the gate two hours after creation (a start approval in between): the gate-arrival time",
+			withAdmitted(sessionAt(0), metav1.ConditionFalse, 2*time.Hour),
+			at(2 * time.Hour),
+		},
+		{
 			"cold wake after release: the later wake time",
 			withWake(withAdmitted(sessionAt(0), metav1.ConditionFalse, time.Minute), 2*time.Minute),
 			at(2 * time.Minute),
@@ -109,6 +114,33 @@ func TestIsAdmitted(t *testing.T) {
 	assert.False(t, IsAdmitted(sessionAt(0)), "no condition: not admitted")
 	assert.True(t, IsAdmitted(withAdmitted(sessionAt(0), metav1.ConditionTrue, 0)), "Admitted=True")
 	assert.False(t, IsAdmitted(withAdmitted(sessionAt(0), metav1.ConditionFalse, 0)), "Admitted=False")
+}
+
+func TestIsQueued(t *testing.T) {
+	queued := func(status metav1.ConditionStatus, reason string) *v1alpha1.AgentSession {
+		s := sessionAt(0)
+		s.Status.Conditions = []metav1.Condition{{
+			Type: v1alpha1.AgentSessionConditionAdmitted, Status: status, Reason: reason,
+			LastTransitionTime: *mtime(time.Minute),
+		}}
+		return s
+	}
+	cases := []struct {
+		name string
+		sess *v1alpha1.AgentSession
+		want bool
+	}{
+		{"no Admitted condition: not queued", sessionAt(0), false},
+		{"Admitted=False/Queued: queued", queued(metav1.ConditionFalse, v1alpha1.ReasonAdmissionQueued), true},
+		{"Admitted=False/Reclaimed: not queued (released, has not reached the gate again)", queued(metav1.ConditionFalse, v1alpha1.ReasonAdmissionReclaimed), false},
+		{"Admitted=False/PlacementMismatch: not queued", queued(metav1.ConditionFalse, v1alpha1.ReasonAdmissionMisfit), false},
+		{"Admitted=True: not queued", queued(metav1.ConditionTrue, v1alpha1.ReasonAdmitted), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, IsQueued(tc.sess))
+		})
+	}
 }
 
 func TestDemandTotal(t *testing.T) {

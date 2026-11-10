@@ -47,17 +47,23 @@ func (r *Reconciler) awaitingAdmission(sess *spiceboxv1alpha1.AgentSession) bool
 }
 
 // waitForAdmission is the whole reconcile tail of a booting session that is
-// not admitted: give up once it has waited past the capacity-hold timeout,
-// otherwise surface the wait and requeue. It creates nothing.
+// not admitted: mark its arrival in line, give up once it has waited past the
+// capacity-hold timeout, otherwise surface the wait and requeue. It creates
+// nothing.
 //
-// The wait is measured from admission.WaitingSince — the later of joining the
-// line and the last release — so a session released back to the line (a
-// placement misfit) gets a full window, not the remainder of its first one.
+// The first gated pass of a wait stamps Admitted=False/Queued at now (see
+// markQueued), and the wait is measured from admission.WaitingSince — that
+// arrival time. A session parked for hours at a start-approval, identity or
+// credential gate therefore gets a full window from the moment it actually
+// joins the line, and so does one released back to it (a placement misfit or
+// a reclaim followed by a cold wake), rather than the remainder of an earlier
+// one.
 //
 // A negative --capacity-hold-timeout (hold disabled) means no give-up time:
 // there is no pod whose ordinary readiness deadline could apply instead, so
 // the session waits for admission with no CapacityHold notice.
 func (r *Reconciler) waitForAdmission(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (ctrl.Result, error) {
+	r.markQueued(sess)
 	timeout := r.effectiveCapacityHoldTimeout()
 	since := admission.WaitingSince(sess)
 	until := since.Add(timeout)
@@ -78,6 +84,32 @@ func (r *Reconciler) waitForAdmission(ctx context.Context, sess *spiceboxv1alpha
 		}
 	}
 	return ctrl.Result{RequeueAfter: requeue}, r.applyStatus(ctx, sess)
+}
+
+// markQueued records, on sess, that it has reached the admission gate:
+// Admitted=False/Queued with now as the transition time, unless it already
+// carries that marker (a later pass of the same wait keeps the original
+// arrival). The admitter considers only queued sessions, so this marker is
+// what puts a session in line; a session parked or blocked before the gate
+// never carries it and never reserves anything. The caller persists it.
+//
+// The transition time is set explicitly rather than left to
+// meta.SetStatusCondition, which keeps the old time on a False→False change:
+// a session released earlier (Reclaimed, PlacementMismatch) arrives in line
+// again now, not at its release.
+func (r *Reconciler) markQueued(sess *spiceboxv1alpha1.AgentSession) {
+	if admission.IsQueued(sess) {
+		return
+	}
+	now := metav1.NewTime(r.now())
+	conditions.Set(sess, &sess.Status.Conditions, metav1.Condition{
+		Type:               spiceboxv1alpha1.AgentSessionConditionAdmitted,
+		Status:             metav1.ConditionFalse,
+		Reason:             spiceboxv1alpha1.ReasonAdmissionQueued,
+		Message:            "waiting in line for cluster capacity",
+		LastTransitionTime: now,
+	})
+	conditions.Find(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted).LastTransitionTime = now
 }
 
 // admissionWaitExpiredMessage is the Failed condition message when a session

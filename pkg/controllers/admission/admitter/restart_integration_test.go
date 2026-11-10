@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -140,13 +141,23 @@ func TestAdmitterRestartRebuildsLine(t *testing.T) {
 
 	stop := startAdmitter(t, env)
 	for i := 1; i <= 5; i++ {
-		require.NoError(t, c.Create(ctx, &spiceboxv1alpha1.AgentSession{
+		sess := &spiceboxv1alpha1.AgentSession{
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("s%d", i), Namespace: restartNamespace},
 			Spec: spiceboxv1alpha1.AgentSessionSpec{
 				Class:  testClass,
 				Prompt: spiceboxv1alpha1.PromptSource{Inline: "review this"},
 			},
-		}), "create s%d", i)
+		}
+		require.NoError(t, c.Create(ctx, sess), "create s%d", i)
+		// envtest runs no AgentSession reconciler: put the session in line the
+		// way its admission gate does, Admitted=False/Queued at arrival.
+		sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhasePending
+		meta.SetStatusCondition(&sess.Status.Conditions, metav1.Condition{
+			Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionFalse,
+			Reason: spiceboxv1alpha1.ReasonAdmissionQueued, Message: "waiting in line",
+			LastTransitionTime: sess.CreationTimestamp,
+		})
+		require.NoError(t, c.Status().Update(ctx, sess), "queue s%d", i)
 	}
 
 	waitForAdmitted(t, c, 2)

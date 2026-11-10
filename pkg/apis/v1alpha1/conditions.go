@@ -523,6 +523,12 @@ const (
 // AgentSessionConditionAdmitted reasons.
 const (
 	ReasonAdmitted = "Admitted"
+	// ReasonAdmissionQueued marks a session that has reached the admission
+	// gate and is waiting in line. Its transition time is the moment it
+	// arrived, which the waiting timeout is measured from; the admitter
+	// considers only sessions carrying it, so a session parked at an earlier
+	// gate never reserves anything.
+	ReasonAdmissionQueued = "Queued"
 	// ReasonAdmissionReclaimed marks a session released so a session ahead of
 	// it in line could be admitted.
 	ReasonAdmissionReclaimed = "Reclaimed"

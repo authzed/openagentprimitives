@@ -65,7 +65,10 @@ func JoinedAt(sess *v1alpha1.AgentSession) time.Time {
 }
 
 // WaitingSince is when the session's current wait began: JoinedAt, or the
-// later moment it was released from admission.
+// later moment its Admitted condition last went False. The gate stamps
+// Admitted=False/Queued at the moment a session reaches it, so for a session
+// in line this is its gate arrival — not its creation, however long it was
+// parked at a start-approval, identity or credential gate first.
 func WaitingSince(sess *v1alpha1.AgentSession) time.Time {
 	joined := JoinedAt(sess)
 	if c := admittedCondition(sess); c != nil && c.Status == metav1.ConditionFalse &&
@@ -73,6 +76,15 @@ func WaitingSince(sess *v1alpha1.AgentSession) time.Time {
 		return c.LastTransitionTime.Time
 	}
 	return joined
+}
+
+// IsQueued reports whether the session has reached the admission gate and is
+// waiting in line (Admitted=False/Queued). Only such a session is a candidate
+// for admission: one parked at an earlier gate, or blocked before it, has not
+// reached the line.
+func IsQueued(sess *v1alpha1.AgentSession) bool {
+	c := admittedCondition(sess)
+	return c != nil && c.Status == metav1.ConditionFalse && c.Reason == v1alpha1.ReasonAdmissionQueued
 }
 
 // IsAdmitted reports whether the session's Admitted condition is True.

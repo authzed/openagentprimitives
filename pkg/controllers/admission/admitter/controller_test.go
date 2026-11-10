@@ -61,15 +61,23 @@ func testScheme(t *testing.T) *runtime.Scheme {
 }
 
 // waitingSession is a booting, never-admitted session created at
-// baseTime+offset.
+// baseTime+offset that reached the admission gate at once
+// (Admitted=False/Queued at creation).
 func waitingSession(name string, offset time.Duration) *spiceboxv1alpha1.AgentSession {
 	return &spiceboxv1alpha1.AgentSession{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: "default",
 			CreationTimestamp: metav1.NewTime(baseTime.Add(offset)),
 		},
-		Spec:   spiceboxv1alpha1.AgentSessionSpec{Class: testClass},
-		Status: spiceboxv1alpha1.AgentSessionStatus{Phase: spiceboxv1alpha1.AgentSessionPhasePending},
+		Spec: spiceboxv1alpha1.AgentSessionSpec{Class: testClass},
+		Status: spiceboxv1alpha1.AgentSessionStatus{
+			Phase: spiceboxv1alpha1.AgentSessionPhasePending,
+			Conditions: []metav1.Condition{{
+				Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionFalse,
+				Reason:             spiceboxv1alpha1.ReasonAdmissionQueued,
+				LastTransitionTime: metav1.NewTime(baseTime.Add(offset)),
+			}},
+		},
 	}
 }
 
@@ -161,6 +169,19 @@ func TestAdmitterPass(t *testing.T) {
 		for _, name := range []string{"rb-a", "rb-b", "rb-c"} {
 			assertAdmitted(t, getSession(t, c, name))
 		}
+	})
+
+	t.Run("Pending without the Queued marker (parked at an earlier gate, or fatal settings): not admitted, no position", func(t *testing.T) {
+		parked := waitingSession("rb-parked", 0)
+		parked.Status.Conditions = nil
+		r, c, _ := newReconciler(t, true, roomFor(5), parked, waitingSession("rb-a", time.Minute))
+		runPass(t, r)
+
+		got := getSession(t, c, "rb-parked")
+		assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted),
+			"a session that never reached the gate is never admitted")
+		assert.Nil(t, got.Status.Admission, "and holds no line position")
+		assertAdmitted(t, getSession(t, c, "rb-a"))
 	})
 
 	t.Run("a position write is skipped when unchanged: second pass sends no status patch", func(t *testing.T) {

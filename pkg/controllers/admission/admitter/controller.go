@@ -121,12 +121,16 @@ func isTerminal(sess *spiceboxv1alpha1.AgentSession) bool {
 		sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhaseFailed
 }
 
-// isWaiting matches the AgentSession reconciler's gate: a booting session
-// ("" or Pending) that is not admitted. A session parked at a pre-start gate
-// has another phase and is not in line yet.
+// isWaiting matches a session the AgentSession reconciler's gate has put in
+// line: booting ("" or Pending) and marked Admitted=False/Queued. The marker
+// is required, not just the phase: a session's settings are persisted, and
+// its phase set to Pending, before the start-approval, identity and
+// credential gates park it and before a fatal-settings or image-pin block
+// stops it — a session in any of those states never reached the line and must
+// never be admitted, or it would reserve capacity it cannot use.
 func isWaiting(sess *spiceboxv1alpha1.AgentSession) bool {
 	return (sess.Status.Phase == "" || sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhasePending) &&
-		!admission.IsAdmitted(sess)
+		admission.IsQueued(sess)
 }
 
 func (r *Reconciler) demand(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (admission.Demand, error) {

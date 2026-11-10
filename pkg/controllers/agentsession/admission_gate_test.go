@@ -63,23 +63,37 @@ func TestAdmissionGate(t *testing.T) {
 		wantHoldStatus metav1.ConditionStatus // "" = CapacityHold absent
 		wantHoldReason string
 		wantMsg        []string // substrings of the CapacityHold (held) or Failed message
+		// wantQueuedAt, when set, is the expected Admitted=False/Queued
+		// transition time: the moment the session reached the gate.
+		wantQueuedAt time.Time
 	}{
 		{
-			name:    "Pending, not admitted: no SpiceboxSession; CapacityHold=True/WaitingForAdmission after grace",
+			name:    "Pending, queued 2m ago: no SpiceboxSession; CapacityHold=True/WaitingForAdmission after grace",
 			enabled: true, bundles: true, createdAt: -2 * time.Minute,
+			prep: func(s *spiceboxv1alpha1.AgentSession) {
+				withAdmittedCondition(s, metav1.ConditionFalse, spiceboxv1alpha1.ReasonAdmissionQueued, nowT.Add(-2*time.Minute))
+			},
 			wantHoldStatus: metav1.ConditionTrue,
 			wantHoldReason: spiceboxv1alpha1.ReasonCapacityHoldWaitingAdmission,
 			wantMsg:        []string{"out of room", "gives up at 17:58 UTC"},
 		},
 		{
-			name:    "Pending, not admitted, no bundles: no runner pod",
+			name:    "Pending, queued 2m ago, no bundles: no runner pod",
 			enabled: true, createdAt: -2 * time.Minute,
+			prep: func(s *spiceboxv1alpha1.AgentSession) {
+				withAdmittedCondition(s, metav1.ConditionFalse, spiceboxv1alpha1.ReasonAdmissionQueued, nowT.Add(-2*time.Minute))
+			},
 			wantHoldStatus: metav1.ConditionTrue,
 			wantHoldReason: spiceboxv1alpha1.ReasonCapacityHoldWaitingAdmission,
 		},
 		{
 			name:    "Pending, not admitted, inside the grace: no pods and no hold notice yet",
 			enabled: true, bundles: true, createdAt: -10 * time.Second,
+		},
+		{
+			name:    "first reaches the gate 3h after creation: queued from now, not failed, no hold notice yet",
+			enabled: true, bundles: true, createdAt: -3 * time.Hour,
+			wantQueuedAt: nowT,
 		},
 		{
 			name:    "Pending, admitted: bundle SpiceboxSession created as today, no hold",
@@ -123,22 +137,23 @@ func TestAdmissionGate(t *testing.T) {
 			wantHoldReason: spiceboxv1alpha1.ReasonCapacityHoldReleased,
 		},
 		{
-			name:    "waiting past the timeout from join time: Failed, CapacityHold=False/HoldExpired",
-			enabled: true, bundles: true, createdAt: -61 * time.Minute,
+			name:    "queued past the timeout: Failed, CapacityHold=False/HoldExpired",
+			enabled: true, bundles: true, createdAt: -3 * time.Hour,
+			prep: func(s *spiceboxv1alpha1.AgentSession) {
+				withAdmittedCondition(s, metav1.ConditionFalse, spiceboxv1alpha1.ReasonAdmissionQueued, nowT.Add(-61*time.Minute))
+			},
 			wantFailed:     true,
 			wantHoldStatus: metav1.ConditionFalse,
 			wantHoldReason: spiceboxv1alpha1.ReasonCapacityHoldExpired,
 			wantMsg:        []string{"waited 1h0m0s", "cluster capacity"},
 		},
 		{
-			name:    "released long after creation: the wait is measured from the release, not failed",
+			name:    "released long after creation: re-queued at the gate, the wait restarts there, not failed",
 			enabled: true, bundles: true, createdAt: -3 * time.Hour,
 			prep: func(s *spiceboxv1alpha1.AgentSession) {
 				withAdmittedCondition(s, metav1.ConditionFalse, spiceboxv1alpha1.ReasonAdmissionMisfit, nowT.Add(-5*time.Minute))
 			},
-			wantHoldStatus: metav1.ConditionTrue,
-			wantHoldReason: spiceboxv1alpha1.ReasonCapacityHoldWaitingAdmission,
-			wantMsg:        []string{"gives up at 17:55 UTC"},
+			wantQueuedAt: nowT,
 		},
 		{
 			name:    "AdmissionEnabled=false: bundle SpiceboxSession created without Admitted",
@@ -188,6 +203,14 @@ func TestAdmissionGate(t *testing.T) {
 				assert.Equal(t, tc.wantHoldReason, hold.Reason)
 			}
 
+			if !tc.wantQueuedAt.IsZero() {
+				adm := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+				if assert.NotNil(t, adm, "Admitted condition") {
+					assert.Equal(t, metav1.ConditionFalse, adm.Status)
+					assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionQueued, adm.Reason)
+					assert.Equal(t, tc.wantQueuedAt, adm.LastTransitionTime.Time.UTC(), "queued at gate arrival")
+				}
+			}
 			if !tc.wantFailed {
 				assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase, "session must not fail")
 				if hold != nil && hold.Status == metav1.ConditionTrue {
@@ -206,6 +229,51 @@ func TestAdmissionGate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A session that clears its start approval two hours after creation reaches
+// the admission gate then, not at creation: it is queued from that moment
+// (Admitted=False/Queued at now), is not failed for having "waited" through
+// the approval, creates nothing, and provisions normally once admitted.
+func TestAdmissionGate_QueuedOnArrivalAfterStartApproval(t *testing.T) {
+	nowT := time.Date(2026, 11, 10, 17, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return nowT }
+	codeBundle := spiceboxv1alpha1.ToolBundle{Name: "code", Class: "toolbelt"}
+	ac := classWithBundle("ac1", codeBundle)
+	sess := sessionCreatedAt("s1", "ac1", nowT.Add(-2*time.Hour))
+	// Approved: channelsd removed the park marker; the phase still says parked.
+	sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseAwaitingStartApproval
+	parked := metav1.NewTime(nowT.Add(-2 * time.Hour))
+	sess.Status.StartApprovalParkedAt = &parked
+
+	r, c := fakeReconciler(t, clock, ac, sess)
+	r.AdmissionEnabled = true
+	runReconciles(t, r, "s1", 3)
+
+	got := getSession(t, c, "s1")
+	require.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase, "an approval wait is not a wait in line")
+	assert.Equal(t, spiceboxv1alpha1.AgentSessionPhasePending, got.Status.Phase)
+	adm := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+	require.NotNil(t, adm, "Admitted condition written at the gate")
+	assert.Equal(t, metav1.ConditionFalse, adm.Status)
+	assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionQueued, adm.Reason)
+	assert.Equal(t, nowT, adm.LastTransitionTime.Time.UTC(), "queued at gate arrival")
+	assert.Equal(t, nowT, admission.WaitingSince(&got).UTC(), "the waiting timeout runs from gate arrival")
+	assert.False(t, exists(t, c, agentsession.BundleSessionName(&got, codeBundle), &spiceboxv1alpha1.SpiceboxSession{}),
+		"no pods before admission")
+
+	// The admitter admits it.
+	apimeta.SetStatusCondition(&got.Status.Conditions, metav1.Condition{
+		Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionTrue,
+		Reason: spiceboxv1alpha1.ReasonAdmitted, LastTransitionTime: metav1.NewTime(nowT),
+	})
+	require.NoError(t, c.Status().Update(context.Background(), &got), "admit")
+	runReconciles(t, r, "s1", 3)
+
+	got = getSession(t, c, "s1")
+	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+	assert.True(t, exists(t, c, agentsession.BundleSessionName(&got, codeBundle), &spiceboxv1alpha1.SpiceboxSession{}),
+		"admitted: the bundle SpiceboxSession is created")
 }
 
 // A terminal reap releases admission in the status write that accompanies it,
@@ -317,7 +385,7 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 		wantAdmittedNil bool // no Admitted condition at all
 	}{
 		{
-			name:    "admitted, pods unschedulable 2m: pods reaped, Admitted=False/PlacementMismatch, JoinedAt unchanged, CapacityHold released",
+			name:    "admitted, pods unschedulable 2m: pods reaped, released and re-queued, JoinedAt unchanged, CapacityHold released",
 			enabled: true, admitted: true, pending: 2 * time.Minute, schedMsg: capacitySchedMsg, heldBefore: true,
 			wantReaped: true, wantMisfit: true,
 		},
@@ -415,9 +483,13 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 			case tc.wantMisfit:
 				require.NotNil(t, adm, "Admitted condition")
 				assert.Equal(t, metav1.ConditionFalse, adm.Status)
-				assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionMisfit, adm.Reason)
 				assert.Equal(t, nowT, adm.LastTransitionTime.Time.UTC(), "transition stamped from the reconciler clock")
-				if !tc.wantFailed {
+				if tc.wantFailed {
+					assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionMisfit, adm.Reason)
+				} else {
+					// Released (PlacementMismatch), then back at the gate on the
+					// next pass: queued again, its wait restarting there.
+					assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionQueued, adm.Reason, "the released session is back in line")
 					assert.Equal(t, nowT, admission.WaitingSince(&got).UTC(), "the waiting-timeout clock restarts at the release")
 				}
 			default:
