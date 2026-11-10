@@ -126,3 +126,55 @@ func TestPlanReclaim(t *testing.T) {
 		assert.False(t, m.Reserve(head(500).Demand), "caller's model must still be full after planning")
 	})
 }
+
+// A line at its cap needs a SLOT, not space: PlanCapReclaim picks the single
+// oldest non-child warm idle session of the head's line past minWarm.
+func TestPlanCapReclaim(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	head := Candidate{Key: types.NamespacedName{Namespace: "ns", Name: "head"}, Line: "agent-a"}
+	childWarm := func(w WarmIdle) WarmIdle { w.Child = true; return w }
+	cases := []struct {
+		name   string
+		head   Candidate
+		warm   []WarmIdle
+		want   string
+		wantOK bool
+	}{
+		{
+			name: "two eligible warm sessions: the oldest only",
+			head: head,
+			warm: []WarmIdle{
+				warmOn("young", "agent-a", 10*time.Minute, now, 100),
+				warmOn("old", "agent-a", 30*time.Minute, now, 100),
+			},
+			want: "old", wantOK: true,
+		},
+		{
+			name: "oldest is younger than minWarm, another line's is older: nothing",
+			head: head,
+			warm: []WarmIdle{
+				warmOn("young", "agent-a", time.Minute, now, 100),
+				warmOn("other", "agent-b", time.Hour, now, 100),
+			},
+		},
+		{
+			name: "only a delegated child is warm (children do not count toward the cap): nothing",
+			head: head,
+			warm: []WarmIdle{childWarm(warmOn("kid", "agent-a", time.Hour, now, 100))},
+		},
+		{
+			name: "child head (never cap-blocked): nothing",
+			head: Candidate{Key: head.Key, Line: "agent-a", Child: true},
+			warm: []WarmIdle{warmOn("old", "agent-a", time.Hour, now, 100)},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := PlanCapReclaim(tc.head, tc.warm, now, 5*time.Minute)
+			assert.Equal(t, tc.wantOK, ok)
+			if tc.wantOK {
+				assert.Equal(t, tc.want, got.Name)
+			}
+		})
+	}
+}

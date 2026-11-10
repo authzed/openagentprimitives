@@ -218,8 +218,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 	in.Caps, in.Waiting = r.capLines(ctx, in.Waiting, byKey)
 
 	pool := reclaimPool{
-		sessions: map[types.NamespacedName]*spiceboxv1alpha1.AgentSession{},
-		inFlight: map[string][]admission.PlacedPod{},
+		sessions:  map[types.NamespacedName]*spiceboxv1alpha1.AgentSession{},
+		inFlight:  map[string][]admission.PlacedPod{},
+		requested: map[string]int{},
 	}
 	for _, sess := range holding {
 		d, err := r.demand(ctx, sess)
@@ -268,9 +269,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 			errs = append(errs, err)
 		}
 	}
-	if in.Model.Known() {
-		errs = append(errs, r.requestReclaims(ctx, in.Waiting, dec, &pool, in.Model, now)...)
-	}
+	// Capacity reclaims plan only on a known model (PlanReclaim returns nil
+	// otherwise); cap reclaims need no capacity data, so they run either way.
+	errs = append(errs, r.requestReclaims(ctx, in.Waiting, dec, &pool, in.Model, now)...)
 	return requeue, errors.Join(errs...)
 }
 
@@ -360,26 +361,35 @@ func boundPods(namespace string, d admission.Demand, pods podIndex) []admission.
 // and the admitter is woken by each of those status writes and pod events —
 // would see the head still not fit and reclaim the next-oldest warm session
 // too, cascading through the line for one head.
+//
+// requested counts, per line, the non-child holders already carrying a
+// reclaim request and not yet slept: each is already giving a cap slot back,
+// so a cap-blocked head waits for it rather than asking for another.
 type reclaimPool struct {
-	warm     []admission.WarmIdle
-	sessions map[types.NamespacedName]*spiceboxv1alpha1.AgentSession
-	inFlight map[string][]admission.PlacedPod
+	warm      []admission.WarmIdle
+	sessions  map[types.NamespacedName]*spiceboxv1alpha1.AgentSession
+	inFlight  map[string][]admission.PlacedPod
+	requested map[string]int
 }
 
 // addWarm files a warm Idle holder's bound pods: as in flight when a reclaim
 // is already requested (so it is not chosen again), else as a candidate. A
 // session with no bound pods has nothing to give back and is skipped.
 func (p *reclaimPool) addWarm(sess *spiceboxv1alpha1.AgentSession, placed []admission.PlacedPod) {
+	line := lineOf(sess)
+	child := sess.Spec.Parent != nil
+	if _, requested := sess.Annotations[spiceboxv1alpha1.AnnotationReclaimRequested]; requested {
+		p.inFlight[line] = append(p.inFlight[line], placed...)
+		if !child {
+			p.requested[line]++
+		}
+		return
+	}
 	if len(placed) == 0 {
 		return
 	}
-	line := lineOf(sess)
-	if _, requested := sess.Annotations[spiceboxv1alpha1.AnnotationReclaimRequested]; requested {
-		p.inFlight[line] = append(p.inFlight[line], placed...)
-		return
-	}
 	key := client.ObjectKeyFromObject(sess)
-	p.warm = append(p.warm, admission.WarmIdle{Key: key, Line: line, IdleSince: sess.Status.LastIdleAt.Time, Pods: placed})
+	p.warm = append(p.warm, admission.WarmIdle{Key: key, Line: line, IdleSince: sess.Status.LastIdleAt.Time, Pods: placed, Child: child})
 	p.sessions[key] = sess
 }
 
@@ -479,13 +489,18 @@ func (r *Reconciler) addDrainingReclaims(ctx context.Context, pool *reclaimPool,
 	}
 }
 
-// requestReclaims asks for the warm Idle sessions PlanReclaim picks for each
-// line's head (its still-waiting position 1) to be slept early. model is the
-// one Decide reserved into, so this pass's admissions are respected. Before a
-// line plans, its in-flight reclaims are freed on model, so only the shortfall
-// they do not already cover is reclaimed. Lines go in name order; each line's
-// frees and its head's demand are applied to model before the next line plans,
-// so two lines never count the same free space.
+// requestReclaims asks for the warm Idle sessions picked for each line's head
+// (its still-waiting position 1) to be slept early. model is the one Decide
+// reserved into, so this pass's admissions are respected. Lines go in name
+// order; each line's frees and its head's demand are applied to model before
+// the next line plans, so two lines never count the same free space.
+//
+// A head whose line is at its cap (dec.CapBlocked) needs a slot, not space:
+// PlanCapReclaim picks one warm non-child holder of the line, unless one
+// already requested is still in flight (it is already giving a slot back).
+// Any other head gets PlanReclaim's capacity plan; before it plans, the
+// line's in-flight reclaims are freed on model, so only the shortfall they do
+// not already cover is reclaimed.
 func (r *Reconciler) requestReclaims(ctx context.Context, waiting []admission.Candidate, dec admission.Decision,
 	pool *reclaimPool, model admission.CapacityModel, now time.Time,
 ) []error {
@@ -505,7 +520,14 @@ func (r *Reconciler) requestReclaims(ctx context.Context, waiting []admission.Ca
 	for _, head := range heads {
 		inFlight := pool.inFlight[head.Line]
 		model.Free(inFlight)
-		plan := admission.PlanReclaim(head, pool.warm, model, now, r.MinWarm)
+		var plan []types.NamespacedName
+		if dec.CapBlocked[head.Line] {
+			if key, ok := admission.PlanCapReclaim(head, pool.warm, now, r.MinWarm); ok && pool.requested[head.Line] == 0 {
+				plan = []types.NamespacedName{key}
+			}
+		} else {
+			plan = admission.PlanReclaim(head, pool.warm, model, now, r.MinWarm)
+		}
 		for _, key := range plan {
 			model.Free(pods[key])
 			if err := r.requestReclaim(ctx, pool.sessions[key], head.Key, now); err != nil {
@@ -516,9 +538,11 @@ func (r *Reconciler) requestReclaims(ctx context.Context, waiting []admission.Ca
 			continue
 		}
 		// Hold the freed space for this head so a later line cannot plan on it.
-		// With a plan, PlanReclaim proved the head fits; a failure means that
-		// invariant broke. With only in-flight frees it may simply not fit yet.
-		if !model.Reserve(head.Demand) && len(plan) > 0 {
+		// With a capacity plan, PlanReclaim proved the head fits; a failure
+		// means that invariant broke. With only in-flight frees, or a cap
+		// reclaim (which frees a slot, not necessarily enough space), it may
+		// simply not fit yet.
+		if !model.Reserve(head.Demand) && len(plan) > 0 && !dec.CapBlocked[head.Line] {
 			log.FromContext(ctx).Info("admission: head does not fit after its planned reclaims were freed; the plan's fit check and the model disagree",
 				"class", head.Line, "head", head.Key.String(), "reclaims", len(plan))
 		}

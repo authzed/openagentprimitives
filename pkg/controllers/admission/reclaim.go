@@ -15,6 +15,9 @@ type WarmIdle struct {
 	Line      string
 	IdleSince time.Time
 	Pods      []PlacedPod
+	// Child is set for a delegated child session, which never counts toward
+	// its line's cap and so frees no cap slot.
+	Child bool
 }
 
 // PlanReclaim picks which warm Idle sessions of the head's own line to
@@ -46,4 +49,30 @@ func PlanReclaim(head Candidate, warm []WarmIdle, model CapacityModel, now time.
 		}
 	}
 	return nil
+}
+
+// PlanCapReclaim picks the warm Idle session to reclaim for a head whose line
+// is at its cap (Decision.CapBlocked): the head needs a slot, not space, and
+// one reclaimed non-child holder gives it one. Of head's line's non-child
+// warm sessions idle at least minWarm, the oldest (ties by key) is returned.
+// ok is false for a child head (a cap never blocks it) or when none is
+// eligible.
+func PlanCapReclaim(head Candidate, warm []WarmIdle, now time.Time, minWarm time.Duration) (types.NamespacedName, bool) {
+	if head.Child {
+		return types.NamespacedName{}, false
+	}
+	var pick *WarmIdle
+	for i := range warm {
+		w := &warm[i]
+		if w.Line != head.Line || w.Child || now.Sub(w.IdleSince) < minWarm {
+			continue
+		}
+		if pick == nil || cmp.Or(w.IdleSince.Compare(pick.IdleSince), cmp.Compare(w.Key.String(), pick.Key.String())) < 0 {
+			pick = w
+		}
+	}
+	if pick == nil {
+		return types.NamespacedName{}, false
+	}
+	return pick.Key, true
 }

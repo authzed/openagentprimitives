@@ -770,3 +770,78 @@ func TestAdmitterAdoptsPreAdmissionSessions(t *testing.T) {
 		assert.Nil(t, meta.FindStatusCondition(getSession(t, c, "rb-old").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted))
 	})
 }
+
+// TestAdmitterCapReclaim pins early reclaim for a line blocked by its cap
+// rather than by capacity: warm idle holders count toward the cap, so the
+// oldest one past minWarm is asked back, one per head, and not while an
+// earlier request for the line is still in flight.
+func TestAdmitterCapReclaim(t *testing.T) {
+	const minWarm = 5 * time.Minute
+	requested := func(s *spiceboxv1alpha1.AgentSession) *spiceboxv1alpha1.AgentSession {
+		s.Annotations = map[string]string{spiceboxv1alpha1.AnnotationReclaimRequested: baseTime.Format(time.RFC3339)}
+		return s
+	}
+	cases := []struct {
+		name          string
+		objs          []client.Object
+		wantAnnotated []string
+		wantClean     []string
+	}{
+		{
+			name: "cap 2 held by two warm idle sessions, plenty of room: the oldest is reclaimed, only it",
+			objs: []client.Object{
+				cpuNode(8), cappedClass(2),
+				warmIdleSession("rb-old", 30*time.Minute), boundRunnerPod("rb-old"),
+				warmIdleSession("rb-mid", 20*time.Minute), boundRunnerPod("rb-mid"),
+				waitingSession("rb-wait", time.Minute),
+			},
+			wantAnnotated: []string{"rb-old"},
+			wantClean:     []string{"rb-mid", "rb-wait"},
+		},
+		{
+			name: "a cap reclaim already in flight for the line: no second one",
+			objs: []client.Object{
+				cpuNode(8), cappedClass(2),
+				requested(warmIdleSession("rb-old", 30*time.Minute)), boundRunnerPod("rb-old"),
+				warmIdleSession("rb-mid", 20*time.Minute), boundRunnerPod("rb-mid"),
+				waitingSession("rb-wait", time.Minute),
+			},
+			wantClean: []string{"rb-mid", "rb-wait"},
+		},
+		{
+			name: "the cap is held by a running session, the warm one is too young: nothing reclaimed",
+			objs: []client.Object{
+				cpuNode(8), cappedClass(2),
+				admittedRunning("rb-run"),
+				warmIdleSession("rb-young", time.Minute), boundRunnerPod("rb-young"),
+				waitingSession("rb-wait", time.Minute),
+			},
+			wantClean: []string{"rb-young", "rb-wait"},
+		},
+		{
+			name: "under the cap and the head fits: admitted, nothing reclaimed",
+			objs: []client.Object{
+				cpuNode(8), cappedClass(3),
+				warmIdleSession("rb-old", 30*time.Minute), boundRunnerPod("rb-old"),
+				waitingSession("rb-wait", time.Minute),
+			},
+			wantClean: []string{"rb-old"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, c, _ := newReconciler(t, true, nil, tc.objs...)
+			r.Capacity = admission.KubeCapacitySource{Reader: c}
+			r.MinWarm = minWarm
+			runPass(t, r)
+			for _, name := range tc.wantAnnotated {
+				assert.Equal(t, passTime.Format(time.RFC3339), getSession(t, c, name).Annotations[spiceboxv1alpha1.AnnotationReclaimRequested],
+					"%s: reclaim requested at the pass's Now", name)
+			}
+			for _, name := range tc.wantClean {
+				assert.NotContains(t, getSession(t, c, name).Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
+					"%s: no reclaim requested", name)
+			}
+		})
+	}
+}

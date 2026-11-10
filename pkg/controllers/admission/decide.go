@@ -36,11 +36,17 @@ type Position struct {
 	Index, LineLength int32
 }
 
-// Decision is the outcome of one pass: who to admit now, and where everyone
-// still waiting stands in their line.
+// Decision is the outcome of one pass: who to admit now, where everyone
+// still waiting stands in their line, and which lines' heads wait on their
+// cap rather than on room.
 type Decision struct {
 	Admit     []types.NamespacedName
 	Positions map[types.NamespacedName]Position
+	// CapBlocked holds every line whose head is still waiting, is not a
+	// delegated child, and whose non-child holders (counting this pass's
+	// admissions) have reached the line's cap. Freeing space does nothing for
+	// such a line; only a holder giving its slot back does.
+	CapBlocked map[string]bool
 }
 
 // lineState is one line's remaining queue and what it already holds.
@@ -57,7 +63,13 @@ func (l *lineState) eligible() bool {
 	if len(l.queue) == 0 {
 		return false
 	}
-	return l.queue[0].Child || l.capacity <= 0 || l.nonChild < l.capacity
+	return !l.capBlocked()
+}
+
+// capBlocked reports whether the line's head waits on the cap: a non-child
+// head, a capped line, its non-child holders at the cap.
+func (l *lineState) capBlocked() bool {
+	return len(l.queue) > 0 && !l.queue[0].Child && l.capacity > 0 && l.nonChild >= l.capacity
 }
 
 // Decide admits waiting sessions, whole pod set at a time, repeatedly picking
@@ -152,10 +164,14 @@ func Decide(in Input) Decision {
 	}
 
 	positions := map[types.NamespacedName]Position{}
+	capBlocked := map[string]bool{}
 	for _, l := range lines {
 		for i, c := range l.queue {
 			positions[c.Key] = Position{Index: int32(i + 1), LineLength: int32(len(l.queue))}
 		}
+		if l.capBlocked() {
+			capBlocked[l.name] = true
+		}
 	}
-	return Decision{Admit: admit, Positions: positions}
+	return Decision{Admit: admit, Positions: positions, CapBlocked: capBlocked}
 }

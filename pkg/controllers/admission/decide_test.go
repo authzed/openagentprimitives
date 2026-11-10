@@ -190,3 +190,56 @@ func TestDecidePositions(t *testing.T) {
 		key("b2"): {Index: 1, LineLength: 1},
 	}, got.Positions, "positions are 1-based per line, cover only still-waiting candidates")
 }
+
+// CapBlocked names the lines whose head is still waiting because the line is
+// at its cap, not because it does not fit — the lines a cap reclaim can help.
+func TestDecideCapBlocked(t *testing.T) {
+	cases := []struct {
+		name string
+		in   Input
+		want map[string]bool
+	}{
+		{
+			name: "cap 1 with one holder, room to spare: the line is cap-blocked",
+			in: Input{
+				Waiting: []Candidate{cand("w", "l", 1, false, 100)},
+				Holders: []Holder{holder("h", "l", false, 100)},
+				Caps:    map[string]int32{"l": 1},
+				Model:   &slotModel{known: true, slots: 5},
+			},
+			want: map[string]bool{"l": true},
+		},
+		{
+			name: "uncapped line whose head does not fit: not cap-blocked",
+			in: Input{
+				Waiting: []Candidate{cand("w", "l", 1, false, 100, 100)},
+				Model:   &slotModel{known: true, slots: 1},
+			},
+			want: map[string]bool{},
+		},
+		{
+			name: "under its cap, head does not fit: not cap-blocked",
+			in: Input{
+				Waiting: []Candidate{cand("w", "l", 1, false, 100, 100)},
+				Holders: []Holder{holder("h", "l", false, 100)},
+				Caps:    map[string]int32{"l": 2},
+				Model:   &slotModel{known: true, slots: 1},
+			},
+			want: map[string]bool{},
+		},
+		{
+			name: "cap reached by this pass's own admission: cap-blocked",
+			in: Input{
+				Waiting: []Candidate{cand("a", "l", 1, false, 100), cand("b", "l", 2, false, 100)},
+				Caps:    map[string]int32{"l": 1},
+				Model:   &slotModel{known: true, slots: 5},
+			},
+			want: map[string]bool{"l": true},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, Decide(tc.in).CapBlocked)
+		})
+	}
+}
