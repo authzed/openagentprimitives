@@ -1,0 +1,80 @@
+# The demo's permission model, checked with `zed validate`. It documents who can
+# do what on the shared drive and is the reference for the SpiceDB schema
+# fragment in manifests/sidecartoolbox.yaml and the tuples in
+# cluster/spicedb-bootstrap.yaml.
+#
+# Object ids are drive paths after OAP's spicedb_escape transform ("." becomes
+# "=2E"). alice, bob and carol stand in for the canonical ids of real users.
+schema: |-
+  definition user {}
+
+  // As in OAP's base schema.
+  definition group {
+    relation member: user
+    permission membership = member
+  }
+
+  // A stand-in for OAP's agentsession: the people in a session can interact with it.
+  definition agentsession {
+    relation owner: user
+    permission interact = owner
+  }
+
+  // Folders do not inherit from their parent: being able to list /shared never
+  // means being able to read /shared/finance. Nobody holds `approve` on a
+  // folder, so a refused folder request is refused outright, with no one asked.
+  definition folder {
+    relation viewer_group: group
+    relation editor_group: group
+    relation approver: user
+    permission read = viewer_group->membership + editor_group->membership
+    permission write = editor_group->membership
+    permission approve = approver
+  }
+
+  // `read` is written the way OAP's schema composer emits it for a slotted
+  // type: an approval writes slot_grant_read for one session on this one file.
+  // Direct access flows through `owner`.
+  definition file {
+    relation parent: folder
+    relation approver: user
+    relation slot_grant_read: agentsession
+    permission owner = parent->read
+    permission read = slot_grant_read->interact + owner
+    permission approve = approver
+  }
+relationships: |-
+  group:eng#member@user:alice
+  group:eng#member@user:carol
+  group:finance#member@user:bob
+  folder:/shared#viewer_group@group:eng
+  folder:/shared#viewer_group@group:finance
+  folder:/shared/eng#editor_group@group:eng
+  folder:/shared/eng/drafts#editor_group@group:eng
+  folder:/shared/finance#editor_group@group:finance
+  file:/shared/eng/q3-budget-update-template=2Emd#parent@folder:/shared/eng
+  file:/shared/eng/roadmap=2Emd#parent@folder:/shared/eng
+  file:/shared/finance/payroll=2Ecsv#parent@folder:/shared/finance
+  file:/shared/finance/eng-budget-q3=2Ecsv#parent@folder:/shared/finance
+  file:/shared/finance/vendor-contracts=2Emd#parent@folder:/shared/finance
+  file:/shared/hr/handbook=2Emd#parent@folder:/shared/hr
+  file:/shared/finance/eng-budget-q3=2Ecsv#approver@user:bob
+  file:/shared/finance/eng-budget-q3=2Ecsv#slot_grant_read@agentsession:demo-approved
+  agentsession:demo-approved#owner@user:carol
+assertions:
+  assertTrue:
+    - folder:/shared#read@user:alice
+    - file:/shared/eng/roadmap=2Emd#read@user:alice
+    - folder:/shared/eng/drafts#write@user:alice
+    - file:/shared/finance/payroll=2Ecsv#read@user:bob
+    - file:/shared/finance/eng-budget-q3=2Ecsv#approve@user:bob
+    - file:/shared/finance/eng-budget-q3=2Ecsv#read@user:carol
+  assertFalse:
+    - folder:/shared/finance#read@user:alice
+    - file:/shared/finance/payroll=2Ecsv#read@user:alice
+    - file:/shared/finance/eng-budget-q3=2Ecsv#read@user:alice
+    - folder:/shared/finance#write@user:alice
+    - folder:/shared#write@user:alice
+    - folder:/shared/hr#read@user:alice
+    - folder:/shared/finance#approve@user:bob
+    - file:/shared/finance/payroll=2Ecsv#approve@user:bob
