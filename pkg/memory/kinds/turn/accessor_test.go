@@ -2,6 +2,7 @@ package turn_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -533,4 +534,89 @@ func TestAppender_AttachmentContentRoundTrip(t *testing.T) {
 	assert.Equal(t, in.Content[1].Attachment.Ref, block.Attachment.Ref)
 	assert.Equal(t, in.Content[1].Attachment.TextRef, block.Attachment.TextRef)
 	assert.Equal(t, in.Content[1].Attachment.Pages, block.Attachment.Pages)
+}
+
+// TestAppender_UnstorableCharactersAreReplaced pins the second half of the
+// demo-reviewbot failure. A turn carrying NUL used to reach Postgres, fail as
+// a 500 with SQLSTATE 22P05, and be retried eight times before the session was
+// marked MemoryUnavailable. The facade refuses such an entry on every backend,
+// so the appender must hand it one it can store — whichever block the
+// character arrived in, since tool output is not the only source: a model's
+// reply and a user's message reach here unfiltered.
+func TestAppender_UnstorableCharactersAreReplaced(t *testing.T) {
+	cases := []struct {
+		name  string
+		block memory.ContentBlock
+		check func(t *testing.T, got memory.ContentBlock)
+	}{
+		{
+			name:  "NUL in a text block: replaced with U+FFFD, the text around it kept",
+			block: memory.ContentBlock{Type: "text", Text: "before\x00after"},
+			check: func(t *testing.T, got memory.ContentBlock) {
+				assert.Equal(t, "before\ufffdafter", got.Text)
+			},
+		},
+		{
+			name: "NUL in a tool_result: replaced with U+FFFD",
+			block: memory.ContentBlock{Type: "tool_result",
+				ToolResult: &memory.ToolResultBlock{ToolUseID: "tu-1", Content: "stderr: boom\x00"}},
+			check: func(t *testing.T, got memory.ContentBlock) {
+				require.NotNil(t, got.ToolResult)
+				assert.Equal(t, "stderr: boom\ufffd", got.ToolResult.Content)
+			},
+		},
+		{
+			// Input is bytes, so it is stored base64-encoded and no escape in
+			// it ever reaches the column: the recorded arguments stay exactly
+			// the ones the tool was called with.
+			name: "NUL escape in tool_use input: stored byte-for-byte",
+			block: memory.ContentBlock{Type: "tool_use",
+				ToolUse: &memory.ToolUseBlock{ID: "tu-1", Name: "write", Input: []byte(`{"path":"a\u0000b"}`)}},
+			check: func(t *testing.T, got memory.ContentBlock) {
+				require.NotNil(t, got.ToolUse)
+				assert.Equal(t, `{"path":"a\u0000b"}`, string(got.ToolUse.Input))
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newAppender(t)
+			ctx := memory.WithSystemApproval(context.Background(), "test")
+			in := memory.Turn{
+				Index: 0, Role: "user",
+				Content:   []memory.ContentBlock{tc.block},
+				CreatedAt: time.Unix(0, 0).UTC(),
+			}
+			require.NoError(t, a.Append(ctx, in), "a turn must not be refused over one character")
+			require.NoError(t, a.Append(ctx, in), "re-appending the same turn stays a no-op")
+
+			turns, err := a.ReadAll(ctx)
+			require.NoError(t, err)
+			require.Len(t, turns, 1)
+			require.Len(t, turns[0].Content, 1)
+			tc.check(t, turns[0].Content[0])
+		})
+	}
+}
+
+// TestAppender_ReappendOfTurnStoredWithNULIsNoOp covers a transcript written
+// before the appender replaced anything: inmem and sqlite accepted NUL, so such
+// a turn is stored with it. Re-appending that turn must stay the no-op it was,
+// not turn into an index conflict because the new bytes carry U+FFFD instead.
+func TestAppender_ReappendOfTurnStoredWithNULIsNoOp(t *testing.T) {
+	backend := inmem.NewBackend()
+	scope := memory.Scope{Kind: "session", ID: "default/s1"}
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	in := textTurn(0, "user", "before\x00after")
+
+	// Straight into the backend, below the facade that now refuses it.
+	stored, err := json.Marshal(map[string]any{"content": in.Content})
+	require.NoError(t, err)
+	require.NoError(t, backend.Put(ctx, memory.Entry{
+		Scope: scope, Kind: turn.KindName, ID: turn.EntryID(0, "user"),
+		CreatedAt: in.CreatedAt, Content: stored,
+	}))
+
+	a := turn.NewAppender(memory.NewLocal(backend), scope)
+	require.NoError(t, a.Append(ctx, in))
 }

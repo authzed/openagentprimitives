@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -49,10 +50,18 @@ func Record(ctx context.Context, mem memory.Memory, scope memory.Scope, ev Event
 	if err != nil {
 		return fmt.Errorf("toolsession.Record: marshal: %w", err)
 	}
+	// ev.Text is whatever the inner tool streamed, so it can carry a character
+	// the store refuses. Losing one character beats losing the event.
+	id := memory.NewID(Kind{})
+	raw, replaced := memory.StorableJSON(raw)
+	if replaced > 0 {
+		slog.Info("toolsession.Record: replaced characters the store cannot hold with U+FFFD",
+			"scope", scope.ID, "entry", id, "replaced", replaced)
+	}
 	_, err = mem.Put(ctx, memory.Entry{
 		Scope:     scope,
 		Kind:      KindName,
-		ID:        memory.NewID(Kind{}),
+		ID:        id,
 		CreatedAt: time.Now().UTC(),
 		Content:   raw,
 	})

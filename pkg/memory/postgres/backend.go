@@ -3,9 +3,12 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/authzed/openagentprimitives/pkg/memory"
 )
@@ -113,6 +116,21 @@ func unmarshalLinks(raw []byte) ([]memory.Link, error) {
 	return links, nil
 }
 
+// invalidIfDataException tags a Postgres data exception (SQLSTATE class 22 —
+// an untranslatable character, an invalid escape, a value out of range) as
+// memory.ErrInvalidEntry. Those are refusals of the entry's bytes, so a retry
+// cannot succeed; untagged, httpsrv would answer 500 and httpclient would retry
+// a doomed write until it gave up. The facade's checkStorable refuses the known
+// shapes before they get here; this is the backstop for any it does not name.
+// Every other error stays a fault, retryable as before.
+func invalidIfDataException(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "22") {
+		return fmt.Errorf("%w: %w", memory.ErrInvalidEntry, err)
+	}
+	return err
+}
+
 func (b *Backend) Put(ctx context.Context, e memory.Entry) error {
 	tx, err := b.client.Pool().Begin(ctx)
 	if err != nil {
@@ -139,7 +157,7 @@ func (b *Backend) Put(ctx context.Context, e memory.Entry) error {
 		e.Scope.Kind, e.Scope.ID, e.Kind, e.ID,
 		e.CreatedAt, tags, e.Content, linksJSON, provJSON)
 	if err != nil {
-		return fmt.Errorf("postgres put entry: %w", err)
+		return fmt.Errorf("postgres put entry: %w", invalidIfDataException(err))
 	}
 
 	_, err = tx.Exec(ctx,
@@ -164,7 +182,7 @@ func (b *Backend) Put(ctx context.Context, e memory.Entry) error {
 				"relation", "target_scope_kind", "target_scope_id", "target_kind", "target_id"},
 			pgx.CopyFromRows(rows))
 		if err != nil {
-			return fmt.Errorf("postgres put links: %w", err)
+			return fmt.Errorf("postgres put links: %w", invalidIfDataException(err))
 		}
 	}
 
