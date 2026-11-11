@@ -605,13 +605,13 @@ type delegation struct {
 type delegations map[types.NamespacedName]delegation
 
 // listDelegations indexes every SubagentRequest that names its child. A list
-// error returns an empty index, so the pass treats every session as
-// non-delegated rather than trusting spec.parent; the caller reports the
-// error so the pass is retried.
+// error is returned, and the caller defers the whole pass on it: nothing is
+// decided, admitted or reclaimed until a later pass can read the delegation
+// records, since without them no session could be proven a delegated child.
 func (r *Reconciler) listDelegations(ctx context.Context) (delegations, error) {
 	var list spiceboxv1alpha1.SubagentRequestList
 	if err := r.Client.List(ctx, &list); err != nil {
-		log.FromContext(ctx).Info("admission: list SubagentRequests failed; no session is treated as a delegated child this pass",
+		log.FromContext(ctx).Info("admission: list SubagentRequests failed; deferring this admission pass",
 			"err", err.Error())
 		return delegations{}, fmt.Errorf("admission pass: list SubagentRequests: %w", err)
 	}
