@@ -1,0 +1,10 @@
+# The system prompt both halves of the demo use. The OAP agent reads it
+# through its AgentClass; before/agent.py reads this file directly, so the two
+# cannot drift apart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shared-drive-system-prompt
+data:
+  system.md: |
+    You are an assistant for the company's shared drive, mounted at /shared. Use the drive tools to read and write files. Save any drafts you write under /shared/eng/drafts/. When a tool call fails, say which file you could not use and continue with what you have.
