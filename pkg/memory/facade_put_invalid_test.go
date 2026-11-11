@@ -114,6 +114,19 @@ func TestPutValidationErrorsAreErrInvalidEntry(t *testing.T) {
 			invalid: true,
 		},
 		{
+			name:    "invalid UTF-8 in raw Content (jsonb refuses, SQLSTATE 22021): ErrInvalidEntry",
+			entry:   memory.Entry{Scope: scope, Kind: "mk", ID: "mk-1", Content: []byte("{\"a\":\"\xff\"}")},
+			backend: inmem.NewBackend(),
+			invalid: true,
+		},
+		{
+			name: "NUL in Provenance.Publisher: ErrInvalidEntry",
+			entry: memory.Entry{Scope: scope, Kind: "mk", ID: "mk-1",
+				Provenance: &memory.Provenance{Publisher: "system:\x00"}},
+			backend: inmem.NewBackend(),
+			invalid: true,
+		},
+		{
 			name:    "store fault on the durable write: NOT ErrInvalidEntry",
 			entry:   memory.Entry{Scope: scope, Kind: "mk", ID: "mk-1"},
 			backend: &putFaultBackend{Backend: inmem.NewBackend(), err: errors.New("connection reset by peer")},

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -79,6 +80,16 @@ func NewAppender(mem memory.Memory, scope memory.Scope) *Appender {
 // writer per session scope (the runner loop) means no two turn-writers race.
 // A failed conflict-check Query is fatal — returned rather than falling
 // through to a blind Put, which would drop both the error and the check.
+//
+// A character the store cannot hold (NUL, in practice) is replaced with U+FFFD
+// here rather than left for Put to refuse. A turn is the session's durable
+// record, so refusing it fails the session, over one character in a model's
+// reply or a user's message. A tool call's arguments are not at risk: they are
+// bytes, stored base64-encoded. Every writer of a turn — the runner, and
+// channelsd for inbound messages — comes through this method, so replacing
+// here covers all of them and every field, and it happens before the entry is
+// signed. The live conversation keeps the original; only the record carries
+// the placeholder, and the log line below says so.
 func (a *Appender) Append(ctx context.Context, t memory.Turn) error {
 	id := EntryID(t.Index, t.Role)
 	raw, err := json.Marshal(turnContent{Content: t.Content, Usage: t.Usage, Author: t.Author, Via: t.Via, Refused: t.Refused, Model: t.Model})
@@ -91,14 +102,27 @@ func (a *Appender) Append(ctx context.Context, t memory.Turn) error {
 	if qerr != nil {
 		return fmt.Errorf("turn.Append: conflict check: %w", qerr)
 	}
+	unclean := raw
+	raw, replaced := memory.StorableJSON(raw)
+	if replaced > 0 {
+		slog.Info("turn.Append: replaced characters the store cannot hold with U+FFFD",
+			"scope", a.scope.ID, "entry", id, "replaced", replaced)
+	}
 	if len(existing.Entries) == 1 {
 		// Canonical JSON, not raw bytes: the existing entry came back OUT of a
 		// backend, and postgres stores content in a JSONB column that re-emits
 		// object keys in its own order and whitespace. A byte compare read every
 		// legitimate re-append — a replay after restart, not only a retry after a
 		// lost response — as divergent, failing ErrIndexConflict on postgres only.
-		if bytes.Equal(memory.CanonicalContent(existing.Entries[0].Content), memory.CanonicalContent(raw)) {
+		stored := memory.CanonicalContent(existing.Entries[0].Content)
+		if bytes.Equal(stored, memory.CanonicalContent(raw)) {
 			return nil // idempotent re-append
+		}
+		// A turn written before the replacement above existed is stored with
+		// the original characters (inmem and sqlite accepted them), and
+		// re-appending it is just as much a no-op.
+		if replaced > 0 && bytes.Equal(stored, memory.CanonicalContent(unclean)) {
+			return nil
 		}
 		return memory.ErrIndexConflict
 	}
