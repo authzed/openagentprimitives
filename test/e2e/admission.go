@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -45,9 +46,10 @@ func (h *Harness) registerAdmitter(t *testing.T, mgr manager.Manager) {
 }
 
 // FixedSetCapacity is a cluster with room for exactly Sets whole session pod
-// sets, whatever their size. Every Reserve of a non-empty demand takes one
-// set's room, so with the harness's pods never binding to a node (there is
-// no scheduler), each admitted session holds one slot until it is released.
+// sets, whatever their size. A set's room is charged to its runner pod, the
+// one pod every session's set has exactly one of, so with the harness's pods
+// never binding to a node (there is no scheduler), each admitted session holds
+// one slot until it is released.
 //
 // It stands in for nodes, not for the admission logic: the admitter still
 // orders lines, applies fair share and reserves holders' unplaced demand
@@ -76,15 +78,28 @@ type setModel struct {
 
 func (m *setModel) Known() bool { return true }
 
+// Reserve charges one set per runner pod in d. Charging per call instead
+// would be wrong: Decide reserves a holder's unplaced pods one at a time, so a
+// three-pod holder would take three sets. A pod that is not a runner (sandbox,
+// detector, sidecar) rides on its session's set and is free.
 func (m *setModel) Reserve(d admission.Demand) bool {
-	if len(d.Pods) == 0 {
-		return true
+	sets := 0
+	for _, p := range d.Pods {
+		if isRunnerPod(p) {
+			sets++
+		}
 	}
-	if m.free == 0 {
+	if sets > m.free {
 		return false
 	}
-	m.free--
+	m.free -= sets
 	return true
+}
+
+// isRunnerPod matches the runner pod of a session's demand, named by
+// agentsession.RunnerPodName.
+func isRunnerPod(p admission.PodDemand) bool {
+	return p.SandboxSession == "" && strings.HasSuffix(p.Name, "-runner")
 }
 
 // Free is a no-op: a model rebuilt every pass has no placed pods to return,
