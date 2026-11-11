@@ -2769,6 +2769,14 @@ func run(cfg *config) {
 	// operator admits against the free space at a time. Capacity is declared
 	// as the interface and assigned a concrete value, never a typed-nil
 	// pointer (see the repo conventions on nil interfaces).
+	//
+	// The capacity snapshot reads nodes and pods from the cached client while
+	// sessions are listed through the APIReader. Only the session list must
+	// see the admitter's own last writes (a lagging cache would show an
+	// admitted session still waiting and admit a second into its space);
+	// node and pod state the admitter never writes, so a cache a moment
+	// behind costs at most one pass's accuracy, and an uncached list of every
+	// pod on each pass would be a full apiserver read per wake.
 	var admissionCapacity sessionadmission.CapacitySource = sessionadmission.KubeCapacitySource{Reader: mgr.GetClient()}
 	if err := (&admitter.Reconciler{
 		Client:    mgr.GetClient(),

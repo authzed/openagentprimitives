@@ -234,9 +234,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 	for _, sess := range holding {
 		d, err := r.demand(ctx, sess)
 		if err != nil {
-			// Still a holder: it counts toward its line's share and cap. Its
-			// placed pods are in the snapshot; only its unplaced ones go
-			// unreserved, which is the accepted cost of an unpriceable holder.
+			// Still a holder: it counts toward its line's cap. With no
+			// demand it adds nothing to the line's share, and its unplaced
+			// pods go unreserved (its placed ones are in the snapshot), which
+			// is the accepted cost of an unpriceable holder.
 			logger.Info("admission: cannot price an admitted session's pod set; counting it with no unplaced demand",
 				"session", sess.Namespace+"/"+sess.Name, "class", lineOf(sess), "err", err.Error())
 		}

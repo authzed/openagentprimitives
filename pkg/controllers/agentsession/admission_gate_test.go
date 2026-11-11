@@ -9,6 +9,7 @@ package agentsession_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -19,7 +20,9 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/controllers/admission"
@@ -57,6 +60,8 @@ func TestAdmissionGate(t *testing.T) {
 		createdAt time.Duration // session creation, relative to now
 		// prep stamps admission state onto the session before it is loaded.
 		prep func(sess *spiceboxv1alpha1.AgentSession)
+		// holdTimeout is Reconciler.CapacityHoldTimeout; 0 = the default.
+		holdTimeout time.Duration
 
 		wantPods       bool // the bundle SpiceboxSession (bundles) or runner pod (no bundles) exists
 		wantFailed     bool
@@ -150,6 +155,14 @@ func TestAdmissionGate(t *testing.T) {
 			wantMsg:        []string{"waited 1h0m0s", "cluster capacity"},
 		},
 		{
+			name:    "hold disabled (negative timeout), queued 3h ago: waits on, not failed, no CapacityHold give-up time posted",
+			enabled: true, bundles: true, createdAt: -3 * time.Hour, holdTimeout: -1,
+			prep: func(s *spiceboxv1alpha1.AgentSession) {
+				withAdmittedCondition(s, metav1.ConditionFalse, spiceboxv1alpha1.ReasonAdmissionQueued, nowT.Add(-3*time.Hour))
+			},
+			wantQueuedAt: nowT.Add(-3 * time.Hour),
+		},
+		{
 			name:    "released long after creation: re-queued at the gate, the wait restarts there, not failed",
 			enabled: true, bundles: true, createdAt: -3 * time.Hour,
 			prep: func(s *spiceboxv1alpha1.AgentSession) {
@@ -196,6 +209,7 @@ func TestAdmissionGate(t *testing.T) {
 
 			r, c := fakeReconciler(t, clock, ac, sess)
 			r.AdmissionEnabled = tc.enabled
+			r.CapacityHoldTimeout = tc.holdTimeout
 			runReconciles(t, r, "s1", 3)
 
 			got := getSession(t, c, "s1")
@@ -665,6 +679,105 @@ func TestAdmissionGate_Misfit(t *testing.T) {
 			default:
 				require.NotNil(t, adm, "Admitted condition")
 				assert.Equal(t, metav1.ConditionTrue, adm.Status, "still admitted")
+			}
+		})
+	}
+}
+
+// releaseMisfit gives admission back only once the session's pods are gone:
+// released while they still stood, the admitter would count their capacity
+// twice. A failed reap writes no release; a failed release write leaves the
+// session admitted (its pods already reaped), and the error is returned so
+// the next pass decides afresh.
+func TestAdmissionGate_MisfitReleaseFailures(t *testing.T) {
+	nowT := time.Date(2026, 11, 10, 17, 0, 0, 0, time.UTC)
+	codeBundle := spiceboxv1alpha1.ToolBundle{Name: "code", Class: "toolbelt"}
+	errBoom := errors.New("apiserver unavailable")
+	carriesRelease := func(obj client.Object) bool {
+		sess, ok := obj.(*spiceboxv1alpha1.AgentSession)
+		if !ok {
+			return false
+		}
+		c := apimeta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+		return c != nil && c.Reason == spiceboxv1alpha1.ReasonAdmissionMisfit
+	}
+
+	cases := []struct {
+		name string
+		// funcs is built per case so it can record onto releaseWrites.
+		funcs      func(releaseWrites *int) interceptor.Funcs
+		wantErr    string
+		wantReaped bool
+	}{
+		{
+			name: "reap fails: error returned, pods kept, still admitted, no release written",
+			funcs: func(releaseWrites *int) interceptor.Funcs {
+				return interceptor.Funcs{
+					Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+						if _, ok := obj.(*spiceboxv1alpha1.SpiceboxSession); ok {
+							return errBoom
+						}
+						return cl.Delete(ctx, obj, opts...)
+					},
+					SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
+						if carriesRelease(obj) {
+							*releaseWrites++
+						}
+						return cl.SubResource(sub).Patch(ctx, obj, p, opts...)
+					},
+				}
+			},
+			wantErr: "reap bundle SpiceboxSession",
+		},
+		{
+			name: "release write fails after the reap: error returned, pods reaped, still admitted",
+			funcs: func(releaseWrites *int) interceptor.Funcs {
+				return interceptor.Funcs{
+					SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
+						if carriesRelease(obj) {
+							*releaseWrites++
+							return errBoom
+						}
+						return cl.SubResource(sub).Patch(ctx, obj, p, opts...)
+					},
+				}
+			},
+			wantErr:    "record placement-mismatch release",
+			wantReaped: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := func() time.Time { return nowT }
+			started := nowT.Add(-2 * time.Minute)
+			sess := sessionCreatedAt("s1", "ac1", nowT.Add(-20*time.Minute))
+			withAdmittedCondition(sess, metav1.ConditionTrue, spiceboxv1alpha1.ReasonAdmitted, started.Add(-time.Second))
+			bundle := bundleWithPod("s1", "code", "s1-code-pod", started)
+			pod := pendingUnschedulablePod("s1-code-pod", "uid-1", started, capacitySchedMsg)
+
+			var releaseWrites int
+			r, c := fakeReconcilerWithFuncs(t, clock, tc.funcs(&releaseWrites), classWithBundle("ac1", codeBundle), sess, bundle, pod)
+			r.AdmissionEnabled = true
+
+			ctx := memory.WithSystemApproval(context.Background(), "test")
+			var err error
+			for range 3 {
+				if _, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "s1"}}); err != nil {
+					break
+				}
+			}
+			require.Error(t, err, "the failed step is returned so the reconcile retries")
+			assert.ErrorContains(t, err, tc.wantErr)
+
+			got := getSession(t, c, "s1")
+			assert.Equal(t, !tc.wantReaped,
+				exists(t, c, agentsession.BundleSessionName(&got, codeBundle), &spiceboxv1alpha1.SpiceboxSession{}),
+				"bundle SpiceboxSession present")
+			assert.True(t, admission.IsAdmitted(&got), "no release persisted: still Admitted=True")
+			if !tc.wantReaped {
+				assert.Zero(t, releaseWrites, "no release is written before the reap succeeds")
+			} else {
+				assert.Equal(t, 1, releaseWrites, "the release is written once the reap succeeded")
 			}
 		})
 	}

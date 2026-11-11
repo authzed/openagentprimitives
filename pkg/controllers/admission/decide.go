@@ -79,6 +79,15 @@ func (l *lineState) capBlocked() bool {
 // ordered ahead of others in their line and are never blocked by, nor counted
 // toward, the cap.
 //
+// There is no reservation across lines. A head that does not fit holds no
+// space for itself, so other lines' smaller heads keep being admitted into
+// whatever frees, and a large head can be starved for as long as they keep
+// arriving: work-conserving admission is chosen over a cross-line reservation
+// that would idle free capacity while the large head waits for enough to
+// free at once. The wait is bounded, not unbounded: a starved head fails
+// once it has waited past --capacity-hold-timeout, as any unadmitted session
+// does.
+//
 // Decide mutates in.Model: Unplaced holder demand and every admitted
 // candidate's demand are reserved on it. It does not modify in.Waiting or
 // in.Holders.

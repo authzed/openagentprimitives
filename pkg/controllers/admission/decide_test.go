@@ -107,6 +107,26 @@ func TestDecide(t *testing.T) {
 			admit: keys("b"),
 		},
 		{
+			name: "equal shares across lines: admitted in head JoinedAt order, then by line name",
+			in: func() Input {
+				return Input{
+					Waiting: []Candidate{cand("c", "C", 2, false, 100), cand("a", "A", 2, false, 100), cand("b", "B", 1, false, 100)},
+					Model:   &slotModel{known: true, slots: 3},
+				}
+			},
+			admit: keys("b", "a", "c"),
+		},
+		{
+			name: "one free slot: a later child is admitted ahead of an earlier non-child in its line",
+			in: func() Input {
+				return Input{
+					Waiting: []Candidate{cand("early", "l", 1, false, 100), cand("kid", "l", 2, true, 100)},
+					Model:   &slotModel{known: true, slots: 1},
+				}
+			},
+			admit: keys("kid"),
+		},
+		{
 			name: "cap 2 with 2 holders: non-child head waits, child head admitted",
 			in: func() Input {
 				return Input{
