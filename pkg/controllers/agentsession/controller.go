@@ -651,6 +651,14 @@ type Reconciler struct {
 	// --capacity-hold-timeout. See capacity_hold.go.
 	CapacityHoldTimeout time.Duration
 
+	// AdmissionEnabled gates a booting session's pods on admission: while true,
+	// a Pending session creates none of its pods (bundle SpiceboxSessions,
+	// separate-pod sidecars, detectors, runner) until the admitter sets
+	// Admitted=True, and it gives up once it has waited unadmitted past
+	// CapacityHoldTimeout. The zero value (false) is ungated — today's
+	// behaviour. See admission_gate.go.
+	AdmissionEnabled bool
+
 	// SpiceDBDeleter, when non-nil, wipes all agentsession relationships in
 	// SpiceDB during finalization, before the finalizer is removed. Nil skips
 	// SpiceDB cleanup, logged rather than silent.
@@ -1456,6 +1464,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{RequeueAfter: remaining}, nil
 		case reapActionReap:
 			res, err := r.reapSessionPods(ctx, &sess)
+			// The reaped pods' capacity is free, so the session's admission
+			// goes back to its line. Written after the reap succeeds, never
+			// before: released while its pods still stood, the admitter would
+			// count their capacity twice. A session not Admitted=True is
+			// untouched, so this writes nothing on later passes.
+			if err == nil && r.releaseAdmissionOnReclaim(&sess) {
+				if serr := r.applyStatus(ctx, &sess); serr != nil {
+					log.FromContext(ctx).Info("reap: recording admission release failed; will retry",
+						"session", sess.Namespace+"/"+sess.Name, "err", serr.Error())
+					return ctrl.Result{}, fmt.Errorf("record admission release after reap: %w", serr)
+				}
+			}
 			if err == nil && reclaimAfter > 0 && (res.RequeueAfter == 0 || reclaimAfter < res.RequeueAfter) {
 				res.RequeueAfter = reclaimAfter
 			}
@@ -1730,6 +1750,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			"session", sess.Namespace+"/"+sess.Name, "err", err.Error())
 	}
 
+	// 2-pre. Admission. With admission on, a booting session that is not yet
+	// admitted creates NONE of its pods — bundles, separate-pod sidecars,
+	// detectors and runner all sit below this line — and waits in line here
+	// until the admitter sets Admitted=True. Everything above (settings, the
+	// start/identity/credential gates, owner resolution) has already run: the
+	// admitter needs status.effectiveSettings to size the session's demand.
+	if r.awaitingAdmission(&sess) {
+		return r.waitForAdmission(ctx, &sess)
+	}
+	// Admitted (or admission off): a wait-in-line hold ends here, persisted now
+	// for the same reason the bundle stage persists its own release — so a
+	// bundle-capacity hold set later this pass is a NEW episode with its own
+	// give-up time rather than diffed away against the stored True.
+	if r.releaseCapacityHoldFor(&sess, spiceboxv1alpha1.ReasonCapacityHoldWaitingAdmission) {
+		if err := r.applyStatus(ctx, &sess); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// 2. Bundle SpiceboxSessions, or the vacuous NoBundles path. Only an
 	// active/pending turn provisions; every parked phase (Idle, AwaitingRetry,
 	// AwaitingDecision, AwaitingCredentials) and every terminal phase skips this
@@ -1770,27 +1809,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			var earliestBundleStart time.Time
 			bundleSessionStatuses := make([]spiceboxv1alpha1.ResolvedBundle, 0, len(ac.Spec.ToolBundles))
 			for _, b := range ac.Spec.ToolBundles {
-				identity := b.AgentIdentity
-				if identity == "" {
-					identity = sess.Spec.AgentIdentity
-				}
-				if identity == "" {
-					identity = ac.Spec.AgentIdentity
-				}
-
 				if err := r.ensureSandboxNetworkPolicy(ctx, &sess, b); err != nil {
 					return ctrl.Result{}, err
 				}
-				// The tier-resolved sandbox backend for this bundle, or nil when no
-				// tier expressed a preference — BuildBundleSession then leaves
-				// spec.sandbox unset, so the SpiceboxClass's own setting stands.
-				var resolvedSandbox *spiceboxv1alpha1.SandboxBackend
-				if eff := sess.Status.EffectiveSettings; eff != nil {
-					if backend, ok := eff.Sandbox[b.Name]; ok {
-						resolvedSandbox = &backend
-					}
-				}
-				desired := BuildBundleSession(&sess, b, identity, claimName, sess.Status.ResolvedSkillBundles, resolvedSandbox, ac.Spec.Config)
+				desired := desiredBundleSession(&sess, &ac, b, claimName)
+				identity := desired.Spec.Agent
 				// Server-side apply (idempotent re-create).
 				if err := r.Client.Patch(ctx, desired,
 					client.Apply, client.ForceOwnership, client.FieldOwner("agentsession-bundle"),
@@ -1968,6 +1991,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				bundlesWereReady := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionBundlesReady)
 				midSession := bundlesWereReady != nil && bundlesWereReady.Status == metav1.ConditionTrue
 				stall, stalled := r.firstSchedulingStall(ctx, sess.Namespace, notReadyPods)
+				// Admission's safety net: an admitted set the scheduler still
+				// cannot place goes back to its line instead of holding the
+				// placed half (admission_gate.go). Ahead of the deadline, which
+				// a re-queued session must not be failed by.
+				if r.placementMisfit(&sess, stall, stalled && !midSession) {
+					sess.Status.BundleSessions = bundleSessionStatuses
+					return r.releaseMisfit(ctx, &sess, stall)
+				}
 				bundleDeadline, held := r.capacityHoldDeadline(&sess, stall, stalled && !midSession, r.effectiveBundleReadyDeadline(ctx))
 				if bundleProvisioningTimedOut(capacityHoldAdjustedStart(&sess, earliestBundleStart, held, r.now()), r.now(), bundleDeadline) {
 					sess.Status.BundleSessions = bundleSessionStatuses
@@ -2331,6 +2362,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// catch-all for every other path off Idle. Clearing lets a later Idle
 		// period sleep again instead of idleSleepDue reading it as already-slept.
 		sess.Status.SleptAt = nil
+	}
+	// The same catch-all for the admitter's reclaim request: one a session left
+	// Idle before honoring is stale, and must not sleep it on its next Idle.
+	if err := r.clearStaleReclaimRequest(ctx, &sess); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Forensic hold: an unreleased SessionHold naming this session forces
@@ -2862,57 +2898,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// clear AwaitingDetector reason set meanwhile so the wait is never silent.
 	// The loop is generic — it never branches on inspector id.
 	{
-		var resolvedDetectors []spiceboxv1alpha1.ResolvedContentGuardDetector
-		var detKeys []string
 		// Collect the detector-requiring inspectors and their specs.
-		if eff := sess.Status.EffectiveSettings; eff != nil {
-			for _, ci := range eff.ContentInspectors {
-				insp, ok := contentguardregistry.Get(ci.ID)
-				if !ok {
-					// Webhook already rejected unknown IDs; defensive skip.
-					continue
-				}
-				dp, ok := insp.(contentguard.DetectorProvider)
-				if !ok {
-					// Inspector does not need a detector sidecar (e.g. url-allowlist).
-					continue
-				}
-				raw := ci.Config.Raw
-				ds, derr := dp.Detector(raw)
-				if derr != nil || ds == nil {
-					// Fail-closed: a detector-requiring inspector that can't resolve
-					// its image must not silently run unscanned.
-					return r.markBootFailed(ctx, &sess,
-						spiceboxv1alpha1.ReasonAgentSessionContentGuardHalt,
-						fmt.Sprintf("content-guard detector %q: %v", ci.ID, derr))
-				}
-				// Use the image exactly as declared in the inspector config: pinned
-				// by digest it launches the exact bytes, by tag it launches by tag.
-				// There is no probe path here as there is for SidecarToolbox.
-				img := ds.Image
-				resolvedDetectors = append(resolvedDetectors, spiceboxv1alpha1.ResolvedContentGuardDetector{
-					Inspector:  ci.ID,
-					Image:      img,
-					HealthPath: ds.HealthPath,
-				})
-				detKeys = append(detKeys, "det-"+ci.ID)
-			}
+		resolvedDetectors, derr := resolveContentGuardDetectors(sess.Status.EffectiveSettings)
+		if derr != nil {
+			// Fail-closed: a detector-requiring inspector that can't resolve
+			// its image must not silently run unscanned.
+			return r.markBootFailed(ctx, &sess,
+				spiceboxv1alpha1.ReasonAgentSessionContentGuardHalt, derr.Error())
 		}
 
 		if len(resolvedDetectors) > 0 {
-			// Allocate ports in the SAME key space as sidecar ports so they never
-			// collide. Derive the sidecar key slice from the resolved snapshot.
-			sidecarKeySlice := make([]string, 0, len(resolvedSidecars))
+			sidecarRefs := make([]string, 0, len(resolvedSidecars))
 			for _, rt := range resolvedSidecars {
-				sidecarKeySlice = append(sidecarKeySlice, rt.Ref)
+				sidecarRefs = append(sidecarRefs, rt.Ref)
 			}
-			allKeys := append(append([]string{}, sidecarKeySlice...), detKeys...)
-			ports := AllocatePorts(allKeys)
-			for i := range resolvedDetectors {
-				det := &resolvedDetectors[i]
-				det.Port = ports["det-"+det.Inspector]
-				det.PodName = "sidecar-" + sess.Name + "-" + det.Inspector
-			}
+			placeContentGuardDetectors(&sess, resolvedDetectors, sidecarRefs)
 
 			// Create each detector pod + its deny-all-egress NetworkPolicy, and
 			// reflect the pod IP. Hold runner-pod creation until every PodIP is known.
@@ -2934,22 +2934,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			var terminalDetectorFailures []string
 			for i := range resolvedDetectors {
 				det := &resolvedDetectors[i]
-				spec := cosidecar.Spec{
-					Ref: det.Inspector,
-					// Pin the NetworkPolicy name to the one
-					// cleanupOrphanedSidecarPods reaps by. On cosidecar's default
-					// name, removing an inspector mid-session reaps the detector pod
-					// by label but orphans its NetworkPolicy until session GC.
-					// BuildPod names the pod by Ref, so only the NP name is affected.
-					Name:            SidecarNetworkPolicyName(&sess, det.Inspector),
-					Image:           det.Image,
-					Port:            det.Port,
-					Health:          cosidecar.Healthcheck{Path: det.HealthPath},
-					ImagePullSecret: r.ImagePullSecret,
-					// Zero egress: the detector ingests potentially hostile tool text
-					// and must not be able to exfiltrate it to external endpoints.
-					Egress: cosidecar.EgressPolicy{Denied: true},
-				}
+				spec := detectorPodSpec(&sess, *det, r.ImagePullSecret)
 				pod, _, perr := cosidecar.BuildPod(&sess, spec)
 				if perr != nil {
 					return r.markBootFailed(ctx, &sess,
@@ -3111,6 +3096,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// is the source of truth for real container crashes, and the
 		// maxRunnerRestarts kill-switch must fire only on those.
 		sess.Status.LastIdleAt = nil
+		// A slept or archived session's pods are gone. One reaped before
+		// admission knew of it has no Admitted condition, and with SleptAt
+		// cleared its stale pod names would read as pre-admission: record the
+		// release here, in the wake's own status write, so it queues instead.
+		if sess.Status.SleptAt != nil || wasArchivedBySweep {
+			r.releaseUnrecordedAdmission(&sess)
+		}
 		// Clear SleptAt explicitly, not just via the LastIdleAt catch-all: this
 		// path nils LastIdleAt in the same pass that applies WakeRequested, and
 		// that catch-all ran earlier in this call while phase was still Idle, so

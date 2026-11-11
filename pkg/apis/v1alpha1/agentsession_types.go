@@ -399,6 +399,13 @@ type AgentSessionStatus struct {
 	// +optional
 	EstimatedCost *EstimatedSessionCost `json:"estimatedCost,omitempty"`
 
+	// Admission is where this session stands in its AgentClass's admission
+	// line while it waits for its pod set to be admitted. Written by the
+	// operator's admitter only when the position changes, and cleared when the
+	// session is admitted. Nil when the session is not waiting.
+	// +optional
+	Admission *AdmissionStatus `json:"admission,omitempty"`
+
 	// AwaitingUserInputSince is set when the agent yields via
 	// await_user_message and cleared on resume or terminal. It is the durable
 	// floor under the at-most-once turn_activity yield event: a non-nil value
@@ -1597,4 +1604,15 @@ type GoalExecutionReference struct {
 	OccurrenceID  string `json:"occurrenceID"`
 	GoalRevision  int64  `json:"goalRevision"`
 	ConsentDigest string `json:"consentDigest"`
+}
+
+// AdmissionStatus is a waiting session's place in its admission line.
+type AdmissionStatus struct {
+	// Position is the session's 1-based place in its line.
+	Position int32 `json:"position"`
+	// LineLength is how many sessions are waiting in the line.
+	LineLength int32 `json:"lineLength"`
+	// JoinedAt is when the session took its place in line: its creation, or
+	// the wake that re-queued it.
+	JoinedAt metav1.Time `json:"joinedAt"`
 }

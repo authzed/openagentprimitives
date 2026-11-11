@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	fakekind "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/fake"
@@ -22,9 +24,14 @@ import (
 type SendOption func(*sendCfg)
 
 type sendCfg struct {
-	user, thread string
-	attachments  []channelkinds.InboundAttachment
+	user, thread, channel string
+	attachments           []channelkinds.InboundAttachment
 }
+
+// OnChannel sends through the named Channel instead of the fixture's only
+// conversational one — for a fixture with one fake Channel per AgentClass,
+// where singleChannel would refuse to pick.
+func OnChannel(name string) SendOption { return func(c *sendCfg) { c.channel = name } }
 
 // AsUser overrides the requester identity for this inbound — both the
 // channel-side ExternalID and the email that drives the SpiceDB
@@ -74,7 +81,15 @@ func (h *Harness) SendUserMessage(text string, opts ...SendOption) {
 		o(&cfg)
 	}
 
-	ch := h.singleChannel("SendUserMessage")
+	var ch *spiceboxv1alpha1.Channel
+	if cfg.channel != "" {
+		ch = &spiceboxv1alpha1.Channel{}
+		if err := h.K8s.Get(context.Background(), client.ObjectKey{Namespace: h.Namespace(), Name: cfg.channel}, ch); err != nil {
+			h.t.Fatalf("SendUserMessage: get Channel %q: %v", cfg.channel, err)
+		}
+	} else {
+		ch = h.singleChannel("SendUserMessage")
+	}
 	// The fake listener registers its Driver lazily on Start (a goroutine), so
 	// a Channel applied shortly before this send races the listener-starter.
 	// Poll for the driver — mirroring ExpectAgentReply's poll — instead of a

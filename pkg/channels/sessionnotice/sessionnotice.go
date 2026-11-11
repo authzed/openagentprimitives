@@ -15,6 +15,9 @@
 package sessionnotice
 
 import (
+	"fmt"
+
+	"github.com/dustin/go-humanize"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -209,10 +212,18 @@ func CapacityHold(sess *spiceboxv1alpha1.AgentSession) (string, bool) {
 	if c == nil || c.Status != metav1.ConditionTrue {
 		return "", false
 	}
-	if c.Message == "" {
-		return SchedulingLead, true
+	text := c.Message
+	if text == "" {
+		text = SchedulingLead
 	}
-	return c.Message, true
+	// The admitter records where the session stands in its class's line. The
+	// notice is posted once per hold episode, so this is the position at the
+	// time it posts. The class name stands in for a display name: the session
+	// status carries none, and this package stays a pure derivation (no lookup).
+	if a := sess.Status.Admission; a != nil && a.Position > 0 {
+		text += fmt.Sprintf(" You're %s in line for %s.", humanize.Ordinal(int(a.Position)), sess.Spec.Class)
+	}
+	return text, true
 }
 
 // CapacityHoldExpired reports whether the session failed because its capacity

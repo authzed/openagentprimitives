@@ -544,6 +544,8 @@ func reachable(agents []workshopthreadsrv.AgentInThread, ns, class string) bool 
 //     Model absent means the tier default applies, Harness absent means
 //     ap-native.
 //   - Budget — the tier default applies.
+//   - MaxConcurrentSessions — the source agent's session cap; a stand-in is
+//     a different class, with no line of the source's to limit.
 //   - Subagents, SubagentModes, BoundEntities (deprecated) — DROPPED. A
 //     source class's own roster would almost certainly name classes this
 //     workshop does not have, which the AgentClass reconciler marks

@@ -1580,6 +1580,14 @@ spec:
                 required:
                 - prompt
                 type: object
+              maxConcurrentSessions:
+                description: |-
+                  MaxConcurrentSessions: at most this many of this agent's sessions hold
+                  capacity at once. Delegated child sessions are not counted and are
+                  never blocked by it. Unset means no limit.
+                format: int32
+                minimum: 1
+                type: integer
               mcpServers:
                 description: |-
                   MCPServers references MCPServer CRs in the same namespace whose
@@ -5070,6 +5078,33 @@ spec:
                   - artifactID
                   type: object
                 type: array
+              admission:
+                description: |-
+                  Admission is where this session stands in its AgentClass's admission
+                  line while it waits for its pod set to be admitted. Written by the
+                  operator's admitter only when the position changes, and cleared when the
+                  session is admitted. Nil when the session is not waiting.
+                properties:
+                  joinedAt:
+                    description: |-
+                      JoinedAt is when the session took its place in line: its creation, or
+                      the wake that re-queued it.
+                    format: date-time
+                    type: string
+                  lineLength:
+                    description: LineLength is how many sessions are waiting in the
+                      line.
+                    format: int32
+                    type: integer
+                  position:
+                    description: Position is the session's 1-based place in its line.
+                    format: int32
+                    type: integer
+                required:
+                - joinedAt
+                - lineLength
+                - position
+                type: object
               agentWakeCredit:
                 description: |-
                   AgentWakeCredit is how many further AGENT-DRIVEN wakes this session will

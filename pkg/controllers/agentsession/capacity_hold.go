@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/controllers/admission"
 	"github.com/authzed/openagentprimitives/pkg/controllers/conditions"
 )
 
@@ -141,6 +142,27 @@ func (r *Reconciler) syncCapacityHold(sess *spiceboxv1alpha1.AgentSession, held 
 		return
 	}
 	r.releaseCapacityHold(sess)
+}
+
+// syncAdmissionHold records that a booting session is waiting in line to be
+// admitted: CapacityHold=True/WaitingForAdmission, whose message gives up at
+// until (WaitingSince + the hold timeout). Like syncCapacityHold it waits out
+// unschedulableGrace first, measured from admission.WaitingSince, so a session
+// admitted a few seconds after joining never flashes a "queued" notice. The
+// message is a pure function of until, so the condition is written once per
+// wait rather than churned by every requeue. Released by releaseCapacityHoldFor
+// once the session is admitted.
+func (r *Reconciler) syncAdmissionHold(sess *spiceboxv1alpha1.AgentSession, until time.Time) {
+	if r.now().Sub(admission.WaitingSince(sess)) < unschedulableGrace {
+		return
+	}
+	conditions.Set(sess, &sess.Status.Conditions, metav1.Condition{
+		Type:               spiceboxv1alpha1.AgentSessionConditionCapacityHold,
+		Status:             metav1.ConditionTrue,
+		Reason:             spiceboxv1alpha1.ReasonCapacityHoldWaitingAdmission,
+		Message:            capacityHoldMessage(until),
+		LastTransitionTime: metav1.NewTime(r.now()),
+	})
 }
 
 // releaseCapacityHoldFor releases an active hold only when it is the given

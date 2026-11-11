@@ -175,6 +175,13 @@ type AgentClassSpec struct {
 	// +optional
 	Budget *BudgetConfig `json:"budget,omitempty"`
 
+	// MaxConcurrentSessions: at most this many of this agent's sessions hold
+	// capacity at once. Delegated child sessions are not counted and are
+	// never blocked by it. Unset means no limit.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	MaxConcurrentSessions *int32 `json:"maxConcurrentSessions,omitempty"`
+
 	// BoundEntities is the PRE-RENAME spelling of spec.authz.slots.
 	//
 	// Still deserialized on purpose. This is an AUTHZ field: dropping it from

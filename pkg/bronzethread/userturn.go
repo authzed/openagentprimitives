@@ -45,6 +45,15 @@ type BundleAttachment struct {
 type UserTurn struct {
 	Text        string             `json:"text"`
 	Attachments []BundleAttachment `json:"attachments,omitempty"`
+
+	// Thread names the session this turn lands on; Channel, the fake Channel
+	// it is sent through (empty: the fixture's only one). Both empty is the
+	// single-session bundle. See sessions.go.
+	Thread  string `json:"thread,omitempty"`
+	Channel string `json:"channel,omitempty"`
+
+	// WaitFor holds this turn until each named session reaches its state.
+	WaitFor []TurnBarrier `json:"waitFor,omitempty"`
 }
 
 // UnmarshalJSON accepts the bare-string and object forms.

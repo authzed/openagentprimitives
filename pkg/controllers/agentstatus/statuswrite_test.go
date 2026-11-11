@@ -3,6 +3,7 @@ package agentstatus
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -130,4 +131,63 @@ func TestWriteOwned_ConditionWrite_DoesNotResendOperatorOwnedFields(t *testing.T
 	require.NotNil(t, got.Status.EffectiveSettings, "operator-owned effectiveSettings must be preserved")
 	assert.True(t, got.Status.EffectiveSettings.ReportSessionCost,
 		"operator-owned effectiveSettings.reportSessionCost must be preserved by a condition write")
+}
+
+// A writer that deliberately re-stamps a condition's transition time on a
+// reason change with no status change (Admitted False/Reclaimed →
+// False/Queued: the session arrives in line now, not at its release) must
+// have that time persisted. meta.SetStatusCondition alone keeps the stored
+// time whenever the status is unchanged; a writer that did not move the time
+// keeps that behaviour.
+func TestWriteOwned_CarriesDeliberateTransitionTimeOnSameStatus(t *testing.T) {
+	released := metav1.NewTime(time.Now().Add(-48 * time.Hour).Truncate(time.Second))
+	queued := metav1.NewTime(time.Now().Truncate(time.Second))
+	cases := []struct {
+		name    string
+		wantLTT metav1.Time
+		mutate  func(c *metav1.Condition)
+	}{
+		{
+			name:    "reason changed and transition time moved later: the new time is persisted",
+			wantLTT: queued,
+			mutate: func(c *metav1.Condition) {
+				c.Reason = spiceboxv1alpha1.ReasonAdmissionQueued
+				c.LastTransitionTime = queued
+			},
+		},
+		{
+			name:    "reason changed, transition time untouched: the stored time is kept",
+			wantLTT: released,
+			mutate: func(c *metav1.Condition) {
+				c.Reason = spiceboxv1alpha1.ReasonAdmissionQueued
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			original := &spiceboxv1alpha1.AgentSession{
+				ObjectMeta: metav1.ObjectMeta{Name: "sess", Namespace: "default"},
+				Status: spiceboxv1alpha1.AgentSessionStatus{Conditions: []metav1.Condition{{
+					Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionFalse,
+					Reason: spiceboxv1alpha1.ReasonAdmissionReclaimed, LastTransitionTime: released,
+				}}},
+			}
+			c := fake.NewClientBuilder().WithScheme(writeOwnedScheme(t)).
+				WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).
+				WithObjects(original.DeepCopy()).Build()
+			var base spiceboxv1alpha1.AgentSession
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(original), &base))
+			sess := base.DeepCopy()
+			tc.mutate(&sess.Status.Conditions[0])
+
+			require.NoError(t, WriteOwned(context.Background(), c, sess, &base, spiceboxv1alpha1.OwnerOperator))
+
+			var got spiceboxv1alpha1.AgentSession
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(original), &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+			require.NotNil(t, cond)
+			assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionQueued, cond.Reason)
+			assert.True(t, tc.wantLTT.Equal(&cond.LastTransitionTime), "want %v got %v", tc.wantLTT, cond.LastTransitionTime)
+		})
+	}
 }
