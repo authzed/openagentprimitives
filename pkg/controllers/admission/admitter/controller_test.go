@@ -147,48 +147,48 @@ func assertPosition(t *testing.T, s *spiceboxv1alpha1.AgentSession, index, lengt
 func TestAdmitterPass(t *testing.T) {
 	t.Run("three waiting demo-agent sessions, room for one: oldest gets Admitted=True, others get Position 1 and 2 of 2", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(1),
-			waitingSession("rb-c", 3*time.Minute),
-			waitingSession("rb-a", time.Minute),
-			waitingSession("rb-b", 2*time.Minute),
+			waitingSession("sess-c", 3*time.Minute),
+			waitingSession("sess-a", time.Minute),
+			waitingSession("sess-b", 2*time.Minute),
 		)
 		res := runPass(t, r)
 		assert.Equal(t, 15*time.Second, res.RequeueAfter, "periodic requeue")
 
-		assertAdmitted(t, getSession(t, c, "rb-a"))
-		assertPosition(t, getSession(t, c, "rb-b"), 1, 2)
-		assertPosition(t, getSession(t, c, "rb-c"), 2, 2)
+		assertAdmitted(t, getSession(t, c, "sess-a"))
+		assertPosition(t, getSession(t, c, "sess-b"), 1, 2)
+		assertPosition(t, getSession(t, c, "sess-c"), 2, 2)
 	})
 
 	t.Run("Enabled=false: every waiting session admitted, with no room at all", func(t *testing.T) {
 		r, c, _ := newReconciler(t, false, roomFor(0),
-			waitingSession("rb-a", time.Minute),
-			waitingSession("rb-b", 2*time.Minute),
-			waitingSession("rb-c", 3*time.Minute),
+			waitingSession("sess-a", time.Minute),
+			waitingSession("sess-b", 2*time.Minute),
+			waitingSession("sess-c", 3*time.Minute),
 		)
 		runPass(t, r)
-		for _, name := range []string{"rb-a", "rb-b", "rb-c"} {
+		for _, name := range []string{"sess-a", "sess-b", "sess-c"} {
 			assertAdmitted(t, getSession(t, c, name))
 		}
 	})
 
 	t.Run("Pending without the Queued marker (parked at an earlier gate, or fatal settings): not admitted, no position", func(t *testing.T) {
-		parked := waitingSession("rb-parked", 0)
+		parked := waitingSession("sess-parked", 0)
 		parked.Status.Conditions = nil
-		r, c, _ := newReconciler(t, true, roomFor(5), parked, waitingSession("rb-a", time.Minute))
+		r, c, _ := newReconciler(t, true, roomFor(5), parked, waitingSession("sess-a", time.Minute))
 		runPass(t, r)
 
-		got := getSession(t, c, "rb-parked")
+		got := getSession(t, c, "sess-parked")
 		assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted),
 			"a session that never reached the gate is never admitted")
 		assert.Nil(t, got.Status.Admission, "and holds no line position")
-		assertAdmitted(t, getSession(t, c, "rb-a"))
+		assertAdmitted(t, getSession(t, c, "sess-a"))
 	})
 
 	t.Run("a position write is skipped when unchanged: second pass sends no status patch", func(t *testing.T) {
 		r, c, patches := newReconciler(t, true, roomFor(1),
-			waitingSession("rb-a", time.Minute),
-			waitingSession("rb-b", 2*time.Minute),
-			waitingSession("rb-c", 3*time.Minute),
+			waitingSession("sess-a", time.Minute),
+			waitingSession("sess-b", 2*time.Minute),
+			waitingSession("sess-c", 3*time.Minute),
 		)
 		runPass(t, r)
 		require.Positive(t, patches.Load(), "first pass writes admission and positions")
@@ -196,88 +196,88 @@ func TestAdmitterPass(t *testing.T) {
 
 		runPass(t, r)
 		assert.Zero(t, patches.Load(), "nothing changed, so nothing is written")
-		assertPosition(t, getSession(t, c, "rb-b"), 1, 2)
+		assertPosition(t, getSession(t, c, "sess-b"), 1, 2)
 	})
 
 	t.Run("a holder still occupying the room: nobody is admitted, the line starts at 1", func(t *testing.T) {
-		holder := waitingSession("rb-holder", 0)
+		holder := waitingSession("sess-holder", 0)
 		holder.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseRunning
 		holder.Status.Conditions = []metav1.Condition{{
 			Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionTrue,
 			Reason: spiceboxv1alpha1.ReasonAdmitted, LastTransitionTime: metav1.NewTime(baseTime),
 		}}
 		r, c, _ := newReconciler(t, true, roomFor(1), holder,
-			waitingSession("rb-a", time.Minute),
-			waitingSession("rb-b", 2*time.Minute),
+			waitingSession("sess-a", time.Minute),
+			waitingSession("sess-b", 2*time.Minute),
 		)
 		runPass(t, r)
-		assertPosition(t, getSession(t, c, "rb-a"), 1, 2)
-		assertPosition(t, getSession(t, c, "rb-b"), 2, 2)
+		assertPosition(t, getSession(t, c, "sess-a"), 1, 2)
+		assertPosition(t, getSession(t, c, "sess-b"), 2, 2)
 	})
 
 	t.Run("a terminal session still Admitted=True: not a holder, so the head is admitted", func(t *testing.T) {
-		done := waitingSession("rb-done", 0)
+		done := waitingSession("sess-done", 0)
 		done.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseSucceeded
 		done.Status.Conditions = []metav1.Condition{{
 			Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionTrue,
 			Reason: spiceboxv1alpha1.ReasonAdmitted, LastTransitionTime: metav1.NewTime(baseTime),
 		}}
-		r, c, _ := newReconciler(t, true, roomFor(1), done, waitingSession("rb-a", time.Minute))
+		r, c, _ := newReconciler(t, true, roomFor(1), done, waitingSession("sess-a", time.Minute))
 		runPass(t, r)
-		assertAdmitted(t, getSession(t, c, "rb-a"))
+		assertAdmitted(t, getSession(t, c, "sess-a"))
 	})
 
 	t.Run("a session parked at a pre-start gate: not waiting, never admitted or positioned", func(t *testing.T) {
-		parked := waitingSession("rb-parked", 0)
+		parked := waitingSession("sess-parked", 0)
 		parked.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseAwaitingDecision
 		r, c, _ := newReconciler(t, true, roomFor(5), parked)
 		runPass(t, r)
-		got := getSession(t, c, "rb-parked")
+		got := getSession(t, c, "sess-parked")
 		assert.False(t, admission.IsAdmitted(got), "parked session not admitted")
 		assert.Nil(t, got.Status.Admission, "parked session has no line position")
 	})
 
 	t.Run("demand fails for the oldest: it keeps waiting unpositioned, the next is admitted", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(1),
-			waitingSession("rb-a", time.Minute),
-			waitingSession("rb-b", 2*time.Minute),
+			waitingSession("sess-a", time.Minute),
+			waitingSession("sess-b", 2*time.Minute),
 		)
 		r.Demand = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (admission.Demand, error) {
-			if sess.Name == "rb-a" {
+			if sess.Name == "sess-a" {
 				return admission.Demand{}, fmt.Errorf("settings not resolved")
 			}
 			return oneCPUDemand(ctx, sess)
 		}
 		runPass(t, r)
-		a := getSession(t, c, "rb-a")
-		assert.False(t, admission.IsAdmitted(a), "rb-a not admitted")
-		assert.Nil(t, a.Status.Admission, "rb-a not positioned")
-		assertAdmitted(t, getSession(t, c, "rb-b"))
+		a := getSession(t, c, "sess-a")
+		assert.False(t, admission.IsAdmitted(a), "sess-a not admitted")
+		assert.Nil(t, a.Status.Admission, "sess-a not positioned")
+		assertAdmitted(t, getSession(t, c, "sess-b"))
 	})
 
 	t.Run("capacity snapshot fails: capacity unknown, every waiting session admitted as AdmittedUnknownCapacity", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, failingSource{},
-			waitingSession("rb-a", time.Minute),
-			waitingSession("rb-b", 2*time.Minute),
+			waitingSession("sess-a", time.Minute),
+			waitingSession("sess-b", 2*time.Minute),
 		)
 		runPass(t, r)
-		assertAdmittedUnknown(t, getSession(t, c, "rb-a"))
-		assertAdmittedUnknown(t, getSession(t, c, "rb-b"))
+		assertAdmittedUnknown(t, getSession(t, c, "sess-a"))
+		assertAdmittedUnknown(t, getSession(t, c, "sess-b"))
 	})
 
 	t.Run("namespace-scoped operator (watch set): capacity treated as unknown even with no room, admitted as AdmittedUnknownCapacity", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(0),
-			waitingSession("rb-a", time.Minute),
+			waitingSession("sess-a", time.Minute),
 		)
 		r.Namespaces = []string{"default"}
 		runPass(t, r)
-		assertAdmittedUnknown(t, getSession(t, c, "rb-a"))
+		assertAdmittedUnknown(t, getSession(t, c, "sess-a"))
 	})
 
 	t.Run("known capacity: admitted with reason Admitted", func(t *testing.T) {
-		r, c, _ := newReconciler(t, true, roomFor(1), waitingSession("rb-a", time.Minute))
+		r, c, _ := newReconciler(t, true, roomFor(1), waitingSession("sess-a", time.Minute))
 		runPass(t, r)
-		assertAdmitted(t, getSession(t, c, "rb-a"))
+		assertAdmitted(t, getSession(t, c, "sess-a"))
 	})
 }
 
@@ -368,9 +368,9 @@ func TestAdmitterWatchNamespaces(t *testing.T) {
 			c := fake.NewClientBuilder().
 				WithScheme(testScheme(t)).
 				WithObjects(
-					inNamespace(waitingSession("rb-a", time.Minute), "team-a"),
-					inNamespace(waitingSession("rb-b", 2*time.Minute), "team-b"),
-					inNamespace(waitingSession("rb-c", 3*time.Minute), "other"),
+					inNamespace(waitingSession("sess-a", time.Minute), "team-a"),
+					inNamespace(waitingSession("sess-b", 2*time.Minute), "team-b"),
+					inNamespace(waitingSession("sess-c", 3*time.Minute), "other"),
 				).
 				WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).
 				WithInterceptorFuncs(interceptor.Funcs{
@@ -467,38 +467,38 @@ func TestAdmitterEarlyReclaim(t *testing.T) {
 			name: "line has a waiting head, one warm idle past minWarm: reclaim annotation set on it only",
 			objs: []client.Object{
 				cpuNode(2),
-				warmIdleSession("rb-old", 10*time.Minute), boundRunnerPod("rb-old"),
-				warmIdleSession("rb-young", time.Minute), boundRunnerPod("rb-young"),
-				waitingSession("rb-wait", time.Minute),
+				warmIdleSession("sess-old", 10*time.Minute), boundRunnerPod("sess-old"),
+				warmIdleSession("sess-young", time.Minute), boundRunnerPod("sess-young"),
+				waitingSession("sess-wait", time.Minute),
 			},
-			wantAnnotated: []string{"rb-old"},
-			wantClean:     []string{"rb-young", "rb-wait"},
+			wantAnnotated: []string{"sess-old"},
+			wantClean:     []string{"sess-young", "sess-wait"},
 		},
 		{
 			name: "no waiting head: no annotation",
 			objs: []client.Object{
 				cpuNode(1),
-				warmIdleSession("rb-old", 10*time.Minute), boundRunnerPod("rb-old"),
+				warmIdleSession("sess-old", 10*time.Minute), boundRunnerPod("sess-old"),
 			},
-			wantClean: []string{"rb-old"},
+			wantClean: []string{"sess-old"},
 		},
 		{
 			name: "the head fits without a reclaim: admitted, no annotation",
 			objs: []client.Object{
 				cpuNode(2),
-				warmIdleSession("rb-old", 10*time.Minute), boundRunnerPod("rb-old"),
-				waitingSession("rb-wait", time.Minute),
+				warmIdleSession("sess-old", 10*time.Minute), boundRunnerPod("sess-old"),
+				waitingSession("sess-wait", time.Minute),
 			},
-			wantClean: []string{"rb-old", "rb-wait"},
+			wantClean: []string{"sess-old", "sess-wait"},
 		},
 		{
 			name: "only warm idle is younger than minWarm: no annotation",
 			objs: []client.Object{
 				cpuNode(1),
-				warmIdleSession("rb-young", time.Minute), boundRunnerPod("rb-young"),
-				waitingSession("rb-wait", time.Minute),
+				warmIdleSession("sess-young", time.Minute), boundRunnerPod("sess-young"),
+				waitingSession("sess-wait", time.Minute),
 			},
-			wantClean: []string{"rb-young", "rb-wait"},
+			wantClean: []string{"sess-young", "sess-wait"},
 		},
 	}
 	for _, tc := range cases {
@@ -521,14 +521,14 @@ func TestAdmitterEarlyReclaim(t *testing.T) {
 	}
 
 	t.Run("a reclaim already requested: the annotation is not rewritten", func(t *testing.T) {
-		old := warmIdleSession("rb-old", 10*time.Minute)
+		old := warmIdleSession("sess-old", 10*time.Minute)
 		earlier := baseTime.Format(time.RFC3339)
 		old.Annotations = map[string]string{spiceboxv1alpha1.AnnotationReclaimRequested: earlier}
-		r, c, _ := newReconciler(t, true, nil, cpuNode(1), old, boundRunnerPod("rb-old"), waitingSession("rb-wait", time.Minute))
+		r, c, _ := newReconciler(t, true, nil, cpuNode(1), old, boundRunnerPod("sess-old"), waitingSession("sess-wait", time.Minute))
 		r.Capacity = admission.KubeCapacitySource{Reader: c}
 		r.MinWarm = minWarm
 		runPass(t, r)
-		assert.Equal(t, earlier, getSession(t, c, "rb-old").Annotations[spiceboxv1alpha1.AnnotationReclaimRequested],
+		assert.Equal(t, earlier, getSession(t, c, "sess-old").Annotations[spiceboxv1alpha1.AnnotationReclaimRequested],
 			"the first request's time stands")
 	})
 }
@@ -551,15 +551,15 @@ func TestAdmitterReclaimInFlightIsCredited(t *testing.T) {
 		{
 			name: "slept and Admitted=False/Reclaimed, pod still bound: second pass annotates nothing new",
 			advance: func(t *testing.T, c client.Client) {
-				markReclaimed(t, c, "rb-1")
+				markReclaimed(t, c, "sess-1")
 			},
 		},
 		{
 			name: "slept and Admitted=False/Reclaimed, pod terminating (DeletionTimestamp): second pass annotates nothing new",
 			advance: func(t *testing.T, c client.Client) {
-				markReclaimed(t, c, "rb-1")
+				markReclaimed(t, c, "sess-1")
 				var pod corev1.Pod
-				require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "rb-1-runner"}, &pod))
+				require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "sess-1-runner"}, &pod))
 				require.NoError(t, c.Delete(context.Background(), &pod), "delete held by a finalizer: pod lingers terminating")
 				require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(&pod), &pod))
 				require.NotNil(t, pod.DeletionTimestamp, "pod is terminating")
@@ -568,25 +568,25 @@ func TestAdmitterReclaimInFlightIsCredited(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pod1 := boundRunnerPod("rb-1")
+			pod1 := boundRunnerPod("sess-1")
 			pod1.Finalizers = []string{"test/hold"}
 			r, c, _ := newReconciler(t, true, nil,
 				cpuNode(3),
-				warmIdleSession("rb-1", 30*time.Minute), pod1,
-				warmIdleSession("rb-2", 20*time.Minute), boundRunnerPod("rb-2"),
-				warmIdleSession("rb-3", 10*time.Minute), boundRunnerPod("rb-3"),
-				waitingSession("rb-wait", time.Minute),
+				warmIdleSession("sess-1", 30*time.Minute), pod1,
+				warmIdleSession("sess-2", 20*time.Minute), boundRunnerPod("sess-2"),
+				warmIdleSession("sess-3", 10*time.Minute), boundRunnerPod("sess-3"),
+				waitingSession("sess-wait", time.Minute),
 			)
 			r.Capacity = admission.KubeCapacitySource{Reader: c}
 			r.MinWarm = minWarm
 
 			runPass(t, r)
-			require.Contains(t, getSession(t, c, "rb-1").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested, "pass 1 reclaims the oldest")
-			require.NotContains(t, getSession(t, c, "rb-2").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested, "pass 1 reclaims only one")
+			require.Contains(t, getSession(t, c, "sess-1").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested, "pass 1 reclaims the oldest")
+			require.NotContains(t, getSession(t, c, "sess-2").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested, "pass 1 reclaims only one")
 
 			tc.advance(t, c)
 			runPass(t, r)
-			for _, name := range []string{"rb-2", "rb-3"} {
+			for _, name := range []string{"sess-2", "sess-3"} {
 				assert.NotContains(t, getSession(t, c, name).Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
 					"%s: the in-flight reclaim already covers the head", name)
 			}
@@ -600,28 +600,28 @@ func TestAdmitterReclaimInFlightIsCredited(t *testing.T) {
 func TestAdmitterDrainingReclaimUnpriceable(t *testing.T) {
 	r, c, _ := newReconciler(t, true, nil,
 		cpuNode(3),
-		warmIdleSession("rb-1", 30*time.Minute), boundRunnerPod("rb-1"),
-		warmIdleSession("rb-2", 20*time.Minute), boundRunnerPod("rb-2"),
-		warmIdleSession("rb-3", 10*time.Minute), boundRunnerPod("rb-3"),
-		waitingSession("rb-wait", time.Minute),
+		warmIdleSession("sess-1", 30*time.Minute), boundRunnerPod("sess-1"),
+		warmIdleSession("sess-2", 20*time.Minute), boundRunnerPod("sess-2"),
+		warmIdleSession("sess-3", 10*time.Minute), boundRunnerPod("sess-3"),
+		waitingSession("sess-wait", time.Minute),
 	)
 	r.Capacity = admission.KubeCapacitySource{Reader: c}
 	r.MinWarm = 5 * time.Minute
 
 	runPass(t, r)
-	require.Contains(t, getSession(t, c, "rb-1").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested, "pass 1 reclaims the oldest")
+	require.Contains(t, getSession(t, c, "sess-1").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested, "pass 1 reclaims the oldest")
 
-	markReclaimed(t, c, "rb-1")
+	markReclaimed(t, c, "sess-1")
 	r.Demand = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (admission.Demand, error) {
-		if sess.Name == "rb-1" {
+		if sess.Name == "sess-1" {
 			return admission.Demand{}, fmt.Errorf("AgentClass gone")
 		}
 		return oneCPUDemand(ctx, sess)
 	}
 	runPass(t, r)
-	assert.Contains(t, getSession(t, c, "rb-2").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
-		"rb-1's pods are uncredited, so the next-oldest is reclaimed")
-	assert.NotContains(t, getSession(t, c, "rb-3").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
+	assert.Contains(t, getSession(t, c, "sess-2").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
+		"sess-1's pods are uncredited, so the next-oldest is reclaimed")
+	assert.NotContains(t, getSession(t, c, "sess-3").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
 		"one more reclaim covers the head")
 }
 
@@ -687,66 +687,66 @@ func requestFor(child *spiceboxv1alpha1.AgentSession) *spiceboxv1alpha1.Subagent
 
 func TestAdmitterConcurrencyCap(t *testing.T) {
 	t.Run("class cap 1 with one admitted parent: its waiting child is admitted; a waiting non-child is not", func(t *testing.T) {
-		child := childOf(waitingSession("rb-child", 2*time.Minute), "rb-parent")
+		child := childOf(waitingSession("sess-child", 2*time.Minute), "sess-parent")
 		r, c, _ := newReconciler(t, true, roomFor(5),
 			cappedClass(1),
-			admittedRunning("rb-parent"),
-			waitingSession("rb-other", time.Minute),
+			admittedRunning("sess-parent"),
+			waitingSession("sess-other", time.Minute),
 			child, requestFor(child),
 		)
 		runPass(t, r)
-		assertAdmitted(t, getSession(t, c, "rb-child"))
-		assertPosition(t, getSession(t, c, "rb-other"), 1, 1)
+		assertAdmitted(t, getSession(t, c, "sess-child"))
+		assertPosition(t, getSession(t, c, "sess-other"), 1, 1)
 	})
 
 	t.Run("class cap 2 with one admitted parent: the oldest waiting non-child takes the second slot, the next waits", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(5),
 			cappedClass(2),
-			admittedRunning("rb-parent"),
-			waitingSession("rb-a", time.Minute),
-			waitingSession("rb-b", 2*time.Minute),
+			admittedRunning("sess-parent"),
+			waitingSession("sess-a", time.Minute),
+			waitingSession("sess-b", 2*time.Minute),
 		)
 		runPass(t, r)
-		assertAdmitted(t, getSession(t, c, "rb-a"))
-		assertPosition(t, getSession(t, c, "rb-b"), 1, 1)
+		assertAdmitted(t, getSession(t, c, "sess-a"))
+		assertPosition(t, getSession(t, c, "sess-b"), 1, 1)
 	})
 
 	t.Run("no AgentClass to read a cap from: the line is uncapped, every waiting session that fits is admitted", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(5),
-			admittedRunning("rb-parent"),
-			waitingSession("rb-a", time.Minute),
-			waitingSession("rb-b", 2*time.Minute),
+			admittedRunning("sess-parent"),
+			waitingSession("sess-a", time.Minute),
+			waitingSession("sess-b", 2*time.Minute),
 		)
 		runPass(t, r)
-		assertAdmitted(t, getSession(t, c, "rb-a"))
-		assertAdmitted(t, getSession(t, c, "rb-b"))
+		assertAdmitted(t, getSession(t, c, "sess-a"))
+		assertAdmitted(t, getSession(t, c, "sess-b"))
 	})
 
 	t.Run("an unpriceable holder still takes its cap slot: the waiting session is cap-blocked despite room", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(5),
 			cappedClass(1),
-			admittedRunning("rb-holder"),
-			waitingSession("rb-wait", time.Minute),
+			admittedRunning("sess-holder"),
+			waitingSession("sess-wait", time.Minute),
 		)
 		r.Demand = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (admission.Demand, error) {
-			if sess.Name == "rb-holder" {
+			if sess.Name == "sess-holder" {
 				return admission.Demand{}, fmt.Errorf("settings not resolved")
 			}
 			return oneCPUDemand(ctx, sess)
 		}
 		runPass(t, r)
-		assert.True(t, admission.IsAdmitted(getSession(t, c, "rb-holder")), "the unpriceable holder stays admitted")
-		assertPosition(t, getSession(t, c, "rb-wait"), 1, 1)
+		assert.True(t, admission.IsAdmitted(getSession(t, c, "sess-holder")), "the unpriceable holder stays admitted")
+		assertPosition(t, getSession(t, c, "sess-wait"), 1, 1)
 	})
 
 	t.Run("AgentClass read fails: the line's non-children keep waiting unpositioned, its child is still admitted", func(t *testing.T) {
-		child := childOf(waitingSession("rb-child", 2*time.Minute), "rb-parent")
+		child := childOf(waitingSession("sess-child", 2*time.Minute), "sess-parent")
 		c := fake.NewClientBuilder().
 			WithScheme(testScheme(t)).
 			WithObjects(
 				cappedClass(1),
-				admittedRunning("rb-parent"),
-				waitingSession("rb-other", time.Minute),
+				admittedRunning("sess-parent"),
+				waitingSession("sess-other", time.Minute),
 				child, requestFor(child),
 			).
 			WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).
@@ -764,17 +764,18 @@ func TestAdmitterConcurrencyCap(t *testing.T) {
 			Now: func() time.Time { return passTime }, Demand: oneCPUDemand,
 		}
 		runPass(t, r)
-		assertAdmitted(t, getSession(t, c, "rb-child"))
-		other := getSession(t, c, "rb-other")
-		assert.False(t, admission.IsAdmitted(other), "rb-other not admitted past a cap it could not read")
-		assert.Nil(t, other.Status.Admission, "rb-other not positioned")
+		assertAdmitted(t, getSession(t, c, "sess-child"))
+		other := getSession(t, c, "sess-other")
+		assert.False(t, admission.IsAdmitted(other), "sess-other not admitted past a cap it could not read")
+		assert.Nil(t, other.Status.Admission, "sess-other not positioned")
 	})
 }
 
 // TestAdmitterChildNeedsProvenance pins that spec.parent alone does not make
 // a session a delegated child: anyone who may create an AgentSession can set
 // it. Without a SubagentRequest that created it for that parent, the session
-// is capped and waits in arrival order like any other.
+// is capped and waits in arrival order like any other. A failed request list
+// defers the pass instead of deciding without the index.
 func TestAdmitterChildNeedsProvenance(t *testing.T) {
 	cases := []struct {
 		name string
@@ -786,30 +787,30 @@ func TestAdmitterChildNeedsProvenance(t *testing.T) {
 		{
 			name: "spec.parent with no SubagentRequest: capped, behind the earlier session",
 			objs: func(s *spiceboxv1alpha1.AgentSession) []client.Object {
-				s.Spec.Parent = &spiceboxv1alpha1.NamespacedRef{Namespace: "default", Name: "rb-parent"}
+				s.Spec.Parent = &spiceboxv1alpha1.NamespacedRef{Namespace: "default", Name: "sess-parent"}
 				return []client.Object{s}
 			},
 		},
 		{
 			name: "the request records a different parent: capped, behind the earlier session",
 			objs: func(s *spiceboxv1alpha1.AgentSession) []client.Object {
-				sr := requestFor(childOf(s, "rb-parent"))
-				s.Spec.Parent.Name = "rb-elsewhere"
+				sr := requestFor(childOf(s, "sess-parent"))
+				s.Spec.Parent.Name = "sess-elsewhere"
 				return []client.Object{s, sr}
 			},
 		},
 		{
 			name: "the request records this child but does not own it: capped, behind the earlier session",
 			objs: func(s *spiceboxv1alpha1.AgentSession) []client.Object {
-				sr := requestFor(childOf(s, "rb-parent"))
+				sr := requestFor(childOf(s, "sess-parent"))
 				s.OwnerReferences = nil
 				return []client.Object{s, sr}
 			},
 		},
 		{
-			name: "SubagentRequest list fails: even a genuine child is capped, behind the earlier session",
+			name: "SubagentRequest list fails: the pass is deferred, nobody is admitted or positioned",
 			objs: func(s *spiceboxv1alpha1.AgentSession) []client.Object {
-				s = childOf(s, "rb-parent")
+				s = childOf(s, "sess-parent")
 				return []client.Object{s, requestFor(s)}
 			},
 			listFails: true,
@@ -819,9 +820,9 @@ func TestAdmitterChildNeedsProvenance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			objs := append([]client.Object{
 				cappedClass(1),
-				admittedRunning("rb-parent"),
-				waitingSession("rb-other", time.Minute),
-			}, tc.objs(waitingSession("rb-claimed", 2*time.Minute))...)
+				admittedRunning("sess-parent"),
+				waitingSession("sess-other", time.Minute),
+			}, tc.objs(waitingSession("sess-claimed", 2*time.Minute))...)
 			var funcs interceptor.Funcs
 			if tc.listFails {
 				funcs.List = func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -844,11 +845,16 @@ func TestAdmitterChildNeedsProvenance(t *testing.T) {
 			_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: Key})
 			if tc.listFails {
 				assert.ErrorContains(t, err, "list SubagentRequests", "the failed list is reported so the pass retries")
-			} else {
-				require.NoError(t, err, "Reconcile")
+				for _, name := range []string{"sess-other", "sess-claimed"} {
+					s := getSession(t, c, name)
+					assert.False(t, admission.IsAdmitted(s), "%s not admitted on a deferred pass", name)
+					assert.Nil(t, s.Status.Admission, "%s not positioned on a deferred pass", name)
+				}
+				return
 			}
-			assertPosition(t, getSession(t, c, "rb-other"), 1, 2)
-			assertPosition(t, getSession(t, c, "rb-claimed"), 2, 2)
+			require.NoError(t, err, "Reconcile")
+			assertPosition(t, getSession(t, c, "sess-other"), 1, 2)
+			assertPosition(t, getSession(t, c, "sess-claimed"), 2, 2)
 		})
 	}
 }
@@ -881,52 +887,52 @@ func TestAdmitterAdoptsPreAdmissionSessions(t *testing.T) {
 	t.Run("Running pre-admission session with a bound pod, class cap 1: adopted, and the cap holds the waiting session back", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(5),
 			cappedClass(1),
-			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhaseRunning), boundRunnerPod("rb-old"),
-			waitingSession("rb-a", time.Minute),
+			preAdmissionSession("sess-old", spiceboxv1alpha1.AgentSessionPhaseRunning), boundRunnerPod("sess-old"),
+			waitingSession("sess-a", time.Minute),
 		)
 		runPass(t, r)
-		assertAdopted(t, getSession(t, c, "rb-old"))
-		assertPosition(t, getSession(t, c, "rb-a"), 1, 1)
+		assertAdopted(t, getSession(t, c, "sess-old"))
+		assertPosition(t, getSession(t, c, "sess-a"), 1, 1)
 	})
 
 	t.Run("Pending pre-admission session with an unbound pod, room for one: adopted, its unplaced pod reserved, the waiting session waits", func(t *testing.T) {
-		pod := boundRunnerPod("rb-old")
+		pod := boundRunnerPod("sess-old")
 		pod.Spec.NodeName = ""
 		pod.Status.Phase = corev1.PodPending
 		r, c, _ := newReconciler(t, true, roomFor(1),
-			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhasePending), pod,
-			waitingSession("rb-a", time.Minute),
+			preAdmissionSession("sess-old", spiceboxv1alpha1.AgentSessionPhasePending), pod,
+			waitingSession("sess-a", time.Minute),
 		)
 		runPass(t, r)
-		assertAdopted(t, getSession(t, c, "rb-old"))
-		assertPosition(t, getSession(t, c, "rb-a"), 1, 1)
+		assertAdopted(t, getSession(t, c, "sess-old"))
+		assertPosition(t, getSession(t, c, "sess-a"), 1, 1)
 	})
 
 	t.Run("pre-admission session with nothing waiting: still adopted", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(1),
-			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhaseIdle), boundRunnerPod("rb-old"),
+			preAdmissionSession("sess-old", spiceboxv1alpha1.AgentSessionPhaseIdle), boundRunnerPod("sess-old"),
 		)
 		runPass(t, r)
-		assertAdopted(t, getSession(t, c, "rb-old"))
+		assertAdopted(t, getSession(t, c, "sess-old"))
 	})
 
 	t.Run("pre-admission status but no pod listed: not adopted (nothing to hold)", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(1),
-			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhaseRunning),
-			waitingSession("rb-a", time.Minute),
+			preAdmissionSession("sess-old", spiceboxv1alpha1.AgentSessionPhaseRunning),
+			waitingSession("sess-a", time.Minute),
 		)
 		runPass(t, r)
-		assert.Nil(t, meta.FindStatusCondition(getSession(t, c, "rb-old").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted),
+		assert.Nil(t, meta.FindStatusCondition(getSession(t, c, "sess-old").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted),
 			"no pods: not a holder")
-		assertAdmitted(t, getSession(t, c, "rb-a"))
+		assertAdmitted(t, getSession(t, c, "sess-a"))
 	})
 
 	t.Run("Enabled=false: nothing adopted", func(t *testing.T) {
 		r, c, _ := newReconciler(t, false, roomFor(1),
-			preAdmissionSession("rb-old", spiceboxv1alpha1.AgentSessionPhaseRunning), boundRunnerPod("rb-old"),
+			preAdmissionSession("sess-old", spiceboxv1alpha1.AgentSessionPhaseRunning), boundRunnerPod("sess-old"),
 		)
 		runPass(t, r)
-		assert.Nil(t, meta.FindStatusCondition(getSession(t, c, "rb-old").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted))
+		assert.Nil(t, meta.FindStatusCondition(getSession(t, c, "sess-old").Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted))
 	})
 }
 
@@ -950,41 +956,41 @@ func TestAdmitterCapReclaim(t *testing.T) {
 			name: "cap 2 held by two warm idle sessions, plenty of room: the oldest is reclaimed, only it",
 			objs: []client.Object{
 				cpuNode(8), cappedClass(2),
-				warmIdleSession("rb-old", 30*time.Minute), boundRunnerPod("rb-old"),
-				warmIdleSession("rb-mid", 20*time.Minute), boundRunnerPod("rb-mid"),
-				waitingSession("rb-wait", time.Minute),
+				warmIdleSession("sess-old", 30*time.Minute), boundRunnerPod("sess-old"),
+				warmIdleSession("sess-mid", 20*time.Minute), boundRunnerPod("sess-mid"),
+				waitingSession("sess-wait", time.Minute),
 			},
-			wantAnnotated: []string{"rb-old"},
-			wantClean:     []string{"rb-mid", "rb-wait"},
+			wantAnnotated: []string{"sess-old"},
+			wantClean:     []string{"sess-mid", "sess-wait"},
 		},
 		{
 			name: "a cap reclaim already in flight for the line: no second one",
 			objs: []client.Object{
 				cpuNode(8), cappedClass(2),
-				requested(warmIdleSession("rb-old", 30*time.Minute)), boundRunnerPod("rb-old"),
-				warmIdleSession("rb-mid", 20*time.Minute), boundRunnerPod("rb-mid"),
-				waitingSession("rb-wait", time.Minute),
+				requested(warmIdleSession("sess-old", 30*time.Minute)), boundRunnerPod("sess-old"),
+				warmIdleSession("sess-mid", 20*time.Minute), boundRunnerPod("sess-mid"),
+				waitingSession("sess-wait", time.Minute),
 			},
-			wantClean: []string{"rb-mid", "rb-wait"},
+			wantClean: []string{"sess-mid", "sess-wait"},
 		},
 		{
 			name: "the cap is held by a running session, the warm one is too young: nothing reclaimed",
 			objs: []client.Object{
 				cpuNode(8), cappedClass(2),
-				admittedRunning("rb-run"),
-				warmIdleSession("rb-young", time.Minute), boundRunnerPod("rb-young"),
-				waitingSession("rb-wait", time.Minute),
+				admittedRunning("sess-run"),
+				warmIdleSession("sess-young", time.Minute), boundRunnerPod("sess-young"),
+				waitingSession("sess-wait", time.Minute),
 			},
-			wantClean: []string{"rb-young", "rb-wait"},
+			wantClean: []string{"sess-young", "sess-wait"},
 		},
 		{
 			name: "under the cap and the head fits: admitted, nothing reclaimed",
 			objs: []client.Object{
 				cpuNode(8), cappedClass(3),
-				warmIdleSession("rb-old", 30*time.Minute), boundRunnerPod("rb-old"),
-				waitingSession("rb-wait", time.Minute),
+				warmIdleSession("sess-old", 30*time.Minute), boundRunnerPod("sess-old"),
+				waitingSession("sess-wait", time.Minute),
 			},
-			wantClean: []string{"rb-old"},
+			wantClean: []string{"sess-old"},
 		},
 	}
 	for _, tc := range cases {
@@ -1013,13 +1019,13 @@ func TestAdmitterCapReclaim(t *testing.T) {
 // label, it is the bundle entry's pod.
 func TestBoundPodsMatchesPoolNamedSandboxPod(t *testing.T) {
 	d := admission.Demand{Pods: []admission.PodDemand{
-		{Name: "rb-runner", CPUMilli: 1000},
-		{Name: "rb-code-pod", SandboxSession: "rb-code", CPUMilli: 500},
+		{Name: "sess-runner", CPUMilli: 1000},
+		{Name: "sess-code-pod", SandboxSession: "sess-code", CPUMilli: 500},
 	}}
 	runner := boundRunnerPod("rb")
 	sandbox := boundRunnerPod("ignored")
 	sandbox.Name = "warmpool-x7k2p"
-	sandbox.Labels = map[string]string{sandboxPodLabel: "rb-code"}
+	sandbox.Labels = map[string]string{sandboxPodLabel: "sess-code"}
 	pods := newPodIndex([]corev1.Pod{*runner, *sandbox})
 
 	got := boundPods("default", d, pods)
@@ -1027,7 +1033,7 @@ func TestBoundPodsMatchesPoolNamedSandboxPod(t *testing.T) {
 	for _, p := range got {
 		names = append(names, p.Name)
 	}
-	assert.ElementsMatch(t, []string{"rb-runner", "warmpool-x7k2p"}, names, "both the runner and the pool-named sandbox pod are bound")
+	assert.ElementsMatch(t, []string{"sess-runner", "warmpool-x7k2p"}, names, "both the runner and the pool-named sandbox pod are bound")
 	assert.Empty(t, unplaced("default", d, pods, true).Pods, "nothing left unplaced")
 }
 
@@ -1038,13 +1044,13 @@ func TestAdmitterClearsStalePosition(t *testing.T) {
 		s.Status.Admission = &spiceboxv1alpha1.AdmissionStatus{Position: 3, LineLength: 5, JoinedAt: s.CreationTimestamp}
 		return s
 	}
-	failed := stale(waitingSession("rb-failed", 0))
+	failed := stale(waitingSession("sess-failed", 0))
 	failed.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseFailed
-	parked := stale(waitingSession("rb-parked", 0))
+	parked := stale(waitingSession("sess-parked", 0))
 	parked.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseAwaitingCredentials
 
 	r, c, _ := newReconciler(t, true, roomFor(1), failed, parked)
 	runPass(t, r)
-	assert.Nil(t, getSession(t, c, "rb-failed").Status.Admission, "a Failed session holds no line position")
-	assert.Nil(t, getSession(t, c, "rb-parked").Status.Admission, "a parked session holds no line position")
+	assert.Nil(t, getSession(t, c, "sess-failed").Status.Admission, "a Failed session holds no line position")
+	assert.Nil(t, getSession(t, c, "sess-parked").Status.Admission, "a parked session holds no line position")
 }

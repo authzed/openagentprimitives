@@ -195,7 +195,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 
 	delegated, err := r.listDelegations(ctx)
 	if err != nil {
-		errs = append(errs, err)
+		// Defer the whole pass rather than decide on a view known to be wrong:
+		// with no delegation index every genuine child would read as a
+		// non-child, losing its cap exemption and, if warm idle, becoming a
+		// cap-reclaim candidate during an API blip.
+		return requeue, errors.Join(append(errs, err)...)
 	}
 	pods, podsKnown := r.listPods(ctx)
 	adopted, adoptErrs := r.adoptPreAdmission(ctx, preAdmission, pods, podsKnown, now)
