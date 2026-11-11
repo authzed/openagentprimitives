@@ -42,6 +42,7 @@ import (
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentsessions,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentsessions/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=agentclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=agentprimitives.authzed.com,resources=subagentrequests,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
@@ -192,6 +193,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 		return requeue, errors.Join(errs...)
 	}
 
+	delegated, err := r.listDelegations(ctx)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	pods, podsKnown := r.listPods(ctx)
 	adopted, adoptErrs := r.adoptPreAdmission(ctx, preAdmission, pods, podsKnown, now)
 	errs = append(errs, adoptErrs...)
@@ -215,7 +220,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 			Key:      key,
 			Line:     lineOf(sess),
 			JoinedAt: admission.JoinedAt(sess),
-			Child:    sess.Spec.Parent != nil,
+			Child:    delegated.isChild(ctx, sess),
 			Demand:   d,
 		})
 	}
@@ -235,15 +240,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (ctrl.R
 			logger.Info("admission: cannot price an admitted session's pod set; counting it with no unplaced demand",
 				"session", sess.Namespace+"/"+sess.Name, "class", lineOf(sess), "err", err.Error())
 		}
+		child := delegated.isChild(ctx, sess)
 		in.Holders = append(in.Holders, admission.Holder{
 			Key:      client.ObjectKeyFromObject(sess),
 			Line:     lineOf(sess),
-			Child:    sess.Spec.Parent != nil,
+			Child:    child,
 			Demand:   d,
 			Unplaced: unplaced(sess.Namespace, d, pods, podsKnown),
 		})
 		if podsKnown && isWarmIdle(sess) {
-			pool.addWarm(sess, boundPods(sess.Namespace, d, pods))
+			pool.addWarm(sess, child, boundPods(sess.Namespace, d, pods))
 		}
 	}
 	if podsKnown {
@@ -377,10 +383,10 @@ type reclaimPool struct {
 
 // addWarm files a warm Idle holder's bound pods: as in flight when a reclaim
 // is already requested (so it is not chosen again), else as a candidate. A
-// session with no bound pods has nothing to give back and is skipped.
-func (p *reclaimPool) addWarm(sess *spiceboxv1alpha1.AgentSession, placed []admission.PlacedPod) {
+// session with no bound pods has nothing to give back and is skipped. child is
+// the holder's proven delegation (delegations.isChild).
+func (p *reclaimPool) addWarm(sess *spiceboxv1alpha1.AgentSession, child bool, placed []admission.PlacedPod) {
 	line := lineOf(sess)
-	child := sess.Spec.Parent != nil
 	if _, requested := sess.Annotations[spiceboxv1alpha1.AnnotationReclaimRequested]; requested {
 		p.inFlight[line] = append(p.inFlight[line], placed...)
 		if !child {
@@ -572,6 +578,67 @@ func (r *Reconciler) requestReclaim(ctx context.Context, sess *spiceboxv1alpha1.
 		return fmt.Errorf("request reclaim of %s/%s: %w", sess.Namespace, sess.Name, err)
 	}
 	return nil
+}
+
+// delegation is what a SubagentRequest's status records about the child it
+// created: the request (its UID, which the child's controller owner reference
+// names) and the parent it delegated for.
+type delegation struct {
+	request types.UID
+	parent  spiceboxv1alpha1.NamespacedRef
+}
+
+// delegations indexes, by child session, every delegation the SubagentRequest
+// controller has recorded.
+//
+// A session's own spec.parent is not proof that it is a delegated child:
+// anyone who may create an AgentSession can set it, and a child skips its
+// class's cap and goes first in its line. A request's status.childRef is
+// written only by the operator (no namespace principal is granted
+// subagentrequests/status), and only once it has created that child itself,
+// so the exemption is read from there.
+type delegations map[types.NamespacedName]delegation
+
+// listDelegations indexes every SubagentRequest that names its child. A list
+// error returns an empty index, so the pass treats every session as
+// non-delegated rather than trusting spec.parent; the caller reports the
+// error so the pass is retried.
+func (r *Reconciler) listDelegations(ctx context.Context) (delegations, error) {
+	var list spiceboxv1alpha1.SubagentRequestList
+	if err := r.Client.List(ctx, &list); err != nil {
+		log.FromContext(ctx).Info("admission: list SubagentRequests failed; no session is treated as a delegated child this pass",
+			"err", err.Error())
+		return delegations{}, fmt.Errorf("admission pass: list SubagentRequests: %w", err)
+	}
+	out := make(delegations, len(list.Items))
+	for i := range list.Items {
+		sr := &list.Items[i]
+		if ref := sr.Status.ChildRef; ref != nil {
+			out[types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}] = delegation{request: sr.UID, parent: sr.Spec.Parent}
+		}
+	}
+	return out, nil
+}
+
+// isChild reports whether sess is a delegated child: it names a parent, and a
+// SubagentRequest that owns it records creating it for that same parent. A
+// session claiming a parent with no such record is treated as non-delegated
+// and logged. That includes a genuine child in the moment between its
+// creation and its request's status write; it waits as an ordinary session
+// until the write lands, which wakes the pass (SetupWithManager).
+func (d delegations) isChild(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) bool {
+	claimed := sess.Spec.Parent
+	if claimed == nil {
+		return false
+	}
+	if got, ok := d[client.ObjectKeyFromObject(sess)]; ok && got.parent == *claimed {
+		if owner := metav1.GetControllerOf(sess); owner != nil && owner.UID == got.request {
+			return true
+		}
+	}
+	log.FromContext(ctx).Info("admission: session names a parent but no SubagentRequest records delegating it; treating it as a non-delegated session",
+		"session", sess.Namespace+"/"+sess.Name, "class", lineOf(sess), "claimedParent", claimed.Namespace+"/"+claimed.Name)
+	return false
 }
 
 // listSessions lists every AgentSession the operator owns: cluster-wide with
@@ -789,8 +856,10 @@ func (r *Reconciler) writePosition(ctx context.Context, sess *spiceboxv1alpha1.A
 	return nil
 }
 
-// SetupWithManager maps every AgentSession event, and every event on a pod
-// carrying a session label, to the single Key.
+// SetupWithManager maps every AgentSession event, every SubagentRequest event
+// (its status.childRef write is what proves a waiting session a delegated
+// child), and every event on a pod carrying a session label, to the single
+// Key.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	toKey := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{{NamespacedName: Key}}
@@ -804,6 +873,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("admission").
 		Watches(&spiceboxv1alpha1.AgentSession{}, toKey).
+		Watches(&spiceboxv1alpha1.SubagentRequest{}, toKey).
 		Watches(&corev1.Pod{}, toKey, builder.WithPredicates(sessionPod)).
 		Complete(r)
 }

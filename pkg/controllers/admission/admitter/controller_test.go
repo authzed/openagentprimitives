@@ -594,6 +594,37 @@ func TestAdmitterReclaimInFlightIsCredited(t *testing.T) {
 	}
 }
 
+// A draining reclaim whose pod set cannot be priced is not credited to its
+// line: its terminating pods still fill the snapshot, so the head still does
+// not fit and the next pass reclaims the next-oldest warm session.
+func TestAdmitterDrainingReclaimUnpriceable(t *testing.T) {
+	r, c, _ := newReconciler(t, true, nil,
+		cpuNode(3),
+		warmIdleSession("rb-1", 30*time.Minute), boundRunnerPod("rb-1"),
+		warmIdleSession("rb-2", 20*time.Minute), boundRunnerPod("rb-2"),
+		warmIdleSession("rb-3", 10*time.Minute), boundRunnerPod("rb-3"),
+		waitingSession("rb-wait", time.Minute),
+	)
+	r.Capacity = admission.KubeCapacitySource{Reader: c}
+	r.MinWarm = 5 * time.Minute
+
+	runPass(t, r)
+	require.Contains(t, getSession(t, c, "rb-1").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested, "pass 1 reclaims the oldest")
+
+	markReclaimed(t, c, "rb-1")
+	r.Demand = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (admission.Demand, error) {
+		if sess.Name == "rb-1" {
+			return admission.Demand{}, fmt.Errorf("AgentClass gone")
+		}
+		return oneCPUDemand(ctx, sess)
+	}
+	runPass(t, r)
+	assert.Contains(t, getSession(t, c, "rb-2").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
+		"rb-1's pods are uncredited, so the next-oldest is reclaimed")
+	assert.NotContains(t, getSession(t, c, "rb-3").Annotations, spiceboxv1alpha1.AnnotationReclaimRequested,
+		"one more reclaim covers the head")
+}
+
 // markReclaimed does what the sleep path's status write does: SleptAt and
 // Admitted=False/Reclaimed. The reclaim annotation stays (it is removed only
 // after the reap) and the pods are left for the test to dispose of.
@@ -628,19 +659,40 @@ func admittedRunning(name string) *spiceboxv1alpha1.AgentSession {
 	return s
 }
 
-// childOf marks s as a session delegated by parent.
+// childOf makes s a session delegated by parent the way the SubagentRequest
+// controller builds one: spec.parent set and controlled by its request.
+// requestFor is that request, with the child recorded on its status; a test
+// leaves it out to make s a session that only claims a parent.
 func childOf(s *spiceboxv1alpha1.AgentSession, parent string) *spiceboxv1alpha1.AgentSession {
 	s.Spec.Parent = &spiceboxv1alpha1.NamespacedRef{Namespace: "default", Name: parent}
+	s.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(requestFor(s),
+		spiceboxv1alpha1.SchemeGroupVersion.WithKind("SubagentRequest"))}
 	return s
+}
+
+// requestFor is the SubagentRequest that created child (see childOf).
+func requestFor(child *spiceboxv1alpha1.AgentSession) *spiceboxv1alpha1.SubagentRequest {
+	sr := &spiceboxv1alpha1.SubagentRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: child.Name + "-req", Namespace: child.Namespace, UID: types.UID(child.Name + "-req-uid")},
+		Spec:       spiceboxv1alpha1.SubagentRequestSpec{Class: testClass, Task: "do the delegated work"},
+		Status: spiceboxv1alpha1.SubagentRequestStatus{
+			ChildRef: &spiceboxv1alpha1.NamespacedRef{Namespace: child.Namespace, Name: child.Name},
+		},
+	}
+	if child.Spec.Parent != nil {
+		sr.Spec.Parent = *child.Spec.Parent
+	}
+	return sr
 }
 
 func TestAdmitterConcurrencyCap(t *testing.T) {
 	t.Run("class cap 1 with one admitted parent: its waiting child is admitted; a waiting non-child is not", func(t *testing.T) {
+		child := childOf(waitingSession("rb-child", 2*time.Minute), "rb-parent")
 		r, c, _ := newReconciler(t, true, roomFor(5),
 			cappedClass(1),
 			admittedRunning("rb-parent"),
 			waitingSession("rb-other", time.Minute),
-			childOf(waitingSession("rb-child", 2*time.Minute), "rb-parent"),
+			child, requestFor(child),
 		)
 		runPass(t, r)
 		assertAdmitted(t, getSession(t, c, "rb-child"))
@@ -670,14 +722,32 @@ func TestAdmitterConcurrencyCap(t *testing.T) {
 		assertAdmitted(t, getSession(t, c, "rb-b"))
 	})
 
+	t.Run("an unpriceable holder still takes its cap slot: the waiting session is cap-blocked despite room", func(t *testing.T) {
+		r, c, _ := newReconciler(t, true, roomFor(5),
+			cappedClass(1),
+			admittedRunning("rb-holder"),
+			waitingSession("rb-wait", time.Minute),
+		)
+		r.Demand = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (admission.Demand, error) {
+			if sess.Name == "rb-holder" {
+				return admission.Demand{}, fmt.Errorf("settings not resolved")
+			}
+			return oneCPUDemand(ctx, sess)
+		}
+		runPass(t, r)
+		assert.True(t, admission.IsAdmitted(getSession(t, c, "rb-holder")), "the unpriceable holder stays admitted")
+		assertPosition(t, getSession(t, c, "rb-wait"), 1, 1)
+	})
+
 	t.Run("AgentClass read fails: the line's non-children keep waiting unpositioned, its child is still admitted", func(t *testing.T) {
+		child := childOf(waitingSession("rb-child", 2*time.Minute), "rb-parent")
 		c := fake.NewClientBuilder().
 			WithScheme(testScheme(t)).
 			WithObjects(
 				cappedClass(1),
 				admittedRunning("rb-parent"),
 				waitingSession("rb-other", time.Minute),
-				childOf(waitingSession("rb-child", 2*time.Minute), "rb-parent"),
+				child, requestFor(child),
 			).
 			WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).
 			WithInterceptorFuncs(interceptor.Funcs{
@@ -699,6 +769,88 @@ func TestAdmitterConcurrencyCap(t *testing.T) {
 		assert.False(t, admission.IsAdmitted(other), "rb-other not admitted past a cap it could not read")
 		assert.Nil(t, other.Status.Admission, "rb-other not positioned")
 	})
+}
+
+// TestAdmitterChildNeedsProvenance pins that spec.parent alone does not make
+// a session a delegated child: anyone who may create an AgentSession can set
+// it. Without a SubagentRequest that created it for that parent, the session
+// is capped and waits in arrival order like any other.
+func TestAdmitterChildNeedsProvenance(t *testing.T) {
+	cases := []struct {
+		name string
+		// objs is the claimed child's own objects: the session, and any request.
+		objs func(claimed *spiceboxv1alpha1.AgentSession) []client.Object
+		// listFails fails every SubagentRequest list.
+		listFails bool
+	}{
+		{
+			name: "spec.parent with no SubagentRequest: capped, behind the earlier session",
+			objs: func(s *spiceboxv1alpha1.AgentSession) []client.Object {
+				s.Spec.Parent = &spiceboxv1alpha1.NamespacedRef{Namespace: "default", Name: "rb-parent"}
+				return []client.Object{s}
+			},
+		},
+		{
+			name: "the request records a different parent: capped, behind the earlier session",
+			objs: func(s *spiceboxv1alpha1.AgentSession) []client.Object {
+				sr := requestFor(childOf(s, "rb-parent"))
+				s.Spec.Parent.Name = "rb-elsewhere"
+				return []client.Object{s, sr}
+			},
+		},
+		{
+			name: "the request records this child but does not own it: capped, behind the earlier session",
+			objs: func(s *spiceboxv1alpha1.AgentSession) []client.Object {
+				sr := requestFor(childOf(s, "rb-parent"))
+				s.OwnerReferences = nil
+				return []client.Object{s, sr}
+			},
+		},
+		{
+			name: "SubagentRequest list fails: even a genuine child is capped, behind the earlier session",
+			objs: func(s *spiceboxv1alpha1.AgentSession) []client.Object {
+				s = childOf(s, "rb-parent")
+				return []client.Object{s, requestFor(s)}
+			},
+			listFails: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := append([]client.Object{
+				cappedClass(1),
+				admittedRunning("rb-parent"),
+				waitingSession("rb-other", time.Minute),
+			}, tc.objs(waitingSession("rb-claimed", 2*time.Minute))...)
+			var funcs interceptor.Funcs
+			if tc.listFails {
+				funcs.List = func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if _, ok := list.(*spiceboxv1alpha1.SubagentRequestList); ok {
+						return fmt.Errorf("apiserver unavailable")
+					}
+					return cl.List(ctx, list, opts...)
+				}
+			}
+			c := fake.NewClientBuilder().
+				WithScheme(testScheme(t)).
+				WithObjects(objs...).
+				WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).
+				WithInterceptorFuncs(funcs).
+				Build()
+			r := &Reconciler{
+				Client: c, Capacity: roomFor(5), Enabled: true,
+				Now: func() time.Time { return passTime }, Demand: oneCPUDemand,
+			}
+			_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: Key})
+			if tc.listFails {
+				assert.ErrorContains(t, err, "list SubagentRequests", "the failed list is reported so the pass retries")
+			} else {
+				require.NoError(t, err, "Reconcile")
+			}
+			assertPosition(t, getSession(t, c, "rb-other"), 1, 2)
+			assertPosition(t, getSession(t, c, "rb-claimed"), 2, 2)
+		})
+	}
 }
 
 // preAdmissionSession is a session that started its pods before admission was
