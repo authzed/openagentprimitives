@@ -406,6 +406,109 @@ func TestAdmissionGate_PreAdmissionSleepReleases(t *testing.T) {
 	assert.False(t, admission.PreAdmission(&got), "after a wake clears SleptAt it is a normal session that queues")
 }
 
+// A session slept or held before admission was switched on (an upgrade, or a
+// run with admission off) has no Admitted condition, and its status still
+// names the pods it had before they were reaped. Resumed with admission on —
+// a cold wake, an archive wake, or its hold released — it must queue at the gate like any
+// cold wake and create none of its pods, not pass as pre-admission on those
+// stale names. With admission off it boots at once, as it always has.
+func TestAdmissionGate_ResumeWithoutAdmittedConditionQueues(t *testing.T) {
+	nowT := time.Now().UTC().Truncate(time.Second)
+	codeBundle := spiceboxv1alpha1.ToolBundle{Name: "code", Class: "toolbelt"}
+
+	// slept: an Idle channel session whose pods the sleep reaped, with a wake
+	// requested after it slept.
+	slept := func(s *spiceboxv1alpha1.AgentSession) []client.Object {
+		idle := metav1.NewTime(nowT.Add(-2 * time.Hour))
+		sleptAt := metav1.NewTime(nowT.Add(-time.Hour))
+		s.Spec.InputChannel = &spiceboxv1alpha1.ChannelBinding{Name: "chan-1", Kind: "fake", Key: "thread-1"}
+		s.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseIdle
+		s.Status.LastIdleAt = &idle
+		s.Status.SleptAt = &sleptAt
+		s.Annotations = map[string]string{
+			spiceboxv1alpha1.AnnotationWakeRequestedAt: nowT.Add(-time.Second).Format(time.RFC3339Nano),
+		}
+		return nil
+	}
+	// archived: swept to Succeeded with its pods reaped, then woken.
+	archived := func(s *spiceboxv1alpha1.AgentSession) []client.Object {
+		finished := metav1.NewTime(nowT.Add(-time.Hour))
+		s.Spec.InputChannel = &spiceboxv1alpha1.ChannelBinding{Name: "chan-1", Kind: "fake", Key: "thread-1"}
+		s.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseSucceeded
+		s.Status.FinishedAt = &finished
+		s.Status.Conditions = []metav1.Condition{{
+			Type: spiceboxv1alpha1.AgentSessionConditionIdle, Status: metav1.ConditionTrue,
+			Reason: spiceboxv1alpha1.ReasonAgentSessionArchived, LastTransitionTime: finished,
+		}}
+		s.Annotations = map[string]string{
+			spiceboxv1alpha1.AnnotationWakeRequestedAt: nowT.Add(-time.Second).Format(time.RFC3339Nano),
+		}
+		return nil
+	}
+	// held: parked at Held with its pods reaped, and the hold since released.
+	held := func(s *spiceboxv1alpha1.AgentSession) []client.Object {
+		s.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseHeld
+		return []client.Object{&spiceboxv1alpha1.SessionHold{
+			ObjectMeta: metav1.ObjectMeta{Name: "h1", Namespace: "default"},
+			Spec: spiceboxv1alpha1.SessionHoldSpec{
+				SessionRef: spiceboxv1alpha1.NamespacedRef{Namespace: "default", Name: "s1"},
+				Reason:     "denial streak",
+			},
+			Status: spiceboxv1alpha1.SessionHoldStatus{
+				Phase: spiceboxv1alpha1.SessionHoldPhaseReleased, ReleasedBy: "user:approver-1",
+			},
+		}}
+	}
+
+	cases := []struct {
+		name    string
+		enabled bool
+		prep    func(s *spiceboxv1alpha1.AgentSession) []client.Object
+	}{
+		{name: "slept before admission, woken with admission on: Admitted=False/Queued, no pods created", enabled: true, prep: slept},
+		{name: "held before admission, released with admission on: Admitted=False/Queued, no pods created", enabled: true, prep: held},
+		{name: "archived before admission, woken with admission on: Admitted=False/Queued, no pods created", enabled: true, prep: archived},
+		{name: "slept, woken with admission off: boots at once, no Admitted condition", prep: slept},
+		{name: "held, released with admission off: boots at once, no Admitted condition", prep: held},
+		{name: "archived, woken with admission off: boots at once, no Admitted condition", prep: archived},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := func() time.Time { return nowT }
+			ac := classWithBundle("ac1", codeBundle)
+			sess := sessionCreatedAt("s1", "ac1", nowT.Add(-3*time.Hour))
+			extra := tc.prep(sess)
+			// The pods it had before they were reaped, still named on status.
+			sess.Status.RunnerPodName = agentsession.RunnerPodName(sess)
+			sess.Status.BundleSessions = []spiceboxv1alpha1.ResolvedBundle{{
+				Name: codeBundle.Name, SpiceboxSessionName: agentsession.BundleSessionName(sess, codeBundle),
+			}}
+			require.False(t, admission.PreAdmission(sess), "fixture holds no pods while parked")
+
+			r, c := fakeReconciler(t, clock, append([]client.Object{ac, sess}, extra...)...)
+			r.AdmissionEnabled = tc.enabled
+			runReconciles(t, r, "s1", 3)
+
+			got := getSession(t, c, "s1")
+			assert.Equal(t, spiceboxv1alpha1.AgentSessionPhasePending, got.Status.Phase, "resumed to Pending")
+			bundlePresent := exists(t, c, agentsession.BundleSessionName(&got, codeBundle), &spiceboxv1alpha1.SpiceboxSession{})
+			adm := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted)
+			if !tc.enabled {
+				assert.True(t, bundlePresent, "admission off: the bundle SpiceboxSession is created at once")
+				assert.Nil(t, adm, "admission off: no Admitted condition written")
+				return
+			}
+			assert.False(t, bundlePresent, "no bundle SpiceboxSession before admission")
+			assert.False(t, exists(t, c, agentsession.RunnerPodName(&got), &corev1.Pod{}), "no runner pod before admission")
+			if assert.NotNil(t, adm, "Admitted condition") {
+				assert.Equal(t, metav1.ConditionFalse, adm.Status)
+				assert.Equal(t, spiceboxv1alpha1.ReasonAdmissionQueued, adm.Reason)
+			}
+			assert.True(t, admission.IsQueued(&got), "in line for the admitter")
+		})
+	}
+}
+
 func ptrTo[T any](v T) *T { return &v }
 
 // An ADMITTED booting session whose bundle pod the scheduler still cannot

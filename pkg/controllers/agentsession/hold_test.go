@@ -981,11 +981,14 @@ func TestReconcileHold_releasesAdmission(t *testing.T) {
 				return h
 			}()))
 			r.LifecycleMemory = memory.NewLocal(inmem.NewBackend())
-			_, proceed, err = r.reconcileHold(ctx, &got)
+			res, proceed, err := r.reconcileHold(ctx, &got)
 			require.NoError(t, err)
-			require.True(t, proceed)
-			assert.Equal(t, spiceboxv1alpha1.AgentSessionPhasePending, got.Status.Phase)
-			assert.True(t, r.awaitingAdmission(&got), "a released hold rejoins the line at the gate")
+			assert.False(t, proceed, "an unadmitted release stops this pass, which runs below the admission gate")
+			assert.Positive(t, res.RequeueAfter, "requeued so the next pass meets the gate")
+			var persisted spiceboxv1alpha1.AgentSession
+			require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &persisted))
+			assert.Equal(t, spiceboxv1alpha1.AgentSessionPhasePending, persisted.Status.Phase, "Pending projection persisted")
+			assert.True(t, r.awaitingAdmission(&persisted), "a released hold rejoins the line at the gate")
 		})
 	}
 }

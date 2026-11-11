@@ -139,6 +139,31 @@ func (r *Reconciler) releaseAdmissionOnReclaim(sess *spiceboxv1alpha1.AgentSessi
 	if !admission.IsAdmitted(sess) && (!r.AdmissionEnabled || !admission.PreAdmission(sess)) {
 		return false
 	}
+	r.setAdmissionReclaimed(sess)
+	return true
+}
+
+// releaseUnrecordedAdmission records Admitted=False/Reclaimed on a session
+// that is resuming from a reap admission never saw — slept, archived or Held
+// before admission was switched on, or while it was off — and so carries no
+// Admitted condition. Its status still names the pods it had (RunnerPodName
+// and BundleSessions are never cleared), so once the resume puts it back in a
+// booting phase it would look pre-admission and pass the gate with nothing
+// reserved. With the condition it queues like any cold wake. The caller
+// persists it, in the same write as the resume.
+//
+// Inert with admission off, and on a session that already has an Admitted
+// condition (its own reap released it). Reports whether it changed sess.
+func (r *Reconciler) releaseUnrecordedAdmission(sess *spiceboxv1alpha1.AgentSession) bool {
+	if !r.AdmissionEnabled || conditions.Find(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionAdmitted) != nil {
+		return false
+	}
+	r.setAdmissionReclaimed(sess)
+	return true
+}
+
+// setAdmissionReclaimed writes Admitted=False/Reclaimed onto sess.
+func (r *Reconciler) setAdmissionReclaimed(sess *spiceboxv1alpha1.AgentSession) {
 	// r.now() for the transition time: admission.JoinedAt and WaitingSince
 	// compare it against status.lastWakeAt, and the admitter orders the line
 	// by them.
@@ -149,7 +174,6 @@ func (r *Reconciler) releaseAdmissionOnReclaim(sess *spiceboxv1alpha1.AgentSessi
 		Message:            "the session's pods were reclaimed; a later wake rejoins the line",
 		LastTransitionTime: metav1.NewTime(r.now()),
 	})
-	return true
 }
 
 // admissionMisfitGrace is how long an admitted session's bundle pod may stay

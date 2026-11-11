@@ -3096,6 +3096,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// is the source of truth for real container crashes, and the
 		// maxRunnerRestarts kill-switch must fire only on those.
 		sess.Status.LastIdleAt = nil
+		// A slept or archived session's pods are gone. One reaped before
+		// admission knew of it has no Admitted condition, and with SleptAt
+		// cleared its stale pod names would read as pre-admission: record the
+		// release here, in the wake's own status write, so it queues instead.
+		if sess.Status.SleptAt != nil || wasArchivedBySweep {
+			r.releaseUnrecordedAdmission(&sess)
+		}
 		// Clear SleptAt explicitly, not just via the LastIdleAt catch-all: this
 		// path nils LastIdleAt in the same pass that applies WakeRequested, and
 		// that catch-all ran earlier in this call while phase was still Idle, so

@@ -269,12 +269,15 @@ func (r *Reconciler) reconcileHold(ctx context.Context, sess *spiceboxv1alpha1.A
 // session off PhaseHeld instead of re-reading a log whose last phase-changing
 // event is still Held.
 //
-// proceed is always true here — either a Released event was just appended and
-// the rest of Reconcile should run so normal provisioning resumes, or there
-// is no released hold to attribute the release to (a session manually forced
-// into PhaseHeld with no SessionHold ever naming it), in which case there is
-// nothing this method can do and the session is left exactly as it already
-// was, same as if no hold had ever been observed.
+// proceed is true here unless the released session must wait for admission —
+// either a Released event was just appended and the rest of Reconcile should
+// run so normal provisioning resumes, or there is no released hold to
+// attribute the release to (a session manually forced into PhaseHeld with no
+// SessionHold ever naming it), in which case there is nothing this method can
+// do and the session is left exactly as it already was, same as if no hold
+// had ever been observed. With admission on, a released session that is not
+// admitted persists its release and requeues (proceed=false) so it reaches
+// the admission gate before any pod is created.
 func (r *Reconciler) reconcileHoldRelease(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (ctrl.Result, bool, error) {
 	released, err := r.releasedHoldFor(ctx, sess)
 	if err != nil {
@@ -292,6 +295,21 @@ func (r *Reconciler) reconcileHoldRelease(ctx context.Context, sess *spiceboxv1a
 		At:         time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		return ctrl.Result{}, false, fmt.Errorf("apply Released for %s/%s: %w", sess.Namespace, sess.Name, err)
+	}
+	// A session held before admission knew of it was reaped with no Admitted
+	// condition, and back at Pending its stale pod names would read as
+	// pre-admission. Record the release so it queues like any cold wake.
+	r.releaseUnrecordedAdmission(sess)
+
+	// This runs below the admission gate in Reconcile, so a released session
+	// that must wait in line cannot continue this pass: it would fall through
+	// to pod creation unadmitted. Persist the Pending projection (and the
+	// release above) and requeue; the next pass meets the gate first.
+	if r.awaitingAdmission(sess) {
+		if err := r.applyStatus(ctx, sess); err != nil {
+			return ctrl.Result{}, false, fmt.Errorf("record hold release for %s/%s: %w", sess.Namespace, sess.Name, err)
+		}
+		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	}
 	return ctrl.Result{}, true, nil
 }

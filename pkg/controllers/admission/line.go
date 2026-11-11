@@ -104,7 +104,10 @@ func IsQueued(sess *v1alpha1.AgentSession) bool {
 //
 // A session whose pods were reaped while it stays non-terminal — slept, or
 // Held — is excluded: its status still names the pods it had, but it holds
-// nothing, and its next wake must queue like any cold wake.
+// nothing, and its next wake must queue like any cold wake. Its reap normally
+// records Admitted=False/Reclaimed; one reaped before admission was switched
+// on has the condition recorded by its wake, archive wake or hold release
+// instead, since those clear the exclusion while the pod names stay.
 func PreAdmission(sess *v1alpha1.AgentSession) bool {
 	switch sess.Status.Phase {
 	case v1alpha1.AgentSessionPhaseSucceeded, v1alpha1.AgentSessionPhaseFailed, v1alpha1.AgentSessionPhaseHeld:
