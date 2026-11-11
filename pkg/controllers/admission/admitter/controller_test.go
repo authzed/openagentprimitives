@@ -355,11 +355,11 @@ func TestAdmitterWatchNamespaces(t *testing.T) {
 		{
 			name:       "watch set: one namespaced list per watched namespace, unwatched sessions untouched",
 			namespaces: []string{"team-a", "team-b"},
-			wantLists:  []string{"team-a", "team-b"}, wantAdmitted: []string{"team-a/rb-a", "team-b/rb-b"},
+			wantLists:  []string{"team-a", "team-b"}, wantAdmitted: []string{"team-a/sess-a", "team-b/sess-b"},
 		},
 		{
 			name:      "no watch set: one cluster-wide list, every namespace admitted",
-			wantLists: []string{""}, wantAdmitted: []string{"other/rb-c", "team-a/rb-a", "team-b/rb-b"},
+			wantLists: []string{""}, wantAdmitted: []string{"other/sess-c", "team-a/sess-a", "team-b/sess-b"},
 		},
 	}
 	for _, tc := range cases {
@@ -542,7 +542,7 @@ func TestAdmitterReclaimInFlightIsCredited(t *testing.T) {
 	const minWarm = 5 * time.Minute
 	cases := []struct {
 		name    string
-		advance func(t *testing.T, c client.Client) // what happened to rb-1 between passes
+		advance func(t *testing.T, c client.Client) // what happened to sess-1 between passes
 	}{
 		{
 			name:    "reclaim requested but not yet slept: second pass annotates nothing new",
@@ -1022,7 +1022,7 @@ func TestBoundPodsMatchesPoolNamedSandboxPod(t *testing.T) {
 		{Name: "sess-runner", CPUMilli: 1000},
 		{Name: "sess-code-pod", SandboxSession: "sess-code", CPUMilli: 500},
 	}}
-	runner := boundRunnerPod("rb")
+	runner := boundRunnerPod("sess")
 	sandbox := boundRunnerPod("ignored")
 	sandbox.Name = "warmpool-x7k2p"
 	sandbox.Labels = map[string]string{sandboxPodLabel: "sess-code"}
