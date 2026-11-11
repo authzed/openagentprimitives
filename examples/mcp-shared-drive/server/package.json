@@ -1,0 +1,9 @@
+{
+  "name": "shared-drive-fs",
+  "private": true,
+  "description": "Pins for the demo's unmodified MCP filesystem server and its stdio-to-HTTP bridge.",
+  "dependencies": {
+    "@modelcontextprotocol/server-filesystem": "2.1.0",
+    "supergateway": "4.2.1"
+  }
+}
