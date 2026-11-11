@@ -2768,7 +2768,7 @@ func run(cfg *config) {
 	// create pods for. Leader-only (the controller-runtime default), so one
 	// operator admits against the free space at a time. Capacity is declared
 	// as the interface and assigned a concrete value, never a typed-nil
-	// pointer (CLAUDE.md, nil interfaces).
+	// pointer (see the repo conventions on nil interfaces).
 	var admissionCapacity sessionadmission.CapacitySource = sessionadmission.KubeCapacitySource{Reader: mgr.GetClient()}
 	if err := (&admitter.Reconciler{
 		Client:    mgr.GetClient(),

@@ -1,6 +1,6 @@
 # Fixture for the admission-burst bundle: two agents sharing one cluster.
 #
-# burst-reviewer is the reviewbot shape — two sandbox bundles per session, so a
+# burst-reviewer is a code-review agent shape — two sandbox bundles per session, so a
 # session's pod set is more than one pod and "all or none" means something.
 # burst-notes is a second agent with its own line. Both run with the plan gate
 # off and tool calls permissive: what the bundle pins is WHEN each session gets

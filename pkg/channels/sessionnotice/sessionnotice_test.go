@@ -188,7 +188,7 @@ func TestCapacityHoldPosition(t *testing.T) {
 	}{
 		{name: "position 3 of 5: hold text plus ordinal sentence naming the class",
 			admission: &spiceboxv1alpha1.AdmissionStatus{Position: 3, LineLength: 5},
-			want:      holdMsg + " You're 3rd in line for reviewbot."},
+			want:      holdMsg + " You're 3rd in line for demo-agent."},
 		{name: "no admission status: hold text unchanged",
 			want: holdMsg},
 		{name: "position 0: hold text unchanged",
@@ -198,7 +198,7 @@ func TestCapacityHoldPosition(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := sess(spiceboxv1alpha1.AgentSessionPhasePending, hold)
-			s.Spec.Class = "reviewbot"
+			s.Spec.Class = "demo-agent"
 			s.Status.Admission = tc.admission
 			got, held := sessionnotice.CapacityHold(s)
 			require.True(t, held)

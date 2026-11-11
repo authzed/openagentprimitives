@@ -25,7 +25,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/admission"
 )
 
-const testClass = "reviewbot"
+const testClass = "demo-agent"
 
 var (
 	baseTime = time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
@@ -145,7 +145,7 @@ func assertPosition(t *testing.T, s *spiceboxv1alpha1.AgentSession, index, lengt
 }
 
 func TestAdmitterPass(t *testing.T) {
-	t.Run("three waiting reviewbot sessions, room for one: oldest gets Admitted=True, others get Position 1 and 2 of 2", func(t *testing.T) {
+	t.Run("three waiting demo-agent sessions, room for one: oldest gets Admitted=True, others get Position 1 and 2 of 2", func(t *testing.T) {
 		r, c, _ := newReconciler(t, true, roomFor(1),
 			waitingSession("rb-c", 3*time.Minute),
 			waitingSession("rb-a", time.Minute),
