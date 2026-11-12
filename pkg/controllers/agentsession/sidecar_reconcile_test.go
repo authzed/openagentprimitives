@@ -971,20 +971,57 @@ func TestReconcileFieldIsolatedSidecar_CredentialStaysOutOfRunnerPod(t *testing.
 		"the isolated toolbox's upstreamAuth credential must NOT be reachable from the runner pod's spec (claim 3)")
 }
 
-// wakeWithSeparatePodSidecar drives a channel-attached session whose runner has
-// already run, with one secret-gated separate-pod sidecar (crash-looping when
-// crash is set, otherwise left still starting), parks it Idle with the runner
-// pod gone, stamps a wake as a new user message would, and reconciles. It
-// returns the session and whether a runner pod exists afterwards.
-func wakeWithSeparatePodSidecar(t *testing.T, name string, crash bool) (spiceboxv1alpha1.AgentSession, bool) {
+// wokenSidecarSession is a parked session with one secret-gated separate-pod
+// sidecar and a freshly stamped wake, ready for the test to reconcile pass by
+// pass.
+type wokenSidecarSession struct {
+	env        *testenv.Env
+	r          *agentsession.Reconciler
+	sessKey    types.NamespacedName
+	runnerKey  types.NamespacedName
+	sidecarKey types.NamespacedName
+}
+
+// reconcile runs exactly one pass and returns its Result, so a test can assert
+// the requeue cadence each pass ends with.
+func (w wokenSidecarSession) reconcile(t *testing.T) ctrl.Result {
+	t.Helper()
+	res, err := w.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: w.sessKey})
+	require.NoError(t, err, "Reconcile")
+	return res
+}
+
+func (w wokenSidecarSession) session(t *testing.T) spiceboxv1alpha1.AgentSession {
+	t.Helper()
+	var got spiceboxv1alpha1.AgentSession
+	require.NoError(t, w.env.Client.Get(context.Background(), w.sessKey, &got), "Get AgentSession")
+	return got
+}
+
+func (w wokenSidecarSession) runnerExists() bool {
+	var pod corev1.Pod
+	return w.env.Client.Get(context.Background(), w.runnerKey, &pod) == nil
+}
+
+// parkAndWakeWithSeparatePodSidecar drives a channel-attached session whose
+// runner has already run, with one secret-gated separate-pod sidecar
+// (crash-looping when crash is set, otherwise left still starting), parks it
+// Idle with the runner pod gone, and stamps a wake as a new user message would.
+// It does NOT reconcile the wake: the caller does, one pass at a time.
+func parkAndWakeWithSeparatePodSidecar(t *testing.T, name string, crash bool) wokenSidecarSession {
 	t.Helper()
 	env := testenv.Shared(t)
 	ctx := context.Background()
 	r := newReconcilerWithArchive(t, env, 0)
 
 	box := name + "-box"
-	sessKey := types.NamespacedName{Namespace: "default", Name: name}
-	runnerKey := types.NamespacedName{Namespace: "default", Name: name + "-runner"}
+	w := wokenSidecarSession{
+		env:        env,
+		r:          r,
+		sessKey:    types.NamespacedName{Namespace: "default", Name: name},
+		runnerKey:  types.NamespacedName{Namespace: "default", Name: name + "-runner"},
+		sidecarKey: types.NamespacedName{Namespace: "default", Name: name + "-sidecar-" + box},
+	}
 
 	tb := sidecarToolboxWithSecretInputs(t, box, "KUBECONFIG", "file:/root/.kube/config", "kubeconfig")
 	require.NoError(t, env.Client.Create(ctx, tb), "create SidecarToolbox")
@@ -1003,7 +1040,7 @@ func wakeWithSeparatePodSidecar(t *testing.T, name string, crash bool) (spicebox
 	// The runner has already run (it produced the gating secret), so a sidecar
 	// crash is recorded for it rather than failing the session.
 	var live spiceboxv1alpha1.AgentSession
-	require.NoError(t, env.Client.Get(ctx, sessKey, &live))
+	require.NoError(t, env.Client.Get(ctx, w.sessKey, &live))
 	meta.SetStatusCondition(&live.Status.Conditions, metav1.Condition{
 		Type:   string(spiceboxv1alpha1.AgentSessionConditionRunnerReady),
 		Status: metav1.ConditionTrue,
@@ -1013,36 +1050,30 @@ func wakeWithSeparatePodSidecar(t *testing.T, name string, crash bool) (spicebox
 
 	reconcileToWork(t, ctx, r, name)
 	if crash {
-		crashSidecarPod(t, ctx, env, name+"-sidecar-"+box, "boom")
+		crashSidecarPod(t, ctx, env, w.sidecarKey.Name, "boom")
 		reconcileToWork(t, ctx, r, name)
 	}
 
 	// Park the session: the runner exited and the session went Idle.
 	var runnerPod corev1.Pod
-	if err := env.Client.Get(ctx, runnerKey, &runnerPod); err == nil {
+	if err := env.Client.Get(ctx, w.runnerKey, &runnerPod); err == nil {
 		require.NoError(t, env.Client.Delete(ctx, &runnerPod), "delete the prior runner pod")
 	}
 	var idle spiceboxv1alpha1.AgentSession
-	require.NoError(t, env.Client.Get(ctx, sessKey, &idle))
+	require.NoError(t, env.Client.Get(ctx, w.sessKey, &idle))
 	idle.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseIdle
 	idleAt := metav1.Now()
 	idle.Status.LastIdleAt = &idleAt
 	require.NoError(t, env.Client.Status().Update(ctx, &idle), "set phase=Idle")
 
 	// A new user message arrives.
-	require.NoError(t, env.Client.Get(ctx, sessKey, &idle))
+	require.NoError(t, env.Client.Get(ctx, w.sessKey, &idle))
 	if idle.Annotations == nil {
 		idle.Annotations = map[string]string{}
 	}
 	idle.Annotations[spiceboxv1alpha1.AnnotationWakeRequestedAt] = time.Now().UTC().Format(time.RFC3339Nano)
 	require.NoError(t, env.Client.Update(ctx, &idle), "stamp wake annotation")
-
-	reconcileToWork(t, ctx, r, name)
-
-	var got spiceboxv1alpha1.AgentSession
-	require.NoError(t, env.Client.Get(ctx, sessKey, &got))
-	runnerExists := env.Client.Get(ctx, runnerKey, &runnerPod) == nil
-	return got, runnerExists
+	return w
 }
 
 // TestReconcileSecretGatedSidecar_CrashLoopDoesNotBlockWake covers a parked
@@ -1054,27 +1085,110 @@ func wakeWithSeparatePodSidecar(t *testing.T, name string, crash bool) (spicebox
 // wake also suppresses the idle sweep, the session never slept or archived
 // either. The user's message went unanswered indefinitely.
 func TestReconcileSecretGatedSidecar_CrashLoopDoesNotBlockWake(t *testing.T) {
-	got, runnerExists := wakeWithSeparatePodSidecar(t, "s-wakecrash", true)
+	w := parkAndWakeWithSeparatePodSidecar(t, "s-wakecrash", true)
 
-	assert.NotNil(t, got.Status.LastWakeAt, "the wake must be consumed despite the crash-looping sidecar")
-	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseIdle, got.Status.Phase, "the session must leave Idle")
+	// The wake pass consumes the wake and stops short of the runner.
+	res := w.reconcile(t)
+	assert.Equal(t, 1*time.Second, res.RequeueAfter, "the wake pass requeues promptly to start the runner")
+	woken := w.session(t)
+	require.NotNil(t, woken.Status.LastWakeAt, "the wake must be consumed despite the crash-looping sidecar")
+	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseIdle, woken.Status.Phase, "the session must leave Idle")
+
+	// The pass after the wake falls through the failed sidecar to the runner.
+	res = w.reconcile(t)
+	assert.Equal(t, 30*time.Second, res.RequeueAfter,
+		"a terminally failed sidecar is re-checked at the relaxed cadence, not held at 2s")
+	assert.True(t, w.runnerExists(), "a fresh runner pod must be created for the woken session")
+
+	got := w.session(t)
 	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase,
 		"a sidecar crash recorded for the runner must not fail the woken session")
 	require.Len(t, got.Status.ResolvedSidecarToolboxes, 1, "one resolved sidecar in status")
 	assert.NotNil(t, got.Status.ResolvedSidecarToolboxes[0].PodFailure,
 		"the failure stays recorded so the new runner can surface it")
-	assert.True(t, runnerExists, "a fresh runner pod must be created for the woken session")
+	require.NotNil(t, got.Status.LastWakeAt)
+	assert.True(t, woken.Status.LastWakeAt.Equal(got.Status.LastWakeAt), "the wake is consumed exactly once")
+}
+
+// TestReconcileSecretGatedSidecar_RecoveredSidecarClearsFailureAndRequeue
+// covers the other end of a recorded crash: once the pod goes Ready the failure
+// is cleared from status and the relaxed re-check stops.
+func TestReconcileSecretGatedSidecar_RecoveredSidecarClearsFailureAndRequeue(t *testing.T) {
+	w := parkAndWakeWithSeparatePodSidecar(t, "s-wakeheal", true)
+	ctx := context.Background()
+
+	w.reconcile(t)
+	res := w.reconcile(t)
+	require.Equal(t, 30*time.Second, res.RequeueAfter, "precondition: the failed sidecar is being re-checked")
+
+	// The crash loop resolves itself (envtest has no kubelet; set it by hand).
+	var pod corev1.Pod
+	require.NoError(t, w.env.Client.Get(ctx, w.sidecarKey, &pod), "get sidecar pod")
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.PodIP = "10.9.9.7"
+	pod.Status.ContainerStatuses = nil
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	require.NoError(t, w.env.Client.Status().Update(ctx, &pod), "set sidecar pod Ready+PodIP")
+
+	res = w.reconcile(t)
+	assert.Zero(t, res.RequeueAfter, "a recovered sidecar needs no further polling")
+
+	got := w.session(t)
+	require.Len(t, got.Status.ResolvedSidecarToolboxes, 1, "one resolved sidecar in status")
+	assert.Nil(t, got.Status.ResolvedSidecarToolboxes[0].PodFailure, "the stale failure is cleared on recovery")
+	assert.Equal(t, "10.9.9.7", got.Status.ResolvedSidecarToolboxes[0].SidecarPodIP, "the recovered pod's IP is reflected")
 }
 
 // TestReconcileSecretGatedSidecar_StartingSidecarDoesNotBlockWake covers the
 // non-terminal half: a sidecar pod that is merely still starting may hold the
 // runner until it is Ready, but must not keep the wake from being consumed.
 func TestReconcileSecretGatedSidecar_StartingSidecarDoesNotBlockWake(t *testing.T) {
-	got, runnerExists := wakeWithSeparatePodSidecar(t, "s-wakestart", false)
+	w := parkAndWakeWithSeparatePodSidecar(t, "s-wakestart", false)
 
-	assert.NotNil(t, got.Status.LastWakeAt, "the wake must be consumed while the sidecar is still starting")
-	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseIdle, got.Status.Phase, "the session must leave Idle")
+	res := w.reconcile(t)
+	assert.Equal(t, 1*time.Second, res.RequeueAfter, "the wake pass requeues promptly")
+	woken := w.session(t)
+	require.NotNil(t, woken.Status.LastWakeAt, "the wake must be consumed while the sidecar is still starting")
+	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseIdle, woken.Status.Phase, "the session must leave Idle")
+
+	// The pass after the wake waits on the still-starting pod.
+	res = w.reconcile(t)
+	assert.Equal(t, 2*time.Second, res.RequeueAfter, "a still-starting sidecar holds the pass at the 2s cadence")
+	assert.False(t, w.runnerExists(), "the runner is held until a still-starting sidecar is Ready")
+
+	got := w.session(t)
 	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase,
 		"a still-starting sidecar must not fail the session")
-	assert.False(t, runnerExists, "the runner is held until a still-starting sidecar is Ready")
+	require.NotNil(t, got.Status.LastWakeAt)
+	assert.True(t, woken.Status.LastWakeAt.Equal(got.Status.LastWakeAt), "the wake is consumed exactly once")
+}
+
+// TestReconcileSecretGatedSidecar_NotReadyPastDeadlineStopsHoldingWokenRunner
+// covers a sidecar pod that never becomes Ready for a reason no terminal
+// container state names (unschedulable, evicted, failing readiness). It holds
+// the woken runner only until sidecarReadyDeadline; past it the pod is recorded
+// as failed, exactly like a crash loop, and the runner starts without it.
+// Previously this held at the 2s cadence forever with the wake already consumed.
+func TestReconcileSecretGatedSidecar_NotReadyPastDeadlineStopsHoldingWokenRunner(t *testing.T) {
+	w := parkAndWakeWithSeparatePodSidecar(t, "s-wakedeadline", false)
+
+	w.reconcile(t)
+	res := w.reconcile(t)
+	require.Equal(t, 2*time.Second, res.RequeueAfter, "precondition: the still-starting sidecar holds the pass")
+	require.False(t, w.runnerExists(), "precondition: the runner is held inside the deadline")
+
+	// The deadline passes with the pod still not Ready.
+	w.r.Now = func() time.Time { return time.Now().Add(agentsession.SidecarReadyDeadlineForTest + time.Minute) }
+
+	res = w.reconcile(t)
+	assert.Equal(t, 30*time.Second, res.RequeueAfter, "past the deadline the sidecar is re-checked, not held")
+	assert.True(t, w.runnerExists(), "the runner must start once the sidecar's deadline has passed")
+
+	got := w.session(t)
+	assert.NotEqual(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase,
+		"a sidecar that timed out after the runner had started must not fail the session")
+	require.Len(t, got.Status.ResolvedSidecarToolboxes, 1, "one resolved sidecar in status")
+	failure := got.Status.ResolvedSidecarToolboxes[0].PodFailure
+	require.NotNil(t, failure, "the timeout is recorded for the runner to surface")
+	assert.Equal(t, agentsession.ReasonSidecarNotReadyDeadlineExceeded, failure.Reason)
 }

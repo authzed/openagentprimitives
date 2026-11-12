@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -383,7 +384,66 @@ func (r *Reconciler) reconcileSidecarPod(ctx context.Context, sess *spiceboxv1al
 	// wedged in a terminal container state (crash loop, unpullable image,
 	// unsatisfiable config) must not be waited on silently — it is reported so
 	// the caller can tell the agent and the user WHY the toolset is missing.
-	return sidecarPodState{Failure: sidecarPodFailure(&live)}, nil
+	if f := sidecarPodFailure(&live); f != nil {
+		return sidecarPodState{Failure: f}, nil
+	}
+	// Not Ready and not recognizably terminal — evicted, unschedulable, running
+	// but failing readiness. Waiting is right only for so long: past the
+	// deadline it is reported exactly like a terminal failure.
+	return sidecarPodState{Failure: sidecarPodReadyDeadlineFailure(&live, r.now())}, nil
+}
+
+// sidecarReadyDeadline bounds how long a separate-pod sidecar may sit not-Ready
+// without a recognized terminal container state before it is treated as failed.
+// sidecarPodFailure only knows the kubelet's terminal Waiting reasons; a pod
+// that is evicted, permanently Unschedulable, or running but never passing
+// readiness matches none of them, and would otherwise hold the runner at the
+// not-ready cadence forever with nothing said to anyone.
+//
+// Matches detectorReadyDeadline: a cold node may need a scale-up plus an image
+// pull before the pod even starts.
+const sidecarReadyDeadline = 5 * time.Minute
+
+// ReasonSidecarNotReadyDeadlineExceeded is the SidecarPodFailure reason for a
+// pod that outlived sidecarReadyDeadline without becoming Ready.
+const ReasonSidecarNotReadyDeadlineExceeded = "NotReadyDeadlineExceeded"
+
+// sidecarPodReadyDeadlineFailure returns the failure record for a not-Ready pod
+// that has outlived sidecarReadyDeadline, or nil while it is still inside it.
+//
+// The clock starts when the pod last STOPPED being ready: its PodReady
+// condition's LastTransitionTime when the kubelet has reported one, otherwise
+// its CreationTimestamp (never scheduled, so no kubelet has touched it). That
+// keeps a long-lived sidecar whose readiness probe starts failing from being
+// condemned the instant it flaps, which measuring from creation alone would do.
+//
+// The message is built only from slow-moving pod fields — no elapsed time, no
+// scheduler message with its node counts — because it lands in status and is
+// the runner's dedup fingerprint: a value that changed per pass would rewrite
+// status every reconcile and re-notify the user every turn.
+func sidecarPodReadyDeadlineFailure(pod *corev1.Pod, now time.Time) *spiceboxv1alpha1.SidecarPodFailure {
+	notReadySince := pod.CreationTimestamp.Time
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady && !c.LastTransitionTime.IsZero() {
+			notReadySince = c.LastTransitionTime.Time
+		}
+	}
+	if notReadySince.IsZero() || now.Sub(notReadySince) <= sidecarReadyDeadline {
+		return nil
+	}
+	state := "phase " + string(pod.Status.Phase)
+	if pod.Status.Reason != "" {
+		state += ", " + pod.Status.Reason
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason != "" {
+			state += ", " + c.Reason
+		}
+	}
+	return &spiceboxv1alpha1.SidecarPodFailure{
+		Reason:  ReasonSidecarNotReadyDeadlineExceeded,
+		Message: fmt.Sprintf("pod did not become Ready within %s (%s)", sidecarReadyDeadline, state),
+	}
 }
 
 // sidecarPodState is what one reconcile pass observed about a separate-pod
@@ -397,7 +457,8 @@ type sidecarPodState struct {
 	// replacement will be created on the next pass.
 	Replacing bool
 	// Failure is non-nil when the pod is wedged in a state it will not recover
-	// from on its own. See sidecarPodFailure.
+	// from on its own (see sidecarPodFailure), or has stayed not-Ready past
+	// sidecarReadyDeadline (see sidecarPodReadyDeadlineFailure).
 	Failure *spiceboxv1alpha1.SidecarPodFailure
 }
 

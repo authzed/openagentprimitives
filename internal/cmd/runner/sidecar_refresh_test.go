@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -316,6 +317,52 @@ func TestSidecarToolRefresher_TerminalFailureSurvivesRunnerRestart(t *testing.T)
 
 	assert.Len(t, notices, 1,
 		"a runner restart must not re-report a sidecar failure the user already saw")
+}
+
+// TestSidecarToolRefresher_RestartedRunnerReAdvisesAgentWithoutReNotifying pins
+// the split between the two halves of a failure report across a runner restart
+// or an idle-sleep → wake.
+//
+// The user-facing notice is durable in the thread, so the annotation suppresses
+// it. The agent-facing advisory is transient — it is never replayed from
+// history — so the fresh process's model has no idea why a toolbox it was
+// promised is missing unless the first pass says so again.
+func TestSidecarToolRefresher_RestartedRunnerReAdvisesAgentWithoutReNotifying(t *testing.T) {
+	scheme := refreshScheme(t)
+	failed := failedPod("k8s", "CrashLoopBackOff", "boom")
+	reported, err := json.Marshal(map[string]string{"k8s": podFailureFingerprint(failed.PodFailure)})
+	require.NoError(t, err)
+
+	// The session as an earlier runner left it: failure recorded AND reported.
+	sess := &spiceboxv1alpha1.AgentSession{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "s1", Namespace: "default",
+			Annotations: map[string]string{sidecarFailureReportedAnnotation: string(reported)},
+		},
+		Status: spiceboxv1alpha1.AgentSessionStatus{
+			ResolvedSidecarToolboxes: []spiceboxv1alpha1.ResolvedSidecarToolbox{failed},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sess).
+		WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).Build()
+	key := client.ObjectKeyFromObject(sess)
+	probe := func(_ context.Context, _ string) ([]mcpprobe.Tool, error) { return liveEcho, nil }
+
+	var notices []*notice.Notice
+	notify := func(_ context.Context, n *notice.Notice) { notices = append(notices, n) }
+
+	refresh := newSidecarToolRefresher(c, key, probe, map[string]string{}, nil, nil, nil, notify)
+
+	res, err := refresh(context.Background())
+	require.NoError(t, err)
+	require.Len(t, res.Advisories, 1, "the fresh process's agent must be told the toolbox is gone")
+	assert.Contains(t, res.Advisories[0], "k8s", "the advisory must name the unavailable sidecar")
+	assert.Empty(t, notices, "the user already saw this failure; it must not be re-notified")
+
+	res, err = refresh(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, res.Advisories, "the re-advisory is once per process, not once per turn")
+	assert.Empty(t, notices, "still no notice on a later turn")
 }
 
 // A failure the user has NOT seen must still reach them after a restart: the

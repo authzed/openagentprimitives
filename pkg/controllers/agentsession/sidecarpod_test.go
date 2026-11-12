@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -550,6 +551,94 @@ func TestTerminalPodWaitReason(t *testing.T) {
 				assert.Equal(t, tc.wantReason, reason, "reason")
 				assert.NotEmpty(t, msg, "terminal reasons should carry the kubelet message for the user-facing failure")
 			}
+		})
+	}
+}
+
+// TestSidecarPodReadyDeadlineFailure pins the backstop for a not-Ready sidecar
+// pod that matches no terminal container state: it is waited on for
+// sidecarReadyDeadline and then reported as failed, so it can never hold a
+// session indefinitely.
+func TestSidecarPodReadyDeadlineFailure(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	deadline := agentsession.SidecarReadyDeadlineForTest
+	at := func(ago time.Duration) metav1.Time { return metav1.NewTime(now.Add(-ago)) }
+
+	cases := []struct {
+		name        string
+		pod         corev1.Pod
+		wantMessage string // empty means "still inside the deadline: nil"
+	}{
+		{
+			name: "created just inside the deadline: still waited on",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: at(deadline)},
+				Status:     corev1.PodStatus{Phase: corev1.PodPending},
+			},
+		},
+		{
+			name: "unschedulable past the deadline: failed, naming the scheduling reason",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: at(deadline + time.Second)},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					Conditions: []corev1.PodCondition{{
+						Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+						Reason: corev1.PodReasonUnschedulable, Message: "0/3 nodes are available",
+					}},
+				},
+			},
+			wantMessage: "pod did not become Ready within 5m0s (phase Pending, Unschedulable)",
+		},
+		{
+			name: "evicted past the deadline: failed, naming the pod's own reason",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: at(time.Hour)},
+				Status:     corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Evicted"},
+			},
+			wantMessage: "pod did not become Ready within 5m0s (phase Failed, Evicted)",
+		},
+		{
+			name: "old pod whose readiness only just dropped: clock runs from the drop, still waited on",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: at(24 * time.Hour)},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{{
+						Type: corev1.PodReady, Status: corev1.ConditionFalse, LastTransitionTime: at(time.Minute),
+					}},
+				},
+			},
+		},
+		{
+			name: "running but failing readiness past the deadline: failed",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: at(24 * time.Hour)},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{{
+						Type: corev1.PodReady, Status: corev1.ConditionFalse, LastTransitionTime: at(deadline + time.Minute),
+					}},
+				},
+			},
+			wantMessage: "pod did not become Ready within 5m0s (phase Running)",
+		},
+		{
+			name: "no creation timestamp and no Ready condition: never times out",
+			pod:  corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodPending}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := agentsession.SidecarPodReadyDeadlineFailureForTest(&tc.pod, now)
+			if tc.wantMessage == "" {
+				assert.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			assert.Equal(t, agentsession.ReasonSidecarNotReadyDeadlineExceeded, got.Reason)
+			assert.Equal(t, tc.wantMessage, got.Message)
+			assert.Nil(t, got.ExitCode, "no container exit is implied")
 		})
 	}
 }
