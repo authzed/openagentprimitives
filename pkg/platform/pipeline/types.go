@@ -217,8 +217,8 @@ type Input struct {
 	// ProxyExec marks this as a viewer-attributed proxy execution — an MCP-UI
 	// app-tool call the widget VIEWER drives, not the LLM. When set, the
 	// ToolCallAuthz hook attributes the approval-card Requester to Requester
-	// (the viewer, D-D1), not the session's LastInbound requester. false on the
-	// LLM path.
+	// (the viewer, D-D1), not the person speaking in the thread. false on the
+	// LLM path, where the card names the current speaker.
 	ProxyExec bool
 	// UIDataBinding marks a result bound for a BROWSER rather than the model:
 	// an agent-UI data binding, resolved server-side under the viewer's

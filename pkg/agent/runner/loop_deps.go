@@ -617,10 +617,12 @@ type Loop struct {
 	// AgentSession. Empty for kubectl-driven sessions.
 	StartedByCanonical identity.CanonicalUserID
 
-	// ChannelKind / LastInboundExternalID feed the Requester field of the
-	// ToolApprovalRequestPayload. Empty values flow through as empty strings
-	// (channelsd's sender tolerates that for kubectl-driven approval prompts,
-	// where there is no inbound channel user).
+	// ChannelKind is the Kind on the tool-approval card's Requester.
+	// LastInboundExternalID is that Requester's fallback when no speaker is
+	// recorded (llmPathRequester); internal/cmd/runner never sets it. Empty
+	// values flow through as empty strings (channelsd's sender tolerates that
+	// for kubectl-driven approval prompts, where there is no inbound channel
+	// user).
 	//
 	// LastInboundExternalID has no paired "last inbound email" field — fine for
 	// tool_call approvals (DecideApprovers resolves standing via SpiceDB owner

@@ -10,10 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
-	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/hooks"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
@@ -274,13 +272,12 @@ func TestSeqForEmit_AppToolCtx_LastAssistantTurnIndexRace(t *testing.T) {
 
 // TestBuildToolCallApprovalAsk_ProxyExec_UsesViewerRequester pins problem 3
 // (D-D1 display): on the app-tool (proxy-exec) path the approval-card Requester
-// is the decoded widget viewer; on the LLM path it stays the session's
-// LastInbound channel-native identity (byte-for-byte unchanged).
+// is the decoded widget viewer; on the LLM path it is the current speaker
+// (llmPathRequester), whatever viewer the caller passes.
 func TestBuildToolCallApprovalAsk_ProxyExec_UsesViewerRequester(t *testing.T) {
 	l := loopWithConsolidatedTimeout(t)
 	l.Tools = []tool.Tool{&csFakeTool{name: "do_thing"}}
 	l.ChannelKind = "slack"
-	l.LastInboundExternalID = "U-session"
 	ctx := memory.WithSystemApproval(context.Background(), "test")
 	perm := authz.Permission{StateImpact: authz.External}
 
@@ -300,32 +297,19 @@ func TestBuildToolCallApprovalAsk_ProxyExec_UsesViewerRequester(t *testing.T) {
 		assert.Equal(t, identity.RawExternalID(email), req.ExternalID)
 	})
 
-	t.Run("LLM path: Requester is the session LastInbound (unchanged)", func(t *testing.T) {
-		ask, err := l.buildToolCallApprovalAsk(ctx, "do_thing", map[string]any{}, perm, "tu-1", "because", identity.CanonicalFromTrusted("", "test fixture"), false)
+	t.Run("LLM path: Requester is the current speaker, never the viewer argument", func(t *testing.T) {
+		speaker := slackSubject(t, "U-speaker", "")
+		l.lastInboundAuthor = speaker
+		t.Cleanup(func() { l.lastInboundAuthor = "" })
+
+		ask, err := l.buildToolCallApprovalAsk(ctx, "do_thing", map[string]any{}, perm, "tu-1", "because", viewer, false)
 		require.NoError(t, err)
 		require.NotNil(t, ask)
 		req, ok := ask.Payload["requester"].(channelevents.ExternalIdentity)
 		require.True(t, ok)
 		assert.Equal(t, identity.Kind("slack"), req.Kind)
-		assert.Equal(t, identity.RawExternalID("U-session"), req.ExternalID)
-	})
-
-	// The production LLM path. internal/cmd/runner never assigns
-	// LastInboundExternalID, so the requester the approval card names is the
-	// session's started-by annotation — stamped by channelsd / the controllers,
-	// never by anything the model writes.
-	t.Run("LLM path, no LastInbound: Requester is the session's started-by annotation", func(t *testing.T) {
-		l2 := loopWithConsolidatedTimeout(t)
-		l2.Tools = []tool.Tool{&csFakeTool{name: "do_thing"}}
-		l2.ChannelKind = "slack"
-		l2.AgentSession = &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{
-			Annotations: map[string]string{spiceboxv1alpha1.AnnotationStartedByExternalID: "U_STARTER"},
-		}}
-		ask, err := l2.buildToolCallApprovalAsk(ctx, "do_thing", map[string]any{}, perm, "tu-1", "because", identity.CanonicalFromTrusted("", "test fixture"), false)
-		require.NoError(t, err)
-		require.NotNil(t, ask)
-		req, ok := ask.Payload["requester"].(channelevents.ExternalIdentity)
-		require.True(t, ok)
-		assert.Equal(t, channelevents.ExternalIdentity{Kind: identity.KindSlack, ExternalID: "U_STARTER"}, req)
+		assert.Equal(t, speaker, req.Subject, "the mention resolves from the speaker's own subject")
+		assert.Equal(t, identity.RawExternalID("U-speaker"), req.ExternalID)
+		assert.Empty(t, req.Email, "the viewer's email must not leak onto the LLM path's card")
 	})
 }
