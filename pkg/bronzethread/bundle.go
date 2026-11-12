@@ -326,6 +326,9 @@ func (b Bundle) Validate() error {
 	if len(b.UserTurns) == 0 && b.Trigger == nil {
 		return fmt.Errorf("a bundle needs either userTurns or a trigger; nothing would start the run")
 	}
+	if len(b.UserTurns) > 0 && b.UserTurns[0].DeleteSessionFirst {
+		return fmt.Errorf("userTurns[0]: deleteSessionFirst needs a session to delete, and none exists before the first turn")
+	}
 	if b.Trigger != nil {
 		if b.Trigger.Channel == "" {
 			return fmt.Errorf("trigger needs a channel")
@@ -668,6 +671,13 @@ type Expect struct {
 	// the model anyway. A refusal that still leaks the payload into context has
 	// denied nothing.
 	LastToolResultNotContains string `json:"lastToolResultNotContains,omitempty"`
+
+	// RequestNotContains asserts something appears in NO message of the
+	// request — no text, no tool input, no tool result, however far back.
+	// LastToolResultNotContains says one result was clean; this says a value
+	// is not in the model's context at all, which is the claim to make when the
+	// question is whether another session's conversation leaked into this one.
+	RequestNotContains string `json:"requestNotContains,omitempty"`
 
 	// LastToolResultIsError is a pointer so a bundle can assert "must NOT be an
 	// error" (false) distinctly from not caring (unset).

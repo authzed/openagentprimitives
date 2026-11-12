@@ -140,6 +140,23 @@ func TestBundle_Validate(t *testing.T) {
 			wantErr: "trigger needs a channelKey",
 		},
 		{
+			name: "deleteSessionFirst on a later turn validates",
+			doctor: func(b bt.Bundle) bt.Bundle {
+				b.UserTurns = append(b.UserTurns, bt.UserTurn{Text: "again", DeleteSessionFirst: true})
+				return b
+			},
+		},
+		{
+			// Before the first turn there is no session to delete; the driver
+			// would fail on a lookup minutes into a fixture boot instead.
+			name: "deleteSessionFirst on the first turn: refused",
+			doctor: func(b bt.Bundle) bt.Bundle {
+				b.UserTurns[0].DeleteSessionFirst = true
+				return b
+			},
+			wantErr: "userTurns[0]: deleteSessionFirst",
+		},
+		{
 			// Folded in rather than left as a separate call, so both consumers
 			// get it from the one method.
 			name: "a tool declared in both output maps: refused",
