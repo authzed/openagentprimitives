@@ -671,6 +671,7 @@ func (h *runnerHost) buildToolCallPending(ctx context.Context, reqID string, ask
 		PermissionTitle: h.l.PlanGatePermissionTitles[resourceType+"/"+permission],
 		ResourceLabel:   resourceDisplayLabel(h.l.PlanGateResourceDisplays, resourceType, resourceID),
 		Justification:   justification,
+		Requester:       extractExternalIdentity(ask.Payload, "requester"),
 	}
 	card.What = whatLine(ask.Summary, card)
 
@@ -1326,6 +1327,93 @@ func currentTurnAuthorIdentity(author identity.Subject) *channelevents.ExternalI
 	return &channelevents.ExternalIdentity{Kind: "idp", Email: identity.Email(email), ExternalID: identity.RawExternalID(email)}
 }
 
+// llmPathRequester is who the tool-approval card's "Requested by" row names on
+// the LLM path: the person whose message the agent is answering, NOT the person
+// who started the session.
+//
+// One runner serves a whole multiplayer thread (advanceRequester's doc). When
+// Alice starts it and Bob asks for the call, "Requested by Alice" lends Bob
+// Alice's credibility on a security decision. So the source is
+// lastInboundAuthor, the designated "who is speaking right now" field, and
+// deliberately not authSubject: under startedBy mode authSubject stays frozen
+// at the starter, which is exactly the case where Bob's call runs on Alice's
+// grants and the approver most needs to see that Bob asked.
+//
+// A recorded speaker who is not an addressable person (an agent-authored turn,
+// a raw passthrough) yields an empty identity, so the card has no row: the
+// starter did not ask, and naming them would lend their credibility just the
+// same. Only when no speaker is recorded at all (a session woken by a
+// schedule) does it fall back: LastInboundExternalID if a caller set it
+// (internal/cmd/runner does not), else the session's started-by annotations,
+// whose external id and email are stamped as a matched pair.
+//
+// Concurrency: called only from buildToolCallApprovalAsk's non-app-tool
+// branch, which runs on a dispatch goroutine Run joins (wg.Wait) before it
+// writes lastInboundAuthor again — the ordering CurrentSpeakerCanInteract
+// documents. The app-tool path (handleAppToolCallReq) runs on a goroutine Run
+// does not join, and names its widget viewer instead.
+func (l *Loop) llmPathRequester() channelevents.ExternalIdentity {
+	kind := identity.Kind(l.AddressableChannelKind())
+	if !l.lastInboundAuthor.Empty() {
+		// Not addressable: the zero identity, which renders no row.
+		id, _ := speakerRequesterIdentity(l.lastInboundAuthor, kind)
+		return id
+	}
+	// No paired email exists for LastInboundExternalID, so none is attached:
+	// pairing it with the annotation's would name two different people at once.
+	if l.LastInboundExternalID != "" {
+		return channelevents.ExternalIdentity{Kind: kind, ExternalID: identity.RawExternalID(l.LastInboundExternalID)}
+	}
+	var ext, email string
+	if l.AgentSession != nil {
+		ext = l.AgentSession.Annotations[spiceboxv1alpha1.AnnotationStartedByExternalID]
+		email = l.AgentSession.Annotations[spiceboxv1alpha1.AnnotationStartedByEmail]
+	}
+	return channelevents.ExternalIdentity{Kind: kind, ExternalID: identity.RawExternalID(ext), Email: identity.Email(email)}
+}
+
+// speakerRequesterIdentity turns a turn author's subject into the identity the
+// "Requested by" row carries, or ok=false when the author is not an
+// addressable person.
+//
+// The subject rides as a Subject passthrough with Kind set to the session's
+// human channel kind — the shape infoLeakageWouldShareWithFields already
+// stamps — so a surface resolves the mention from the person's own canonical:
+// Slack looks an email canonical up by address and reads a synthetic
+// slack:<team>:<id> canonical's id directly, with no API call. The outbound
+// relay's kind re-stamp leaves Subject untouched.
+//
+// Email and ExternalID are DISPLAY ONLY (Subject wins in Principal()), decoded
+// from that same subject so they cannot disagree with it: the email when the
+// canonical encodes one, else the synthetic triple's channel-native id.
+//
+// Guards, the same ones speakerEmail relies on: a user subject (an
+// agent-authored turn is not a requester) with a non-empty canonical that the
+// platform encoded. A RawSubject passthrough decodes to itself and is refused,
+// because its text is self-asserted.
+func speakerRequesterIdentity(author identity.Subject, kind identity.Kind) (channelevents.ExternalIdentity, bool) {
+	canon, err := author.CanonicalUserID()
+	if err != nil || canon.IsZero() {
+		return channelevents.ExternalIdentity{}, false
+	}
+	decoded := identity.DecodeForDisplay(author.String())
+	if decoded == author.String() {
+		return channelevents.ExternalIdentity{}, false
+	}
+	id := channelevents.ExternalIdentity{Kind: kind, Subject: author}
+	if email := speakerEmail(author); email != "" {
+		id.Email = identity.Email(email)
+		return id, true
+	}
+	// A synthetic canonical decodes to "kind:teamScope:externalID".
+	parts := strings.SplitN(decoded, ":", 3)
+	if len(parts) != 3 || strings.TrimSpace(parts[2]) == "" {
+		return channelevents.ExternalIdentity{}, false
+	}
+	id.ExternalID = identity.RawExternalID(parts[2])
+	return id, true
+}
+
 // contentInspectionLead authors the headline the generic renderer shows as the
 // prompt Lead. Its wording is pinned by
 // pkg/channels/channelkinds/slack/content_inspection_characterization_test.go;
@@ -1442,10 +1530,17 @@ type toolApprovalCopy struct {
 
 	Justification string
 	What          string
+
+	// Requester is the person asking for the call, as buildToolCallApprovalAsk
+	// resolved it: the authenticated widget viewer on an app-tool call, else the
+	// author of the turn the agent is answering (llmPathRequester), falling back
+	// to the session's started-by identity only when no speaker is recorded.
+	// Zero when nobody is known (a kubectl-started session).
+	Requester channelevents.ExternalIdentity
 }
 
-// toolApprovalFields authors the Why / What / Tool / Permission rows of the
-// approval card.
+// toolApprovalFields authors the Requested by / Why / What / Tool / Permission
+// rows of the approval card.
 //
 // NO WIRE IDENTIFIERS. This card used to print "Tool: `gitlike_git`" and
 // "Permission: `push`" — an internal tool id and a SpiceDB permission name  14
@@ -1457,12 +1552,59 @@ func toolApprovalFields(c toolApprovalCopy) []channelevents.InteractionField {
 	if strings.TrimSpace(why) == "" {
 		why = "_(no justification provided)_"
 	}
-	return []channelevents.InteractionField{
-		{Label: "Why", Value: why},
-		{Label: "What", Value: c.What},
-		{Label: "Tool", Value: humanToolName(c.ToolName, c.ToolDescription)},
-		{Label: "Permission", Value: humanPermission(c.Permission, c.ResourceType, c.PermissionTitle)},
+	var fields []channelevents.InteractionField
+	if f, ok := requestedByField(c.Requester); ok {
+		fields = append(fields, f)
 	}
+	return append(fields,
+		channelevents.InteractionField{Label: "Why", Value: why},
+		channelevents.InteractionField{Label: "What", Value: c.What},
+		channelevents.InteractionField{Label: "Tool", Value: humanToolName(c.ToolName, c.ToolDescription)},
+		channelevents.InteractionField{Label: "Permission", Value: humanPermission(c.Permission, c.ResourceType, c.PermissionTitle)},
+	)
+}
+
+// requestedByField names the person whose session raised the call — the
+// first thing an approver needs and the one thing the card used to leave out.
+//
+// It carries the requester as a STRUCTURED identity (Mentions), never as
+// mention markup: this package is channel-agnostic, so each surface renders
+// the identity its own way — Slack resolves it to a live `<@U…>` mention
+// (resolveFieldMentions), and the outbound relay re-stamps its Kind when an
+// agent-bound child's card is delivered through a parent's channel. Same seam
+// channelsd's permission_request "From" row uses (pipeline.go requesterField).
+//
+// Value is the plain fallback for surfaces that resolve no mentions (local,
+// browser, fake) and for a resolution miss on one that does: the email when the
+// identity carries one, else the channel-native id.
+//
+// TRUST: the identity is never model-authored. buildToolCallApprovalAsk takes
+// it from the authenticated widget viewer, the current turn's Author (resolved
+// server-side by the channel, never by the agent), or the session's started-by
+// annotations — stamped from the authenticated starter when the session is
+// created, and refused to runner writes by the AgentSession webhook, whose
+// runnerWritableAnnotations allowlist does not include them. So the row is
+// publisher copy like every other Field.
+//
+// ok is false when no requester is known, and the row is then omitted rather
+// than printed as "(unknown)": a card that names nobody is honest, one that
+// says "unknown" reads like a fault.
+func requestedByField(id channelevents.ExternalIdentity) (channelevents.InteractionField, bool) {
+	if !id.HasIdentity() {
+		return channelevents.InteractionField{}, false
+	}
+	display := strings.TrimSpace(id.Email.String())
+	if display == "" {
+		display = strings.TrimSpace(id.ExternalID.String())
+	}
+	if display == "" {
+		return channelevents.InteractionField{}, false
+	}
+	return channelevents.InteractionField{
+		Label:    "Requested by",
+		Value:    display,
+		Mentions: []channelevents.ExternalIdentity{id},
+	}, true
 }
 
 // humanToolName prefers the tool's own description, else a humanized form of
@@ -1927,6 +2069,19 @@ func extractPermission(m map[string]any) authz.Permission {
 		return v
 	}
 	return authz.Permission{}
+}
+
+// extractExternalIdentity returns the channelevents.ExternalIdentity stored at
+// key, or the zero identity when absent or of another type. The tool_call ask
+// carries its requester this way (ToolCallApprovalPayload.ToMap).
+func extractExternalIdentity(m map[string]any, key string) channelevents.ExternalIdentity {
+	if m == nil {
+		return channelevents.ExternalIdentity{}
+	}
+	if v, ok := m[key].(channelevents.ExternalIdentity); ok {
+		return v
+	}
+	return channelevents.ExternalIdentity{}
 }
 
 func extractTaintSlice(m map[string]any, key string) []leakageTaintRecord {
