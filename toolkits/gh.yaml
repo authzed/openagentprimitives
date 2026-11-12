@@ -1147,11 +1147,20 @@ subcommands:
       # The FALLBACK is the dangerous reading, and that ordering is the design:
       # variants below name what is SAFE, so a method or endpoint nobody
       # anticipated lands here rather than slipping past an allowlist.
+      #
+      # Every expression here and in the variants reads the endpoint with ONE
+      # leading slash stripped. gh does the same before it builds the request,
+      # so `/repos/o/r/forks` and `repos/o/r/forks` are one call — and the
+      # slashed form is the one GitHub's own REST docs print. Reading only the
+      # bare form left the slashed one naming no repository: the fallback
+      # resolved an empty id and the call was refused with no approval a human
+      # could have granted. Exactly one slash, as gh strips: `//repos/...` still
+      # names nothing and still fails closed.
       stateImpact: external
       check:
         resourceType: github_repo_url
         permission: write
-        resourceIDExpr: 'has(args.endpoint) && args.endpoint.startsWith("repos/") && args.endpoint.split("/").size() >= 3 ? args.endpoint.split("/")[1] + "/" + args.endpoint.split("/")[2] : ""'
+        resourceIDExpr: 'has(args.endpoint) && (args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).startsWith("repos/") && (args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).split("/").size() >= 3 ? (args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).split("/")[1] + "/" + (args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).split("/")[2] : ""'
         resourceIDTransforms: [github_repo_url_id]
         resourceIDHint: "for a write, call a repo-scoped endpoint (repos/OWNER/NAME/...) — an endpoint naming no repository cannot be authorized"
     permissionVariants:
@@ -1175,13 +1184,13 @@ subcommands:
       # A repo-scoped GET is a read of that repository. `gh pr view` is
       # readonly#read on the same object; routing the identical read through a
       # human just because it went via `api` was over-restriction, not security.
-      - when: '(!has(args.method) || args.method == "" || args.method == "GET") && !("field" in args) && !("raw-field" in args) && !("hostname" in args) && has(args.endpoint) && args.endpoint.startsWith("repos/") && args.endpoint.split("/").size() >= 3'
+      - when: '(!has(args.method) || args.method == "" || args.method == "GET") && !("field" in args) && !("raw-field" in args) && !("hostname" in args) && has(args.endpoint) && (args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).startsWith("repos/") && (args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).split("/").size() >= 3'
         check:
           stateImpact: readonly
           check:
             resourceType: github_repo_url
             permission: read
-            resourceIDExpr: 'args.endpoint.split("/")[1] + "/" + args.endpoint.split("/")[2]'
+            resourceIDExpr: '(args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).split("/")[1] + "/" + (args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).split("/")[2]'
             # Same canonical id as every other repository reference here: the
             # endpoint yields OWNER/NAME, and github_repo_url_id folds and
             # encodes it exactly as `gh pr view` does, so `gh api repos/o/r/...`
@@ -1191,7 +1200,7 @@ subcommands:
       # flow opens with it to derive the committer, and it names no repository,
       # so it keys on the `self` sentinel: grantable and revocable on its own,
       # rather than either ungated or impossible.
-      - when: '(!has(args.method) || args.method == "" || args.method == "GET") && !("field" in args) && !("raw-field" in args) && !("hostname" in args) && has(args.endpoint) && (args.endpoint == "user" || args.endpoint.startsWith("user/"))'
+      - when: '(!has(args.method) || args.method == "" || args.method == "GET") && !("field" in args) && !("raw-field" in args) && !("hostname" in args) && has(args.endpoint) && ((args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint) == "user" || (args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).startsWith("user/"))'
         check:
           stateImpact: readonly
           check:
@@ -1205,7 +1214,7 @@ subcommands:
             # grant stays written on the literal `self`, exactly as before.
             resourceIDTransforms: [github_repo_url_id]
       # Cross-repo search, same sentinel the `search` subcommands use.
-      - when: '(!has(args.method) || args.method == "" || args.method == "GET") && !("field" in args) && !("raw-field" in args) && !("hostname" in args) && has(args.endpoint) && args.endpoint.startsWith("search/")'
+      - when: '(!has(args.method) || args.method == "" || args.method == "GET") && !("field" in args) && !("raw-field" in args) && !("hostname" in args) && has(args.endpoint) && (args.endpoint.startsWith("/") ? args.endpoint.substring(1) : args.endpoint).startsWith("search/")'
         check:
           stateImpact: readonly
           check:
