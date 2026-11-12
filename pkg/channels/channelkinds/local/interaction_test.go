@@ -89,6 +89,46 @@ func TestInteractionSender_Send(t *testing.T) {
 			},
 		},
 		{
+			// The runner names the requester as a structured identity
+			// (Mentions) with Value as the plain fallback. This kind resolves
+			// no mentions, so it must render Value as ordinary text — no
+			// mention markup, and the row is not dropped.
+			name: "interaction_request: tool_approval Requested by row renders its plain fallback, not mention markup",
+			env: func(t *testing.T) channelevents.Envelope {
+				return mustEnv(t, channelevents.KindInteractionRequest,
+					channelevents.InteractionRequestPayload{
+						AgentSessionRef: channelevents.SessionRef{Namespace: "default", Name: "s1"},
+						Category:        "tool_approval",
+						RequestRef:      "req-rb",
+						Lead:            "Approval needed",
+						Fields: []channelevents.InteractionField{
+							{
+								Label: "Requested by", Value: "alice@corp.example",
+								Mentions: []channelevents.ExternalIdentity{{Kind: "idp", Email: "alice@corp.example", ExternalID: "alice@corp.example"}},
+							},
+							{Label: "Why", Value: "need to land the fix"},
+						},
+						Actions: []channelevents.InteractionAction{
+							{ID: "approve", Label: "Approve", Kind: channelevents.ActionKindDecision},
+							{ID: "deny", Label: "Deny", Kind: channelevents.ActionKindDecision},
+						},
+						Audience: channelevents.InteractionAudience{
+							Scope:     channelevents.AudienceApprovers,
+							Approvers: []channelevents.ExternalIdentity{{Kind: "user", ExternalID: "owner-1"}},
+						},
+					})
+			},
+			check: func(t *testing.T, ev any) {
+				m, ok := ev.(MsgInteractionRequest)
+				require.True(t, ok, "want MsgInteractionRequest, got %T", ev)
+				assert.Contains(t, m.Text, "**Requested by:** alice@corp.example", "the plain fallback names the requester")
+				assert.NotContains(t, m.Text, "<@", "a surface that resolves no mentions emits no mention markup")
+				require.NotEmpty(t, m.Payload.Fields)
+				assert.Equal(t, "Requested by", m.Payload.Fields[0].Label)
+				assert.Len(t, m.Payload.Fields[0].Mentions, 1, "the structured identity still reaches the TUI")
+			},
+		},
+		{
 			name: "interaction_applied: emits MsgInteractionApplied with outcome",
 			env: func(t *testing.T) channelevents.Envelope {
 				return mustEnv(t, channelevents.KindInteractionApplied,

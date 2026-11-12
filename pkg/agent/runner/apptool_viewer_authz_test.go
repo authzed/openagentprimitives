@@ -10,8 +10,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
+	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/hooks"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
@@ -306,5 +308,24 @@ func TestBuildToolCallApprovalAsk_ProxyExec_UsesViewerRequester(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, identity.Kind("slack"), req.Kind)
 		assert.Equal(t, identity.RawExternalID("U-session"), req.ExternalID)
+	})
+
+	// The production LLM path. internal/cmd/runner never assigns
+	// LastInboundExternalID, so the requester the approval card names is the
+	// session's started-by annotation — stamped by channelsd / the controllers,
+	// never by anything the model writes.
+	t.Run("LLM path, no LastInbound: Requester is the session's started-by annotation", func(t *testing.T) {
+		l2 := loopWithConsolidatedTimeout(t)
+		l2.Tools = []tool.Tool{&csFakeTool{name: "do_thing"}}
+		l2.ChannelKind = "slack"
+		l2.AgentSession = &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{spiceboxv1alpha1.AnnotationStartedByExternalID: "U_STARTER"},
+		}}
+		ask, err := l2.buildToolCallApprovalAsk(ctx, "do_thing", map[string]any{}, perm, "tu-1", "because", identity.CanonicalFromTrusted("", "test fixture"), false)
+		require.NoError(t, err)
+		require.NotNil(t, ask)
+		req, ok := ask.Payload["requester"].(channelevents.ExternalIdentity)
+		require.True(t, ok)
+		assert.Equal(t, channelevents.ExternalIdentity{Kind: identity.KindSlack, ExternalID: "U_STARTER"}, req)
 	})
 }

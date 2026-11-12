@@ -671,6 +671,7 @@ func (h *runnerHost) buildToolCallPending(ctx context.Context, reqID string, ask
 		PermissionTitle: h.l.PlanGatePermissionTitles[resourceType+"/"+permission],
 		ResourceLabel:   resourceDisplayLabel(h.l.PlanGateResourceDisplays, resourceType, resourceID),
 		Justification:   justification,
+		Requester:       extractExternalIdentity(ask.Payload, "requester"),
 	}
 	card.What = whatLine(ask.Summary, card)
 
@@ -1442,10 +1443,16 @@ type toolApprovalCopy struct {
 
 	Justification string
 	What          string
+
+	// Requester is the person whose session raised the call, as
+	// buildToolCallApprovalAsk resolved it: the authenticated widget viewer on
+	// an app-tool call, else the session's channel-native requester. Zero when
+	// nobody is known (a kubectl-started session, a cron run).
+	Requester channelevents.ExternalIdentity
 }
 
-// toolApprovalFields authors the Why / What / Tool / Permission rows of the
-// approval card.
+// toolApprovalFields authors the Requested by / Why / What / Tool / Permission
+// rows of the approval card.
 //
 // NO WIRE IDENTIFIERS. This card used to print "Tool: `gitlike_git`" and
 // "Permission: `push`" — an internal tool id and a SpiceDB permission name  14
@@ -1457,12 +1464,58 @@ func toolApprovalFields(c toolApprovalCopy) []channelevents.InteractionField {
 	if strings.TrimSpace(why) == "" {
 		why = "_(no justification provided)_"
 	}
-	return []channelevents.InteractionField{
-		{Label: "Why", Value: why},
-		{Label: "What", Value: c.What},
-		{Label: "Tool", Value: humanToolName(c.ToolName, c.ToolDescription)},
-		{Label: "Permission", Value: humanPermission(c.Permission, c.ResourceType, c.PermissionTitle)},
+	var fields []channelevents.InteractionField
+	if f, ok := requestedByField(c.Requester); ok {
+		fields = append(fields, f)
 	}
+	return append(fields,
+		channelevents.InteractionField{Label: "Why", Value: why},
+		channelevents.InteractionField{Label: "What", Value: c.What},
+		channelevents.InteractionField{Label: "Tool", Value: humanToolName(c.ToolName, c.ToolDescription)},
+		channelevents.InteractionField{Label: "Permission", Value: humanPermission(c.Permission, c.ResourceType, c.PermissionTitle)},
+	)
+}
+
+// requestedByField names the person whose session raised the call — the
+// first thing an approver needs and the one thing the card used to leave out.
+//
+// It carries the requester as a STRUCTURED identity (Mentions), never as
+// mention markup: this package is channel-agnostic, so each surface renders
+// the identity its own way — Slack resolves it to a live `<@U…>` mention
+// (resolveFieldMentions), and the outbound relay re-stamps its Kind when an
+// agent-bound child's card is delivered through a parent's channel. Same seam
+// channelsd's permission_request "From" row uses (pipeline.go requesterField).
+//
+// Value is the plain fallback for surfaces that resolve no mentions (local,
+// browser, fake) and for a resolution miss on one that does: the email when the
+// identity carries one, else the channel-native id.
+//
+// TRUST: the identity is never model-authored. buildToolCallApprovalAsk takes
+// it from the authenticated widget viewer or the session's started-by
+// annotation — stamped from the authenticated starter when the session is
+// created, and pinned against runner rewrites by the AgentSession webhook
+// (pinnedAnnotationReasons) — so the row is publisher copy like every other
+// Field.
+//
+// ok is false when no requester is known, and the row is then omitted rather
+// than printed as "(unknown)": a card that names nobody is honest, one that
+// says "unknown" reads like a fault.
+func requestedByField(id channelevents.ExternalIdentity) (channelevents.InteractionField, bool) {
+	if !id.HasIdentity() {
+		return channelevents.InteractionField{}, false
+	}
+	display := strings.TrimSpace(id.Email.String())
+	if display == "" {
+		display = strings.TrimSpace(id.ExternalID.String())
+	}
+	if display == "" {
+		return channelevents.InteractionField{}, false
+	}
+	return channelevents.InteractionField{
+		Label:    "Requested by",
+		Value:    display,
+		Mentions: []channelevents.ExternalIdentity{id},
+	}, true
 }
 
 // humanToolName prefers the tool's own description, else a humanized form of
@@ -1927,6 +1980,19 @@ func extractPermission(m map[string]any) authz.Permission {
 		return v
 	}
 	return authz.Permission{}
+}
+
+// extractExternalIdentity returns the channelevents.ExternalIdentity stored at
+// key, or the zero identity when absent or of another type. The tool_call ask
+// carries its requester this way (ToolCallApprovalPayload.ToMap).
+func extractExternalIdentity(m map[string]any, key string) channelevents.ExternalIdentity {
+	if m == nil {
+		return channelevents.ExternalIdentity{}
+	}
+	if v, ok := m[key].(channelevents.ExternalIdentity); ok {
+		return v
+	}
+	return channelevents.ExternalIdentity{}
 }
 
 func extractTaintSlice(m map[string]any, key string) []leakageTaintRecord {
