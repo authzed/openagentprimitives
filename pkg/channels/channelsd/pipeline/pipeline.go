@@ -1398,8 +1398,6 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 
 	// Fresh-session path (no terminal predecessor: archived == nil below).
 	caps := bindingCaps(p.Capabilities(ev.Channel.Spec.Kind))
-	sessName := makeSessionName(ev.Channel, ev.ChannelKey)
-	prefix := channelevents.SubjectPrefix(ev.Channel.Namespace, sessName)
 
 	// No InheritFrom on this path: a terminal predecessor is either forked
 	// (NewInheriting) or refused above, so nothing reaching here has one.
@@ -1435,6 +1433,21 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 			return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeThreadOwnedByAnotherAgent}, nil
 		}
 	}
+
+	// The name to mint under — never makeSessionName directly: its answer can
+	// name a scope a DELETED predecessor's transcript still occupies (see
+	// freshSessionName). AFTER the thread-ownership guard, so a message another
+	// agent's session owns keeps its silent refusal even while memory is
+	// unreadable. Fail CLOSED, like sweepBeforeMint below: the scope's contents
+	// could not be established, and minting anyway is exactly how a
+	// predecessor's transcript becomes this session's working context.
+	sessName, err := p.freshSessionName(ctx, ev.Channel, ev.ChannelKey)
+	if err != nil {
+		log.FromContext(ctx).Info("fresh session: could not establish an unoccupied name; refusing to mint",
+			"channel", channelRefForLog(ev.Channel), "channelKey", ev.ChannelKey, "err", err.Error())
+		return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
+	}
+	prefix := channelevents.SubjectPrefix(ev.Channel.Namespace, sessName)
 
 	// Session-START gate (start_gate.go): on an org-membership-attributing
 	// channel, a non-member needs agentclass#start_session — or a platform
@@ -2721,8 +2734,84 @@ func (p *Pipeline) sweepBeforeMint(ctx context.Context, ns, name string) error {
 	return nil
 }
 
+// maxSessionNameGenerations bounds freshSessionName's walk. Each step past the
+// first is a session for this exact (channel, key) that was deleted after it
+// had spoken: the archive sweep and session GC produce at most one a month for
+// a conversation that goes quiet, so this is decades of them, and reaching it
+// means something is wrong rather than busy — say so instead of looping. It
+// also caps the name suffix at three digits, which the 63-byte name budget
+// depends on (see sessionNameGeneration).
+const maxSessionNameGenerations = 512
+
+// freshSessionName picks the name a fresh session for (ch, key) is minted
+// under: the first generation (see sessionNameGeneration) whose memory scope
+// holds no turns.
+//
+// Why it cannot simply be makeSessionName. A memory scope is keyed by
+// namespace/name, not by the CR's UID, and its transcript outlives the CR on
+// purpose: the turns are append-only, signed audit evidence that session
+// deletion and GC cannot remove. makeSessionName is deterministic, so once the
+// session it names has been deleted — by hand, or by the archive sweep followed
+// by session GC — the next message on the same key would mint a session INTO
+// its predecessor's transcript. The runner then reads that as a resume: turn 0
+// already exists, so the new message (spec.prompt, placed only when no turn 0
+// exists) is never placed. What follows depends on how the old conversation
+// ended — on the agent's reply, it parks without a word; on a tool result
+// (agent_work_complete's, say), it runs the OLD conversation again. Either way
+// the person's message is lost, and the predecessor's tool output — never
+// re-authorized for whoever is asking now — is the new session's working
+// context. sweepBeforeMint already clears what a reused
+// name leaves in SpiceDB; this is the memory half, and since the memory cannot
+// be cleared, the name moves instead.
+//
+// Deterministic across replicas, so the AlreadyExists race the base name relies
+// on still collapses two replicas onto one session: every replica reads the
+// same retained scopes and walks the same sequence. Follow-up messages never
+// recompute the name — correlateSessions finds the session by its channel
+// labels, which a successor carries exactly as the first generation did.
+//
+// The order of the two reads per step is what keeps the race safe. A scope
+// holding turns is either a dead predecessor's or a LIVE session's — another
+// replica that minted this same inbound a moment ago and has already written
+// into it. Turns are read FIRST and the CR second, so a replica that sees
+// another's turns is guaranteed to see that replica's CR too (it was created
+// before anything was written under its name) and joins it rather than walking
+// past it to mint a duplicate. p.K8s is the uncached client.
+//
+// Any read error is returned, never guessed past: the caller refuses to mint.
+func (p *Pipeline) freshSessionName(ctx context.Context, ch *spiceboxv1alpha1.Channel, key string) (string, error) {
+	base := makeSessionName(ch, key)
+	for g := 1; g <= maxSessionNameGenerations; g++ {
+		name := sessionNameGeneration(base, g)
+		turns, err := p.Memory.ReadAll(ctx, ch.Namespace, name)
+		if err != nil {
+			return "", fmt.Errorf("read memory scope %s/%s before minting a session under it: %w", ch.Namespace, name, err)
+		}
+		if len(turns) == 0 {
+			return name, nil
+		}
+		var existing spiceboxv1alpha1.AgentSession
+		switch err := p.K8s.Get(ctx, types.NamespacedName{Namespace: ch.Namespace, Name: name}, &existing); {
+		case err == nil && existing.DeletionTimestamp == nil:
+			// Live: a concurrent mint of this conversation. The Create below
+			// meets AlreadyExists and joins it, exactly as for the base name.
+			return name, nil
+		case err != nil && !apierrors.IsNotFound(err):
+			return "", fmt.Errorf("check whether %s/%s exists: %w", ch.Namespace, name, err)
+		}
+		// Gone, or being deleted (its finalizer is running): a predecessor
+		// either way, and joining one about to vanish would strand the inbound.
+		log.FromContext(ctx).Info("fresh session: memory scope holds a deleted session's transcript; minting under the next name instead",
+			"occupied", ch.Namespace+"/"+name, "turns", len(turns),
+			"channel", channelRefForLog(ch), "channelKey", key)
+	}
+	return "", fmt.Errorf("every one of %d candidate names for %s key %q holds a deleted session's transcript",
+		maxSessionNameGenerations, channelRefForLog(ch), key)
+}
+
 // makeSessionName produces a deterministic-ish name based on the channel
-// and key. Truncated + suffixed with a hash so k8s names stay valid.
+// and key. Truncated + suffixed with a hash so k8s names stay valid. A fresh
+// mint goes through freshSessionName, which starts here.
 func makeSessionName(ch *spiceboxv1alpha1.Channel, key string) string {
 	h := sha256.Sum256([]byte(ch.Name + "/" + key))
 	suffix := hex.EncodeToString(h[:])[:8]
@@ -2731,6 +2820,24 @@ func makeSessionName(ch *spiceboxv1alpha1.Channel, key string) string {
 		base = base[:40]
 	}
 	return base + "-" + suffix
+}
+
+// sessionNameGeneration names the g-th session minted for one (channel, key):
+// base itself (makeSessionName's answer) for the first, base-g<g> after it. A
+// counter rather than a hash so the sequence is the same on every replica and
+// readable in `kubectl get agentsessions`.
+//
+// The limit that binds is 63, not 253: a session's workspace Jobs are named
+// "ws-apply-<session>" (agentsession rbac.go), and a Job name must fit a 63-byte
+// label value. base is at most 49 bytes (40 of channel name, "-", 8 hex), and
+// maxSessionNameGenerations keeps the suffix to at most "-g512", 5 bytes — so
+// the longest name is 54 and its Job name exactly 63. A larger bound, or a
+// longer suffix, must shorten base to match.
+func sessionNameGeneration(base string, g int) string {
+	if g <= 1 {
+		return base
+	}
+	return base + "-g" + strconv.Itoa(g)
 }
 
 // renderMention returns the channel kind's clickable mention syntax for

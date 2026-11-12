@@ -57,6 +57,26 @@ func lastToolResultName(req llm.Request) string {
 	return ""
 }
 
+// requestMentions reports whether s appears anywhere in the request's messages:
+// a text block, a tool call's input, or a tool result, in any message. It backs
+// expect.requestNotContains, whose claim is that a value never reached the
+// model's context at all, by whatever door.
+func requestMentions(req llm.Request, s string) bool {
+	for _, m := range req.Messages {
+		for _, c := range m.Content {
+			switch {
+			case strings.Contains(c.Text, s):
+				return true
+			case c.ToolUse != nil && strings.Contains(string(c.ToolUse.Input), s):
+				return true
+			case c.ToolResult != nil && strings.Contains(c.ToolResult.Content, s):
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // lastToolResultBlock returns the most recent tool_result block, or nil when
 // the request carries none.
 func lastToolResultBlock(req llm.Request) *llm.ToolResultBlock {
