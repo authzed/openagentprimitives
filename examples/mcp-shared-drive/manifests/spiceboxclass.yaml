@@ -1,5 +1,8 @@
 # The sandbox the drive's MCP server runs in. It needs no network: the server
 # and bridge are installed in the image and the drive lives on local disk.
+# mode: none is enforced by a NetworkPolicy only for a sidecar in its own pod;
+# this sidecar shares the runner pod's network, so the setting is declared,
+# not enforced.
 #
 # A SidecarToolbox inherits only resources, network mode and pidsLimit from
 # its class. The sidecar brings its own image (sidecartoolbox.yaml's

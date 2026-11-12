@@ -5,14 +5,15 @@ filesystem server serves a company shared drive. A template in the eng folder
 tells whoever fills it in to pull per-person salaries from `/shared/finance`.
 
 - **Before:** a plain agent connects straight to the server. It follows the
-  template, reads `payroll.csv`, and writes everyone's salary into a folder all
-  of eng can read.
+  template, reads `payroll.csv`, and writes each engineer's salary into a
+  folder all of eng can read.
 - **After:** the same model, the same authored system prompt, the same server
-  and the same drive, but OAP runs the agent. OAP checks every tool call
-  against the one file or folder it touches, as the person asking, before the
-  call reaches the server. Alice's payroll read is refused outright. Bob, who
-  owns one finance file, approves it for her in Slack. Bob reads payroll
-  directly because finance owns it.
+  and the same drive contents, but OAP runs the agent. OAP checks every tool
+  call against the one file or folder it touches, as the person asking, before
+  the call reaches the server. Alice's agent is refused at the finance folder,
+  and nobody can approve payroll for her. Bob, who owns one finance file,
+  approves it for her in Slack. Bob reads payroll directly because finance
+  owns it.
 
 ## What this shows, and what it does not
 
@@ -42,8 +43,9 @@ Do not say:
 - **That the data stays private after Bob approves.** The approval lets
   Alice's agent read one file (see Limitations for how long). The draft Alice
   saves is hers to share, like any document she writes.
-- **That Bob's approval covers one session.** It covers one file, for Alice,
-  in any of her sessions until it expires or is withdrawn.
+- **That Bob's approval covers one session.** It covers one file, for Alice
+  and anyone she admits to that thread, in any of their sessions, until it
+  expires or is withdrawn.
 
 ## Layout
 
@@ -52,7 +54,7 @@ oap.yaml                         package manifest (image build + Slack channel)
 manifests/
   agentclass.yaml                the AgentClass (model, authz, slots, budget)
   sidecartoolbox.yaml            the MCP server as a sidecar, with per-call checks
-  spiceboxclass.yaml             sandbox limits for the sidecar (no network)
+  spiceboxclass.yaml             sandbox limits for the sidecar
   system-prompt.yaml             the authored system prompt, shared by both halves
 cluster/
   permission-model.zed.yaml      the permission model, with assertions (zed validate)
@@ -71,6 +73,8 @@ before/
 - [kind](https://kind.sigs.k8s.io/) (tested with v0.31.0), `kubectl`, Go and
   [mage](https://magefile.org/) to build `oap` from this repo.
 - Python 3.10 or newer for the "before" agent (tested with 3.14).
+- [`zed`](https://github.com/authzed/zed), to check SpiceDB during the reset,
+  and Node.js with `npx`, for the optional Inspector cold open.
 - An Anthropic API key, and a free [ngrok](https://ngrok.com/) account token
   (OAP's local install exposes its web endpoint through ngrok; Slack itself
   uses Socket Mode and needs no tunnel).
@@ -111,7 +115,7 @@ docker run -d --name sdfs --read-only --tmpfs /tmp:rw,mode=1777 --user 10001 \
 Run the agent:
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
+python3 -m venv /tmp/mcp-shared-drive-venv && . /tmp/mcp-shared-drive-venv/bin/activate
 pip install -r examples/mcp-shared-drive/before/requirements.txt
 set -a && . examples/mcp-shared-drive/.env && set +a
 python examples/mcp-shared-drive/before/agent.py \
@@ -187,11 +191,18 @@ kubectl get agentclass,sidecartoolbox -n default   # both VALID True, toolbox RE
 
 ### Run the scenes
 
-Invite the bot to a channel both Alice and Bob are in (`/invite
-@shared-drive-agent-bot`). **Start every scene with a new top-level message in
-that channel**, mentioning the bot. Each thread is its own session. Avoid DMs
-for the demo: a Slack DM is one long-lived session, so a second DM continues
-the first conversation (see Limitations).
+Create two channels and invite the bot to each (`/invite
+@shared-drive-agent-bot`):
+
+- **`#q3-budget`**, with Alice and Bob, for Scenes 1 and 2.
+- **A private channel with only Bob and the bot**, for Scene 3 and the
+  revocation scene. Bob's answers there include payroll rows, and anything
+  the agent posts in a thread is visible to everyone in that channel.
+
+**Start every scene with a new top-level message**, mentioning the bot. Each
+thread is its own session. Avoid DMs for the demo: a Slack DM is one
+long-lived session, so a second DM continues the first conversation (see
+Limitations).
 
 To check a scene on its tool results rather than the agent's wording, find the
 session and read its log:
@@ -246,7 +257,8 @@ Now read /shared/finance/payroll.csv too.
 
 Refused outright, with no card to Bob: approving one file opens nothing else.
 
-**Scene 3, the right person reads directly.** As Bob, in a new thread:
+**Scene 3, the right person reads directly.** As Bob, in a new thread in his
+private channel (not `#q3-budget`, where Alice would see the answer):
 
 ```
 @shared-drive-agent-bot What are the total salaries in /shared/finance/payroll.csv?
@@ -280,8 +292,9 @@ copy of `cluster/spicedb-bootstrap.yaml`:
 
 Apply the copy with the same `sed … | kubectl apply` command. Re-applying the
 bootstrap deletes relationships that are no longer listed. As Bob, ask for the
-payroll totals **in a new thread**: the read is refused outright, with no
-restart or redeploy. Re-apply the original file to put him back.
+payroll totals **in a new thread** in his private channel: the read is refused
+outright, with no restart or redeploy. Re-apply the original file to put him
+back.
 
 Ask in a new thread, not the thread from Scene 3. Revocation stops the next
 tool call; it does not take back what the agent already read. In the old
@@ -290,11 +303,18 @@ answer from them without calling the tool.
 
 ## Reset
 
+Remove the "before" container, delete this agent's sessions (other agents'
+sessions in the namespace are left alone), and re-apply the seed in case a
+revocation run left Bob out of finance:
+
 ```bash
 docker rm -f sdfs
-for s in $(kubectl get agentsessions -n default -o name | cut -d/ -f2); do
+for s in $(kubectl get agentsessions -n default \
+    -o jsonpath='{range .items[?(@.spec.class=="shared-drive-agent")]}{.metadata.name}{"\n"}{end}'); do
   ./bin/oap session delete "$s" -n default
 done
+sed -e "s/{{ALICE_EMAIL}}/$ALICE_EMAIL/g" -e "s/{{BOB_EMAIL}}/$BOB_EMAIL/g" \
+  examples/mcp-shared-drive/cluster/spicedb-bootstrap.yaml | kubectl apply -n default -f -
 ```
 
 Deleting a session also deletes the approvals granted to it. To confirm none
@@ -302,9 +322,11 @@ are left:
 
 ```bash
 kubectl port-forward -n agentprimitives-system svc/spicebox-spicedb 50051:50051 &
+PF=$!
 zed relationship read file slot_grant_read --endpoint localhost:50051 --insecure \
   --token "$(kubectl get secret spicebox-spicedb-token -n agentprimitives-system \
     -o jsonpath='{.data.preshared_key}' | base64 -d)"
+kill $PF
 ```
 
 No output means no grants. Then start the scenes again in new threads.
@@ -314,16 +336,21 @@ No output means no grants. Then start the scenes again in new threads.
 - **What Bob's approval covers.** It lets Alice's agent read that one file,
   and nothing else in finance. The grant is written to the session Bob
   approved, but the read check asks whether the person asking can use that
-  session, and Alice can. So Alice can read the file from any of her sessions
-  until the grant expires (24 hours), the approved session is deleted, or the
-  grant is withdrawn with `oap session revoke-slot`. Bob is not asked again in
-  that time.
+  session: Alice, and anyone she admits to that thread. They can read the file
+  from any of their sessions until the grant expires (24 hours), the approved
+  session is deleted, or the grant is withdrawn with `oap session revoke-slot`.
+  Bob is not asked again in that time.
 - **The approval card does not name who is asking.** It shows the session's
   name, not Alice's. A fix that adds a "Requested by" row is in progress.
 - **DMs reuse one session.** A Slack DM maps to one session, so a new DM
   message continues the earlier conversation. If you delete a DM session, the
   next DM gets a session with the same name; in testing, that session resumed
   the deleted conversation and dropped the new message. Use channel threads.
+- **Each session has its own copy of the drive.** The server runs as a
+  sidecar in each session's pod, with the drive on that pod's `/tmp`. A draft
+  written in one session is not visible to another, and it is gone when the
+  session is deleted. A SidecarToolbox's state lives and dies with the
+  session.
 - **The agent cannot read back its own new draft.** Reads are checked against
   the files seeded in SpiceDB, and a new draft is not one of them. It can list
   the drafts folder.
@@ -334,6 +361,12 @@ No output means no grants. Then start the scenes again in new threads.
   constraints in a different CEL environment from the one the runner uses, so
   it rejects `args.path` constraints. Paths are checked as the exact IDs they
   name instead: a path with `..`, `//` or a trailing slash names an ID nothing
-  is related to, and is refused.
+  is related to, and is refused. This holds because the seed lists only
+  canonical paths, the drive has no symlinks, and no allowlisted tool can
+  move, rename or link a file. Write tools check the parent folder, so for a
+  write the server itself refuses a target like `/shared/eng/drafts/.`.
+- **The sidecar's network is not isolated.** `spiceboxclass.yaml` declares
+  `network: none`, but OAP enforces that with a NetworkPolicy only for a
+  sidecar in its own pod. This one shares the runner pod's network.
 - **`spicebox-graphiti` crash-loops** without an OpenAI key. It backs OAP's
   optional knowledge-graph memory, which this demo does not use.

@@ -24,8 +24,12 @@ spec:
       subject: currentRequester
       mode: enforcing
     slots:
-      # A file owner's approval grants the session read access to that one
-      # file. multi: a session may be granted several files without a pin.
+      # A file owner's approval writes a read grant for that one file to the
+      # approved session. The check runs as the person asking and passes for
+      # anyone who can use that session (its starter and anyone admitted to
+      # the thread), from any of their sessions, until the grant expires
+      # (24h) or the session is deleted. multi: a session may be granted
+      # several files without a pin.
       - resourceType: file
         description: "A file on the shared drive"
         permission: read

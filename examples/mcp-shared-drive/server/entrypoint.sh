@@ -9,6 +9,11 @@
 # request reaches the bridge before the client has opened its event stream it
 # is dropped, and tool calls hang for 60 seconds. Stateless mode never forwards
 # the client's Roots capability, so the server never asks.
+#
+# The bridge's info log goes to stdout and copies every message verbatim,
+# file contents included; that would put payroll rows in the container log,
+# outside the permission checks this demo is about. stdout is discarded. Its
+# errors and the server's own stderr go to stderr, which is kept.
 set -eu
 
 if [ ! -d /tmp/shared ]; then
@@ -20,4 +25,4 @@ exec supergateway \
   --outputTransport streamableHttp \
   --port "${MCP_PORT:-8000}" \
   --streamableHttpPath /mcp \
-  --healthEndpoint /healthz
+  --healthEndpoint /healthz >/dev/null

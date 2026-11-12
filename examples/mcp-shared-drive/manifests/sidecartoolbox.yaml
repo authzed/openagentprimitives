@@ -14,7 +14,11 @@
 # There are no path constraints: a path is checked as the exact ID it names.
 # Only the folders and files seeded in cluster/spicedb-bootstrap.yaml have
 # relationships, so a path with "..", "//", a trailing slash or no leading
-# /shared names an ID nothing is related to, and the check refuses it.
+# /shared names an ID nothing is related to, and the check refuses it. Writes
+# check the parent folder, so for a target like /shared/eng/drafts/. it is the
+# server that refuses. This relies on the seed holding only canonical paths,
+# the drive having no symlinks, and no allowlisted tool moving, renaming or
+# linking files.
 apiVersion: agentprimitives.authzed.com/v1alpha1
 kind: SidecarToolbox
 metadata:
