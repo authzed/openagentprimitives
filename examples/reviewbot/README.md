@@ -407,6 +407,13 @@ included — at the next reconcile.
    outcome is `could_not_finish`, the reason is always posted to the Slack
    thread as well — the thread, not the check run, is where it is visible.
 
+A check run can be re-answered without a new push: reply in the thread where
+that pull request's reviews are delivered and ask for a re-review. That thread
+belongs to the session the webhook opened, so the re-review runs with the
+trigger-status tools and its conclusion replaces the one on the head commit. A
+review asked for anywhere else (a fresh thread, a direct message) is a separate
+session with no check-run access, and is delivered to its thread only.
+
 ## Deferred / known limitations
 
 - **The `oap-toolchain-claude` image is unbuilt and its `sizeBytes` is
