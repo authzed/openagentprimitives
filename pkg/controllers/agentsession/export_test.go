@@ -5,6 +5,7 @@ package agentsession
 
 import (
 	"context"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -61,6 +62,16 @@ func (r *Reconciler) MarkBootFailedForTest(ctx context.Context, sess *spiceboxv1
 func SidecarPodFailureForTest(pod *corev1.Pod) *spiceboxv1alpha1.SidecarPodFailure {
 	return sidecarPodFailure(pod)
 }
+
+// SidecarPodReadyDeadlineFailureForTest exposes the unexported not-Ready
+// deadline classifier, and the deadline it measures against, to
+// agentsession_test. Test-only.
+func SidecarPodReadyDeadlineFailureForTest(pod *corev1.Pod, now time.Time) *spiceboxv1alpha1.SidecarPodFailure {
+	return sidecarPodReadyDeadlineFailure(pod, now)
+}
+
+// SidecarReadyDeadlineForTest is sidecarReadyDeadline. Test-only.
+const SidecarReadyDeadlineForTest = sidecarReadyDeadline
 
 // EnsureDetectorPodForTest exposes the unexported ensureDetectorPod so
 // agentsession_test can assert the write ORDER (deny-all-egress policy before
