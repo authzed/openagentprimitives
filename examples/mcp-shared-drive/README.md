@@ -245,11 +245,16 @@ contained a salary.
 Use just /shared/finance/eng-budget-q3.csv for the numbers.
 ```
 
-Bob gets an approval card addressed only to him, with the agent's reason, the
-action ("Read the complete text contents of the file at
-/shared/finance/eng-budget-q3.csv"), the tool, the permission and the session.
-He clicks **Approve**. The read's tool result contains `Platform team`, and
-the agent writes a new draft from the budget lines. Then, in the same thread:
+Bob gets an approval card in the thread that only he can see (Slack marks it
+"Only visible to you"; if Bob were not in the channel, it would come as a DM).
+It shows the agent's reason, what it wants to do, the tool and the session.
+The wording of the reason and the action is the agent's own and changes from
+run to run, for example "Read the complete contents of file
+/shared/finance/eng-budget-q3.csv". Everyone in the thread, Alice included,
+also sees a public note that the agent wants to read that file and is waiting
+on Bob. He clicks **Approve**, and both messages change to "Approved by" Bob.
+The read's tool result contains `Platform team`, and the agent writes a new
+draft from the budget lines. Then, in the same thread:
 
 ```
 Now read /shared/finance/payroll.csv too.
