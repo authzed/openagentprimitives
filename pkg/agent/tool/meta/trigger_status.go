@@ -119,7 +119,9 @@ func (t *claimTriggerStatusTool) Description() string {
 		"marks it in progress so whoever is watching can see the work has begun. Takes no arguments: " +
 		"which event, and where its status lives, come from the event itself. " +
 		"If the result says `already_concluded`, this exact state of the work was answered before — a " +
-		"repeat delivery — so there is nothing to redo; say nothing further and end the round."
+		"repeat delivery — so there is nothing to redo; say nothing further and end the round. The one " +
+		"exception is a person in this session explicitly asking for the work to be redone: then redo it " +
+		"and conclude again, and the new conclusion replaces the one already recorded."
 }
 
 // InputSchema is deliberately empty. Every identifier this call needs came in
