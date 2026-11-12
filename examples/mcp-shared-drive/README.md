@@ -323,6 +323,7 @@ are left:
 ```bash
 kubectl port-forward -n agentprimitives-system svc/spicebox-spicedb 50051:50051 &
 PF=$!
+sleep 3
 zed relationship read file slot_grant_read --endpoint localhost:50051 --insecure \
   --token "$(kubectl get secret spicebox-spicedb-token -n agentprimitives-system \
     -o jsonpath='{.data.preshared_key}' | base64 -d)"
