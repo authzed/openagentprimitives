@@ -7629,7 +7629,8 @@ spec:
                         reason:
                           description: |-
                             Reason is the kubelet's terminal container Waiting reason, e.g.
-                            "CrashLoopBackOff" or "ImagePullBackOff".
+                            "CrashLoopBackOff" or "ImagePullBackOff", or "NotReadyDeadlineExceeded"
+                            for a pod that stayed not-Ready past the operator's deadline without one.
                           type: string
                       required:
                       - reason

@@ -2702,10 +2702,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 						"session", sess.Namespace+"/"+sess.Name,
 						"sidecar", rt.Ref, "pod", rt.SidecarPodName)
 				} else if podIP == "" {
-					// Pod created but not Ready yet. A terminally failed pod was
-					// recorded above and will not become Ready, so only a pod that
-					// is still starting is waited on: requeue and reflect the PodIP
-					// on a later pass. Not a boot failure.
+					// Pod created but not Ready yet. A failed pod — terminally
+					// wedged, or not-Ready past sidecarReadyDeadline — was recorded
+					// above and is not waited on, so only a pod that is still
+					// starting holds here: requeue and reflect the PodIP on a later
+					// pass. Not a boot failure.
 					if podState.Failure == nil {
 						sidecarPodNotReady = true
 						log.FromContext(ctx).Info("sidecar pod not Ready yet; awaiting PodIP",
@@ -2813,8 +2814,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// (handled below) would never be consumed, and because a pending wake also
 	// suppresses the idle sweep, the session would never sleep or archive
 	// either. FALL THROUGH, so the wake is consumed and the runner is (re)created;
-	// just re-check the pod at a relaxed cadence.
-	if sidecarTerminalFailure && (sidecarRequeue == 0 || sidecarTerminalRequeue < sidecarRequeue) {
+	// just re-check the pod at a relaxed cadence. The shorter AwaitingSecret
+	// interval set above wins when both apply.
+	if sidecarTerminalFailure && sidecarRequeue == 0 {
 		sidecarRequeue = sidecarTerminalRequeue
 	}
 	// A satisfied separate-pod sidecar whose pod is still starting, or whose
@@ -3304,8 +3306,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	sess.Status.ObservedGeneration = sess.Generation
 	// RequeueAfter is nonzero only while a secret-gated sidecar awaits its secret,
 	// so the sidecar pod is created as soon as the runner produces it, or while a
-	// sidecar sits terminally failed. The runner is already Running by now, so
-	// this blocks nothing.
+	// sidecar sits terminally failed. Neither holds the runner — the sidecar step
+	// does not return early for them — so this only schedules the next look.
 	return ctrl.Result{RequeueAfter: sidecarRequeue}, r.applyStatus(ctx, &sess)
 }
 

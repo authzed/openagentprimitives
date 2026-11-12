@@ -1397,77 +1397,68 @@ func run(cfg *config) error {
 		// Resolve the probe URL for this sidecar entry.
 		probeURL, ready := sidecarProbeURL(rt, os.Getenv)
 
-		if !ready {
-			if rt.AwaitingSecret {
-				// Secret not yet produced; sidecar pod doesn't exist yet. Skip
-				// silently — this is the normal AwaitingSecret steady state, not
-				// a boot failure.
-				slog.Info("sidecar toolbox awaiting secret; skipping this pass",
-					"sidecar", rt.Name)
-				continue
-			}
-			if rt.RunMode == "separate-pod" && rt.PodFailure != nil {
-				// The operator recorded this sidecar's pod as terminally failed
-				// (a crash loop, an unpullable image). It will not become Ready,
-				// so polling for its IP would only end in failing the whole
-				// session. Boot without it: the tool refresher reports the
-				// failure to the agent and user at the top of the first turn, and
-				// picks the sidecar up if its pod ever recovers.
-				slog.Info("separate-pod sidecar terminally failed; booting without it",
-					"sidecar", rt.Name, "reason", rt.PodFailure.Reason)
-				continue
-			}
-			if rt.RunMode == "separate-pod" {
-				// Pod exists (AwaitingSecret==false) but IP not yet reflected in
-				// status. Poll the AgentSession until it appears.
-				slog.Info("separate-pod sidecar IP not yet reflected; polling",
-					"sidecar", rt.Name, "timeout", sidecarPodIPTimeout)
-				deadline := time.Now().Add(sidecarPodIPTimeout)
-				for time.Now().Before(deadline) {
-					select {
-					case <-rootCtx.Done():
-						return rootCtx.Err()
-					case <-time.After(sidecarPodIPPollInterval):
-					}
-					var refreshed spiceboxv1alpha1.AgentSession
-					if rerr := c.Get(rootCtx, sessKey, &refreshed); rerr != nil {
-						return fmt.Errorf("poll AgentSession for sidecar %q IP: %w", rt.Name, rerr)
-					}
-					for _, rrt := range refreshed.Status.ResolvedSidecarToolboxes {
-						if rrt.Name == rt.Name {
-							rt = rrt
-							break
-						}
-					}
-					probeURL, ready = sidecarProbeURL(rt, os.Getenv)
-					if ready || rt.PodFailure != nil {
+		// sidecarBootDecision owns the per-sidecar branch; it is re-evaluated on
+		// each refreshed snapshot while polling.
+		action := sidecarBootDecision(rt, ready)
+		if action == sidecarBootPoll {
+			// Pod exists (AwaitingSecret==false) but IP not yet reflected in
+			// status. Poll the AgentSession until it appears, or until the
+			// operator records the pod as terminally failed.
+			slog.Info("separate-pod sidecar IP not yet reflected; polling",
+				"sidecar", rt.Name, "timeout", sidecarPodIPTimeout)
+			deadline := time.Now().Add(sidecarPodIPTimeout)
+			for action == sidecarBootPoll && time.Now().Before(deadline) {
+				select {
+				case <-rootCtx.Done():
+					return rootCtx.Err()
+				case <-time.After(sidecarPodIPPollInterval):
+				}
+				var refreshed spiceboxv1alpha1.AgentSession
+				if rerr := c.Get(rootCtx, sessKey, &refreshed); rerr != nil {
+					return fmt.Errorf("poll AgentSession for sidecar %q IP: %w", rt.Name, rerr)
+				}
+				for _, rrt := range refreshed.Status.ResolvedSidecarToolboxes {
+					if rrt.Name == rt.Name {
+						rt = rrt
 						break
 					}
 				}
-				if !ready && rt.PodFailure != nil {
-					// Recorded as terminally failed while we waited: same as the
-					// skip above — boot without it and let the refresher report it.
-					slog.Info("separate-pod sidecar terminally failed while awaiting its IP; booting without it",
-						"sidecar", rt.Name, "reason", rt.PodFailure.Reason)
-					continue
-				}
-				if !ready {
-					// Sidecar pod created (not AwaitingSecret) but never became
-					// Ready within the timeout — treat as boot failure.
-					if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed,
-						fmt.Sprintf("separate-pod sidecar %q: SidecarPodIP not reflected after %s", rt.Name, sidecarPodIPTimeout)); werr != nil {
-						return werr
-					}
-					return nil
-				}
-			} else {
-				// In-pod sidecar: MCP_PORT_* env missing — always a boot error.
+				probeURL, ready = sidecarProbeURL(rt, os.Getenv)
+				action = sidecarBootDecision(rt, ready)
+			}
+			if action == sidecarBootPoll {
+				// Sidecar pod created (not AwaitingSecret) but never became
+				// Ready within the timeout — treat as boot failure.
 				if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed,
-					fmt.Sprintf("runner: missing MCP_PORT env for in-pod sidecar %q", rt.Name)); werr != nil {
+					fmt.Sprintf("separate-pod sidecar %q: SidecarPodIP not reflected after %s", rt.Name, sidecarPodIPTimeout)); werr != nil {
 					return werr
 				}
 				return nil
 			}
+		}
+		switch action {
+		case sidecarBootSkip:
+			if rt.AwaitingSecret {
+				// Secret not yet produced; sidecar pod doesn't exist yet. This is
+				// the normal AwaitingSecret steady state, not a boot failure.
+				slog.Info("sidecar toolbox awaiting secret; skipping this pass",
+					"sidecar", rt.Name)
+			} else {
+				// The operator recorded this sidecar's pod as terminally failed.
+				// Boot without it: the tool refresher tells the agent at the top
+				// of the first turn (and the user, once per failure), and picks
+				// the sidecar up if its pod ever recovers.
+				slog.Info("separate-pod sidecar terminally failed; booting without it",
+					"sidecar", rt.Name, "reason", rt.PodFailure.Reason)
+			}
+			continue
+		case sidecarBootFail:
+			// In-pod sidecar: MCP_PORT_* env missing — always a boot error.
+			if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed,
+				fmt.Sprintf("runner: missing MCP_PORT env for in-pod sidecar %q", rt.Name)); werr != nil {
+				return werr
+			}
+			return nil
 		}
 
 		// Probe + synthesize this sidecar's tools via the single shared core
