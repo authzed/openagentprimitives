@@ -23,7 +23,8 @@
 //     starter).
 //   - KindInteractionApplied for any other category (a decision-kind category's
 //     outcome — approved/denied/expired): edits the clicker's own ephemeral/DM
-//     in place via the response_url that round-tripped from the decision
+//     in place — or removes it, when a public note in the same thread took the
+//     resolved card — via the response_url that round-tripped from the decision
 //     (listener.go's handleInteractionDecisionClick sets
 //     InteractionDecisionPayload.ResponseRef = the click's cb.ResponseURL; the
 //     decision pipe copies it verbatim onto Applied.ResponseRef — see
@@ -487,22 +488,25 @@ func (s *interactionSender) sendApplied(ctx context.Context, sess channelkinds.S
 // (identity_choice, permission_request today; any future ActionKindDecision
 // category generically, since the request-side rendering already treats
 // decision actions category-agnostically — see buildInteractionRequestBlocks).
-// It edits BOTH surfaces a request may have produced — the clicker's own
+// It settles BOTH surfaces a request may have produced — the clicker's own
 // prompt and any public note posted alongside it — then drops the delivery
 // record, since the interaction is resolved and nothing will edit it again.
 // That record/drop pairing is what keeps the in-process store bounded.
 //
-//  1. Edit the prompt: prefer the clicker's response_url when the decision
-//     carried one (replace_original:true edits exactly what they saw) —
-//     best-effort, since an expired/5xx response_url is logged, not fatal, and
-//     falls through to the recorded prompt ref rather than aborting the
-//     resolution bookkeeping below; else fall back to the recorded prompt ref
-//     via UpdateMessageContext, which covers a decision resolved without a
-//     click (a timeout) that still has a known prompt location.
-//  2. Edit the recorded public note (best-effort): strips its buttons down
-//     to the outcome line. A miss (nothing recorded, e.g. no public note was
-//     posted) is a silent no-op; a failed edit is logged, not fatal — the
-//     interaction is already resolved regardless of whether the note updates.
+//  1. Edit the recorded public note (best-effort) into the resolved card. A
+//     miss (nothing recorded, e.g. no public note was posted) is a silent
+//     no-op; a failed edit is logged, not fatal — the interaction is already
+//     resolved regardless of whether the note updates.
+//  2. Settle the prompt: prefer the clicker's response_url when the decision
+//     carried one. When the public note took the resolved card, the prompt is
+//     DELETED (delete_original:true) so the clicker does not read the same
+//     card twice in one thread; otherwise it is edited in place
+//     (replace_original:true). Best-effort either way, since an expired/5xx
+//     response_url is logged, not fatal, and falls through to the recorded
+//     prompt ref rather than aborting the resolution bookkeeping below; else
+//     fall back to the recorded prompt ref via UpdateMessageContext, which
+//     covers a decision resolved without a click (a timeout) that still has
+//     a known prompt location.
 //  3. Drop the delivery record unconditionally (no-op-safe on a missing
 //     entry) — the interaction is resolved either way.
 //  4. If neither surface was edited (no response_url, no recorded prompt —
@@ -529,39 +533,63 @@ func (s *interactionSender) sendDecisionApplied(ctx context.Context, sess channe
 	}
 	appliedBlocks := buildInteractionAppliedBlocks(p, cachedReq)
 
-	// 1. Edit the prompt: prefer the clicker's response_url (edits exactly what
-	//    they saw); else the recorded prompt ref; else fall back to a notice.
+	var promptRef, noteRef deliveryRef
+	var haveRecord bool
+	if s.delivery != nil {
+		promptRef, noteRef, haveRecord = s.delivery.get(p.RequestRef)
+	}
+
+	// 1. Edit the public note (best-effort) into the resolved card. It goes
+	//    first because whether it landed decides what the clicker's own prompt
+	//    becomes below.
+	noteEdited := false
+	if haveRecord && noteRef.TS != "" {
+		if _, _, _, err := s.client.UpdateMessageContext(ctx, noteRef.ChannelID, noteRef.TS,
+			notifyOption(outcomeText),
+			slackapi.MsgOptionBlocks(appliedBlocks...)); err != nil {
+			logger.Info("interaction sender: edit public note failed (best-effort)", "requestRef", p.RequestRef, "err", err.Error())
+		} else {
+			noteEdited = true
+		}
+	}
+
+	// 2. Settle the prompt: prefer the clicker's response_url (acts on exactly
+	//    what they saw); else the recorded prompt ref; else fall back to a notice.
 	// The response_url POST is best-effort, like every other surface edit in
 	// this function: the interaction is already resolved (the pipe published
 	// this Applied), so a cosmetic failure here — an expired/5xx response_url —
 	// must not abort the resolution bookkeeping below (recorded-prompt-ref
-	// edit, public-note edit, delivery-record drop, initiator fallback). On
-	// failure, log and leave editedPrompt false so those steps still run.
+	// edit, delivery-record drop, initiator fallback). On failure, log and
+	// leave editedPrompt false so those steps still run.
 	editedPrompt := false
 	if p.ResponseRef != "" {
-		// blocks, not text alone: a response_url body with no blocks replaces
-		// the clicker's whole card with one line of text, discarding the ask
-		// it was answering. text rides along as the notification preview.
-		// escapeSlackText, not the raw outcomeText: Slack parses a response_url
-		// body's "text" as mrkdwn exactly like MsgOptionText's field, and this
-		// string is the runner's on the queued_messages path (see
-		// interactionOutcomeText). The two chat.update sinks below reach the
-		// same door through notifyOption; this one has no MsgOption to carry
-		// it, so it escapes here.
-		if err := postToResponseURL(ctx, s.httpCli(), p.ResponseRef, map[string]any{
-			"replace_original": true, "text": escapeSlackText(outcomeText), "blocks": appliedBlocks,
-		}); err != nil {
+		// The public note now carries the resolved card, and it sits in the
+		// same thread as the clicker's prompt. Rewriting the prompt into that
+		// card too shows the clicker the identical card twice, one above the
+		// other, so the prompt is removed instead and the note stands as the
+		// one record everybody — the clicker included — reads.
+		body := map[string]any{"delete_original": true}
+		if !noteEdited {
+			// blocks, not text alone: a response_url body with no blocks replaces
+			// the clicker's whole card with one line of text, discarding the ask
+			// it was answering. text rides along as the notification preview.
+			// escapeSlackText, not the raw outcomeText: Slack parses a response_url
+			// body's "text" as mrkdwn exactly like MsgOptionText's field, and this
+			// string is the runner's on the queued_messages path (see
+			// interactionOutcomeText). The chat.update sinks reach the same door
+			// through notifyOption; this one has no MsgOption to carry it, so it
+			// escapes here.
+			body = map[string]any{
+				"replace_original": true, "text": escapeSlackText(outcomeText), "blocks": appliedBlocks,
+			}
+		}
+		if err := postToResponseURL(ctx, s.httpCli(), p.ResponseRef, body); err != nil {
 			logger.Info("interaction sender: post response_url failed (best-effort)", "requestRef", p.RequestRef, "err", err.Error())
 		} else {
 			editedPrompt = true
 		}
 	}
 
-	var promptRef, noteRef deliveryRef
-	var haveRecord bool
-	if s.delivery != nil {
-		promptRef, noteRef, haveRecord = s.delivery.get(p.RequestRef)
-	}
 	if !editedPrompt && haveRecord && promptRef.TS != "" {
 		if _, _, _, err := s.client.UpdateMessageContext(ctx, promptRef.ChannelID, promptRef.TS,
 			notifyOption(outcomeText),
@@ -569,15 +597,6 @@ func (s *interactionSender) sendDecisionApplied(ctx context.Context, sess channe
 			logger.Info("interaction sender: edit prompt failed (best-effort)", "requestRef", p.RequestRef, "err", err.Error())
 		} else {
 			editedPrompt = true
-		}
-	}
-
-	// 2. Edit the public note (best-effort): strip buttons → outcome line.
-	if haveRecord && noteRef.TS != "" {
-		if _, _, _, err := s.client.UpdateMessageContext(ctx, noteRef.ChannelID, noteRef.TS,
-			notifyOption(outcomeText),
-			slackapi.MsgOptionBlocks(appliedBlocks...)); err != nil {
-			logger.Info("interaction sender: edit public note failed (best-effort)", "requestRef", p.RequestRef, "err", err.Error())
 		}
 	}
 
