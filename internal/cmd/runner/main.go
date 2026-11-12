@@ -255,14 +255,7 @@ func main() {
 	deplogs.Silence()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
-	// Route controller-runtime's logger through the same handler. Without it,
-	// every log.FromContext call in runner-side code (respond_to_user's
-	// fallback-notice failures, the dispatch loop, authz slot promotion) is
-	// discarded. SetLogger is first-write-wins and a transitive init() can
-	// claim it first (see internal/cmd/channelsd), so run() also carries the
-	// logger on rootCtx, which log.FromContext prefers.
-	ctrl.SetLogger(logr.FromSlogHandler(logger.Handler()))
+	installLogging(logger.Handler())
 
 	// run() owns its own context + manual SIGTERM/SIGINT handling (see below),
 	// so the root command uses Execute() rather than ExecuteContext() — the
@@ -334,12 +327,24 @@ func newCommand() *cobra.Command {
 	return cmd
 }
 
-// loggingContext returns a background context carrying a logr view of the
-// default slog handler, so log.FromContext in runner-side code writes to the
-// runner's stderr even when controller-runtime's global logger was claimed by a
-// dependency before main ran.
-func loggingContext() context.Context {
-	return logf.IntoContext(context.Background(), logr.FromSlogHandler(slog.Default().Handler()))
+// installLogging makes h the destination for both slog's default logger and
+// controller-runtime's global logger. Without the second half, every
+// log.FromContext call in runner-side code (respond_to_user's fallback-notice
+// failures, the dispatch loop, authz slot promotion) on a context that carries
+// no logger of its own is discarded.
+func installLogging(h slog.Handler) {
+	slog.SetDefault(slog.New(h))
+	ctrl.SetLogger(logr.FromSlogHandler(h))
+}
+
+// newRootContext returns run()'s cancellable root context, carrying a logr view
+// of h. log.FromContext prefers a context's own logger over the global one
+// installLogging sets, so this is defence in depth: nothing in this binary is
+// known to claim controller-runtime's first-write-wins global ahead of main,
+// but the lines routed here are error reports, and a context-carried logger
+// keeps them reaching stderr even if a dependency someday does.
+func newRootContext(h slog.Handler) (context.Context, context.CancelFunc) {
+	return context.WithCancel(logf.IntoContext(context.Background(), logr.FromSlogHandler(h)))
 }
 
 func run(cfg *config) error {
@@ -399,7 +404,7 @@ func run(cfg *config) error {
 	// SIGTERM handling. The signal-consuming goroutine is started below, once
 	// the signing memory + session scope exist, so it can record an explicit
 	// Stopped lifecycle transition before cancelling the loop.
-	rootCtx, cancel := context.WithCancel(loggingContext())
+	rootCtx, cancel := newRootContext(slog.Default().Handler())
 	defer cancel()
 
 	// loopRef is stored once the runner Loop is fully constructed (below). The
