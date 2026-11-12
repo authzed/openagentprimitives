@@ -10,6 +10,11 @@
 # take several paths or walk a whole tree (read_multiple_files, move_file,
 # copy_file, directory_tree, search_files, ...) are left off the allowlist:
 # they cannot be checked one resource at a time.
+#
+# There are no path constraints: a path is checked as the exact ID it names.
+# Only the folders and files seeded in cluster/spicedb-bootstrap.yaml have
+# relationships, so a path with "..", "//", a trailing slash or no leading
+# /shared names an ID nothing is related to, and the check refuses it.
 apiVersion: agentprimitives.authzed.com/v1alpha1
 kind: SidecarToolbox
 metadata:
@@ -43,9 +48,6 @@ spec:
       intent: "List one folder."
       args:
         allowedFields: [path]
-        constraints:
-          - cel: 'args.path.matches("^/shared(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$") && !args.path.contains("..")'
-            message: 'Paths must be absolute under /shared, with no "..", empty, trailing or dot-prefixed segments.'
       permission:
         stateImpact: readonly
         check:
@@ -59,9 +61,6 @@ spec:
       intent: "Read one file."
       args:
         allowedFields: [path, head, tail]
-        constraints:
-          - cel: 'args.path.matches("^/shared(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$") && !args.path.contains("..")'
-            message: 'Paths must be absolute under /shared, with no "..", empty, trailing or dot-prefixed segments.'
       permission:
         stateImpact: readonly
         check:
@@ -75,9 +74,6 @@ spec:
       intent: "Show one file's size and dates."
       args:
         allowedFields: [path]
-        constraints:
-          - cel: 'args.path.matches("^/shared(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$") && !args.path.contains("..")'
-            message: 'Paths must be absolute under /shared, with no "..", empty, trailing or dot-prefixed segments.'
       permission:
         stateImpact: readonly
         check:
@@ -91,11 +87,6 @@ spec:
       intent: "Create or overwrite a file in a folder."
       args:
         allowedFields: [path, content]
-        constraints:
-          - cel: 'args.path.matches("^/shared(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$") && !args.path.contains("..")'
-            message: 'Paths must be absolute under /shared, with no "..", empty, trailing or dot-prefixed segments.'
-          - cel: 'args.path.matches("^/shared/[^/]+/.+$")'
-            message: "Writes must target a file inside a folder under /shared."
       permission:
         stateImpact: readwrite
         check:
@@ -109,11 +100,6 @@ spec:
       intent: "Create a folder inside a folder."
       args:
         allowedFields: [path]
-        constraints:
-          - cel: 'args.path.matches("^/shared(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$") && !args.path.contains("..")'
-            message: 'Paths must be absolute under /shared, with no "..", empty, trailing or dot-prefixed segments.'
-          - cel: 'args.path.matches("^/shared/[^/]+/.+$")'
-            message: "Writes must target a file inside a folder under /shared."
       permission:
         stateImpact: readwrite
         check:

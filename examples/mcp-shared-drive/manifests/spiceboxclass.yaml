@@ -1,10 +1,19 @@
 # The sandbox the drive's MCP server runs in. It needs no network: the server
 # and bridge are installed in the image and the drive lives on local disk.
+#
+# A SidecarToolbox inherits only resources, network mode and pidsLimit from
+# its class. The sidecar brings its own image (sidecartoolbox.yaml's
+# source.image) and its own tools, so image and tools here are unused; they
+# are set because every SpiceboxClass must have them to be Valid.
 apiVersion: agentprimitives.authzed.com/v1alpha1
 kind: SpiceboxClass
 metadata:
   name: shared-drive-sandbox
 spec:
-  image: ""
+  image: spicebox-sandbox:dev
+  tools:
+    - name: noop
+      command: ["/bin/sh", "-c", "true"]
+      expectedDuration: short
   resources: {cpu: "250m", memory: "512Mi", ephemeralStorage: "64Mi"}
   network: {mode: none}
