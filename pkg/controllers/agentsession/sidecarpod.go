@@ -387,10 +387,29 @@ func (r *Reconciler) reconcileSidecarPod(ctx context.Context, sess *spiceboxv1al
 	if f := sidecarPodFailure(&live); f != nil {
 		return sidecarPodState{Failure: f}, nil
 	}
+	if f := sidecarPodRestartingFailure(&live); f != nil {
+		return sidecarPodState{Failure: f}, nil
+	}
 	// Not Ready and not recognizably terminal — evicted, unschedulable, running
 	// but failing readiness. Waiting is right only for so long: past the
 	// deadline it is reported exactly like a terminal failure.
-	return sidecarPodState{Failure: sidecarPodReadyDeadlineFailure(&live, r.now())}, nil
+	return sidecarPodState{Failure: sidecarPodReadyDeadlineFailure(&live, r.now(), r.sidecarReadyDeadlineFor(sess, &live))}, nil
+}
+
+// sidecarReadyDeadlineFor returns the not-Ready deadline for a sidecar pod: the
+// capacity hold's window when the session is still booting and the pod is
+// Pending on a capacity shortfall, sidecarReadyDeadline otherwise. A burst of
+// sessions whose class carries a separate-pod sidecar would otherwise fail at
+// the sidecar stage after 5m, the one stage the hold did not cover (see
+// capacity_hold.go for why a shortfall is waited out rather than failed).
+//
+// No release-adjusted start is needed here, unlike the bundle hold: once the
+// scheduler places the pod, the kubelet reports a PodReady condition whose
+// LastTransitionTime restarts the clock sidecarPodReadyDeadlineFailure measures.
+func (r *Reconciler) sidecarReadyDeadlineFor(sess *spiceboxv1alpha1.AgentSession, pod *corev1.Pod) time.Duration {
+	reason, stalled := podSchedulingFailureReason(pod)
+	deadline, _ := r.capacityHoldDeadline(sess, schedulingStall{reason: reason}, stalled, sidecarReadyDeadline)
+	return deadline
 }
 
 // sidecarReadyDeadline bounds how long a separate-pod sidecar may sit not-Ready
@@ -401,15 +420,22 @@ func (r *Reconciler) reconcileSidecarPod(ctx context.Context, sess *spiceboxv1al
 // not-ready cadence forever with nothing said to anyone.
 //
 // Matches detectorReadyDeadline: a cold node may need a scale-up plus an image
-// pull before the pod even starts.
+// pull before the pod even starts. A booting session's pod that is Pending on a
+// capacity shortfall gets the capacity hold's window instead (see
+// sidecarReadyDeadlineFor).
 const sidecarReadyDeadline = 5 * time.Minute
+
+// reasonCrashLoopBackOff is the kubelet's Waiting reason for a crash-looping
+// container, reused for one caught between restarts (see
+// sidecarPodRestartingFailure) so both states record the same failure.
+const reasonCrashLoopBackOff = "CrashLoopBackOff"
 
 // ReasonSidecarNotReadyDeadlineExceeded is the SidecarPodFailure reason for a
 // pod that outlived sidecarReadyDeadline without becoming Ready.
 const ReasonSidecarNotReadyDeadlineExceeded = "NotReadyDeadlineExceeded"
 
 // sidecarPodReadyDeadlineFailure returns the failure record for a not-Ready pod
-// that has outlived sidecarReadyDeadline, or nil while it is still inside it.
+// that has outlived deadline, or nil while it is still inside it.
 //
 // The clock starts when the pod last STOPPED being ready: its PodReady
 // condition's LastTransitionTime when the kubelet has reported one, otherwise
@@ -421,14 +447,9 @@ const ReasonSidecarNotReadyDeadlineExceeded = "NotReadyDeadlineExceeded"
 // scheduler message with its node counts — because it lands in status and is
 // the runner's dedup fingerprint: a value that changed per pass would rewrite
 // status every reconcile and re-notify the user every turn.
-func sidecarPodReadyDeadlineFailure(pod *corev1.Pod, now time.Time) *spiceboxv1alpha1.SidecarPodFailure {
-	notReadySince := pod.CreationTimestamp.Time
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodReady && !c.LastTransitionTime.IsZero() {
-			notReadySince = c.LastTransitionTime.Time
-		}
-	}
-	if notReadySince.IsZero() || now.Sub(notReadySince) <= sidecarReadyDeadline {
+func sidecarPodReadyDeadlineFailure(pod *corev1.Pod, now time.Time, deadline time.Duration) *spiceboxv1alpha1.SidecarPodFailure {
+	notReadySince := podNotReadySince(pod)
+	if notReadySince.IsZero() || now.Sub(notReadySince) <= deadline {
 		return nil
 	}
 	state := "phase " + string(pod.Status.Phase)
@@ -442,8 +463,63 @@ func sidecarPodReadyDeadlineFailure(pod *corev1.Pod, now time.Time) *spiceboxv1a
 	}
 	return &spiceboxv1alpha1.SidecarPodFailure{
 		Reason:  ReasonSidecarNotReadyDeadlineExceeded,
-		Message: fmt.Sprintf("pod did not become Ready within %s (%s)", sidecarReadyDeadline, state),
+		Message: fmt.Sprintf("pod did not become Ready within %s (%s)", deadline, state),
 	}
+}
+
+// podNotReadySince is when the pod last stopped being ready: its PodReady
+// condition's LastTransitionTime when the kubelet has reported one, otherwise
+// its CreationTimestamp.
+func podNotReadySince(pod *corev1.Pod) time.Time {
+	since := pod.CreationTimestamp.Time
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady && !c.LastTransitionTime.IsZero() {
+			since = c.LastTransitionTime.Time
+		}
+	}
+	return since
+}
+
+// sidecarPodRestartingFailure reports a crash-looping container caught BETWEEN
+// back-offs. While the kubelet restarts it the container is briefly Running
+// (or Terminated) with no Waiting reason, so sidecarPodFailure sees nothing;
+// left to the deadline classifier, a pod past its deadline would flip between
+// CrashLoopBackOff and NotReadyDeadlineExceeded on every restart, and a pod
+// inside it between CrashLoopBackOff and no failure at all. Both rewrite the
+// record that is the runner's dedup fingerprint, re-notifying the user.
+//
+// A container counts when its last termination was a failure that finished
+// during the pod's current not-Ready stretch — an old crash a since-Ready pod
+// recovered from does not make a later readiness drop a crash loop. The record
+// is the same one sidecarPodFailure builds from the Waiting state, so a pod
+// alternating between the two keeps one fingerprint.
+func sidecarPodRestartingFailure(pod *corev1.Pod) *spiceboxv1alpha1.SidecarPodFailure {
+	since := podNotReadySince(pod)
+	for _, cs := range pod.Status.ContainerStatuses {
+		term := cs.LastTerminationState.Terminated
+		if term == nil || term.ExitCode == 0 || term.FinishedAt.Time.Before(since) {
+			continue
+		}
+		return &spiceboxv1alpha1.SidecarPodFailure{
+			Reason:   reasonCrashLoopBackOff,
+			Message:  containerTerminationMessage(cs.Name, term),
+			ExitCode: ptr.To(term.ExitCode),
+		}
+	}
+	return nil
+}
+
+// containerTerminationMessage is the failure message for a container that
+// exited: its log tail (the kubelet copies it into the terminated message —
+// the pod is built with FallbackToLogsOnError, see cosidecar.BuildContainer),
+// or the exit code when the container wrote nothing. Never the kubelet's
+// back-off text: that names no cause, and its delay grows with each restart,
+// which would change the runner's dedup fingerprint every back-off step.
+func containerTerminationMessage(container string, term *corev1.ContainerStateTerminated) string {
+	if msg := strings.TrimSpace(term.Message); msg != "" {
+		return msg
+	}
+	return fmt.Sprintf("container %q exited with code %d", container, term.ExitCode)
 }
 
 // sidecarPodState is what one reconcile pass observed about a separate-pod
@@ -505,9 +581,7 @@ func sidecarPodFailure(pod *corev1.Pod) *spiceboxv1alpha1.SidecarPodFailure {
 			continue
 		}
 		f.ExitCode = ptr.To(term.ExitCode)
-		if msg := strings.TrimSpace(term.Message); msg != "" {
-			f.Message = msg
-		}
+		f.Message = containerTerminationMessage(cs.Name, term)
 		break
 	}
 	return f

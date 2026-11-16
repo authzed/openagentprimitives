@@ -67,7 +67,19 @@ func SidecarPodFailureForTest(pod *corev1.Pod) *spiceboxv1alpha1.SidecarPodFailu
 // deadline classifier, and the deadline it measures against, to
 // agentsession_test. Test-only.
 func SidecarPodReadyDeadlineFailureForTest(pod *corev1.Pod, now time.Time) *spiceboxv1alpha1.SidecarPodFailure {
-	return sidecarPodReadyDeadlineFailure(pod, now)
+	return sidecarPodReadyDeadlineFailure(pod, now, sidecarReadyDeadline)
+}
+
+// SidecarPodRestartingFailureForTest exposes the unexported between-restarts
+// crash-loop classifier. Test-only.
+func SidecarPodRestartingFailureForTest(pod *corev1.Pod) *spiceboxv1alpha1.SidecarPodFailure {
+	return sidecarPodRestartingFailure(pod)
+}
+
+// SidecarReadyDeadlineForForTest exposes the unexported per-pod deadline
+// selection (capacity hold vs. sidecarReadyDeadline). Test-only.
+func (r *Reconciler) SidecarReadyDeadlineForForTest(sess *spiceboxv1alpha1.AgentSession, pod *corev1.Pod) time.Duration {
+	return r.sidecarReadyDeadlineFor(sess, pod)
 }
 
 // SidecarReadyDeadlineForTest is sidecarReadyDeadline. Test-only.
