@@ -397,16 +397,26 @@ func (r *Reconciler) reconcileSidecarPod(ctx context.Context, sess *spiceboxv1al
 }
 
 // sidecarReadyDeadlineFor returns the not-Ready deadline for a sidecar pod: the
-// capacity hold's window when the session is still booting and the pod is
+// capacity hold's window when the session is on its FIRST boot and the pod is
 // Pending on a capacity shortfall, sidecarReadyDeadline otherwise. A burst of
 // sessions whose class carries a separate-pod sidecar would otherwise fail at
 // the sidecar stage after 5m, the one stage the hold did not cover (see
 // capacity_hold.go for why a shortfall is waited out rather than failed).
 //
+// A session whose runner has run before keeps sidecarReadyDeadline even when
+// its phase reads Pending, as a woken session's does: a wake must not be held
+// behind a sidecar for an hour (the runner can boot past a failed sidecar and
+// tell the agent why), and a deadline that changed with the phase would
+// change the failure message, which is the runner's dedup fingerprint, and
+// re-notify the user about the same pod.
+//
 // No release-adjusted start is needed here, unlike the bundle hold: once the
-// scheduler places the pod, the kubelet reports a PodReady condition whose
-// LastTransitionTime restarts the clock sidecarPodReadyDeadlineFailure measures.
+// scheduler binds the pod, podNotReadySince measures from the bind (and then
+// from the kubelet's PodReady transition), not from creation.
 func (r *Reconciler) sidecarReadyDeadlineFor(sess *spiceboxv1alpha1.AgentSession, pod *corev1.Pod) time.Duration {
+	if podAlreadyStarted(sess) {
+		return sidecarReadyDeadline
+	}
 	reason, stalled := podSchedulingFailureReason(pod)
 	deadline, _ := r.capacityHoldDeadline(sess, schedulingStall{reason: reason}, stalled, sidecarReadyDeadline)
 	return deadline
@@ -439,9 +449,10 @@ const ReasonSidecarNotReadyDeadlineExceeded = "NotReadyDeadlineExceeded"
 //
 // The clock starts when the pod last STOPPED being ready: its PodReady
 // condition's LastTransitionTime when the kubelet has reported one, otherwise
-// its CreationTimestamp (never scheduled, so no kubelet has touched it). That
-// keeps a long-lived sidecar whose readiness probe starts failing from being
-// condemned the instant it flaps, which measuring from creation alone would do.
+// its bind time, otherwise its CreationTimestamp (never scheduled, so no
+// kubelet has touched it); see podNotReadySince. That keeps a long-lived
+// sidecar whose readiness probe starts failing from being condemned the
+// instant it flaps, which measuring from creation alone would do.
 //
 // The message is built only from slow-moving pod fields — no elapsed time, no
 // scheduler message with its node counts — because it lands in status and is
@@ -468,14 +479,36 @@ func sidecarPodReadyDeadlineFailure(pod *corev1.Pod, now time.Time, deadline tim
 }
 
 // podNotReadySince is when the pod last stopped being ready: its PodReady
-// condition's LastTransitionTime when the kubelet has reported one, otherwise
-// its CreationTimestamp.
+// condition's LastTransitionTime when the kubelet has reported one; otherwise
+// when it was bound to a node (the PodScheduled=True transition the apiserver
+// stamps at bind); otherwise its CreationTimestamp.
+//
+// The bind time matters for a pod that waited out a capacity hold. Between the
+// bind and the kubelet's first status write the pod is Pending with
+// PodScheduled=True and no PodReady condition, so the hold no longer applies
+// (sidecarReadyDeadlineFor) and the ordinary deadline is in force. Measured
+// from creation, a pod held longer than that deadline would be past it the
+// instant it was placed, and a booting session would fail at the very moment
+// capacity freed up.
 func podNotReadySince(pod *corev1.Pod) time.Time {
 	since := pod.CreationTimestamp.Time
+	var ready, bound time.Time
 	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodReady && !c.LastTransitionTime.IsZero() {
-			since = c.LastTransitionTime.Time
+		if c.LastTransitionTime.IsZero() {
+			continue
 		}
+		switch {
+		case c.Type == corev1.PodReady:
+			ready = c.LastTransitionTime.Time
+		case c.Type == corev1.PodScheduled && c.Status == corev1.ConditionTrue:
+			bound = c.LastTransitionTime.Time
+		}
+	}
+	switch {
+	case !ready.IsZero():
+		return ready
+	case bound.After(since):
+		return bound
 	}
 	return since
 }

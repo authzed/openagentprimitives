@@ -626,6 +626,45 @@ func TestSidecarPodReadyDeadlineFailure(t *testing.T) {
 			wantMessage: "pod did not become Ready within 5m0s (phase Running)",
 		},
 		{
+			name: "held past the deadline, just bound, kubelet not yet reported: clock runs from the bind, still waited on",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: at(10 * time.Minute)},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					Conditions: []corev1.PodCondition{{
+						Type: corev1.PodScheduled, Status: corev1.ConditionTrue, LastTransitionTime: at(time.Second),
+					}},
+				},
+			},
+		},
+		{
+			name: "bound past the deadline and the kubelet never reported: failed",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: at(time.Hour)},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					Conditions: []corev1.PodCondition{{
+						Type: corev1.PodScheduled, Status: corev1.ConditionTrue, LastTransitionTime: at(deadline + time.Minute),
+					}},
+				},
+			},
+			wantMessage: "pod did not become Ready within 5m0s (phase Pending)",
+		},
+		{
+			name: "kubelet reported: PodReady wins over the bind time",
+			pod: corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: at(time.Hour)},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodScheduled, Status: corev1.ConditionTrue, LastTransitionTime: at(time.Second)},
+						{Type: corev1.PodReady, Status: corev1.ConditionFalse, LastTransitionTime: at(deadline + time.Minute)},
+					},
+				},
+			},
+			wantMessage: "pod did not become Ready within 5m0s (phase Running)",
+		},
+		{
 			name: "no creation timestamp and no Ready condition: never times out",
 			pod:  corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodPending}},
 		},
@@ -702,7 +741,7 @@ func TestSidecarPodRestartingFailure(t *testing.T) {
 }
 
 // TestSidecarReadyDeadlineFor pins which not-Ready deadline a separate-pod
-// sidecar gets: a booting session's pod Pending on a capacity shortfall waits
+// sidecar gets: a first-boot session's pod Pending on a capacity shortfall waits
 // out the capacity hold like bundle and detector pods do; anything else keeps
 // sidecarReadyDeadline.
 func TestSidecarReadyDeadlineFor(t *testing.T) {
@@ -717,21 +756,27 @@ func TestSidecarReadyDeadlineFor(t *testing.T) {
 	}
 	const shortfall = "0/3 nodes are available: 3 Insufficient cpu."
 
+	// startedBefore marks a session whose runner has run before — a woken
+	// session reads Pending again but still carries RunnerReady.
+	startedBefore := []metav1.Condition{{Type: spiceboxv1alpha1.AgentSessionConditionRunnerReady, Status: metav1.ConditionFalse, Reason: "Idle"}}
+
 	cases := []struct {
-		name  string
-		phase string
-		pod   *corev1.Pod
-		want  time.Duration
+		name       string
+		phase      string
+		conditions []metav1.Condition
+		pod        *corev1.Pod
+		want       time.Duration
 	}{
 		{name: "booting, capacity shortfall: held for the capacity hold window", phase: spiceboxv1alpha1.AgentSessionPhasePending, pod: pending(shortfall), want: time.Hour},
 		{name: "booting, unphased, capacity shortfall: held", phase: "", pod: pending(shortfall), want: time.Hour},
 		{name: "booting, unschedulable on a taint: ordinary deadline", phase: spiceboxv1alpha1.AgentSessionPhasePending, pod: pending("0/3 nodes are available: 3 node(s) had untolerated taint."), want: agentsession.SidecarReadyDeadlineForTest},
 		{name: "running session, capacity shortfall: ordinary deadline", phase: spiceboxv1alpha1.AgentSessionPhaseRunning, pod: pending(shortfall), want: agentsession.SidecarReadyDeadlineForTest},
 		{name: "booting, scheduled but not Ready: ordinary deadline", phase: spiceboxv1alpha1.AgentSessionPhasePending, pod: &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning}}, want: agentsession.SidecarReadyDeadlineForTest},
+		{name: "woken session (Pending, runner ran before), capacity shortfall: ordinary deadline, a wake is not held", phase: spiceboxv1alpha1.AgentSessionPhasePending, conditions: startedBefore, pod: pending(shortfall), want: agentsession.SidecarReadyDeadlineForTest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sess := &spiceboxv1alpha1.AgentSession{Status: spiceboxv1alpha1.AgentSessionStatus{Phase: tc.phase}}
+			sess := &spiceboxv1alpha1.AgentSession{Status: spiceboxv1alpha1.AgentSessionStatus{Phase: tc.phase, Conditions: tc.conditions}}
 			r := &agentsession.Reconciler{}
 			assert.Equal(t, tc.want, r.SidecarReadyDeadlineForForTest(sess, tc.pod))
 		})
