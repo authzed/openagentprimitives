@@ -878,6 +878,8 @@ func run(rootCtx context.Context, cfg *config) error {
 	// constructed); a nil minter degrades to "no Manage button on App
 	// Home" rather than failing the listener.
 	mgr := newChannelManager(cli, nc, mem, mem.MemoryV2(), mem.Preferences(), personalizableClassLookup{az: az}, pl, wd, az, nil)
+	// Set before Run starts any listener, so every Deps carries it.
+	mgr.goals = mem.Goals()
 	go mgr.Run(rootCtx)
 	defer mgr.Stop(logger)
 

@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/pipeline"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -367,6 +369,65 @@ func (m *memoryClient) MemoryV2() memory.Memory { return m.signed }
 // newMemoryClient, so this never wraps a typed-nil pointer into the
 // interface return.
 func (m *memoryClient) Preferences() channelkinds.PreferencesClient { return m.client }
+
+// Goals returns the first-party group goal management client, wired into
+// Deps.Goals so a channel kind's own surface (a home view) can list and act
+// on group goals for a verified viewer. Both collaborators are constructed
+// unconditionally in newMemoryClient, so the interface is never a typed nil.
+func (m *memoryClient) Goals() channelkinds.GoalsClient {
+	return &goalsClient{api: m.client, consent: m.client, mem: m.signed}
+}
+
+// goalManager is the goal server's management API (httpclient.Client).
+type goalManager interface {
+	ManageGoals(ctx context.Context, req goals.ManageRequest) (goals.ManageResponse, error)
+}
+
+// goalsClient implements channelkinds.GoalsClient over the goal server's
+// management API. An in-modal approval (resume, renew) comes back as the
+// operator-signed request the viewer's click decides; it records that
+// decision with the channelsd signer and commits it through the same path a
+// consent card's click takes.
+type goalsClient struct {
+	api     goalManager
+	consent pipeline.GoalConsentCommitter
+	mem     memory.Memory
+}
+
+var _ channelkinds.GoalsClient = (*goalsClient)(nil)
+
+func (g *goalsClient) ListForViewer(ctx context.Context, viewer identity.CanonicalUserID, ns, class string, limit int) ([]channelkinds.GoalSummary, int, error) {
+	out, err := g.api.ManageGoals(ctx, goals.ManageRequest{Operation: goals.ManageList, Viewer: viewer.String(), Namespace: ns, Class: class, Limit: limit})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list group goals of %s/%s for %s: %w", ns, class, viewer, err)
+	}
+	return out.Goals, out.Total, nil
+}
+
+func (g *goalsClient) StandingPlan(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource string) (plangate.Plan, error) {
+	out, err := g.api.ManageGoals(ctx, goals.ManageRequest{Operation: goals.ManagePlan, Viewer: viewer.String(), Namespace: ns, Goal: goalResource})
+	if err != nil {
+		return plangate.Plan{}, fmt.Errorf("standing plan of %s for %s: %w", goalResource, viewer, err)
+	}
+	if out.Plan == nil {
+		return plangate.Plan{}, fmt.Errorf("standing plan of %s for %s: %w: the goal server returned none", goalResource, viewer, goals.ErrNotFound)
+	}
+	return *out.Plan, nil
+}
+
+func (g *goalsClient) Act(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action string) error {
+	out, err := g.api.ManageGoals(ctx, goals.ManageRequest{Operation: goals.ManageAct, Viewer: viewer.String(), Namespace: ns, Goal: goalResource, Action: action})
+	if err != nil {
+		return fmt.Errorf("%s %s for %s: %w", action, goalResource, viewer, err)
+	}
+	if out.Approval == nil {
+		return nil
+	}
+	if err := pipeline.DecideGoalConsentFirstParty(ctx, g.mem, g.consent, *out.Approval, viewer, true); err != nil {
+		return fmt.Errorf("%s %s for %s: recording the approval: %w", action, goalResource, viewer, err)
+	}
+	return nil
+}
 
 // Compile-time check: *memoryClient implements pipeline.Memory.
 var _ pipeline.Memory = (*memoryClient)(nil)

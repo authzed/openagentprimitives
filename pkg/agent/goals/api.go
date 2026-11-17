@@ -3,7 +3,9 @@ package goals
 import (
 	"time"
 
+	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 )
 
@@ -110,4 +112,30 @@ type RunDecisionIngressCheck struct {
 // the live run of a group-owned goal, read from its occurrence.
 type RunDecisionIngress struct {
 	Group bool `json:"group"`
+}
+
+// ManageRequest is channelsd's call to the goal server's management API on
+// behalf of a person a channel kind has verified (Viewer, canonical). It is
+// accepted only with channelsd's own token: Viewer is channelsd's word.
+type ManageRequest struct {
+	Operation string `json:"operation"`
+	Viewer    string `json:"viewer"`
+	Namespace string `json:"namespace"`
+	// Class narrows a list to one AgentClass's goals.
+	Class string `json:"class,omitempty"`
+	// Goal names one goal, "agent_goal:<id>", for plan and act.
+	Goal   string `json:"goal,omitempty"`
+	Action string `json:"action,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// ManageResponse answers a ManageRequest.
+type ManageResponse struct {
+	Goals []GoalSummary  `json:"goals,omitempty"`
+	Total int            `json:"total,omitempty"`
+	Plan  *plangate.Plan `json:"plan,omitempty"`
+	// Approval is the operator-signed consent request an act (resume, renew)
+	// leaves for the viewer to decide: channelsd records the viewer's
+	// decision on it exactly as for a consent card, and commits it.
+	Approval *memory.Entry `json:"approval,omitempty"`
 }

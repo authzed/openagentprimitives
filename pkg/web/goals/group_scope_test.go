@@ -99,6 +99,8 @@ type groupAuthority struct {
 	checkErrs    map[string]error
 	// interactChecks counts CheckInteract calls.
 	interactChecks int
+	// lookups records each LookupResourceIDs call as "type#perm@user".
+	lookups []string
 }
 
 func newGroupAuthority() *groupAuthority {

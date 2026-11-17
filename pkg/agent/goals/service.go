@@ -27,6 +27,13 @@ type Actor struct {
 	// id, and TurnRef the inbound whose attestation named them, so the actor
 	// can be re-derived for the same turn. Both stay empty for private scope.
 	User, TurnRef string
+	// FirstParty marks the session-less management actor: a person acting
+	// from a first-party management surface outside any conversation, named
+	// by channelsd after the kind verified them. Only the goal server sets it,
+	// and only after verifying channelsd's own token; it is never read from a
+	// request. Such an actor has no Session and no SessionUID, acts on a
+	// group-owned Domain as User, and carries its attestation in Attestation.
+	FirstParty bool
 }
 
 // GroupAccess names a check a group-owned domain needs beyond read and
@@ -107,8 +114,19 @@ func (s *Service) validateDomain(d Domain) error {
 	return fmt.Errorf("%w: group owner %s#%s is not a registered member link", ErrInvalid, typ, rel)
 }
 
+// actorShapeValid admits an actor that names a session, or the first-party
+// management actor: session-less, acting as a named user on a group-owned
+// domain. A session-less actor without the first-party mark is refused, so
+// no other caller can drop the session and its checks.
+func actorShapeValid(a Actor) bool {
+	if a.FirstParty {
+		return a.Session == "" && a.SessionUID == "" && a.User != "" && a.Domain.GroupOwned()
+	}
+	return a.Session != ""
+}
+
 func (s *Service) authorize(ctx context.Context, a Actor, write bool) error {
-	if s.Auth == nil || a.Session == "" || a.Proof == "" {
+	if s.Auth == nil || !actorShapeValid(a) || a.Proof == "" {
 		return ErrDenied
 	}
 	if err := s.validateDomain(a.Domain); err != nil {
@@ -120,7 +138,7 @@ func (s *Service) authorize(ctx context.Context, a Actor, write bool) error {
 // groupAuthorizer runs authorize's preconditions for a group-owned domain and
 // returns the GroupAuthorizer to ask.
 func (s *Service) groupAuthorizer(a Actor) (GroupAuthorizer, error) {
-	if s.Auth == nil || a.Session == "" || a.Proof == "" || a.User == "" || !a.Domain.GroupOwned() {
+	if s.Auth == nil || !actorShapeValid(a) || a.Proof == "" || a.User == "" || !a.Domain.GroupOwned() {
 		return nil, ErrDenied
 	}
 	if err := s.validateDomain(a.Domain); err != nil {

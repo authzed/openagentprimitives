@@ -4,6 +4,7 @@ package spicedb
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -297,4 +298,33 @@ func TestGroupGoal_ExecuteHeldByRunSession(t *testing.T) {
 	require.True(t, asSession(stale, f.session), "precondition: allowed before expiry")
 	require.Eventually(t, func() bool { return !asSession(stale, f.session) }, 15*time.Second, 250*time.Millisecond,
 		"expired run tuple: refused")
+}
+
+// The management API lists a viewer's group goals from
+// LookupResources(agent_goal_domain, view_memory, viewer): members and
+// platform admins find the domain; a manager who left, a denied member and
+// an outsider do not.
+func TestGroupGoal_LookupViewableDomains(t *testing.T) {
+	c := newIntegrationClient(t)
+	f := newGroupGoalFixture(t, c)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		who   identity.CanonicalUserID
+		finds bool
+	}{
+		{"plain member: found", f.bob, true},
+		{"manager in the group: found", f.alice, true},
+		{"platform admin: found", f.dave, true},
+		{"manager who left the group: not found", f.carol, false},
+		{"denied member: not found", f.eve, false},
+		{"outsider: not found", f.frank, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ids, truncated, err := c.LookupResourceIDs(ctx, "agent_goal_domain", "view_memory", tc.who)
+			require.NoError(t, err)
+			assert.False(t, truncated)
+			assert.Equal(t, tc.finds, slices.Contains(ids, f.domain))
+		})
+	}
 }

@@ -100,33 +100,19 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 		return nil
 	}
 	c := g.Execution
+	// A consent requested from a management surface is decided there, in
+	// the same click; it is never posted as a card.
+	if c.ManagementHosted() {
+		return nil
+	}
 	ns, name, ok := strings.Cut(c.Session, "/")
 	if !ok {
 		return domain.ErrInvalid
 	}
 	scope := memory.Scope{Kind: "session", ID: ns + "/" + name}
-	id := "goalconsent-request-" + c.Digest
 	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
-	entry, found, err := goalconsent.Find(ctx, p.Memory, scope, id)
+	_, request, err := p.ensureRequest(ctx, g)
 	if err != nil {
-		return err
-	}
-	if !found {
-		entry, err = consentEntry(g, time.Now().UTC())
-		if err != nil {
-			return err
-		}
-		entry, err = p.Writer.Put(ctx, entry)
-		if err != nil {
-			return err
-		}
-	}
-	var content goalconsent.Content
-	if err := json.Unmarshal(entry.Content, &content); err != nil {
-		return err
-	}
-	var request channelevents.InteractionRequestPayload
-	if err := json.Unmarshal(content.Request, &request); err != nil {
 		return err
 	}
 	if request.ExpiresAt == nil || !time.Now().Before(*request.ExpiresAt) {
@@ -143,6 +129,51 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 		notice = func() { p.noticeRenewal(ctx, g, ns, name) }
 	}
 	return p.publishRetainedRequest(ctx, scope, request, notice)
+}
+
+// EnsureRequest is ensureRequest under the publisher's lock, so it never
+// races Notify writing the same append-only record.
+func (p *ConsentPublisher) EnsureRequest(ctx context.Context, g domain.Goal) (memory.Entry, channelevents.InteractionRequestPayload, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ensureRequest(memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator"), g)
+}
+
+// ensureRequest returns the operator-signed request record for the consent
+// in g.Execution (g is the goal as that consent's card shows it: a renewal's
+// RenewalView), writing it into the consent's host scope if it is not there
+// yet, with the card it carries. Its decision, by a card click or from a
+// management surface, is recorded beside it and witnesses it.
+func (p *ConsentPublisher) ensureRequest(ctx context.Context, g domain.Goal) (memory.Entry, channelevents.InteractionRequestPayload, error) {
+	c := g.Execution
+	if c == nil {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, domain.ErrInvalid
+	}
+	scope := memory.Scope{Kind: "session", ID: c.Session}
+	id := "goalconsent-request-" + c.Digest
+	entry, found, err := goalconsent.Find(ctx, p.Memory, scope, id)
+	if err != nil {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, fmt.Errorf("goal %s: reading consent request %s: %w", g.ID, id, err)
+	}
+	if !found {
+		entry, err = consentEntry(g, time.Now().UTC())
+		if err != nil {
+			return memory.Entry{}, channelevents.InteractionRequestPayload{}, err
+		}
+		entry, err = p.Writer.Put(ctx, entry)
+		if err != nil {
+			return memory.Entry{}, channelevents.InteractionRequestPayload{}, fmt.Errorf("goal %s: recording consent request %s: %w", g.ID, id, err)
+		}
+	}
+	var content goalconsent.Content
+	if err := json.Unmarshal(entry.Content, &content); err != nil {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, err
+	}
+	var request channelevents.InteractionRequestPayload
+	if err := json.Unmarshal(content.Request, &request); err != nil {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, err
+	}
+	return entry, request, nil
 }
 
 // noticeRenewal posts, beside a renewal card, a plain notice in the run that

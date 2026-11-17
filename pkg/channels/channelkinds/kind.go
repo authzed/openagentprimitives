@@ -14,7 +14,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelfeatures"
 	"github.com/authzed/openagentprimitives/pkg/channels/delivery"
@@ -566,6 +568,13 @@ type Deps struct {
 	// nil degrades the App Home preferences pane to a "couldn't load" state.
 	Preferences PreferencesClient
 
+	// Goals gives channel kinds first-party management of group goals — a
+	// verified viewer listing, pausing, resuming, renewing or removing the
+	// group goals they can see — from a surface of their own outside any
+	// conversation (a home view). Optional — nil means the surface has no
+	// goals section; the in-conversation goal tools still manage them.
+	Goals GoalsClient
+
 	// PersonalizableClasses answers "which AgentClasses has this canonical
 	// user interacted with" — the App Home preferences section (Task 11)
 	// uses it to decide which class cards get a preferences section at all,
@@ -636,6 +645,29 @@ func (d Deps) ResolvedApproverFanoutLimit() int {
 type PreferencesClient interface {
 	GetPreferencesFirstParty(ctx context.Context, ns, className, subject string) (preferences.SnapshotResponse, error)
 	CommitPreferenceFirstParty(ctx context.Context, ns, className string, req preferences.CommitRequest) error
+}
+
+// GoalSummary is one group goal as GoalsClient lists it for a viewer.
+type GoalSummary = goals.GoalSummary
+
+// GoalsClient is the kind-neutral group goal management API a channel kind's
+// first-party surface calls. viewer is the canonical person the
+// kind verified; every call re-checks their live permissions on the goal
+// server: view to list, pause to pause, manage (a listed manager still in
+// the group, or a platform admin) for the rest. goalResource is a
+// GoalSummary.Resource. Refusals wrap goals.ErrDenied, goals.ErrNotFound,
+// goals.ErrInvalid or goals.ErrConflict with a reason a person can act on.
+// Wired in internal/cmd/channelsd.
+type GoalsClient interface {
+	// ListForViewer lists class's group goals in ns that viewer can see:
+	// the first limit rows, and how many there are in all.
+	ListForViewer(ctx context.Context, viewer identity.CanonicalUserID, ns, class string, limit int) ([]GoalSummary, int, error)
+	// StandingPlan is the goal's standing plan, to show before an approval.
+	StandingPlan(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource string) (plangate.Plan, error)
+	// Act takes action — goals.ActPause, ActResume, ActRenew or ActRemove —
+	// as viewer. Resume and renew are approvals decided by this call (the
+	// click is the decision); nothing is posted into the conversation.
+	Act(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action string) error
 }
 
 // PersonalizableClassLookup gives channel kinds a narrow, read-only way to

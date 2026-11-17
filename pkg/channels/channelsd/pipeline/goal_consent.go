@@ -50,18 +50,33 @@ func (p *Pipeline) decideGoalConsent(ctx context.Context, category string, d cha
 	if err != nil {
 		return channelinteractions.Outcome{}, err
 	}
-	scope := entry.Scope
-
 	approved := d.Payload.ActionID == "approve"
-	id := "goalconsent-decision-" + content.Goal.Execution.Digest
-	decision, exists, err := goalconsent.Find(ctx, p.Mem, scope, id)
-	if err != nil {
+	if err := recordGoalConsentDecision(ctx, p.Mem, p.GoalConsentCommitter, entry, content, owner, approved); err != nil {
 		return channelinteractions.Outcome{}, err
+	}
+	outcome := channelevents.OutcomeDenied
+	if approved {
+		outcome = channelevents.OutcomeApproved
+	}
+	return channelinteractions.Outcome{Result: outcome}, nil
+}
+
+// recordGoalConsentDecision records owner's decision on the operator-signed
+// request entry (content is its decoded content) beside it, in its scope,
+// signed by mem, and commits it to the goal server. A decision already
+// recorded is re-committed only for the same decider and answer (a retry).
+// Both a card click and a first-party management approval decide through it.
+func recordGoalConsentDecision(ctx context.Context, mem memory.Memory, committer GoalConsentCommitter, entry memory.Entry, content goalconsent.Content, owner string, approved bool) error {
+	scope := entry.Scope
+	id := "goalconsent-decision-" + content.Goal.Execution.Digest
+	decision, exists, err := goalconsent.Find(ctx, mem, scope, id)
+	if err != nil {
+		return fmt.Errorf("goal %s: reading decision %s: %w", content.Goal.ID, id, err)
 	}
 	if !exists {
 		witness, err := json.Marshal(entry)
 		if err != nil {
-			return channelinteractions.Outcome{}, err
+			return err
 		}
 		// Owner is who decided: the goal's owner for a private goal, the
 		// deciding manager (the approver) for a group goal.
@@ -70,30 +85,26 @@ func (p *Pipeline) decideGoalConsent(ctx context.Context, category string, d cha
 		content.RequestWitness = witness
 		raw, err := json.Marshal(content)
 		if err != nil {
-			return channelinteractions.Outcome{}, err
+			return err
 		}
 		decision = memory.Entry{Scope: scope, Kind: goalconsent.KindName, ID: id, Content: raw, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
-		decision, err = p.Mem.Put(ctx, decision)
+		decision, err = mem.Put(ctx, decision)
 		if err != nil {
-			return channelinteractions.Outcome{}, err
+			return fmt.Errorf("goal %s: recording %s's decision: %w", content.Goal.ID, owner, err)
 		}
 	} else {
 		var prior goalconsent.Content
 		if err := json.Unmarshal(decision.Content, &prior); err != nil {
-			return channelinteractions.Outcome{}, err
+			return err
 		}
 		if err := priorDecisionConflict(content.Goal, prior, owner, approved); err != nil {
-			return channelinteractions.Outcome{}, err
+			return err
 		}
 	}
-	if err := p.GoalConsentCommitter.CommitGoalConsent(ctx, decision); err != nil {
-		return channelinteractions.Outcome{}, err
+	if err := committer.CommitGoalConsent(ctx, decision); err != nil {
+		return fmt.Errorf("goal %s: committing %s's decision: %w", content.Goal.ID, owner, err)
 	}
-	outcome := channelevents.OutcomeDenied
-	if approved {
-		outcome = channelevents.OutcomeApproved
-	}
-	return channelinteractions.Outcome{Result: outcome}, nil
+	return nil
 }
 
 // priorDecisionConflict lets only the original decider re-commit a recorded
@@ -221,4 +232,42 @@ func (p *Pipeline) checkGoalManager(ctx context.Context, g goals.Goal, request c
 		return fmt.Errorf("only a manager of this group goal can decide its consent (you do not manage it)")
 	}
 	return nil
+}
+
+// DecideGoalConsentFirstParty records decider's decision on a group goal's
+// consent request from a first-party management surface, where the click is
+// the decision (an in-modal resume or renew): request is the operator-signed
+// request record the goal server returned. There is no card, so nothing is
+// compared with one; everything else is the card path's — the goal server's
+// pre-write check (manager, start gate, still pending), the same signed
+// decision record beside the request, and the same commit, which the goal
+// server re-checks in full.
+func DecideGoalConsentFirstParty(ctx context.Context, mem memory.Memory, committer GoalConsentCommitter, request memory.Entry, decider identity.CanonicalUserID, approved bool) error {
+	if mem == nil || committer == nil {
+		return fmt.Errorf("goal consent collaborators unavailable")
+	}
+	if request.Kind != goalconsent.KindName || request.Provenance == nil || request.Provenance.Publisher != "system:operator" {
+		return fmt.Errorf("goal consent request %s is not a platform-signed request", request.ID)
+	}
+	var content goalconsent.Content
+	if err := json.Unmarshal(request.Content, &content); err != nil {
+		return fmt.Errorf("goal consent request %s: %w", request.ID, err)
+	}
+	if content.Goal.Execution == nil || request.ID != "goalconsent-request-"+content.Goal.Execution.Digest {
+		return fmt.Errorf("goal consent request %s does not name its consent", request.ID)
+	}
+	if !content.Goal.Domain.GroupOwned() {
+		return fmt.Errorf("goal %s: only a group goal is approved from a management surface", content.Goal.ID)
+	}
+	if decider.IsZero() {
+		return fmt.Errorf("goal %s: a decision needs a decider", content.Goal.ID)
+	}
+	checker, ok := committer.(GoalConsentChecker)
+	if !ok {
+		return fmt.Errorf("group goal consent unavailable: the goal server cannot check a decision before it is recorded")
+	}
+	if err := checker.CheckGoalConsent(ctx, request, decider.String(), approved); err != nil {
+		return fmt.Errorf("goal %s: the goal server refused %s's decision: %w", content.Goal.ID, decider, err)
+	}
+	return recordGoalConsentDecision(ctx, mem, committer, request, content, decider.String(), approved)
 }

@@ -2,9 +2,11 @@ package httpclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	webgoals "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -36,4 +38,39 @@ func (c *Client) GroupGoalRun(ctx context.Context, ns, name string) (bool, error
 		return false, err
 	}
 	return out.Group, nil
+}
+
+// ManageGoals calls the goal server's management API (channelsd's token
+// only). A refusal is returned as the goal sentinel its status names —
+// goals.ErrDenied (403), ErrNotFound (404), ErrInvalid (400), ErrConflict
+// (409) — wrapped with the server's reason.
+func (c *Client) ManageGoals(ctx context.Context, req webgoals.ManageRequest) (webgoals.ManageResponse, error) {
+	var out webgoals.ManageResponse
+	err := c.do(ctx, http.MethodPost, "/goals/manage", req, &out)
+	if err == nil {
+		return out, nil
+	}
+	code, ok := StatusCode(err)
+	if !ok {
+		return webgoals.ManageResponse{}, err
+	}
+	var sentinel error
+	switch code {
+	case http.StatusForbidden:
+		sentinel = webgoals.ErrDenied
+	case http.StatusNotFound:
+		sentinel = webgoals.ErrNotFound
+	case http.StatusBadRequest:
+		sentinel = webgoals.ErrInvalid
+	case http.StatusConflict:
+		sentinel = webgoals.ErrConflict
+	default:
+		return webgoals.ManageResponse{}, err
+	}
+	var se *statusError
+	reason := err.Error()
+	if errors.As(err, &se) {
+		reason = strings.TrimSpace(se.msg)
+	}
+	return webgoals.ManageResponse{}, fmt.Errorf("%w: %s", sentinel, reason)
 }

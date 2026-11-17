@@ -220,7 +220,7 @@ func (s *Service) RenewExecution(ctx context.Context, a Actor, r ExecutionReques
 	if !ApprovalInForce(g, now) {
 		return Goal{}, fmt.Errorf("%w: only an approval in force can be renewed", ErrInvalid)
 	}
-	accepted, err := s.renew(ctx, g, RenewalHost{Session: a.Session, SessionUID: a.SessionUID}, now, r.RequestID, h,
+	accepted, err := s.renew(ctx, g, consentHost(a, g), now, r.RequestID, h,
 		func(terms ExecutionTerms) error { return s.validateExecution(ctx, g, terms, a.User) },
 		Event{Action: "request_renewal", Session: a.Session, Proof: a.Proof, ActorProof: json.RawMessage(a.Attestation)})
 	if err != nil {

@@ -307,7 +307,17 @@ func (s *Server) syncGroupTuples(ctx context.Context, g domain.Goal) error {
 
 // reauthorizeGroup re-derives the actor for the same turn and requires it to
 // be unchanged, as Authorize does for private scope.
+//
+// The first-party management actor has no turn to re-derive: it was built
+// by the management API from channelsd's verified request, for this one
+// request, and every check that follows is a live check on its User.
 func (s *Server) reauthorizeGroup(ctx context.Context, a domain.Actor) error {
+	if a.FirstParty {
+		if a.Session != "" || a.User == "" || !a.Domain.GroupOwned() {
+			return domain.ErrDenied
+		}
+		return nil
+	}
 	ns, name, ok := strings.Cut(a.Session, "/")
 	if !ok || a.User == "" {
 		return domain.ErrDenied

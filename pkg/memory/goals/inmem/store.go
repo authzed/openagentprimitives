@@ -251,3 +251,47 @@ func (s *Store) Published(_ context.Context, id string) error {
 	s.events[id] = e
 	return nil
 }
+
+var _ goals.DomainListStore = (*Store)(nil)
+
+func (s *Store) ListDomains(_ context.Context, ids []string, r goals.ListRequest) (goals.Page, error) {
+	if err := goals.ValidDomainSet(ids, r); err != nil {
+		return goals.Page{}, err
+	}
+	in := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		in[id] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := goals.Page{Goals: []goals.Goal{}}
+	for _, b := range s.rows {
+		g, err := decode(b)
+		if err != nil {
+			return goals.Page{}, err
+		}
+		if in[g.Domain.ID()] && g.ID > r.After && (r.State == "" || g.State == r.State) {
+			p.Goals = append(p.Goals, g)
+		}
+	}
+	sort.Slice(p.Goals, func(i, j int) bool { return p.Goals[i].ID < p.Goals[j].ID })
+	if len(p.Goals) > r.Limit {
+		p.Goals = p.Goals[:r.Limit]
+		p.Next = p.Goals[len(p.Goals)-1].ID
+	}
+	return p, nil
+}
+
+func (s *Store) GetInDomains(_ context.Context, ids []string, id string) (goals.Goal, error) {
+	if err := goals.ValidDomainSet(ids, goals.ListRequest{Limit: 1}); err != nil {
+		return goals.Goal{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range ids {
+		if b, ok := s.rows[d+"/"+id]; ok {
+			return decode(b)
+		}
+	}
+	return goals.Goal{}, goals.ErrNotFound
+}

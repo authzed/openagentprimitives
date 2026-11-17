@@ -46,6 +46,10 @@ type Authority interface {
 	// ListUserSubjects lists the users directly on resourceType:id#relation,
 	// fully consistent. Group goals reconcile their manager tuples with it.
 	ListUserSubjects(ctx context.Context, resourceType, resourceID, relation string) ([]string, error)
+	// LookupResourceIDs lists the objects of resourceType on which user holds
+	// permission, fully consistent. truncated reports the answer may be a
+	// prefix. The management API lists a viewer's group goal domains with it.
+	LookupResourceIDs(ctx context.Context, resourceType, permission string, user identity.CanonicalUserID) (ids []string, truncated bool, err error)
 }
 
 type ExecutionSessionAuthority interface {
@@ -104,6 +108,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/goals/decision/ingress" {
 		s.decisionIngressHTTP(w, r)
+		return
+	}
+	if r.URL.Path == "/goals/manage" {
+		s.manageHTTP(w, r)
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/goals/"), "/")
@@ -664,7 +672,16 @@ func (s *Server) Authorize(ctx context.Context, a domain.Actor, write bool) erro
 
 // Sources carries every resource dependency forward, including reads from
 // earlier turns. Goals cannot launder a restricted read into future sessions.
+//
+// The first-party management actor has no session, so it has read nothing
+// and carries no source into a goal.
 func (s *Server) Sources(ctx context.Context, a domain.Actor) ([]domain.Source, error) {
+	if a.FirstParty {
+		if a.Session != "" {
+			return nil, domain.ErrDenied
+		}
+		return nil, nil
+	}
 	sources, err := s.sessionSources(ctx, a.Session)
 	if err != nil {
 		return nil, err

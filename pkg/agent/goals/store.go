@@ -52,3 +52,30 @@ type Store interface {
 	Envelope(context.Context, string) (json.RawMessage, error)
 	Published(context.Context, string) error
 }
+
+// DomainListStore reads goals across a set of domains, named by Domain.ID():
+// what a management surface lists for a viewer, whose visible domains come
+// from the authorization graph rather than from one session's binding. IDs
+// that name no domain match nothing. A store without it cannot serve the
+// management API.
+type DomainListStore interface {
+	// ListDomains pages goals whose domain is in ids, in id order, with r's
+	// state filter, cursor and limit.
+	ListDomains(ctx context.Context, ids []string, r ListRequest) (Page, error)
+	// GetInDomains reads goal id if its domain is in ids, else ErrNotFound.
+	GetInDomains(ctx context.Context, ids []string, id string) (Goal, error)
+}
+
+// MaxDomainSet bounds a DomainListStore read: one statement's parameters.
+const MaxDomainSet = 1000
+
+// ValidDomainSet checks a DomainListStore read's arguments.
+func ValidDomainSet(ids []string, r ListRequest) error {
+	if len(ids) > MaxDomainSet {
+		return fmt.Errorf("%w: at most %d domains per read, got %d", ErrInvalid, MaxDomainSet, len(ids))
+	}
+	if r.Limit < 1 || r.Limit > 100 || r.State != "" && !validState(r.State) {
+		return fmt.Errorf("%w: limit must be 1-100 and state valid", ErrInvalid)
+	}
+	return nil
+}

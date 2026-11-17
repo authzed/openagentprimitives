@@ -406,7 +406,8 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 	if err := r.Terms.validate(now, a.Domain.Owner); err != nil {
 		return Goal{}, err
 	}
-	g.Execution = &ExecutionConsent{Session: a.Session, SessionUID: a.SessionUID}
+	host := consentHost(a, g)
+	g.Execution = &ExecutionConsent{Session: host.Session, SessionUID: host.SessionUID}
 	if err := s.validateExecution(ctx, g, r.Terms, a.User); err != nil {
 		return Goal{}, err
 	}
@@ -424,11 +425,11 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 		SessionUID   string
 		Terms        ExecutionTerms
 		ApprovalMode string
-	}{g, a.Session, a.SessionUID, r.Terms, r.ApprovalMode})
+	}{g, host.Session, host.SessionUID, r.Terms, r.ApprovalMode})
 	if err != nil {
 		return Goal{}, err
 	}
-	g.Execution = &ExecutionConsent{ApprovalMode: r.ApprovalMode, Session: a.Session, SessionUID: a.SessionUID, RequestID: r.RequestID, RequestRevision: g.Revision, Digest: digest, Terms: r.Terms}
+	g.Execution = &ExecutionConsent{ApprovalMode: r.ApprovalMode, Session: host.Session, SessionUID: host.SessionUID, RequestID: r.RequestID, RequestRevision: g.Revision, Digest: digest, Terms: r.Terms}
 	if preflight, ok := s.ExecutionAuth.(interface {
 		CheckExecutionConsent(context.Context, Goal) error
 	}); ok {
