@@ -355,10 +355,13 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 			// subject, this is the unresolved case wearing a well-formed
 			// address, and it is refused the same way below — unless the
 			// platform has a UserIdentity for the subject. That record is
-			// written only from a channel-verified inbound (channelsd's
+			// written only from a channel inbound (channelsd's
 			// recordChannelIdentity) or an identity link, so it is a real
 			// user who simply never saved a preference, and the class
-			// defaults are the right answer for them.
+			// defaults are the right answer for them. What it proves is
+			// existence, not the profile text on it: the names it records
+			// are self-set and unverified, which is why the name resolver
+			// matches only channel identities that carry a vouched email.
 			known, kerr := h.userIdentityExists(r.Context(), subject)
 			if kerr != nil {
 				log.FromContext(r.Context()).Info("memory: preferences UserIdentity lookup failed",

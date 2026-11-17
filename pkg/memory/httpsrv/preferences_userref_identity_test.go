@@ -33,6 +33,20 @@ func userIdentityFor(t *testing.T, addr, slackDisplay, realName string) *v1alpha
 	}
 }
 
+// guestIdentityNamed builds the UserIdentity channelsd records for a Slack
+// guest: a team-scoped synthetic subject and a channel identity with the
+// self-set realName but no vouched email.
+func guestIdentityNamed(userID, realName string) *v1alpha1.UserIdentity {
+	subject := identity.Subject("user:synthetic-T1-" + userID)
+	return &v1alpha1.UserIdentity{
+		ObjectMeta: metav1.ObjectMeta{Name: useridentity.NameForSubject(subject)},
+		Spec:       v1alpha1.UserIdentitySpec{Subject: subject.String(), DisplayName: realName},
+		Status: v1alpha1.UserIdentityStatus{ChannelIdentities: []v1alpha1.ChannelIdentity{{
+			Kind: "slack", Domain: "T1", ExternalID: userID, DisplayName: realName, RealName: realName,
+		}}},
+	}
+}
+
 // TestPreferencesGetUserRef_EmailKnownViaUserIdentity_ResolvesToDefaults pins
 // the other half of the existence bar: a subject with a UserIdentity is a real
 // platform user even when they never saved a preference, so the read answers
@@ -70,6 +84,7 @@ func TestPreferencesGetUserRef_NameRef(t *testing.T) {
 		{name: "unique full name reaches the saved value", ref: "name:Alice Moreno", wantStatus: http.StatusOK, wantValue: `"de"`, wantOutcome: preferenceaccess.OutcomeOK},
 		{name: "name shared by two users: 422, unresolved", ref: "name:Jo Park", wantStatus: http.StatusUnprocessableEntity, wantOutcome: preferenceaccess.OutcomeUnresolved},
 		{name: "unknown name: 422, unresolved", ref: "name:Robin Hale", wantStatus: http.StatusUnprocessableEntity, wantOutcome: preferenceaccess.OutcomeUnresolved},
+		{name: "name only an unvouched guest set on themselves: 422, unresolved", ref: "name:Dana Whitfield", wantStatus: http.StatusUnprocessableEntity, wantOutcome: preferenceaccess.OutcomeUnresolved},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,6 +94,7 @@ func TestPreferencesGetUserRef_NameRef(t *testing.T) {
 				userIdentityFor(t, "alice@example.com", "amoreno", "Alice Moreno"),
 				userIdentityFor(t, "jo@example.com", "jo", "Jo Park"),
 				userIdentityFor(t, "jpark@example.com", "jpark", "Jo Park"),
+				guestIdentityNamed("UGUEST", "Dana Whitfield"),
 			)
 			putUserPreference(t, mem, mustCanonicalEmail(t, "alice@example.com"), prefsNS, prefsClass, "language", json.RawMessage(`"de"`))
 
