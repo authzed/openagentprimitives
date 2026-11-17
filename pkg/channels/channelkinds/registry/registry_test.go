@@ -203,7 +203,7 @@ func TestGroupGoalHostFor(t *testing.T) {
 func TestGroupMemberLinks_UnionOncePerLink(t *testing.T) {
 	links := GroupMemberLinks()
 	assert.Equal(t, 1, countOf(links, "slack_channel#member"))
-	assert.Equal(t, 1, countOf(links, "slack_channel#view"))
+	assert.Equal(t, 0, countOf(links, "slack_channel#view"), "audience refs are never group-goal owner types")
 	assert.Equal(t, 1, countOf(links, "group#member"))
 	assert.IsIncreasing(t, links, "sorted and de-duplicated")
 }

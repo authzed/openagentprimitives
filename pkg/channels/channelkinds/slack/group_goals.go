@@ -114,7 +114,11 @@ func (k *Kind) RunAnchor(b *spiceboxv1alpha1.ChannelBinding) (*spiceboxv1alpha1.
 	return out, nil
 }
 
-// GroupMemberLinks implements channelkinds.GroupGoalHost.
+// GroupMemberLinks implements channelkinds.GroupGoalHost: the subject-set
+// type of ConversationMemberRef only. slack_channel#view is the AUDIENCE ref
+// and is deliberately absent — composed into agent_goal_domain#member_group it
+// would let a channel's whole audience (for a public channel, the workspace)
+// be written in as goal owners.
 func (k *Kind) GroupMemberLinks() []string {
-	return []string{"slack_channel#member", "slack_channel#view"}
+	return []string{"slack_channel#member"}
 }

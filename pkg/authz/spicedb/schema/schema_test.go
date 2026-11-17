@@ -99,6 +99,15 @@ func TestSchemaHasCriticalDefinitions(t *testing.T) {
 		"definition workshop {",
 		"permission build = session",
 		"permission close = starter + platform->can_admin",
+		// Group goals: a manager who leaves the group stops managing (the
+		// intersection), and platform admins are the standing fallback when no
+		// manager is left (class->administer). Drop either arm and it still
+		// compiles.
+		"definition agent_goal_domain {",
+		"permission manage = (owner + (manager & member_group) + class->administer) - denied",
+		"permission view_memory = (owner + member_group + class->administer) - denied",
+		"permission administer = platform->can_admin",
+		"permission execute_group = domain_approved",
 	} {
 		require.Contains(t, authzschema.Schema, want, "canonical schema missing %q", want)
 	}
@@ -134,7 +143,11 @@ func TestSchema_DeclaresTheAgentSentinel(t *testing.T) {
 // union — append or replace — fails loudly.
 func TestAgentSessionInteractSubjectsAreClosed(t *testing.T) {
 	requireExactRelationLine(t, authzschema.Schema, "relation started_by: user")
-	requireExactRelationLine(t, authzschema.Schema, "relation participant: user | group#member | agentclass#starter")
+	// agent_goal_domain#manage (a group goal's run session) keeps the set
+	// closed: every arm of manage bottoms out in user or group#member (owner,
+	// manager, member_group, and class->administer -> platform#admin), none in
+	// service.
+	requireExactRelationLine(t, authzschema.Schema, "relation participant: user | group#member | agentclass#starter | agent_goal_domain#manage")
 }
 
 // TestAgentClassInteractorRelationAndPersonalizePermission pins the

@@ -85,7 +85,8 @@ func TestGroupGoalHost(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	assert.Equal(t, []string{"slack_channel#member", "slack_channel#view"}, k.GroupMemberLinks())
+	assert.Equal(t, []string{"slack_channel#member"}, k.GroupMemberLinks(),
+		"member ref only: the audience ref (#view) is never a group-goal owner type")
 }
 
 func TestMembershipCurrent(t *testing.T) {

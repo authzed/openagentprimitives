@@ -193,11 +193,16 @@ definition agentsession {
     // scope, fork, and (with started_by and participants) interact. Written at
     // session creation by the operator's owner resolver from per-channel policy.
     // group#member admits channel-membership groups and class-wide group owners.
-    relation owner: user | group#member
+    //
+    // agent_goal_domain#manage is the owner of a group goal's RUN session: the
+    // goal's live managers (plus platform admins), resolved at check time, so a
+    // manager who leaves the group stops approving that run's asks without any
+    // tuple on the session changing. See agent_goal_domain below.
+    relation owner: user | group#member | agent_goal_domain#manage
     // agentclass#starter lets a class fix its sessions' interact set to its own
     // explicit starters (spec.authz.session.onlyStartersInteract): one tuple
     // naming the set, resolved live, instead of one tuple per person.
-    relation participant: user | group#member | agentclass#starter
+    relation participant: user | group#member | agentclass#starter | agent_goal_domain#manage
     // denied is the blocklist, written when the original requester clicks Deny
     // on a permission_request. denied wins over EVERY grant below — it is
     // subtracted from all four permissions, not just interact. A user an owner
@@ -211,7 +216,7 @@ definition agentsession {
     // one-way door. With owner admitting slack_channel#member, one tuple can
     // mean an entire channel, and a user-only blocklist could only rescind it
     // one member at a time — which never finishes for a channel that grows.
-    relation denied: user | group#member | agentclass#starter
+    relation denied: user | group#member | agentclass#starter | agent_goal_domain#manage
     // parent links a delegated child session to the session that spawned it.
     // Lineage is a LIVE arrow, never copied tuples: revoking standing on a
     // parent takes effect on every descendant at the next check, with no
@@ -576,6 +581,13 @@ definition agentclass {
     // this user personalize" = the classes they've interacted with. A named
     // permission (not the raw relation) keeps the query stable if the rule grows.
     permission can_personalize = interactor
+
+    // administer is "a platform admin, for this class". It exists because an
+    // arrow cannot chain (class->platform->can_admin is not expressible), so a
+    // definition that reaches the admins through its class arrows here:
+    // agent_goal_domain#manage's admin fallback. Through can_admin, the
+    // PERMISSION, for the reason workshop#close documents.
+    permission administer = platform->can_admin
 }
 
 // workshop is one builder session's build space, keyed by its NAMESPACE name
@@ -661,17 +673,51 @@ definition cluster {
     permission pinned = debug_target
 }
 
-// Private durable goal namespace. Only trusted platform code binds the owning
-// user/class pair. Slots carry session access; the memory audience stays private.
+// Durable goal namespace. Only trusted platform code binds the owning
+// user/class pair. Slots carry session access; the memory audience stays with
+// the owner.
+//
+// A domain is owned ONE of two ways, never both:
+//
+//   private  owner: a single user. Everything below resolves through owner.
+//   group    member_group: the member subject set of a multi-person
+//            conversation, plus manager (who may steer the goal) and class
+//            (for the platform-admin fallback). owner is left unwritten.
+//
+// member_group names no channel kind's type here. Its only base type is the
+// core group#member; the guardian composer unions in every registered kind's
+// GroupMemberLinks (ComposeGoalGroupLinks), so a kind brings its own member
+// set without this definition learning its name.
+//
+// manage intersects manager WITH member_group: a manager who leaves the
+// conversation stops managing at the next membership sync, with no tuple on
+// the domain touched. Any member can leave, the last manager included, so
+// platform admins always hold manage on a group goal through class — the one
+// standing "whoever administers this agent" (agentclass has no per-class
+// owner) — and, to step in, they must see it, so view_memory (hence pause)
+// carries the same arm. The admin arm needs the class tuple; a private domain
+// never has one.
+//
+// manage is also a SUBJECT SET: a group goal's run session is owned by
+// agent_goal_domain:<id>#manage. It carries an intersection and an exclusion,
+// which SpiceDB resolves in Check and LookupSubjects alike — the run session's
+// approver fan-out depends on the latter (group_goals_integration_test.go).
 definition agent_goal_domain {
     relation owner: user
+    relation member_group: group#member
+    relation manager: user
+    relation class: agentclass
     relation denied: user
     relation slot_pin: agentsession
     relation slot_grant_view_memory: agentsession with expiration
     relation slot_grant_write_memory: agentsession with expiration
-    permission view_memory = owner - denied
-    permission write_memory = owner - denied
-    permission manage = owner - denied
+    // The admin arm is here as well as in manage: an admin stepping in for a
+    // group with no manager left has to be able to see the goal first.
+    permission view_memory = (owner + member_group + class->administer) - denied
+    // pause is any member's emergency brake: whoever can see the goal can stop it.
+    permission pause = view_memory
+    permission manage = (owner + (manager & member_group) + class->administer) - denied
+    permission write_memory = manage
     // Autonomous execution consent is introduced separately; ownership alone
     // cannot grant it.
     relation executor: user with expiration
@@ -679,10 +725,18 @@ definition agent_goal_domain {
 }
 
 // An approval grants only the exact reviewed request, with bounded lifetime.
+//
+// domain_approved is the GROUP goal's consent: the subject is the domain itself,
+// not a person, because a standing group consent outlives any one manager's
+// membership. The manager who gave it is re-checked live per run elsewhere; this
+// tuple says only that the domain consented to this exact request, until it
+// expires.
 definition agent_goal_execution {
  relation domain: agent_goal_domain
  relation approved: user with expiration
+ relation domain_approved: agent_goal_domain with expiration
  permission owner = domain->manage
  permission approve = domain->manage
  permission execute = approved & domain->manage
+ permission execute_group = domain_approved
 }

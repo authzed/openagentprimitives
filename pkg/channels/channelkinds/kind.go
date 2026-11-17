@@ -807,8 +807,14 @@ type GroupGoalHost interface {
 	// RunAnchor derives, as a copy, the binding a goal run starts from: the
 	// same conversation with any thread anchor cleared. It never mutates b.
 	RunAnchor(b *spiceboxv1alpha1.ChannelBinding) (*spiceboxv1alpha1.ChannelBinding, error)
-	// GroupMemberLinks lists the subject-set link types (e.g.
-	// "slack_channel#member") this kind contributes as group-goal owners.
+	// GroupMemberLinks lists the subject-set link types of
+	// ConversationMemberRef ONLY (e.g. "slack_channel#member") — the types this
+	// kind contributes as group-goal owners, composed into
+	// agent_goal_domain#member_group. Audience refs (ConversationAudienceRef's
+	// types) are never listed here and never composed into the schema: they are
+	// resolved through AudienceResolver, and admitting one into member_group
+	// would make a goal's owners as wide as everyone who can see the
+	// conversation.
 	GroupMemberLinks() []string
 }
 

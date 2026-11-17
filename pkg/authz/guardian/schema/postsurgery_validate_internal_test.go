@@ -155,7 +155,7 @@ func TestComposeAllWithSkipped_RefusesAnInvalidPostSurgeryResult(t *testing.T) {
 	frags := []IdentifiedFragment{SlotCollidesWithRelationFragment()}
 	slots := []SlotPair{GadgetViewerSlot()}
 
-	_, _, err := composeAllWithSkipped(frags, nil, nil, slots)
+	_, _, err := composeAllWithSkipped(frags, nil, nil, slots, nil)
 	require.Error(t, err, "surgery producing an invalid schema must not be returned as success")
 	assert.Contains(t, err.Error(), "grant/slot composition produced invalid schema",
 		"must be the post-surgery gate, not merely any validateCompiled failure")
