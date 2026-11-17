@@ -34,10 +34,15 @@ func newBootstrapSecretsCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("build client: %w", err)
 			}
+			// One line per Secret to the Job's log: what was minted, left as is,
+			// or repaired/re-minted (with any Deployment it rolled).
+			logf := func(format string, args ...any) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "bootstrap-secrets: "+format+"\n", args...)
+			}
 			return bootstrap.MintAllInternalSecrets(cmd.Context(), cl, cl, bootstrap.MintOptions{
 				SkipSpiceDBToken:  skipSpiceDBToken,
 				SkipPostgresToken: skipPostgresToken,
-			})
+			}, logf)
 		},
 	}
 	cmd.Flags().BoolVar(&skipSpiceDBToken, "skip-spicedb-token", false,

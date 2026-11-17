@@ -310,6 +310,7 @@ func ensureNATSCredsSecret(ctx context.Context, c client.Client, cred natsClient
 		if err := c.Create(ctx, sec); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("create %s secret: %w", cred.secretName, err)
 		}
+		logf("minted %s", cred.secretName)
 		return nil
 
 	default:
