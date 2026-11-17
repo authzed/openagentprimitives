@@ -1,6 +1,8 @@
 package desktop
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -10,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm/models"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/chatgpt"
 )
 
 // modelProvider is what the desktop first-run flow needs to know about one
@@ -25,8 +28,9 @@ import (
 // namespaced vendor/model, so nothing handling a model name here may assume a
 // bare one.
 type modelProvider struct {
-	keyEnvVar    string
-	defaultModel string
+	keyEnvVar         string
+	defaultModel      string
+	accountCredential func(context.Context, string, string) (string, error)
 }
 
 // knownModelProviders maps a provider to those facts. Its keys are the LLM
@@ -43,6 +47,10 @@ type modelProvider struct {
 // Validate() must reject it rather than silently accept config-plumbing for
 // something that can't actually be configured.
 var knownModelProviders = map[string]modelProvider{
+	"chatgpt": {accountCredential: func(ctx context.Context, dir, id string) (string, error) {
+		a, err := ChatGPTClient(dir).Access(ctx, id)
+		return a.AccessToken, err
+	}},
 	"anthropic":  {keyEnvVar: "ANTHROPIC_API_KEY", defaultModel: "claude-sonnet-5"},
 	"openai":     {keyEnvVar: "OPENAI_API_KEY", defaultModel: "gpt-5.5"},
 	"openrouter": {keyEnvVar: "OPENROUTER_API_KEY", defaultModel: "openrouter/auto"},
@@ -76,6 +84,7 @@ type NgrokConfig struct {
 type ModelConfig struct {
 	Provider string `json:"provider"` // one of ModelProviderNames()
 	APIKey   string `json:"apiKey"`
+	Account  string `json:"account,omitempty"` // issued OAuth registration ID; never a token
 
 	// Name is the model to register as the cluster default, e.g.
 	// "claude-sonnet-5" or the namespaced "anthropic/claude-3.5-sonnet" an
@@ -115,10 +124,18 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
-	if _, err := lookupProvider(c.Model.Provider); err != nil {
+	p, err := lookupProvider(c.Model.Provider)
+	if err != nil {
 		return err
 	}
-	if c.Model.APIKey == "" {
+	if p.accountCredential != nil {
+		if c.Model.Account == "" || c.Model.APIKey != "" {
+			return fmt.Errorf("desktop config: select a signed-in account; API keys are not used for this provider")
+		}
+		if strings.TrimSpace(c.Model.Name) == "" {
+			return fmt.Errorf("desktop config: select a model available to the signed-in account")
+		}
+	} else if c.Model.APIKey == "" {
 		return fmt.Errorf("desktop config: model apiKey required")
 	}
 	model, err := c.EffectiveModel()
@@ -130,7 +147,8 @@ func (c Config) Validate() error {
 	// catch it here rather than at the agent's first turn. models.ProviderFor
 	// stays quiet for an id no built-in table attributes, so a model newer
 	// than those tables is still accepted as typed.
-	if owner, known := models.ProviderFor(model); known && owner != c.Model.Provider {
+	modelOwner := models.ProviderFamily(c.Model.Provider)
+	if owner, known := models.ProviderFor(model); known && owner != modelOwner {
 		return fmt.Errorf("desktop config: model %q is served by %q, not the selected provider %q — name a %s model or leave model.name empty to use that provider's default", model, owner, c.Model.Provider, c.Model.Provider)
 	}
 	// Built-in chat is the default (Channel == nil) and needs nothing.
@@ -157,6 +175,9 @@ func (c Config) EffectiveModel() (string, error) {
 	if name := strings.TrimSpace(c.Model.Name); name != "" {
 		return name, nil
 	}
+	if p.defaultModel == "" {
+		return "", fmt.Errorf("desktop config: select a model available to the signed-in account")
+	}
 	return p.defaultModel, nil
 }
 
@@ -166,13 +187,46 @@ func (c Config) EffectiveModel() (string, error) {
 // Validate is the gate that rejects one, and it runs before any bring-up.
 func (c Config) EnvForInstall() map[string]string {
 	env := map[string]string{}
-	if p, ok := knownModelProviders[c.Model.Provider]; ok {
+	if p, ok := knownModelProviders[c.Model.Provider]; ok && p.keyEnvVar != "" {
 		env[p.keyEnvVar] = c.Model.APIKey
 	}
 	if c.Ngrok != nil && c.Ngrok.AuthToken != "" {
 		env["NGROK_AUTHTOKEN"] = c.Ngrok.AuthToken
 	}
 	return env
+}
+
+func ChatGPTClient(support string) *chatgpt.Client {
+	return chatgpt.New(filepath.Join(support, "chatgpt"))
+}
+
+// AccountAuthenticated reports whether setup should collect an account instead
+// of an API key. The provider's registration owns this choice.
+func AccountAuthenticated(provider string) bool {
+	p, ok := knownModelProviders[provider]
+	return ok && p.accountCredential != nil
+}
+
+func (c Config) Credential(ctx context.Context, support string) (string, error) {
+	p, err := lookupProvider(c.Model.Provider)
+	if err != nil {
+		return "", err
+	}
+	if p.accountCredential != nil {
+		return p.accountCredential(ctx, support, c.Model.Account)
+	}
+	return c.Model.APIKey, nil
+}
+
+func (c Config) TokenSecretName() string {
+	if c.Model.Account == "" {
+		return "model-default-token"
+	}
+	return AccountTokenSecretName(c.Model.Account)
+}
+
+func AccountTokenSecretName(id string) string {
+	return fmt.Sprintf("model-chatgpt-%x", sha256.Sum256([]byte(id)))[:38]
 }
 
 func Load(dir string) (Config, error) {

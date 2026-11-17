@@ -1566,6 +1566,7 @@ spec:
                     - anthropic
                     - openai
                     - openrouter
+                    - chatgpt
                     - test
                     type: string
                   routingMetadata:
@@ -2711,6 +2712,7 @@ spec:
                         - anthropic
                         - openai
                         - openrouter
+                        - chatgpt
                         - test
                         type: string
                       routingMetadata:
@@ -5662,6 +5664,7 @@ spec:
                         - anthropic
                         - openai
                         - openrouter
+                        - chatgpt
                         - test
                         type: string
                       routingMetadata:
@@ -9411,6 +9414,7 @@ spec:
                         - anthropic
                         - openai
                         - openrouter
+                        - chatgpt
                         - test
                         type: string
                     required:
@@ -10135,6 +10139,7 @@ spec:
                       - anthropic
                       - openai
                       - openrouter
+                      - chatgpt
                       - test
                       type: string
                     routing:
@@ -11978,6 +11983,7 @@ spec:
                         - anthropic
                         - openai
                         - openrouter
+                        - chatgpt
                         - test
                         type: string
                     required:
@@ -12702,6 +12708,7 @@ spec:
                       - anthropic
                       - openai
                       - openrouter
+                      - chatgpt
                       - test
                       type: string
                     routing:

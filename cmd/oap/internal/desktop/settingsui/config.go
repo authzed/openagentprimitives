@@ -29,10 +29,12 @@ const minSettingsPassword = 8
 type configResponse struct {
 	Model struct {
 		Provider     string `json:"provider"`
+		Account      string `json:"account,omitempty"`
 		APIKeyMasked string `json:"apiKeyMasked"` // "••••" + last 4, "" when unset
 		Name         string `json:"name"`
 	} `json:"model"`
 	Providers           []string `json:"providers"`
+	AccountProviders    []string `json:"accountProviders"`
 	NgrokConfigured     bool     `json:"ngrokConfigured"`
 	HealthNotifications bool     `json:"healthNotifications"`
 	PasswordSet         bool     `json:"passwordSet"`
@@ -47,6 +49,7 @@ type configResponse struct {
 type configUpdateRequest struct {
 	Model struct {
 		Provider string `json:"provider"`
+		Account  string `json:"account,omitempty"`
 		APIKey   string `json:"apiKey"` // "" = keep existing
 		Name     string `json:"name"`
 	} `json:"model"`
@@ -102,6 +105,12 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 
 	var resp configResponse
 	resp.Model.Provider = cfg.Model.Provider
+	resp.Model.Account = cfg.Model.Account
+	for _, p := range desktop.ModelProviderNames() {
+		if desktop.AccountAuthenticated(p) {
+			resp.AccountProviders = append(resp.AccountProviders, p)
+		}
+	}
 	resp.Model.APIKeyMasked = maskKey(cfg.Model.APIKey)
 	resp.Model.Name = cfg.Model.Name
 	resp.Providers = desktop.ModelProviderNames()
@@ -154,8 +163,17 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 
 	updated := cur
 	updated.Model.Provider = req.Model.Provider
+	if desktop.AccountAuthenticated(req.Model.Provider) {
+		updated.Model.Account = req.Model.Account
+		if updated.Model.Account == "" && cur.Model.Provider == req.Model.Provider {
+			updated.Model.Account = cur.Model.Account
+		}
+		updated.Model.APIKey = ""
+	} else {
+		updated.Model.Account = ""
+	}
 	updated.Model.Name = req.Model.Name
-	if req.Model.APIKey != "" {
+	if req.Model.APIKey != "" && !desktop.AccountAuthenticated(req.Model.Provider) {
 		updated.Model.APIKey = req.Model.APIKey
 	}
 
@@ -194,13 +212,20 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if cur.Model.Account != updated.Model.Account || cur.Model.Name != updated.Model.Name {
+		if err := updated.ValidateAccountModel(r.Context(), s.deps.SupportDir); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
+
 	if err := updated.Save(s.deps.SupportDir); err != nil {
 		s.deps.Logf("settingsui: save config: %v", err)
 		http.Error(w, "settings: failed to save config", http.StatusInternalServerError)
 		return
 	}
 
-	modelChanged := cur.Model.Provider != updated.Model.Provider ||
+	modelChanged := cur.Model.Account != updated.Model.Account || cur.Model.Provider != updated.Model.Provider ||
 		cur.Model.APIKey != updated.Model.APIKey ||
 		cur.Model.Name != updated.Model.Name
 	passwordChanged := cur.AdminPasswordHash != updated.AdminPasswordHash

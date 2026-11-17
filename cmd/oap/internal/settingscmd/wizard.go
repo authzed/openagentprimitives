@@ -278,7 +278,7 @@ func resolveDefaultModelOpts(flagOpts DefaultModelOpts, formStep *catalogStepRes
 //     var is honored as given.
 func (o DefaultModelOpts) checkCoherent() error {
 	model := strings.TrimSpace(o.Model)
-	if owner, known := models.ProviderFor(model); known && owner != o.Provider {
+	if owner, known := models.ProviderFor(model); known && owner != models.ProviderFamily(o.Provider) {
 		return fmt.Errorf(
 			"--default-model=%s is served by the %q provider, not %q: pass --default-model-provider=%s, or name a model %s serves",
 			model, owner, o.Provider, owner, o.Provider)

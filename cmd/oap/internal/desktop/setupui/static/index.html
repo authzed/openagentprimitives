@@ -417,15 +417,25 @@
             <label for="provider-select">Model provider</label>
             <select id="provider-select" name="provider">
               <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
+              <option value="openai">OpenAI API</option>
+              <option value="chatgpt" data-auth="account">ChatGPT subscription</option>
               <option value="openrouter">OpenRouter</option>
             </select>
           </div>
-          <div class="field">
+          <div class="field" id="api-key-field">
             <label for="api-key-input">API key</label>
             <input id="api-key-input" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the API key for this provider">
           </div>
-          <div class="field">
+          <div class="field" id="account-field" hidden>
+            <label for="account-select">ChatGPT account</label>
+            <select id="account-select"><option value="">Add an account</option></select>
+            <button type="button" id="account-login" data-oai-siwc-button>Continue with ChatGPT</button>
+            <button type="button" id="account-logout">Sign out of selected account</button>
+            <label for="account-model">Available model</label>
+            <select id="account-model"></select>
+            <p class="field-hint">Uses your eligible ChatGPT plan and its app usage limits. <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage usage in ChatGPT</a>.</p>
+          </div>
+          <div class="field" id="model-field">
             <label for="model-input">Model <span class="field-optional">(optional)</span></label>
             <input id="model-input" name="model" type="text" autocomplete="off" spellcheck="false" placeholder="Leave blank for this provider's recommended model">
             <p class="field-hint">OpenRouter models are namespaced, e.g. <code>anthropic/claude-3.5-sonnet</code>.</p>
@@ -802,6 +812,45 @@
     }
   }
 
+  function accountAuth() { return $("provider-select").selectedOptions[0].dataset.auth === "account"; }
+  function accountRequest(path, account) {
+    var options = account === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({account: account})};
+    return fetch(path, options).then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error(t); }); return r.json(); });
+  }
+  function loadAccountModels() {
+    var id = $("account-select").value;
+    $("account-model").replaceChildren();
+    if (!id) return Promise.resolve();
+    return accountRequest("/accounts/models?account=" + encodeURIComponent(id)).then(function (models) {
+      if ($("account-select").value !== id) return;
+      models.forEach(function (m) { $("account-model").add(new Option(m.display_name, m.slug)); });
+    });
+  }
+  function loadAccounts(selected) {
+    return accountRequest("/accounts").then(function (accounts) {
+      $("account-select").replaceChildren(new Option("Add an account", ""));
+      accounts.forEach(function (a) { $("account-select").add(new Option(a.label + (a.signedIn ? "" : " (signed out)"), a.id)); });
+      $("account-select").value = selected || "";
+      return loadAccountModels();
+    });
+  }
+  $("provider-select").addEventListener("change", function () {
+    var useAccount = accountAuth();
+    $("account-field").hidden = !useAccount;
+    $("api-key-field").hidden = useAccount;
+    $("model-field").hidden = useAccount;
+    if (useAccount) loadAccounts($("account-select").value).catch(function(e) { setConfigError(e.message); });
+  });
+  $("account-select").addEventListener("change", function () { loadAccountModels().catch(function(e) { setConfigError(e.message); }); });
+  $("account-login").addEventListener("click", function () {
+    var button = this; button.disabled = true; setConfigError("");
+    accountRequest("/accounts/login", $("account-select").value).then(function (r) { return loadAccounts(r.account); })
+      .catch(function(e) { setConfigError(e.message); }).finally(function () { button.disabled = false; });
+  });
+  $("account-logout").addEventListener("click", function () {
+    accountRequest("/accounts/logout", $("account-select").value).then(function () { return loadAccounts(""); }).catch(function(e) { setConfigError(e.message); });
+  });
+
   $("config-form-el").addEventListener("submit", function (e) {
     e.preventDefault();
     setConfigError(null);
@@ -822,8 +871,9 @@
 
     var payload = {
       provider: $("provider-select").value,
-      apiKey: $("api-key-input").value,
-      model: $("model-input").value.trim(),
+      apiKey: accountAuth() ? "" : $("api-key-input").value,
+      account: accountAuth() ? $("account-select").value : "",
+      model: accountAuth() ? $("account-model").value : $("model-input").value.trim(),
       password: password
     };
 

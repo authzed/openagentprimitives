@@ -1102,6 +1102,7 @@ spec:
                         - anthropic
                         - openai
                         - openrouter
+                        - chatgpt
                         - test
                         type: string
                       routingMetadata:

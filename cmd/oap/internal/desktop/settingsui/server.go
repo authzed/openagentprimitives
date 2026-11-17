@@ -33,8 +33,9 @@ const keepaliveInterval = 25 * time.Second
 // JSON/SSE API. Bind with Start; New only constructs and mints the launch
 // token.
 type Server struct {
-	deps  Deps
-	token string
+	Accounts http.Handler
+	deps     Deps
+	token    string
 
 	// appKey is the webassets manifest entry rendered at GET /. It defaults to
 	// the built "settings" entry; it stays overridable (lowercase, unexported —
@@ -122,6 +123,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("PUT /api/cluster/settings", s.handleClusterSettingsPut)
 	mux.HandleFunc("GET /api/cluster/install-info", s.handleClusterInstallInfoGet)
 	mux.HandleFunc("POST /api/kubectl/use", s.handleKubectlUse)
+	if s.Accounts != nil {
+		mux.Handle("/accounts", s.Accounts)
+		mux.Handle("/accounts/", s.Accounts)
+	}
 	mux.HandleFunc("POST /api/reveal/config", s.handleRevealConfig)
 	mux.HandleFunc("POST /api/reveal/logs", s.handleRevealLogs)
 

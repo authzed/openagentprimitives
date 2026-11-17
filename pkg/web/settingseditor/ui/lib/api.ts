@@ -19,6 +19,7 @@ export interface AppState {
 // ConfigModel is the redacted model projection settingsui.configResponse
 // carries — apiKeyMasked is "••••"+last 4 (or "" when unset), never the real key.
 export interface ConfigModel {
+  account?: string;
   provider: string;
   apiKeyMasked: string;
   name: string;
@@ -28,6 +29,7 @@ export interface ConfigModel {
 export interface ConfigResponse {
   model: ConfigModel;
   providers: string[];
+  accountProviders?: string[];
   ngrokConfigured: boolean;
   healthNotifications: boolean;
   passwordSet: boolean;
@@ -38,6 +40,7 @@ export interface ConfigResponse {
 // apiKey "" means "keep the value already on disk" — there is no other way
 // to signal "leave this alone" without echoing the secret back.
 export interface ConfigUpdateModel {
+  account?: string;
   provider: string;
   apiKey: string;
   name: string;

@@ -209,3 +209,12 @@ func ProviderFor(id string) (string, bool) {
 	}
 	return found, found != ""
 }
+
+// ProviderFamily identifies the upstream model catalog for an authentication route.
+func ProviderFamily(provider string) string {
+	families := map[string]string{"chatgpt": "openai"}
+	if family, ok := families[provider]; ok {
+		return family
+	}
+	return provider
+}

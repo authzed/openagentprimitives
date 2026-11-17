@@ -34,7 +34,7 @@ var providerCases = []struct {
 // package's own list, so a fourth provider cannot be registered without the
 // key-var / default-model / catalog assertions below being extended to it.
 func TestModelProviderNames_CoversEveryProvider(t *testing.T) {
-	want := make([]string, 0, len(providerCases))
+	want := []string{"chatgpt"} // Account auth has no key env or built-in default; covered separately below.
 	for _, tc := range providerCases {
 		want = append(want, tc.provider)
 	}
@@ -298,4 +298,27 @@ func TestConfig_SaveLoad_PreservesHealthNotifications(t *testing.T) {
 	require.NotNil(t, got.HealthNotifications, "pointer must survive the round trip")
 	assert.False(t, *got.HealthNotifications)
 	assert.False(t, got.HealthNotificationsEnabled())
+}
+
+func TestConfigChatGPTRequiresAccountAndModel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		model desktop.ModelConfig
+		valid bool
+	}{
+		{"account and available model", desktop.ModelConfig{Provider: "chatgpt", Account: "oaiapp_test", Name: "gpt-5.5"}, true},
+		{"missing account", desktop.ModelConfig{Provider: "chatgpt", Name: "gpt-5.5"}, false},
+		{"missing model", desktop.ModelConfig{Provider: "chatgpt", Account: "oaiapp_test"}, false},
+		{"API key is not subscription login", desktop.ModelConfig{Provider: "chatgpt", Account: "oaiapp_test", Name: "gpt-5.5", APIKey: "sk-key"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := desktop.Config{Model: tc.model}
+			if tc.valid {
+				require.NoError(t, c.Validate())
+				assert.Empty(t, c.EnvForInstall())
+			} else {
+				assert.Error(t, c.Validate())
+			}
+		})
+	}
 }

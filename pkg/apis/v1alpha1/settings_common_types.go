@@ -246,7 +246,7 @@ type ModelCatalogEntry struct {
 	Name string `json:"name"`
 
 	// Provider is the LLM provider serving this model.
-	// +kubebuilder:validation:Enum=anthropic;openai;openrouter;test
+	// +kubebuilder:validation:Enum=anthropic;openai;openrouter;chatgpt;test
 	// +optional
 	Provider string `json:"provider,omitempty"`
 
@@ -360,7 +360,7 @@ type SettingsDefaults struct {
 // the apiKey.
 type DefaultModel struct {
 	// Provider is the LLM provider serving this model.
-	// +kubebuilder:validation:Enum=anthropic;openai;openrouter;test
+	// +kubebuilder:validation:Enum=anthropic;openai;openrouter;chatgpt;test
 	Provider string `json:"provider"`
 	// Name is the provider's model identifier.
 	Name string `json:"name"`
@@ -492,3 +492,6 @@ func (l *SettingsLimits) MaxWorkshopsPerStarterOrDefault() int32 {
 	}
 	return *l.MaxWorkshopsPerStarter
 }
+
+// ModelTokenSourceAnnotation binds a runner credential copy to its original catalog source.
+const ModelTokenSourceAnnotation = "agentprimitives.authzed.com/model-token-source"

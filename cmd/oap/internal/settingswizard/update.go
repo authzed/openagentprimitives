@@ -45,6 +45,15 @@ func defaultModelTokenRef() *v1alpha1.NamespacedSecretKeyRef {
 // only that one entry. The write uses the fixed wizard field manager so a
 // later full wizard run converges on the same owner rather than fighting it.
 func UpdateDefaultModelEntry(ctx context.Context, c client.Client, provider, name string) error {
+	return UpdateDefaultModelEntryWithToken(ctx, c, provider, name, nil)
+}
+
+// UpdateDefaultModelEntryWithToken optionally changes the default credential source.
+func UpdateDefaultModelEntryWithToken(ctx context.Context, c client.Client, provider, name string, tokenRef *v1alpha1.NamespacedSecretKeyRef) error {
+	newRef := tokenRef
+	if newRef == nil {
+		newRef = defaultModelTokenRef()
+	}
 	var cas v1alpha1.ClusterAgentSettings
 	getErr := c.Get(ctx, client.ObjectKey{Name: v1alpha1.ClusterAgentSettingsName}, &cas)
 	switch {
@@ -57,7 +66,7 @@ func UpdateDefaultModelEntry(ctx context.Context, c client.Client, provider, nam
 			ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.ClusterAgentSettingsName},
 		}
 		entries := []v1alpha1.ModelCatalogEntry{{
-			Name: name, Provider: provider, Default: true, TokenRef: defaultModelTokenRef(),
+			Name: name, Provider: provider, Default: true, TokenRef: newRef,
 		}}
 		cas.Spec.ModelCatalog = &entries
 		if err := c.Create(ctx, &cas, client.FieldOwner(fieldManager)); err != nil {
@@ -77,13 +86,16 @@ func UpdateDefaultModelEntry(ctx context.Context, c client.Client, provider, nam
 		if entries[i].Default {
 			entries[i].Provider = provider
 			entries[i].Name = name
+			if tokenRef != nil {
+				entries[i].TokenRef = tokenRef
+			}
 			found = true
 			break
 		}
 	}
 	if !found {
 		entries = append(entries, v1alpha1.ModelCatalogEntry{
-			Name: name, Provider: provider, Default: true, TokenRef: defaultModelTokenRef(),
+			Name: name, Provider: provider, Default: true, TokenRef: newRef,
 		})
 	}
 	cas.Spec.ModelCatalog = &entries

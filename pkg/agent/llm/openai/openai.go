@@ -4,8 +4,8 @@
 // cache economics are not modeled — see pkg/agent/llm/models.WithoutCacheRatios).
 //
 // The API key is a static string held in the SDK client. OPENAI_BASE_URL
-// overrides the base URL — set explicitly (the SDK reads it too) so a
-// Codex/subscription endpoint can be pointed at. Send always uses the SDK's
+// overrides the API base URL. ChatGPT plan usage uses the separate chatgpt
+// provider and its Responses protocol. Send always uses the SDK's
 // streaming endpoint and accumulates the full response; Request.OnEvent, when
 // set, receives live neutral StreamEvents.
 //
@@ -37,8 +37,7 @@ type Provider struct {
 
 // New constructs a Provider with the given API key. Panics on empty key
 // (matches anthropic.New; the factory path checks empty → error before here).
-// OPENAI_BASE_URL, if set, overrides the default endpoint (for a Codex /
-// subscription base URL).
+// OPENAI_BASE_URL, if set, overrides the default API endpoint.
 func New(apiKey string) *Provider {
 	if apiKey == "" {
 		panic("openai.New: apiKey must be non-empty")

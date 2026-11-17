@@ -51,6 +51,7 @@ type OnOpenDashboardFunc func() error
 // it is read here and handed straight to onConfig as its own argument.
 type configRequest struct {
 	Provider string `json:"provider"`
+	Account  string `json:"account"`
 	APIKey   string `json:"apiKey"`
 	// Model is optional: blank means the selected provider's recommended
 	// model (see desktop.Config.EffectiveModel).
@@ -66,6 +67,8 @@ type Server struct {
 	timeline        *Timeline
 	onConfig        OnConfigFunc
 	onOpenDashboard OnOpenDashboardFunc
+	Accounts        http.Handler
+	ValidateConfig  func(context.Context, desktop.Config) error
 
 	ln      net.Listener
 	httpSrv *http.Server
@@ -110,6 +113,10 @@ func (s *Server) Start(port int) error {
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/progress", s.handleProgress)
 	mux.HandleFunc("/config", s.handleConfig)
+	if s.Accounts != nil {
+		mux.Handle("/accounts", s.Accounts)
+		mux.Handle("/accounts/", s.Accounts)
+	}
 	mux.HandleFunc("/open-dashboard", s.handleOpenDashboard)
 
 	srv := &http.Server{Handler: desktop.LoopbackGuard(mux)}
@@ -258,12 +265,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := desktop.Config{Model: desktop.ModelConfig{Provider: req.Provider, APIKey: req.APIKey, Name: req.Model}}
+	cfg := desktop.Config{Model: desktop.ModelConfig{Provider: req.Provider, APIKey: req.APIKey, Name: req.Model, Account: req.Account}}
 	if err := cfg.Validate(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	if s.ValidateConfig != nil {
+		if err := s.ValidateConfig(r.Context(), cfg); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
 	if s.onConfig != nil {
 		if err := s.onConfig(cfg, req.Password); err != nil {
 			http.Error(w, fmt.Sprintf("apply config: %v", err), http.StatusInternalServerError)

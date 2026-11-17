@@ -248,6 +248,8 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 	}()
 
 	srv := setupui.New(st.timeline, st.onConfigSubmit)
+	srv.Accounts = st.accountHandler()
+	srv.ValidateConfig = func(ctx context.Context, cfg desktop.Config) error { return cfg.ValidateAccountModel(ctx, st.support) }
 	srv.SetOnOpenDashboard(func() error {
 		st.openDashboard()
 		return nil
@@ -256,6 +258,7 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 		return fmt.Errorf("desktop: start setup UI server: %w", err)
 	}
 	st.setupSrv = srv
+	go st.maintainModelCredentials(ctx)
 	go func() {
 		select {
 		case serveErr, ok := <-srv.Errors():
@@ -329,12 +332,13 @@ func runDesktop(ctx context.Context, out io.Writer, _ *apcmd.Globals) error {
 // (menu item click handlers, the bring-up loop, and onExit all run
 // concurrently with systray's own event-dispatch goroutine).
 type desktopState struct {
-	ctx       context.Context
-	out       io.Writer
-	logFile   *os.File
-	support   string
-	resources string
-	eng       *desktop.Engine
+	modelCredentialsMu sync.Mutex
+	ctx                context.Context
+	out                io.Writer
+	logFile            *os.File
+	support            string
+	resources          string
+	eng                *desktop.Engine
 
 	// initialConfig is the config loaded from disk at process start; valid
 	// (usable) only when needsConfigAtStart is false. onReady starts
@@ -911,8 +915,12 @@ func (s *desktopState) configureHook(ctx context.Context, kubeconfig []byte, cfg
 		return err
 	}
 
+	credential, err := cfg.Credential(ctx, s.support)
+	if err != nil {
+		return err
+	}
 	tokenPath := filepath.Join(s.support, modelTokenFileName)
-	if err := atomicWriteFile(tokenPath, []byte(cfg.Model.APIKey), 0o600); err != nil {
+	if err := atomicWriteFile(tokenPath, []byte(credential), 0o600); err != nil {
 		return fmt.Errorf("stage model token: %w", err)
 	}
 	defer os.Remove(tokenPath)
@@ -925,7 +933,7 @@ func (s *desktopState) configureHook(ctx context.Context, kubeconfig []byte, cfg
 		Model:           model,
 		Provider:        cfg.Model.Provider,
 		TokenFile:       tokenPath,
-		SecretName:      "model-default-token",
+		SecretName:      cfg.TokenSecretName(),
 		SecretNamespace: "agentprimitives-system",
 		SecretKey:       "token",
 	}
@@ -1872,6 +1880,7 @@ func (s *desktopState) openSettings() {
 			notify("OAP Desktop", "Couldn't open Settings — see logs.")
 			return
 		}
+		srv.Accounts = s.accountHandler()
 		if err := srv.Start(0); err != nil {
 			s.logf("settings: start server: %v", err)
 			notify("OAP Desktop", "Couldn't open Settings — see logs.")
@@ -2032,15 +2041,19 @@ func (s *desktopState) reapplyConfig(ctx context.Context, cfg desktop.Config, sc
 		if err != nil {
 			return fmt.Errorf("connect to local cluster: %w", err)
 		}
-		ref := modeltoken.SecretRef{Namespace: "agentprimitives-system", Name: "model-default-token", Key: "token"}
-		if err := modeltoken.EnsureSecret(ctx, b.Dynamic, ref, cfg.Model.APIKey); err != nil {
+		credential, err := cfg.Credential(ctx, s.support)
+		if err != nil {
+			return err
+		}
+		ref := modeltoken.SecretRef{Namespace: "agentprimitives-system", Name: cfg.TokenSecretName(), Key: "token"}
+		if err := modeltoken.EnsureSecret(ctx, b.Dynamic, ref, credential); err != nil {
 			return err
 		}
 		model, err := cfg.EffectiveModel()
 		if err != nil {
 			return err
 		}
-		if err := settingswizard.UpdateDefaultModelEntry(ctx, b.Controller, cfg.Model.Provider, model); err != nil {
+		if err := settingswizard.UpdateDefaultModelEntryWithToken(ctx, b.Controller, cfg.Model.Provider, model, &spiceboxv1alpha1.NamespacedSecretKeyRef{Namespace: ref.Namespace, Name: ref.Name, Key: ref.Key}); err != nil {
 			return fmt.Errorf("update cluster default model entry: %w", err)
 		}
 	}

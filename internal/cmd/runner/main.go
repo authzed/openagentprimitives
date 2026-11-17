@@ -36,6 +36,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/derivevalidator"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm/anthropic"
+	_ "github.com/authzed/openagentprimitives/pkg/agent/llm/chatgpt"
 	_ "github.com/authzed/openagentprimitives/pkg/agent/llm/openai" // registers "openai"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm/openaicompat"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm/openrouter" // registers "openrouter"; also used directly for its base-URL/header accessors
@@ -608,6 +609,29 @@ func run(cfg *config) error {
 	provider, err := providers.New(sess.Status.EffectiveSettings.Model.Provider, apiKey)
 	if err != nil {
 		return fmt.Errorf("runner: build LLM provider: %w", err)
+	}
+
+	modelTokenRef := sess.Status.EffectiveSettings.Model.APIKey
+	provider = providers.WithCredentialSource(provider, func(ctx context.Context) (string, error) {
+		ref := modelTokenRef
+		var secret corev1.Secret
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, &secret); err != nil {
+			return "", fmt.Errorf("read session model credential: %w", err)
+		}
+		token := string(secret.Data[ref.Key])
+		if token == "" {
+			return "", fmt.Errorf("model credential is unavailable; sign in again in desktop settings")
+		}
+		return token, nil
+	})
+	var approvalSummary summarizer.Provider
+	var annotationSummary summarizer.Provider
+	if providers.RotatesCredentials(provider.Name()) {
+		approvalSummary = summarizer.NewWithLLM(provider, sess.Status.EffectiveSettings.Model.Name)
+		annotationSummary = summarizer.NewWithLLM(provider, sess.Status.EffectiveSettings.Model.Name)
+	} else {
+		approvalSummary = summarizer.NewForProvider(sess.Status.EffectiveSettings.Model.Provider, apiKey)
+		annotationSummary = summarizer.NewForProvider(sess.Status.EffectiveSettings.Model.Provider, apiKey)
 	}
 
 	// SpiceDB is REQUIRED — per-tool authz checks and JIT relationship
@@ -2286,14 +2310,14 @@ func run(cfg *config) error {
 		// match the session's primary LLM provider (Anthropic sessions
 		// get an Anthropic-key summarizer, OpenAI sessions an OpenAI-key
 		// one) — reuses the runner's API key; cheap calls.
-		ApprovalSummarizer: summarizer.NewForProvider(sess.Status.EffectiveSettings.Model.Provider, apiKey),
+		ApprovalSummarizer: approvalSummary,
 
 		// AnnotationSummarizer is the same isolated summarizer LLM construction
 		// as ApprovalSummarizer, reused for the browser annotation-batch echo
 		// (D4 plan, task 3). NewForProvider's Provider now also implements
 		// SummarizeAnnotations; maybeEchoAnnotationTurn falls back to
 		// summarizer.FallbackAnnotationSummary when this is nil or errors.
-		AnnotationSummarizer: summarizer.NewForProvider(sess.Status.EffectiveSettings.Model.Provider, apiKey),
+		AnnotationSummarizer: annotationSummary,
 
 		// EchoPublish wires maybeEchoAnnotationTurn's KindUserEcho mirror to the
 		// runner's NATS connection; nil for non-channel-attached sessions (see
@@ -2400,7 +2424,11 @@ func run(cfg *config) error {
 	// deliberately decoupled from the gate: a recommender error degrades dynamic
 	// to a plain ask (see IdentityChoiceGate.Eval), it never fails the session.
 	if class.Spec.IdentityMode == spiceboxv1alpha1.IdentityModeDynamic {
-		loop.IdentityRecommender = buildIdentityRecommender(sess.Status.EffectiveSettings.Model.Provider, apiKey)
+		if providers.RotatesCredentials(provider.Name()) {
+			loop.IdentityRecommender = identityadvisor.NewWithLLM(provider, sess.Status.EffectiveSettings.Model.Name)
+		} else {
+			loop.IdentityRecommender = buildIdentityRecommender(sess.Status.EffectiveSettings.Model.Provider, apiKey)
+		}
 	}
 
 	loop.AuthzCli = spdbCli

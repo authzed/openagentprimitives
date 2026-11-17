@@ -423,6 +423,13 @@ func BuildRunnerRBAC(
 			Verbs:         []string{"get"},
 		})
 	}
+	// A runner may reread its own model access token after OAuth rotation.
+	// It already receives the same Secret as mounted files; no central credential
+	// or another session's Secret becomes readable.
+	if s.Status.EffectiveSettings != nil && s.Status.EffectiveSettings.Model.APIKey.Name != "" {
+		role.Rules = append(role.Rules, rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"secrets"}, ResourceNames: []string{s.Status.EffectiveSettings.Model.APIKey.Name}, Verbs: []string{"get"}})
+	}
+
 	rb := &rbacv1.RoleBinding{
 		TypeMeta: metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -458,6 +465,10 @@ func BuildRunnerRBAC(
 	}
 	if llmAPIKey != "" {
 		sec.Data[agentSessionSecretLLMAPIKey] = []byte(llmAPIKey)
+		if s.Status.EffectiveSettings != nil && s.Status.EffectiveSettings.ModelTokenSource != nil {
+			src := s.Status.EffectiveSettings.ModelTokenSource
+			sec.Annotations = map[string]string{spiceboxv1alpha1.ModelTokenSourceAnnotation: src.Namespace + "/" + src.Name + "/" + src.Key}
+		}
 	}
 	// Per-session ClusterRoleBinding granting this session's runner SA
 	// read access to the cluster-scoped spiceboxtoolspecs CRD via the

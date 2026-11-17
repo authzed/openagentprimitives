@@ -356,7 +356,7 @@ type IdentityRecommendationConfig struct {
 }
 
 type ModelConfig struct {
-	// +kubebuilder:validation:Enum=anthropic;openai;openrouter;test
+	// +kubebuilder:validation:Enum=anthropic;openai;openrouter;chatgpt;test
 	// +optional
 	Provider string `json:"provider,omitempty"`
 	// +optional

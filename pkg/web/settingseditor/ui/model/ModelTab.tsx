@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@ap/design";
 import { getConfig, putConfig, ApiError, type ConfigResponse, type FieldOutcome } from "../lib/api";
+import { ChatGPTAccount } from "./ChatGPTAccount";
 import { OutcomeList } from "../lib/OutcomeList";
 
 export interface ModelTabProps {
@@ -31,6 +32,7 @@ export function ModelTab({ apiBase, running }: ModelTabProps) {
 
   const [provider, setProvider] = React.useState("");
   const [apiKeyInput, setApiKeyInput] = React.useState("");
+  const [account, setAccount] = React.useState("");
   const [modelName, setModelName] = React.useState("");
   const [ngrokInput, setNgrokInput] = React.useState("");
   const [clearNgrok, setClearNgrok] = React.useState(false);
@@ -47,6 +49,7 @@ export function ModelTab({ apiBase, running }: ModelTabProps) {
         setConfig(c);
         setProvider(c.model.provider);
         setModelName(c.model.name);
+        setAccount(c.model.account || "");
       })
       .catch((e: Error) => {
         if (!closed) setLoadError(e.message);
@@ -68,7 +71,7 @@ export function ModelTab({ apiBase, running }: ModelTabProps) {
       // have changed it since).
       const latest = await getConfig(apiBase);
       const resp = await putConfig(apiBase, {
-        model: { provider, apiKey: apiKeyInput, name: modelName },
+        model: { provider, apiKey: config?.accountProviders?.includes(provider) ? "" : apiKeyInput, name: modelName, account: config?.accountProviders?.includes(provider) ? account : "" },
         ngrokAuthToken: clearNgrok ? "" : ngrokInput,
         clearNgrok,
         healthNotifications: latest.healthNotifications,
@@ -114,6 +117,7 @@ export function ModelTab({ apiBase, running }: ModelTabProps) {
             </Select>
           </section>
 
+          {config.accountProviders?.includes(provider) ? <ChatGPTAccount account={account} onAccount={setAccount} model={modelName} onModel={setModelName} /> : <>
           <section className="flex flex-col gap-2">
             <Label htmlFor="model-api-key">API key</Label>
             <p className="text-sm text-muted-foreground">
@@ -135,6 +139,8 @@ export function ModelTab({ apiBase, running }: ModelTabProps) {
               Leave blank to use {provider || "the selected provider"}&apos;s recommended default model.
             </p>
           </section>
+
+          </>}
 
           <section className="flex flex-col gap-2">
             <h3 className="text-sm font-medium">ngrok</h3>
