@@ -11,6 +11,7 @@ import (
 
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/cliout"
 	"github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz/spicedb"
 	"github.com/authzed/openagentprimitives/pkg/platform/apimage"
 	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
@@ -79,7 +80,13 @@ func runRenderValidate(ctx context.Context, out io.Writer, cfg RenderConfig, dir
 		}
 	}
 
-	// 3. First-party images are pinned (no mutable :dev), unless --no-digest-pin.
+	// 3. SpiceDB is reachable: the endpoint ConfigMap every client reads is
+	// present, and when it names the in-cluster Service, the SpiceDBCluster that
+	// serves it ships too. Without these the overlay syncs green and nothing can
+	// authorize.
+	problems = append(problems, spicedbProblems(docs)...)
+
+	// 4. First-party images are pinned (no mutable :dev), unless --no-digest-pin.
 	if !cfg.NoDigestPin {
 		for _, img := range firstPartyMutableImages(built) {
 			problems = append(problems, fmt.Sprintf("image %q uses a mutable tag; GitOps wants an immutable digest (render with a registry, or pass --no-digest-pin to accept this)", img))
@@ -112,7 +119,7 @@ func jobMintedSecretNames(cfg RenderConfig) []string {
 		"spicebox-postgres-token", "spicebox-spicedb-token")
 	out := names[:0:len(names)]
 	for _, n := range names {
-		if n == "spicebox-spicedb-token" && cfg.ExternalSpiceDB {
+		if n == "spicebox-spicedb-token" && cfg.externalSpiceDB() {
 			continue
 		}
 		if n == "spicebox-postgres-token" && cfg.ExternalPostgres {
@@ -134,7 +141,7 @@ func externalSecretNames(cfg RenderConfig) map[string]bool {
 	if cfg.ExternalWebhookTLS {
 		out["spicebox-webhook-tls"] = true
 	}
-	if cfg.ExternalSpiceDB {
+	if cfg.externalSpiceDB() {
 		out["spicebox-spicedb-token"] = true
 	}
 	if cfg.ExternalPostgres {
@@ -161,8 +168,10 @@ type secretRef struct {
 }
 
 // nonOptionalSecretRefs collects every required (optional!=true) Secret reference
-// from pod templates in docs — env valueFrom.secretKeyRef and volume secrets.
-// A missing optional field defaults to required, matching the kubelet.
+// from pod templates in docs: env valueFrom.secretKeyRef, envFrom secretRef,
+// volume secrets and projected-volume secret sources, across containers and
+// initContainers. A missing optional field defaults to required, matching the
+// kubelet.
 func nonOptionalSecretRefs(docs []*unstructured.Unstructured) []secretRef {
 	var refs []secretRef
 	for _, d := range docs {
@@ -170,51 +179,74 @@ func nonOptionalSecretRefs(docs []*unstructured.Unstructured) []secretRef {
 		if !found {
 			continue
 		}
+		add := func(ref map[string]any, nameKey string) {
+			if optionalTrue(ref) {
+				return
+			}
+			if name, ok, _ := unstructured.NestedString(ref, nameKey); ok {
+				refs = append(refs, secretRef{d.GetKind(), d.GetName(), name})
+			}
+		}
 		for _, cf := range []string{"containers", "initContainers"} {
-			containers, _, _ := unstructured.NestedSlice(spec, cf)
-			for _, c := range containers {
-				cm, ok := c.(map[string]any)
-				if !ok {
-					continue
+			for _, cm := range mapsAt(spec, cf) {
+				for _, em := range mapsAt(cm, "env") {
+					if skr, found, _ := unstructured.NestedMap(em, "valueFrom", "secretKeyRef"); found {
+						add(skr, "name")
+					}
 				}
-				env, _, _ := unstructured.NestedSlice(cm, "env")
-				for _, e := range env {
-					em, ok := e.(map[string]any)
-					if !ok {
-						continue
-					}
-					skr, found, _ := unstructured.NestedMap(em, "valueFrom", "secretKeyRef")
-					if !found {
-						continue
-					}
-					if optionalTrue(skr) {
-						continue
-					}
-					if name, ok, _ := unstructured.NestedString(skr, "name"); ok {
-						refs = append(refs, secretRef{d.GetKind(), d.GetName(), name})
+				for _, efm := range mapsAt(cm, "envFrom") {
+					if sr, found, _ := unstructured.NestedMap(efm, "secretRef"); found {
+						add(sr, "name")
 					}
 				}
 			}
 		}
-		volumes, _, _ := unstructured.NestedSlice(spec, "volumes")
-		for _, v := range volumes {
-			vm, ok := v.(map[string]any)
-			if !ok {
-				continue
+		for _, vm := range mapsAt(spec, "volumes") {
+			if sec, found, _ := unstructured.NestedMap(vm, "secret"); found {
+				add(sec, "secretName")
 			}
-			sec, found, _ := unstructured.NestedMap(vm, "secret")
-			if !found {
-				continue
-			}
-			if optionalTrue(sec) {
-				continue
-			}
-			if name, ok, _ := unstructured.NestedString(sec, "secretName"); ok {
-				refs = append(refs, secretRef{d.GetKind(), d.GetName(), name})
+			for _, src := range mapsAt(vm, "projected", "sources") {
+				if sec, found, _ := unstructured.NestedMap(src, "secret"); found {
+					add(sec, "name")
+				}
 			}
 		}
 	}
 	return refs
+}
+
+// mapsAt returns the map elements of the list at path in m (non-maps skipped).
+func mapsAt(m map[string]any, path ...string) []map[string]any {
+	list, _, _ := unstructured.NestedSlice(m, path...)
+	out := make([]map[string]any, 0, len(list))
+	for _, e := range list {
+		if em, ok := e.(map[string]any); ok {
+			out = append(out, em)
+		}
+	}
+	return out
+}
+
+// spicedbProblems checks that the built overlay gives its SpiceDB clients
+// something to connect to (see runRenderValidate step 3).
+func spicedbProblems(docs []*unstructured.Unstructured) []string {
+	var endpoint string
+	var cluster bool
+	for _, d := range docs {
+		switch {
+		case d.GetKind() == "ConfigMap" && d.GetName() == spicedb.SharedConfigMapName:
+			endpoint, _, _ = unstructured.NestedString(d.Object, "data", spicedb.SharedConfigMapEndpointKey)
+		case d.GetKind() == "SpiceDBCluster" && d.GetName() == "spicebox-spicedb":
+			cluster = true
+		}
+	}
+	switch {
+	case endpoint == "":
+		return []string{fmt.Sprintf("no ConfigMap %s with a %q key: the SpiceDB clients have no endpoint", spicedb.SharedConfigMapName, spicedb.SharedConfigMapEndpointKey)}
+	case endpoint == inClusterSpiceDBEndpoint && !cluster:
+		return []string{fmt.Sprintf("ConfigMap %s points at the in-cluster SpiceDB (%s) but no SpiceDBCluster ships to serve it", spicedb.SharedConfigMapName, endpoint)}
+	}
+	return nil
 }
 
 func optionalTrue(m map[string]any) bool {
@@ -249,17 +281,27 @@ func deploymentHasEnv(docs []*unstructured.Unstructured, name, envName string) b
 }
 
 // firstPartyMutableImages returns first-party image refs in the built YAML that
-// are NOT digest-pinned (a mutable "<name>:tag" with no @sha256). Scans textually
-// since image refs appear in container specs and a few CR fields alike.
+// are NOT digest-pinned. Every occurrence is checked on its own: one pinned
+// reference must not vouch for an unpinned one elsewhere. Scans textually since
+// image refs appear in container specs and a few CR fields alike.
 func firstPartyMutableImages(built []byte) []string {
 	var mutable []string
 	text := string(built)
 	for _, img := range apimage.All {
-		// A pinned ref contains "<name>...@sha256:"; a mutable one is "<name>:dev"
-		// (or any tag) with no digest. Flag the bare ":dev" refs that survive.
+		// A pinned ref is "<name>:<tag>@sha256:..."; flag any "<name>:dev"
+		// occurrence not followed by a digest.
 		needle := img.Name + ":dev"
-		if strings.Contains(text, needle) && !strings.Contains(text, img.Name+":dev@sha256:") {
-			mutable = append(mutable, needle)
+		for i := strings.Index(text, needle); i >= 0; {
+			end := i + len(needle)
+			if !strings.HasPrefix(text[end:], "@sha256:") {
+				mutable = append(mutable, needle)
+				break
+			}
+			next := strings.Index(text[end:], needle)
+			if next < 0 {
+				break
+			}
+			i = end + next
 		}
 	}
 	return mutable

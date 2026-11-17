@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+  name: spicebox-bootstrap
+  namespace: agentprimitives-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+  name: spicebox-bootstrap
+  namespace: agentprimitives-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - create
+  - update
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - list
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+  name: spicebox-bootstrap
+  namespace: agentprimitives-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spicebox-bootstrap
+subjects:
+- kind: ServiceAccount
+  name: spicebox-bootstrap
+  namespace: agentprimitives-system
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  name: spicebox-bootstrap-secrets-98a5b8aef4
+  namespace: agentprimitives-system
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spicebox-bootstrap
+    spec:
+      containers:
+      - args:
+        - bootstrap-secrets
+        - --skip-spicedb-token
+        - --skip-postgres-token
+        image: spicebox-operator:dev
+        name: bootstrap-secrets
+        resources: {}
+      restartPolicy: OnFailure
+      serviceAccountName: spicebox-bootstrap

@@ -32,13 +32,19 @@ type RenderConfig struct {
 	Tags         manifests.Tags
 	StorageClass string
 	Routing      WebdRoutingOpts
-	WithPostgres bool
 	MemoryToken  MemoryTokenLinks
 	NoDigestPin  bool
-	// ExternalSpiceDB/ExternalPostgres: the user points at an EXTERNAL instance and
-	// provides its token Secret themselves, so the bootstrap Job must NOT mint that
-	// token (it would fight the external instance).
-	ExternalSpiceDB  bool
+	// ExternalSpiceDBEndpoint, when set, points every component at a SpiceDB the
+	// user runs: the overlay ships no SpiceDBCluster, the endpoint ConfigMap
+	// carries this address, and the user provides spicebox-spicedb-token (the
+	// bootstrap Job must NOT mint it — it would fight the external instance).
+	// ExternalSpiceDBInsecure keeps plaintext gRPC to it; otherwise every client
+	// is flipped to TLS.
+	ExternalSpiceDBEndpoint string
+	ExternalSpiceDBInsecure bool
+	// ExternalPostgres: the overlay ships no Postgres and the user provides
+	// spicebox-postgres-token. Requires an external SpiceDB, because the bundled
+	// SpiceDB keeps its datastore in the bundled Postgres.
 	ExternalPostgres bool
 	// ExternalWebhookTLS: do not emit the cert-manager Issuer/Certificate for the
 	// operator webhook serving cert; you provide spicebox-webhook-tls + the VWC
@@ -46,6 +52,9 @@ type RenderConfig struct {
 	ExternalWebhookTLS bool
 	Strat              cloud.Strategy
 }
+
+// externalSpiceDB reports whether the user runs their own SpiceDB.
+func (c RenderConfig) externalSpiceDB() bool { return c.ExternalSpiceDBEndpoint != "" }
 
 func NewRenderCmd(g *apcmd.Globals) *cobra.Command {
 	cfg := RenderConfig{OutputDir: "deploy/oap"}
@@ -57,8 +66,9 @@ func NewRenderCmd(g *apcmd.Globals) *cobra.Command {
 			"Unlike `oap install`, render never mutates a cluster (its only remote call is read-only image-digest " +
 			"resolution, skipped with --no-digest-pin). Commit the output directory and point your GitOps controller " +
 			"at it. The overlay provisions every internal Secret: a pre-start Job mints the tokens/NATS material " +
-			"before the operator starts, and a cert-manager Certificate populates the webhook cert (so cert-manager " +
-			"is a dependency). Use --external-spicedb/--external-postgres/--external-webhook-tls to provide any of " +
+			"before the operator starts, a SpiceDBCluster backed by the bundled Postgres serves authorization, and a " +
+			"cert-manager Certificate populates the webhook cert (so cert-manager is a dependency). Use " +
+			"--external-spicedb-endpoint/--external-postgres/--external-webhook-tls to provide any of " +
 			"those yourself, or link an existing memory token with the per-component --*-memory-token-secret flags. " +
 			"Verify a synced cluster with `oap check`.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -69,10 +79,10 @@ func NewRenderCmd(g *apcmd.Globals) *cobra.Command {
 	cmd.Flags().StringVar(&cfg.ClusterKind, "cluster-kind", "", clusterKindFlagUsage)
 	cmd.Flags().StringVar(&cfg.Tags.Registry, "image-registry", "", "Rewrite first-party images to <registry>/<name>")
 	cmd.Flags().StringVar(&cfg.StorageClass, "storage-class", "", "StorageClass for stateful PVCs/StatefulSets")
-	cmd.Flags().BoolVar(&cfg.WithPostgres, "with-postgres", false, "Include the Postgres dependency component")
 	cmd.Flags().BoolVar(&cfg.NoDigestPin, "no-digest-pin", false, "Emit mutable tags instead of pinning digests (skips registry digest resolution)")
-	cmd.Flags().BoolVar(&cfg.ExternalSpiceDB, "external-spicedb", false, "You run an external SpiceDB and provide spicebox-spicedb-token yourself; the bootstrap Job will not mint it")
-	cmd.Flags().BoolVar(&cfg.ExternalPostgres, "external-postgres", false, "You run an external Postgres and provide spicebox-postgres-token yourself; the bootstrap Job will not mint it")
+	cmd.Flags().StringVar(&cfg.ExternalSpiceDBEndpoint, "external-spicedb-endpoint", "", "gRPC host:port of a SpiceDB you run; the overlay ships no SpiceDB and you provide spicebox-spicedb-token yourself (the bootstrap Job will not mint it)")
+	cmd.Flags().BoolVar(&cfg.ExternalSpiceDBInsecure, "external-spicedb-insecure", false, "Reach --external-spicedb-endpoint over plaintext gRPC instead of TLS")
+	cmd.Flags().BoolVar(&cfg.ExternalPostgres, "external-postgres", false, "You run an external Postgres and provide spicebox-postgres-token yourself; the overlay ships no Postgres and the bootstrap Job will not mint the token. Requires --external-spicedb-endpoint")
 	cmd.Flags().BoolVar(&cfg.ExternalWebhookTLS, "external-webhook-tls", false, "Do not emit cert-manager resources for the operator webhook cert; you provide spicebox-webhook-tls + the VWC caBundle yourself (clusters without cert-manager)")
 	// Per-component only, by design: there is deliberately no "one Secret for all
 	// three" flag — webd's token must differ from channelsd/authzd (it is
@@ -157,6 +167,12 @@ func runRender(ctx context.Context, out io.Writer, g *apcmd.Globals, cfg RenderC
 func validateRenderFlags(cfg RenderConfig) error {
 	if cfg.Strat != nil && spicedbModeFor(cfg.Strat.InstallProfile().SpiceDBDatastore()).bootstrapsSchemaAtStartup() {
 		return fmt.Errorf("cluster kind %q uses an in-memory SpiceDB datastore whose schema is bootstrapped at startup, which is fatal against the durable, multi-replica cluster a GitOps render targets; render a persistent-datastore kind (the operator applies the schema there)", cfg.Strat.Key())
+	}
+	if cfg.ExternalPostgres && !cfg.externalSpiceDB() {
+		return fmt.Errorf("--external-postgres requires --external-spicedb-endpoint: the bundled SpiceDB keeps its datastore in the bundled Postgres, so it cannot run without it")
+	}
+	if cfg.ExternalSpiceDBInsecure && !cfg.externalSpiceDB() {
+		return fmt.Errorf("--external-spicedb-insecure requires --external-spicedb-endpoint")
 	}
 	if cfg.Routing.trustedHostname == "" && cfg.Routing.sandboxHostname != "" {
 		return fmt.Errorf("--sandbox-hostname requires --trusted-hostname")

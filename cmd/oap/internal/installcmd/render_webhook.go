@@ -1,6 +1,13 @@
 package installcmd
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
+)
 
 // Webhook serving-cert provisioning for the GitOps path, via cert-manager.
 //
@@ -72,4 +79,49 @@ func webhookCAInjectPatch() []byte {
 			"    cert-manager.io/inject-ca-from: agentprimitives-system/"+webhookCertName+"\n")
 	}
 	return []byte(strings.Join(docs, "---\n"))
+}
+
+// webhookCABundleRemovals returns the kustomization `patches:` entries that
+// remove every literal `caBundle: ""` from the base VWCs. The ca-injector owns
+// that field; left in the desired manifest, Argo self-heal or Flux's server-side
+// apply would reset it to empty and fight the injector, failing admission TLS in
+// between. Indices are read from the base itself, so a webhook added to
+// config/manager/webhook.yaml is covered without touching this file.
+func webhookCABundleRemovals() (string, error) {
+	docs, err := manifests.Split(manifests.Install)
+	if err != nil {
+		return "", fmt.Errorf("parse base bundle: %w", err)
+	}
+	var out strings.Builder
+	for _, name := range webhookVWCNames {
+		var ops []string
+		found := false
+		for _, d := range docs {
+			if d.GetKind() != "ValidatingWebhookConfiguration" || d.GetName() != name {
+				continue
+			}
+			found = true
+			hooks, _, _ := unstructured.NestedSlice(d.Object, "webhooks")
+			for i, h := range hooks {
+				hm, ok := h.(map[string]any)
+				if !ok {
+					return "", fmt.Errorf("ValidatingWebhookConfiguration %s webhook %d is not a map", name, i)
+				}
+				if _, has, _ := unstructured.NestedFieldNoCopy(hm, "clientConfig", "caBundle"); has {
+					ops = append(ops, fmt.Sprintf("      - op: remove\n        path: /webhooks/%d/clientConfig/caBundle\n", i))
+				}
+			}
+		}
+		if !found {
+			return "", fmt.Errorf("ValidatingWebhookConfiguration %s is not in the base bundle (webhookVWCNames is stale)", name)
+		}
+		if len(ops) == 0 {
+			continue
+		}
+		out.WriteString("  - target:\n" +
+			"      kind: ValidatingWebhookConfiguration\n" +
+			"      name: " + name + "\n" +
+			"    patch: |-\n" + strings.TrimSuffix(strings.Join(ops, ""), "\n") + "\n")
+	}
+	return out.String(), nil
 }

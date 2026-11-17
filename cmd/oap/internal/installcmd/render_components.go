@@ -15,20 +15,26 @@ type dependencyComponent struct {
 	name    string
 	enabled func(RenderConfig) bool
 	load    func() ([][]byte, error)
+	// syncWave is the Argo sync-wave every resource in the component joins
+	// (render_syncwaves.go). Stamped onto each doc, not via the component's
+	// commonAnnotations: a Component's transformers run over the PARENT's whole
+	// resource set, which would move every resource into this wave.
+	syncWave string
 }
 
 // dependencyComponents is the fixed, ordered set of optional dependencies. Order
 // is fixed so the emitted `components:` list (and the on-disk layout) is
 // deterministic across renders.
 //
-// Postgres only, by design: its token is Job-minted, so --with-postgres renders
-// a bundle that works end to end. Graphiti/Neo4j are omitted until a follow-up
+// Postgres only, by design: its token is Job-minted, so it works end to end. It
+// is on unless --external-postgres, as in oap install, because the bundled
+// SpiceDB keeps its datastore in it. Graphiti/Neo4j are omitted until a follow-up
 // adds the external-LLM-key story — graphiti needs a user-supplied
 // spicebox-graphiti-config (OpenAI key) the overlay cannot mint, which render's
 // "nothing external by default" contract has no place for yet. (The install path
 // still supports them; see install.go / manifests.Graphiti/Neo4j.)
 var dependencyComponents = []dependencyComponent{
-	{"postgres", func(c RenderConfig) bool { return c.WithPostgres }, manifests.Postgres},
+	{"postgres", func(c RenderConfig) bool { return !c.ExternalPostgres }, manifests.Postgres, syncWavePostgres},
 }
 
 // enabledComponentNames returns the enabled dependency names in fixed order. Used
@@ -64,6 +70,13 @@ func writeDependencyComponents(cfg RenderConfig) error {
 				}
 				docs[i] = m
 			}
+		}
+		for i := range docs {
+			m, err := annotateDoc(docs[i], map[string]string{argoSyncWaveAnnotation: d.syncWave})
+			if err != nil {
+				return fmt.Errorf("annotate %s: %w", d.name, err)
+			}
+			docs[i] = m
 		}
 		compDir := filepath.Join(cfg.OutputDir, "components", d.name)
 		if err := os.MkdirAll(compDir, 0o755); err != nil {

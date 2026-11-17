@@ -138,6 +138,27 @@ func WriteOverlay(cfg RenderConfig) error {
 		}
 	}
 
+	// Argo sync-waves: the base Namespace joins the bootstrap-prerequisites wave
+	// (the Job and its RBAC carry their own waves).
+	if err := os.WriteFile(filepath.Join(cfg.OutputDir, syncWavePatchFile), syncWavePatch(), 0o644); err != nil {
+		return err
+	}
+
+	// SpiceDB: the database Job + SpiceDBCluster + endpoint ConfigMap oap install
+	// creates imperatively, or just the ConfigMap for an external instance.
+	spicedbDocs, err := renderSpiceDBResources(cfg)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(cfg.OutputDir, spicedbResourceFile), spicedbDocs, 0o644); err != nil {
+		return err
+	}
+	if tls, emitted := spicedbTLSPatch(cfg); emitted {
+		if err := os.WriteFile(filepath.Join(cfg.OutputDir, spicedbTLSPatchFile), tls, 0o644); err != nil {
+			return err
+		}
+	}
+
 	// Pre-start Job that mints the internal Secrets (always emitted — a GitOps
 	// apply has no `oap install` to mint them).
 	job, err := renderBootstrapJob(cfg)
@@ -160,8 +181,8 @@ func WriteOverlay(cfg RenderConfig) error {
 		}
 	}
 
-	// Optional dependencies (postgres/graphiti/neo4j) become kustomize Components,
-	// pulled in via `components:` only when their --with-* flag is set.
+	// Dependencies (postgres) become kustomize Components, pulled in via
+	// `components:` unless the user runs that dependency externally.
 	if err := writeDependencyComponents(cfg); err != nil {
 		return err
 	}
@@ -200,16 +221,24 @@ func clusterKindPatch(key string) []byte {
 // deterministically. Components and additional patches are appended by later
 // render stages; order is fixed so re-renders are byte-identical.
 func renderKustomization(cfg RenderConfig) ([]byte, error) {
-	resources := "resources:\n  - base/install.yaml\n  - base/channelsd.yaml\n  - base/nats.yaml\n  - " + bootstrapJobFile + "\n"
+	resources := "resources:\n  - base/install.yaml\n  - base/channelsd.yaml\n  - base/nats.yaml\n  - " + bootstrapJobFile + "\n  - " + spicedbResourceFile + "\n"
 	if cfg.Routing.trustedHostname != "" {
 		resources += "  - " + routingResourceFile + "\n"
 	}
 	if !cfg.ExternalWebhookTLS {
 		resources += "  - " + webhookCertResourceFile + "\n"
 	}
-	patches := "patches:\n  - path: " + clusterKindPatchFile + "\n"
+	patches := "patches:\n  - path: " + clusterKindPatchFile + "\n  - path: " + syncWavePatchFile + "\n"
 	if !cfg.ExternalWebhookTLS {
 		patches += "  - path: " + webhookCAInjectPatchFile + "\n"
+		removals, err := webhookCABundleRemovals()
+		if err != nil {
+			return nil, err
+		}
+		patches += removals
+	}
+	if _, emitted := spicedbTLSPatch(cfg); emitted {
+		patches += "  - path: " + spicedbTLSPatchFile + "\n" + spicedbTLSChannelsdPatch()
 	}
 	k := "apiVersion: kustomize.config.k8s.io/v1beta1\n" +
 		"kind: Kustomization\n" +
