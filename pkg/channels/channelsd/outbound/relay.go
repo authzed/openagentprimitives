@@ -334,6 +334,21 @@ func notePendingPrompt(ctx context.Context, mem memory.Memory, ns, name string, 
 	}
 }
 
+// promptExpiredInTransit reports whether env is an interaction request whose
+// deadline has passed by now. Any other kind, or a payload that will not
+// decode, is delivered: dropping on a decode failure would be the silent hang
+// the relay exists to prevent.
+func promptExpiredInTransit(env channelevents.Envelope, now time.Time) bool {
+	if env.Kind != channelevents.KindInteractionRequest {
+		return false
+	}
+	var pl channelevents.InteractionRequestPayload
+	if err := json.Unmarshal(env.Payload, &pl); err != nil {
+		return false
+	}
+	return pl.ExpiredAt(now)
+}
+
 func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 	logger := log.FromContext(ctx).WithValues("subject", msg.Subject)
 
@@ -701,6 +716,18 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 			return
 		}
 		env.Payload = reb
+	}
+
+	// A prompt whose deadline passed while it sat in the relay's queue is not
+	// delivered: the runner has already stopped waiting, and its timeout report
+	// rides IN, so it can reach channelsd before this card does and find nothing
+	// to retire. Delivered anyway, the card would arrive armed — a Slack
+	// approver card is an ephemeral a later expiry cannot edit — and noted as
+	// live, for a request nobody can act on. Re-surfacing applies the same rule
+	// to a parked prompt.
+	if promptExpiredInTransit(env, time.Now()) {
+		logger.Info("outbound relay: drop, interaction request expired before delivery")
+		return
 	}
 
 	// Durably record relayed prompt REQUEST envelopes so the inbound pipeline can

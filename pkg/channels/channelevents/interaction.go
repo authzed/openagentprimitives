@@ -317,6 +317,16 @@ type InteractionRequestPayload struct {
 	Interruptible bool `json:"interruptible,omitempty"`
 }
 
+// ExpiredAt reports whether the request's deadline has passed at now. It is the
+// one definition every consumer shares — the relay deciding whether a card is
+// still worth delivering, re-surfacing, and the decision pipe refusing a late
+// click — so they never disagree about one prompt. Inclusive: the runner's own
+// wait is a context.WithTimeout that fires AT the deadline, so a request is
+// dead at ExpiresAt, not after it. A nil ExpiresAt never passes.
+func (p InteractionRequestPayload) ExpiredAt(now time.Time) bool {
+	return p.ExpiresAt != nil && !now.Before(*p.ExpiresAt)
+}
+
 // Validate enforces the wire contract. Nil Actions is legal: a read-only
 // notice card (info-leakage notice-only mode).
 func (p InteractionRequestPayload) Validate() error {

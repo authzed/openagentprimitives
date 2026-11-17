@@ -2244,3 +2244,39 @@ func (r *fixedResolver) lastSubChannelRef() (spiceboxv1alpha1.NamespacedRef, boo
 	}
 	return r.subChannelRefs[len(r.subChannelRefs)-1], true
 }
+
+// An interaction request whose deadline passed while it waited in the relay is
+// dropped, not delivered: the runner already stopped waiting, so the card
+// would arrive armed for a request nobody can act on. A live request published
+// right behind it still goes out — and because the relay handles one
+// subscription in order, its arrival proves the expired one was processed.
+func TestRelay_DropsInteractionRequestExpiredInTransit(t *testing.T) {
+	nc := connectNATS(t)
+	cli := fakeClientWith(t, defaultSession())
+	subCap := &captureSender{}
+	startRelay(t, nc, cli, &fixedResolver{s: &captureSender{}, subS: subCap})
+
+	request := func(ref string, expiresIn time.Duration) channelevents.Envelope {
+		deadline := time.Now().Add(expiresIn)
+		return buildEnv(t, "foo", channelevents.KindInteractionRequest, channelevents.InteractionRequestPayload{
+			Category:   "test_category",
+			RequestRef: ref,
+			Lead:       "Approve this?",
+			Audience: channelevents.InteractionAudience{
+				Scope:     channelevents.AudienceApprovers,
+				Approvers: []channelevents.ExternalIdentity{{Kind: "fake", ExternalID: "U0X"}},
+			},
+			ExpiresAt: &deadline,
+		})
+	}
+	publishOut(t, nc, "default", "foo", "interaction_request", request("expired", -time.Minute))
+	publishOut(t, nc, "default", "foo", "interaction_request", request("live", time.Hour))
+
+	require.Eventually(t, func() bool { return subCap.count() >= 1 }, 5*time.Second, 20*time.Millisecond,
+		"the live request is delivered")
+	got := subCap.envelopes()
+	require.Len(t, got, 1, "only the live request is delivered")
+	var pl channelevents.InteractionRequestPayload
+	require.NoError(t, json.Unmarshal(got[0].Payload, &pl))
+	assert.Equal(t, "live", pl.RequestRef)
+}
