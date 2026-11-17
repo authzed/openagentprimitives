@@ -11,32 +11,138 @@ import (
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
+	"github.com/authzed/openagentprimitives/pkg/memory"
 )
 
 // awaitUserMessageToolName is the meta tool the agent calls to park. The loop
 // borrows it by name for the resume case; see parkUntilInbound.
 const awaitUserMessageToolName = "await_user_message"
 
-// resumedWithNothingToDo reports whether this Run has nothing to respond to.
+// resumeShape names why a resume found nothing to do, for the park's log line
+// and its exit. resumeHasWork is the zero value: take the turn.
+type resumeShape string
+
+const (
+	resumeHasWork resumeShape = ""
+	// resumeAssistantLast: the transcript ends with the agent's own message.
+	resumeAssistantLast resumeShape = "assistant-last"
+	// resumeCompletedRound: the transcript ends with a round the agent closed
+	// through a recorded, successful agent_work_complete.
+	resumeCompletedRound resumeShape = "completed-round"
+)
+
+// resumedWithNothingToDo reports whether this Run has nothing to respond to,
+// and which shape of transcript made it so.
 //
-// Both halves are required and neither is sufficient:
+// hadInitialPrompt distinguishes a RESUME from a first boot. A first boot
+// always has something to say — its opening prompt — and must never park.
+// Past that, the transcript has nothing outstanding in two shapes:
 //
-//   - hadInitialPrompt distinguishes a RESUME from a first boot. A first boot
-//     always has something to say — its opening prompt — and must never park.
-//   - The last replayed message being the ASSISTANT's is what makes the turn
-//     both pointless and invalid. If the transcript ends with a user message (a
-//     just-drained inbox turn, or a prior run that died mid-turn before
-//     answering), there IS something outstanding and the loop must run.
+//   - The last message is the ASSISTANT's. Calling the model then is both
+//     pointless and invalid (providers reject a conversation ending in an
+//     assistant message).
+//   - completedRound (see completedRoundAtRest, and the caller's gate on which
+//     sessions it applies to), nothing was appended since the replay
+//     (len(messages) == replayed), and the last message carries only tool
+//     results. The live loop parks Idle the moment agent_work_complete
+//     succeeds and never shows the model that result, so a resume that finds
+//     the same transcript has no more to do than the live loop had.
+//
+// Anything else — a just-drained inbox turn, a refused completion handed back
+// as an error, a tool batch a prior run died before answering — IS outstanding
+// and the loop must run.
 //
 // It checks the message shape rather than "did drainInbox return anything"
 // because the question is what the model would be sent, which the messages
 // themselves answer — so a future path that appends something else for the model
 // to act on is covered without knowing about it.
-func resumedWithNothingToDo(hadInitialPrompt bool, messages []llm.Message) bool {
+func resumedWithNothingToDo(hadInitialPrompt, completedRound bool, replayed int, messages []llm.Message) resumeShape {
 	if !hadInitialPrompt || len(messages) == 0 {
+		return resumeHasWork
+	}
+	last := messages[len(messages)-1]
+	if last.Role == "assistant" {
+		return resumeAssistantLast
+	}
+	if completedRound && len(messages) == replayed && onlyToolResults(last) {
+		return resumeCompletedRound
+	}
+	return resumeHasWork
+}
+
+// completedRoundAtRest reports whether the durable transcript ends with a
+// round the agent closed through agent_work_complete, every step of which
+// actually ran.
+//
+// Deliberately stricter than transcriptAtRest/endsTurn, which also drive turn
+// attribution and must keep their own answers:
+//
+//   - EVERY tool_use in the last assistant turn has a RECORDED result in prior.
+//     A runner that died between appending the assistant turn and recording
+//     its results left the batch unexecuted — replay synthesizes "no result
+//     recorded" answers for it (repairOrphanToolUses), but those are not
+//     evidence anything ran, and parking there would silently drop the
+//     reply, the goal report, the completion itself.
+//   - agent_work_complete's own recorded result is not an error: a refused
+//     completion left the round open. A sibling's error does not reopen it —
+//     the live loop parks on a successful completion whatever its siblings
+//     returned.
+//   - Nothing but tool results was placed after that assistant turn. Any other
+//     user turn (an inbound already drained, an authorless notice) is
+//     something the model has not answered yet.
+func completedRoundAtRest(prior []memory.Turn) bool {
+	last := -1
+	for i, t := range prior {
+		if t.Role == "assistant" && (last < 0 || t.Index > prior[last].Index) {
+			last = i
+		}
+	}
+	if last < 0 || prior[last].Refused {
 		return false
 	}
-	return messages[len(messages)-1].Role == "assistant"
+	a := prior[last]
+	results := map[string]*memory.ToolResultBlock{}
+	for _, t := range prior {
+		if t.Role != "user" || t.Index <= a.Index {
+			continue
+		}
+		for _, b := range t.Content {
+			if b.Type != "tool_result" || b.ToolResult == nil {
+				return false
+			}
+			results[b.ToolResult.ToolUseID] = b.ToolResult
+		}
+	}
+	completed := false
+	for _, b := range a.Content {
+		if b.Type != "tool_use" || b.ToolUse == nil {
+			continue
+		}
+		r, ok := results[b.ToolUse.ID]
+		if !ok {
+			return false
+		}
+		if b.ToolUse.Name == "agent_work_complete" {
+			if r.IsError {
+				return false
+			}
+			completed = true
+		}
+	}
+	return completed
+}
+
+// onlyToolResults reports whether m carries tool results and nothing else.
+func onlyToolResults(m llm.Message) bool {
+	if len(m.Content) == 0 {
+		return false
+	}
+	for _, b := range m.Content {
+		if b.Type != "tool_result" {
+			return false
+		}
+	}
+	return true
 }
 
 // parkUntilInbound blocks in the SAME wait the agent's own await_user_message
