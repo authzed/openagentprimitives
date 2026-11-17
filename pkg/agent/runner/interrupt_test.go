@@ -98,6 +98,34 @@ func TestInterruptRegistry_DeregisterStopsCancel(t *testing.T) {
 	cancelA(nil) // avoid ctx leak
 }
 
+func TestInterruptRegistry_CancelForBudget(t *testing.T) {
+	var reg interruptRegistry
+
+	roCtx, roCancel := context.WithCancelCause(context.Background())
+	rwCtx, rwCancel := context.WithCancelCause(context.Background())
+	provCtx, provCancel := context.WithCancelCause(context.Background())
+	reg.registerTool("tu_ro", ro("read_file"), roCancel)
+	reg.registerTool("tu_rw", rw("terraform_apply"), rwCancel)
+	reg.setProvider(provCancel)
+
+	reg.cancelForBudget(errMaxDurationExceeded)
+
+	assert.ErrorIs(t, context.Cause(roCtx), errMaxDurationExceeded, "readonly tool cancelled")
+	assert.ErrorIs(t, context.Cause(rwCtx), errMaxDurationExceeded,
+		"stateful tool cancelled too: a spent budget ends the session regardless")
+	assert.ErrorIs(t, context.Cause(provCtx), errMaxDurationExceeded, "provider call cancelled")
+	assert.False(t, reg.takeRequested(), "a budget cancel is not a user interrupt")
+
+	// Registrations after the budget is spent are cancelled on arrival, so a
+	// call started in the window after the watchdog fired cannot run unbounded.
+	lateTool, lateToolCancel := context.WithCancelCause(context.Background())
+	lateProv, lateProvCancel := context.WithCancelCause(context.Background())
+	reg.registerTool("tu_late", rw("terraform_apply"), lateToolCancel)
+	reg.setProvider(lateProvCancel)
+	assert.ErrorIs(t, context.Cause(lateTool), errMaxDurationExceeded, "late tool cancelled on register")
+	assert.ErrorIs(t, context.Cause(lateProv), errMaxDurationExceeded, "late provider call cancelled on set")
+}
+
 // regTool registers t under id in l's live interrupt registry and returns
 // its cancel func, mirroring what the dispatch fan-out does in loop_dispatch.go.
 func regTool(l *Loop, id string, t tool.Tool) context.CancelCauseFunc {

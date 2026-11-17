@@ -57,12 +57,20 @@ func TestPatchRunDuration(t *testing.T) {
 	c, sess := newFakeClientWithSession(t)
 	sp := runner.NewStatusPatcher(c, client.ObjectKeyFromObject(sess))
 	ctx := context.Background()
-	require.NoError(t, sp.PatchRunDuration(ctx, 90*time.Second), "PatchRunDuration")
+	require.NoError(t, sp.PatchRunDuration(ctx, 90*time.Second, time.Hour), "PatchRunDuration")
 
 	var out spiceboxv1alpha1.AgentSession
 	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &out), "Get after PatchRunDuration")
 	require.NotNil(t, out.Status.RunDuration, "RunDuration must be set")
 	assert.Equal(t, 90*time.Second, out.Status.RunDuration.Duration)
+	require.NotNil(t, out.Status.EnforcedMaxDuration, "EnforcedMaxDuration must be set with a cap")
+	assert.Equal(t, time.Hour, out.Status.EnforcedMaxDuration.Duration)
+
+	// A pod enforcing no cap clears the field rather than leaving a previous
+	// pod's value for the operator's backstop to compare against.
+	require.NoError(t, sp.PatchRunDuration(ctx, 2*time.Minute, 0), "PatchRunDuration without a cap")
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &out), "Get after uncapped PatchRunDuration")
+	assert.Nil(t, out.Status.EnforcedMaxDuration, "no cap: EnforcedMaxDuration cleared")
 }
 
 func TestWriteSucceeded(t *testing.T) {

@@ -22,12 +22,8 @@ import (
 	"fmt"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
-	"github.com/authzed/openagentprimitives/pkg/controllers/agentstatus"
-	"github.com/authzed/openagentprimitives/pkg/controllers/conditions"
 )
 
 // reconcileExpiration evaluates the wall-clock lifetime cap. Returns:
@@ -72,20 +68,9 @@ func (r *Reconciler) reconcileExpiration(ctx context.Context, sess *spiceboxv1al
 		return false, deadline.Sub(now), nil
 	}
 
-	patched := sess.DeepCopy()
-	if err := r.applyEvent(ctx, patched, lifecyclecore.Expired{}); err != nil {
-		return false, 0, err
-	}
-	patched.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseFailed
-	patched.Status.FailureReason = spiceboxv1alpha1.ReasonAgentSessionExpired
-	finished := metav1.NewTime(now)
-	patched.Status.FinishedAt = &finished
-	conditions.Set(sess, &patched.Status.Conditions, metav1.Condition{
-		Type: spiceboxv1alpha1.AgentSessionConditionFailed, Status: metav1.ConditionTrue,
-		Reason:  spiceboxv1alpha1.ReasonAgentSessionExpired,
-		Message: fmt.Sprintf("session expired after %s (wall-clock lifetime cap)", expiration),
-	})
-	if err := agentstatus.WriteOwned(ctx, r.Client, patched, sess, spiceboxv1alpha1.OwnerOperator); err != nil {
+	if err := r.failSessionByOperator(ctx, sess, lifecyclecore.Expired{},
+		spiceboxv1alpha1.ReasonAgentSessionExpired,
+		fmt.Sprintf("session expired after %s (wall-clock lifetime cap)", expiration)); err != nil {
 		return false, 0, err
 	}
 	return true, 0, nil

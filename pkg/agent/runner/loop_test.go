@@ -1625,3 +1625,52 @@ func TestLoop_RecordsToolCatalogOnChangeOnly(t *testing.T) {
 		"the catalog must be keyed on the transcript index of the assistant turn it produced, "+
 			"so a capture walking memory.Turn indices resolves it via ForTurn")
 }
+
+// TestLoop_MaxDurationCutsOffInFlightWork proves maxDuration is a deadline on
+// in-flight work, not only a turn-boundary check: an LLM call or tool call that
+// never returns on its own is cancelled once active run-time reaches the cap,
+// and the session fails as BudgetExceeded rather than hanging in Running (or,
+// for the Send case, parking in AwaitingRetry as if the provider had failed).
+func TestLoop_MaxDurationCutsOffInFlightWork(t *testing.T) {
+	durationBudget := func() *runner.Budget {
+		return runner.NewBudget(spiceboxv1alpha1.BudgetConfig{
+			MaxDuration: metav1.Duration{Duration: 50 * time.Millisecond},
+		}, runner.NewRunClock(0, time.Now), time.Now())
+	}
+	runToEnd := func(t *testing.T, l *runner.Loop) spiceboxv1alpha1.AgentSession {
+		t.Helper()
+		ctx := memory.WithSystemApproval(context.Background(), "test")
+		done := make(chan error, 1)
+		go func() { done <- l.Run(ctx) }()
+		select {
+		case err := <-done:
+			require.NoError(t, err, "Run")
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run did not end: in-flight work outlived maxDuration")
+		}
+		var got spiceboxv1alpha1.AgentSession
+		require.NoError(t, l.Status.Get(ctx, &got), "Get after Run")
+		return got
+	}
+
+	t.Run("LLM call hung past the cap: Failed/BudgetExceeded, not AwaitingRetry", func(t *testing.T) {
+		prov := &interruptibleProvider{sending: make(chan struct{})}
+		l, _, _ := newLoopFixtureWithProvider(t, prov)
+		l.Budget = durationBudget()
+
+		got := runToEnd(t, l)
+		assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
+	})
+
+	t.Run("tool call hung past the cap: Failed/BudgetExceeded", func(t *testing.T) {
+		tl := &blockingCancellableTool{name: "slow_read", started: make(chan struct{})}
+		l, _, _, _ := newLoopFixture(t, []llmfake.Step{callStep("tu_1", "slow_read", `{}`)})
+		l.Tools = append(meta.Load(), tl)
+		l.Budget = durationBudget()
+
+		got := runToEnd(t, l)
+		assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
+	})
+}

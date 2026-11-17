@@ -12,6 +12,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -334,4 +335,65 @@ func TestBootFailure_AProviderThatCannotBeReadIsNotOverwritten(t *testing.T) {
 	assert.Empty(t, published, "an unreadable surface may already hold a real verdict")
 	assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, sess.Status.Phase)
 	assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed, sess.Status.FailureReason)
+}
+
+// TestOperatorFailure_AnswersTheTriggerOfASessionItEnds: a session the operator
+// fails mid-run, because its runner blew through its run-time budget or its
+// wall-clock lifetime, has a runner that is not going to answer either. The
+// pull request must hear that the work stopped, not that the agent never
+// started.
+func TestOperatorFailure_AnswersTheTriggerOfASessionItEnds(t *testing.T) {
+	cases := []struct {
+		name       string
+		mut        func(s *spiceboxv1alpha1.AgentSession)
+		fail       func(r *agentsession.Reconciler, s *spiceboxv1alpha1.AgentSession) (bool, error)
+		wantReason string
+	}{
+		{
+			name: "maxDuration backstop: could_not_finish naming BudgetExceeded",
+			mut: func(s *spiceboxv1alpha1.AgentSession) {
+				s.Status.RunDuration = &metav1.Duration{Duration: 31 * time.Hour}
+				s.Status.EnforcedMaxDuration = &metav1.Duration{Duration: 2 * time.Hour}
+			},
+			fail: func(r *agentsession.Reconciler, s *spiceboxv1alpha1.AgentSession) (bool, error) {
+				return r.ReconcileRunDurationForTest(context.Background(), s)
+			},
+			wantReason: spiceboxv1alpha1.ReasonAgentSessionBudget,
+		},
+		{
+			name: "sessionExpiration sweep: could_not_finish naming SessionExpired",
+			mut: func(s *spiceboxv1alpha1.AgentSession) {
+				started := metav1.NewTime(time.Now().Add(-48 * time.Hour))
+				s.Status.StartedAt = &started
+				s.Status.EffectiveSettings = &spiceboxv1alpha1.EffectiveSettings{
+					Budget: spiceboxv1alpha1.BudgetConfig{SessionExpiration: metav1.Duration{Duration: time.Hour}},
+				}
+			},
+			fail: func(r *agentsession.Reconciler, s *spiceboxv1alpha1.AgentSession) (bool, error) {
+				return r.ReconcileExpirationForTest(context.Background(), s)
+			},
+			wantReason: spiceboxv1alpha1.ReasonAgentSessionExpired,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k := resetTriggerKind(t)
+			sess := bootFailedSession(tsKindName)
+			sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseRunning
+			tc.mut(sess)
+			r := triggerReconciler(t, sess)
+
+			failed, err := tc.fail(r, sess)
+			require.NoError(t, err)
+			require.True(t, failed, "the operator must fail this session")
+
+			claims, published := k.snapshot()
+			assert.Equal(t, 1, claims, "the surface is READ before it is written")
+			require.Len(t, published, 1, "the pull request must be told the work stopped")
+			assert.Equal(t, channelkinds.TriggerOutcomeCouldNotFinish, published[0].Outcome)
+			assert.Contains(t, published[0].Summary, tc.wantReason)
+			assert.NotContains(t, published[0].Summary, "could not start",
+				"this session started; the boot-failure wording would be false")
+		})
+	}
 }

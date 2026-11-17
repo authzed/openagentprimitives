@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"time"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -33,6 +34,48 @@ type Budget struct {
 // (zero ⇒ unenforced, e.g. before StartedAt is stamped).
 func NewBudget(cfg spiceboxv1alpha1.BudgetConfig, runClock *RunClock, sessionStartedAt time.Time) *Budget {
 	return &Budget{cfg: cfg, runClock: runClock, sessionStartedAt: sessionStartedAt, now: time.Now}
+}
+
+// MaxDuration is the active run-time cap this budget enforces (0 ⇒ none).
+// Nil-safe.
+func (b *Budget) MaxDuration() time.Duration {
+	if b == nil {
+		return 0
+	}
+	return b.cfg.MaxDuration.Duration
+}
+
+// durationWatchFloor bounds how often watchDuration re-arms. While the run
+// clock is paused (parked on a human) the remaining budget does not shrink, so
+// without a floor a nearly-spent budget would re-arm a near-zero timer in a
+// tight loop for the whole wait.
+const durationWatchFloor = time.Second
+
+// watchDuration blocks until ctx is done or active run-time reaches
+// MaxDuration, then calls onExceeded once. Check only runs at turn boundaries,
+// so this is what makes maxDuration a deadline on an in-flight LLM call or tool
+// call rather than a bound checked after it returns. It measures the run
+// clock, not wall-clock, so time parked on an approval or await_user_message
+// inside a tool call is excluded exactly as Check excludes it. No-op when no
+// cap or no clock is configured.
+func (b *Budget) watchDuration(ctx context.Context, onExceeded func()) {
+	if b.MaxDuration() <= 0 || b.runClock == nil {
+		return
+	}
+	for {
+		remaining := b.cfg.MaxDuration.Duration - b.runClock.Elapsed()
+		if remaining <= 0 {
+			onExceeded()
+			return
+		}
+		t := time.NewTimer(max(remaining, durationWatchFloor))
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // Check returns "" when within budget; otherwise the first BudgetReason* tripped.

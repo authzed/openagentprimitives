@@ -127,9 +127,11 @@ type ArchiveSweep struct{ baseEvent }
 type Expired struct{ baseEvent }
 
 // RunDurationExceeded fails a session whose recorded active run-time
-// (status.runDuration) has passed budget.maxDuration by more than the
-// operator's grace. The runner enforces maxDuration itself, so this fires only
-// when the runner has stopped doing so — wedged in a call that never returns.
+// (status.runDuration) has passed the maxDuration its runner reports enforcing
+// (status.enforcedMaxDuration) by more than the operator's grace. The runner
+// enforces maxDuration itself, at turn boundaries and by cancelling in-flight
+// LLM and tool calls when the cap is reached, so this fires only when the
+// runner has stopped doing so: wedged somewhere that cancellation cannot reach.
 // Emitted by the operator's run-duration backstop. Like Expired it is not
 // phase-guarded; the terminal-sticky guard protects finished sessions.
 type RunDurationExceeded struct{ baseEvent }

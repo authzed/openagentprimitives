@@ -176,10 +176,18 @@ func (s *StatusPatcher) PatchProgress(ctx context.Context, p Progress) error {
 // Unlike PatchProgress (which overwrites per-pod counters), this is the
 // monotonic session-lifetime accumulator the next pod seeds from. Optimistic-
 // lock retried; no-op in local mode.
-func (s *StatusPatcher) PatchRunDuration(ctx context.Context, d time.Duration) error {
+//
+// enforcedMax is the maxDuration this pod is enforcing (0 ⇒ none), written in
+// the same patch as status.enforcedMaxDuration so the operator's backstop never
+// pairs a run-time with a cap the runner does not hold.
+func (s *StatusPatcher) PatchRunDuration(ctx context.Context, d, enforcedMax time.Duration) error {
 	return s.mutate(ctx, func(sess *spiceboxv1alpha1.AgentSession) {
 		rd := metav1.Duration{Duration: d}
 		sess.Status.RunDuration = &rd
+		sess.Status.EnforcedMaxDuration = nil
+		if enforcedMax > 0 {
+			sess.Status.EnforcedMaxDuration = &metav1.Duration{Duration: enforcedMax}
+		}
 	})
 }
 

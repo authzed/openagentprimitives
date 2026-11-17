@@ -41,6 +41,10 @@ func isInterruptibleTool(t tool.Tool) bool {
 
 var errInterruptedByUser = errors.New("interrupted by user")
 
+// errMaxDurationExceeded is the cancel cause for an in-flight LLM call or tool
+// call cut off because active run-time reached budget.maxDuration.
+var errMaxDurationExceeded = errors.New("session reached its maxDuration budget")
+
 // interruptEntry pairs a live in-flight tool with its cancel func, so the
 // registry can decide at fire() time whether cancelling it is truthful
 // (Cancellable AND stateless/readonly) without a caller-supplied snapshot.
@@ -60,11 +64,18 @@ type interruptRegistry struct {
 	cancels        map[string]interruptEntry
 	providerCancel context.CancelCauseFunc
 	requested      bool
+	// budgetCause is set by cancelForBudget and never cleared: once the budget
+	// is spent, every call registered afterwards is cancelled on arrival, which
+	// closes the window between the watchdog firing and the next registration.
+	budgetCause error
 }
 
 func (r *interruptRegistry) registerTool(id string, t tool.Tool, c context.CancelCauseFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.budgetCause != nil {
+		c(r.budgetCause)
+	}
 	if r.cancels == nil {
 		r.cancels = map[string]interruptEntry{}
 	}
@@ -94,7 +105,29 @@ func (r *interruptRegistry) deregisterTool(id string) {
 func (r *interruptRegistry) setProvider(c context.CancelCauseFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.budgetCause != nil {
+		c(r.budgetCause)
+	}
 	r.providerCancel = c
+}
+
+// cancelForBudget cancels the in-flight provider call and EVERY in-flight tool
+// with cause, and makes later registrations cancel on arrival. Unlike fire it
+// does not spare stateful tools: a user interrupt must never cut a durable
+// mutation short, but a spent budget ends the session regardless, and the
+// alternative to cancelling the call here is the operator reaping the whole pod
+// under it, which no tool can clean up after. It does not set requested — this
+// is not a queue-jump, and the loop fails the session rather than draining.
+func (r *interruptRegistry) cancelForBudget(cause error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.budgetCause = cause
+	for _, e := range r.cancels {
+		e.cancel(cause)
+	}
+	if r.providerCancel != nil {
+		r.providerCancel(cause)
+	}
 }
 
 func (r *interruptRegistry) clearProvider() {

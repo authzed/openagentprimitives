@@ -1474,6 +1474,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: requeue}, r.applyStatus(ctx, &sess)
 	}
 
+	// maxDuration backstop: a Running session whose runner-reported run-time is
+	// well past the cap that runner holds has a runner that stopped enforcing it.
+	// Fail it so the terminal path reaps the runner. Here, above the class and
+	// settings gates, because its inputs are all on the session's own status and
+	// a wedged runner must not stay Running just because its class went
+	// Valid=False. reconcileHold has not run yet this pass, so the held-session
+	// guard is reconcileRunDuration's own activeHoldFor lookup. See maxduration.go.
+	if failed, err := r.reconcileRunDuration(ctx, &sess); err != nil {
+		return ctrl.Result{}, err
+	} else if failed {
+		// Phase → Failed; the status watch re-reconciles into the reap path.
+		return ctrl.Result{}, nil
+	}
+
 	// 1. Resolve AgentClass + gate on Valid=True.
 	var ac spiceboxv1alpha1.AgentClass
 	acKey := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Spec.Class}
@@ -2304,18 +2318,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// otherwise clobber this override on the very same reconcile pass.
 	if res, proceed, err := r.reconcileHold(ctx, &sess); err != nil || !proceed {
 		return res, err
-	}
-
-	// maxDuration backstop: a Running session whose runner-reported run-time is
-	// well past its budget has a runner that stopped enforcing it (wedged in a
-	// call that never returns). Fail it so the terminal path reaps the runner.
-	// After reconcileHold for the same terminal-sticky reason as the sweeps
-	// below. See maxduration.go.
-	if failed, err := r.reconcileRunDuration(ctx, &sess); err != nil {
-		return ctrl.Result{}, err
-	} else if failed {
-		// Phase → Failed; the status watch re-reconciles into the reap path.
-		return ctrl.Result{}, nil
 	}
 
 	// 4c. Idle-sleep and archive sweep: an Idle channel-attached session past
@@ -3699,7 +3701,7 @@ func (r *Reconciler) markBootFailed(ctx context.Context, sess *spiceboxv1alpha1.
 		// forever. After applyEvent, so a transition that could not be recorded
 		// does not publish a verdict for a session that is not failing yet.
 		if !hadLiveRunner {
-			r.concludeTriggerStatusOnBootFailure(ctx, sess, reason)
+			r.concludeTriggerStatusOnOperatorFailure(ctx, sess, reason, bootFailureSummary(reason))
 		}
 	}
 	sess.Status.FailureReason = reason

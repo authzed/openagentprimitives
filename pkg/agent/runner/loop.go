@@ -413,6 +413,19 @@ func (l *Loop) Run(ctx context.Context) error {
 		defer flushCancel()
 		go l.runDurationFlusher(flushCtx, runDurationFlushInterval)
 	}
+	// maxDuration as a deadline on in-flight work: Budget.Check only runs at turn
+	// boundaries, so without this an LLM call or tool call that straddles the cap
+	// runs on until it returns. When active run-time reaches the cap the watchdog
+	// cancels whatever is in flight; the Send error path and the post-dispatch
+	// Check below then fail the session as MaxDurationExceeded.
+	budgetWatchCtx, budgetWatchCancel := context.WithCancel(ctx)
+	defer budgetWatchCancel()
+	go l.Budget.watchDuration(budgetWatchCtx, func() {
+		slog.Default().Info("maxDuration reached; cancelling in-flight LLM and tool calls",
+			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name,
+			"maxDuration", l.Budget.MaxDuration().String())
+		l.interrupts.cancelForBudget(errMaxDurationExceeded)
+	})
 
 	// Session-context the meta tools see. agent_work_complete writes here via
 	// SubmitResult; the runner reads it after the loop ends.
@@ -688,6 +701,9 @@ func (l *Loop) Run(ctx context.Context) error {
 		l.interrupts.clearProvider()
 		sendCancel(nil)
 		if err != nil {
+			if context.Cause(sendCtx) == errMaxDurationExceeded {
+				return l.fail(ctx, budgetFailReason(BudgetReasonDuration), BudgetReasonDuration)
+			}
 			if context.Cause(sendCtx) == errInterruptedByUser {
 				// The user interrupted the LLM call to jump the queue. Not a
 				// provider failure — drain the held queue and continue.
