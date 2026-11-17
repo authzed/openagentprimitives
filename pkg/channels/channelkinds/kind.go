@@ -807,6 +807,22 @@ type GroupGoalHost interface {
 	// RunAnchor derives, as a copy, the binding a goal run starts from: the
 	// same conversation with any thread anchor cleared. It never mutates b.
 	RunAnchor(b *spiceboxv1alpha1.ChannelBinding) (*spiceboxv1alpha1.ChannelBinding, error)
+	// GroupBinding derives, without any session, the binding of the
+	// conversation memberRef names on ch — the base a group goal's run takes
+	// RunAnchor of, so a run never reads the session the goal was created in.
+	// memberRef is a ref this kind's ConversationMemberRef returns, and the
+	// result's ConversationMemberRef is memberRef again; anything else is an
+	// error. Name, Kind, Key and External are set; Capabilities and the NATS
+	// prefix are the caller's.
+	GroupBinding(ch *spiceboxv1alpha1.Channel, memberRef string) (*spiceboxv1alpha1.ChannelBinding, error)
+	// RunAnchorWritten reports whether b carries a complete, self-consistent
+	// thread anchor of the shape this kind's sender writes back into a run's
+	// binding on its first post (key and anchor fields agreeing). With
+	// RunAnchor, it lets the goal-session webhook admit exactly that one
+	// write without naming any kind's fields: RunAnchor(after) must equal the
+	// unanchored before, and after must be RunAnchorWritten. A kind that never
+	// writes an anchor back returns false.
+	RunAnchorWritten(b *spiceboxv1alpha1.ChannelBinding) bool
 	// GroupMemberLinks lists the subject-set link types of
 	// ConversationMemberRef ONLY (e.g. "slack_channel#member") — the types this
 	// kind contributes as group-goal owners, composed into

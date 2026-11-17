@@ -161,6 +161,12 @@ const (
 	// will work. That is also why the thread is not terminal.
 	AgentUnavailable = "agent_unavailable"
 
+	// GoalApprovalExpiring — a group goal's approval runs out soon, and its
+	// managers have been asked to renew it. Routine: renewing is an ordinary
+	// approval, and nothing has failed yet; the notice carries the next step
+	// so a manager who missed the card knows how to renew.
+	GoalApprovalExpiring = "goal_approval_expiring"
+
 	// RevocationNotApplied — somebody withdrew access this session is using and
 	// the withdrawal could not be applied here, so the capability may still be
 	// live inside the running session.
@@ -302,6 +308,7 @@ func registerNotices() {
 
 		// Lifecycle churn. The thread carries on either way; the reader is
 		// being kept informed, not asked for anything.
+		{Name: GoalApprovalExpiring, Tone: channelinteractions.ToneRoutine},
 		{Name: SessionContinuedInherited, Tone: channelinteractions.ToneHousekeeping},
 		{Name: ThreadTakeoverInherited, Tone: channelinteractions.ToneHousekeeping},
 		// …except this one, where history did NOT carry over. Degraded rather

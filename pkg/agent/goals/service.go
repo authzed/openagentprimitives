@@ -240,10 +240,21 @@ func (s *Service) Create(ctx context.Context, a Actor, r CreateRequest) (Goal, e
 	if err := validateGoal(g); err != nil {
 		return Goal{}, err
 	}
-	return s.commit(ctx, a, g, 0, r.RequestID, h, "create")
+	return s.commit(ctx, a, g, 0, nil, r.RequestID, h, "create")
 }
 
+// Get reads goal id with its derived BlockedReason.
 func (s *Service) Get(ctx context.Context, a Actor, id string) (Goal, error) {
+	g, err := s.get(ctx, a, id)
+	if err != nil {
+		return Goal{}, err
+	}
+	g.BlockedReason = blockedReason(g, s.now())
+	return g, nil
+}
+
+// get is Get as stored, for a read that is written back.
+func (s *Service) get(ctx context.Context, a Actor, id string) (Goal, error) {
 	if err := s.authorize(ctx, a, false); err != nil {
 		return Goal{}, err
 	}
@@ -279,6 +290,7 @@ func (s *Service) List(ctx context.Context, a Actor, r ListRequest) (Page, error
 			}
 			return Page{}, err
 		}
+		g.BlockedReason = blockedReason(g, s.now())
 		visible = append(visible, g)
 	}
 	p.Goals = visible
@@ -303,6 +315,10 @@ func (s *Service) Update(ctx context.Context, a Actor, r Change) (Goal, error) {
 		return g, err
 	}
 	g, err := s.Store.Get(ctx, a.Domain, r.ID)
+	if err != nil {
+		return Goal{}, err
+	}
+	prior, err := EncodePrior(g)
 	if err != nil {
 		return Goal{}, err
 	}
@@ -333,8 +349,9 @@ func (s *Service) Update(ctx context.Context, a Actor, r Change) (Goal, error) {
 		if err := ga.CheckManagers(ctx, a, next, r); err != nil {
 			return Goal{}, err
 		}
+		return s.commitInPlace(ctx, a, next, prior, r.RequestID, h, r.Action)
 	}
-	return s.commit(ctx, a, next, r.Revision, r.RequestID, h, r.Action)
+	return s.commit(ctx, a, next, r.Revision, prior, r.RequestID, h, r.Action)
 }
 
 func mergeSources(existing, added []Source) []Source {
@@ -351,12 +368,34 @@ func mergeSources(existing, added []Source) []Source {
 	return slices.Compact(sources)
 }
 
-func (s *Service) commit(ctx context.Context, a Actor, g Goal, expected int64, key, hash, action string) (Goal, error) {
+// commit writes g, read as prior (nil for a create), at the next revision.
+func (s *Service) commit(ctx context.Context, a Actor, g Goal, expected int64, prior json.RawMessage, key, hash, action string) (Goal, error) {
+	g.BlockedReason = "" // derived on read, never stored
 	id, err := newID("goalev-")
 	if err != nil {
 		return Goal{}, err
 	}
-	accepted, err := s.Store.Commit(ctx, Mutation{Goal: g, Expected: expected, RequestID: key, Hash: hash, Event: Event{ID: id, Goal: g, Action: action, Session: a.Session, Proof: a.Proof, ActorProof: json.RawMessage(a.Attestation)}})
+	accepted, err := s.Store.Commit(ctx, Mutation{Goal: g, Expected: expected, RequestID: key, Hash: hash, Prior: prior, Event: Event{ID: id, Goal: g, Action: action, Session: a.Session, Proof: a.Proof, ActorProof: json.RawMessage(a.Attestation)}})
+	return s.accepted(ctx, a, accepted, err)
+}
+
+// commitInPlace writes g, read as prior, at its current revision
+// (InPlaceStore): a change that leaves what its runs may do alone.
+func (s *Service) commitInPlace(ctx context.Context, a Actor, g Goal, prior json.RawMessage, key, hash, action string) (Goal, error) {
+	store, ok := s.Store.(InPlaceStore)
+	if !ok {
+		return Goal{}, fmt.Errorf("%w: this change is not stored here", ErrDenied)
+	}
+	g.BlockedReason = ""
+	id, err := newID("goalev-inplace-")
+	if err != nil {
+		return Goal{}, err
+	}
+	accepted, err := store.CommitInPlace(ctx, Mutation{Goal: g, Expected: g.Revision, RequestID: key, Hash: hash, Prior: prior, Event: Event{ID: id, Goal: g, Action: action, Session: a.Session, Proof: a.Proof, ActorProof: json.RawMessage(a.Attestation)}})
+	return s.accepted(ctx, a, accepted, err)
+}
+
+func (s *Service) accepted(ctx context.Context, a Actor, accepted Goal, err error) (Goal, error) {
 	if err != nil {
 		return Goal{}, err
 	}

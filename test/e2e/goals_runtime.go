@@ -62,7 +62,7 @@ func (h *Harness) startGoalsRuntime(t *testing.T, mgr manager.Manager, signer *p
 	discovery := &goalweb.Discovery{Server: server, Store: store, Triggers: triggers, Sources: sources}
 	server.Discovery = discovery
 	consumers.Register("goal-discovery", discovery)
-	dispatcher := &goalctrl.Dispatcher{Service: service, Store: store, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: "e2e-goals", DeliveryMemory: h.opSigned, EventRouter: &sessionevents.Router{Triggers: triggers, Store: events}, EventDispatcher: &sessionevents.Dispatcher{Triggers: triggers, Consumer: consumers}}
+	dispatcher := &goalctrl.Dispatcher{Service: service, Store: store, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: "e2e-goals", DeliveryMemory: h.opSigned, RunGrants: server, EventRouter: &sessionevents.Router{Triggers: triggers, Store: events}, EventDispatcher: &sessionevents.Dispatcher{Triggers: triggers, Consumer: consumers}}
 	server.ExecutionSessions = dispatcher
 	require.NoError(t, mgr.Add(&goalweb.Publisher{Store: store, Memory: h.memStore, Signer: signer, Notify: consent.Notify}))
 	require.NoError(t, mgr.Add(dispatcher))

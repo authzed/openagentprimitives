@@ -379,3 +379,6 @@ func (m *memoryClient) RecordGoalActor(ctx context.Context, sess *v1.AgentSessio
 
 // Group goal consent refuses a committer that cannot pre-check a decision.
 var _ pipeline.GoalConsentChecker = (*httpclient.Client)(nil)
+
+// Group goal runs accept channel-ingress decisions only on the goal server's word.
+var _ pipeline.GroupGoalRunChecker = (*httpclient.Client)(nil)

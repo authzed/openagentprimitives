@@ -85,6 +85,35 @@ func TestGroupGoalHost(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("GroupBinding: the channel-level binding of the member ref, whose member ref round-trips", func(t *testing.T) {
+		ch := &spiceboxv1alpha1.Channel{ObjectMeta: metav1.ObjectMeta{Name: "team-chat", Namespace: "ns1"}}
+		ch.Spec.Kind = KindName
+		b, err := k.GroupBinding(ch, "slack_channel:C1#member")
+		require.NoError(t, err)
+		assert.Equal(t, &spiceboxv1alpha1.ChannelBinding{Name: "team-chat", Kind: KindName, Key: "channel:C1", External: map[string]string{"channel_id": "C1"}}, b)
+		ref, ok := k.ConversationMemberRef(b)
+		assert.True(t, ok)
+		assert.Equal(t, "slack_channel:C1#member", ref)
+	})
+
+	t.Run("RunAnchorWritten: only a thread key agreeing with its thread_ts", func(t *testing.T) {
+		ext := func(ts string) map[string]string { return map[string]string{"channel_id": "C1", "thread_ts": ts} }
+		assert.True(t, k.RunAnchorWritten(&spiceboxv1alpha1.ChannelBinding{Key: "thread:C1:1.2", External: ext("1.2")}))
+		assert.False(t, k.RunAnchorWritten(&spiceboxv1alpha1.ChannelBinding{Key: "thread:C1:9.9", External: ext("1.2")}), "key and thread disagree")
+		assert.False(t, k.RunAnchorWritten(&spiceboxv1alpha1.ChannelBinding{Key: "channel:C1", External: map[string]string{"channel_id": "C1"}}), "no anchor yet")
+		assert.False(t, k.RunAnchorWritten(nil))
+	})
+
+	t.Run("GroupBinding: refs that are not a channel's member set are errors", func(t *testing.T) {
+		ch := &spiceboxv1alpha1.Channel{ObjectMeta: metav1.ObjectMeta{Name: "team-chat"}}
+		for _, ref := range []string{"slack_channel:C1#view", "group:g1#member", "slack_channel:D1#member", "slack_channel:G1#member", "slack_channel:#member", "slack_channel:C1:x#member"} {
+			_, err := k.GroupBinding(ch, ref)
+			assert.Error(t, err, ref)
+		}
+		_, err := k.GroupBinding(nil, "slack_channel:C1#member")
+		assert.Error(t, err, "nil Channel")
+	})
+
 	assert.Equal(t, []string{"slack_channel#member"}, k.GroupMemberLinks(),
 		"member ref only: the audience ref (#view) is never a group-goal owner type")
 }

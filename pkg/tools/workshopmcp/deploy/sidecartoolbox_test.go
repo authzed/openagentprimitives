@@ -554,8 +554,9 @@ func TestDeclaration_TheDraftComposesEverySlotItsChecksName(t *testing.T) {
 	// failure message nobody reads.
 	block := draftDefinition(t, withSlots)
 	for _, permission := range draftKeyedTools {
-		assert.Contains(t, block, "permission "+permission+" = "+authz.SlotGrantRelationName(permission)+"->interact",
-			"a session-only draft has no local standing, so the composed arm is the grant alone")
+		rel := authz.SlotGrantRelationName(permission)
+		assert.Contains(t, block, "permission "+permission+" = "+rel+" + "+rel+"->interact\n",
+			"a session-only draft has no local standing, so the composed arm is the grant alone (the session and its members)")
 	}
 }
 

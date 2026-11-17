@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,6 +53,24 @@ func (Kind) RunAnchor(b *spiceboxv1alpha1.ChannelBinding) (*spiceboxv1alpha1.Cha
 	out.Key = "group-run:" + uuid.NewString()
 	return out, nil
 }
+
+// GroupBinding implements channelkinds.GroupGoalHost: a binding on ch in the
+// group memberRef ("group:<id>#member") names.
+func (Kind) GroupBinding(ch *spiceboxv1alpha1.Channel, memberRef string) (*spiceboxv1alpha1.ChannelBinding, error) {
+	if ch == nil {
+		return nil, fmt.Errorf("fake GroupBinding: nil Channel")
+	}
+	rest, typed := strings.CutPrefix(memberRef, "group:")
+	id, member := strings.CutSuffix(rest, "#member")
+	if !typed || !member || id == "" || strings.ContainsAny(id, ":#") {
+		return nil, fmt.Errorf("fake GroupBinding: %q is not a fake group's member set", memberRef)
+	}
+	return &spiceboxv1alpha1.ChannelBinding{Name: ch.Name, Kind: ch.Spec.Kind, Key: "group:" + id, External: map[string]string{groupFixtureKey: id}}, nil
+}
+
+// RunAnchorWritten implements channelkinds.GroupGoalHost: the fake never
+// writes an anchor back.
+func (Kind) RunAnchorWritten(*spiceboxv1alpha1.ChannelBinding) bool { return false }
 
 // GroupMemberLinks implements channelkinds.GroupGoalHost.
 func (Kind) GroupMemberLinks() []string { return []string{"group#member"} }

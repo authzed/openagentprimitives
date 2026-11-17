@@ -94,6 +94,15 @@ func TestDeriveGroupStandingApproval(t *testing.T) {
 		{name: "approver lost the class start permission after consent: still covered (start gate is consent-time only)", covered: true, arrange: func(t *testing.T, r *groupRun) {
 			r.c.f.auth.startDenied = map[string]bool{r.c.alice: true}
 		}},
+		{name: "a manager added after approval: still covered (consent and the scheduled run untouched)", covered: true, arrange: func(t *testing.T, r *groupRun) {
+			status, _, body := r.c.f.as(t, "r1", managerChange("add-bob", r.c.stored(t), "add_manager", r.c.bob))
+			require.Equal(t, 200, status, body)
+		}},
+		{name: "the approver removed as a manager: the run still dispatches, nil (a card)", arrange: func(t *testing.T, r *groupRun) {
+			r.c.f.turnProof(t, r.c.carol, "r2")
+			status, _, body := r.c.f.as(t, "r2", managerChange("remove-alice", r.c.stored(t), "remove_manager", r.c.alice))
+			require.Equal(t, 200, status, body)
+		}},
 		{name: "run plan adds a phase: not covered, nil (a card)", arrange: func(t *testing.T, r *groupRun) {
 			wider := r.plan
 			wider.Phases = append(append([]plangate.Phase{}, r.plan.Phases...), r.plan.Phases[1])

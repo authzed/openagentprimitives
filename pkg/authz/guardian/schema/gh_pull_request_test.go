@@ -75,7 +75,7 @@ func TestGhToolkit_PullRequestWriteMemoryIsCreatedBySlotComposition(t *testing.T
 	assert.True(t, changed)
 	assert.Empty(t, skipped)
 	assert.Contains(t, composed, "relation slot_grant_write_memory")
-	assert.Contains(t, composed, "permission write_memory = slot_grant_write_memory->interact")
+	assert.Contains(t, composed, "permission write_memory = slot_grant_write_memory + slot_grant_write_memory->interact")
 }
 
 // A slot on the AUDIENCE permission is refused with an error, not skipped.

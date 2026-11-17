@@ -114,7 +114,14 @@ func priorDecisionConflict(g goals.Goal, prior goalconsent.Content, owner string
 // validateGoalConsent checks a click on a goal consent card of category (the
 // category the caller is bound for) against the platform-signed request.
 func (p *Pipeline) validateGoalConsent(ctx context.Context, category string, d channelinteractions.Decision) (memory.Entry, goalconsent.Content, string, error) {
-	if !channelevents.ComponentDecisionIngress(ctx) {
+	// A group goal's card (standing-plan approval, and the renewal card a run
+	// posts) is clicked in the group's own conversation, so its decision
+	// arrives on the ordinary inbound subject like any transport click. What
+	// guards it does not depend on ingress: the generic pipe's resource-owner
+	// check on agent_goal:<id>#manage, checkGoalManager below, the goal
+	// server's pre-write check, and the append-only record. A private goal's
+	// card keeps component-only ingress.
+	if !channelevents.ComponentDecisionIngress(ctx) && category != categories.GoalGroupExecutionConsent {
 		return memory.Entry{}, goalconsent.Content{}, "", fmt.Errorf("goal consent requires verified component decision ingress")
 	}
 	if p.Mem == nil || p.GoalConsentCommitter == nil {

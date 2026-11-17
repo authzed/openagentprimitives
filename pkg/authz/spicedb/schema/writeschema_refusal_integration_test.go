@@ -44,7 +44,7 @@ func TestSpiceDBRefusesAPermissionWithADanglingRelation(t *testing.T) {
 	// Reproduce composeOneSlot's two edits by hand (pkg/authz/guardian/schema/
 	// slots.go): it injects the slot_grant_<perm> relation right after the
 	// definition header, then REPLACES the named permission's expression with
-	// slotPermissionExpr — slot_grant_<perm>->interact + owner. Both edits are
+	// slotPermissionExpr — slot_grant_<perm> + slot_grant_<perm>->interact + owner. Both edits are
 	// needed for fidelity: with only the permission line swapped,
 	// slot_grant_read itself would ALSO be undeclared, and SpiceDB would report
 	// that dangling reference first, masking the one this test is about. owner
@@ -66,7 +66,7 @@ func TestSpiceDBRefusesAPermissionWithADanglingRelation(t *testing.T) {
 
 	bad := strings.Replace(afterRelationInjection,
 		"permission read = session->read_transcript",
-		"permission read = slot_grant_read->interact + owner", 1)
+		"permission read = slot_grant_read + slot_grant_read->interact + owner", 1)
 	require.NotEqual(t, afterRelationInjection, bad,
 		"the permission anchor no longer matches schema.zed: %q", "permission read = session->read_transcript")
 

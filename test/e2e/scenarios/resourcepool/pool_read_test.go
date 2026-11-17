@@ -167,9 +167,10 @@ func TestE2E_ResourcePoolRead_GrantFoldsThePoolIntoASearch(t *testing.T) {
 			"the MCPServer fragment's resource type must be in the composed schema; got:\n%s", schema)
 
 		// The composer OWNS the slot permission line: whatever the fragment
-		// wrote is replaced with slot_grant_<perm>->interact + owner.
+		// wrote is replaced with slot_grant_<perm> + slot_grant_<perm>->interact + owner.
+		slotRel := authz.SlotGrantRelationName(slotPermission)
 		assert.Contains(t, schema,
-			"permission "+slotPermission+" = "+authz.SlotGrantRelationName(slotPermission)+"->interact + owner",
+			"permission "+slotPermission+" = "+slotRel+" + "+slotRel+"->interact + owner",
 			"ComposeSlots must own the slotted permission; got:\n%s", schema)
 
 		// And it must NOT own the audience permission. If a future change ever

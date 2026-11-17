@@ -56,7 +56,7 @@ spec:
           - name: owner
             expr: hubspot_owner_id_ref->user
           # COMPOSER-OWNED: the schema composer replaces this line with
-          # `slot_grant_contact_access->interact + owner`, because the
+          # `slot_grant_contact_access + slot_grant_contact_access->interact + owner`, because the
           # AgentClass declares crm_company as an authz slot.
           #
           # It used to read `any_user + grant_contact_access + owner`, and the

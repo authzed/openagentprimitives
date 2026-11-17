@@ -96,7 +96,7 @@ spicedbSchema:
         #   NOT get forge-backed access through it.
         #
         # ComposeSlots OWNS a slot permission's expression line and replaces
-        # whatever is written here with `slot_grant_<perm>->interact + owner`
+        # whatever is written here with `slot_grant_<perm> + slot_grant_<perm>->interact + owner`
         # (pkg/authz/guardian/schema/slots.go, composeOneSlot). That is a
         # security property — it is what stops an AgentClass author widening a
         # slot permission, and what removes a wildcard leaf — and the composer
@@ -199,7 +199,7 @@ spicedbSchema:
   # the natural thing to write and several did. ComposeSlots CREATES a
   # permission it does not find rather than skipping it (it skips only a type
   # the schema does not DECLARE, and this one still is), so such a slot now
-  # composes `permission read = slot_grant_read->interact + owner` onto THIS
+  # composes `permission read = slot_grant_read + slot_grant_read->interact + owner` onto THIS
   # definition. Without an `owner` relation that is a dangling reference, the
   # pass that would catch it in RunAll is report-only, and SpiceDB's WriteSchema
   # then refuses the entire composed schema — cluster-wide, for every

@@ -123,7 +123,7 @@ func TestComposeAllWithSkipped_ConfirmsTheSurgeryOmitsTheOwnerLeg(t *testing.T) 
 	assert.NoError(t, ValidateComposedSchema(afterSlot),
 		"a session-only resource with no owner relation must compose to VALID schema: "+
 			"the owner leg is omitted, not left dangling")
-	assert.Contains(t, afterSlot, "permission read = "+SlotGrantRelationName("read")+"->interact",
+	assert.Contains(t, afterSlot, "permission read = "+SlotGrantRelationName("read")+" + "+SlotGrantRelationName("read")+"->interact\n",
 		"the grant-path leg the slot exists to create must still be there")
 	assert.NotContains(t, afterSlot, "->interact + owner",
 		"widget declares no owner; the leg must be omitted, not written dangling")

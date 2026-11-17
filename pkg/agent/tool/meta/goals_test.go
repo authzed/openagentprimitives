@@ -73,6 +73,11 @@ func TestGoalDescriptionExplainsGroupGoals(t *testing.T) {
 	assert.Contains(t, d, "scope=group")
 	assert.Contains(t, d, "act as the agent")
 	assert.Contains(t, d, "manager")
+	assert.Contains(t, d, `blockedReason "approval expired"`, "an expired group approval is re-requested by a manager")
+	assert.Contains(t, d, `reply state "unconfirmed"`, "a group reply without a receiver is not reported as delivered")
+	assert.Contains(t, d, "only \"accepted\" carries a delivery receipt")
+	assert.Contains(t, d, "handed to the channel for posting; delivery was not confirmed")
+	assert.Contains(t, d, `"publish_failed"`, "a reply that never reached the channel is described")
 }
 
 // Group-scope writes are authorized by the goal server against the turn's

@@ -89,26 +89,50 @@ func (s *Server) prepareGroupExecution(ctx context.Context, a domain.Actor, r *d
 		}
 		r.Terms.AgentIdentityUID = string(ai.UID)
 	}
+	// The standing plan arrives authored (the update_plan phase shape) and is
+	// frozen here, as a runtime plan is; a caller never supplies the frozen
+	// form, which would let it skip the freeze's checks.
 	if r.Terms.StandingPlan != nil {
-		frozen, err := freezeStandingPlan(*r.Terms.StandingPlan, &class)
+		return fmt.Errorf("%w: give the standing plan as terms.standingPlan phases, in the shape update_plan takes", domain.ErrInvalid)
+	}
+	if len(r.StandingPlan) > 0 {
+		frozen, err := freezeAuthoredStandingPlan(authoredStandingPhases(r.StandingPlan), &class)
 		if err != nil {
 			return err
 		}
-		r.Terms.StandingPlan = &frozen
+		r.Terms.StandingPlan, r.StandingPlan = &frozen, nil
 	}
 	return nil
 }
 
-var errGroupEvent = fmt.Errorf("%w: event watches are not available on group goals", domain.ErrDenied)
+// authoredStandingPhases projects a request's standing plan into the
+// freeze's input, field for field, as the runner projects update_plan phases
+// (runner.AuthoredPhasesFrom).
+func authoredStandingPhases(in []domain.StandingPhase) []plangate.AuthoredPhase {
+	out := make([]plangate.AuthoredPhase, 0, len(in))
+	for _, p := range in {
+		a := plangate.AuthoredPhase{ID: p.ID, Label: p.Label, Why: p.Why}
+		for _, r := range p.Requires {
+			a.Requires = append(a.Requires, plangate.AuthoredRequires{Phase: r.Phase, Why: r.Why})
+		}
+		if p.Max != nil {
+			a.Max = &plangate.AuthoredMax{Count: p.Max.Count, Why: p.Max.Why}
+		}
+		if p.Budget != nil {
+			a.Budget = &plangate.AuthoredBudget{Calls: p.Budget.Calls, Why: p.Budget.Why}
+		}
+		for _, h := range p.Permissions {
+			a.Permissions = append(a.Permissions, plangate.AuthoredPermission{Handle: h.Handle, Why: h.Why})
+		}
+		for _, sl := range p.Slots {
+			a.Slots = append(a.Slots, plangate.AuthoredSlot{Type: sl.Type, ID: sl.ID, Why: sl.Why})
+		}
+		out = append(out, a)
+	}
+	return out
+}
 
-var (
-	// errMembershipNotCurrent marks a refusal that a later directory sync
-	// can clear: the group's membership is not current right now.
-	errMembershipNotCurrent = errors.New("group membership is not kept current")
-	// errGroupLookup marks a refusal because an object the terms pin could
-	// not be read for a reason other than its absence.
-	errGroupLookup = errors.New("lookup failed")
-)
+var errGroupEvent = fmt.Errorf("%w: event watches are not available on group goals", domain.ErrDenied)
 
 // definitiveGroupRefusal reports whether a group validation error means the
 // approved terms can never run again without a fresh approval: an ErrDenied
@@ -117,16 +141,17 @@ var (
 // guards changed, the kind no longer hosting group goals, the destination no
 // longer the goal's group, and the approver refused by the class start gate.
 func definitiveGroupRefusal(err error) bool {
-	return errors.Is(err, domain.ErrDenied) && !errors.Is(err, errMembershipNotCurrent) && !errors.Is(err, errGroupLookup)
+	return errors.Is(err, domain.ErrDenied) && !errors.Is(err, domain.ErrMembershipNotCurrent) && !errors.Is(err, domain.ErrLookupFailed)
 }
 
 // groupLookupError refuses because what (a pinned object) could not be read:
-// definitively when it no longer exists, retryably otherwise.
-func groupLookupError(what string, err error) error {
+// definitively (wrapping gone, the cause a dispatcher records) when it no
+// longer exists, retryably otherwise.
+func groupLookupError(what string, gone, err error) error {
 	if apierrors.IsNotFound(err) {
-		return fmt.Errorf("%w: %s no longer exists", domain.ErrDenied, what)
+		return fmt.Errorf("%w: %w: %s no longer exists", domain.ErrDenied, gone, what)
 	}
-	return fmt.Errorf("%w: %s: %w: %v", domain.ErrDenied, what, errGroupLookup, err)
+	return fmt.Errorf("%w: %s: %w: %v", domain.ErrDenied, what, domain.ErrLookupFailed, err)
 }
 
 // validateGroup checks a group goal's execution terms against the live
@@ -175,13 +200,19 @@ func (s *Server) checkGroupTerms(ctx context.Context, g domain.Goal, t domain.Ex
 	ns := g.Domain.Namespace
 	var class v1.AgentClass
 	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: g.Domain.Class}, &class); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: %w: execution class %q no longer exists", domain.ErrDenied, domain.ErrGroupNotHostable, g.Domain.Class)
+		}
 		return err
 	}
 	hash, err := digest(class.Spec)
 	if err != nil {
 		return err
 	}
-	if string(class.UID) != g.Domain.ClassUID || hash != t.ClassDigest || !class.DeletionTimestamp.IsZero() {
+	if string(class.UID) != g.Domain.ClassUID || !class.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("%w: %w: execution class changed since review", domain.ErrDenied, domain.ErrGroupNotHostable)
+	}
+	if hash != t.ClassDigest {
 		return fmt.Errorf("%w: execution class changed since review", domain.ErrDenied)
 	}
 
@@ -190,10 +221,10 @@ func (s *Server) checkGroupTerms(ctx context.Context, g domain.Goal, t domain.Ex
 	// consulted.
 	var ch v1.Channel
 	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: t.Group.Channel}, &ch); err != nil {
-		return groupLookupError(fmt.Sprintf("the group's channel %q", t.Group.Channel), err)
+		return groupLookupError(fmt.Sprintf("the group's channel %q", t.Group.Channel), domain.ErrGroupChannelGone, err)
 	}
 	if string(ch.UID) != t.Group.ChannelUID || !ch.DeletionTimestamp.IsZero() {
-		return fmt.Errorf("%w: the group's channel %q changed since review", domain.ErrDenied, t.Group.Channel)
+		return fmt.Errorf("%w: %w: the group's channel %q changed since review", domain.ErrDenied, domain.ErrGroupChannelGone, t.Group.Channel)
 	}
 	if err := s.groupQualifies(ctx, &class, &ch); err != nil {
 		return err
@@ -201,7 +232,7 @@ func (s *Server) checkGroupTerms(ctx context.Context, g domain.Goal, t domain.Ex
 	host, _ := registry.GroupGoalHostFor(ch.Spec.Kind) // groupQualifies established it
 	typ, _, rel, ok := g.Domain.OwnerSubjectSet()
 	if !ok || !slices.Contains(host.GroupMemberLinks(), typ+"#"+rel) {
-		return fmt.Errorf("%w: the goal's group is not a %s group", domain.ErrDenied, ch.Spec.Kind)
+		return fmt.Errorf("%w: %w: the goal's group is not a %s group", domain.ErrDenied, domain.ErrGroupNotHostable, ch.Spec.Kind)
 	}
 
 	if err := s.checkAgentIdentityPin(ctx, ns, &class, t); err != nil {
@@ -243,29 +274,29 @@ func (s *Server) checkGroupTerms(ctx context.Context, g domain.Goal, t domain.Ex
 // identity (new credentials) needs a fresh consent.
 func (s *Server) checkAgentIdentityPin(ctx context.Context, ns string, class *v1.AgentClass, t domain.ExecutionTerms) error {
 	if t.AgentIdentity != class.Spec.AgentIdentity {
-		return fmt.Errorf("%w: the agent's AgentIdentity changed since review", domain.ErrDenied)
+		return fmt.Errorf("%w: %w: the agent's AgentIdentity changed since review", domain.ErrDenied, domain.ErrIdentityChanged)
 	}
 	if class.Spec.AgentIdentity == "" {
 		if t.AgentIdentityUID != "" {
-			return fmt.Errorf("%w: the agent's AgentIdentity changed since review", domain.ErrDenied)
+			return fmt.Errorf("%w: %w: the agent's AgentIdentity changed since review", domain.ErrDenied, domain.ErrIdentityChanged)
 		}
 		return nil
 	}
 	var ai v1.AgentIdentity
 	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: class.Spec.AgentIdentity}, &ai); err != nil {
-		return groupLookupError(fmt.Sprintf("AgentIdentity %q", class.Spec.AgentIdentity), err)
+		return groupLookupError(fmt.Sprintf("AgentIdentity %q", class.Spec.AgentIdentity), domain.ErrIdentityChanged, err)
 	}
 	if ai.UID == "" || string(ai.UID) != t.AgentIdentityUID || !ai.DeletionTimestamp.IsZero() {
-		return fmt.Errorf("%w: the agent's AgentIdentity changed since review", domain.ErrDenied)
+		return fmt.Errorf("%w: %w: the agent's AgentIdentity changed since review", domain.ErrDenied, domain.ErrIdentityChanged)
 	}
 	return nil
 }
 
-// freezeStandingPlan runs a standing plan through plangate.FreezeFrom, the
-// same freeze the runner applies to an agent-authored plan.
+// freezeStandingPlan re-freezes a standing plan already in terms, the check
+// validation runs on stored terms. A request's plan is frozen from its
+// authored form by freezeAuthoredStandingPlan instead.
 //
-// Terms carry the plan already in frozen shape (ExecutionTerms.StandingPlan
-// has no authored form), so it is projected back to authored phases — phase
+// Stored terms carry the plan in frozen shape, so it is projected back to authored phases — phase
 // ids are the indices, requires edges name them — and re-frozen. Any freeze
 // problem (an unparseable handle, a slot type the class never declared, an
 // edge to a missing phase) refuses the plan rather than silently narrowing
@@ -300,6 +331,13 @@ func freezeStandingPlan(p plangate.Plan, class *v1.AgentClass) (plangate.Plan, e
 		}
 		authored[i] = a
 	}
+	return freezeAuthoredStandingPlan(authored, class)
+}
+
+// freezeAuthoredStandingPlan freezes an authored standing plan and refuses
+// one no run could execute as approved: a freeze problem, no phase that
+// reports the result, or two instances of one slot type (a run holds one).
+func freezeAuthoredStandingPlan(authored []plangate.AuthoredPhase, class *v1.AgentClass) (plangate.Plan, error) {
 	frozen, problems := plangate.FreezeFrom(authored, nil, class.Spec.SlotResourceTypes())
 	if len(problems) > 0 {
 		details := make([]string, len(problems))
@@ -314,6 +352,13 @@ func freezeStandingPlan(p plangate.Plan, class *v1.AgentClass) (plangate.Plan, e
 	// the plan at consent instead of approving one that cannot run unattended.
 	if !reportsResult(frozen) {
 		return plangate.Plan{}, fmt.Errorf("%w: a group goal's standing plan must include a phase that reports its result (permission %s)", domain.ErrInvalid, resultHandle)
+	}
+	if conflicts := plangate.SlotInstanceConflicts(frozen); len(conflicts) > 0 {
+		details := make([]string, len(conflicts))
+		for i, c := range conflicts {
+			details[i] = c.RefusalText()
+		}
+		return plangate.Plan{}, fmt.Errorf("%w: standing plan: %s", domain.ErrInvalid, strings.Join(details, "; "))
 	}
 	return frozen, nil
 }

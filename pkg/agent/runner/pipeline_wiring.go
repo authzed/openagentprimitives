@@ -1629,6 +1629,21 @@ func (l *Loop) FreezeAndRecordPhases(ctx context.Context, authored []plangate.Au
 		}
 	}
 
+	// A group goal's run holds one instance of each slot type, as every
+	// session does, and is held to a standing plan that names at most one. A
+	// run plan naming two could be approved and then fail at its first bind,
+	// so it is refused here, before it governs anything — with the reason the
+	// agent needs to re-plan.
+	if l.GroupGoalRun {
+		if conflicts := plangate.SlotInstanceConflicts(frozen); len(conflicts) > 0 {
+			details := make([]string, 0, len(conflicts))
+			for _, c := range conflicts {
+				details = append(details, c.RefusalText())
+			}
+			return notices, fmt.Errorf("%s", strings.Join(details, " "))
+		}
+	}
+
 	impact := map[permsurface.Handle]authz.StateImpact{}
 	for _, d := range l.PlanGateSurface {
 		impact[d.Handle] = d.StateImpact

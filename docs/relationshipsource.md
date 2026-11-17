@@ -688,7 +688,7 @@ access that already works.
 **An `AgentClass` that declares a `spec.authz.slots` entry on one of those
 permissions loses the `repo->can_*` arm.** Slot composition OWNS a slot
 permission's expression and rewrites it to
-`slot_grant_<permission>->interact + owner`. For that permission, the slot grant
+`slot_grant_<permission> + slot_grant_<permission>->interact + owner`. For that permission, the slot grant
 and direct `owner` standing are what resolve, and the directory contributes
 nothing — however complete and healthy the sync is.
 

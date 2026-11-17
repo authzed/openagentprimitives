@@ -1837,6 +1837,7 @@ func (h *Harness) startChannelsdPlumbing(t *testing.T, mgrCtx context.Context) {
 	if c := h.runnerFactory.preferencesChannelsdClient(); c != nil {
 		pl.PreferenceCommitter = c
 		pl.GoalConsentCommitter = c
+		pl.GroupGoalRuns = c
 		pipeline.BindGoalConsentHandler(pl)
 		pipeline.BindPreferenceCommitHandler(pl)
 	}

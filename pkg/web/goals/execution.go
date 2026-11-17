@@ -410,6 +410,22 @@ func executionGrant(g domain.Goal) []authz.Relation {
 	}
 }
 
+// GrantGroupRun grants a group goal's run session execute on the execution it
+// runs (agent_goal_execution#run, expiring with the run): a group run acts as
+// its own session, so this tuple is what its delivery tools are authorized
+// by. It re-checks the domain's consent (AuthorizeDispatch) first and writes
+// nothing unless it holds. A private goal never gets a run tuple; its owner
+// holds execute through approved.
+func (s *Server) GrantGroupRun(ctx context.Context, g domain.Goal, session string, expires time.Time) error {
+	if !g.Domain.GroupOwned() || g.Execution == nil || session == "" || expires.IsZero() {
+		return fmt.Errorf("%w: only a group goal's run is granted as its session", domain.ErrDenied)
+	}
+	if err := s.AuthorizeDispatch(ctx, g); err != nil {
+		return err
+	}
+	return s.Auth.Relations().WriteRelationships(ctx, []authz.Relation{{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "run", SubjectType: "agentsession", SubjectID: session, ExpiresAt: expires}})
+}
+
 func (s *Server) AuthorizeDispatch(ctx context.Context, g domain.Goal) error {
 	if s.Auth == nil || g.Execution == nil {
 		return domain.ErrDenied

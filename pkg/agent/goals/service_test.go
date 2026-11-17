@@ -181,7 +181,7 @@ func TestReviseManagers(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, next.Managers)
 			assert.Equal(t, g.Execution, next.Execution, "manager changes do not clear execution consent")
-			assert.Equal(t, g.Revision+1, next.Revision)
+			assert.Equal(t, g.Revision, next.Revision, "nor the revision the consent and its runs are bound to")
 		})
 	}
 }

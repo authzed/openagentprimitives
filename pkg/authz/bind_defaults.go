@@ -195,6 +195,11 @@ func BindClassDefaults(
 			})
 		}
 	}
+	// When subject is the session itself (a group goal run, a userless
+	// session), a grant the session already holds on a candidate satisfies
+	// this check via the composed slot permission's direct leg — so a re-bind
+	// renews its own prior grant, the same way a human member's does via
+	// slot_grant_<p>->interact.
 	bound := admissibleCandidates(ctx, mem, memScope, chk, subject, string(scope.SourceDefault), logger, cands)
 	return bindSlots(ctx, mem, memScope, sess, w, scope.SourceDefault, logger, now, SlotGrantExpiry(now(), sessionExpiration), bound)
 }

@@ -97,6 +97,9 @@ func (s *Store) Commit(_ context.Context, m goals.Mutation) (goals.Goal, error) 
 	if g, ok, err := s.receipt(m.Goal.Domain, m.RequestID, m.Hash); err != nil || ok {
 		return g, err
 	}
+	if m.Expected != 0 && len(m.Prior) == 0 {
+		return goals.Goal{}, goals.ErrConflict // an update must carry the goal it read
+	}
 	b, exists := s.rows[key(m.Goal.Domain, m.Goal.ID)]
 	if m.Expected == 0 && exists || m.Expected != 0 && !exists {
 		return goals.Goal{}, goals.ErrConflict
@@ -109,6 +112,66 @@ func (s *Store) Commit(_ context.Context, m goals.Mutation) (goals.Goal, error) 
 		if old.Revision != m.Expected {
 			return goals.Goal{}, goals.ErrConflict
 		}
+		if ok, err := s.priorMatches(m); err != nil || !ok {
+			if err == nil {
+				err = goals.ErrConflict
+			}
+			return goals.Goal{}, err
+		}
+	}
+	gb, err := json.Marshal(m.Goal)
+	if err != nil {
+		return goals.Goal{}, err
+	}
+	eb, err := json.Marshal(m.Event)
+	if err != nil {
+		return goals.Goal{}, err
+	}
+	s.rows[key(m.Goal.Domain, m.Goal.ID)] = gb
+	s.receipts[key(m.Goal.Domain, m.RequestID)] = receipt{m.Hash, gb}
+	s.events[m.Event.ID] = event{data: eb}
+	s.order = append(s.order, m.Event.ID)
+	return decode(gb)
+}
+
+var _ goals.InPlaceStore = (*Store)(nil)
+
+// priorMatches reports whether the stored goal still encodes as m.Prior.
+func (s *Store) priorMatches(m goals.Mutation) (bool, error) {
+	if len(m.Prior) == 0 {
+		return true, nil
+	}
+	b, exists := s.rows[key(m.Goal.Domain, m.Goal.ID)]
+	if !exists {
+		return false, nil
+	}
+	current, err := decode(b)
+	if err != nil {
+		return false, err
+	}
+	have, err := json.Marshal(current)
+	if err != nil {
+		return false, err
+	}
+	return string(have) == string(m.Prior), nil
+}
+
+// CommitInPlace implements goals.InPlaceStore: a payload rewrite at the
+// current revision, guarded by the full stored content.
+func (s *Store) CommitInPlace(_ context.Context, m goals.Mutation) (goals.Goal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if g, ok, err := s.receipt(m.Goal.Domain, m.RequestID, m.Hash); err != nil || ok {
+		return g, err
+	}
+	if m.Expected == 0 || m.Expected != m.Goal.Revision || len(m.Prior) == 0 {
+		return goals.Goal{}, goals.ErrConflict
+	}
+	if ok, err := s.priorMatches(m); err != nil || !ok {
+		if err == nil {
+			err = goals.ErrConflict
+		}
+		return goals.Goal{}, err
 	}
 	gb, err := json.Marshal(m.Goal)
 	if err != nil {

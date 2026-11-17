@@ -56,7 +56,7 @@ const slottableMemoryPermissionPrefix = "write_"
 //
 // Why this matters: ComposeSlots OWNS the permission line it composes — see
 // its doc comment — replacing whatever a fragment author wrote with
-// slot_grant_<perm>->interact + owner. That is exactly the behaviour that
+// slot_grant_<perm> + slot_grant_<perm>->interact + owner. That is exactly the behaviour that
 // makes a fragment unable to weaken who reaches a resource through an agent.
 // Pointed at a memory pool's AUDIENCE permission instead of its write
 // permission, the same replacement silently redefines who may read every
@@ -100,11 +100,25 @@ func slotGrantRelationDecl(permission string) string {
 
 // slotPermissionExpr is the expression the composer OWNS for a slot permission.
 //
+//	slot_grant_<perm>             the granted SESSION itself
 //	slot_grant_<perm>->interact   the session's member set (owner + participant - denied)
 //	owner                         direct standing on the resource itself, WHEN the
 //	                              target definition declares one
 //
-// The second leg is why approval volume stays sane: a requester who already has
+// The first leg exists for a session acting in its own right — a group goal
+// run, a userless session — whose tool calls are checked as
+// `agentsession:<ns>/<name>` (runner.sessionSelfSubject). agentsession#interact
+// never contains the session, so without this leg a grant written FOR that
+// session authorized nobody. It widens nothing else: the relation is typed
+// `agentsession with expiration` with no subject set, so it names exactly the
+// one session the tuple names — never a delegated child (nothing arrows across
+// `parent` here), never another session — and it expires with the grant. Every
+// audience question (LookupSubjects for info-leakage, approver fan-out, pt-tag
+// readers) asks for `user` subjects, so a session satisfying this leg never
+// appears in one. `denied` does not reach it, for the same structural reason
+// as agentsession#converse: denied holds people, the subject here is a session.
+//
+// The owner leg is why approval volume stays sane: a requester who already has
 // standing on the resource passes with no grant and no approval, so approval
 // fires only where the agent would exceed what the requester could do alone.
 //
@@ -119,7 +133,8 @@ func slotGrantRelationDecl(permission string) string {
 // WriteSchema — see definitionDeclaresName, which composeOneSlot calls to
 // decide hasOwner before this function ever runs.
 func slotPermissionExpr(permission string, hasOwner bool) string {
-	expr := SlotGrantRelationName(permission) + "->interact"
+	rel := SlotGrantRelationName(permission)
+	expr := rel + " + " + rel + "->interact"
 	if hasOwner {
 		expr += " + owner"
 	}
@@ -161,7 +176,7 @@ func ComposeSlots(src string, slots []SlotPair) (string, bool, []SlotPair, error
 		// A memory AUDIENCE permission (view_memory, and anything later paired
 		// with it) may never be slotted: this composer OWNS the permission line
 		// it writes, so a slot on view_memory would silently replace "who may
-		// read this pool" with the slot's interact+owner expression, changing
+		// read this pool" with the slot's grant+interact+owner expression, changing
 		// every entry's readership out from under the data with no error and no
 		// diff anyone reads. Unlike a reserved-definition slot (skipped, below),
 		// this is refused with an error: the operator asked for something that

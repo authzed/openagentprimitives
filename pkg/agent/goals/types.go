@@ -20,6 +20,27 @@ var (
 	ErrDenied   = errors.New("goal access denied")
 )
 
+// Causes of a group run's refusal that can never clear without a fresh
+// approval. They travel alongside ErrDenied (an error wraps both), so a
+// dispatcher records the specific RunReason while every ErrDenied check still
+// holds. A refusal that wraps none of them is either transient or generic.
+var (
+	// ErrGroupChannelGone: the pinned Channel is deleted or recreated.
+	ErrGroupChannelGone = errors.New("the group's channel is gone")
+	// ErrGroupNotHostable: the Channel's kind, membership, member ref or the
+	// class's owner ceiling no longer allow a group run.
+	ErrGroupNotHostable = errors.New("the group's conversation can no longer host the run")
+	// ErrMembershipNotCurrent: the group's membership is not kept current right
+	// now. Unlike the others it is transient (a directory sync clears it), so a
+	// dispatcher retries within the occurrence's window and records nothing.
+	ErrMembershipNotCurrent = errors.New("group membership is not kept current")
+	// ErrLookupFailed: an object the terms pin could not be read (not that it
+	// is absent). Transient, retried like ErrMembershipNotCurrent.
+	ErrLookupFailed = errors.New("lookup failed")
+	// ErrIdentityChanged: the class's AgentIdentity is deleted or recreated.
+	ErrIdentityChanged = errors.New("the agent's identity changed since review")
+)
+
 // LastManagerRefusal is the refusal text for a manager change that would leave a
 // group goal with no manager in the group. Platform admins can still step in,
 // but they are not the group's managers, so they do not count.
@@ -131,6 +152,23 @@ type Goal struct {
 	Plan      *PlanRef          `json:"plan,omitempty"`
 	Result    *Result           `json:"result,omitempty"`
 	Execution *ExecutionConsent `json:"execution,omitempty"`
+	// PendingRenewal is a group goal's renewal of Execution awaiting a
+	// manager's decision. Execution stays in force until its own ExpiresAt
+	// while it is pending. Neither recording nor deciding one changes the
+	// revision; approving it replaces Execution. A declined renewal stays here, decided,
+	// so the same approval is not asked to be renewed again.
+	PendingRenewal *ExecutionConsent `json:"pendingRenewal,omitempty"`
+	// PriorExecution is the approval a renewal replaced. It keeps governing
+	// the runs it scheduled (occurrences bound to its digest) until its own
+	// ExpiresAt, so approving a renewal supersedes nothing (ForConsent).
+	PriorExecution *ExecutionConsent `json:"priorExecution,omitempty"`
+	// LastApprovedTerms are the terms of a group goal's most recent approval.
+	// Unlike Execution they survive pause, resume and edits, so a resume can
+	// offer them for re-approval in one click.
+	LastApprovedTerms *ExecutionTerms `json:"lastApprovedTerms,omitempty"`
+	// BlockedReason is derived when a goal is read (Service.Get and List) and
+	// never stored: commit clears it.
+	BlockedReason string `json:"blockedReason,omitempty"`
 	// Managers are the canonical user ids that may manage a group-owned
 	// goal, as long as they stay in the group (the schema intersects manager
 	// with member_group). Empty for private goals. The agent_goal_domain
@@ -192,10 +230,13 @@ type Event struct {
 	ActorProof json.RawMessage `json:"actorProof,omitempty"`
 	Goal       Goal            `json:"goal"`
 	Action     string          `json:"action"`
-	Session    string          `json:"session"`
-	Proof      string          `json:"proof"`
-	Occurrence *Occurrence     `json:"occurrence,omitempty"`
-	OccurredAt *time.Time      `json:"occurredAt,omitempty"`
+	// Actor names a system author, for an event no session's person caused
+	// (a renewal request). Empty when Session and Proof name the actor.
+	Actor      string      `json:"actor,omitempty"`
+	Session    string      `json:"session"`
+	Proof      string      `json:"proof"`
+	Occurrence *Occurrence `json:"occurrence,omitempty"`
+	OccurredAt *time.Time  `json:"occurredAt,omitempty"`
 }
 
 func validState(s State) bool {
@@ -303,14 +344,20 @@ func Revise(g Goal, c Change, now time.Time) (Goal, error) {
 	g.Revision++
 	// Any management mutation conservatively requires fresh execution consent.
 	// In particular, resume must never revive authority withdrawn by pause.
+	// A pending renewal and a renewed approval go with it; LastApprovedTerms
+	// stays for resume.
 	g.Execution = nil
+	g.PendingRenewal = nil
+	g.PriorExecution = nil
 	g.UpdatedAt = now.UTC()
 	return g, validateGoal(g)
 }
 
 // reviseManagers applies add_manager / remove_manager. A manager change says
 // who may manage the goal, not what its runs may do, so unlike every other
-// mutation it keeps the goal's execution consent. Removing the last listed
+// mutation it keeps the goal's execution consent — and its revision, which
+// that consent and every scheduled or running occurrence are bound to; it is
+// committed in place (InPlaceStore). Removing the last listed
 // manager is refused here; the server additionally refuses a change that would
 // leave no manager who is still in the group (CheckManagers), because the
 // list alone cannot see membership.
@@ -340,7 +387,6 @@ func reviseManagers(g Goal, c Change, now time.Time) (Goal, error) {
 		managers = slices.Delete(managers, at, at+1)
 	}
 	g.Managers = managers
-	g.Revision++
 	g.UpdatedAt = now.UTC()
 	return g, validateGoal(g)
 }

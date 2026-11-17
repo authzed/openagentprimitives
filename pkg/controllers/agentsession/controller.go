@@ -568,6 +568,20 @@ type GoalSessionValidator interface {
 	GoalSessionConcluded(context.Context, *spiceboxv1alpha1.AgentSession) (concluded bool, verdict GoalRunVerdict, err error)
 	ValidateGoalSession(context.Context, *spiceboxv1alpha1.AgentSession) error
 	ConstrainGoalSettings(context.Context, *spiceboxv1alpha1.AgentSession, *spiceboxv1alpha1.EffectiveSettings) error
+	// GoalSessionOwners reports who owns a goal run session when its goal,
+	// not its Channel, decides that: a group goal's run. The zero value means
+	// the ordinary channel-policy resolution applies (a private goal's run).
+	// An error means the owners cannot be established, and the session is
+	// left ownerless (fail closed).
+	GoalSessionOwners(context.Context, *spiceboxv1alpha1.AgentSession) (GoalRunOwners, error)
+}
+
+// GoalRunOwners are the SpiceDB subjects a goal decides for its run session:
+// Owner on agentsession#owner (who approves the run's asks) and Participant
+// on agentsession#participant (who may see and talk in it).
+type GoalRunOwners struct {
+	Owner       string
+	Participant string
 }
 
 type Reconciler struct {

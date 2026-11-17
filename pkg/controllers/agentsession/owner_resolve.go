@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -37,6 +38,19 @@ func resolveOwnerSubject(identityMode string, policy *spiceboxv1alpha1.ChannelOw
 // ResolveAndWriteOwners resolves the session owner and writes agentsession#owner
 // via the Granter. Idempotent (TOUCH). ch may be nil (kubectl/no-channel sessions).
 func (r *Reconciler) ResolveAndWriteOwners(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ch *spiceboxv1alpha1.Channel, ac *spiceboxv1alpha1.AgentClass) error {
+	// A goal run whose goal names its owners (a group goal's) is owned by
+	// that goal, not by its Channel: none of the channel-policy sources below
+	// is consulted for it. Asked before them so a Channel policy can never
+	// hand a group run's approvals to anyone but the goal's managers.
+	if sess.Spec.GoalExecution != nil && r.GoalValidator != nil {
+		owners, err := r.GoalValidator.GoalSessionOwners(ctx, sess)
+		if err != nil {
+			return fmt.Errorf("goal run owners: %w", err)
+		}
+		if owners != (GoalRunOwners{}) {
+			return r.writeGoalRunOwners(ctx, sess, ac, owners)
+		}
+	}
 	starter := spiceboxv1alpha1.StartedBySubject(sess).String()
 	var policy *spiceboxv1alpha1.ChannelOwnerPolicy
 	if ch != nil {
@@ -73,6 +87,33 @@ func (r *Reconciler) ResolveAndWriteOwners(ctx context.Context, sess *spiceboxv1
 	}
 	r.writeInteractorTuples(ctx, sess, ac)
 	return nil
+}
+
+// writeGoalRunOwners writes a goal run's owner (resolved against the class's
+// ownerCeiling by ResolveGoalRunOwner, and refused unless the goal itself
+// decided it) and its participants. Both are TOUCHes
+// re-run every reconcile. A run has no starter, so there is no trigger owner
+// and no interactor tuple to write.
+func (r *Reconciler) writeGoalRunOwners(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ac *spiceboxv1alpha1.AgentClass, owners GoalRunOwners) error {
+	subject, source, err := spiceboxv1alpha1.ResolveGoalRunOwner(ac.Spec.IdentityMode, owners.Owner, ac.Spec.GetOwnerCeiling())
+	if err != nil {
+		return err
+	}
+	// Only the goal's managers may own a goal run. Group-goal opt-in and
+	// dispatch already refuse a class whose ceiling would win; this is the
+	// last line, so a ceiling added in between leaves the run ownerless
+	// (every #owner gate denies) rather than owned by someone else.
+	if source != spiceboxv1alpha1.OwnerSourceGoal {
+		return fmt.Errorf("goal run owner: the class's %s owner policy would override the goal's managers; no owner written", source)
+	}
+	ref := authz.SessionRef{Namespace: sess.Namespace, Name: sess.Name}
+	if err := authz.TouchOwner(ctx, r.AuthzGranter, ref, subject); err != nil {
+		return err
+	}
+	if owners.Participant == "" {
+		return nil
+	}
+	return authz.TouchInteractParticipant(ctx, r.AuthzGranter, ref, owners.Participant)
 }
 
 // writeInteractorTuples records, on the AgentClass, that this session's human

@@ -1124,6 +1124,13 @@ func (l *Loop) Run(ctx context.Context) error {
 			return nil
 		}
 
+		// A group goal run whose approval expired undecided reports blocked
+		// and concludes now, ahead of any terminal tool in the same turn: the
+		// expiry is the run's outcome, and its tool results are recorded above.
+		if expired, ok := l.takeGroupRunApprovalExpired(); ok {
+			return l.concludeGroupRunBlocked(ctx, expired)
+		}
+
 		if terminal {
 			// Channel-attached IdleExit: an await_user_message / ask_parent TTL, context cancelled,
 			// or the PreResponse share-denied yield respond_to_user routes here as

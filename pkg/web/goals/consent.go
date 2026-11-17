@@ -15,6 +15,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
+	"github.com/authzed/openagentprimitives/pkg/channels/notice"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
@@ -79,14 +80,23 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 		_, err = store.Schedule(ctx, g)
 		return err
 	}
-	if event.Action != "request_execution" {
+	if event.Action != "request_execution" && event.Action != "request_renewal" {
 		return nil
 	}
 	g, err := p.Service.Store.Get(ctx, event.Goal.Domain, event.Goal.ID)
 	if err != nil {
 		return err
 	}
-	if g.Execution == nil || g.Revision != event.Goal.Revision || g.Execution.Decision != nil {
+	if event.Action == "request_renewal" {
+		// A renewal's card is the goal as the renewal would have it, posted
+		// in the run session that hosts it (its Session), and only while it
+		// is still the undecided renewal of the approval in force.
+		r := g.PendingRenewal
+		if r == nil || event.Goal.PendingRenewal == nil || r.Digest != event.Goal.PendingRenewal.Digest || r.Decision != nil || g.Revision != r.RequestRevision+1 {
+			return nil
+		}
+		g = domain.RenewalView(g)
+	} else if g.Execution == nil || g.Revision != event.Goal.Revision || g.Execution.Decision != nil {
 		return nil
 	}
 	c := g.Execution
@@ -125,7 +135,36 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 	if c.ApprovalMode == "plan" {
 		return nil
 	}
-	return p.publishRetainedRequest(ctx, scope, request)
+	var notice func()
+	// The operator's renewal card lasts only as long as its run, so a notice
+	// says how else to renew. A manager's own renewal is in their own
+	// conversation, where they asked.
+	if event.Action == "request_renewal" && c.SystemRenewal() {
+		notice = func() { p.noticeRenewal(ctx, g, ns, name) }
+	}
+	return p.publishRetainedRequest(ctx, scope, request, notice)
+}
+
+// noticeRenewal posts, beside a renewal card, a plain notice in the run that
+// hosts it (g is the renewal view): the card lasts only as long as that run,
+// so the notice says when the approval runs out and how else to renew it.
+// It is best-effort: a failure is logged, and the card is unaffected.
+func (p *ConsentPublisher) noticeRenewal(ctx context.Context, g domain.Goal, ns, name string) {
+	if g.PriorExecution == nil {
+		return
+	}
+	title := []rune(strings.Join(strings.Fields(g.Title), " "))
+	if len(title) > 200 {
+		title = append(title[:199], '…')
+	}
+	n := notice.New(categories.GoalApprovalExpiring, notice.Args{
+		Lead:     fmt.Sprintf("%s: approval expires %s.", string(title), g.PriorExecution.Terms.ExpiresAt.UTC().Format("2 Jan 2006, 15:04 UTC")),
+		NextStep: "A manager can renew it from the agent's home view, where available, or by asking me to renew it.",
+		Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceParticipants},
+	})
+	if err := n.Publish(p.Publish, channelevents.SessionRef{Namespace: ns, Name: name}, "goalrenewal-notice-"+g.Execution.Digest); err != nil {
+		log.FromContext(ctx).Info("group goal renewal notice could not be posted; the renewal card was", "goal", g.ID, "session", ns+"/"+name, "error", err)
+	}
 }
 
 // validateApprovedGroup re-runs the group rules for an approved group goal,
@@ -159,7 +198,10 @@ func (p *ConsentPublisher) validateApprovedGroup(ctx context.Context, g domain.G
 
 // publishRetainedRequest keeps the outbox pending until the relay records the
 // exact request. A successful bus publish alone can lose a card during restart.
-func (p *ConsentPublisher) publishRetainedRequest(ctx context.Context, scope memory.Scope, request channelevents.InteractionRequestPayload) error {
+//
+// afterPublish, when set, runs once the card itself has been handed to the
+// bus (not on a replay that finds it already retained).
+func (p *ConsentPublisher) publishRetainedRequest(ctx context.Context, scope memory.Scope, request channelevents.InteractionRequestPayload, afterPublish func()) error {
 	retained := func() (bool, error) {
 		record, found, err := parkedprompt.Find(ctx, p.Memory, scope, request.RequestRef)
 		if err != nil || !found {
@@ -195,6 +237,9 @@ func (p *ConsentPublisher) publishRetainedRequest(ctx context.Context, scope mem
 	}
 	if err := channelevents.PublishOut(p.Publish, ns, name, channelevents.KindInteractionRequest, request); err != nil {
 		return err
+	}
+	if afterPublish != nil {
+		afterPublish()
 	}
 	if found, err := retained(); err != nil || found {
 		return err
@@ -269,7 +314,7 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 	if e != nil || canonical != owner {
 		return memory.Entry{}, domain.ErrDenied
 	}
-	details, e := json.Marshal(g)
+	details, e := json.Marshal(cardGoal(g))
 	if e != nil {
 		return memory.Entry{}, e
 	}
@@ -357,7 +402,7 @@ func consentRecord(g domain.Goal, scope memory.Scope, id string, request channel
 	if e != nil {
 		return memory.Entry{}, e
 	}
-	content, e := json.Marshal(goalconsent.Content{Goal: g, Request: raw})
+	content, e := json.Marshal(goalconsent.Content{Goal: cardGoal(g), Request: raw})
 	if e != nil {
 		return memory.Entry{}, e
 	}
@@ -376,6 +421,34 @@ func cardExpiry(c *domain.ExecutionConsent, now time.Time) time.Time {
 		expiry = c.Terms.ExpiresAt
 	}
 	return expiry
+}
+
+// renewalCardExpiry is when a renewal card lapses unanswered: when the
+// approval it renews runs out, or when the run hosting it can last no longer,
+// whichever is first — not the per-run plan approval timeout, which would
+// give managers seconds to renew. The run may end sooner still; the card is
+// best-effort, and the notice beside it says how else to renew.
+//
+// A manager's own renewal (not SystemRenewal) is posted in their own
+// conversation, which outlives a run: it lasts until the approval runs out.
+func renewalCardExpiry(c, renewed *domain.ExecutionConsent, now time.Time) time.Time {
+	expiry := renewed.Terms.ExpiresAt.UTC()
+	if c.SystemRenewal() {
+		expiry = now.UTC().Add(time.Duration(c.Terms.Bounds.DurationSeconds) * time.Second)
+	}
+	if expiry.After(renewed.Terms.ExpiresAt) {
+		expiry = renewed.Terms.ExpiresAt.UTC()
+	}
+	return expiry
+}
+
+// cardGoal is g as a consent card and its signed record carry it: the goal
+// and the consent asked for, without the other consents it holds (what a
+// renewal replaces, the last approved terms), which the decision never reads
+// and which would crowd the record past its size bound.
+func cardGoal(g domain.Goal) domain.Goal {
+	g.PriorExecution, g.LastApprovedTerms, g.PendingRenewal, g.BlockedReason = nil, nil, nil, ""
+	return g
 }
 
 func evidenceLines(t domain.ExecutionTerms) []string {
@@ -403,11 +476,14 @@ func groupConsentRequest(g domain.Goal, ns, name, id string, now time.Time) (cha
 	if t.Group == nil {
 		return channelevents.InteractionRequestPayload{}, fmt.Errorf("%w: a group goal's consent needs its group destination", domain.ErrInvalid)
 	}
-	details, err := json.Marshal(g)
+	details, err := json.Marshal(cardGoal(g))
 	if err != nil {
 		return channelevents.InteractionRequestPayload{}, err
 	}
 	expiry := cardExpiry(c, now)
+	if c.IsRenewal() && g.PriorExecution != nil {
+		expiry = renewalCardExpiry(c, g.PriorExecution, now)
+	}
 	b := t.Bounds
 	when := channelevents.InteractionField{Label: "Run once", Value: t.DueAt.UTC().Format("2 Jan 2006, 15:04:05 UTC")}
 	if schedule := t.Schedule; schedule != nil {
@@ -450,9 +526,15 @@ func groupConsentRequest(g domain.Goal, ns, name, id string, now time.Time) (cha
 	if rationale != "" {
 		excerpt += "\n\nThe agent's reasons for the plan:\n" + rationale
 	}
+	lead := "Approve this group goal's standing plan?"
+	if c.IsRenewal() {
+		// The operator asks, not a person: say what it continues.
+		lead = "Renew this group goal's approval?"
+		body = "Approving continues the current approval on the same terms from the time below; until then the current approval stays in force, and if nobody approves, the goal stops when it runs out. " + body
+	}
 	typ, goalID, perm := g.ManageRef()
 	return channelevents.InteractionRequestPayload{AgentSessionRef: channelevents.SessionRef{Namespace: ns, Name: name}, Category: categories.GoalGroupExecutionConsent, RequestRef: id,
-		Lead: "Approve this group goal's standing plan?", Body: body, Fields: fields,
+		Lead: lead, Body: body, Fields: fields,
 		Excerpt:   &channelevents.InteractionExcerpt{Label: fmt.Sprintf("Goal · revision %d", g.Revision), Content: excerpt},
 		Details:   details,
 		Resources: []channelevents.InteractionResourceRef{{Type: typ, ID: goalID, Permission: perm}},

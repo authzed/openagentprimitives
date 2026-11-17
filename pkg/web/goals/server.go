@@ -23,6 +23,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/provenance"
 	"github.com/authzed/openagentprimitives/pkg/memory/tokens"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -63,6 +64,12 @@ type ExecutionReplyPreparer interface {
 	PrepareGoalReply(context.Context, *v1.AgentSession, channelevents.OutboundUserMessagePayload, []domain.Source) (domain.Occurrence, error)
 }
 
+// ExecutionReplyFailureRecorder records that a handed-off group reply could
+// not be published.
+type ExecutionReplyFailureRecorder interface {
+	RecordGoalReplyPublishFailed(context.Context, *v1.AgentSession, channelevents.OutboundUserMessagePayload) (domain.Occurrence, error)
+}
+
 type Server struct {
 	Discovery         *Discovery
 	EventSources      *sessionevents.Registry
@@ -93,6 +100,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/goals/decision/check" {
 		s.checkDecisionHTTP(w, r)
+		return
+	}
+	if r.URL.Path == "/goals/decision/ingress" {
+		s.decisionIngressHTTP(w, r)
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/goals/"), "/")
@@ -136,7 +147,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := memory.WithCaller(memory.WithSystemApproval(r.Context(), "system:operator"), "system:operator")
-	if req.Operation == "authorize_execution" || req.Operation == "authorize_plan" || req.Operation == "report_execution_result" || req.Operation == "prepare_reply" {
+	if req.Operation == "authorize_execution" || req.Operation == "authorize_plan" || req.Operation == "report_execution_result" || req.Operation == "prepare_reply" || req.Operation == "reply_publish_failed" {
 		var sess v1.AgentSession
 		if s.ExecutionSessions == nil {
 			s.fail(w, r, domain.ErrDenied)
@@ -154,15 +165,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err)
 			return
 		}
-		owner := v1.StartedByCanonical(&sess)
-		allowed, err := s.Auth.CheckInteract(ctx, ns, name, owner, true)
+		// A private run acts for its owner, who started it and must still be
+		// able to interact with it. A group run is started by no one: its
+		// domain comes from the occurrence, and its standing is the goal's
+		// own (ValidateGoalSession re-checked the dispatch above).
+		group, err := s.groupRun(ctx, &sess)
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
-		if !allowed {
-			s.fail(w, r, domain.ErrDenied)
-			return
+		owner := v1.StartedByCanonical(&sess)
+		if !group {
+			allowed, err := s.Auth.CheckInteract(ctx, ns, name, owner, true)
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			if !allowed {
+				s.fail(w, r, domain.ErrDenied)
+				return
+			}
+		}
+		runSources := func() ([]domain.Source, error) {
+			if group {
+				return s.sessionSources(ctx, ns+"/"+name)
+			}
+			return s.Sources(ctx, domain.Actor{Session: ns + "/" + name, Domain: domain.Domain{Owner: owner.String()}})
 		}
 		out := Response{ExecutionAvailable: true}
 		if req.Operation == "authorize_execution" {
@@ -191,12 +219,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.fail(w, r, domain.ErrDenied)
 				return
 			}
-			sources, err := s.Sources(ctx, domain.Actor{Session: ns + "/" + name, Domain: domain.Domain{Owner: owner.String()}})
+			sources, err := runSources()
 			if err != nil {
 				s.fail(w, r, err)
 				return
 			}
 			run, err := preparer.PrepareGoalReply(ctx, &sess, *req.Reply, sources)
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			out.Run = &run
+		}
+		if req.Operation == "reply_publish_failed" {
+			recorder, ok := s.ExecutionSessions.(ExecutionReplyFailureRecorder)
+			if !ok || req.Reply == nil {
+				s.fail(w, r, domain.ErrDenied)
+				return
+			}
+			run, err := recorder.RecordGoalReplyPublishFailed(ctx, &sess, *req.Reply)
 			if err != nil {
 				s.fail(w, r, err)
 				return
@@ -210,7 +251,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			// Source dependencies come from trusted session memory, not wire fields.
-			req.Proposal.Sources, err = s.Sources(ctx, domain.Actor{Session: ns + "/" + name, Domain: domain.Domain{Owner: owner.String()}})
+			req.Proposal.Sources, err = runSources()
 			if err != nil {
 				s.fail(w, r, err)
 				return
@@ -227,6 +268,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.FromContext(ctx).Info("goal authority response failed", "session", ns+"/"+name, "error", err)
 		}
 		return
+	}
+	if isGoalManagement(req.Operation) {
+		if err := s.refuseFromGoalRun(ctx, ns, name, req.Operation); err != nil {
+			s.failGroup(w, r, err)
+			return
+		}
 	}
 	group, err := s.isGroupRequest(ctx, ns, name, req)
 	if err != nil {
@@ -618,7 +665,28 @@ func (s *Server) Authorize(ctx context.Context, a domain.Actor, write bool) erro
 // Sources carries every resource dependency forward, including reads from
 // earlier turns. Goals cannot launder a restricted read into future sessions.
 func (s *Server) Sources(ctx context.Context, a domain.Actor) ([]domain.Source, error) {
-	rows, err := s.Memory.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: a.Session}, Kinds: []string{infoleakagetaint.KindName}, Limit: 10000})
+	sources, err := s.sessionSources(ctx, a.Session)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ReadGoal(ctx, a, domain.Goal{Sources: sources}); err != nil {
+		return nil, err
+	}
+	if a.Domain.GroupOwned() {
+		// A group goal's content is shown to the whole conversation, so a
+		// source only the actor can read must not become one of its sources.
+		if err := s.audienceCanRead(ctx, a, sources); err != nil {
+			return nil, err
+		}
+	}
+	return sources, nil
+}
+
+// sessionSources lists what session (ns/name) has read, from its taint
+// records, unchecked. A whole list or none: a partial read would drop a
+// dependency.
+func (s *Server) sessionSources(ctx context.Context, session string) ([]domain.Source, error) {
+	rows, err := s.Memory.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: session}, Kinds: []string{infoleakagetaint.KindName}, Limit: 10000})
 	if err != nil {
 		return nil, err
 	}
@@ -633,17 +701,24 @@ func (s *Server) Sources(ctx context.Context, a domain.Actor) ([]domain.Source, 
 		}
 		sources = append(sources, domain.Source{ResourceType: t.ResourceType, ResourceID: t.ResourceID, Permission: t.Permission})
 	}
-	if err := s.ReadGoal(ctx, a, domain.Goal{Sources: sources}); err != nil {
-		return nil, err
-	}
-	if a.Domain.GroupOwned() {
-		// A group goal's content is shown to the whole conversation, so a
-		// source only the actor can read must not become one of its sources.
-		if err := s.audienceCanRead(ctx, a, sources); err != nil {
-			return nil, err
-		}
-	}
 	return sources, nil
+}
+
+// groupRun reports whether sess runs an occurrence of a group goal, from the
+// occurrence's own domain — never from the session's annotations. A group
+// run's sources are not checked as any one person's: what it read is carried
+// with its result and reply, and every post it makes passes the
+// information-leakage gate against the whole conversation.
+func (s *Server) groupRun(ctx context.Context, sess *v1.AgentSession) (bool, error) {
+	store, ok := s.Service.Store.(domain.OccurrenceStore)
+	if !ok {
+		return false, domain.ErrDenied
+	}
+	o, err := store.Occurrence(ctx, sess.Spec.GoalExecution.OccurrenceID)
+	if err != nil {
+		return false, err
+	}
+	return o.Domain.GroupOwned(), nil
 }
 
 func (s *Server) ReadGoal(ctx context.Context, a domain.Actor, g domain.Goal) error {
@@ -682,4 +757,34 @@ func (s *Server) actorRecords(ctx context.Context, ns, name string) (memory.Quer
 		case <-timer.C:
 		}
 	}
+}
+
+// isGoalManagement reports whether op creates, changes, approves or discovers
+// goals (manager changes are updates), as opposed to reading them.
+func isGoalManagement(op string) bool {
+	switch op {
+	case "create", "update", "request_execution", "request_discovery", "stop_discovery", "get_discovery_policy", "get_discovery_proposal":
+		return true
+	}
+	return false
+}
+
+// refuseFromGoalRun refuses goal management from a goal-execution session,
+// group or private. A run executes one occurrence of a goal it was given; it
+// never creates, changes, approves or discovers goals, whatever its catalog
+// offers. A session read that errors fails the request.
+func (s *Server) refuseFromGoalRun(ctx context.Context, ns, name, op string) error {
+	var sess v1.AgentSession
+	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sess); err != nil {
+		// Never-existing or deleted: no run to refuse; the actor resolution
+		// that follows refuses an unknown session as before.
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("read session %s/%s: %w", ns, name, err)
+	}
+	if sess.Spec.GoalExecution != nil {
+		return fmt.Errorf("%w: a goal run cannot %s goals; goals are managed from a conversation, not from a run", domain.ErrDenied, strings.ReplaceAll(op, "_", " "))
+	}
+	return nil
 }

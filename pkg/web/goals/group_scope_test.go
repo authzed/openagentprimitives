@@ -97,6 +97,8 @@ type groupAuthority struct {
 	// that answer false; checkErrs fails every check on a resource type.
 	refusedPerms map[string]bool
 	checkErrs    map[string]error
+	// interactChecks counts CheckInteract calls.
+	interactChecks int
 }
 
 func newGroupAuthority() *groupAuthority {
@@ -153,6 +155,7 @@ func (a *groupAuthority) GrantSlots(_ context.Context, _, _ string, b []authz.Sl
 	return nil
 }
 func (a *groupAuthority) CheckInteract(context.Context, string, string, identity.CanonicalUserID, bool) (bool, error) {
+	a.interactChecks++
 	return true, nil
 }
 func (a *groupAuthority) has(id, rel, subjType, subjID, subjRel string) bool {
@@ -329,6 +332,7 @@ func TestGroupQualifies(t *testing.T) {
 		mode      string
 		kind      string
 		syncErr   error
+		ceiling   *v1.OwnerCeiling
 		wantInMsg string
 	}{
 		{name: "opted in, agent identity, synced kind: qualifies", goals: `{"groups":true}`, kind: "grouptest"},
@@ -338,12 +342,20 @@ func TestGroupQualifies(t *testing.T) {
 		{name: "ask: refused naming the mode", goals: `{"groups":true}`, mode: "ask", kind: "grouptest", wantInMsg: `"ask"`},
 		{name: "kind without the contract: refused naming the kind", goals: `{"groups":true}`, kind: "plaintest", wantInMsg: `channel kind "plaintest" cannot host group goals`},
 		{name: "membership not synced: refused with the kind's reason", goals: `{"groups":true}`, kind: "grouptest", syncErr: errors.New("directory sync is not Ready"), wantInMsg: "directory sync is not Ready"},
+		{name: "empty owner ceiling (default mode): qualifies", goals: `{"groups":true}`, kind: "grouptest", ceiling: &v1.OwnerCeiling{}},
+		{name: "fixed owner ceiling: refused, it would own the runs instead of the managers", goals: `{"groups":true}`, kind: "grouptest", ceiling: &v1.OwnerCeiling{Fixed: "group:admins#member"},
+			wantInMsg: "group goals need runs owned by the goal's managers; this agent's session-owner policy (fixed) would override them"},
+		{name: "starterOnly owner ceiling: refused, runs have no starter to own them", goals: `{"groups":true}`, kind: "grouptest", ceiling: &v1.OwnerCeiling{StarterOnly: true},
+			wantInMsg: "group goals need runs owned by the goal's managers; this agent's session-owner policy (starterOnly) would override them"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newGroupFixture(t)
 			groupTestMembershipErr = tc.syncErr
 			class := &v1.AgentClass{Spec: v1.AgentClassSpec{IdentityMode: tc.mode, Capabilities: map[string]apiext.JSON{"goals": {Raw: []byte(tc.goals)}}}}
+			if tc.ceiling != nil {
+				class.Spec.Authz = &v1.AuthzBlock{OwnerCeiling: tc.ceiling}
+			}
 			ch := &v1.Channel{ObjectMeta: metav1.ObjectMeta{Namespace: groupNS, Name: "c"}, Spec: v1.ChannelSpec{Kind: tc.kind}}
 			err := f.s.groupQualifies(context.Background(), class, ch)
 			if tc.wantInMsg == "" {
@@ -560,7 +572,7 @@ func TestGroupManagers(t *testing.T) {
 		status, r, body := f.as(t, "r1", add)
 		require.Equal(t, 200, status, body)
 		assert.Equal(t, []string{"alice", "bob"}, r.Goal.Managers)
-		assert.Equal(t, g.Revision+1, r.Goal.Revision, "the retry replays the receipt; it does not revise twice")
+		assert.Equal(t, g.Revision, r.Goal.Revision, "a manager change keeps the revision its runs are bound to; the retry replays the receipt")
 		assert.True(t, f.auth.managerTuple(g.ID, "bob"))
 	})
 	t.Run("a replayed old request never restores a manager removed since", func(t *testing.T) {
@@ -627,9 +639,13 @@ func TestGroupManagers(t *testing.T) {
 		g := f.createAsAlice(t)
 		// Plant consent directly: this is about the manager path not clearing
 		// it, not about how it was requested.
+		stored, err := f.s.Service.Store.Get(context.Background(), g.Domain, g.ID)
+		require.NoError(t, err)
+		prior, err := core.EncodePrior(stored)
+		require.NoError(t, err)
 		g.Execution = &core.ExecutionConsent{RequestID: "consent", RequestRevision: g.Revision, Digest: "d"}
 		g.Revision++
-		g, err := f.s.Service.Store.Commit(context.Background(), core.Mutation{Goal: g, Expected: g.Revision - 1, RequestID: "plant", Hash: "plant", Event: core.Event{ID: "goalev-plant", Goal: g, Action: "request_execution", Session: "team/session", Proof: "p"}})
+		g, err = f.s.Service.Store.Commit(context.Background(), core.Mutation{Goal: g, Expected: g.Revision - 1, Prior: prior, RequestID: "plant", Hash: "plant", Event: core.Event{ID: "goalev-plant", Goal: g, Action: "request_execution", Session: "team/session", Proof: "p"}})
 		require.NoError(t, err)
 		f.auth.members["bob"] = true
 		status, r, body := f.as(t, "r1", managerChange("add-bob", g, "add_manager", "bob"))

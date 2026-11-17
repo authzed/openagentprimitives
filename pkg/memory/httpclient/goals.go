@@ -26,3 +26,14 @@ func (c *Client) CommitGoalConsent(ctx context.Context, entry memory.Entry) erro
 func (c *Client) CheckGoalConsent(ctx context.Context, request memory.Entry, decider string, approved bool) error {
 	return c.do(ctx, http.MethodPost, "/goals/decision/check", goalconsent.Check{Request: request, Decider: decider, Approved: approved}, nil)
 }
+
+// GroupGoalRun asks the goal server whether ns/name is the live run of a
+// group-owned goal, so a decision on it may arrive by channel ingress. Any
+// refusal (a private run, a concluded or unbound one) is an error.
+func (c *Client) GroupGoalRun(ctx context.Context, ns, name string) (bool, error) {
+	var out webgoals.RunDecisionIngress
+	if err := c.do(ctx, http.MethodPost, "/goals/decision/ingress", webgoals.RunDecisionIngressCheck{Namespace: ns, Name: name}, &out); err != nil {
+		return false, err
+	}
+	return out.Group, nil
+}

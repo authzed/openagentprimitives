@@ -241,3 +241,60 @@ func TestGroupGoal_RunSessionApproveFollowsManage(t *testing.T) {
 	assert.ElementsMatch(t, []string{f.alice.String(), f.dave.String()}, got,
 		"approver set is exactly the live managers plus platform admins")
 }
+
+// A group run acts as its own session: execute on the execution is held by
+// the run session the dispatcher wrote as `run`, until that tuple expires,
+// and by no other session. A private execution never gets a run tuple, so
+// its execute stays approved & domain->manage.
+func TestGroupGoal_ExecuteHeldByRunSession(t *testing.T) {
+	c := newIntegrationClient(t)
+	f := newGroupGoalFixture(t, c)
+	ctx := context.Background()
+
+	asSession := func(execID, session string) bool {
+		t.Helper()
+		ok, err := c.CheckSubjectOnResource(ctx, "agent_goal_execution", execID, "execute", "agentsession", session, true)
+		require.NoError(t, err)
+		return ok
+	}
+	asUser := func(execID string, u identity.CanonicalUserID) bool {
+		t.Helper()
+		ok, err := c.CheckOnResource(ctx, "agent_goal_execution", execID, "execute", u, true)
+		require.NoError(t, err)
+		return ok
+	}
+	run := func(execID, session string, expires time.Time) {
+		t.Helper()
+		r := rel("agent_goal_execution", execID, "run", "agentsession", session, "")
+		r.ExpiresAt = expires
+		require.NoError(t, c.Relations().WriteRelationships(ctx, []authz.Relation{
+			rel("agent_goal_execution", execID, "domain", "agent_goal_domain", f.domain, ""), r,
+		}))
+	}
+
+	group := uniq(t, "ggexec-run-")
+	other := "goals/" + uniq(t, "ggrun-other-")
+	assert.False(t, asSession(group, f.session), "no run tuple: refused")
+	run(group, f.session, time.Now().Add(time.Hour))
+	assert.True(t, asSession(group, f.session), "the run session holds execute")
+	assert.False(t, asSession(group, other), "a different session is refused")
+	assert.False(t, asUser(group, f.alice), "a run tuple grants no person execute")
+
+	private := uniq(t, "ggexec-private-")
+	privateDomain := uniq(t, "ggdom-private-")
+	approved := rel("agent_goal_execution", private, "approved", "user", f.alice.String(), "")
+	approved.ExpiresAt = time.Now().Add(time.Hour)
+	require.NoError(t, c.Relations().WriteRelationships(ctx, []authz.Relation{
+		rel("agent_goal_domain", privateDomain, "owner", "user", f.alice.String(), ""),
+		rel("agent_goal_execution", private, "domain", "agent_goal_domain", privateDomain, ""), approved,
+	}))
+	assert.True(t, asUser(private, f.alice), "private: approved owner who manages executes, unchanged")
+	assert.False(t, asUser(private, f.bob), "private: no approval, no execute")
+	assert.False(t, asSession(private, f.session), "private: no session executes without a run tuple")
+
+	stale := uniq(t, "ggexec-run-stale-")
+	run(stale, f.session, time.Now().Add(2*time.Second))
+	require.True(t, asSession(stale, f.session), "precondition: allowed before expiry")
+	require.Eventually(t, func() bool { return !asSession(stale, f.session) }, 15*time.Second, 250*time.Millisecond,
+		"expired run tuple: refused")
+}

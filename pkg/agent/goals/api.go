@@ -98,3 +98,16 @@ func (r Response) ReadDependencies() []Source {
 	}
 	return sources
 }
+
+// RunDecisionIngressCheck asks the goal server, as channelsd, whether a
+// decision on Session may arrive on the session's ordinary inbound subject.
+type RunDecisionIngressCheck struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// RunDecisionIngress answers RunDecisionIngressCheck. Group is true only for
+// the live run of a group-owned goal, read from its occurrence.
+type RunDecisionIngress struct {
+	Group bool `json:"group"`
+}

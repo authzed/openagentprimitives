@@ -15,7 +15,7 @@
 #
 # contact_access is COMPOSER-OWNED: because the AgentClass declares
 # crm_company as an authz slot, the schema composer rewrites the expression
-# below to `slot_grant_contact_access->interact + owner`. The `owner` here
+# below to `slot_grant_contact_access + slot_grant_contact_access->interact + owner`. The `owner` here
 # is what the file declares; the slot half is added at compose time.
 #
 # list_contacts_for_company also uses enforceMode: always so a deny is
@@ -74,7 +74,7 @@ spec:
           - name: list
             expr: any_user
           # contact_access is COMPOSER-OWNED: the schema composer replaces this
-          # line with `slot_grant_contact_access->interact + owner` because the
+          # line with `slot_grant_contact_access + slot_grant_contact_access->interact + owner` because the
           # AgentClass declares crm_company as an authz slot.
           #
           # It used to read `any_user + grant_contact_access + owner`. The

@@ -301,6 +301,11 @@ type Pipeline struct {
 	PreferenceCommitter  PreferenceCommitter
 	GoalConsentCommitter GoalConsentCommitter
 
+	// GroupGoalRuns tells the decision pipe whether a goal-execution session
+	// is a live group goal run, from the operator's occurrence record. Nil
+	// keeps every goal run on component-only decision ingress.
+	GroupGoalRuns GroupGoalRunChecker
+
 	// resolvedCache remembers recently-resolved interaction/approval decisions
 	// so a late spectator click (after the matching pending entry has been
 	// cleared) gets a spectator response naming who actually approved/denied.

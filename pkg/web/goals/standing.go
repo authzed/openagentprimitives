@@ -37,6 +37,9 @@ func (s *Server) derivePlanApproval(ctx context.Context, sess *v1.AgentSession, 
 	if err != nil {
 		return nil, err
 	}
+	// The consent this run is bound to, which after a renewal can be the
+	// approval it replaced.
+	g, _ = g.ForConsent(o.ConsentDigest)
 	if err := s.Service.DispatchOccurrence(ctx, g, o); err != nil {
 		return nil, err
 	}

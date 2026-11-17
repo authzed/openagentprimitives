@@ -585,6 +585,9 @@ func run(rootCtx context.Context, cfg *config) error {
 	// Also the pipeline.GoalConsentChecker group goal consent requires (the
 	// assertion below keeps that from silently lapsing).
 	pl.GoalConsentCommitter = mem.client
+	// The goal server's occurrence record decides whether a goal run is a
+	// group run, whose managers' clicks arrive by ordinary channel ingress.
+	pl.GroupGoalRuns = mem.client
 
 	// Wire RestartCapable kinds. No kind implements it yet, so this loop is
 	// currently a no-op.

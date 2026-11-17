@@ -744,12 +744,22 @@ definition agent_goal {
 // tuple says only that the domain consented to this exact request, until it
 // expires. execute_group intersects it with domain so only the execution's own
 // domain can hold it: a domain_approved naming any other domain grants nothing.
+//
+// run is a GROUP run's own session, which is what a group run acts as. The
+// dispatcher writes one per run session, only after execute_group passes, and
+// it expires with that run. The resource is the execution DIGEST, which every
+// occurrence under the same consent shares, so this tuple says "this session
+// may execute under this consent" — not "for this occurrence". Binding a run to
+// its own occurrence is ValidateGoalSession's and PrepareGoalReply's job. A
+// private execution never gets a run tuple: its execute is
+// approved & domain->manage.
 definition agent_goal_execution {
  relation domain: agent_goal_domain
  relation approved: user with expiration
  relation domain_approved: agent_goal_domain with expiration
+ relation run: agentsession with expiration
  permission owner = domain->manage
  permission approve = domain->manage
- permission execute = approved & domain->manage
+ permission execute = (approved & domain->manage) + run
  permission execute_group = domain_approved & domain
 }

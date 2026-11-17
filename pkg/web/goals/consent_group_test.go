@@ -65,8 +65,10 @@ type groupConsentFlow struct {
 	handler            channelinteractions.DecisionHandler
 	publisher          *ConsentPublisher
 	committedDecisions int
-	store              *sqlstore.Store
-	signer             *provenance.Signer
+	// notices are the plain notices published beside cards.
+	notices []channelevents.Envelope
+	store   *sqlstore.Store
+	signer  *provenance.Signer
 }
 
 func newGroupConsentFlow(t *testing.T) *groupConsentFlow {
@@ -77,6 +79,13 @@ func newGroupConsentFlow(t *testing.T) *groupConsentFlow {
 // newGroupConsentFlowWith is newGroupConsentFlow with the class adjusted by
 // mutate before the request pins its digest.
 func newGroupConsentFlowWith(t *testing.T, mutate func(*v1.AgentClass)) *groupConsentFlow {
+	t.Helper()
+	return newGroupConsentFlowTerms(t, mutate, nil)
+}
+
+// newGroupConsentFlowTerms is newGroupConsentFlowWith with the requested
+// terms adjusted by terms before they are sent.
+func newGroupConsentFlowTerms(t *testing.T, mutate func(*v1.AgentClass), terms func(*core.ExecutionTerms)) *groupConsentFlow {
 	t.Helper()
 	f := newGroupFixture(t)
 	c := &groupConsentFlow{f: f, alice: canonOf(t, "alice@example.com"), bob: canonOf(t, "bob@example.com"), carol: canonOf(t, "carol@example.com")}
@@ -119,8 +128,11 @@ func newGroupConsentFlowWith(t *testing.T, mutate func(*v1.AgentClass)) *groupCo
 		DueAt: now.Add(time.Hour), ExpiresAt: now.Add(60 * 24 * time.Hour),
 		Bounds:            core.ExecutionBounds{DurationSeconds: 180, Turns: 10, Tokens: 10000, ApprovalSeconds: 90},
 		AllowedOperations: []string{"respond_to_user", "report_goal_result"}, Evidence: []string{"weekly summary"},
-		ActionApproval: "standing_plan", StandingPlan: groupStandingPlan(t),
-	}}
+		ActionApproval: "standing_plan",
+	}, StandingPlan: groupStandingPhases()}
+	if terms != nil {
+		terms(&exec.Terms)
+	}
 	status, r, body = f.as(t, "r1", core.Request{Operation: "request_execution", Scope: "group", Resource: groupResource(), Execution: exec})
 	require.Equal(t, 200, status, body)
 	c.goal = *r.Goal
@@ -132,8 +144,15 @@ func newGroupConsentFlowWith(t *testing.T, mutate func(*v1.AgentClass)) *groupCo
 	c.signer = signer
 	f.keys[provenance.PubKeyRef{Publisher: "system:operator", KeyID: signer.KeyID()}] = pub
 	c.publisher = &ConsentPublisher{Service: f.s.Service, Memory: f.mem, Writer: provenance.NewSigningMemory(f.mem, signer), Publish: func(_ string, raw []byte) error {
-		require.NoError(t, json.Unmarshal(raw, &c.published))
-		require.NoError(t, json.Unmarshal(c.published.Payload, &c.card))
+		var env channelevents.Envelope
+		var payload channelevents.InteractionRequestPayload
+		require.NoError(t, json.Unmarshal(raw, &env))
+		require.NoError(t, json.Unmarshal(env.Payload, &payload))
+		if len(payload.Actions) == 0 {
+			c.notices = append(c.notices, env)
+			return nil
+		}
+		c.published, c.card = env, payload
 		return parkedprompt.Note(memory.WithCaller(memory.WithSystemApproval(context.Background(), "system:channelsd"), "system:channelsd"), f.mem,
 			memory.Scope{Kind: "session", ID: c.published.Session.Namespace + "/" + c.published.Session.Name}, parkedprompt.Content{RequestRef: c.card.RequestRef, Category: c.card.Category, Envelope: raw})
 	}}

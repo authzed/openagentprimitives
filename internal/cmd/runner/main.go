@@ -1615,7 +1615,14 @@ func run(cfg *config) error {
 			if l := loopRef.Load(); l != nil {
 				req.TurnRef = l.TurnRef()
 			}
-			return memHTTP.Goals(ctx, ns, name, req)
+			resp, err := memHTTP.Goals(ctx, ns, name, req)
+			if code, ok := httpclient.StatusCode(err); ok && code == http.StatusConflict {
+				// The goal server answers ErrConflict with 409. Rebuild it so a
+				// tool can tell "this run already did that" from a transport
+				// failure (respond_to_user's one-reply-per-run refusal).
+				err = fmt.Errorf("%w: %v", goalmodel.ErrConflict, err)
+			}
+			return resp, err
 		},
 		NATSPublish:      pubFn,
 		EnvelopeSigner:   envSigner,
@@ -2330,6 +2337,18 @@ func run(cfg *config) error {
 			})
 		}(),
 		PlanGateBindsStanding: groupGoalRun,
+		GroupGoalRun:          groupGoalRun,
+		// A group run reports blocked itself when an approval it raised
+		// expires undecided; nil for every other session.
+		GroupRunReport: func() func(context.Context, goalmodel.RunProposal) error {
+			if !groupGoalRun {
+				return nil
+			}
+			return func(ctx context.Context, p goalmodel.RunProposal) error {
+				_, err := memHTTP.Goals(ctx, ns, name, goalmodel.Request{Operation: "report_execution_result", Proposal: p})
+				return err
+			}
+		}(),
 
 		// Live CR pointers, so the loop can dispatch autofill and
 		// per-user-message binding. Nil disables those paths, as a defence

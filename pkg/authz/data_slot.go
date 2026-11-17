@@ -12,7 +12,7 @@ import (
 // SessionEnd, and both are checked by exactly one SpiceDB permission.
 //
 //	           binds                       checked by
-//	authz      a resource instance         slot_grant_<perm>->interact + owner
+//	authz      a resource instance         slot_grant_<perm> + slot_grant_<perm>->interact + owner
 //	data       a pt-tag whose content      pt_tag#reader / pt_tag#access
 //	           the child may read
 

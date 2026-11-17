@@ -320,7 +320,7 @@ func (d *Discovery) publish(ctx context.Context, g domain.Goal, purpose string, 
 	if err = json.Unmarshal(content.Request, &request); err != nil {
 		return err
 	}
-	return publisher.publishRetainedRequest(ctx, scope, request)
+	return publisher.publishRetainedRequest(ctx, scope, request, nil)
 }
 
 func (d *Discovery) Decide(ctx context.Context, content goalconsent.Content, decision domain.ExecutionDecision) error {

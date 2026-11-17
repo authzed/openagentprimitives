@@ -19,6 +19,7 @@ import (
 
 	core "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz/permsurface"
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/browser"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
@@ -60,6 +61,15 @@ func groupStandingPlan(t *testing.T) *plangate.Plan {
 	}, nil, []string{"github_repo"})
 	require.Empty(t, problems)
 	return &frozen
+}
+
+// groupStandingPhases is groupStandingPlan as a request authors it: the
+// update_plan phase shape request_goal_execution's terms.standingPlan takes.
+func groupStandingPhases() []core.StandingPhase {
+	return []core.StandingPhase{
+		{ID: "read", Label: "Read the repo", Why: "the weekly summary", Permissions: []core.StandingPermission{{Handle: "perm:read:github_repo", Why: "read"}}, Slots: []core.StandingSlot{{Type: "github_repo", ID: "acme/app", Why: "the group's repo"}}},
+		{ID: "post", Label: "Post the summary", Why: "deliver it", Permissions: []core.StandingPermission{{Handle: "perm:execute:agent_goal_execution", Why: "report"}}, Requires: []core.StandingRequires{{Phase: "read", Why: "read first"}}},
+	}
 }
 
 type groupExec struct {
@@ -184,6 +194,8 @@ func TestGroupExecutionValidation(t *testing.T) {
 		// substring of the refusal.
 		groupErr error
 		groupMsg string
+		// groupCause (optional) is the specific cause a dispatcher records.
+		groupCause error
 		// private (optional) mutates the private fixture; privateErr is what
 		// the private path must still return.
 		private    func(*testing.T, *privateExec)
@@ -196,7 +208,7 @@ func TestGroupExecutionValidation(t *testing.T) {
 				e.class.UID = "other-uid"
 				e.rebuild(t)
 			},
-			groupErr: core.ErrDenied, groupMsg: "class changed",
+			groupErr: core.ErrDenied, groupCause: core.ErrGroupNotHostable, groupMsg: "class changed",
 		},
 		{
 			name: "kept: class spec digest pinned — spec edited after consent: refused",
@@ -251,14 +263,14 @@ func TestGroupExecutionValidation(t *testing.T) {
 			group: func(_ *testing.T, e *groupExec) {
 				e.terms.AgentIdentityUID = "recreated-uid"
 			},
-			groupErr: core.ErrDenied, groupMsg: "AgentIdentity",
+			groupErr: core.ErrDenied, groupCause: core.ErrIdentityChanged, groupMsg: "AgentIdentity",
 		},
 		{
 			name: "replaced: owner catalog pin — AgentIdentity name differs from the class's: refused",
 			group: func(_ *testing.T, e *groupExec) {
 				e.terms.AgentIdentity = "other-bot"
 			},
-			groupErr: core.ErrDenied, groupMsg: "AgentIdentity",
+			groupErr: core.ErrDenied, groupCause: core.ErrIdentityChanged, groupMsg: "AgentIdentity",
 		},
 		{
 			name: "replaced: owner catalog pin — AgentIdentity deleted: refused",
@@ -266,7 +278,7 @@ func TestGroupExecutionValidation(t *testing.T) {
 				e.objs = e.objs[:2]
 				e.rebuild(t)
 			},
-			groupErr: core.ErrDenied, groupMsg: "AgentIdentity",
+			groupErr: core.ErrDenied, groupCause: core.ErrIdentityChanged, groupMsg: "AgentIdentity",
 		},
 		{
 			name: "dropped: executionPreference(owner) — unset preference accepted for group, refused for private",
@@ -346,7 +358,7 @@ func TestGroupExecutionValidation(t *testing.T) {
 			group: func(_ *testing.T, e *groupExec) {
 				e.terms.Group.ChannelUID = "older-channel-uid"
 			},
-			groupErr: core.ErrDenied, groupMsg: "channel",
+			groupErr: core.ErrDenied, groupCause: core.ErrGroupChannelGone, groupMsg: "channel",
 		},
 		{
 			name: "replaced: origin Channel — Channel deleted: refused",
@@ -354,7 +366,7 @@ func TestGroupExecutionValidation(t *testing.T) {
 				e.objs = []client.Object{e.objs[0], e.objs[2]}
 				e.rebuild(t)
 			},
-			groupErr: core.ErrDenied, groupMsg: "channel",
+			groupErr: core.ErrDenied, groupCause: core.ErrGroupChannelGone, groupMsg: "channel",
 		},
 		{
 			name: "replaced: origin Channel — kind no longer hosts group goals: refused",
@@ -362,7 +374,7 @@ func TestGroupExecutionValidation(t *testing.T) {
 				e.objs[1].(*v1.Channel).Spec.Kind = "plaintest"
 				e.rebuild(t)
 			},
-			groupErr: core.ErrDenied, groupMsg: "cannot host group goals",
+			groupErr: core.ErrDenied, groupCause: core.ErrGroupNotHostable, groupMsg: "cannot host group goals",
 		},
 		{
 			name: "replaced: AllowedOperations not limited — tool operations accepted for group, refused for private",
@@ -391,7 +403,7 @@ func TestGroupExecutionValidation(t *testing.T) {
 				e.goal.Domain.Owner = "slack_channel:C1#member"
 				e.terms.Group.MemberGroup = "slack_channel:C1#member"
 			},
-			groupErr: core.ErrDenied, groupMsg: "group",
+			groupErr: core.ErrDenied, groupCause: core.ErrGroupNotHostable, groupMsg: "group",
 		},
 		{
 			name: "standing plan frozen — a slot type the class never declared: refused",
@@ -413,6 +425,13 @@ func TestGroupExecutionValidation(t *testing.T) {
 				e.terms.StandingPlan.Phases[0].Slots = append(e.terms.StandingPlan.Phases[0].Slots, e.terms.StandingPlan.Phases[0].Slots[0])
 			},
 			groupErr: core.ErrInvalid, groupMsg: "frozen",
+		},
+		{
+			name: "standing plan names two instances of one slot type: refused, a run holds one",
+			group: func(_ *testing.T, e *groupExec) {
+				e.terms.StandingPlan.Phases[0].Slots = append(e.terms.StandingPlan.Phases[0].Slots, plangate.Slot{Type: "github_repo", ID: "acme/other"})
+			},
+			groupErr: core.ErrInvalid, groupMsg: "a run can hold one github_repo at a time",
 		},
 		{
 			name: "standing plan consents are operator authority — a phase carrying one: refused",
@@ -451,6 +470,9 @@ func TestGroupExecutionValidation(t *testing.T) {
 				assert.NoError(t, err, "group")
 			} else {
 				assert.ErrorIs(t, err, tc.groupErr, "group")
+				if tc.groupCause != nil {
+					assert.ErrorIs(t, err, tc.groupCause, "group cause")
+				}
 				if tc.groupMsg != "" && err != nil {
 					assert.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tc.groupMsg), "group refusal reason")
 				}
@@ -499,20 +521,54 @@ func TestGroupValidateDispatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "deciding manager", "never the private owner-catalog lookup")
 }
 
+// TestGroupDispatchRefusesOwnerCeiling: a class that gains an owner ceiling
+// after consent stops dispatching group runs, which its managers could no
+// longer own.
+func TestGroupDispatchRefusesOwnerCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ceiling *v1.OwnerCeiling
+		mode    string
+	}{
+		{name: "no ceiling (default mode): dispatches"},
+		{name: "fixed ceiling: refused naming fixed", ceiling: &v1.OwnerCeiling{Fixed: "group:admins#member"}, mode: "fixed"},
+		{name: "starterOnly ceiling: refused naming starterOnly", ceiling: &v1.OwnerCeiling{StarterOnly: true}, mode: "starterOnly"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newGroupExec(t, func(c *v1.AgentClass) { c.Spec.Authz.OwnerCeiling = tc.ceiling })
+			err := e.f.s.ValidateGroupDispatch(context.Background(), e.goal, e.terms)
+			if tc.mode == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, core.ErrDenied)
+			assert.ErrorIs(t, err, core.ErrGroupNotHostable, "the dispatcher records group_not_hostable")
+			assert.Contains(t, err.Error(), "this agent's session-owner policy ("+tc.mode+") would override them")
+		})
+	}
+}
+
 func TestPrepareGroupExecution(t *testing.T) {
-	authored := []plangate.AuthoredPhase{{ID: "read", Permissions: []plangate.AuthoredPermission{{Handle: "perm:execute:agent_goal_execution"}, {Handle: "perm:read:github_repo"}}, Slots: []plangate.AuthoredSlot{{Type: "github_repo", ID: "acme/app"}}}}
+	authored := []plangate.AuthoredPhase{{ID: "read", Label: "Read the repo", Permissions: []plangate.AuthoredPermission{{Handle: "perm:execute:agent_goal_execution"}, {Handle: "perm:read:github_repo"}}, Slots: []plangate.AuthoredSlot{{Type: "github_repo", ID: "acme/app"}}}}
 	want, problems := plangate.FreezeFrom(authored, nil, []string{"github_repo"})
 	require.Empty(t, problems)
 	newRequest := func() *core.ExecutionRequest {
 		now := time.Now().UTC()
-		return &core.ExecutionRequest{Terms: core.ExecutionTerms{
-			DueAt: now.Add(time.Hour), ExpiresAt: now.Add(48 * time.Hour),
-			AllowedOperations: []string{"respond_to_user"}, Evidence: []string{"summary"},
-			ActionApproval: "standing_plan",
-			StandingPlan:   &plangate.Plan{Phases: []plangate.Phase{{Permissions: want.Phases[0].Permissions, Slots: want.Phases[0].Slots}}},
-			// Model-supplied pins are overwritten from authoritative objects.
-			Group: &core.GroupDestination{Channel: "elsewhere", ChannelUID: "x", MemberGroup: "group:g9#member"}, AgentIdentityUID: "forged",
-		}}
+		return &core.ExecutionRequest{
+			Terms: core.ExecutionTerms{
+				DueAt: now.Add(time.Hour), ExpiresAt: now.Add(48 * time.Hour),
+				AllowedOperations: []string{"respond_to_user"}, Evidence: []string{"summary"},
+				ActionApproval: "standing_plan",
+				// Model-supplied pins are overwritten from authoritative objects.
+				Group: &core.GroupDestination{Channel: "elsewhere", ChannelUID: "x", MemberGroup: "group:g9#member"}, AgentIdentityUID: "forged",
+			},
+			// The authored shape request_goal_execution's terms.standingPlan takes.
+			StandingPlan: []core.StandingPhase{{
+				ID: "read", Label: "Read the repo", Why: "the weekly summary",
+				Permissions: []core.StandingPermission{{Handle: "perm:execute:agent_goal_execution", Why: "report"}, {Handle: "perm:read:github_repo", Why: "read"}},
+				Slots:       []core.StandingSlot{{Type: "github_repo", ID: "acme/app", Why: "the group's repo"}},
+			}},
+		}
 	}
 	setup := func(t *testing.T) (*groupExec, core.Actor) {
 		e := newGroupExec(t, nil)
@@ -522,7 +578,7 @@ func TestPrepareGroupExecution(t *testing.T) {
 		return e, core.Actor{Domain: groupDomainFixture(), Session: groupNS + "/session", SessionUID: "session-uid", User: "bob"}
 	}
 
-	t.Run("fills group pins from the session's conversation and freezes the plan", func(t *testing.T) {
+	t.Run("fills group pins from the session's conversation and freezes the authored plan", func(t *testing.T) {
 		e, a := setup(t)
 		r := newRequest()
 		require.NoError(t, e.f.s.PrepareExecution(context.Background(), a, r))
@@ -532,8 +588,14 @@ func TestPrepareGroupExecution(t *testing.T) {
 		assert.Equal(t, "bot", r.Terms.AgentIdentity)
 		assert.Equal(t, "aid-uid", r.Terms.AgentIdentityUID)
 		assert.Equal(t, []string{pinnedSkill}, r.Terms.SkillVersions)
+		require.NotNil(t, r.Terms.StandingPlan)
 		assert.Equal(t, want.Digest(), r.Terms.StandingPlan.Digest())
-		assert.Equal(t, 1, r.Terms.StandingPlan.Phases[0].Max.Count, "freezing applies the default entry count")
+		require.Len(t, r.Terms.StandingPlan.Phases, 1)
+		ph := r.Terms.StandingPlan.Phases[0]
+		assert.Equal(t, []string{"perm:execute:agent_goal_execution", "perm:read:github_repo"}, handleStrings(ph.Permissions))
+		assert.Equal(t, []plangate.Slot{{Type: "github_repo", ID: "acme/app", Why: "the group's repo"}}, ph.Slots)
+		assert.Equal(t, 1, ph.Max.Count, "freezing applies the default entry count")
+		assert.Empty(t, r.StandingPlan, "the authored plan is consumed by the freeze")
 		e.goal.Execution = &core.ExecutionConsent{Session: a.Session, SessionUID: a.SessionUID}
 		require.NoError(t, e.validate("bob"), "prepared terms validate")
 	})
@@ -541,14 +603,6 @@ func TestPrepareGroupExecution(t *testing.T) {
 		e, a := setup(t)
 		a.Domain.Owner = "group:g2#member"
 		require.ErrorIs(t, e.f.s.PrepareExecution(context.Background(), a, newRequest()), core.ErrDenied)
-	})
-	t.Run("standing plan phase carrying consents: refused at freeze", func(t *testing.T) {
-		e, a := setup(t)
-		r := newRequest()
-		r.Terms.StandingPlan.Phases[0].Consents = []json.RawMessage{json.RawMessage(`{"category":"x"}`)}
-		err := e.f.s.PrepareExecution(context.Background(), a, r)
-		require.ErrorIs(t, err, core.ErrInvalid)
-		assert.Contains(t, err.Error(), "consents")
 	})
 	t.Run("AgentIdentity being deleted: refused", func(t *testing.T) {
 		e, a := setup(t)
@@ -560,20 +614,65 @@ func TestPrepareGroupExecution(t *testing.T) {
 		require.ErrorIs(t, err, core.ErrDenied)
 		assert.Contains(t, err.Error(), "AgentIdentity")
 	})
-	t.Run("standing plan with no phase that reports its result: refused at freeze", func(t *testing.T) {
-		e, a := setup(t)
-		r := newRequest()
-		r.Terms.StandingPlan.Phases[0].Permissions = want.Phases[0].Permissions[1:]
-		err := e.f.s.PrepareExecution(context.Background(), a, r)
-		require.ErrorIs(t, err, core.ErrInvalid)
-		assert.Contains(t, err.Error(), "a group goal's standing plan must include a phase that reports its result")
-	})
-	t.Run("standing plan with an undeclared slot type: refused at freeze", func(t *testing.T) {
-		e, a := setup(t)
-		r := newRequest()
-		r.Terms.StandingPlan.Phases[0].Slots = append(r.Terms.StandingPlan.Phases[0].Slots, plangate.Slot{Type: "crm_company", ID: "acme"})
-		err := e.f.s.PrepareExecution(context.Background(), a, r)
-		require.ErrorIs(t, err, core.ErrInvalid)
-		assert.Contains(t, err.Error(), "crm_company")
-	})
+
+	refusals := []struct {
+		name   string
+		mutate func(r *core.ExecutionRequest)
+		msg    string
+	}{
+		{
+			name: "a frozen plan in terms (the caller skipping the freeze): refused",
+			mutate: func(r *core.ExecutionRequest) {
+				r.Terms.StandingPlan = &want
+				r.StandingPlan = nil
+			},
+			msg: "give the standing plan as terms.standingPlan phases",
+		},
+		{
+			name:   "no phase that reports its result: refused at freeze",
+			mutate: func(r *core.ExecutionRequest) { r.StandingPlan[0].Permissions = r.StandingPlan[0].Permissions[1:] },
+			msg:    "a group goal's standing plan must include a phase that reports its result",
+		},
+		{
+			name: "an undeclared slot type: refused at freeze",
+			mutate: func(r *core.ExecutionRequest) {
+				r.StandingPlan[0].Slots = append(r.StandingPlan[0].Slots, core.StandingSlot{Type: "crm_company", ID: "acme", Why: "x"})
+			},
+			msg: "crm_company",
+		},
+		{
+			name: "two instances of one slot type in a phase: refused, a run holds one",
+			mutate: func(r *core.ExecutionRequest) {
+				r.StandingPlan[0].Slots = append(r.StandingPlan[0].Slots, core.StandingSlot{Type: "github_repo", ID: "acme/other", Why: "x"})
+			},
+			msg: "a run can hold one github_repo at a time",
+		},
+		{
+			name: "two instances of one slot type across phases: refused, a run holds one",
+			mutate: func(r *core.ExecutionRequest) {
+				r.StandingPlan = append(r.StandingPlan, core.StandingPhase{ID: "more", Label: "More", Why: "x",
+					Permissions: []core.StandingPermission{{Handle: "perm:read:github_repo", Why: "x"}},
+					Slots:       []core.StandingSlot{{Type: "github_repo", ID: "acme/other", Why: "x"}}})
+			},
+			msg: "a run can hold one github_repo at a time",
+		},
+	}
+	for _, tc := range refusals {
+		t.Run(tc.name, func(t *testing.T) {
+			e, a := setup(t)
+			r := newRequest()
+			tc.mutate(r)
+			err := e.f.s.PrepareExecution(context.Background(), a, r)
+			require.ErrorIs(t, err, core.ErrInvalid)
+			assert.Contains(t, err.Error(), tc.msg)
+		})
+	}
+}
+
+func handleStrings(hs []permsurface.Handle) []string {
+	out := make([]string, len(hs))
+	for i, h := range hs {
+		out[i] = h.String()
+	}
+	return out
 }

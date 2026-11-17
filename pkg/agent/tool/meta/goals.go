@@ -164,7 +164,16 @@ const groupGoalsGuidance = "scope selects whose goals: private (the default, bel
 	"at least one manager in the group. A group request acts for the person whose message " +
 	"started this turn; if it is refused because someone else spoke since, ask them to repeat " +
 	"the request. Pass the same scope on every call for a goal, and use the resource that " +
-	"list_goals returns for that scope. "
+	"list_goals returns for that scope. Before a group goal's approval runs out, its managers " +
+	"get a renewal card in one of its runs; resuming a paused group goal posts a card here to " +
+	"re-approve the terms it last ran under. If a group goal shows blockedReason \"approval " +
+	"expired\", or a resumed one has no pending execution, a manager asks again with " +
+	"request_goal_execution, omitting terms to re-request the last approved ones. On a channel " +
+	"without delivery receipts, a group run's reply shows in list_goal_runs with reply state " +
+	"\"unconfirmed\": it was handed to the channel for posting; delivery was not confirmed, so " +
+	"never report it as delivered. Reply state \"publish_failed\" means it was handed off but " +
+	"never reached the channel, so nothing was posted. Of the reply states, only \"accepted\" " +
+	"carries a delivery receipt. "
 
 func (t *goalTool) InputSchema() json.RawMessage {
 	props := map[string]any{}
@@ -201,15 +210,16 @@ func (t *goalTool) InputSchema() json.RawMessage {
 		props["requestID"] = str()
 		props["id"] = str()
 		props["revision"] = map[string]any{"type": "integer", "minimum": 1}
-		props["terms"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"dueAt", "expiresAt", "allowedOperations", "evidence"}, "properties": map[string]any{
-			"actionApproval": map[string]any{"type": "string", "enum": []string{"manual", "standing_private"}, "description": "manual requires fresh human plan approval for each run (default). standing_private asks the human to authorize unattended private delivery within this exact finite schedule and destination."},
+		props["terms"] = map[string]any{"type": "object", "additionalProperties": false, "description": "Required, except for a group goal approved before: omit terms entirely to renew its approval in force (it keeps running until a manager approves the renewal), or, once that has run out, to ask its managers to re-approve the terms it last ran under, with a fresh window.", "required": []string{"dueAt", "expiresAt", "allowedOperations", "evidence"}, "properties": map[string]any{
+			"actionApproval": map[string]any{"type": "string", "enum": []string{"manual", "standing_private", "standing_plan"}, "description": "manual requires fresh human plan approval for each run (default). standing_private asks the human to authorize unattended private delivery within this exact finite schedule and destination. standing_plan (group goals only, with standingPlan) asks the goal's managers to approve standingPlan once: each run whose own plan stays within it runs without a card; a run that asks for more gets a card for a manager."},
+			"standingPlan":   standingPlanSchema(),
 			"schedule":       sessionScheduleSchema(),
 			"event":          goalEventSchema(),
 			"dueAt":          map[string]any{"type": "string", "format": "date-time"}, "expiresAt": map[string]any{"type": "string", "format": "date-time"},
 			"report":            map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "subject"}, "properties": map[string]any{"kind": map[string]any{"type": "string", "minLength": 1, "maxLength": 1024}, "subject": map[string]any{"type": "string", "minLength": 1, "maxLength": 1024}}},
 			"bounds":            map[string]any{"type": "object", "description": "Optional: omit entirely for conservative class-capped defaults. If supplied, all four fields are required; approvalSeconds must not exceed durationSeconds and values must respect executionPolicy.maxBounds from list_goals.", "additionalProperties": false, "required": []string{"durationSeconds", "turns", "tokens", "approvalSeconds"}, "properties": map[string]any{"durationSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400}, "turns": map[string]any{"type": "integer", "minimum": 1, "maximum": 10000}, "tokens": map[string]any{"type": "integer", "minimum": 1, "maximum": 10000000}, "approvalSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400}}},
 			"allowedOperations": map[string]any{"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": map[string]any{"type": "string", "enum": []string{"respond_to_user", "report_goal_event"}}}, "evidence": map[string]any{"type": "array", "minItems": 1, "maxItems": 32, "items": str()}}}
-		required = []string{"resource", "requestID", "id", "revision", "terms"}
+		required = []string{"resource", "requestID", "id", "revision"}
 	case "list", "runs":
 		if t.op == "runs" {
 			props["id"] = str()
@@ -269,7 +279,7 @@ func (t *goalTool) Execute(ctx context.Context, raw json.RawMessage, sess *tool.
 	case "request_discovery":
 		err = json.Unmarshal(raw, &req.Discovery)
 	case "request_execution":
-		err = json.Unmarshal(raw, &req.Execution)
+		req.Execution, err = decodeExecutionRequest(raw)
 	case "create":
 		err = json.Unmarshal(raw, &req.Create)
 	case "update":
@@ -289,6 +299,61 @@ func (t *goalTool) Execute(ctx context.Context, raw json.RawMessage, sess *tool.
 		return tool.Result{}, err
 	}
 	return tool.Result{Content: string(b)}, nil
+}
+
+// standingPlanSchema is a group goal's standing plan: phases in exactly the
+// shape update_plan takes, which the goal server freezes as the runner
+// freezes a run's plan.
+func standingPlanSchema() map[string]any {
+	var phase map[string]any
+	if err := json.Unmarshal([]byte(authoredPhaseItemSchema), &phase); err != nil {
+		panic(fmt.Sprintf("standing plan schema: %v", err))
+	}
+	return map[string]any{"type": "array", "minItems": 1, "maxItems": defaultMaxPhases, "items": phase,
+		"description": "Group goals with actionApproval standing_plan only: the plan every run is held to, as update_plan phases. Name every resource concretely (slots[].id); a run holds one resource of each slot type, so name at most one per type. Include a phase with perm:execute:agent_goal_execution for the run's reply and result."}
+}
+
+// decodeExecutionRequest reads request_goal_execution's arguments. A standing
+// plan is authored inside terms (terms.standingPlan, update_plan phases) but
+// travels beside them (ExecutionRequest.StandingPlan): Terms holds only the
+// plan the goal server froze, never one a caller wrote.
+func decodeExecutionRequest(raw json.RawMessage) (goals.ExecutionRequest, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return goals.ExecutionRequest{}, err
+	}
+	// Only terms.standingPlan is read: the one place the schema offers.
+	delete(top, "standingPlan")
+	var plan json.RawMessage
+	if terms, ok := top["terms"]; ok {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(terms, &fields); err != nil {
+			return goals.ExecutionRequest{}, err
+		}
+		if p, ok := fields["standingPlan"]; ok {
+			plan = p
+			delete(fields, "standingPlan")
+			rest, err := json.Marshal(fields)
+			if err != nil {
+				return goals.ExecutionRequest{}, err
+			}
+			top["terms"] = rest
+		}
+	}
+	rest, err := json.Marshal(top)
+	if err != nil {
+		return goals.ExecutionRequest{}, err
+	}
+	var r goals.ExecutionRequest
+	if err := json.Unmarshal(rest, &r); err != nil {
+		return goals.ExecutionRequest{}, err
+	}
+	if len(plan) > 0 {
+		if err := json.Unmarshal(plan, &r.StandingPlan); err != nil {
+			return goals.ExecutionRequest{}, fmt.Errorf("terms.standingPlan: %w", err)
+		}
+	}
+	return r, nil
 }
 
 func sessionScheduleSchema() map[string]any {

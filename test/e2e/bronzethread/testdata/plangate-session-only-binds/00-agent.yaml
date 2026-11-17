@@ -7,7 +7,7 @@
 # decision on the plan-gate card is the authority, not a pre-existing SpiceDB
 # tuple. A push still writes a real slot_grant tuple (with a mandatory expiry,
 # session-scoped, revocable) and the tool-call Check still resolves
-# slot_grant_push->interact + owner; only the pre-check "did the approver
+# slot_grant_push + slot_grant_push->interact + owner; only the pre-check "did the approver
 # already hold this" is skipped.
 #
 # The resource type is named reposcope_repo, NOT git_repo: guardian composes
@@ -82,7 +82,7 @@ spec:
         relations:
           - {name: owner, subjectType: user}
         permissions:
-          # ComposeSlots rewrites this to slot_grant_push->interact + owner
+          # ComposeSlots rewrites this to slot_grant_push + slot_grant_push->interact + owner
           # because the AgentClass below declares reposcope_repo as an authz
           # slot.
           #

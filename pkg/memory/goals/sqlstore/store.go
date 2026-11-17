@@ -218,6 +218,11 @@ func (s *Store) Commit(ctx context.Context, m goals.Mutation) (goals.Goal, error
 }
 
 func (s *Store) commit(ctx context.Context, m goals.Mutation) (goals.Goal, error) {
+	// An update must name the goal it read: the revision alone cannot see a
+	// change committed in place.
+	if m.Expected != 0 && len(m.Prior) == 0 {
+		return goals.Goal{}, fmt.Errorf("%w: an update must carry the goal it read", goals.ErrConflict)
+	}
 	gb, err := json.Marshal(m.Goal)
 	if err != nil {
 		return goals.Goal{}, err
@@ -248,6 +253,11 @@ func (s *Store) commit(ctx context.Context, m goals.Mutation) (goals.Goal, error
 	if n == 0 {
 		g, _, err := s.receipt(ctx, tx, m.Goal.Domain, m.RequestID, m.Hash)
 		return g, err
+	}
+	if m.Expected != 0 {
+		if err := s.checkPrior(ctx, tx, m); err != nil {
+			return goals.Goal{}, err
+		}
 	}
 	if m.Expected == 0 {
 		res, err = tx.ExecContext(ctx, s.query(`INSERT INTO oap_goals(domain,id,revision,state,payload) VALUES(?,?,?,?,?) ON CONFLICT(domain,id) DO NOTHING`), m.Goal.Domain.ID(), m.Goal.ID, m.Goal.Revision, string(m.Goal.State), string(gb))
@@ -313,8 +323,10 @@ func (s *Store) Published(ctx context.Context, id string) error {
 	return affected(res, err)
 }
 
+// eventTable routes an event by its id: run and in-place events are
+// sequenced in the execution audit, since neither changes the goal's revision.
 func eventTable(id string) string {
-	if strings.HasPrefix(id, "goalev-occ-") {
+	if strings.HasPrefix(id, "goalev-occ-") || strings.HasPrefix(id, "goalev-inplace-") {
 		return "oap_goal_execution_events"
 	}
 	return "oap_goal_events"

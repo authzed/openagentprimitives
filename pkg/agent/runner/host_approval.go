@@ -14,6 +14,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -384,6 +385,18 @@ func (h *runnerHost) AwaitDecision(ctx context.Context, reqID string, timeout ti
 		// log. Tell it the request expired so it clears that surface instead
 		// of stranding it. Deny-only; a lapsed deadline never approves.
 		h.publishTimeoutApplied(ctx, reqID, pa.kind)
+		// A group goal run ends on an approval nobody answered: no one is
+		// waiting at the other end of a run to unblock it later. Only an ask
+		// that paused the turn counts; a widget's proxy-exec approval is not
+		// the run's own. The loop reports and concludes once this turn's
+		// results are recorded.
+		//
+		// Only the approval's own deadline counts: IsTimeout also matches a
+		// cancelled context, and a cancel, pause or shutdown of the run while
+		// it waited is not a human leaving the ask unanswered.
+		if pausesTurn && groupRunApprovalDeadlineLapsed(ctx, awaitErr) {
+			h.l.noteGroupRunApprovalExpired(reqID, pa.kind)
+		}
 	}
 	// A genuine transport/publish failure inside Await — the executor cannot turn
 	// it into a verdict, so it fails closed as a Halt. A timeout is NOT an error:
@@ -486,6 +499,14 @@ func (h *runnerHost) AwaitDecision(ctx context.Context, reqID string, timeout ti
 	}
 
 	return d.Approved, d.ApproverID, timedOut, nil
+}
+
+// groupRunApprovalDeadlineLapsed reports whether an await ended because the
+// approval's own deadline passed while the run itself was still live: the
+// wait's deadline was exceeded and the caller's context is neither cancelled
+// nor past its own deadline.
+func groupRunApprovalDeadlineLapsed(ctx context.Context, awaitErr error) bool {
+	return errors.Is(awaitErr, context.DeadlineExceeded) && ctx.Err() == nil
 }
 
 // publishTimeoutApplied notifies channelsd that a host-driven approval
@@ -2300,7 +2321,7 @@ func (h *runnerHost) approverCanDelegateSlots(
 			// This does NOT weaken enforcement downstream: the grant this produces
 			// is still written, still carries a mandatory expiry, is still scoped to
 			// the session, is still revocable, and the tool-call Check still
-			// resolves slot_grant_<perm>->interact + owner against it. The only
+			// resolves slot_grant_<perm> + slot_grant_<perm>->interact + owner against it. The only
 			// dropped step is "did the approver already hold it".
 			out[ref] = permSet(perms)
 			continue

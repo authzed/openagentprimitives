@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
 	"github.com/authzed/openagentprimitives/pkg/agent/modality"
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/approval/summarizer"
@@ -736,7 +737,7 @@ type Loop struct {
 	// Session-only does not weaken enforcement downstream of the approval — the
 	// grant it produces is still written, still carries a mandatory expiry, is
 	// still scoped to the session, is still revocable, and the tool-call Check
-	// still resolves slot_grant_<perm>->interact + owner. The only thing it
+	// still resolves slot_grant_<perm> + slot_grant_<perm>->interact + owner. The only thing it
 	// drops is asking "did the approver already hold it" first, which is
 	// unanswerable for a type SpiceDB has no tuples for in the first place — a
 	// git repository's permissions live at the forge, not in SpiceDB.
@@ -828,6 +829,25 @@ type Loop struct {
 	// approver as delegator. Set only for group goal runs; everywhere else a
 	// goal_group_standing authority is denied for want of a binder.
 	PlanGateBindsStanding bool
+
+	// GroupGoalRun marks a session running a GROUP goal's occurrence. Such a
+	// run acts as its own session (agentsession:<ns>/<name>) for tool-call
+	// authorization in every subject mode: nobody started it, and a member
+	// speaking in its thread must not become its principal. Its delivery tools
+	// hold execute through the run tuple the dispatcher writes for it.
+	GroupGoalRun bool
+
+	// GroupRunReport records this group run's result with the goal server
+	// (report_execution_result). The runner uses it itself, only when an
+	// approval the run raised expires undecided: the run reports blocked and
+	// concludes (see concludeGroupRunBlocked). Nil outside group goal runs.
+	GroupRunReport func(context.Context, goals.RunProposal) error
+
+	// groupRunExpired is the first approval this group run raised that reached
+	// its deadline undecided. Set from the dispatch goroutine awaiting it, read
+	// by the loop once that turn's tool results are recorded.
+	groupRunExpiredMu sync.Mutex
+	groupRunExpired   *expiredApproval
 
 	// planGateFrozen is the frozen plan currently in force, set when the agent
 	// declares phases. Guarded because select_phase and the gate read it from

@@ -2351,7 +2351,7 @@ func run(cfg *config) {
 	var goalValidator agentsessionctrl.GoalSessionValidator
 	if occurrenceStore, ok := goalStore.(goalmodel.OccurrenceStore); ok && goalAuth != nil && monitoringPublish != nil {
 		goalService.ExecutionAuth = goalHandler
-		dispatcher := &goalctrl.Dispatcher{EventRouter: eventRouter, EventDispatcher: eventDispatcher, Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString(), DeliveryMemory: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}}
+		dispatcher := &goalctrl.Dispatcher{EventRouter: eventRouter, EventDispatcher: eventDispatcher, Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString(), DeliveryMemory: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}, RunGrants: goalHandler}
 		if eventHandler != nil {
 			dispatcher.EventIngester = eventHandler.Ingester
 		}
@@ -3074,7 +3074,7 @@ func run(cfg *config) {
 	ws.Register(webtoolcall.Path, &admission.Webhook{Handler: webtoolcall.New(dec)})
 	ws.Register(webskill.PathClusterSkill, &admission.Webhook{Handler: newClusterSkillWebhook(mgr.GetClient(), dec, operatorSAUsername)})
 	ws.Register(websession.Path, &admission.Webhook{Handler: websession.New(dec)})
-	ws.Register(webgoalexecution.Path, &admission.Webhook{Handler: &webgoalexecution.Handler{Decoder: dec, OperatorSubject: "system:serviceaccount:" + systemNS + ":spicebox-operator"}})
+	ws.Register(webgoalexecution.Path, &admission.Webhook{Handler: &webgoalexecution.Handler{Decoder: dec, OperatorSubject: "system:serviceaccount:" + systemNS + ":spicebox-operator", ChannelsdSubject: "system:serviceaccount:" + systemNS + ":spicebox-channelsd"}})
 	ws.Register(websubagentreq.Path, &admission.Webhook{Handler: websubagentreq.New(dec)})
 	ws.Register(webworkspacejob.Path, &admission.Webhook{Handler: webworkspacejob.New(mgr.GetAPIReader(), dec)})
 	// spiceDBClient is a real, non-nil *spicedb.Client here (construction

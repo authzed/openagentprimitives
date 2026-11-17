@@ -114,6 +114,34 @@ func (k *Kind) RunAnchor(b *spiceboxv1alpha1.ChannelBinding) (*spiceboxv1alpha1.
 	return out, nil
 }
 
+// GroupBinding implements channelkinds.GroupGoalHost: the channel-level
+// binding ("channel:<id>", channel_id only — the shape OutboundAnchor seeds)
+// of the channel memberRef names. Only a "C…" channel's member set is a group
+// conversation, as in ConversationMemberRef.
+func (k *Kind) GroupBinding(ch *spiceboxv1alpha1.Channel, memberRef string) (*spiceboxv1alpha1.ChannelBinding, error) {
+	if ch == nil {
+		return nil, fmt.Errorf("slack GroupBinding: nil Channel")
+	}
+	rest, typed := strings.CutPrefix(memberRef, "slack_channel:")
+	id, member := strings.CutSuffix(rest, "#member")
+	b := &spiceboxv1alpha1.ChannelBinding{Name: ch.Name, Kind: ch.Spec.Kind, Key: "channel:" + id, External: map[string]string{"channel_id": id}}
+	if !typed || !member || strings.ContainsAny(id, ":#") || groupConversationChannelID(b) == "" {
+		return nil, fmt.Errorf("slack GroupBinding: %q is not a Slack channel's member set", memberRef)
+	}
+	return b, nil
+}
+
+// RunAnchorWritten implements channelkinds.GroupGoalHost: the relay's
+// first-post write-back gives a channel-level binding a thread_ts and the key
+// "thread:<channel_id>:<thread_ts>"; both must be present and agree.
+func (k *Kind) RunAnchorWritten(b *spiceboxv1alpha1.ChannelBinding) bool {
+	if b == nil {
+		return false
+	}
+	id, ts := b.External["channel_id"], b.External["thread_ts"]
+	return id != "" && ts != "" && b.Key == "thread:"+id+":"+ts
+}
+
 // GroupMemberLinks implements channelkinds.GroupGoalHost: the subject-set
 // type of ConversationMemberRef only. slack_channel#view is the AUDIENCE ref
 // and is deliberately absent — composed into agent_goal_domain#member_group it

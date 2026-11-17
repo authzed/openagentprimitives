@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -69,19 +70,44 @@ func (s *Server) groupQualifies(ctx context.Context, class *v1.AgentClass, ch *v
 	if mode := class.Spec.IdentityMode; mode != "" && mode != "agent" {
 		return fmt.Errorf("%w: group goals act as the agent, but this agent's identityMode is %q; group goals need identityMode agent", domain.ErrDenied, mode)
 	}
+	if err := runsOwnedByManagers(class); err != nil {
+		return err
+	}
 	host, ok := registry.GroupGoalHostFor(ch.Spec.Kind)
 	if !ok {
-		return fmt.Errorf("%w: channel kind %q cannot host group goals", domain.ErrDenied, ch.Spec.Kind)
+		return fmt.Errorf("%w: %w: channel kind %q cannot host group goals", domain.ErrDenied, domain.ErrGroupNotHostable, ch.Spec.Kind)
 	}
 	if k, _ := registry.Get(ch.Spec.Kind); k == nil {
-		return fmt.Errorf("%w: channel kind %q is not registered", domain.ErrDenied, ch.Spec.Kind)
+		return fmt.Errorf("%w: %w: channel kind %q is not registered", domain.ErrDenied, domain.ErrGroupNotHostable, ch.Spec.Kind)
 	} else if _, ok := k.(channelkinds.AudienceResolver); !ok {
-		return fmt.Errorf("%w: channel kind %q cannot list who reads its conversations, which group goals need", domain.ErrDenied, ch.Spec.Kind)
+		return fmt.Errorf("%w: %w: channel kind %q cannot list who reads its conversations, which group goals need", domain.ErrDenied, domain.ErrGroupNotHostable, ch.Spec.Kind)
 	}
 	if err := host.MembershipCurrent(ctx, s.Reader, ch); err != nil {
-		return fmt.Errorf("%w: this conversation's %w: %v", domain.ErrDenied, errMembershipNotCurrent, err)
+		return fmt.Errorf("%w: this conversation's %w: %v", domain.ErrDenied, domain.ErrMembershipNotCurrent, err)
 	}
 	return nil
+}
+
+// runsOwnedByManagers refuses a class whose session-owner policy would be
+// applied ahead of the goal's managers as a group run's owner. It asks the
+// same resolver the operator writes run owners with
+// (v1alpha1.ResolveGoalRunOwner), so any ceiling mode that outranks the goal
+// there is refused here, not only the ones named today.
+func runsOwnedByManagers(class *v1.AgentClass) error {
+	ceiling := class.Spec.GetOwnerCeiling()
+	const probe = GoalResourceType + ":probe#manage"
+	if owner, src, err := v1.ResolveGoalRunOwner(v1.IdentityModeAgent, probe, ceiling); err == nil && src == v1.OwnerSourceGoal && owner == probe {
+		return nil
+	}
+	mode := "ownerCeiling"
+	switch {
+	case ceiling == nil:
+	case ceiling.Fixed != "":
+		mode = "fixed"
+	case ceiling.StarterOnly:
+		mode = "starterOnly"
+	}
+	return fmt.Errorf("%w: %w: group goals need runs owned by the goal's managers; this agent's session-owner policy (%s) would override them", domain.ErrDenied, domain.ErrGroupNotHostable, mode)
 }
 
 // groupConversation returns the binding and Channel of the conversation the
@@ -487,7 +513,7 @@ func (s *Server) audienceCanRead(ctx context.Context, a domain.Actor, sources []
 	kind, _ := registry.Get(ch.Spec.Kind)
 	resolver, ok := kind.(channelkinds.AudienceResolver)
 	if !ok {
-		return fmt.Errorf("%w: channel kind %q cannot list who reads its conversations, which group goals need", domain.ErrDenied, ch.Spec.Kind)
+		return fmt.Errorf("%w: %w: channel kind %q cannot list who reads its conversations, which group goals need", domain.ErrDenied, domain.ErrGroupNotHostable, ch.Spec.Kind)
 	}
 	unresolved := func(why string) error {
 		return fmt.Errorf("%w: this conversation's audience %s, so the sources this goal would carry cannot be checked against it", domain.ErrDenied, why)
@@ -552,6 +578,9 @@ func (s *Server) serveGroup(ctx context.Context, w http.ResponseWriter, r *http.
 		if err == nil {
 			err = s.syncGroupTuples(ctx, g)
 		}
+		if err == nil && req.Change.Action == "resume" {
+			g = s.requestResumeApproval(ctx, a, g)
+		}
 		out.Goal = &g
 	case "get":
 		var g domain.Goal
@@ -577,10 +606,22 @@ func (s *Server) serveGroup(ctx context.Context, w http.ResponseWriter, r *http.
 		if err = s.Authorize(ctx, a, true); err != nil {
 			break
 		}
-		if err = s.PrepareExecution(ctx, a, &req.Execution); err != nil {
+		var g domain.Goal
+		if reflect.DeepEqual(req.Execution.Terms, domain.ExecutionTerms{}) {
+			// No terms: renew the approval in force in place, or, with none
+			// in force, ask again for the terms it last ran under.
+			var renew bool
+			if renew, req.Execution.Terms, err = s.lastApprovedRequest(ctx, a, req.Execution.ID); err != nil {
+				break
+			}
+			if renew {
+				g, err = s.Service.RenewExecution(ctx, a, req.Execution)
+				out.Goal = &g
+				break
+			}
+		} else if err = s.PrepareExecution(ctx, a, &req.Execution); err != nil {
 			break
 		}
-		var g domain.Goal
 		g, err = s.Service.RequestExecution(ctx, a, req.Execution)
 		out.Goal = &g
 	case "request_discovery", "stop_discovery", "get_discovery_policy", "get_discovery_proposal":
@@ -596,6 +637,78 @@ func (s *Server) serveGroup(ctx context.Context, w http.ResponseWriter, r *http.
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		log.FromContext(ctx).Info("group goal response failed", "session", a.Session, "error", err)
 	}
+}
+
+// requestResumeApproval asks, right after a manager resumes group goal g,
+// for re-approval of the terms it last ran under, with a fresh window. The
+// request is the resuming manager's own (an ordinary execution request from
+// this conversation), so its card appears where they are and is decided
+// like any consent. The resume stands either way: a failure is logged and the
+// resumed goal returned, with no pending execution, which is the cue to
+// request_goal_execution.
+func (s *Server) requestResumeApproval(ctx context.Context, a domain.Actor, g domain.Goal) domain.Goal {
+	if g.LastApprovedTerms == nil || g.State != domain.Active || g.Execution != nil {
+		return g
+	}
+	logger := log.FromContext(ctx).WithValues("goal", g.ID, "session", a.Session)
+	// Fresh terms are derived from the resume's own commit time, so a retry
+	// of the same resume asks for the identical request.
+	terms, err := freshLastApproved(*g.LastApprovedTerms, g.UpdatedAt)
+	if err != nil {
+		logger.Info("group goal resumed; its last approved terms cannot be offered again", "error", err)
+		return g
+	}
+	id, err := digest(struct {
+		Goal     string
+		Revision int64
+	}{g.ID, g.Revision})
+	if err != nil {
+		logger.Info("group goal resumed; its re-approval request id could not be derived", "error", err)
+		return g
+	}
+	requested, err := s.Service.RequestExecution(ctx, a, domain.ExecutionRequest{RequestID: "resume-" + id, ID: g.ID, Revision: g.Revision, Terms: terms})
+	if err != nil {
+		logger.Info("group goal resumed; its re-approval could not be requested", "error", err)
+		return g
+	}
+	return requested
+}
+
+// freshLastApproved is t, a group goal's last approved terms, with a fresh
+// window from at: a scheduled series restarts at its next run
+// (domain.RenewedTerms); a one-time run still ahead keeps its own window.
+func freshLastApproved(t domain.ExecutionTerms, at time.Time) (domain.ExecutionTerms, error) {
+	if t.Schedule == nil && t.DueAt.After(at) {
+		return t, nil
+	}
+	return domain.RenewedTerms(t, at)
+}
+
+// lastApprovedRequest decides what a request_goal_execution naming no
+// terms asks for. With an approval in force, renew is true: it becomes a
+// renewal of that approval (Service.RenewExecution), so the approval keeps
+// running until a manager approves the renewal — replacing it outright would
+// end it, and the run asking, before anyone decides. With none in force, it
+// is goal id's last approved terms with a fresh window from now: those were
+// pinned from authoritative objects when first prepared, and RequestExecution
+// re-checks every pin, so they are not prepared again.
+func (s *Server) lastApprovedRequest(ctx context.Context, a domain.Actor, id string) (renew bool, terms domain.ExecutionTerms, err error) {
+	g, err := s.Service.Get(ctx, a, id)
+	if err != nil {
+		return false, domain.ExecutionTerms{}, err
+	}
+	now := time.Now().UTC()
+	if s.Service.Now != nil {
+		now = s.Service.Now().UTC()
+	}
+	if domain.ApprovalInForce(g, now) {
+		return true, domain.ExecutionTerms{}, nil
+	}
+	if g.LastApprovedTerms == nil {
+		return false, domain.ExecutionTerms{}, fmt.Errorf("%w: this goal has never been approved; supply terms", domain.ErrInvalid)
+	}
+	terms, err = freshLastApproved(*g.LastApprovedTerms, now)
+	return false, terms, err
 }
 
 // failGroup surfaces a group refusal's reason to the caller. Private scope

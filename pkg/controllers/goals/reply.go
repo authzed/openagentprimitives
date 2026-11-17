@@ -14,6 +14,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 func (d *Dispatcher) PrepareGoalReply(ctx context.Context, sess *v1.AgentSession, payload channelevents.OutboundUserMessagePayload, sources []domain.Source) (domain.Occurrence, error) {
@@ -28,7 +29,7 @@ func (d *Dispatcher) PrepareGoalReply(ctx context.Context, sess *v1.AgentSession
 	if err != nil {
 		return o, err
 	}
-	g, err := d.Service.Store.Get(ctx, o.Domain, o.GoalID)
+	g, err := d.occurrenceGoal(ctx, o)
 	if err != nil {
 		return o, err
 	}
@@ -46,17 +47,85 @@ func (d *Dispatcher) PrepareGoalReply(ctx context.Context, sess *v1.AgentSession
 	if !ok {
 		return o, domain.ErrDenied
 	}
-	if _, ok := kind.(channelkinds.DeliveryReceiverProvider); !ok {
+	_, confirmable := kind.(channelkinds.DeliveryReceiverProvider)
+	if !confirmable && !g.Domain.GroupOwned() {
 		return o, fmt.Errorf("%w: transport has no durable delivery receiver", domain.ErrDenied)
 	}
-	pin := g.Execution.Terms.Destination
-	intent := delivery.Intent{Session: channelevents.SessionRef{Namespace: sess.Namespace, Name: sess.Name}, Destination: delivery.Destination{Kind: binding.Kind, ChannelUID: pin.ChannelUID, BindingDigest: pin.BindingDigest, Recipient: o.Domain.Owner}, Payload: payload, CreatedAt: d.now()}
-	return store.PrepareReply(ctx, o, domain.RunReply{Intent: intent, Sources: sources}, d.now())
+	var dest delivery.Destination
+	if g.Domain.GroupOwned() {
+		dest, err = d.groupReplyDestination(ctx, g, binding)
+		if err != nil {
+			return o, err
+		}
+	} else {
+		pin := g.Execution.Terms.Destination
+		dest = delivery.Destination{Kind: binding.Kind, ChannelUID: pin.ChannelUID, BindingDigest: pin.BindingDigest, Recipient: o.Domain.Owner}
+	}
+	intent := delivery.Intent{Session: channelevents.SessionRef{Namespace: sess.Namespace, Name: sess.Name}, Destination: dest, Payload: payload, CreatedAt: d.now()}
+	reply := domain.RunReply{Intent: intent, Sources: sources}
+	if !confirmable {
+		// A group run on a kind without a receiver (Slack, until its receiver
+		// lands) replies through the ordinary outbound relay, which posts the
+		// runner's one envelope. The record goes straight to its terminal
+		// unconfirmed state: authorized and handed off, never a receipt, and
+		// never reconciled or retried. The run's information-leak gate has
+		// already checked the reply against the conversation's audience.
+		return store.HandOffReply(ctx, o, reply, d.now())
+	}
+	return store.PrepareReply(ctx, o, reply, d.now())
+}
+
+// RecordGoalReplyPublishFailed records that the runner could not publish a
+// handed-off group reply: the relay never received it, so nothing was posted.
+// The reply moves from unconfirmed to publish_failed under the same run
+// fences as the hand-off. The failure is logged here, where the goal and
+// occurrence are known, as well as by the runner.
+func (d *Dispatcher) RecordGoalReplyPublishFailed(ctx context.Context, sess *v1.AgentSession, payload channelevents.OutboundUserMessagePayload) (domain.Occurrence, error) {
+	if err := d.ValidateGoalSession(ctx, sess); err != nil {
+		return domain.Occurrence{}, err
+	}
+	store, ok := d.Store.(domain.ReplyStore)
+	if !ok || payload.Delivery == nil {
+		return domain.Occurrence{}, domain.ErrDenied
+	}
+	o, err := d.Store.Occurrence(ctx, sess.Spec.GoalExecution.OccurrenceID)
+	if err != nil {
+		return o, err
+	}
+	log.FromContext(ctx).Info("goal reply handed off but not published; nothing was posted",
+		"session", sess.Namespace+"/"+sess.Name, "operation", payload.Delivery.ID, "goal", o.GoalID, "occurrence", o.ID)
+	return store.FailReplyPublish(ctx, o, payload.Delivery.ID, d.now())
+}
+
+// groupReplyDestination is a group reply's audience: the whole group, on the
+// Channel the terms pinned. The run's binding must still be on that Channel
+// (same name and live UID) and address exactly the goal's member group, so a
+// reply can only ever reach the group that owns the goal.
+func (d *Dispatcher) groupReplyDestination(ctx context.Context, g domain.Goal, binding *v1.ChannelBinding) (delivery.Destination, error) {
+	pin := g.Execution.Terms.Group
+	if pin == nil || pin.MemberGroup != g.Domain.Owner || binding.Name != pin.Channel {
+		return delivery.Destination{}, fmt.Errorf("%w: group reply is not addressed to the goal's group", domain.ErrDenied)
+	}
+	ch, host, err := d.groupChannel(ctx, g.Domain.Namespace, pin)
+	if err != nil {
+		return delivery.Destination{}, err
+	}
+	if binding.Kind != ch.Spec.Kind {
+		return delivery.Destination{}, fmt.Errorf("%w: group reply is not on the pinned Channel's kind", domain.ErrDenied)
+	}
+	if member, ok := host.ConversationMemberRef(binding); !ok || member != pin.MemberGroup {
+		return delivery.Destination{}, fmt.Errorf("%w: group reply is not addressed to the goal's group", domain.ErrDenied)
+	}
+	route, err := pin.RouteDigest()
+	if err != nil {
+		return delivery.Destination{}, err
+	}
+	return delivery.Destination{Kind: binding.Kind, ChannelUID: pin.ChannelUID, BindingDigest: route, Recipient: pin.MemberGroup}, nil
 }
 
 func (d *Dispatcher) processReply(ctx context.Context, o domain.Occurrence) (domain.Occurrence, error) {
 	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
-	if o.Reply == nil || o.Reply.State == "accepted" || o.Reply.State == "absent" {
+	if o.Reply == nil || o.Reply.Concluded() {
 		return o, nil
 	}
 	store, ok := d.Store.(domain.ReplyStore)
@@ -94,7 +163,7 @@ func (d *Dispatcher) processReply(ctx context.Context, o domain.Occurrence) (dom
 	}
 	if err != nil {
 		if errors.Is(err, domain.ErrDenied) || apierrors.IsNotFound(err) {
-			if o.Reply.State == "attempted" {
+			if o.Reply.State == domain.ReplyAttempted {
 				closer, ok := receiver.(delivery.Closer)
 				if !ok {
 					return o, fmt.Errorf("delivery outcome unknown; transport cannot close in-flight attempts")
@@ -116,7 +185,7 @@ func (d *Dispatcher) processReply(ctx context.Context, o domain.Occurrence) (dom
 	if err := d.checkReplySources(ctx, o); err != nil {
 		return o, err
 	}
-	if o.Reply.State == "prepared" {
+	if o.Reply.State == domain.ReplyPrepared {
 		attempted, attemptErr := store.AttemptReply(ctx, o, d.now())
 		err = attemptErr
 		if err != nil {
@@ -140,6 +209,13 @@ func (d *Dispatcher) processReply(ctx context.Context, o domain.Occurrence) (dom
 }
 
 func (d *Dispatcher) checkReplySources(ctx context.Context, o domain.Occurrence) error {
+	// A group goal has no owning user to read its sources as. Its run posts
+	// only through the information-leakage gate, which checks what the run
+	// read (seeded with the goal's own sources at activation) against the
+	// conversation's whole audience before every post.
+	if o.Domain.GroupOwned() {
+		return nil
+	}
 	if d.Service.Auth == nil {
 		return domain.ErrDenied
 	}
