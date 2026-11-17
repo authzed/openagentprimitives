@@ -84,7 +84,7 @@ type PhaseDelta struct {
 // working and simply stops asking.
 func (d PhaseDelta) Widens() bool {
 	return d.ConsentsChanged || len(d.Added) > 0 ||
-		d.MaxNow > d.MaxWas ||
+		d.maxRaised() ||
 		len(d.RequiresDropped) > 0 ||
 		len(d.SlotsAdded) > 0 ||
 		d.budgetRaised()
@@ -95,17 +95,47 @@ func (d PhaseDelta) Widens() bool {
 // Zero is UNBOUNDED, so the comparison cannot be a bare >: going from a
 // declared 5 to an undeclared 0 is a move to unbounded, which is the largest
 // widening available and would read as a narrowing under numeric comparison.
+//
+// A NEGATIVE value is unbounded too (BudgetExhausted never fires on one), so it
+// is folded to 0 before comparing. FreezeFrom refuses negatives, but this is
+// the gate's last word on widening and must not depend on that: compared raw,
+// -1 against a standing 5 reads as a narrowing and is auto-approved unbounded.
 func (d PhaseDelta) budgetRaised() bool {
-	if d.BudgetWas == d.BudgetNow {
+	was, now := unboundedAsZero(d.BudgetWas), unboundedAsZero(d.BudgetNow)
+	if was == now {
 		return false
 	}
-	if d.BudgetNow == 0 {
+	if now == 0 {
 		return true // unbounded now; bounded before
 	}
-	if d.BudgetWas == 0 {
+	if was == 0 {
 		return false // was unbounded; any bound is a narrowing
 	}
-	return d.BudgetNow > d.BudgetWas
+	return now > was
+}
+
+// maxRaised reports whether the entry budget grew.
+//
+// The entry check (select_phase) enforces only a positive Max, so a count <= 0
+// is unbounded as well. Moving from a bound to unbounded is a raise. The
+// reverse — 0 to a bound — stays a raise under the plain > comparison, as it
+// always has: that over-asks rather than under-asks, and a frozen plan never
+// carries Max 0 (FreezeFrom defaults it to 1).
+func (d PhaseDelta) maxRaised() bool {
+	was, now := unboundedAsZero(d.MaxWas), unboundedAsZero(d.MaxNow)
+	if now == 0 && was > 0 {
+		return true
+	}
+	return now > was
+}
+
+// unboundedAsZero folds every count the gate reads as unbounded (<= 0) onto 0,
+// so comparisons cannot mistake a negative for a smaller bound.
+func unboundedAsZero(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
 }
 
 // PlanDelta is the whole re-plan's difference from the approved plan.

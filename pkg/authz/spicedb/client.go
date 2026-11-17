@@ -278,6 +278,18 @@ func (c *Client) CheckOnResource(ctx context.Context, resType, resID, permission
 		fmt.Sprintf("%s:%s#%s", resType, resID, permission))
 }
 
+// CheckSubjectOnResource answers <resType>:<resID>#<permission> for a
+// non-user subject <subjType>:<subjID> — an object, not a person, such as a
+// group goal's domain checked against its own execution grant. Not cached.
+func (c *Client) CheckSubjectOnResource(ctx context.Context, resType, resID, permission, subjType, subjID string, fullyConsistent bool) (bool, error) {
+	return c.check(ctx, &v1.CheckPermissionRequest{
+		Resource:    &v1.ObjectReference{ObjectType: resType, ObjectId: resID},
+		Permission:  permission,
+		Subject:     &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: subjType, ObjectId: subjID}},
+		Consistency: consistencyFor(fullyConsistent),
+	}, fmt.Sprintf("%s:%s#%s@%s:%s", resType, resID, permission, subjType, subjID))
+}
+
 // HasAnyOfType reports whether the subject holds `permission` on AT LEAST ONE
 // resource of `resType`.
 //

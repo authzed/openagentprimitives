@@ -742,7 +742,8 @@ definition agent_goal {
 // not a person, because a standing group consent outlives any one manager's
 // membership. The manager who gave it is re-checked live per run elsewhere; this
 // tuple says only that the domain consented to this exact request, until it
-// expires.
+// expires. execute_group intersects it with domain so only the execution's own
+// domain can hold it: a domain_approved naming any other domain grants nothing.
 definition agent_goal_execution {
  relation domain: agent_goal_domain
  relation approved: user with expiration
@@ -750,5 +751,5 @@ definition agent_goal_execution {
  permission owner = domain->manage
  permission approve = domain->manage
  permission execute = approved & domain->manage
- permission execute_group = domain_approved
+ permission execute_group = domain_approved & domain
 }

@@ -12,6 +12,7 @@ import (
 
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
+	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -54,7 +55,12 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 		if err := p.Service.ExecutionAuth.VerifyDecision(ctx, g, *g.Execution.Decision); err != nil {
 			return err
 		}
-		if err := p.Service.ExecutionAuth.Validate(ctx, g, g.Execution.Terms); err != nil {
+		if g.Domain.GroupOwned() {
+			eligible, err := p.validateApprovedGroup(ctx, g)
+			if err != nil || !eligible {
+				return err
+			}
+		} else if err := p.Service.ExecutionAuth.Validate(ctx, g, g.Execution.Terms); err != nil {
 			if errors.Is(err, domain.ErrDenied) {
 				log.FromContext(ctx).Info("approved goal is no longer eligible for scheduling", "goal", g.ID, "error", err)
 				return nil
@@ -120,6 +126,35 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 		return nil
 	}
 	return p.publishRetainedRequest(ctx, scope, request)
+}
+
+// validateApprovedGroup re-runs the group rules for an approved group goal,
+// with the approving manager (Decision.Owner) as the decider.
+//
+//	(true, nil)   eligible: schedule it.
+//	(false, nil)  definitively ineligible (definitiveGroupRefusal): logged,
+//	              and the event is consumed — retrying cannot help, and a
+//	              fresh approval is a new event.
+//	(false, err)  anything else — a lookup that failed, membership not yet
+//	              synced, no group validator: logged and returned, so the
+//	              outbox keeps the event and retries it.
+func (p *ConsentPublisher) validateApprovedGroup(ctx context.Context, g domain.Goal) (bool, error) {
+	v, ok := p.Service.ExecutionAuth.(domain.GroupExecutionValidator)
+	if !ok {
+		err := fmt.Errorf("group goal execution is not served by this authority")
+		log.FromContext(ctx).Info("approved group goal could not be checked for scheduling; will retry", "goal", g.ID, "digest", g.Execution.Digest, "error", err)
+		return false, err
+	}
+	err := v.ValidateGroupExecution(ctx, g, g.Execution.Terms, g.Execution.Decision.Owner)
+	if err == nil {
+		return true, nil
+	}
+	if definitiveGroupRefusal(err) {
+		log.FromContext(ctx).Info("approved group goal is no longer eligible for scheduling; it needs a fresh approval", "goal", g.ID, "digest", g.Execution.Digest, "error", err)
+		return false, nil
+	}
+	log.FromContext(ctx).Info("approved group goal could not be checked for scheduling; will retry", "goal", g.ID, "digest", g.Execution.Digest, "error", err)
+	return false, err
 }
 
 // publishRetainedRequest keeps the outbox pending until the relay records the
@@ -218,6 +253,13 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 	}
 	scope := memory.Scope{Kind: "session", ID: c.Session}
 	id := "goalconsent-request-" + c.Digest
+	if g.Domain.GroupOwned() {
+		request, err := groupConsentRequest(g, ns, name, id, now)
+		if err != nil {
+			return memory.Entry{}, err
+		}
+		return consentRecord(g, scope, id, request, now)
+	}
 	owner := identity.CanonicalFromTrusted(g.Domain.Owner, "verified goal domain owner")
 	email := identity.DecodeForDisplay(owner.String())
 	audience := channelevents.ExternalIdentity{Kind: "email", ExternalID: identity.RawExternalID(email), Email: identity.Email(email)}
@@ -231,14 +273,8 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 	if e != nil {
 		return memory.Entry{}, e
 	}
-	expiry := now.UTC().Add(time.Duration(c.Terms.Bounds.ApprovalSeconds) * time.Second)
-	if expiry.After(c.Terms.ExpiresAt) {
-		expiry = c.Terms.ExpiresAt
-	}
-	evidence := make([]string, 0, len(c.Terms.Evidence))
-	for _, item := range c.Terms.Evidence {
-		evidence = append(evidence, fmt.Sprintf("• %s", item))
-	}
+	expiry := cardExpiry(c, now)
+	evidence := evidenceLines(c.Terms)
 	b := c.Terms.Bounds
 	request := channelevents.InteractionRequestPayload{AgentSessionRef: channelevents.SessionRef{Namespace: ns, Name: name}, Category: categories.GoalExecutionConsent, RequestRef: id,
 		Lead: "Allow one private reminder?", Body: "Runs once at the time below. You’ll approve a fresh plan before it sends the report or reminder.",
@@ -311,6 +347,12 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 			request.Fields[len(request.Fields)-2].Value = "Unattended private reporting within these terms. A plan that asks for any other action is refused."
 		}
 	}
+	return consentRecord(g, scope, id, request, now)
+}
+
+// consentRecord is the retained request record: the goal as reviewed and the
+// exact card, bounded so its later copy into a decision witness fits.
+func consentRecord(g domain.Goal, scope memory.Scope, id string, request channelevents.InteractionRequestPayload, now time.Time) (memory.Entry, error) {
 	raw, e := json.Marshal(request)
 	if e != nil {
 		return memory.Entry{}, e
@@ -324,6 +366,99 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 		return memory.Entry{}, err
 	}
 	return entry, nil
+}
+
+// cardExpiry is when the card lapses unanswered: the approval timeout, but
+// never after the authorization itself ends.
+func cardExpiry(c *domain.ExecutionConsent, now time.Time) time.Time {
+	expiry := now.UTC().Add(time.Duration(c.Terms.Bounds.ApprovalSeconds) * time.Second)
+	if expiry.After(c.Terms.ExpiresAt) {
+		expiry = c.Terms.ExpiresAt
+	}
+	return expiry
+}
+
+func evidenceLines(t domain.ExecutionTerms) []string {
+	evidence := make([]string, 0, len(t.Evidence))
+	for _, item := range t.Evidence {
+		evidence = append(evidence, fmt.Sprintf("• %s", item))
+	}
+	return evidence
+}
+
+// groupConsentRequest is a group goal's consent card. It is posted in the
+// conversation the goal was requested from (the requesting session's own
+// route), for everyone there to see; who may decide is not the audience but
+// the card's one resource — manage on this goal, checked at click time — so
+// any current manager can approve and nobody else can. No email-canonical
+// owner is needed: a group has none.
+//
+// Trusted fields are computed from the terms: schedule, bounds, destination
+// and the standing plan's What, rendered by the plan gate's own card builder.
+// Everything the model wrote (title, outcome, evidence, the plan's Why) goes in
+// the inert excerpt.
+func groupConsentRequest(g domain.Goal, ns, name, id string, now time.Time) (channelevents.InteractionRequestPayload, error) {
+	c := g.Execution
+	t := c.Terms
+	if t.Group == nil {
+		return channelevents.InteractionRequestPayload{}, fmt.Errorf("%w: a group goal's consent needs its group destination", domain.ErrInvalid)
+	}
+	details, err := json.Marshal(g)
+	if err != nil {
+		return channelevents.InteractionRequestPayload{}, err
+	}
+	expiry := cardExpiry(c, now)
+	b := t.Bounds
+	when := channelevents.InteractionField{Label: "Run once", Value: t.DueAt.UTC().Format("2 Jan 2006, 15:04:05 UTC")}
+	if schedule := t.Schedule; schedule != nil {
+		description, err := sessionschedule.Describe(*schedule)
+		if err != nil {
+			return channelevents.InteractionRequestPayload{}, err
+		}
+		loc, err := time.LoadLocation(schedule.Timezone)
+		if err != nil {
+			return channelevents.InteractionRequestPayload{}, err
+		}
+		when = channelevents.InteractionField{Label: "Schedule", Value: fmt.Sprintf("%s at %s · %s · up to %d runs", description, t.DueAt.In(loc).Format("15:04:05"), schedule.Timezone, schedule.MaxRuns)}
+	}
+	identityLine := "The agent's own identity"
+	if t.AgentIdentity != "" {
+		identityLine = "The agent's identity " + strconv.Quote(t.AgentIdentity)
+	}
+	fields := []channelevents.InteractionField{
+		when,
+		{Label: "Authorization ends", Value: t.ExpiresAt.UTC().Format("2 Jan 2006, 15:04:05 UTC")},
+		{Label: "Limits per run", Value: fmt.Sprintf("%d seconds · %d turns · %d tokens", b.DurationSeconds, b.Turns, b.Tokens)},
+		{Label: "Posts to", Value: t.Group.Channel + " (this conversation)"},
+		// "Agent" is read back as the agent's display name; keep it bare.
+		{Label: "Agent", Value: g.Domain.Class},
+		{Label: "Acts as", Value: identityLine},
+		{Label: "Who can approve", Value: fmt.Sprintf("Any manager of this goal (%d listed)", len(g.Managers))},
+		{Label: "Plan approval timeout", Value: fmt.Sprintf("%d seconds", b.ApprovalSeconds)},
+	}
+	body := "Runs act as the agent and post here. Each run asks a manager of this goal to approve a fresh plan before it acts. Any manager can pause or cancel it."
+	var rationale string
+	if t.StandingPlan != nil {
+		plan := plangate.BuildCard(plangate.CardInput{Plan: *t.StandingPlan, WholePlan: true})
+		fields = append(fields, channelevents.InteractionField{Label: "Standing plan", Value: plan.What})
+		rationale = plan.Why
+		if t.ActionApproval == "standing_plan" {
+			body = "Runs act as the agent and post here. A run whose plan stays within the standing plan below needs no further approval; anything beyond it asks a manager of this goal. Any manager can pause or cancel it."
+		}
+	}
+	excerpt := fmt.Sprintf("%s\n\nOutcome: %s\n\nRequired evidence:\n%s", g.Title, g.Outcome, strings.Join(evidenceLines(t), "\n"))
+	if rationale != "" {
+		excerpt += "\n\nThe agent's reasons for the plan:\n" + rationale
+	}
+	typ, goalID, perm := g.ManageRef()
+	return channelevents.InteractionRequestPayload{AgentSessionRef: channelevents.SessionRef{Namespace: ns, Name: name}, Category: categories.GoalGroupExecutionConsent, RequestRef: id,
+		Lead: "Approve this group goal's standing plan?", Body: body, Fields: fields,
+		Excerpt:   &channelevents.InteractionExcerpt{Label: fmt.Sprintf("Goal · revision %d", g.Revision), Content: excerpt},
+		Details:   details,
+		Resources: []channelevents.InteractionResourceRef{{Type: typ, ID: goalID, Permission: perm}},
+		Audience:  channelevents.InteractionAudience{Scope: channelevents.AudienceParticipants},
+		ExpiresAt: &expiry,
+		Actions:   []channelevents.InteractionAction{{ID: "approve", Label: "Approve", Kind: channelevents.ActionKindDecision}, {ID: "deny", Label: "Decline", Kind: channelevents.ActionKindDecision}}}, nil
 }
 
 const maxConsentContentBytes = 30000

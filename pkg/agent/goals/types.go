@@ -58,6 +58,24 @@ func (d Domain) GroupOwned() bool {
 	return strings.Contains(d.Owner, "#")
 }
 
+// ManageRef names what a group goal's deciders hold: manage on
+// agent_goal:<id>. Managers are per goal, so the consent card, the decision
+// handler and DecideExecution all check this one ref, never the domain.
+func (g Goal) ManageRef() (resourceType, resourceID, permission string) {
+	return "agent_goal", g.ID, "manage"
+}
+
+// AcceptsDecider reports whether a recorded decision's Owner is one this
+// domain's goals accept: the owner for a private goal; for a group goal, a
+// non-empty individual — the approving manager, whose standing was checked
+// live when they decided and is re-checked per run, not here.
+func (d Domain) AcceptsDecider(owner string) bool {
+	if !d.GroupOwned() {
+		return owner == d.Owner
+	}
+	return owner != "" && !strings.Contains(owner, "#")
+}
+
 // OwnerSubjectSet splits a group Owner "<type>:<id>#<relation>". ok is false
 // for a user owner or any malformed shape.
 func (d Domain) OwnerSubjectSet() (typ, id, rel string, ok bool) {

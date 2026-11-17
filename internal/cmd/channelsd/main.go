@@ -582,6 +582,8 @@ func run(rootCtx context.Context, cfg *config) error {
 	// no per-write signing needed — CommitPreference is not an append-only
 	// write). Satisfies pipeline.PreferenceCommitter's one method.
 	pl.PreferenceCommitter = mem.client
+	// Also the pipeline.GoalConsentChecker group goal consent requires (the
+	// assertion below keeps that from silently lapsing).
 	pl.GoalConsentCommitter = mem.client
 
 	// Wire RestartCapable kinds. No kind implements it yet, so this loop is

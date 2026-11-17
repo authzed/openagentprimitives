@@ -78,17 +78,29 @@ const (
 type groupAuthority struct {
 	members, admins map[string]bool
 	// unreadable holds "type:id:user" sources a user cannot read.
-	unreadable        map[string]bool
-	tuples            map[authz.Relation]bool
-	deleted           []authz.Relation
-	grants            []authz.SlotBinding
-	checkedUsers      []string
+	unreadable   map[string]bool
+	tuples       map[authz.Relation]bool
+	deleted      []authz.Relation
+	grants       []authz.SlotBinding
+	checkedUsers []string
+	// startDenied holds users the class start gate refuses.
+	startDenied       map[string]bool
 	failManagerWrites bool
 	failDeletes       bool
+	// failExecutionWrites fails any write of an execution grant tuple.
+	failExecutionWrites bool
+	// written is every relation written, in order (tuples is the set).
+	written []authz.Relation
+	// subjectChecks records each non-user check as "res#perm@subj".
+	subjectChecks []string
+	// refusedPerms holds "type:id:perm:user" checks on other resource types
+	// that answer false; checkErrs fails every check on a resource type.
+	refusedPerms map[string]bool
+	checkErrs    map[string]error
 }
 
 func newGroupAuthority() *groupAuthority {
-	return &groupAuthority{members: map[string]bool{}, admins: map[string]bool{}, unreadable: map[string]bool{}, tuples: map[authz.Relation]bool{}}
+	return &groupAuthority{members: map[string]bool{}, admins: map[string]bool{}, unreadable: map[string]bool{}, tuples: map[authz.Relation]bool{}, refusedPerms: map[string]bool{}, checkErrs: map[string]error{}}
 }
 
 func (a *groupAuthority) Relations() authz.RelWriter { return a }
@@ -97,11 +109,25 @@ func (a *groupAuthority) WriteRelationships(_ context.Context, rels []authz.Rela
 		if r.Relation == "manager" && a.failManagerWrites {
 			return fmt.Errorf("test manager tuple write failure")
 		}
+		if r.ResourceType == ExecutionResourceType && a.failExecutionWrites {
+			return fmt.Errorf("test execution grant write failure")
+		}
 	}
 	for _, r := range rels {
 		a.tuples[r] = true
+		a.written = append(a.written, r)
 	}
 	return nil
+}
+
+// CheckSubjectOnResource models execute_group = domain_approved & domain on
+// agent_goal_execution, for a domain subject.
+func (a *groupAuthority) CheckSubjectOnResource(_ context.Context, typ, id, perm, subjType, subjID string, _ bool) (bool, error) {
+	a.subjectChecks = append(a.subjectChecks, typ+":"+id+"#"+perm+"@"+subjType+":"+subjID)
+	if typ != ExecutionResourceType || perm != "execute_group" || subjType != ResourceType {
+		return false, fmt.Errorf("unexpected subject check %s:%s#%s@%s", typ, id, perm, subjType)
+	}
+	return a.hasOn(typ, id, "domain_approved", subjType, subjID, "") && a.hasOn(typ, id, "domain", subjType, subjID, ""), nil
 }
 func (a *groupAuthority) ListUserSubjects(_ context.Context, typ, id, rel string) ([]string, error) {
 	var out []string
@@ -158,12 +184,15 @@ func (a *groupAuthority) goalDomain(goalID string) string {
 func (a *groupAuthority) CheckOnResource(_ context.Context, typ, id, perm string, u identity.CanonicalUserID, _ bool) (bool, error) {
 	a.checkedUsers = append(a.checkedUsers, u.String())
 	user := u.String()
+	if err := a.checkErrs[typ]; err != nil {
+		return false, err
+	}
 	switch typ {
 	case "agentclass":
 		if perm == "administer" {
 			return a.admins[user], nil
 		}
-		return true, nil
+		return !a.startDenied[user], nil
 	case "group":
 		return id == "g1" && perm == "member" && a.members[user], nil
 	case ResourceType:
@@ -188,6 +217,9 @@ func (a *groupAuthority) CheckOnResource(_ context.Context, typ, id, perm string
 		inGroup := a.has(d, "member_group", "group", "g1", "member") && a.members[user]
 		admin := a.has(d, "class", "agentclass", groupNS+"/assistant", "") && a.admins[user]
 		return (inGroup && a.managerTuple(id, user)) || admin, nil
+	}
+	if a.refusedPerms[typ+":"+id+":"+perm+":"+user] {
+		return false, nil
 	}
 	return !a.unreadable[typ+":"+id+":"+user], nil
 }
@@ -593,8 +625,8 @@ func TestGroupManagers(t *testing.T) {
 	t.Run("execution consent survives a manager change", func(t *testing.T) {
 		f := newGroupFixture(t)
 		g := f.createAsAlice(t)
-		// Plant consent directly: requesting it for a group goal is not served
-		// yet, and this is about the manager path not clearing it.
+		// Plant consent directly: this is about the manager path not clearing
+		// it, not about how it was requested.
 		g.Execution = &core.ExecutionConsent{RequestID: "consent", RequestRevision: g.Revision, Digest: "d"}
 		g.Revision++
 		g, err := f.s.Service.Store.Commit(context.Background(), core.Mutation{Goal: g, Expected: g.Revision - 1, RequestID: "plant", Hash: "plant", Event: core.Event{ID: "goalev-plant", Goal: g, Action: "request_execution", Session: "team/session", Proof: "p"}})

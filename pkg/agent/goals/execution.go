@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
+	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 )
 
 // ExecutionBounds are launch ceilings. They do not authorize external actions:
@@ -25,6 +26,14 @@ type PrivateDestination struct {
 	Channel       string `json:"channel"`
 	ChannelUID    string `json:"channelUID"`
 	Recipient     string `json:"recipient"`
+}
+
+// GroupDestination pins the reviewed route of a group-owned goal. MemberGroup
+// must equal the goal domain's Owner subject-set.
+type GroupDestination struct {
+	Channel     string `json:"channel"`
+	ChannelUID  string `json:"channelUID"`
+	MemberGroup string `json:"memberGroup"`
 }
 
 type ExecutionTerms struct {
@@ -46,6 +55,13 @@ type ExecutionTerms struct {
 	AllowedOperations []string                 `json:"allowedOperations"`
 	Evidence          []string                 `json:"evidence"`
 	Destination       PrivateDestination       `json:"destination"`
+	// Group is the group-owned alternative to Destination; exactly one is set.
+	Group *GroupDestination `json:"group,omitempty"`
+	// StandingPlan is the server-frozen plan a group goal's runs derive from
+	// when ActionApproval is standing_plan; the terms digest covers its digest.
+	StandingPlan     *plangate.Plan `json:"standingPlan,omitempty"`
+	AgentIdentity    string         `json:"agentIdentity,omitempty"`
+	AgentIdentityUID string         `json:"agentIdentityUID,omitempty"`
 }
 
 type ExecutionRequest struct {
@@ -91,9 +107,110 @@ type ExecutionAuthority interface {
 	AuthorizeDispatch(context.Context, Goal) error
 }
 
+// GroupExecutionValidator is implemented by an ExecutionAuthority that serves
+// group goals. Their rules check the class start gate for whoever is deciding
+// — the requesting manager when the request is made, the clicking manager
+// when it is approved — which Validate's signature cannot carry. An authority
+// without it refuses group execution.
+type GroupExecutionValidator interface {
+	ValidateGroupExecution(ctx context.Context, g Goal, t ExecutionTerms, decider string) error
+}
+
+// GroupDispatchValidator is implemented by an ExecutionAuthority that runs
+// group goals: the group rules for a run of an approved consent, which
+// re-check every pinned object but not the approving manager (whose start
+// gate is a consent-time check, and whose per-run eligibility decides plan
+// approval, not dispatch). An authority without it refuses group dispatch.
+type GroupDispatchValidator interface {
+	ValidateGroupDispatch(ctx context.Context, g Goal, t ExecutionTerms) error
+}
+
+// validateDispatch runs the authority's rules for a run of g: Validate for a
+// private goal, ValidateGroupDispatch for a group goal.
+func (s *Service) validateDispatch(ctx context.Context, g Goal, t ExecutionTerms) error {
+	if !g.Domain.GroupOwned() {
+		return s.ExecutionAuth.Validate(ctx, g, t)
+	}
+	v, ok := s.ExecutionAuth.(GroupDispatchValidator)
+	if !ok {
+		return fmt.Errorf("%w: group goal dispatch is not served here", ErrDenied)
+	}
+	return v.ValidateGroupDispatch(ctx, g, t)
+}
+
+// validateExecution runs the authority's rules for g: Validate for a private
+// goal, ValidateGroupExecution with decider for a group goal.
+func (s *Service) validateExecution(ctx context.Context, g Goal, t ExecutionTerms, decider string) error {
+	if !g.Domain.GroupOwned() {
+		return s.ExecutionAuth.Validate(ctx, g, t)
+	}
+	v, ok := s.ExecutionAuth.(GroupExecutionValidator)
+	if !ok {
+		return fmt.Errorf("%w: group goal execution is not served here", ErrDenied)
+	}
+	return v.ValidateGroupExecution(ctx, g, t, decider)
+}
+
+// checkDecider requires the decision's Owner to be who may decide g: the goal
+// owner for a private goal; for a group goal, a manager of that goal, checked
+// live (managers are per goal, and the Owner recorded is the approver).
+func (s *Service) checkDecider(ctx context.Context, d Domain, g Goal, decision ExecutionDecision) error {
+	if !d.GroupOwned() {
+		if decision.Owner != d.Owner {
+			return ErrDenied
+		}
+		return nil
+	}
+	ga, ok := s.Auth.(GroupAuthorizer)
+	if decision.Owner == "" || !ok {
+		return ErrDenied
+	}
+	return ga.AuthorizeGoalManager(ctx, Actor{Domain: d, User: decision.Owner}, g)
+}
+
+// validate checks the terms against server time and the goal owner. A group
+// goal is recognized by its owner being a member subject-set.
 func (t ExecutionTerms) validate(now time.Time, owner string) error {
-	if t.ActionApproval != "" && t.ActionApproval != "manual" && t.ActionApproval != "standing_private" {
+	groupGoal := Domain{Owner: owner}.GroupOwned()
+	if t.ActionApproval != "" && t.ActionApproval != "manual" && t.ActionApproval != "standing_private" && t.ActionApproval != "standing_plan" {
 		return fmt.Errorf("%w: unknown action approval policy", ErrInvalid)
+	}
+	if groupGoal {
+		if t.ActionApproval == "standing_private" {
+			return fmt.Errorf("%w: standing_private is not available on group goals; use standing_plan", ErrInvalid)
+		}
+		if t.Group == nil || t.Destination != (PrivateDestination{}) {
+			return fmt.Errorf("%w: a group goal requires exactly one destination: group, not a private destination", ErrInvalid)
+		}
+		if t.Group.MemberGroup != owner {
+			return fmt.Errorf("%w: group.memberGroup must equal the goal owner", ErrInvalid)
+		}
+		if t.Group.Channel == "" || t.Group.ChannelUID == "" {
+			return fmt.Errorf("%w: group destination requires a pinned channel", ErrInvalid)
+		}
+		if t.ActionApproval == "standing_plan" {
+			if t.StandingPlan == nil || len(t.StandingPlan.Phases) == 0 {
+				return fmt.Errorf("%w: standing_plan requires a standing plan with at least one phase", ErrInvalid)
+			}
+			for _, ph := range t.StandingPlan.Phases {
+				for _, sl := range ph.Slots {
+					if sl.ID == "" {
+						return fmt.Errorf("%w: standing plan slot of type %q must name a concrete id", ErrInvalid, sl.Type)
+					}
+				}
+			}
+		}
+	} else {
+		if t.Group != nil {
+			return fmt.Errorf("%w: a private goal requires exactly one destination: a private destination, not a group", ErrInvalid)
+		}
+		if t.ActionApproval == "standing_plan" {
+			return fmt.Errorf("%w: standing_plan is only available on group goals", ErrInvalid)
+		}
+	}
+	maxSpan, maxName := 30*24*time.Hour, "30 days"
+	if groupGoal {
+		maxSpan, maxName = 90*24*time.Hour, "90 days"
 	}
 	if t.Event != nil {
 		if t.Schedule != nil || len(t.ScheduleWindows) != 0 {
@@ -106,8 +223,8 @@ func (t ExecutionTerms) validate(now time.Time, owner string) error {
 	if t.DueAt.Before(now) {
 		return fmt.Errorf("%w: dueAt must be in the future; server time is %s; choose a later start with time for approval", ErrInvalid, now.UTC().Format(time.RFC3339))
 	}
-	if !t.ExpiresAt.After(t.DueAt) || t.ExpiresAt.Sub(now) > 30*24*time.Hour {
-		return fmt.Errorf("%w: expiresAt must be after dueAt and within 30 days of server time %s", ErrInvalid, now.UTC().Format(time.RFC3339))
+	if !t.ExpiresAt.After(t.DueAt) || t.ExpiresAt.Sub(now) > maxSpan {
+		return fmt.Errorf("%w: expiresAt must be after dueAt and within %s of server time %s", ErrInvalid, maxName, now.UTC().Format(time.RFC3339))
 	}
 	permittedReport := false
 	for _, op := range t.AllowedOperations {
@@ -137,7 +254,10 @@ func (t ExecutionTerms) validate(now time.Time, owner string) error {
 	if b.ApprovalSeconds < 1 || b.ApprovalSeconds > b.DurationSeconds {
 		return fmt.Errorf("%w: bounds.approvalSeconds must be between 1 and bounds.durationSeconds=%d (received %d)", ErrInvalid, b.DurationSeconds, b.ApprovalSeconds)
 	}
-	if strings.TrimSpace(t.ClassDigest) == "" || t.Destination.Channel == "" || t.Destination.ChannelUID == "" || t.Destination.Recipient != owner {
+	if strings.TrimSpace(t.ClassDigest) == "" {
+		return fmt.Errorf("%w: execution requires a pinned class", ErrInvalid)
+	}
+	if !groupGoal && (t.Destination.Channel == "" || t.Destination.ChannelUID == "" || t.Destination.Recipient != owner) {
 		return fmt.Errorf("%w: execution requires a pinned class and private destination", ErrInvalid)
 	}
 	if len(t.AllowedOperations) < 1 || len(t.AllowedOperations) > 32 || len(t.Evidence) < 1 || len(t.Evidence) > 32 {
@@ -209,7 +329,7 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 		return Goal{}, err
 	}
 	g.Execution = &ExecutionConsent{Session: a.Session, SessionUID: a.SessionUID}
-	if err := s.ExecutionAuth.Validate(ctx, g, r.Terms); err != nil {
+	if err := s.validateExecution(ctx, g, r.Terms, a.User); err != nil {
 		return Goal{}, err
 	}
 	r.Terms.DueAt = r.Terms.DueAt.UTC()
@@ -239,6 +359,42 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 	return s.commit(ctx, a, g, r.Revision, r.RequestID, h, "request_execution")
 }
 
+// CheckDecision answers, before a decision is recorded anywhere, whether
+// decider may decide the pending request digest on goal id with approved. It
+// is DecideExecution's own predicate — decider check, then the decide-time
+// rules for an approval — so a decision it accepts is one DecideExecution
+// will accept. The decider's own earlier, identical decision is accepted
+// again (a retry); anyone else's is a conflict.
+func (s *Service) CheckDecision(ctx context.Context, d Domain, id, digest, decider string, approved bool) error {
+	if s.ExecutionAuth == nil || s.Auth == nil || s.validateDomain(d) != nil {
+		return ErrDenied
+	}
+	g, err := s.Store.Get(ctx, d, id)
+	if err != nil {
+		return err
+	}
+	c := g.Execution
+	if c == nil || c.Digest != digest {
+		return fmt.Errorf("%w: this approval request is no longer pending", ErrConflict)
+	}
+	if c.Decision != nil {
+		if c.Decision.Owner == decider && c.Decision.Approved == approved {
+			return nil
+		}
+		return fmt.Errorf("%w: this request was already decided", ErrConflict)
+	}
+	if g.State != Active || g.Revision != c.RequestRevision || !s.now().Before(c.Terms.ExpiresAt) {
+		return fmt.Errorf("%w: the goal changed since this approval was requested", ErrConflict)
+	}
+	if err := s.checkDecider(ctx, d, g, ExecutionDecision{Owner: decider}); err != nil {
+		return err
+	}
+	if approved {
+		return s.validateExecution(ctx, g, c.Terms, decider)
+	}
+	return nil
+}
+
 // DecideExecution is an internal component path, not an agent tool. The signed
 // witness is retained atomically with the decision and audit intent. A grant
 // write may be retried independently: no dispatch is possible until both agree.
@@ -251,8 +407,11 @@ func (s *Service) DecideExecution(ctx context.Context, d Domain, id string, deci
 		return Goal{}, err
 	}
 	c := g.Execution
-	if c == nil || c.Digest != decision.Digest || decision.Owner != d.Owner || decision.Witness == "" {
+	if c == nil || c.Digest != decision.Digest || decision.Witness == "" {
 		return Goal{}, ErrDenied
+	}
+	if err := s.checkDecider(ctx, d, g, decision); err != nil {
+		return Goal{}, err
 	}
 	if err := s.ExecutionAuth.VerifyDecision(ctx, g, decision); err != nil {
 		return Goal{}, err
@@ -267,7 +426,7 @@ func (s *Service) DecideExecution(ctx context.Context, d Domain, id string, deci
 		return Goal{}, ErrConflict
 	}
 	if decision.Approved {
-		if err := s.ExecutionAuth.Validate(ctx, g, c.Terms); err != nil {
+		if err := s.validateExecution(ctx, g, c.Terms, decision.Owner); err != nil {
 			return Goal{}, err
 		}
 	}
@@ -319,15 +478,17 @@ func (s *Service) Dispatchable(ctx context.Context, g Goal) error {
 	// edit, cancellation or replacement consent at activation time.
 	g = current
 	c := g.Execution
+	// A group goal's decision names the approving manager, not the group
+	// owner; AcceptsDecider is the owner equality for a private goal.
 	if g.State != Active || c == nil || c.Decision == nil || !c.Decision.Approved ||
-		c.Decision.Owner != g.Domain.Owner || c.Decision.Digest != c.Digest || g.Revision != c.RequestRevision+1 ||
+		!g.Domain.AcceptsDecider(c.Decision.Owner) || c.Decision.Digest != c.Digest || g.Revision != c.RequestRevision+1 ||
 		s.now().Before(c.Terms.DueAt) || !s.now().Before(c.Terms.ExpiresAt) {
 		return ErrDenied
 	}
 	if err := s.ExecutionAuth.VerifyDecision(ctx, g, *c.Decision); err != nil {
 		return err
 	}
-	if err := s.ExecutionAuth.Validate(ctx, g, c.Terms); err != nil {
+	if err := s.validateDispatch(ctx, g, c.Terms); err != nil {
 		return err
 	}
 	return s.ExecutionAuth.AuthorizeDispatch(ctx, g)

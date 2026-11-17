@@ -1991,6 +1991,10 @@ func run(cfg *config) error {
 		Logger:       logr.FromSlogHandler(slog.Default().Handler()),
 	})
 	mergedTools := assembled.Tools
+	// groupGoalRun: this session runs a group goal, so a phase its standing
+	// plan covers is approved by the goal server and bound here (the plan
+	// gate's BindStanding), with the plan's approving manager as delegator.
+	groupGoalRun := false
 	if sess.Spec.GoalExecution != nil {
 		authority, err := memHTTP.Goals(rootCtx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
 		if err != nil {
@@ -1999,6 +2003,7 @@ func run(cfg *config) error {
 		if authority.ExecutionTerms == nil {
 			return fmt.Errorf("goal execution terms unavailable")
 		}
+		groupGoalRun = authority.ExecutionTerms.Group != nil
 		mergedTools = meta.BoundedGoalToolsForTerms(mergedTools, sess.Spec.GoalExecution.ConsentDigest, *authority.ExecutionTerms, func(ctx context.Context) error {
 			_, err := memHTTP.Goals(ctx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
 			return err
@@ -2324,6 +2329,7 @@ func run(cfg *config) error {
 				return memHTTP.Goals(ctx, ns, name, req)
 			})
 		}(),
+		PlanGateBindsStanding: groupGoalRun,
 
 		// Live CR pointers, so the loop can dispatch autofill and
 		// per-user-message binding. Nil disables those paths, as a defence

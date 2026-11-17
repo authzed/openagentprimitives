@@ -822,6 +822,13 @@ type Loop struct {
 
 	PlanApprovalDeriver func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error)
 
+	// PlanGateBindsStanding wires the plan gate's BindStanding to this
+	// runner's approval bind path, so a phase the goal server approves under a
+	// group goal's standing plan gets its slots bound with the standing plan's
+	// approver as delegator. Set only for group goal runs; everywhere else a
+	// goal_group_standing authority is denied for want of a binder.
+	PlanGateBindsStanding bool
+
 	// planGateFrozen is the frozen plan currently in force, set when the agent
 	// declares phases. Guarded because select_phase and the gate read it from
 	// the tool-dispatch goroutines while update_plan writes it.

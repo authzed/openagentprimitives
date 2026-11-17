@@ -46,8 +46,12 @@ func digest(value any) (string, error) {
 }
 
 // PrepareExecution fills all routing and class pins from authoritative objects,
-// never from the model's arguments. Only a single-human route is supported.
+// never from the model's arguments. A private goal gets a single-human route;
+// a group-owned goal gets its group's conversation (prepareGroupExecution).
 func (s *Server) PrepareExecution(ctx context.Context, a domain.Actor, r *domain.ExecutionRequest) error {
+	if a.Domain.GroupOwned() {
+		return s.prepareGroupExecution(ctx, a, r)
+	}
 	var sess v1.AgentSession
 	ns, name, ok := strings.Cut(a.Session, "/")
 	if !ok {
@@ -84,10 +88,7 @@ func (s *Server) PrepareExecution(ctx context.Context, a domain.Actor, r *domain
 		return err
 	}
 	r.Terms.ClassDigest = hash
-	r.Terms.SkillVersions = nil
-	for _, skill := range class.Spec.Skills {
-		r.Terms.SkillVersions = append(r.Terms.SkillVersions, skill.Ref)
-	}
+	r.Terms.SkillVersions = skillVersions(&class)
 	binding := v1.OutboundBinding(&sess)
 	if binding == nil {
 		return fmt.Errorf("%w: private output channel required", domain.ErrDenied)
@@ -112,6 +113,13 @@ func (s *Server) Validate(ctx context.Context, g domain.Goal, t domain.Execution
 	}()
 	if s.Auth == nil || s.Reader == nil {
 		return domain.ErrDenied
+	}
+	if g.Domain.GroupOwned() {
+		// This entry point carries no deciding manager, and the group rules
+		// check the start gate for one; an empty decider is refused there
+		// rather than the gate being skipped. Request and decision use
+		// ValidateGroupExecution, which names the decider.
+		return s.validateGroup(ctx, g, t, identity.CanonicalUserID{})
 	}
 	if t.Event != nil {
 		if s.EventSources == nil || s.Service == nil || s.Service.Events == nil {
@@ -143,55 +151,23 @@ func (s *Server) Validate(ctx context.Context, g domain.Goal, t domain.Execution
 	if len(class.Spec.ToolBundles) > 0 || len(class.Spec.MCPServers) > 0 || len(class.Spec.SidecarToolboxes) > 0 {
 		return fmt.Errorf("%w: private reporting classes cannot attach external tool runtimes", domain.ErrDenied)
 	}
-	var skillVersions []string
-	for _, skill := range class.Spec.Skills {
-		skillVersions = append(skillVersions, skill.Ref)
-	}
-	if !reflect.DeepEqual(skillVersions, t.SkillVersions) {
-		return domain.ErrDenied
-	}
-	// Skills must pin a commit; a mutable branch cannot be the reviewed version.
-	for _, skill := range class.Spec.Skills {
-		_, ref, ok := strings.Cut(skill.Ref, "@")
-		decoded, err := hex.DecodeString(ref)
-		if !ok || err != nil || len(decoded) != 20 {
-			return fmt.Errorf("%w: execution skills must pin a commit", domain.ErrDenied)
-		}
+	if err := checkSkillsPinned(&class, t); err != nil {
+		return err
 	}
 	if err := s.executionPreference(ctx, &class, owner.String()); err != nil {
 		return err
 	}
-	az := class.Spec.GetAuthz()
-	if class.EffectiveSessionInteractPermission() != "" {
-		return fmt.Errorf("%w: goal reports require a class without widened session access", domain.ErrDenied)
+	if err := checkExecutionGuards(&class); err != nil {
+		return err
 	}
-	if az.InformationLeakage.ResolvedMode() != "enforcing" || (az.GetToolCalls().Mode != "" && az.GetToolCalls().Mode != "enforcing") || az.PlanGate == nil || az.PlanGate.Mode != "enforcing" || az.PlanGate.RequirePlan == nil || !*az.PlanGate.RequirePlan || az.PlanGate.Rendering == nil || az.PlanGate.Rendering.MaxAutoApproveHandles != 0 {
-		return fmt.Errorf("%w: execution requires enforcing fresh plans and tool guards", domain.ErrDenied)
-	}
-	if permission := class.StartGatePermission(); permission != "" {
-		allowed, err := s.Auth.CheckOnResource(ctx, "agentclass", g.Domain.Namespace+"/"+g.Domain.Class, permission, owner, true)
-		if err != nil {
-			return err
-		}
-		if !allowed {
-			return domain.ErrDenied
-		}
+	if err := s.checkStartGate(ctx, g.Domain, &class, owner); err != nil {
+		return err
 	}
 	if err := s.ReadGoal(ctx, domain.Actor{Domain: g.Domain}, g); err != nil {
 		return err
 	}
-	maximum := executionPolicy(&class).MaxBounds
-	for _, limit := range []struct {
-		name           string
-		value, maximum int64
-	}{
-		{"durationSeconds", t.Bounds.DurationSeconds, maximum.DurationSeconds},
-		{"turns", t.Bounds.Turns, maximum.Turns},
-		{"tokens", t.Bounds.Tokens, maximum.Tokens},
-	} {
-		if limit.value > limit.maximum {
-			return fmt.Errorf("%w: bounds.%s=%d exceeds class maximum %d; reduce this field or omit bounds to use defaults", domain.ErrInvalid, limit.name, limit.value, limit.maximum)
-		}
+	if err := checkClassBounds(&class, t.Bounds); err != nil {
+		return err
 	}
 	if g.Execution == nil || g.Execution.SessionUID == "" {
 		return domain.ErrDenied
@@ -265,6 +241,80 @@ func (s *Server) Validate(ctx context.Context, g domain.Goal, t domain.Execution
 	return nil
 }
 
+// The guards below are shared by the private and group execution rules: each
+// is a guard the group rules keep unchanged.
+
+func skillVersions(class *v1.AgentClass) []string {
+	var out []string
+	for _, skill := range class.Spec.Skills {
+		out = append(out, skill.Ref)
+	}
+	return out
+}
+
+// checkSkillsPinned requires the class's skills to equal the reviewed list
+// and each to pin a commit; a mutable branch cannot be the reviewed version.
+func checkSkillsPinned(class *v1.AgentClass, t domain.ExecutionTerms) error {
+	if !reflect.DeepEqual(skillVersions(class), t.SkillVersions) {
+		return fmt.Errorf("%w: execution skills changed since review", domain.ErrDenied)
+	}
+	for _, skill := range class.Spec.Skills {
+		_, ref, ok := strings.Cut(skill.Ref, "@")
+		decoded, err := hex.DecodeString(ref)
+		if !ok || err != nil || len(decoded) != 20 {
+			return fmt.Errorf("%w: execution skills must pin a commit", domain.ErrDenied)
+		}
+	}
+	return nil
+}
+
+// checkExecutionGuards requires no widened session access and enforcing
+// info-leakage, tool-call and plan gates, with fresh plans and no
+// auto-approval.
+func checkExecutionGuards(class *v1.AgentClass) error {
+	az := class.Spec.GetAuthz()
+	if class.EffectiveSessionInteractPermission() != "" {
+		return fmt.Errorf("%w: goal reports require a class without widened session access", domain.ErrDenied)
+	}
+	if az.InformationLeakage.ResolvedMode() != "enforcing" || (az.GetToolCalls().Mode != "" && az.GetToolCalls().Mode != "enforcing") || az.PlanGate == nil || az.PlanGate.Mode != "enforcing" || az.PlanGate.RequirePlan == nil || !*az.PlanGate.RequirePlan || az.PlanGate.Rendering == nil || az.PlanGate.Rendering.MaxAutoApproveHandles != 0 {
+		return fmt.Errorf("%w: execution requires enforcing fresh plans and tool guards", domain.ErrDenied)
+	}
+	return nil
+}
+
+// checkStartGate checks the class start gate, if any, for who.
+func (s *Server) checkStartGate(ctx context.Context, d domain.Domain, class *v1.AgentClass, who identity.CanonicalUserID) error {
+	permission := class.StartGatePermission()
+	if permission == "" {
+		return nil
+	}
+	allowed, err := s.Auth.CheckOnResource(ctx, "agentclass", d.Namespace+"/"+d.Class, permission, who, true)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("%w: not allowed to start sessions of this agent", domain.ErrDenied)
+	}
+	return nil
+}
+
+func checkClassBounds(class *v1.AgentClass, b domain.ExecutionBounds) error {
+	maximum := executionPolicy(class).MaxBounds
+	for _, limit := range []struct {
+		name           string
+		value, maximum int64
+	}{
+		{"durationSeconds", b.DurationSeconds, maximum.DurationSeconds},
+		{"turns", b.Turns, maximum.Turns},
+		{"tokens", b.Tokens, maximum.Tokens},
+	} {
+		if limit.value > limit.maximum {
+			return fmt.Errorf("%w: bounds.%s=%d exceeds class maximum %d; reduce this field or omit bounds to use defaults", domain.ErrInvalid, limit.name, limit.value, limit.maximum)
+		}
+	}
+	return nil
+}
+
 func (s *Server) VerifyDecision(ctx context.Context, g domain.Goal, d domain.ExecutionDecision) error {
 	purpose := ""
 	if g.Execution != nil {
@@ -288,7 +338,7 @@ func (s *Server) verifyConsent(ctx context.Context, g domain.Goal, d domain.Exec
 	if err := json.Unmarshal(entry.Content, &content); err != nil {
 		return err
 	}
-	if content.Purpose != purpose || g.Execution == nil || content.Approved == nil || *content.Approved != d.Approved || content.Owner != g.Domain.Owner || d.Owner != g.Domain.Owner || content.Goal.Execution == nil || content.Goal.Execution.Digest != g.Execution.Digest || d.Digest != g.Execution.Digest || content.Goal.Domain != g.Domain || content.Goal.ID != g.ID || !reflect.DeepEqual(content.Goal.Execution.Terms, g.Execution.Terms) || content.Goal.Execution.Session != g.Execution.Session || content.Goal.Execution.SessionUID != g.Execution.SessionUID {
+	if content.Purpose != purpose || g.Execution == nil || content.Approved == nil || *content.Approved != d.Approved || !decidedBy(g, content.Owner, d.Owner) || content.Goal.Execution == nil || content.Goal.Execution.Digest != g.Execution.Digest || d.Digest != g.Execution.Digest || content.Goal.Domain != g.Domain || content.Goal.ID != g.ID || !reflect.DeepEqual(content.Goal.Execution.Terms, g.Execution.Terms) || content.Goal.Execution.Session != g.Execution.Session || content.Goal.Execution.SessionUID != g.Execution.SessionUID {
 		return domain.ErrDenied
 	}
 	var original memory.Entry
@@ -318,9 +368,64 @@ func (s *Server) verifyConsent(ctx context.Context, g domain.Goal, d domain.Exec
 	return nil
 }
 
+// decidedBy reports whether a signed decision's decider (witnessed) and the
+// decision's Owner (recorded) name an acceptable decider for g. A private
+// goal is decided only by its owner. A group goal is decided by a manager:
+// the two must agree and be non-empty. Whether that person managed the goal
+// is checked live at click time (the decision pipe and DecideExecution), not
+// here — this also runs at dispatch, and an approver who has since left must
+// not invalidate the group's standing consent (each run re-checks them).
+func decidedBy(g domain.Goal, witnessed, recorded string) bool {
+	return witnessed == recorded && g.Domain.AcceptsDecider(witnessed)
+}
+
+// ValidateGroupExecution implements domain.GroupExecutionValidator: the group
+// rules with the start gate checked for decider (the requesting manager at
+// request time, the clicking manager at decision time).
+func (s *Server) ValidateGroupExecution(ctx context.Context, g domain.Goal, t domain.ExecutionTerms, decider string) error {
+	if !g.Domain.GroupOwned() {
+		return domain.ErrDenied
+	}
+	var who identity.CanonicalUserID
+	if decider != "" {
+		who = identity.CanonicalFromTrusted(decider, "group goal deciding manager")
+	}
+	return s.validateGroup(ctx, g, t, who)
+}
+
+// executionGrant is the SpiceDB grant for an approved consent. A private goal
+// grants its owner, user-anchored. A group goal grants the DOMAIN itself
+// (domain_approved), never the approving manager: the group's standing
+// consent outlives any one manager's membership, and confers no resource
+// access — that is bound per run.
+func executionGrant(g domain.Goal) []authz.Relation {
+	anchor := authz.Relation{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "domain", SubjectType: ResourceType, SubjectID: g.Domain.ID()}
+	if g.Domain.GroupOwned() {
+		return []authz.Relation{anchor,
+			{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "domain_approved", SubjectType: ResourceType, SubjectID: g.Domain.ID(), ExpiresAt: g.Execution.Terms.ExpiresAt},
+		}
+	}
+	return []authz.Relation{anchor,
+		{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "approved", SubjectType: "user", SubjectID: g.Domain.Owner, ExpiresAt: g.Execution.Terms.ExpiresAt},
+	}
+}
+
 func (s *Server) AuthorizeDispatch(ctx context.Context, g domain.Goal) error {
 	if s.Auth == nil || g.Execution == nil {
 		return domain.ErrDenied
+	}
+	if g.Domain.GroupOwned() {
+		// The group's grant is held by the domain itself (execute_group =
+		// domain_approved & domain), so it is checked with the domain as
+		// subject; no person's membership is consulted here.
+		ok, err := s.Auth.CheckSubjectOnResource(ctx, ExecutionResourceType, g.Execution.Digest, "execute_group", ResourceType, g.Domain.ID(), true)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return domain.ErrDenied
+		}
+		return nil
 	}
 	owner := identity.CanonicalFromTrusted(g.Domain.Owner, "verified goal owner")
 	ok, err := s.Auth.CheckOnResource(ctx, ExecutionResourceType, g.Execution.Digest, "execute", owner, true)
@@ -343,10 +448,7 @@ func (s *Server) EnsureDispatchGrant(ctx context.Context, g domain.Goal) error {
 	if err := s.Validate(ctx, g, g.Execution.Terms); err != nil {
 		return err
 	}
-	return s.Auth.Relations().WriteRelationships(ctx, []authz.Relation{
-		{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "domain", SubjectType: ResourceType, SubjectID: g.Domain.ID()},
-		{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "approved", SubjectType: "user", SubjectID: g.Domain.Owner, ExpiresAt: g.Execution.Terms.ExpiresAt},
-	})
+	return s.Auth.Relations().WriteRelationships(ctx, executionGrant(g))
 }
 
 func (s *Server) decideHTTP(w http.ResponseWriter, r *http.Request) {
@@ -400,16 +502,69 @@ func (s *Server) decideHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if decision.Approved {
-		err = s.Auth.Relations().WriteRelationships(ctx, []authz.Relation{
-			{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "domain", SubjectType: ResourceType, SubjectID: g.Domain.ID()},
-			{ResourceType: ExecutionResourceType, ResourceID: g.Execution.Digest, Relation: "approved", SubjectType: "user", SubjectID: g.Domain.Owner, ExpiresAt: g.Execution.Terms.ExpiresAt},
-		})
+		err = s.Auth.Relations().WriteRelationships(ctx, executionGrant(g))
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// checkDecisionHTTP is channelsd's pre-write check for a goal consent click:
+// whether the clicker may decide the operator-signed request, by the same
+// predicate the decision itself will meet (domain.Service.CheckDecision). A
+// refusal is answered 403 (not allowed) or 409 (already decided, no longer
+// pending) with its reason, for channelsd to show the clicker.
+func (s *Server) checkDecisionHTTP(w http.ResponseWriter, r *http.Request) {
+	bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || s.Tokens == nil || !s.Tokens.IsChannelsdToken(bearer) {
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+	if s.Service == nil || s.Keys == nil || s.Auth == nil {
+		http.Error(w, "goal consent unavailable", 503)
+		return
+	}
+	var check goalconsent.Check
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 131072))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&check); err != nil {
+		http.Error(w, "invalid decision check", 400)
+		return
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		http.Error(w, "invalid decision check", 400)
+		return
+	}
+	entry := check.Request
+	if entry.Kind != goalconsent.KindName || entry.Provenance == nil || entry.Provenance.Publisher != "system:operator" || check.Decider == "" {
+		http.Error(w, "invalid decision check", 400)
+		return
+	}
+	if err := provenance.VerifyEntrySignature(s.Keys, entry); err != nil {
+		s.fail(w, r, fmt.Errorf("%w: consent request signature: %v", domain.ErrDenied, err))
+		return
+	}
+	var content goalconsent.Content
+	if err := json.Unmarshal(entry.Content, &content); err != nil || content.Goal.Execution == nil || entry.ID != "goalconsent-request-"+content.Goal.Execution.Digest {
+		http.Error(w, "invalid decision check", 400)
+		return
+	}
+	ctx := memory.WithCaller(memory.WithSystemApproval(r.Context(), "system:operator"), "system:operator")
+	err := s.Service.CheckDecision(ctx, content.Goal.Domain, content.Goal.ID, content.Goal.Execution.Digest, check.Decider, check.Approved)
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, domain.ErrConflict):
+		log.FromContext(ctx).Info("goal consent check refused", "goal", content.Goal.ID, "digest", content.Goal.Execution.Digest, "error", err)
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, domain.ErrDenied), errors.Is(err, sessionevents.ErrDenied):
+		log.FromContext(ctx).Info("goal consent check refused", "goal", content.Goal.ID, "digest", content.Goal.Execution.Digest, "error", err)
+		http.Error(w, err.Error(), http.StatusForbidden)
+	default:
+		s.fail(w, r, err)
+	}
 }
 
 // A class may expose the existing confirmed-preference surface as an execution

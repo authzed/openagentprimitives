@@ -110,7 +110,7 @@ func TestSchemaHasCriticalDefinitions(t *testing.T) {
 		"definition agent_goal {",
 		"permission manage = ((manager & domain->member_group) + domain->class_admin) - domain->denied",
 		"permission administer = platform->can_admin",
-		"permission execute_group = domain_approved",
+		"permission execute_group = domain_approved & domain",
 	} {
 		require.Contains(t, authzschema.Schema, want, "canonical schema missing %q", want)
 	}

@@ -79,7 +79,7 @@ func (s *Server) groupQualifies(ctx context.Context, class *v1.AgentClass, ch *v
 		return fmt.Errorf("%w: channel kind %q cannot list who reads its conversations, which group goals need", domain.ErrDenied, ch.Spec.Kind)
 	}
 	if err := host.MembershipCurrent(ctx, s.Reader, ch); err != nil {
-		return fmt.Errorf("%w: this conversation's group membership is not kept current: %v", domain.ErrDenied, err)
+		return fmt.Errorf("%w: this conversation's %w: %v", domain.ErrDenied, errMembershipNotCurrent, err)
 	}
 	return nil
 }
@@ -521,8 +521,8 @@ func (s *Server) audienceCanRead(ctx context.Context, a domain.Actor, sources []
 	return nil
 }
 
-// serveGroup handles a group-scope request. Execution and discovery for group
-// goals are not served yet; reads, create, update and manager changes are.
+// serveGroup handles a group-scope request: reads, create, update, manager
+// changes and execution requests. Discovery is for private goals only.
 func (s *Server) serveGroup(ctx context.Context, w http.ResponseWriter, r *http.Request, ns, name string, req Request) {
 	a, err := s.resolveGroup(ctx, ns, name, req.TurnRef)
 	if err != nil {
@@ -566,11 +566,23 @@ func (s *Server) serveGroup(ctx context.Context, w http.ResponseWriter, r *http.
 		p, err = s.Service.Runs(ctx, a, req.ID, req.List)
 		out.Runs = &p
 	case "request_execution":
-		// The source-vs-audience check runs now, so a request that could
-		// never be approved says why; running group goals is a later step.
-		if err = s.Authorize(ctx, a, true); err == nil {
-			err = fmt.Errorf("%w: running group goals is not available yet", domain.ErrDenied)
+		// The source-vs-audience check runs first, so a request that could
+		// never be approved says why. The consent card itself is posted to
+		// this conversation by the goal outbox, for the goal's managers; a
+		// group consent is never folded into the requester's own plan card.
+		if req.Execution.ApprovalMode != "" {
+			err = fmt.Errorf("%w: a group goal is approved by its managers on a card in this conversation; omit approvalMode", domain.ErrInvalid)
+			break
 		}
+		if err = s.Authorize(ctx, a, true); err != nil {
+			break
+		}
+		if err = s.PrepareExecution(ctx, a, &req.Execution); err != nil {
+			break
+		}
+		var g domain.Goal
+		g, err = s.Service.RequestExecution(ctx, a, req.Execution)
+		out.Goal = &g
 	case "request_discovery", "stop_discovery", "get_discovery_policy", "get_discovery_proposal":
 		err = fmt.Errorf("%w: goal discovery is for private goals only; omit scope group", domain.ErrInvalid)
 	default:

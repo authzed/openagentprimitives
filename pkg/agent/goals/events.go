@@ -112,13 +112,13 @@ func (e *EventExecution) CheckSubscription(ctx context.Context, sub sessionevent
 		return err
 	}
 	c := g.Execution
-	if e.Service.ExecutionAuth == nil || g.State != Active || c == nil || c.Decision == nil || !c.Decision.Approved || c.Decision.Owner != g.Domain.Owner || c.Decision.Digest != c.Digest || g.Revision != c.RequestRevision+1 || !e.Service.now().Before(c.Terms.ExpiresAt) {
+	if e.Service.ExecutionAuth == nil || g.State != Active || c == nil || c.Decision == nil || !c.Decision.Approved || !g.Domain.AcceptsDecider(c.Decision.Owner) || c.Decision.Digest != c.Digest || g.Revision != c.RequestRevision+1 || !e.Service.now().Before(c.Terms.ExpiresAt) {
 		return ErrDenied
 	}
 	if err = e.Service.ExecutionAuth.VerifyDecision(ctx, g, *c.Decision); err != nil {
 		return err
 	}
-	if err = e.Service.ExecutionAuth.Validate(ctx, g, c.Terms); err != nil {
+	if err = e.Service.validateDispatch(ctx, g, c.Terms); err != nil {
 		return err
 	}
 	if err = e.Service.ExecutionAuth.AuthorizeDispatch(ctx, g); err != nil {

@@ -23,6 +23,17 @@ type Content struct {
 	RequestWitness json.RawMessage `json:"requestWitness,omitempty"`
 }
 
+// Check asks the goal server, before channelsd records a decision, whether
+// Decider may decide the exact request Request (the operator-signed request
+// record) with Approved. A group goal's decision record is append-only, so a
+// decision the server would refuse must never be written: it would block
+// every other manager's click on the same digest.
+type Check struct {
+	Request  memory.Entry `json:"request"`
+	Decider  string       `json:"decider"`
+	Approved bool         `json:"approved"`
+}
+
 type Kind struct{}
 
 func (Kind) Name() string                          { return KindName }

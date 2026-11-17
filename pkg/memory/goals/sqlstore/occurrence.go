@@ -139,7 +139,7 @@ func (s *Store) dispatchTx(ctx context.Context, f func(*sql.Tx) (goals.Occurrenc
 func executionMatches(g goals.Goal, revision int64, digest string) bool {
 	c := g.Execution
 	return g.State == goals.Active && g.Revision == revision && c != nil && c.Digest == digest && c.Decision != nil &&
-		c.Decision.Approved && c.Decision.Owner == g.Domain.Owner && c.Decision.Digest == digest && c.Decision.Witness != "" && revision == c.RequestRevision+1
+		c.Decision.Approved && g.Domain.AcceptsDecider(c.Decision.Owner) && c.Decision.Digest == digest && c.Decision.Witness != "" && revision == c.RequestRevision+1
 }
 
 func (s *Store) lockedGoal(ctx context.Context, tx *sql.Tx, d goals.Domain, id string) (goals.Goal, error) {

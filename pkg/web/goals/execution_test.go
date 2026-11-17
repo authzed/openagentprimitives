@@ -31,6 +31,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/goals"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	goalsqlite "github.com/authzed/openagentprimitives/pkg/memory/goals/sqlite"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/sessionobservation"
@@ -69,6 +70,22 @@ func (c consentHTTP) CommitGoalConsent(ctx context.Context, entry memory.Entry) 
 	c.server.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent {
 		return &statusError{code: response.Code}
+	}
+	return nil
+}
+
+// CheckGoalConsent is the goal server's pre-write decision check, over HTTP.
+func (c consentHTTP) CheckGoalConsent(ctx context.Context, request memory.Entry, decider string, approved bool) error {
+	raw, err := json.Marshal(goalconsent.Check{Request: request, Decider: decider, Approved: approved})
+	if err != nil {
+		return err
+	}
+	r := httptest.NewRequest(http.MethodPost, "/goals/decision/check", bytes.NewReader(raw)).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+c.token)
+	response := httptest.NewRecorder()
+	c.server.ServeHTTP(response, r)
+	if response.Code != http.StatusNoContent {
+		return fmt.Errorf("%w: %s", &statusError{code: response.Code}, strings.TrimSpace(response.Body.String()))
 	}
 	return nil
 }

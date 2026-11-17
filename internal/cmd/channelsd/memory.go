@@ -376,3 +376,6 @@ var _ pipeline.Memory = (*memoryClient)(nil)
 func (m *memoryClient) RecordGoalActor(ctx context.Context, sess *v1.AgentSession, class *v1.AgentClass, owner identity.CanonicalUserID, inboundRef string) error {
 	return goalactor.Record(ctx, m.signed, memory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}, goalactor.Content{Owner: owner.String(), SessionUID: string(sess.UID), ClassUID: string(class.UID), InboundRef: inboundRef})
 }
+
+// Group goal consent refuses a committer that cannot pre-check a decision.
+var _ pipeline.GoalConsentChecker = (*httpclient.Client)(nil)

@@ -38,6 +38,10 @@ type Authority interface {
 	GrantSlots(context.Context, string, string, []authz.SlotBinding, time.Time) error
 	CheckInteract(context.Context, string, string, identity.CanonicalUserID, bool) (bool, error)
 	CheckOnResource(context.Context, string, string, string, identity.CanonicalUserID, bool) (bool, error)
+	// CheckSubjectOnResource answers a check whose subject is an object, not
+	// a user: a group goal's dispatch checks its execution grant with the
+	// goal's domain itself as subject.
+	CheckSubjectOnResource(ctx context.Context, resType, resID, permission, subjType, subjID string, fullyConsistent bool) (bool, error)
 	// ListUserSubjects lists the users directly on resourceType:id#relation,
 	// fully consistent. Group goals reconcile their manager tuples with it.
 	ListUserSubjects(ctx context.Context, resourceType, resourceID, relation string) ([]string, error)
@@ -85,6 +89,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/goals/decision" {
 		s.decideHTTP(w, r)
+		return
+	}
+	if r.URL.Path == "/goals/decision/check" {
+		s.checkDecisionHTTP(w, r)
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/goals/"), "/")

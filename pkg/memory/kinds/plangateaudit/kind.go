@@ -282,12 +282,27 @@ type Content struct {
 	At         time.Time `json:"at"`
 }
 
+// Authority kinds a derived approval may carry.
+const (
+	// AuthorityGoalPrivateDelivery clears a private goal run's delivery-only
+	// plan under its owner's standing_private consent. It binds no resource.
+	AuthorityGoalPrivateDelivery = "goal_private_delivery"
+	// AuthorityGoalGroupStanding clears a group goal run's phase covered by
+	// the goal's standing plan. Its slots are bound with Approver as delegator.
+	AuthorityGoalGroupStanding = "goal_group_standing"
+)
+
 type ApprovalAuthority struct {
 	Kind         string `json:"kind"`
 	Reference    string `json:"reference"`
 	DecisionRef  string `json:"decisionRef"`
 	OccurrenceID string `json:"occurrenceID"`
 	SessionUID   string `json:"sessionUID"`
+	// Approver is the canonical user id of the person whose standing the
+	// approval delegates — for goal_group_standing, the manager who approved
+	// the group's standing plan, re-checked live for this run. Empty on
+	// authorities that delegate no resource (goal_private_delivery).
+	Approver string `json:"approver,omitempty"`
 }
 
 type Kind struct{}

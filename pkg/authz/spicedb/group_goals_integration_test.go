@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -165,40 +164,44 @@ func TestGroupGoal_ManagerRemovedFromGroupLosesManage(t *testing.T) {
 	assert.False(t, ok, "and no longer approves in the run session")
 }
 
-// execute_group is satisfied only by the domain itself, through an unexpired
-// domain_approved tuple.
+// execute_group is satisfied only by the execution's own domain, through an
+// unexpired domain_approved tuple: a domain_approved naming some other domain
+// grants that other domain nothing.
 func TestGroupGoal_ExecuteGroupNeedsUnexpiredDomainApproval(t *testing.T) {
 	c := newIntegrationClient(t)
 	f := newGroupGoalFixture(t, c)
 	ctx := context.Background()
 
-	checkExec := func(execID string) bool {
+	checkExec := func(execID, asDomain string) bool {
 		t.Helper()
-		resp, err := c.CheckPermission(ctx, &v1.CheckPermissionRequest{
-			Consistency: &v1.Consistency{Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true}},
-			Resource:    &v1.ObjectReference{ObjectType: "agent_goal_execution", ObjectId: execID},
-			Permission:  "execute_group",
-			Subject:     &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: "agent_goal_domain", ObjectId: f.domain}},
-		})
+		ok, err := c.CheckSubjectOnResource(ctx, "agent_goal_execution", execID, "execute_group", "agent_goal_domain", asDomain, true)
 		require.NoError(t, err)
-		return resp.GetPermissionship() == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION
+		return ok
 	}
-	approve := func(execID string, expires time.Time) {
+	approve := func(execID, ownDomain, approvedDomain string, expires time.Time) {
 		t.Helper()
-		r := rel("agent_goal_execution", execID, "domain_approved", "agent_goal_domain", f.domain, "")
+		r := rel("agent_goal_execution", execID, "domain_approved", "agent_goal_domain", approvedDomain, "")
 		r.ExpiresAt = expires
-		require.NoError(t, c.Relations().WriteRelationships(ctx, []authz.Relation{r}))
+		require.NoError(t, c.Relations().WriteRelationships(ctx, []authz.Relation{
+			rel("agent_goal_execution", execID, "domain", "agent_goal_domain", ownDomain, ""), r,
+		}))
 	}
 
 	live := uniq(t, "ggexec-live-")
-	assert.False(t, checkExec(live), "no approval: refused")
-	approve(live, time.Now().Add(time.Hour))
-	assert.True(t, checkExec(live), "unexpired approval: allowed")
+	assert.False(t, checkExec(live, f.domain), "no approval: refused")
+	approve(live, f.domain, f.domain, time.Now().Add(time.Hour))
+	assert.True(t, checkExec(live, f.domain), "unexpired approval: allowed")
+
+	foreign := uniq(t, "ggdom-foreign-")
+	crossed := uniq(t, "ggexec-crossed-")
+	approve(crossed, f.domain, foreign, time.Now().Add(time.Hour))
+	assert.False(t, checkExec(crossed, foreign), "a different domain as subject is refused: it approved an execution that is not its own")
+	assert.False(t, checkExec(crossed, f.domain), "and the execution's own domain never approved it")
 
 	stale := uniq(t, "ggexec-stale-")
-	approve(stale, time.Now().Add(2*time.Second))
-	require.True(t, checkExec(stale), "precondition: allowed before expiry")
-	require.Eventually(t, func() bool { return !checkExec(stale) }, 15*time.Second, 250*time.Millisecond,
+	approve(stale, f.domain, f.domain, time.Now().Add(2*time.Second))
+	require.True(t, checkExec(stale, f.domain), "precondition: allowed before expiry")
+	require.Eventually(t, func() bool { return !checkExec(stale, f.domain) }, 15*time.Second, 250*time.Millisecond,
 		"expired approval: refused")
 }
 
