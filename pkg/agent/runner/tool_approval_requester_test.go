@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,6 +29,35 @@ func slackSubject(t *testing.T, userID, email string) identity.Subject {
 	return s
 }
 
+// requestedByRow builds the tool-approval card the approver reads for a gated
+// call from l's current state and returns its "Requested by" row, nil when the
+// card has none.
+func requestedByRow(t *testing.T, l *Loop) *channelevents.InteractionField {
+	t.Helper()
+	ask, err := l.buildToolCallApprovalAsk(memory.WithSystemApproval(context.Background(), "test"),
+		"do_thing", map[string]any{}, authz.Permission{StateImpact: authz.External}, "tu-1", "because",
+		identity.CanonicalFromTrusted("", "test fixture"), false)
+	require.NoError(t, err, "buildToolCallApprovalAsk")
+	require.NotNil(t, ask)
+	for _, f := range publishToolCallCard(t, *ask).Fields {
+		if f.Label == "Requested by" {
+			return &f
+		}
+	}
+	return nil
+}
+
+// assertRequestedBy checks the row's plain value; want "" means no row at all.
+func assertRequestedBy(t *testing.T, row *channelevents.InteractionField, want string) {
+	t.Helper()
+	if want == "" {
+		assert.Nil(t, row, "nobody known must mean no row, never a guess")
+		return
+	}
+	require.NotNil(t, row, "the card must name who is asking")
+	assert.Equal(t, want, row.Value)
+}
+
 // The "Requested by" row names the person ASKING, not the person who started
 // the session.
 //
@@ -51,6 +81,8 @@ func TestToolApprovalCard_RequesterIsTheCurrentSpeaker(t *testing.T) {
 		name        string
 		annotations map[string]string
 		speaker     func(t *testing.T) identity.Subject
+		// authorless: the newest drained turn had no Author (a notice).
+		authorless bool
 		// wantValue is the row's plain fallback; "" means no row at all.
 		wantValue string
 		// wantSubject is the identity Slack resolves the mention from; empty
@@ -79,7 +111,13 @@ func TestToolApprovalCard_RequesterIsTheCurrentSpeaker(t *testing.T) {
 			wantSubject: func(t *testing.T) identity.Subject { return slackSubject(t, "U_ALICE", "alice@corp.example") },
 		},
 		{
-			name:        "no speaker recorded (woken by a schedule): the started-by pair, named by email",
+			name:        "a notice woke the agent after Bob spoke: no Requested by row, neither Bob nor the starter",
+			annotations: aliceStarted,
+			speaker:     func(t *testing.T) identity.Subject { return slackSubject(t, "U_BOB", "bob@corp.example") },
+			authorless:  true,
+		},
+		{
+			name:        "no inbound turn recorded at all (first turn had no Author): the started-by pair, named by email",
 			annotations: aliceStarted,
 			wantValue:   "alice@corp.example",
 		},
@@ -106,30 +144,113 @@ func TestToolApprovalCard_RequesterIsTheCurrentSpeaker(t *testing.T) {
 			if tc.speaker != nil {
 				l.lastInboundAuthor = tc.speaker(t)
 			}
+			l.lastInboundAuthorless = tc.authorless
 
-			ask, err := l.buildToolCallApprovalAsk(memory.WithSystemApproval(context.Background(), "test"),
-				"do_thing", map[string]any{}, authz.Permission{StateImpact: authz.External}, "tu-1", "because",
-				identity.CanonicalFromTrusted("", "test fixture"), false)
-			require.NoError(t, err, "buildToolCallApprovalAsk")
-			require.NotNil(t, ask)
-
-			var row *channelevents.InteractionField
-			for _, f := range publishToolCallCard(t, *ask).Fields {
-				if f.Label == "Requested by" {
-					row = &f
-				}
-			}
+			row := requestedByRow(t, l)
+			assertRequestedBy(t, row, tc.wantValue)
 			if tc.wantValue == "" {
-				assert.Nil(t, row, "nobody known must mean no row, never a guess")
 				return
 			}
-			require.NotNil(t, row, "the card must name who is asking")
-			assert.Equal(t, tc.wantValue, row.Value)
 			require.Len(t, row.Mentions, 1)
 			assert.Equal(t, identity.KindSlack, row.Mentions[0].Kind, "the session's human channel kind, for the surface to resolve")
 			if tc.wantSubject != nil {
 				assert.Equal(t, tc.wantSubject(t), row.Mentions[0].Subject,
 					"the mention resolves from the speaker's own canonical subject")
+			}
+		})
+	}
+}
+
+// The speaker state the card reads must come out the same whether the runner
+// drained the turns itself or was restarted after they were drained.
+//
+// Each row drives a real drainInbox over an in-memory transcript (turn 0, then
+// one inbox turn at a time, a nil author being a notice nobody sent), then
+// rebuilds the state the way a resumed Run does, from the transcript alone, and
+// requires the two to agree. The approval card a resumed runner then draws is
+// checked against the row's expected requester, so "Alice started it, Bob asked,
+// the runner was evicted" names Bob, not the starter.
+func TestToolApprovalCard_RequesterSurvivesRestartAndNotices(t *testing.T) {
+	aliceStarted := map[string]string{
+		spiceboxv1alpha1.AnnotationStartedByExternalID: "U_ALICE",
+		spiceboxv1alpha1.AnnotationStartedByEmail:      "alice@corp.example",
+	}
+	alice := func(t *testing.T) identity.Subject { return slackSubject(t, "U_ALICE", "alice@corp.example") }
+	bob := func(t *testing.T) identity.Subject { return slackSubject(t, "U_BOB", "bob@corp.example") }
+	carol := func(t *testing.T) identity.Subject { return slackSubject(t, "U_CAROL", "carol@corp.example") }
+	notice := func(*testing.T) identity.Subject { return "" }
+
+	cases := []struct {
+		name  string
+		turn0 func(t *testing.T) identity.Subject
+		inbox []func(t *testing.T) identity.Subject
+		// wantValue is the resumed card's row; "" means no row.
+		wantValue string
+	}{
+		{name: "Alice started, Bob asked, then a restart: the card names Bob", turn0: alice, inbox: []func(*testing.T) identity.Subject{bob}, wantValue: "bob@corp.example"},
+		{name: "Bob, then Carol drained in order: the newest speaker, Carol", turn0: alice, inbox: []func(*testing.T) identity.Subject{bob, carol}, wantValue: "carol@corp.example"},
+		{name: "Bob spoke, then a notice woke the agent: no row", turn0: alice, inbox: []func(*testing.T) identity.Subject{bob, notice}},
+		{name: "a notice, then Bob spoke: Bob again", turn0: alice, inbox: []func(*testing.T) identity.Subject{notice, bob}, wantValue: "bob@corp.example"},
+		{name: "only the starter's first turn: the starter", turn0: alice, wantValue: "alice@corp.example"},
+		{name: "authorless first turn, nothing drained: the started-by pair", wantValue: "alice@corp.example"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := memory.WithSystemApproval(context.Background(), "test")
+			live := newDrainLoop(t)
+			first := drainTextTurn(0, "user", "start")
+			if tc.turn0 != nil {
+				first.Author = tc.turn0(t)
+				// Run's turn-0 placement, which never passes through drainInbox.
+				live.lastInboundAuthor = first.Author
+			}
+			require.NoError(t, live.Memory.Append(ctx, first))
+			next := 1
+			for _, author := range tc.inbox {
+				in := drainTextTurn(next, "inbox", "hello")
+				in.Author = author(t)
+				require.NoError(t, live.Memory.Append(ctx, in))
+				var err error
+				_, next, err = live.drainInbox(ctx, next)
+				require.NoError(t, err, "drainInbox")
+			}
+
+			prior, err := live.Memory.ReadAll(ctx)
+			require.NoError(t, err, "ReadAll")
+			author, authorless := lastInboundSpeaker(prior)
+			assert.Equal(t, live.lastInboundAuthor, author, "resumed speaker matches what the live runner held")
+			assert.Equal(t, live.lastInboundAuthorless, authorless, "resumed authorless flag matches the live runner")
+
+			resumed := loopWithConsolidatedTimeout(t)
+			resumed.Tools = []tool.Tool{&csFakeTool{name: "do_thing"}}
+			resumed.ChannelKind = "slack"
+			resumed.AgentSession = &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Annotations: aliceStarted}}
+			resumed.lastInboundAuthor, resumed.lastInboundAuthorless = author, authorless
+			assertRequestedBy(t, requestedByRow(t, resumed), tc.wantValue)
+		})
+	}
+}
+
+// A speaker who cannot be named gets no row, and says why so the caller can
+// log it: a card with no requester is otherwise invisible to an operator.
+func TestSpeakerRequesterIdentity_ReportsWhyNoRow(t *testing.T) {
+	malformed := identity.Subject("user:" + base64.RawURLEncoding.EncodeToString([]byte("slack:T1")))
+	cases := []struct {
+		name       string
+		author     identity.Subject
+		wantReason string
+	}{
+		{name: "agent-authored turn: not a user subject", author: "agentsession:ns/child", wantReason: "not a user subject"},
+		{name: "raw passthrough: not a platform-encoded canonical", author: "user:dana@example.com", wantReason: "not a platform-encoded canonical"},
+		{name: "two-part synthetic: malformed", author: malformed, wantReason: "malformed synthetic canonical"},
+		{name: "a real Slack sender: addressable, no reason", author: slackSubject(t, "U_BOB", ""), wantReason: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, reason := speakerRequesterIdentity(tc.author, identity.KindSlack)
+			assert.Equal(t, tc.wantReason, reason)
+			if tc.wantReason != "" {
+				assert.Equal(t, channelevents.ExternalIdentity{}, id, "an unnamed speaker yields the zero identity")
 			}
 		})
 	}

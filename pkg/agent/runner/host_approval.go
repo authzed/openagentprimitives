@@ -1339,13 +1339,22 @@ func currentTurnAuthorIdentity(author identity.Subject) *channelevents.ExternalI
 // at the starter, which is exactly the case where Bob's call runs on Alice's
 // grants and the approver most needs to see that Bob asked.
 //
-// A recorded speaker who is not an addressable person (an agent-authored turn,
-// a raw passthrough) yields an empty identity, so the card has no row: the
-// starter did not ask, and naming them would lend their credibility just the
-// same. Only when no speaker is recorded at all (a session woken by a
-// schedule) does it fall back: LastInboundExternalID if a caller set it
-// (internal/cmd/runner does not), else the session's started-by annotations,
-// whose external id and email are stamped as a matched pair.
+// The card gets NO row (the zero identity) in two cases, because the starter
+// did not ask and naming them would lend their credibility just the same:
+//
+//   - The most recently drained turn had no Author (lastInboundAuthorless): a
+//     notice nobody sent woke the agent (subagent-ended, Workshop, restart).
+//     The previous human is still lastInboundAuthor, but they did not ask for
+//     THIS call either, so the card names nobody rather than them.
+//   - The recorded speaker is not an addressable person (an agent-authored
+//     turn, a raw passthrough). That one is logged: a card with no requester
+//     is otherwise invisible to an operator.
+//
+// Only when no inbound turn is recorded at all (a kubectl- or cron-started
+// session, whose first turn has no Author) does it fall back to the session's
+// started-by annotations, whose external id and email are stamped as a
+// matched pair. Both fields survive a runner restart: Run seeds them from the
+// transcript (lastInboundSpeaker) before the first call can be made.
 //
 // Concurrency: called only from buildToolCallApprovalAsk's non-app-tool
 // branch, which runs on a dispatch goroutine Run joins (wg.Wait) before it
@@ -1354,15 +1363,19 @@ func currentTurnAuthorIdentity(author identity.Subject) *channelevents.ExternalI
 // does not join, and names its widget viewer instead.
 func (l *Loop) llmPathRequester() channelevents.ExternalIdentity {
 	kind := identity.Kind(l.AddressableChannelKind())
-	if !l.lastInboundAuthor.Empty() {
-		// Not addressable: the zero identity, which renders no row.
-		id, _ := speakerRequesterIdentity(l.lastInboundAuthor, kind)
-		return id
+	if l.lastInboundAuthorless {
+		return channelevents.ExternalIdentity{}
 	}
-	// No paired email exists for LastInboundExternalID, so none is attached:
-	// pairing it with the annotation's would name two different people at once.
-	if l.LastInboundExternalID != "" {
-		return channelevents.ExternalIdentity{Kind: kind, ExternalID: identity.RawExternalID(l.LastInboundExternalID)}
+	if !l.lastInboundAuthor.Empty() {
+		id, reason := speakerRequesterIdentity(l.lastInboundAuthor, kind)
+		if reason != "" {
+			// The subject's TYPE only, never the subject: see
+			// CurrentSpeakerCanInteract for why.
+			slog.Default().Info("approval card: current speaker not addressable; no Requested by row",
+				"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name,
+				"subjectType", l.lastInboundAuthor.ObjectType(), "reason", reason)
+		}
+		return id
 	}
 	var ext, email string
 	if l.AgentSession != nil {
@@ -1373,8 +1386,8 @@ func (l *Loop) llmPathRequester() channelevents.ExternalIdentity {
 }
 
 // speakerRequesterIdentity turns a turn author's subject into the identity the
-// "Requested by" row carries, or ok=false when the author is not an
-// addressable person.
+// "Requested by" row carries, or the zero identity and a non-empty reason when
+// the author is not an addressable person.
 //
 // The subject rides as a Subject passthrough with Kind set to the session's
 // human channel kind — the shape infoLeakageWouldShareWithFields already
@@ -1391,27 +1404,29 @@ func (l *Loop) llmPathRequester() channelevents.ExternalIdentity {
 // agent-authored turn is not a requester) with a non-empty canonical that the
 // platform encoded. A RawSubject passthrough decodes to itself and is refused,
 // because its text is self-asserted.
-func speakerRequesterIdentity(author identity.Subject, kind identity.Kind) (channelevents.ExternalIdentity, bool) {
+func speakerRequesterIdentity(author identity.Subject, kind identity.Kind) (channelevents.ExternalIdentity, string) {
 	canon, err := author.CanonicalUserID()
-	if err != nil || canon.IsZero() {
-		return channelevents.ExternalIdentity{}, false
+	if err != nil {
+		return channelevents.ExternalIdentity{}, "not a user subject"
+	}
+	if canon.IsZero() {
+		return channelevents.ExternalIdentity{}, "empty canonical"
 	}
 	decoded := identity.DecodeForDisplay(author.String())
 	if decoded == author.String() {
-		return channelevents.ExternalIdentity{}, false
+		return channelevents.ExternalIdentity{}, "not a platform-encoded canonical"
 	}
 	id := channelevents.ExternalIdentity{Kind: kind, Subject: author}
 	if email := speakerEmail(author); email != "" {
 		id.Email = identity.Email(email)
-		return id, true
+		return id, ""
 	}
-	// A synthetic canonical decodes to "kind:teamScope:externalID".
-	parts := strings.SplitN(decoded, ":", 3)
-	if len(parts) != 3 || strings.TrimSpace(parts[2]) == "" {
-		return channelevents.ExternalIdentity{}, false
+	_, _, externalID, ok := identity.SplitSynthetic(decoded)
+	if !ok {
+		return channelevents.ExternalIdentity{}, "malformed synthetic canonical"
 	}
-	id.ExternalID = identity.RawExternalID(parts[2])
-	return id, true
+	id.ExternalID = externalID
+	return id, ""
 }
 
 // contentInspectionLead authors the headline the generic renderer shows as the

@@ -84,6 +84,9 @@ func (l *Loop) drainInbox(ctx context.Context, nextIndex int) (placed []memory.T
 			// not inherit the authorization mode's gating.
 			l.lastInboundAuthor = it.Author
 		}
+		// An authorless notice keeps lastInboundAuthor (see its doc) but means
+		// nobody asked for what the agent does next.
+		l.lastInboundAuthorless = it.Author.Empty()
 
 		marker := memory.Turn{
 			Index:     it.Index,

@@ -617,12 +617,12 @@ type Loop struct {
 	// AgentSession. Empty for kubectl-driven sessions.
 	StartedByCanonical identity.CanonicalUserID
 
-	// ChannelKind is the Kind on the tool-approval card's Requester.
-	// LastInboundExternalID is that Requester's fallback when no speaker is
-	// recorded (llmPathRequester); internal/cmd/runner never sets it. Empty
+	// ChannelKind is the Kind on the tool-approval card's Requester. Empty
 	// values flow through as empty strings (channelsd's sender tolerates that
 	// for kubectl-driven approval prompts, where there is no inbound channel
-	// user).
+	// user). LastInboundExternalID feeds the identity_choice card's
+	// InitiatingUser; internal/cmd/runner never sets it, and the tool-approval
+	// card's Requester deliberately does not read it (llmPathRequester).
 	//
 	// LastInboundExternalID has no paired "last inbound email" field — fine for
 	// tool_call approvals (DecideApprovers resolves standing via SpiceDB owner
@@ -1091,7 +1091,24 @@ type Loop struct {
 	// currentRequester/both, so under startedBy mode (or with authz disabled) it
 	// is frozen at the initiator or empty. Attribution for display must not
 	// inherit an authorization mode's gating.
+	//
+	// An authorless drained turn (a notice: subagent-ended, Workshop, restart)
+	// leaves it at the previous human, so its fail-closed readers
+	// (CurrentSpeakerCanInteract, the speaker profile) keep their meaning;
+	// lastInboundAuthorless records that the newest turn had no Author instead.
+	//
+	// Survives a restart: Run seeds it from the transcript (lastInboundSpeaker)
+	// before the first call, so after a resume those readers see the speaker
+	// whose turn was already placed rather than failing closed on nobody.
 	lastInboundAuthor identity.Subject
+
+	// lastInboundAuthorless is true when the most recently drained inbound turn
+	// carried no Author — "nobody is speaking right now, though someone did
+	// earlier". Display only: llmPathRequester reads it so a notice-driven
+	// call's approval card names nobody rather than the last human. Written
+	// alongside lastInboundAuthor (drainInbox, the turn-0 placement, and Run's
+	// resume seed), under the same Run-goroutine ordering.
+	lastInboundAuthorless bool
 
 	// speakerProfileMu guards the four speakerProfile* fields below together —
 	// one cohesive piece of per-turn memoization state, read and written as a unit

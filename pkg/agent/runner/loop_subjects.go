@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"cmp"
+	"slices"
 	"strings"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -310,6 +312,44 @@ func (l *Loop) CurrentUserTurnIndex() int {
 // identity. The write path already resolves a verified canonical subject; the
 // read path should consult a first-class session-identity/participant record
 // rather than re-deriving "who is this for" by scanning turns.
+// lastInboundSpeaker reconstructs, from a resumed transcript, the
+// lastInboundAuthor / lastInboundAuthorless pair the previous runner held: it
+// replays the same writes the turn-0 placement and drainInbox made, in the
+// same order.
+//
+// It reads the CONSUMED "inbox" turns (those with an inbox_done marker), not
+// the placed "user" turns, because a placed user turn cannot tell an
+// authorless notice from a tool_result (both are user-role with no Author),
+// while an inbox turn is only ever an inbound message or a notice. Inbox turns
+// drained in ascending Index order, so the highest consumed one is the newest.
+// Turn 0 (the initial prompt) is placed directly by Run, never via the inbox,
+// so it is read from the user turn at Index 0.
+func lastInboundSpeaker(prior []memory.Turn) (author identity.Subject, authorless bool) {
+	done := map[int]bool{}
+	var consumed []memory.Turn
+	for _, t := range prior {
+		switch {
+		case t.Role == "inbox_done":
+			done[t.Index] = true
+		case t.Role == "user" && t.Index == 0:
+			author = t.Author
+		}
+	}
+	for _, t := range prior {
+		if t.Role == "inbox" && done[t.Index] {
+			consumed = append(consumed, t)
+		}
+	}
+	slices.SortFunc(consumed, func(a, b memory.Turn) int { return cmp.Compare(a.Index, b.Index) })
+	for _, t := range consumed {
+		if !t.Author.Empty() {
+			author = t.Author
+		}
+		authorless = t.Author.Empty()
+	}
+	return author, authorless
+}
+
 func highestUserTurnIndex(prior []memory.Turn) int {
 	idx := -1
 	for _, t := range prior {
