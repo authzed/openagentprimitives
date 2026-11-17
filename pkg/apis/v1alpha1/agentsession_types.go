@@ -818,7 +818,8 @@ type ResolvedSidecarToolbox struct {
 // of truth for timing.
 type SidecarPodFailure struct {
 	// Reason is the kubelet's terminal container Waiting reason, e.g.
-	// "CrashLoopBackOff" or "ImagePullBackOff".
+	// "CrashLoopBackOff" or "ImagePullBackOff", or "NotReadyDeadlineExceeded"
+	// for a pod that stayed not-Ready past the operator's deadline without one.
 	Reason string `json:"reason"`
 
 	// Message is the most actionable text available: the container's last
