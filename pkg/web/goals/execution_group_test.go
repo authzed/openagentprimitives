@@ -400,8 +400,8 @@ func TestGroupExecutionValidation(t *testing.T) {
 		{
 			name: "replaced: Recipient == owner — member ref of a type the Channel's kind does not contribute: refused",
 			group: func(_ *testing.T, e *groupExec) {
-				e.goal.Domain.Owner = "slack_channel:C1#member"
-				e.terms.Group.MemberGroup = "slack_channel:C1#member"
+				e.goal.Domain.Owner = "other_channel:C1#member"
+				e.terms.Group.MemberGroup = "other_channel:C1#member"
 			},
 			groupErr: core.ErrDenied, groupCause: core.ErrGroupNotHostable, groupMsg: "group",
 		},

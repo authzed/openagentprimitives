@@ -30,7 +30,7 @@ import (
 
 // noReceiverKindName is a group-hosting kind with no durable delivery
 // receiver: the fake's transport and group answers, without its
-// DeliveryReceiverProvider. It stands in for Slack, whose receiver is not
+// DeliveryReceiverProvider. It stands in for any kind whose receiver is not
 // built yet.
 const noReceiverKindName = "fake-noreceiver"
 

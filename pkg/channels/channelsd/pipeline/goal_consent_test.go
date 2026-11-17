@@ -224,7 +224,7 @@ func TestGroupGoalConsentUnderThePrivateCategoryIsRefused(t *testing.T) {
 	assert.False(t, found)
 }
 
-// conversationClient holds the Slack conversation session the card was posted
+// conversationClient holds the chat conversation session the card was posted
 // in (not a goal run), with its Channel, so the pipe can resolve where a
 // decision's outcome is shown.
 func conversationClient(t *testing.T, key client.ObjectKey, goalRun bool) client.Client {
@@ -233,10 +233,10 @@ func conversationClient(t *testing.T, key client.ObjectKey, goalRun bool) client
 	require.NoError(t, spiceboxv1alpha1.AddToScheme(scheme))
 	require.NoError(t, corev1.AddToScheme(scheme))
 	ch := &spiceboxv1alpha1.Channel{ObjectMeta: metav1.ObjectMeta{Name: "c1", Namespace: key.Namespace},
-		Spec: spiceboxv1alpha1.ChannelSpec{Kind: "slack", AgentClass: "ac1", CredentialsRef: spiceboxv1alpha1.ChannelCredentialsRef{SecretName: "s"}}}
+		Spec: spiceboxv1alpha1.ChannelSpec{Kind: "fake", AgentClass: "ac1", CredentialsRef: spiceboxv1alpha1.ChannelCredentialsRef{SecretName: "s"}}}
 	sess := &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, UID: "chat-uid"},
 		Spec: spiceboxv1alpha1.AgentSessionSpec{Class: "ac1", InputChannel: &spiceboxv1alpha1.ChannelBinding{
-			Name: "c1", Kind: "slack", Key: "thread:C1:1", NATSSubjectPrefix: "ap.session." + key.Namespace + "." + key.Name}},
+			Name: "c1", Kind: "fake", Key: "thread:C1:1", NATSSubjectPrefix: "ap.session." + key.Namespace + "." + key.Name}},
 		Status: spiceboxv1alpha1.AgentSessionStatus{Phase: spiceboxv1alpha1.AgentSessionPhaseRunning}}
 	if goalRun {
 		sess.Spec.GoalExecution = &spiceboxv1alpha1.GoalExecutionReference{GoalID: "goal-1", OccurrenceID: "occ-1", GoalRevision: 1, ConsentDigest: "d0"}
@@ -249,7 +249,7 @@ func conversationClient(t *testing.T, key client.ObjectKey, goalRun bool) client
 
 // pipeClick sends a click on the group consent card through the whole
 // decision pipe, as a transport delivers it: on the session's ordinary inbound
-// subject (Slack's listener and the fake harness PublishIn), or on the
+// subject (a kind's listener and the fake harness PublishIn), or on the
 // component tree when component is set.
 //
 // goalRun makes the card's session a group goal run, where a system renewal
@@ -273,14 +273,14 @@ func (g *groupConsent) pipeClick(t *testing.T, decider channelevents.ExternalIde
 
 // A group goal's consent card — the standing-plan card in the conversation
 // that asked for it, and the renewal card a run posts, which is the same
-// category — is clicked in a Slack or fake conversation, so the click arrives
+// category — is clicked in a channel conversation, so the click arrives
 // by channel ingress. A manager's click there decides it; the category's
 // resource-owner check (agent_goal:<id>#manage), the goal server's pre-write
 // check and the append-only decision record are exactly as for component
 // ingress, so a member's click is refused and records nothing.
 func TestGroupGoalConsentByChannelIngress(t *testing.T) {
-	slackUser := func(id, email string) channelevents.ExternalIdentity {
-		return channelevents.ExternalIdentity{Kind: "slack", ExternalID: identity.RawExternalID(id), Email: identity.Email(email)}
+	chatUser := func(id, email string) channelevents.ExternalIdentity {
+		return channelevents.ExternalIdentity{Kind: "fake", ExternalID: identity.RawExternalID(id), Email: identity.Email(email)}
 	}
 	cases := []struct {
 		name      string
@@ -291,12 +291,12 @@ func TestGroupGoalConsentByChannelIngress(t *testing.T) {
 		decided  string
 		rejected string
 	}{
-		{name: "a manager's channel click: decided, recorded, server asked first", decider: slackUser("U_ALICE", "alice@example.com"), decided: "alice@example.com"},
-		{name: "a manager's component click: decided as before", decider: slackUser("U_ALICE", "alice@example.com"), component: true, decided: "alice@example.com"},
-		{name: "a renewal card in a group run's thread, a manager's channel click: decided", decider: slackUser("U_CAROL", "carol@example.com"), goalRun: true, decided: "carol@example.com"},
-		{name: "a renewal card in a group run's thread, a member's channel click: refused not_authorized", decider: slackUser("U_BOB", "bob@example.com"), goalRun: true, rejected: "not_authorized"},
-		{name: "a member's channel click: refused not_authorized, nothing recorded", decider: slackUser("U_BOB", "bob@example.com"), rejected: "not_authorized"},
-		{name: "a sibling goal's manager's channel click: refused not_authorized, nothing recorded", decider: slackUser("U_DAVE", "dave@example.com"), rejected: "not_authorized"},
+		{name: "a manager's channel click: decided, recorded, server asked first", decider: chatUser("U_ALICE", "alice@example.com"), decided: "alice@example.com"},
+		{name: "a manager's component click: decided as before", decider: chatUser("U_ALICE", "alice@example.com"), component: true, decided: "alice@example.com"},
+		{name: "a renewal card in a group run's thread, a manager's channel click: decided", decider: chatUser("U_CAROL", "carol@example.com"), goalRun: true, decided: "carol@example.com"},
+		{name: "a renewal card in a group run's thread, a member's channel click: refused not_authorized", decider: chatUser("U_BOB", "bob@example.com"), goalRun: true, rejected: "not_authorized"},
+		{name: "a member's channel click: refused not_authorized, nothing recorded", decider: chatUser("U_BOB", "bob@example.com"), rejected: "not_authorized"},
+		{name: "a sibling goal's manager's channel click: refused not_authorized, nothing recorded", decider: chatUser("U_DAVE", "dave@example.com"), rejected: "not_authorized"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -330,7 +330,7 @@ func TestPrivateGoalConsentKeepsComponentIngress(t *testing.T) {
 	card.Category = categories.GoalExecutionConsent
 	channelCtx := memory.WithCaller(memory.WithSystemApproval(context.Background(), "system:channelsd"), "system:channelsd")
 	_, err := handler(channelCtx, channelinteractions.Decision{Session: card.AgentSessionRef, Request: &card,
-		Payload: channelevents.InteractionDecisionPayload{Category: categories.GoalExecutionConsent, RequestRef: card.RequestRef, ActionID: "approve", Decider: channelevents.ExternalIdentity{Kind: "slack", ExternalID: "U_ALICE", Email: "alice@example.com"}}})
+		Payload: channelevents.InteractionDecisionPayload{Category: categories.GoalExecutionConsent, RequestRef: card.RequestRef, ActionID: "approve", Decider: channelevents.ExternalIdentity{Kind: "fake", ExternalID: "U_ALICE", Email: "alice@example.com"}}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "component decision ingress")
 	assert.Empty(t, g.committer.checks)

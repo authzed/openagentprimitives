@@ -64,7 +64,7 @@ func (d *Dispatcher) PrepareGoalReply(ctx context.Context, sess *v1.AgentSession
 	intent := delivery.Intent{Session: channelevents.SessionRef{Namespace: sess.Namespace, Name: sess.Name}, Destination: dest, Payload: payload, CreatedAt: d.now()}
 	reply := domain.RunReply{Intent: intent, Sources: sources}
 	if !confirmable {
-		// A group run on a kind without a receiver (Slack, until its receiver
+		// A group run on a kind without a receiver (until that kind's receiver
 		// lands) replies through the ordinary outbound relay, which posts the
 		// runner's one envelope. The record goes straight to its terminal
 		// unconfirmed state: authorized and handed off, never a receipt, and

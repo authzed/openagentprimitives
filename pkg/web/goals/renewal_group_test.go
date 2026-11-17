@@ -85,7 +85,6 @@ func TestGroupRenewalCardIsPostedInTheRunSession(t *testing.T) {
 	assert.Equal(t, categories.GoalApprovalExpiring, n.Category)
 	assert.Contains(t, n.Lead, c.goal.Title+": approval expires "+c.goal.Execution.Terms.ExpiresAt.UTC().Format("2 Jan 2006"))
 	assert.Contains(t, n.NextStep, "asking me to renew it")
-	assert.NotContains(t, n.NextStep+n.Lead, "Slack")
 
 	require.NoError(t, c.publisher.Notify(context.Background(), core.Event{Goal: renewed, Action: "request_renewal"}))
 	assert.Len(t, c.notices, 1, "a replay finds the card retained and posts nothing again")

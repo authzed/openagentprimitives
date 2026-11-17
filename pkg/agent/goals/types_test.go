@@ -52,7 +52,7 @@ func TestValidateDomainGroupOwner(t *testing.T) {
 		{name: "user owner: not group-owned, valid", owner: "user-1", links: links},
 		{name: "registered group link: group-owned, valid", owner: "group:g1#member", links: links, groupOwned: true},
 		{name: "group owner with nil GroupLinks: ErrInvalid", owner: "group:g1#member", groupOwned: true, wantErr: true},
-		{name: "unregistered link type: ErrInvalid", owner: "slack_channel:C#member", links: links, groupOwned: true, wantErr: true},
+		{name: "unregistered link type: ErrInvalid", owner: "other_channel:C#member", links: links, groupOwned: true, wantErr: true},
 		{name: "unregistered relation: ErrInvalid", owner: "group:g1#admin", links: links, groupOwned: true, wantErr: true},
 		{name: "missing id: ErrInvalid", owner: "group:#member", links: links, groupOwned: true, wantErr: true},
 		{name: "two hashes: ErrInvalid", owner: "group:g1#member#x", links: links, groupOwned: true, wantErr: true},

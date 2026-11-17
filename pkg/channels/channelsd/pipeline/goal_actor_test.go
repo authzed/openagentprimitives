@@ -42,7 +42,7 @@ func TestGoalActorWrittenBeforeAcceptedTurnAndWake(t *testing.T) {
 				}
 				return nil
 			}
-			d, err := p.Deliver(ctx, channelkinds.InboundEvent{Channel: ch, ExternalIDs: channelkinds.ExternalIdentity{Kind: "slack", ExternalID: "U1", Email: "a@example.com"}, ChannelKey: "thread:C1:1", MessageText: "Remember my goal"})
+			d, err := p.Deliver(ctx, channelkinds.InboundEvent{Channel: ch, ExternalIDs: channelkinds.ExternalIdentity{Kind: "fake", ExternalID: "U1", Email: "a@example.com"}, ChannelKey: "thread:C1:1", MessageText: "Remember my goal"})
 			require.Equal(t, 1, calls)
 			if fail {
 				require.Error(t, err)
@@ -145,7 +145,7 @@ func TestGoalActorRefIsPerInbound(t *testing.T) {
 		return nil
 	}
 	for _, text := range []string{"first", "second"} {
-		_, err := p.Deliver(ctx, channelkinds.InboundEvent{Channel: ch, ExternalIDs: channelkinds.ExternalIdentity{Kind: "slack", ExternalID: "U1", Email: "a@example.com"}, ChannelKey: "thread:C1:1", MessageText: text})
+		_, err := p.Deliver(ctx, channelkinds.InboundEvent{Channel: ch, ExternalIDs: channelkinds.ExternalIdentity{Kind: "fake", ExternalID: "U1", Email: "a@example.com"}, ChannelKey: "thread:C1:1", MessageText: text})
 		require.NoError(t, err)
 	}
 	require.Len(t, refs, 2)
