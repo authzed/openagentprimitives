@@ -3168,16 +3168,18 @@ func run(cfg *config) {
 		log.Info("admind token not present; admin API disabled", "path", admindTokenFile)
 	}
 
-	// Leader-only bootstrap: apply the SpiceDB base schema so a bare GitOps apply
-	// (Argo/Flux, no `oap install`) has its schema seeded. The internal Secrets
-	// are minted earlier, by the pre-start bootstrap Job (MintAllInternalSecrets),
-	// not here — schema is the one step that needs SpiceDB already running. A plain
-	// RunnableFunc does not implement LeaderElectionRunnable, so controller-runtime
-	// runs it only on the leader. spiceDBClient is a real, non-nil *spicedb.Client
-	// by this point (construction failure exits above), so SchemaIOFor cannot
-	// produce a typed-nil interface.
+	// Leader-only bootstrap: seed the SpiceDB base schema when the datastore has
+	// none, so a bare GitOps apply (Argo/Flux, no `oap install`) is not left
+	// schema-less. A populated schema is the guardian's and is never touched
+	// here, and an unreachable SpiceDB is retried rather than returned (an error
+	// would stop the manager). The internal Secrets are minted earlier, by the
+	// pre-start bootstrap Job. A plain RunnableFunc does not implement
+	// LeaderElectionRunnable, so controller-runtime runs it only on the leader.
+	// spiceDBClient is a real, non-nil *spicedb.Client by this point
+	// (construction failure exits above), so SchemaIOFor cannot produce a
+	// typed-nil interface.
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		return bootstrap.RunBootstrap(ctx, spicedb.SchemaIOFor(spiceDBClient), spicedbschema.Schema)
+		return bootstrap.RunBootstrap(ctx, log.WithName("bootstrap"), spicedb.SchemaIOFor(spiceDBClient), spicedbschema.Schema)
 	})); err != nil {
 		log.Error(err, "registering bootstrap runnable")
 		os.Exit(1)
