@@ -374,3 +374,38 @@ func SessionRelationLinks() []string {
 	sort.Strings(links)
 	return links
 }
+
+// GroupGoalHostFor resolves the kind registered under kind to its
+// channelkinds.GroupGoalHost, when it has one. THE lookup for group goals: a
+// kind gains the capability by implementing the interface. An unregistered or
+// non-implementing kind reports (nil, false).
+func GroupGoalHostFor(kind string) (channelkinds.GroupGoalHost, bool) {
+	k, ok := Get(kind)
+	if !ok {
+		return nil, false
+	}
+	h, ok := k.(channelkinds.GroupGoalHost)
+	return h, ok
+}
+
+// GroupMemberLinks is the sorted, de-duplicated union of
+// GroupGoalHost.GroupMemberLinks over every registered kind.
+func GroupMemberLinks() []string {
+	var links []string
+	seen := map[string]bool{}
+	for _, k := range All() {
+		h, ok := k.(channelkinds.GroupGoalHost)
+		if !ok {
+			continue
+		}
+		for _, l := range h.GroupMemberLinks() {
+			if l == "" || seen[l] {
+				continue
+			}
+			seen[l] = true
+			links = append(links, l)
+		}
+	}
+	sort.Strings(links)
+	return links
+}

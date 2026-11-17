@@ -786,6 +786,32 @@ type OwnerGroupProvider interface {
 	OwnerGroupRef(ch *spiceboxv1alpha1.Channel) (subjectSetRef string, ok bool)
 }
 
+// GroupGoalHost is an optional Kind capability: the kind's conversations can
+// host group goals, durable goals owned by the members of a multi-person
+// conversation. The kind says who the members are, who may see the
+// conversation, whether its membership is synced, and how to start a run in the
+// conversation's home surface. Consumers discover it via
+// registry.GroupGoalHostFor; none switch on the kind name.
+type GroupGoalHost interface {
+	// ConversationMemberRef returns the SpiceDB subject-set of the people in
+	// the conversation the binding addresses (e.g. "slack_channel:C1#member").
+	// ok=false means the binding is not a group conversation (a DM) or carries
+	// no usable address.
+	ConversationMemberRef(b *spiceboxv1alpha1.ChannelBinding) (ref string, ok bool)
+	// ConversationAudienceRef returns the subject-set of people who may see the
+	// conversation (e.g. "slack_channel:C1#view"); ok=false as above.
+	ConversationAudienceRef(b *spiceboxv1alpha1.ChannelBinding) (ref string, ok bool)
+	// MembershipCurrent reports whether this kind's membership for ch is kept
+	// current by a sync. nil means yes; the error says what is missing.
+	MembershipCurrent(ctx context.Context, r client.Reader, ch *spiceboxv1alpha1.Channel) error
+	// RunAnchor derives, as a copy, the binding a goal run starts from: the
+	// same conversation with any thread anchor cleared. It never mutates b.
+	RunAnchor(b *spiceboxv1alpha1.ChannelBinding) (*spiceboxv1alpha1.ChannelBinding, error)
+	// GroupMemberLinks lists the subject-set link types (e.g.
+	// "slack_channel#member") this kind contributes as group-goal owners.
+	GroupMemberLinks() []string
+}
+
 // OutboundAnchorProvider is an optional Kind capability: seed the initial
 // outbound routing metadata for a session whose outbound target is this
 // Channel but whose inbound origin is a different one (cron / split-channel).
