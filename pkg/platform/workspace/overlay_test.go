@@ -45,3 +45,18 @@ func TestBuildOverlayCutJob(t *testing.T) {
 	require.NotNil(t, job.Spec.ActiveDeadlineSeconds)
 	assert.Greater(t, *job.Spec.ActiveDeadlineSeconds, int64(0))
 }
+
+// The overlay-cut Job is named after the session's workspace PVC, so a long
+// session name pushes it past the 63 bytes a Job name may use. A name that
+// already fits must keep its exact name (a cut in flight is looked up by it).
+func TestOverlayCutJobName_FitsAJobName(t *testing.T) {
+	short := PVCRef{Name: "sess1-workspace"}
+	assert.Equal(t, "ws-overlay-sess1-workspace", OverlayCutJobName(short), "a name that fits is unchanged")
+
+	long := PVCRef{Name: strings.Repeat("s", 54) + "-workspace"}
+	got := OverlayCutJobName(long)
+	assert.LessOrEqual(t, len(got), 63, "bounded name %q", got)
+	assert.True(t, strings.HasPrefix(got, "ws-overlay-"), "keeps its readable prefix: %q", got)
+	assert.NotEqual(t, got, OverlayCutJobName(PVCRef{Name: strings.Repeat("s", 55) + "-workspace"}),
+		"two long names that share a prefix stay distinct")
+}

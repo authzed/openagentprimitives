@@ -57,11 +57,17 @@ func lastToolResultName(req llm.Request) string {
 	return ""
 }
 
-// requestMentions reports whether s appears anywhere in the request's messages:
-// a text block, a tool call's input, or a tool result, in any message. It backs
-// expect.requestNotContains, whose claim is that a value never reached the
-// model's context at all, by whatever door.
+// requestMentions reports whether s appears anywhere in the request: a system
+// prompt block, or a text block, a tool call's input, or a tool result in any
+// message. It backs expect.requestNotContains, whose claim is that a value never
+// reached the model's context at all, by whatever door — and the system prompt
+// is one (memory and resume material is injected there).
 func requestMentions(req llm.Request, s string) bool {
+	for _, b := range req.System {
+		if strings.Contains(b.Text, s) {
+			return true
+		}
+	}
 	for _, m := range req.Messages {
 		for _, c := range m.Content {
 			switch {

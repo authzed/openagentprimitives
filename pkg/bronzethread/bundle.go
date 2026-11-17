@@ -672,8 +672,9 @@ type Expect struct {
 	// denied nothing.
 	LastToolResultNotContains string `json:"lastToolResultNotContains,omitempty"`
 
-	// RequestNotContains asserts something appears in NO message of the
-	// request — no text, no tool input, no tool result, however far back.
+	// RequestNotContains asserts something appears NOWHERE in the request — not
+	// in the system prompt, and in no message: no text, no tool input, no tool
+	// result, however far back.
 	// LastToolResultNotContains says one result was clean; this says a value
 	// is not in the model's context at all, which is the claim to make when the
 	// question is whether another session's conversation leaked into this one.

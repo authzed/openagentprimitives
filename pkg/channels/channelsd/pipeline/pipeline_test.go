@@ -296,6 +296,11 @@ type fakeMemory struct {
 	trigDel  []recordedTriggerDelivery
 	envFacts []recordedEnvelopeFacts
 
+	// seededOther marks scopes (key: ns/name) that hold a non-turn record —
+	// a deleted webhook session's trigger_delivery, say — which ReadAll
+	// cannot see and ScopeHasEntries must.
+	seededOther map[string]bool
+
 	// uploads/uploadResult/uploadErr back UploadInboundAsset. Unused (and so
 	// never called) by every pre-attachments test in this file — attachments.go's
 	// own tests in attachments_test.go configure these directly.
@@ -352,6 +357,35 @@ func (f *fakeMemory) ReadAll(_ context.Context, ns, name string) ([]MemTurn, err
 		}
 	}
 	return out, nil
+}
+
+// ScopeHasEntries reports occupancy across every kind this fake records:
+// seeded and appended turns, the non-turn records written during the test,
+// and seededOther. It shares readErr with ReadAll — one backend, one outage.
+func (f *fakeMemory) ScopeHasEntries(ctx context.Context, ns, name string) (bool, error) {
+	turns, err := f.ReadAll(ctx, ns, name)
+	if err != nil {
+		return false, err
+	}
+	if len(turns) > 0 || f.seededOther[ns+"/"+name] {
+		return true, nil
+	}
+	for _, r := range f.msgRefs {
+		if r.Ns == ns && r.Name == name {
+			return true, nil
+		}
+	}
+	for _, r := range f.trigDel {
+		if r.Ns == ns && r.Name == name {
+			return true, nil
+		}
+	}
+	for _, r := range f.envFacts {
+		if r.Ns == ns && r.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (f *fakeMemory) RecordChannelMsgRef(_ context.Context, ns, name, kind, ref string, idx int) error {

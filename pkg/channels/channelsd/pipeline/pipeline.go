@@ -114,6 +114,15 @@ type Memory interface {
 	// cannot tell an empty session from a non-existent one — both read as none.
 	ReadAll(ctx context.Context, ns, name string) ([]MemTurn, error)
 
+	// ScopeHasEntries reports whether the (ns, name) session scope holds any
+	// entry at all, of ANY kind — turns, trigger_delivery, channel_msg_ref and
+	// the rest. freshSessionName's occupancy probe: a scope can hold a deleted
+	// session's records without ever having held a turn (a webhook session
+	// deleted before turn 0 leaves its trigger_delivery), and ReadAll sees
+	// turns only. One entry is enough to answer, so implementations read at
+	// most one.
+	ScopeHasEntries(ctx context.Context, ns, name string) (bool, error)
+
 	// RecordChannelMsgRef maps (kind, ref) → turnIndex at the (ns, name) scope,
 	// so the channel kind's restart UI can resolve a message the user clicked
 	// back to the turn to cut at.
@@ -2736,19 +2745,23 @@ func (p *Pipeline) sweepBeforeMint(ctx context.Context, ns, name string) error {
 
 // maxSessionNameGenerations bounds freshSessionName's walk. Each step past the
 // first is a session for this exact (channel, key) that was deleted after it
-// had spoken: the archive sweep and session GC produce at most one a month for
-// a conversation that goes quiet, so this is decades of them, and reaching it
-// means something is wrong rather than busy — say so instead of looping. It
-// also caps the name suffix at three digits, which the 63-byte name budget
-// depends on (see sessionNameGeneration).
+// had written anything to memory. Memory scopes are never deleted, so this
+// counts every such deletion over the key's whole lifetime — but session GC
+// only deletes a session --session-gc-after past its finish (30 days by
+// default, and never less than the storage retention), so a key that is
+// archived and collected as fast as the defaults allow takes decades to get
+// here, and reaching it means something is deleting sessions in a loop rather
+// than a busy conversation — say so instead of walking forever. It also caps
+// the name suffix at three digits, which the 63-byte name budget depends on
+// (see sessionNameGeneration).
 const maxSessionNameGenerations = 512
 
 // freshSessionName picks the name a fresh session for (ch, key) is minted
-// under: the first generation (see sessionNameGeneration) whose memory scope
-// holds no turns.
+// under: the first generation (see sessionNameGeneration) that no other
+// session — live or dead — has claimed.
 //
 // Why it cannot simply be makeSessionName. A memory scope is keyed by
-// namespace/name, not by the CR's UID, and its transcript outlives the CR on
+// namespace/name, not by the CR's UID, and its contents outlive the CR on
 // purpose: the turns are append-only, signed audit evidence that session
 // deletion and GC cannot remove. makeSessionName is deterministic, so once the
 // session it names has been deleted — by hand, or by the archive sweep followed
@@ -2764,48 +2777,57 @@ const maxSessionNameGenerations = 512
 // name leaves in SpiceDB; this is the memory half, and since the memory cannot
 // be cleared, the name moves instead.
 //
+// "Claimed" is ANY entry in the scope, not just turns: a webhook session
+// deleted before its runner wrote turn 0 still leaves its trigger_delivery,
+// whose fixed id would then refuse the successor's own and be read back as
+// the successor's opening evidence.
+//
+// Per generation, a name is:
+//   - joined when a session CR holds it and is not being deleted, whatever its
+//     scope holds — a concurrent mint of this conversation (or a session that
+//     has not written yet). The Create below meets AlreadyExists and joins it,
+//     exactly as for the base name;
+//   - free when its scope is empty and no CR holds it;
+//   - skipped otherwise: a CR being deleted (joining one about to vanish would
+//     strand the inbound), or no CR but a non-empty scope (a dead
+//     predecessor's records).
+//
 // Deterministic across replicas, so the AlreadyExists race the base name relies
 // on still collapses two replicas onto one session: every replica reads the
 // same retained scopes and walks the same sequence. Follow-up messages never
 // recompute the name — correlateSessions finds the session by its channel
 // labels, which a successor carries exactly as the first generation did.
 //
-// The order of the two reads per step is what keeps the race safe. A scope
-// holding turns is either a dead predecessor's or a LIVE session's — another
-// replica that minted this same inbound a moment ago and has already written
-// into it. Turns are read FIRST and the CR second, so a replica that sees
-// another's turns is guaranteed to see that replica's CR too (it was created
-// before anything was written under its name) and joins it rather than walking
-// past it to mint a duplicate. p.K8s is the uncached client.
+// The order of the two reads per step is what keeps the race safe. The scope
+// is read FIRST and the CR second, so a replica that sees another's entries is
+// guaranteed to see that replica's CR too (it was created before anything was
+// written under its name) and joins it rather than walking past it to mint a
+// duplicate. p.K8s is the uncached client.
 //
 // Any read error is returned, never guessed past: the caller refuses to mint.
 func (p *Pipeline) freshSessionName(ctx context.Context, ch *spiceboxv1alpha1.Channel, key string) (string, error) {
 	base := makeSessionName(ch, key)
 	for g := 1; g <= maxSessionNameGenerations; g++ {
 		name := sessionNameGeneration(base, g)
-		turns, err := p.Memory.ReadAll(ctx, ch.Namespace, name)
+		occupied, err := p.Memory.ScopeHasEntries(ctx, ch.Namespace, name)
 		if err != nil {
 			return "", fmt.Errorf("read memory scope %s/%s before minting a session under it: %w", ch.Namespace, name, err)
 		}
-		if len(turns) == 0 {
-			return name, nil
-		}
 		var existing spiceboxv1alpha1.AgentSession
-		switch err := p.K8s.Get(ctx, types.NamespacedName{Namespace: ch.Namespace, Name: name}, &existing); {
+		err = p.K8s.Get(ctx, types.NamespacedName{Namespace: ch.Namespace, Name: name}, &existing)
+		switch {
 		case err == nil && existing.DeletionTimestamp == nil:
-			// Live: a concurrent mint of this conversation. The Create below
-			// meets AlreadyExists and joins it, exactly as for the base name.
 			return name, nil
 		case err != nil && !apierrors.IsNotFound(err):
 			return "", fmt.Errorf("check whether %s/%s exists: %w", ch.Namespace, name, err)
+		case err != nil && !occupied:
+			return name, nil
 		}
-		// Gone, or being deleted (its finalizer is running): a predecessor
-		// either way, and joining one about to vanish would strand the inbound.
-		log.FromContext(ctx).Info("fresh session: memory scope holds a deleted session's transcript; minting under the next name instead",
-			"occupied", ch.Namespace+"/"+name, "turns", len(turns),
+		log.FromContext(ctx).Info("fresh session: name still held by a deleted session; minting under the next name instead",
+			"occupied", ch.Namespace+"/"+name, "scopeHasEntries", occupied, "terminating", err == nil,
 			"channel", channelRefForLog(ch), "channelKey", key)
 	}
-	return "", fmt.Errorf("every one of %d candidate names for %s key %q holds a deleted session's transcript",
+	return "", fmt.Errorf("every one of %d candidate names for %s key %q is held by a deleted session",
 		maxSessionNameGenerations, channelRefForLog(ch), key)
 }
 

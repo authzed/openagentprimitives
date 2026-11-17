@@ -153,6 +153,14 @@ func (m *stubMemory) ReadAll(_ context.Context, ns, name string) ([]pipeline.Mem
 	return m.seeded[ns+"/"+name], nil
 }
 
+// ScopeHasEntries answers from the seeded turns: the stub's other record
+// methods are no-ops, so turns are the only entries it ever holds.
+func (m *stubMemory) ScopeHasEntries(_ context.Context, ns, name string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.seeded[ns+"/"+name]) > 0, nil
+}
+
 // RecordChannelMsgRef is a no-op in the e2e stub: these tests assert on
 // routing outcomes, not on channel_msg_ref indexing for the restart UI.
 func (m *stubMemory) RecordChannelMsgRef(_ context.Context, _, _, _, _ string, _ int) error {

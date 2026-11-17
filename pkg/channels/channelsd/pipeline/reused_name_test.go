@@ -11,10 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkey"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
+	"github.com/authzed/openagentprimitives/pkg/platform/podspec"
+	"github.com/authzed/openagentprimitives/pkg/platform/workspace"
 )
 
 // A session name is derived from (channel, key), and a session's memory scope
@@ -41,6 +44,10 @@ func TestFreshMint_ReusedNameWithRetainedTranscript(t *testing.T) {
 		// a dead predecessor's turns: 1 is makeSessionName's own name, 2 its
 		// first successor, and so on.
 		seededGenerations []int
+		// otherGenerations names, by generation, scopes that hold a dead
+		// predecessor's NON-turn records only (a webhook session deleted before
+		// turn 0 leaves its trigger_delivery).
+		otherGenerations []int
 		// liveAt, when non-zero, pre-creates a session CR (carrying no channel
 		// labels, so Deliver's correlation misses it — exactly the state a
 		// concurrent replica's just-minted session is in) at that generation.
@@ -48,8 +55,11 @@ func TestFreshMint_ReusedNameWithRetainedTranscript(t *testing.T) {
 		// terminating marks the liveAt session as already being deleted.
 		terminating bool
 		readErr     error
-		wantErr     bool
-		wantOut     channelkinds.Outcome
+		// getErr makes the AgentSession Get for generation 1 fail with
+		// something other than NotFound.
+		getErr  bool
+		wantErr bool
+		wantOut channelkinds.Outcome
 		// wantGeneration is the generation the inbound's session ends up under;
 		// 0 means no session may be created at all.
 		wantGeneration int
@@ -90,6 +100,40 @@ func TestFreshMint_ReusedNameWithRetainedTranscript(t *testing.T) {
 			wantGeneration:    2,
 		},
 		{
+			name:             "scope holds only a deleted session's non-turn record, no CR: minted under the next generation",
+			otherGenerations: []int{1},
+			wantOut:          channelkinds.OutcomeRouted,
+			wantGeneration:   2,
+		},
+		{
+			name:             "a live session whose scope holds only non-turn records: joins it, mints no second session",
+			otherGenerations: []int{1},
+			liveAt:           1,
+			wantOut:          channelkinds.OutcomeRouted,
+			wantGeneration:   1,
+		},
+		{
+			// A parked or capacity-held session that never wrote anything:
+			// its scope is empty, but it is still the predecessor.
+			name:           "a session being deleted with an empty scope: minted under the next generation, not joined",
+			liveAt:         1,
+			terminating:    true,
+			wantOut:        channelkinds.OutcomeRouted,
+			wantGeneration: 2,
+		},
+		{
+			name:              "every candidate name held by a deleted session: fail closed, InternalError and no session minted",
+			seededGenerations: allGenerations(),
+			wantErr:           true,
+			wantOut:           channelkinds.OutcomeInternalError,
+		},
+		{
+			name:    "session lookup fails with a non-NotFound error: fail closed, InternalError and no session minted",
+			getErr:  true,
+			wantErr: true,
+			wantOut: channelkinds.OutcomeInternalError,
+		},
+		{
 			name:    "memory unreadable: fail closed, InternalError and no session minted",
 			readErr: errors.New("memory backend unavailable"),
 			wantErr: true,
@@ -115,6 +159,21 @@ func TestFreshMint_ReusedNameWithRetainedTranscript(t *testing.T) {
 			p, _, mem, _, cli := newPipeline(t, objs...)
 			for _, g := range tc.seededGenerations {
 				mem.seeded[ch.Namespace+"/"+generationName(ch, key, g)] = predecessorTurns
+			}
+			mem.seededOther = map[string]bool{}
+			for _, g := range tc.otherGenerations {
+				mem.seededOther[ch.Namespace+"/"+generationName(ch, key, g)] = true
+			}
+			if tc.getErr {
+				first := generationName(ch, key, 1)
+				p.K8s = interceptor.NewClient(cli.(client.WithWatch), interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if _, ok := obj.(*spiceboxv1alpha1.AgentSession); ok && k.Name == first {
+							return errors.New("apiserver unavailable")
+						}
+						return c.Get(ctx, k, obj, opts...)
+					},
+				})
 			}
 			mem.readErr = tc.readErr
 
@@ -199,13 +258,26 @@ func TestFreshMint_SuccessorNameReceivesTheFollowUp(t *testing.T) {
 	assert.Equal(t, "and a follow-up", mem.appends[0].turn.Content[0].Text)
 }
 
-// The longest name the walk can mint must still leave room for the objects
-// named after a session. The tightest is the workspace Job, "ws-apply-<name>",
-// whose name must fit a 63-byte label value.
+// The longest name the walk can mint must still leave room for the Jobs named
+// after a session, each of which must fit a 63-byte label value: the workspace
+// Jobs ("ws-apply-<name>", fixed in RBAC by exact name, so it must fit raw) and
+// the overlay cut ("ws-overlay-<name>-workspace", bounded by its builder).
 func TestSessionNameGeneration_LongestNameFitsAJobName(t *testing.T) {
 	ch := newChannel(strings.Repeat("c", 80)) // truncated to 40 by makeSessionName
 	name := sessionNameGeneration(makeSessionName(ch, "dm:U1"), maxSessionNameGenerations)
 	assert.LessOrEqual(t, len("ws-apply-"+name), 63, "longest successor name %q", name)
+	sess := &spiceboxv1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	overlay := workspace.OverlayCutJobName(workspace.PVCRef{Name: podspec.WorkspaceClaimName(sess)})
+	assert.LessOrEqual(t, len(overlay), 63, "overlay-cut Job for the longest successor name: %q", overlay)
+}
+
+// allGenerations lists every generation freshSessionName may walk.
+func allGenerations() []int {
+	out := make([]int, maxSessionNameGenerations)
+	for i := range out {
+		out[i] = i + 1
+	}
+	return out
 }
 
 // generationName is the name the g-th session for (ch, key) is minted under:
