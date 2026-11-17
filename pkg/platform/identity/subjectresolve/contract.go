@@ -5,7 +5,7 @@
 // reason the caller can relay.
 //
 // A reference is handled by exactly one registered Resolver, tried in
-// registration order: scheme-specific resolvers (email, trigger-author) are
+// registration order: scheme-specific resolvers (name, email, trigger-author) are
 // registered first and only claim a reference that is unambiguously theirs;
 // the generic resource fallback is registered last and claims anything
 // syntactically shaped like "<type>:<id>". Adding a new reference form is a
@@ -14,7 +14,11 @@
 // from exactly the same registrations, so the two can never drift apart.
 package subjectresolve
 
-import "context"
+import (
+	"context"
+
+	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+)
 
 // Env carries the injected capabilities resolvers may use.
 type Env struct {
@@ -24,6 +28,10 @@ type Env struct {
 	// (for session-derived references like trigger-author). Nil when no
 	// session context exists.
 	SessionAnnotations func(ctx context.Context) (map[string]string, error)
+	// UserIdentities lists every recorded platform user, for references that
+	// join on something only those records carry (a "name:" reference). Nil
+	// when not wired; such references are then unresolved, not an error.
+	UserIdentities func(ctx context.Context) ([]spiceboxv1alpha1.UserIdentity, error)
 }
 
 // RelationReader is the narrow SpiceDB surface the resource resolver needs.

@@ -9,7 +9,7 @@ import (
 )
 
 // fakeResolver is a minimal Resolver for exercising the registry in
-// isolation from the three built-ins.
+// isolation from the four built-ins.
 type fakeResolver struct {
 	form, desc string
 }
@@ -22,12 +22,13 @@ func (f fakeResolver) TryResolve(context.Context, string, Env) (Resolution, bool
 
 func TestUsages_BuiltinsInOrder_FallbackLast(t *testing.T) {
 	got := Usages()
-	require.Len(t, got, 3, "email, trigger-author, and the generic resource fallback")
+	require.Len(t, got, 4, "name, email, trigger-author, and the generic resource fallback")
 	for i, u := range got {
 		assert.NotEmpty(t, u.Form, "entry %d: Form must not be empty", i)
 		assert.NotEmpty(t, u.Description, "entry %d: Description must not be empty", i)
 	}
-	assert.Equal(t, "trigger-author", got[1].Form, "trigger-author is a specific scheme, not the fallback")
+	assert.Equal(t, "name:<full name>", got[0].Form, "name is listed first so a name containing \"@\" is never claimed as an email")
+	assert.Equal(t, "trigger-author", got[2].Form, "trigger-author is a specific scheme, not the fallback")
 	last := got[len(got)-1]
 	assert.Equal(t, "<type>:<id>", last.Form, "the generic resource fallback must be listed last")
 }

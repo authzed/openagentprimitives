@@ -21,7 +21,10 @@ func init() {
 	// Explicit, ordered wiring — not one init() per resolver file — so the
 	// dispatch/documentation order is a property of this list, not of
 	// whatever order the Go toolchain happens to process email.go,
-	// resource.go, and triggerauthor.go in.
+	// name.go, resource.go, and triggerauthor.go in.
+	// name first: it claims only an explicit "name:" prefix, and the email
+	// resolver would otherwise claim a name that happens to contain "@".
+	Register(nameResolver{})
 	Register(emailResolver{})
 	Register(triggerAuthorResolver{})
 	Register(resourceResolver{}) // fallback: must stay last

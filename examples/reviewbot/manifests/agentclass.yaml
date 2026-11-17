@@ -129,7 +129,9 @@ spec:
   # get_preferences read it for a NAMED user rather than only the current
   # turn's own author. Step 5 names that user by the author's verified commit
   # EMAIL (`user: "email:<addr>"`), the same key that resolves the setting
-  # wherever it was saved and the same key the mention lookup uses — NOT the
+  # wherever it was saved and the same key the mention lookup uses, falling
+  # back to their full NAME (`user: "name:<full name>"`) when the commit email
+  # is a personal address the platform never saw — NOT the
   # trigger-author's GitHub-account link, which resolves to nobody until the
   # author has verified that account and so would read this default for
   # everyone who never did. The default is on_problems: notify the author only
@@ -449,11 +451,20 @@ spec:
       get_preferences with `user: "email:<that-commit-email>"` — NOT
       "trigger-author", whose GitHub-account link resolves to nobody until the
       author has verified that account, so it would silently read the class
-      default for everyone who never did. `notifications` is one of `always`,
+      default for everyone who never did. A commit email is often a personal
+      address the platform has never seen, so when that call returns an ERROR
+      — or no non-noreply commit email was available at all — try ONCE more
+      by name: call get_preferences with `user: "name:<author display name>"`,
+      using the `name` field from the same `gh pr view --json author` read,
+      and only when it is a full name (a first and a last name; never the
+      login, and never a name from the pull request's title or body). The
+      server matches it against the people it already knows and refuses
+      unless exactly one matches. `notifications` is one of `always`,
       `on_problems`, or `never` — treat an unset value (this author saved none)
-      as `on_problems`, the default; a get_preferences ERROR means the user
-      could not be identified at all — do NOT assume a value, treat it exactly
-      like `never` for this run (plain login, no mention) and carry on:
+      as `on_problems`, the default. If every get_preferences call you made
+      returned an ERROR, the author could not be identified at all — do NOT
+      assume a value, treat it exactly like `never` for this run (plain login,
+      no mention) and carry on:
         - `never`: do NOT mention them — open with their plain login instead,
           and skip the lookup step below entirely.
         - `on_problems`: mention them ONLY if this review found blocking
@@ -461,11 +472,10 @@ spec:
           `problems_found`. On a clean pass, or a review that could not
           finish, do NOT mention them — plain login, and skip the lookup.
         - `always`: mention them regardless of the outcome.
-      If no non-noreply commit email was available above, you cannot read a
-      preference or resolve a mention for this author: open with their plain
-      login and skip the lookup. When you should mention them, resolve a
-      mention token with lookup_user_for_mention: kind "email" with that same
-      commit email, then kind "name" with the author's display name. If the
+      When you should mention them, resolve a mention token with
+      lookup_user_for_mention: kind "email" with that same commit email (skip
+      this when there was none), then kind "name" with the author's display
+      name. If the
       lookup tool is not among your tools or every lookup misses, use the
       author's login as plain text — never guess a mention.
 
@@ -539,13 +549,15 @@ spec:
          someone else asked for the review. Run that check EXACTLY as step 5
          does — the join key is the PULL REQUEST AUTHOR's verified commit
          email, not whoever asked you here: resolve their commit email as in
-         step 5 and call get_preferences with `user: "email:<that-email>"`.
+         step 5 and call get_preferences with `user: "email:<that-email>"`,
+         falling back to `user: "name:<author's full display name>"` exactly
+         as step 5 does when that errors or there was no commit email.
          Apply the same three-state rule — `never`: plain login; `on_problems`
          (the default, and any unset value): mention only if your review found
          blocking problems, plain login otherwise; `always`: always mention. If
-         no non-noreply commit email was available, or get_preferences returns
-         an ERROR (the author could not be identified), do NOT default to a
-         value — open with their plain login, no mention, and carry on. When
+         every get_preferences call returned an ERROR (the author could not be
+         identified), do NOT default to a value — open with their plain login,
+         no mention, and carry on. When
          you should mention them, resolve the mention exactly as step 5 does
          (that same commit email, then display name; plain login when the
          lookup misses).

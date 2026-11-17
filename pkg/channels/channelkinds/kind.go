@@ -1168,6 +1168,7 @@ type ExternalIdentity struct {
 	Email       identity.Email     // optional
 	TeamScope   identity.TeamScope // for fallback canonical_id; e.g., team_id
 	DisplayName string             // optional; channel-native display/real name
+	RealName    string             // optional; the user's full name, when the kind records one apart from DisplayName
 	// OrgMembership is the kind-attributed org standing of this user; empty
 	// when the kind does not attribute membership.
 	OrgMembership OrgMembership

@@ -51,8 +51,9 @@ const (
 	// OutcomeUserScopeError: the resolved subject's user scope could not be
 	// derived; the request answered 500 and disclosed nothing.
 	OutcomeUserScopeError = "user-scope-error"
-	// OutcomeQueryError: the resolved subject's user_preference query
-	// faulted; the request answered 5xx and disclosed nothing.
+	// OutcomeQueryError: the resolved subject's user_preference query, or
+	// the UserIdentity lookup that decides whether an unproven subject is a
+	// known user, faulted; the request answered 5xx and disclosed nothing.
 	OutcomeQueryError = "query-error"
 )
 

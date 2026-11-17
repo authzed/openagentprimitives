@@ -24464,6 +24464,12 @@ spec:
                     kind:
                       description: Kind is the channel kind, e.g. "slack".
                       type: string
+                    realName:
+                      description: |-
+                        RealName is the user's full name as the channel records it (Slack's
+                        profile.real_name), when known. DisplayName is often a handle
+                        ("jdoe"); this is what a "name:" user reference matches against.
+                      type: string
                   required:
                   - domain
                   - externalID

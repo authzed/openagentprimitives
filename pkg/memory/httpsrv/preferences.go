@@ -23,6 +23,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/userpreference"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/subjectresolve"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/useridentity"
 	"github.com/authzed/openagentprimitives/pkg/platform/preferences"
 )
 
@@ -300,6 +301,13 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 		SessionAnnotations: func(context.Context) (map[string]string, error) {
 			return sess.Annotations, nil
 		},
+		UserIdentities: func(ctx context.Context) ([]v1alpha1.UserIdentity, error) {
+			var list v1alpha1.UserIdentityList
+			if err := h.prefsReader.List(ctx, &list); err != nil {
+				return nil, fmt.Errorf("list UserIdentities: %w", err)
+			}
+			return list.Items, nil
+		},
 	}
 	res, rerr := subjectresolve.Resolve(r.Context(), ref, env)
 	switch {
@@ -345,14 +353,24 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 			// for ANY class. Canonicalizing is not resolving: with no linkage
 			// authority behind the reference and no record behind the
 			// subject, this is the unresolved case wearing a well-formed
-			// address, and it is refused the same way below. The bar is
-			// "some user_preference entry exists" — any class, a cleared
-			// tombstone included — because a saved (or deliberately cleared)
-			// value is the one record only a real, human-confirmed user can
-			// leave, and it needs no new infrastructure to check: the query
-			// above already fetched it.
-			outcome = preferenceaccess.OutcomeUnknownSubject
-			res.Reason = "no platform user is known by this reference"
+			// address, and it is refused the same way below — unless the
+			// platform has a UserIdentity for the subject. That record is
+			// written only from a channel-verified inbound (channelsd's
+			// recordChannelIdentity) or an identity link, so it is a real
+			// user who simply never saved a preference, and the class
+			// defaults are the right answer for them.
+			known, kerr := h.userIdentityExists(r.Context(), subject)
+			if kerr != nil {
+				log.FromContext(r.Context()).Info("memory: preferences UserIdentity lookup failed",
+					"session", scope.ID, "subject", subject, "err", kerr.Error())
+				auditFault(preferenceaccess.OutcomeQueryError, subject, kerr)
+				httpError(w, kerr, http.StatusBadGateway)
+				return
+			}
+			if !known {
+				outcome = preferenceaccess.OutcomeUnknownSubject
+				res.Reason = "no platform user is known by this reference"
+			}
 		}
 		for _, e := range qres.Entries {
 			var p userpreference.Preference
@@ -1049,4 +1067,20 @@ func (h *handler) handlePreferencesFirstPartyCommit(w http.ResponseWriter, r *ht
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// userIdentityExists reports whether a UserIdentity is recorded for the bare
+// canonical subject. NotFound is an answer (false), not a fault.
+func (h *handler) userIdentityExists(ctx context.Context, subject string) (bool, error) {
+	name := useridentity.NameForSubject(identity.CanonicalFromTrusted(subject, "a subject this handler just resolved").Subject())
+	var ui v1alpha1.UserIdentity
+	err := h.prefsReader.Get(ctx, types.NamespacedName{Name: name}, &ui)
+	switch {
+	case err == nil:
+		return true, nil
+	case apierrors.IsNotFound(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("get UserIdentity %s: %w", name, err)
+	}
 }
