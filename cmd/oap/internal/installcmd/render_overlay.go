@@ -59,9 +59,9 @@ func applyMemoryTokenLinks(base []byte, links MemoryTokenLinks) []byte {
 		}
 		return bytes.ReplaceAll(b, []byte(def), []byte(linked))
 	}
-	base = repl(base, bootstrap.MemoryTokenSecretNames[0], links.Channelsd)
-	base = repl(base, bootstrap.MemoryTokenSecretNames[1], links.Webd)
-	base = repl(base, bootstrap.MemoryTokenSecretNames[2], links.Authzd)
+	base = repl(base, bootstrap.ChannelsdMemoryTokenSecret, links.Channelsd)
+	base = repl(base, bootstrap.WebdMemoryTokenSecret, links.Webd)
+	base = repl(base, bootstrap.AuthzdMemoryTokenSecret, links.Authzd)
 	return base
 }
 

@@ -173,15 +173,15 @@ func validateRenderFlags(cfg RenderConfig) error {
 	// mints the defaults regardless of links: `--webd-memory-token-secret` pointed
 	// at channelsd's default name (channelsd left to mint) is the same leak as
 	// linking both to one Secret, and must be refused just the same.
-	eff := func(link string, i int) string {
+	eff := func(link, def string) string {
 		if link != "" {
 			return link
 		}
-		return bootstrap.MemoryTokenSecretNames[i]
+		return def
 	}
-	webd := eff(cfg.MemoryToken.Webd, 1)
-	if webd == eff(cfg.MemoryToken.Channelsd, 0) || webd == eff(cfg.MemoryToken.Authzd, 2) {
-		return fmt.Errorf("webd's memory token (--webd-memory-token-secret, or its operator-minted default %q) must resolve to a different Secret than the channelsd/authzd memory tokens: webd is browser-facing and must not hold a write-capable memory credential", bootstrap.MemoryTokenSecretNames[1])
+	webd := eff(cfg.MemoryToken.Webd, bootstrap.WebdMemoryTokenSecret)
+	if webd == eff(cfg.MemoryToken.Channelsd, bootstrap.ChannelsdMemoryTokenSecret) || webd == eff(cfg.MemoryToken.Authzd, bootstrap.AuthzdMemoryTokenSecret) {
+		return fmt.Errorf("webd's memory token (--webd-memory-token-secret, or its operator-minted default %q) must resolve to a different Secret than the channelsd/authzd memory tokens: webd is browser-facing and must not hold a write-capable memory credential", bootstrap.WebdMemoryTokenSecret)
 	}
 	return nil
 }

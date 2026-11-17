@@ -2139,14 +2139,6 @@ func deriveCloudProject(ctx context.Context, bundle *kube.Bundle, strat cloud.St
 	return strat.ProjectFromProviderID(providerID), nil
 }
 
-// operatorMemoryTokenSecrets are the per-component memory-token Secrets the
-// operator mounts and reads once at startup. See rollOperatorIfPredatesMemoryTokens.
-var operatorMemoryTokenSecrets = []string{
-	"spicebox-channelsd-memory-token",
-	"spicebox-webd-memory-token",
-	"agentprimitives-authzd-memory-token",
-}
-
 // rollOperatorIfPredatesMemoryTokens rolls the operator Deployment when its
 // running pod started before any of the memory-token Secrets it mounts, so a
 // fresh pod remounts them as real files (see the call site for the subPath race
@@ -2158,7 +2150,7 @@ func rollOperatorIfPredatesMemoryTokens(ctx context.Context, rep progress.Report
 	// Newest token-Secret creation time: the operator pod must have started
 	// after this to have read every token.
 	var newestSecret time.Time
-	for _, name := range operatorMemoryTokenSecrets {
+	for _, name := range bootstrap.MemoryTokenSecretNames {
 		s, err := typed.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {

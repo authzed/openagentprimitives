@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
 )
 
@@ -47,14 +48,14 @@ import (
 // reference the Secret. Keep the value shaped `<creatorFunc> (<file>)`; the
 // first token is parsed as the identifier to look up.
 var installTimeSecrets = map[string]string{
-	"spicebox-channelsd-memory-token":     "ensureChannelsdMemoryToken (init.go)",
-	"spicebox-webd-memory-token":          "ensureWebdMemoryToken (init.go)",
-	"agentprimitives-authzd-memory-token": "ensureAuthzdMemoryToken (init.go)",
-	"spicebox-spicedb-token":              "EnsureSpiceDBToken (mint.go)",
-	"spicebox-channelsd-nats-creds":       "EnsureNATSClientCreds (nats.go)",
-	"spicebox-webd-nats-creds":            "EnsureNATSClientCreds (nats.go)",
-	"spicebox-passthrough-link-key":       "EnsurePassthroughLinkKey (appsecrets.go)",
-	"spicebox-webhook-tls":                "ensureWebhookTLSWithClient (install.go)",
+	bootstrap.ChannelsdMemoryTokenSecret: "ensureChannelsdMemoryToken (init.go)",
+	bootstrap.WebdMemoryTokenSecret:      "ensureWebdMemoryToken (init.go)",
+	bootstrap.AuthzdMemoryTokenSecret:    "ensureAuthzdMemoryToken (init.go)",
+	"spicebox-spicedb-token":             "EnsureSpiceDBToken (mint.go)",
+	"spicebox-channelsd-nats-creds":      "EnsureNATSClientCreds (nats.go)",
+	"spicebox-webd-nats-creds":           "EnsureNATSClientCreds (nats.go)",
+	"spicebox-passthrough-link-key":      "EnsurePassthroughLinkKey (appsecrets.go)",
+	"spicebox-webhook-tls":               "ensureWebhookTLSWithClient (install.go)",
 	// No row for spicebox-anthropic-api-key: nothing in the repo creates it.
 	// Every reference to it (authzd's env, channelsd's volume) is optional:true,
 	// so a row would waive nothing today and would pre-waive the first reference
