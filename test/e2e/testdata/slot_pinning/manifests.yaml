@@ -69,7 +69,7 @@ spec:
 #
 # code_repo declares `standing: session-only` and a single `read` permission.
 # Because the AgentClass below declares code_repo as an authz slot, the schema
-# composer rewrites `read` to `slot_grant_read->interact + owner` and emits
+# composer rewrites `read` to `slot_grant_read + slot_grant_read->interact + owner` and emits
 # `relation slot_grant_read: agentsession` plus the per-type
 # `relation slot_pin: agentsession` single-occupancy carries.
 apiVersion: agentprimitives.authzed.com/v1alpha1

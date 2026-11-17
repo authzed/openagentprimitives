@@ -310,3 +310,39 @@ func (p calendar) Slots(s Spec, start, end time.Time, loc *time.Location) ([]tim
 	}
 	return slots, nil
 }
+
+// NextNominal returns the first nominal slot strictly after after, of the
+// series s describes starting at anchor (its first slot). Nominal means the
+// policy's own slot times: MaxRuns, quiet hours and any series end do not
+// apply, so it can name a slot beyond an approved series — the start of the
+// series that would succeed it. ok is false when the policy has no slot after
+// after (a once schedule).
+func NextNominal(s Spec, anchor, after time.Time) (time.Time, bool, error) {
+	loc, err := s.location()
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	p, ok := policies.Get(s.Kind)
+	if !ok {
+		return time.Time{}, false, fmt.Errorf("unknown session schedule %q", s.Kind)
+	}
+	// Each pass resumes from the last slot it saw, which keeps the series'
+	// phase (an interval's offset, a calendar's local time of day).
+	cursor := anchor
+	for range 1000 {
+		slots, err := p.Slots(s, cursor, cursor.Add(MaxHorizon), loc)
+		if err != nil {
+			return time.Time{}, false, err
+		}
+		for _, slot := range slots {
+			if slot.After(after) {
+				return slot.UTC(), true, nil
+			}
+		}
+		if len(slots) == 0 || !slots[len(slots)-1].After(cursor) {
+			return time.Time{}, false, nil
+		}
+		cursor = slots[len(slots)-1]
+	}
+	return time.Time{}, false, fmt.Errorf("next slot is too far after the series start")
+}

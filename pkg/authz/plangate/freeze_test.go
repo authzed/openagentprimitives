@@ -249,3 +249,48 @@ func TestFreezeFrom_aDifferentlyResolvedRequiresChangesTheDigest(t *testing.T) {
 	assert.NotEqual(t, forward.Digest(), backward.Digest(),
 		"which phase requires which is authority and must move the digest")
 }
+
+// A negative count is not a bound. The gate reads any count <= 0 as unbounded,
+// so carrying one through would let a phase claim "-1 calls" and spend without
+// limit while reading as a smaller number than any bound it is compared to.
+// Each is reported and dropped to the undeclared default, never copied.
+func TestFreezeFrom_refusesNegativeCounts(t *testing.T) {
+	cases := []struct {
+		name       string
+		mutate     func(a *AuthoredPhase)
+		wantDetail string
+		check      func(t *testing.T, ph Phase)
+	}{
+		{
+			name:       "negative budget: reported, budget dropped to undeclared",
+			mutate:     func(a *AuthoredPhase) { a.Budget = &AuthoredBudget{Calls: -1, Why: "x"} },
+			wantDetail: "budget",
+			check:      func(t *testing.T, ph Phase) { assert.Equal(t, BudgetSpec{}, ph.Budget) },
+		},
+		{
+			name:       "negative max: reported, max kept at the default of 1",
+			mutate:     func(a *AuthoredPhase) { a.Max = &AuthoredMax{Count: -1, Why: "x"} },
+			wantDetail: "max",
+			check:      func(t *testing.T, ph Phase) { assert.Equal(t, 1, ph.Max.Count) },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := authored("p", "P")
+			tc.mutate(&a)
+			got, probs := FreezeFrom([]AuthoredPhase{a}, nil, nil)
+			require.Len(t, probs, 1)
+			assert.Equal(t, 0, probs[0].PhaseIndex)
+			assert.Contains(t, probs[0].Detail, tc.wantDetail)
+			tc.check(t, got.Phases[0])
+		})
+	}
+}
+
+// Zero stays legal: a budget of zero is the explicit "undeclared" spelling.
+func TestFreezeFrom_zeroBudgetIsNotAProblem(t *testing.T) {
+	a := authored("p", "P")
+	a.Budget = &AuthoredBudget{Calls: 0}
+	_, probs := FreezeFrom([]AuthoredPhase{a}, nil, nil)
+	assert.Empty(t, probs)
+}

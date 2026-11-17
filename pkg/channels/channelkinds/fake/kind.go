@@ -290,6 +290,10 @@ type Driver struct {
 	// HandleInteractionDecision once a category's bound decision handler
 	// resolves the request. Tests drain via Driver.InteractionApplieds().
 	interactionApplieds []recordedInteractionApplied
+	// interactionRejections records every KindInteractionDecisionRejected
+	// envelope: a click the decision pipe refused, addressed to the clicker.
+	// Tests drain via Driver.InteractionRejections().
+	interactionRejections []InteractionRejection
 	// liveViewOffers records every KindLiveViewOffer envelope the
 	// live_view_offer sub-channel sender received. That sender exists only
 	// while EnableDeliverySurfaces is in effect, so this stays empty for every

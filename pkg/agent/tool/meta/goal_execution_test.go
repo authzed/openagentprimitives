@@ -86,3 +86,43 @@ func TestObservationOnlyGoalHasNoDeliveryTool(t *testing.T) {
 	require.Len(t, bounded, 1)
 	require.Equal(t, "report_goal_result", bounded[0].Name())
 }
+
+// namedTool is a catalog tool of the class, outside the goal tool set.
+type namedTool struct {
+	tool.Tool
+	name string
+}
+
+func (n namedTool) Name() string { return n.name }
+
+// A group run keeps the class's catalog: only respond_to_user is
+// wrapped with the execute check, and report_goal_result is added. A private
+// run is narrowed to the reply and plan tools, as before.
+func TestBoundedGoalToolsKeepTheCatalogForGroupRuns(t *testing.T) {
+	respond := newRespondTool(RespondConfig{Capabilities: []string{"text"}, ChannelKind: "fake"})
+	catalog := append([]tool.Tool{respond, namedTool{Tool: respond, name: "gh"}, namedTool{Tool: respond, name: "update_plan"}, namedTool{Tool: respond, name: "query_memory"}}, NewGoalTools(nil)...)
+	caller := func(context.Context, goals.Request) (goals.Response, error) { return goals.Response{}, nil }
+	ops := []string{"respond_to_user", "report_goal_result"}
+	cases := []struct {
+		name  string
+		terms goals.ExecutionTerms
+		want  []string
+	}{
+		{name: "private: narrowed to reply, plan controls and result", terms: goals.ExecutionTerms{AllowedOperations: ops}, want: []string{"respond_to_user", "update_plan", "report_goal_result"}},
+		{name: "group: the class's catalog and goal reads plus result, never goal management", terms: goals.ExecutionTerms{AllowedOperations: ops, Group: &goals.GroupDestination{Channel: "team-chat", ChannelUID: "uid", MemberGroup: "group:g1#member"}}, want: []string{"respond_to_user", "gh", "update_plan", "query_memory", "list_goals", "get_goal", "list_goal_runs", "report_goal_result"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bounded := BoundedGoalToolsForTerms(catalog, "digest", tc.terms, func(context.Context) error { return nil }, caller)
+			var names []string
+			for _, b := range bounded {
+				names = append(names, b.Name())
+				if b.Name() == "respond_to_user" || b.Name() == "report_goal_result" {
+					require.NotNil(t, b.Permission().Check, "%s checks execute", b.Name())
+					assert.Equal(t, "agent_goal_execution", b.Permission().Check.ResourceType)
+				}
+			}
+			assert.Equal(t, tc.want, names)
+		})
+	}
+}

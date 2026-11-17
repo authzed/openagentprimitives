@@ -107,6 +107,75 @@ func (*updatePlanTool) Description() string {
 		"Use stable requestIDs on repeated full-plan updates. Each future session still requires its own fresh action plan."
 }
 
+// authoredPhaseItemSchema is the JSON schema of one authored phase: update_plan's
+// phases[] items, and request_goal_execution's terms.standingPlan items for a
+// group goal's standing plan. One literal, so the two shapes cannot drift.
+const authoredPhaseItemSchema = `{
+	"type":"object",
+	"additionalProperties":false,
+	"properties":{
+		"id":{"type":"string","minLength":1,"maxLength":64},
+		"label":{"type":"string","minLength":1,"maxLength":200},
+		"why":{"type":"string","minLength":1,"maxLength":300},
+		"requires":{
+			"type":"array",
+			"items":{
+				"type":"object",
+				"additionalProperties":false,
+				"properties":{
+					"phase":{"type":"string","minLength":1,"maxLength":64},
+					"why":{"type":"string","minLength":1,"maxLength":300}
+				},
+				"required":["phase","why"]
+			}
+		},
+		"max":{
+			"type":"object",
+			"additionalProperties":false,
+			"properties":{
+				"count":{"type":"integer","minimum":1},
+				"why":{"type":"string","minLength":1,"maxLength":300}
+			},
+			"required":["count","why"]
+		},
+		"budget":{
+			"type":"object",
+			"additionalProperties":false,
+			"properties":{
+				"calls":{"type":"integer","minimum":1},
+				"why":{"type":"string","minLength":1,"maxLength":300}
+			},
+			"required":["calls","why"]
+		},
+		"permissions":{
+			"type":"array",
+			"items":{
+				"type":"object",
+				"additionalProperties":false,
+				"properties":{
+					"handle":{"type":"string","maxLength":200,"pattern":"^(perm:[a-z][a-z0-9_]*:[a-z][a-z0-9_/]*|tool:[a-zA-Z0-9_-]{1,64})$","description":"A permission handle from this session's permission surface — NOT a tool name. Either \"perm:<permission>:<resourceType>\" (e.g. perm:read:github_repo) or \"tool:<toolName>\" (e.g. tool:apply_workspace). A handle that is not on the surface is dropped, narrowing this phase; the result says which and lists what is declarable. Tools that are stateless or passthrough carry no authorization and have no handle."},
+					"why":{"type":"string","minLength":1,"maxLength":300,"description":"Why this phase needs this capability. A person reads it on the approval card, quoted and attributed to you. It is your claim, not a system statement — the card describes what is actually being granted separately, so justify the need rather than restating the permission."}
+				},
+				"required":["handle","why"]
+			}
+		},
+		"slots":{
+			"type":"array",
+			"items":{
+				"type":"object",
+				"additionalProperties":false,
+				"properties":{
+					"type":{"type":"string","minLength":1,"maxLength":128},
+					"id":{"type":"string","maxLength":512,"description":"The SPECIFIC resource this phase will act on, when you already know it \u2014 the repository, the issue, the record. Supply it whenever you can: naming it lets the user approve this phase now, and the work then runs without interrupting them again. Omit it only when you genuinely cannot know the target until you have looked; the phase is then marked as needing a second approval later."},
+					"why":{"type":"string","minLength":1,"maxLength":300,"description":"Why this phase needs THIS resource. A person reads it on the approval card, quoted and attributed to you, next to the resource itself \u2014 so write the sentence that answers \"why does it want that one?\". It is your claim, not a system statement: it cannot widen what you are asking for, and what is being granted is described separately."}
+				},
+				"required":["type","why"]
+			}
+		}
+	},
+	"required":["id","label","why"]
+}`
+
 func (*updatePlanTool) InputSchema() json.RawMessage {
 	schema := json.RawMessage(`{
 		"type":"object",
@@ -130,71 +199,7 @@ func (*updatePlanTool) InputSchema() json.RawMessage {
 			},
 			"phases":{
 				"type":"array",
-				"items":{
-					"type":"object",
-					"additionalProperties":false,
-					"properties":{
-						"id":{"type":"string","minLength":1,"maxLength":64},
-						"label":{"type":"string","minLength":1,"maxLength":200},
-						"why":{"type":"string","minLength":1,"maxLength":300},
-						"requires":{
-							"type":"array",
-							"items":{
-								"type":"object",
-								"additionalProperties":false,
-								"properties":{
-									"phase":{"type":"string","minLength":1,"maxLength":64},
-									"why":{"type":"string","minLength":1,"maxLength":300}
-								},
-								"required":["phase","why"]
-							}
-						},
-						"max":{
-							"type":"object",
-							"additionalProperties":false,
-							"properties":{
-								"count":{"type":"integer","minimum":1},
-								"why":{"type":"string","minLength":1,"maxLength":300}
-							},
-							"required":["count","why"]
-						},
-						"budget":{
-							"type":"object",
-							"additionalProperties":false,
-							"properties":{
-								"calls":{"type":"integer","minimum":1},
-								"why":{"type":"string","minLength":1,"maxLength":300}
-							},
-							"required":["calls","why"]
-						},
-						"permissions":{
-							"type":"array",
-							"items":{
-								"type":"object",
-								"additionalProperties":false,
-								"properties":{
-									"handle":{"type":"string","maxLength":200,"pattern":"^(perm:[a-z][a-z0-9_]*:[a-z][a-z0-9_/]*|tool:[a-zA-Z0-9_-]{1,64})$","description":"A permission handle from this session's permission surface — NOT a tool name. Either \"perm:<permission>:<resourceType>\" (e.g. perm:read:github_repo) or \"tool:<toolName>\" (e.g. tool:apply_workspace). A handle that is not on the surface is dropped, narrowing this phase; the result says which and lists what is declarable. Tools that are stateless or passthrough carry no authorization and have no handle."},
-									"why":{"type":"string","minLength":1,"maxLength":300,"description":"Why this phase needs this capability. A person reads it on the approval card, quoted and attributed to you. It is your claim, not a system statement — the card describes what is actually being granted separately, so justify the need rather than restating the permission."}
-								},
-								"required":["handle","why"]
-							}
-						},
-						"slots":{
-							"type":"array",
-							"items":{
-								"type":"object",
-								"additionalProperties":false,
-								"properties":{
-									"type":{"type":"string","minLength":1,"maxLength":128},
-									"id":{"type":"string","maxLength":512,"description":"The SPECIFIC resource this phase will act on, when you already know it \u2014 the repository, the issue, the record. Supply it whenever you can: naming it lets the user approve this phase now, and the work then runs without interrupting them again. Omit it only when you genuinely cannot know the target until you have looked; the phase is then marked as needing a second approval later."},
-									"why":{"type":"string","minLength":1,"maxLength":300,"description":"Why this phase needs THIS resource. A person reads it on the approval card, quoted and attributed to you, next to the resource itself \u2014 so write the sentence that answers \"why does it want that one?\". It is your claim, not a system statement: it cannot widen what you are asking for, and what is being granted is described separately."}
-								},
-								"required":["type","why"]
-							}
-						}
-					},
-					"required":["id","label","why"]
-				}
+				"items":` + authoredPhaseItemSchema + `
 			},
 			"parent_plan":{"type":"string","maxLength":64},
 			"parent_item":{"type":"string","maxLength":64}

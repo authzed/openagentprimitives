@@ -119,3 +119,37 @@ func TestTheClassGateStillBinds(t *testing.T) {
 	assert.Empty(t, serviceSubjectFor(sess, nil).String(),
 		"a nil class answers nothing, so it must not grant the session a principal")
 }
+
+// TestTheServiceAnnotationOnlyEverNamesAService: the declared-service override
+// is read from an annotation, and nothing at admission stops a session from
+// being created carrying any value there. Since a slot grant now authorizes
+// the session it names directly, an annotation naming ANOTHER session would
+// borrow that session's grants. The override therefore accepts a `service:`
+// subject and nothing else; anything else is treated as unset, so the session
+// falls back to itself — the only source of an agentsession principal is
+// sessionSelfSubject.
+func TestTheServiceAnnotationOnlyEverNamesAService(t *testing.T) {
+	userless := &spiceboxv1alpha1.AgentClass{
+		Status: spiceboxv1alpha1.AgentClassStatus{UserlessInput: true},
+	}
+	for _, tc := range []struct {
+		name       string
+		annotation string
+		want       string
+	}{
+		{"valid service: accepted", "service:digest-bot", "service:digest-bot"},
+		{"another session: rejected, falls back to self", "agentsession:victim-ns/victim", "agentsession:demo/nightly-report"},
+		{"this session spelled out: rejected, self comes only from sessionSelfSubject", "agentsession:demo/nightly-report", "agentsession:demo/nightly-report"},
+		{"user: rejected, falls back to self", "user:dmljdGltQGNvcnAuY29t", "agentsession:demo/nightly-report"},
+		{"service subject set: rejected, falls back to self", "service:digest-bot#member", "agentsession:demo/nightly-report"},
+		{"malformed: rejected, falls back to self", "digest-bot", "agentsession:demo/nightly-report"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := selfSubjectSession("demo", "nightly-report")
+			sess.Annotations = map[string]string{spiceboxv1alpha1.AnnotationAuthzServiceSubject: tc.annotation}
+			got := serviceSubjectFor(sess, userless).String()
+			assert.Equal(t, tc.want, got)
+			assert.NotEqual(t, "agentsession:victim-ns/victim", got, "never another session's principal")
+		})
+	}
+}

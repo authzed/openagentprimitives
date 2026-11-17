@@ -23,7 +23,7 @@
 // The fixture's AgentClass declares an authz.slots entry on
 // github_pull_request/pin — an ordinary, non-memory permission, composed by
 // ComposeSlots into `relation slot_grant_pin: agentsession with expiration`
-// plus `permission pin = slot_grant_pin->interact` (github_pull_request has
+// plus `permission pin = slot_grant_pin + slot_grant_pin->interact` (github_pull_request has
 // no `owner` relation, so the `+ owner` leg is omitted). That relation is
 // what NewSlotBoundChecker's ListSlotGrants reads back, and it exists only
 // because the fixture's toolBundle reaches toolkit "gh" — a slot naming a

@@ -136,10 +136,20 @@ func (s *Store) dispatchTx(ctx context.Context, f func(*sql.Tx) (goals.Occurrenc
 	return o, nil
 }
 
-func executionMatches(g goals.Goal, revision int64, digest string) bool {
+// boundGoal is g as it applies to work bound to (revision, digest): with that
+// consent in Execution (goals.Goal.ForConsent — the approval in force, or the
+// one a renewal replaced), approved and current at that revision. ok is false
+// when no such approved consent governs that work.
+func boundGoal(g goals.Goal, revision int64, digest string) (goals.Goal, bool) {
+	g, held := g.ForConsent(digest)
 	c := g.Execution
-	return g.State == goals.Active && g.Revision == revision && c != nil && c.Digest == digest && c.Decision != nil &&
-		c.Decision.Approved && c.Decision.Owner == g.Domain.Owner && c.Decision.Digest == digest && c.Decision.Witness != "" && revision == c.RequestRevision+1
+	return g, held && g.State == goals.Active && g.Revision == revision && c != nil && c.Digest == digest && c.Decision != nil &&
+		c.Decision.Approved && g.Domain.AcceptsDecider(c.Decision.Owner) && c.Decision.Digest == digest && c.Decision.Witness != "" && revision == c.RequestRevision+1
+}
+
+func executionMatches(g goals.Goal, revision int64, digest string) bool {
+	_, ok := boundGoal(g, revision, digest)
+	return ok
 }
 
 func (s *Store) lockedGoal(ctx context.Context, tx *sql.Tx, d goals.Domain, id string) (goals.Goal, error) {
@@ -216,6 +226,29 @@ func (s *Store) Schedule(ctx context.Context, g goals.Goal) (goals.Occurrence, e
 			}
 			h := sha256.Sum256([]byte(seed))
 			id := "occ-" + hex.EncodeToString(h[:])
+			// A renewal is approved in place, at the same revision, so the
+			// approval it renews can already hold this window. A queued
+			// occurrence is rebound to the renewal; one already claimed or
+			// done keeps its consent (PriorExecution governs it).
+			if held, found, err := s.occurrenceAt(ctx, tx, g, w.DueAt); err != nil {
+				return first, err
+			} else if found && held.ID != id {
+				if held.State == goals.OccurrenceQueued && held.ConsentDigest != current.Execution.Digest {
+					if _, err := tx.ExecContext(ctx, s.query(`UPDATE oap_goal_occurrences SET consent_digest=?,expires_at=? WHERE id=? AND state='queued'`), current.Execution.Digest, w.ExpiresAt.UnixNano(), held.ID); err != nil {
+						return first, err
+					}
+					if held, err = s.occurrence(ctx, tx, held.ID); err != nil {
+						return first, err
+					}
+					if err := s.auditOccurrence(ctx, tx, held, "execution_rebound", current.UpdatedAt); err != nil {
+						return first, err
+					}
+				}
+				if i == 0 {
+					first = held
+				}
+				continue
+			}
 			res, err := tx.ExecContext(ctx, s.query(`INSERT INTO oap_goal_occurrences(id,domain,owner_key,class_key,goal_id,goal_revision,consent_digest,due_at,expires_at,state,session_name) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`), id, g.Domain.ID(), owner, class, g.ID, g.Revision, current.Execution.Digest, w.DueAt.UnixNano(), w.ExpiresAt.UnixNano(), string(goals.OccurrenceQueued), goals.SessionName(h[:16]))
 			if err != nil {
 				return first, err
@@ -239,6 +272,21 @@ func (s *Store) Schedule(ctx context.Context, g goals.Goal) (goals.Occurrence, e
 		}
 		return first, nil
 	})
+}
+
+// occurrenceAt finds g's occurrence at its current revision due at due: the
+// window key (domain, goal, revision, due) admits one.
+func (s *Store) occurrenceAt(ctx context.Context, tx *sql.Tx, g goals.Goal, due time.Time) (goals.Occurrence, bool, error) {
+	var id string
+	err := tx.QueryRowContext(ctx, s.query(`SELECT id FROM oap_goal_occurrences WHERE domain=? AND goal_id=? AND goal_revision=? AND due_at=?`), g.Domain.ID(), g.ID, g.Revision, due.UnixNano()).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return goals.Occurrence{}, false, nil
+	}
+	if err != nil {
+		return goals.Occurrence{}, false, err
+	}
+	o, err := s.occurrence(ctx, tx, id)
+	return o, err == nil, err
 }
 
 // Due selects one head per owner before the next head, so a prolific owner's
@@ -298,7 +346,8 @@ func (s *Store) Claim(ctx context.Context, r goals.ClaimRequest) (goals.Occurren
 			if err != nil {
 				return o, err
 			}
-			if !executionMatches(g, o.GoalRevision, o.ConsentDigest) || !occurrenceWindowMatches(g, o) {
+			g, bound := boundGoal(g, o.GoalRevision, o.ConsentDigest)
+			if !bound || !occurrenceWindowMatches(g, o) {
 				return o, goals.ErrConflict
 			}
 			for _, cap := range []struct {
@@ -499,7 +548,8 @@ func (s *Store) proposeResult(ctx context.Context, tx *sql.Tx, current, o goals.
 	if err != nil {
 		return current, err
 	}
-	if !executionMatches(g, current.GoalRevision, current.ConsentDigest) {
+	g, bound := boundGoal(g, current.GoalRevision, current.ConsentDigest)
+	if !bound {
 		return current, goals.ErrConflict
 	}
 	if p.Observation != nil {

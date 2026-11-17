@@ -137,3 +137,22 @@ func TestPlanGateApprovers_namesArePresentedAsEmailsNotCanonicalIDs(t *testing.T
 	assert.NotContains(t, got, canonical.String(),
 		"the canonical id must not reach a human-facing surface")
 }
+
+// A group goal run's standing approvals bind through this runner, so the hook
+// must receive a binder exactly when the Loop says the session is one; every
+// other session leaves it nil and a goal_group_standing authority is denied.
+func TestPlanGateHook_bindsStandingOnlyForGroupGoalRuns(t *testing.T) {
+	for _, group := range []bool{true, false} {
+		l := &Loop{PlanGateMode: "enforcing", SessionKey: memory.NamespacedName{Namespace: "ns", Name: "s"}, PlanGateBindsStanding: group}
+		var built []pipeline.Hook
+		for _, f := range hookFactories {
+			if f.Name == "plan_gate" {
+				built = f.Build(l)
+			}
+		}
+		require.Len(t, built, 1)
+		gate, ok := built[0].(*hooks.PlanGate)
+		require.True(t, ok)
+		assert.Equal(t, group, gate.BindsStandingForTest(), "group goal run = %v", group)
+	}
+}

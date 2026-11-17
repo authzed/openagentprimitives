@@ -1625,8 +1625,8 @@ func (h *Harness) startChannelsdPlumbing(t *testing.T, mgrCtx context.Context) {
 	// AgentSession controllers above), so a SpiceDB schema mismatch
 	// surfaces here as a test failure rather than a silent deny.
 	pl := pipeline.NewPipeline(h.K8s, h.SpiceDB, mem, pubAdapter, caps)
-	pl.RecordGoalActor = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alpha1.AgentClass, owner identity.CanonicalUserID) error {
-		return goalactor.Record(ctx, h.goalActorSigned, pkgmemory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}, goalactor.Content{Owner: owner.String(), SessionUID: string(sess.UID), ClassUID: string(class.UID)})
+	pl.RecordGoalActor = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alpha1.AgentClass, owner identity.CanonicalUserID, inboundRef string) error {
+		return goalactor.Record(ctx, h.goalActorSigned, pkgmemory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}, goalactor.Content{Owner: owner.String(), SessionUID: string(sess.UID), ClassUID: string(class.UID), InboundRef: inboundRef})
 	}
 
 	// The durable memory facade, mirroring internal/cmd/channelsd/main.go's pl.Mem. It
@@ -1837,6 +1837,7 @@ func (h *Harness) startChannelsdPlumbing(t *testing.T, mgrCtx context.Context) {
 	if c := h.runnerFactory.preferencesChannelsdClient(); c != nil {
 		pl.PreferenceCommitter = c
 		pl.GoalConsentCommitter = c
+		pl.GroupGoalRuns = c
 		pipeline.BindGoalConsentHandler(pl)
 		pipeline.BindPreferenceCommitHandler(pl)
 	}
@@ -2123,6 +2124,9 @@ func (a *pipelineMemAdapter) Append(ctx context.Context, ns, name string, t pipe
 		// and the multiplayer-attribution assertion would test a harness
 		// artifact, not the real inbox->user Author-preservation path.
 		Author: t.Author,
+		// Same for the per-inbound ref the goal_actor attestation carries, so
+		// the runner's turn ref resolves in-process as it does deployed.
+		InboundRef: t.InboundRef,
 	}
 	return a.appenderFor(ns, name).Append(ctx, turn)
 }
@@ -2343,6 +2347,31 @@ func (h *Harness) applyManifestLabeled(yamlBlob, source string) {
 					source, gvk.Kind, obj.GetName(), err, upErr)
 			}
 		}
+		h.reapplyExplicitSpec(ctx, source, gvk, obj, raw)
+	}
+}
+
+// reapplyExplicitSpec merge-patches the manifest's own spec back onto one of
+// this project's objects after the typed write.
+//
+// The typed write drops every zero value on an omitempty field, so the API
+// server's default fills it in: `maxAutoApproveHandles: 0` written in a
+// fixture arrives as the CRD default 8. Goal execution requires that zero, and
+// no fixture could say so. The patch carries the manifest bytes as written, so
+// an explicit zero survives the way it does under kubectl apply; for a spec
+// with no explicit zero it changes nothing.
+func (h *Harness) reapplyExplicitSpec(ctx context.Context, source string, gvk *metav1.GroupVersionKind, obj client.Object, raw map[string]any) {
+	h.t.Helper()
+	spec, ok := raw["spec"]
+	if !ok || gvk.Group != spiceboxv1alpha1.GroupName {
+		return
+	}
+	patch, err := json.Marshal(map[string]any{"spec": spec})
+	if err != nil {
+		h.t.Fatalf("ApplyManifest(%s): %s/%s: encode spec patch: %v", source, gvk.Kind, obj.GetName(), err)
+	}
+	if err := h.K8s.Patch(ctx, obj, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		h.t.Fatalf("ApplyManifest(%s): %s/%s: re-apply explicit spec: %v", source, gvk.Kind, obj.GetName(), err)
 	}
 }
 

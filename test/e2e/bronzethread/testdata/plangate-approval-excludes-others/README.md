@@ -48,7 +48,7 @@ Nothing else in this fixture would refuse it for an uninteresting reason:
 to it**, not because a session-scope document excluded it. `contact_access`
 on this fixture's schema has no wildcard leaf
 (`pkg/e2e/testdata/agent-centerdot-companies/02-mcpserver.yaml`): it is
-`slot_grant_contact_access->interact + owner`. Neither leg resolves for
+`slot_grant_contact_access + slot_grant_contact_access->interact + owner`. Neither leg resolves for
 `4299` — the phase never named it, so no grant was written, and it belongs
 to `owner-2`, so the owner leg is somebody else's.
 

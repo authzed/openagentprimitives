@@ -190,3 +190,30 @@ func TestTriggerDescriberFor_GithubYesFakeNo(t *testing.T) {
 	_, ok = TriggerDescriberFor("does-not-exist")
 	assert.False(t, ok)
 }
+
+func TestGroupGoalHostFor(t *testing.T) {
+	_, ok := GroupGoalHostFor("slack")
+	assert.True(t, ok, "slack hosts group goals")
+	_, ok = GroupGoalHostFor("github")
+	assert.False(t, ok, "github does not implement GroupGoalHost")
+	_, ok = GroupGoalHostFor("does-not-exist")
+	assert.False(t, ok)
+}
+
+func TestGroupMemberLinks_UnionOncePerLink(t *testing.T) {
+	links := GroupMemberLinks()
+	assert.Equal(t, 1, countOf(links, "slack_channel#member"))
+	assert.Equal(t, 0, countOf(links, "slack_channel#view"), "audience refs are never group-goal owner types")
+	assert.Equal(t, 1, countOf(links, "group#member"))
+	assert.IsIncreasing(t, links, "sorted and de-duplicated")
+}
+
+func countOf(ss []string, want string) int {
+	n := 0
+	for _, s := range ss {
+		if s == want {
+			n++
+		}
+	}
+	return n
+}

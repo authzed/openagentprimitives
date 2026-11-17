@@ -4,7 +4,7 @@
 # makes the AgentClass controller emit that class's AgentSessionGrants CR and
 # the guardian compose, into the live schema, the
 # `relation slot_grant_<perm>: agentsession with expiration` plus
-# `permission <perm> = slot_grant_<perm>->interact + owner` the scenarios write
+# `permission <perm> = slot_grant_<perm> + slot_grant_<perm>->interact + owner` the scenarios write
 # their slot-grant tuples on.
 #
 #   dossier-pool-e2e        slots dossier/read         → slot_grant_read

@@ -173,6 +173,101 @@ func ComposeWithSkipped(src string, pairs []GrantPair, sessionLinks ...string) (
 	return out, true, skipped, nil
 }
 
+const (
+	goalDomainDefinitionName = "agent_goal_domain"
+	goalMemberGroupRelation  = "member_group"
+)
+
+// ComposeGoalGroupLinks unions links (each "<type>#<relation>", e.g.
+// "slack_channel#member" — a kind's GroupMemberLinks) into
+// agent_goal_domain#member_group, the relation that names a group goal's
+// owning members. It is the agent_goal_domain sibling of ComposeWithSkipped's
+// sessionLinks, kept separate so that function's contract is unchanged.
+//
+// Entries already on the line are kept and not repeated; new ones are appended
+// in sorted order, so a recompose of its own output is a byte-identical no-op
+// (changed=false). Nothing else in the definition — owner in particular, a
+// private goal's single user — is touched.
+//
+// Fails closed rather than handing SpiceDB something it would refuse at write
+// time: src must parse and declare agent_goal_domain with a member_group
+// relation, and every link must be a subject SET whose type src defines. A
+// kind whose member type is not defined has not contributed its fragment.
+func ComposeGoalGroupLinks(src string, links []string) (string, bool, error) {
+	if len(links) == 0 {
+		return src, false, nil
+	}
+	parsed, err := compiler.Compile(compiler.InputSchema{
+		Source:       input.Source("goal-group-schema"),
+		SchemaString: src,
+	}, compiler.AllowUnprefixedObjectType())
+	if err != nil {
+		return "", false, fmt.Errorf("parse schema: %w", err)
+	}
+	defined := make(map[string]struct{}, len(parsed.ObjectDefinitions))
+	for _, def := range parsed.ObjectDefinitions {
+		defined[def.GetName()] = struct{}{}
+	}
+	if _, ok := defined[goalDomainDefinitionName]; !ok {
+		return "", false, fmt.Errorf("schema is missing definition %q", goalDomainDefinitionName)
+	}
+	for _, link := range links {
+		linkType, linkRel, ok := strings.Cut(link, "#")
+		if !ok || linkType == "" || linkRel == "" {
+			return "", false, fmt.Errorf("goal group link %q is not a subject set (<type>#<relation>)", link)
+		}
+		if _, ok := defined[linkType]; !ok {
+			return "", false, fmt.Errorf("goal group link %q references undefined object type %q — the channel kind must contribute its definition via SchemaContributor", link, linkType)
+		}
+	}
+
+	blockStart, blockEnd, ok := findDefinitionBlock(src, goalDomainDefinitionName)
+	if !ok {
+		return "", false, fmt.Errorf("could not locate %q definition in source text", goalDomainDefinitionName)
+	}
+	block := src[blockStart:blockEnd]
+	prefix := "relation " + goalMemberGroupRelation + ":"
+	lines := strings.Split(block, "\n")
+	found := false
+	changed := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		found = true
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		// Compare whole subject-type entries, not substrings: "group#member"
+		// must not count as present on a line holding only
+		// "onepassword_group#member".
+		present := map[string]bool{}
+		for _, part := range strings.Split(strings.TrimPrefix(trimmed, prefix), "|") {
+			present[strings.TrimSpace(part)] = true
+		}
+		var add []string
+		for _, l := range links {
+			if !present[l] {
+				present[l] = true
+				add = append(add, l)
+			}
+		}
+		if len(add) == 0 {
+			break
+		}
+		sort.Strings(add)
+		lines[i] = indent + trimmed + " | " + strings.Join(add, " | ")
+		changed = true
+		break
+	}
+	if !found {
+		return "", false, fmt.Errorf("definition %q has no %q relation", goalDomainDefinitionName, goalMemberGroupRelation)
+	}
+	if !changed {
+		return src, false, nil
+	}
+	return src[:blockStart] + strings.Join(lines, "\n") + src[blockEnd:], true, nil
+}
+
 // schemasEquivalent reports whether two schema texts describe the same schema,
 // ignoring the differences SpiceDB itself introduces.
 //
@@ -501,7 +596,7 @@ func Run(ctx context.Context, io SchemaIO, pairs []GrantPair) (Result, error) {
 // to skipped pairs should use RunAll (which surfaces them in
 // Result.SkippedPairs) or invoke composeAllWithSkipped via RunAll.
 func ComposeAll(mcpFragments []IdentifiedFragment, channelKindFragments []*spiceboxv1alpha1.SpiceDBSchemaFragment, pairs []GrantPair, sessionLinks ...string) (string, error) {
-	desired, _, err := composeAllWithSkipped(mcpFragments, channelKindFragments, pairs, nil, sessionLinks...)
+	desired, _, err := composeAllWithSkipped(mcpFragments, channelKindFragments, pairs, nil, nil, sessionLinks...)
 	return desired, err
 }
 
@@ -532,8 +627,12 @@ var ErrComposeFailed = errors.New("compose schema (no write attempted)")
 // SkippedPairs is populated when a pair references a resourceType or
 // permission not present in the composed fragments (e.g., the
 // MCPServer that declared it was removed).
-func RunAll(ctx context.Context, io SchemaIO, mcpFragments []IdentifiedFragment, channelKindFragments []*spiceboxv1alpha1.SpiceDBSchemaFragment, pairs []GrantPair, slots []SlotPair, sessionLinks ...string) (Result, error) {
-	desired, skipped, err := composeAllWithSkipped(mcpFragments, channelKindFragments, pairs, slots, sessionLinks...)
+//
+// goalGroupLinks are the registered kinds' GroupMemberLinks, composed into
+// agent_goal_domain#member_group (ComposeGoalGroupLinks); sessionLinks are
+// their SessionRelationLinks, composed into agentsession's subject relations.
+func RunAll(ctx context.Context, io SchemaIO, mcpFragments []IdentifiedFragment, channelKindFragments []*spiceboxv1alpha1.SpiceDBSchemaFragment, pairs []GrantPair, slots []SlotPair, goalGroupLinks []string, sessionLinks ...string) (Result, error) {
+	desired, skipped, err := composeAllWithSkipped(mcpFragments, channelKindFragments, pairs, slots, goalGroupLinks, sessionLinks...)
 	if err != nil {
 		// Wrapped in ErrComposeFailed, distinguishable from the io.WriteSchema
 		// failure below ("write schema: %w") on purpose: composeAllWithSkipped's
@@ -704,7 +803,7 @@ func composeAllParseOnly(mcpFragments []IdentifiedFragment, channelKindFragments
 // was retired rather than left to duplicate a check that already refuses the
 // write, and the parameter was removed with it rather than left threaded
 // through for a difference that no longer does anything.
-func composeAllWithSkipped(mcpFragments []IdentifiedFragment, channelKindFragments []*spiceboxv1alpha1.SpiceDBSchemaFragment, pairs []GrantPair, slots []SlotPair, sessionLinks ...string) (string, []GrantPair, error) {
+func composeAllWithSkipped(mcpFragments []IdentifiedFragment, channelKindFragments []*spiceboxv1alpha1.SpiceDBSchemaFragment, pairs []GrantPair, slots []SlotPair, goalGroupLinks []string, sessionLinks ...string) (string, []GrantPair, error) {
 	// channelKindFragments (the compile-time baseline) go FIRST, at fixed
 	// positions, so their "200-baseline-<NN>" name (see composeFragmentSet)
 	// stays the same across reconciles regardless of how many CR-sourced
@@ -726,6 +825,13 @@ func composeAllWithSkipped(mcpFragments []IdentifiedFragment, channelKindFragmen
 	desired, _, skipped, err := ComposeWithSkipped(base, pairs, sessionLinks...)
 	if err != nil {
 		return "", nil, fmt.Errorf("compose grants over fragments: %w", err)
+	}
+	// Group member link types land on agent_goal_domain#member_group. After the
+	// fragments, because a kind's member type (slack_channel) is defined by its
+	// fragment; before validation, which covers this rewrite like the others.
+	desired, _, err = ComposeGoalGroupLinks(desired, goalGroupLinks)
+	if err != nil {
+		return "", nil, fmt.Errorf("compose goal group links over fragments: %w", err)
 	}
 	// Slots emit onto the RESOURCE definitions, so they compose after the
 	// fragments have been merged in and the agentsession block rebuilt.

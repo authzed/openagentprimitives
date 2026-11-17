@@ -24,6 +24,7 @@ type SendOption func(*sendCfg)
 type sendCfg struct {
 	user, thread string
 	attachments  []channelkinds.InboundAttachment
+	external     map[string]string
 }
 
 // AsUser overrides the requester identity for this inbound — both the
@@ -47,6 +48,14 @@ func InThread(key string) SendOption { return func(c *sendCfg) { c.thread = key 
 // fake.SetAttachmentSource, keyed by each attachment's ExternalID.
 func WithAttachments(atts ...channelkinds.InboundAttachment) SendOption {
 	return func(c *sendCfg) { c.attachments = atts }
+}
+
+// WithExternal sets the inbound's kind-specific External fields, which the
+// pipeline copies onto the session's binding. A fake conversation that belongs
+// to a group carries its group id here (External["group"]); that is how a
+// scenario puts its thread inside a group the fake kind can host goals for.
+func WithExternal(external map[string]string) SendOption {
+	return func(c *sendCfg) { c.external = external }
 }
 
 // SendUserMessage injects an inbound user message into the harness's
@@ -105,6 +114,7 @@ func (h *Harness) SendUserMessage(text string, opts ...SendOption) {
 		ChannelKey:  cfg.thread,
 		MessageText: text,
 		Attachments: cfg.attachments,
+		External:    cfg.external,
 	})
 }
 
@@ -380,6 +390,12 @@ func (h *Harness) singleSession(caller string) (ns, name string) {
 			continue
 		}
 		if _, delegated := sessions.Items[i].ParentRef(); delegated {
+			continue
+		}
+		// A goal run is a session the operator starts for a scheduled
+		// occurrence, not the conversation the test drives; a scenario that
+		// runs goals has one conversation and any number of runs.
+		if sessions.Items[i].Spec.GoalExecution != nil {
 			continue
 		}
 		attached = append(attached, sessions.Items[i])

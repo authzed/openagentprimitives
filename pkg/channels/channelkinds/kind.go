@@ -14,7 +14,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelfeatures"
 	"github.com/authzed/openagentprimitives/pkg/channels/delivery"
@@ -566,6 +568,13 @@ type Deps struct {
 	// nil degrades the App Home preferences pane to a "couldn't load" state.
 	Preferences PreferencesClient
 
+	// Goals gives channel kinds first-party management of group goals — a
+	// verified viewer listing, pausing, resuming, renewing or removing the
+	// group goals they can see — from a surface of their own outside any
+	// conversation (a home view). Optional — nil means the surface has no
+	// goals section; the in-conversation goal tools still manage them.
+	Goals GoalsClient
+
 	// PersonalizableClasses answers "which AgentClasses has this canonical
 	// user interacted with" — the App Home preferences section (Task 11)
 	// uses it to decide which class cards get a preferences section at all,
@@ -636,6 +645,48 @@ func (d Deps) ResolvedApproverFanoutLimit() int {
 type PreferencesClient interface {
 	GetPreferencesFirstParty(ctx context.Context, ns, className, subject string) (preferences.SnapshotResponse, error)
 	CommitPreferenceFirstParty(ctx context.Context, ns, className string, req preferences.CommitRequest) error
+}
+
+// GoalSummary is one group goal as GoalsClient lists it for a viewer.
+type GoalSummary = goals.GoalSummary
+
+// GoalsClient is the kind-neutral group goal management API a channel kind's
+// first-party surface calls. viewer is the canonical person the
+// kind verified; every call re-checks their live permissions on the goal
+// server: view to list, pause to pause, manage (a listed manager still in
+// the group, or a platform admin) for the rest. goalResource is a
+// GoalSummary.Resource. Refusals wrap goals.ErrDenied, goals.ErrNotFound,
+// goals.ErrInvalid or goals.ErrConflict with a reason a person can act on.
+// Wired in internal/cmd/channelsd.
+type GoalsClient interface {
+	// ListForViewer lists class's group goals in ns that viewer can see:
+	// the first limit rows, and how many there are in all.
+	ListForViewer(ctx context.Context, viewer identity.CanonicalUserID, ns, class string, limit int) ([]GoalSummary, int, error)
+	// StandingPlan is what to show before action on the goal: its title and
+	// standing plan. For an approval (goals.ActResume, ActRenew) it is the
+	// plan that act would approve, with the Digest the act must name; for
+	// "" (View plan) it is the plan in force, awaiting approval or last run
+	// under. For goals.ActRemove the plan may be empty.
+	StandingPlan(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action string) (GoalPlan, error)
+	// Act takes action — goals.ActPause, ActResume, ActRenew or ActRemove —
+	// as viewer. Resume and renew are approvals decided by this call (the
+	// click is the decision); nothing is posted into the conversation.
+	// planDigest is the GoalPlan.Digest the viewer was shown: an approval is
+	// refused with goals.ErrPlanChanged unless it still matches. Pause and
+	// remove take "".
+	Act(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action, planDigest string) error
+}
+
+// GoalPlan is what a management surface shows before an action on a goal.
+// Everything in it is the goal server's, not the surface's own view.
+type GoalPlan struct {
+	// Title is the goal's title. It is agent-authored: render it inert.
+	Title string
+	Plan  plangate.Plan
+	// Digest binds an approval to this plan. It is not authority: the
+	// surface carries it to Act unchanged, and the server refuses an
+	// approval whose plan no longer has it.
+	Digest string
 }
 
 // PersonalizableClassLookup gives channel kinds a narrow, read-only way to
@@ -784,6 +835,54 @@ type OriginLinkProvider interface {
 // owner source when this kind is the output channel, and whether one exists.
 type OwnerGroupProvider interface {
 	OwnerGroupRef(ch *spiceboxv1alpha1.Channel) (subjectSetRef string, ok bool)
+}
+
+// GroupGoalHost is an optional Kind capability: the kind's conversations can
+// host group goals, durable goals owned by the members of a multi-person
+// conversation. The kind says who the members are, who may see the
+// conversation, whether its membership is synced, and how to start a run in the
+// conversation's home surface. Consumers discover it via
+// registry.GroupGoalHostFor; none switch on the kind name.
+type GroupGoalHost interface {
+	// ConversationMemberRef returns the SpiceDB subject-set of the people in
+	// the conversation the binding addresses (e.g. "slack_channel:C1#member").
+	// ok=false means the binding is not a group conversation (a DM) or carries
+	// no usable address.
+	ConversationMemberRef(b *spiceboxv1alpha1.ChannelBinding) (ref string, ok bool)
+	// ConversationAudienceRef returns the subject-set of people who may see the
+	// conversation (e.g. "slack_channel:C1#view"); ok=false as above.
+	ConversationAudienceRef(b *spiceboxv1alpha1.ChannelBinding) (ref string, ok bool)
+	// MembershipCurrent reports whether this kind's membership for ch is kept
+	// current by a sync. nil means yes; the error says what is missing.
+	MembershipCurrent(ctx context.Context, r client.Reader, ch *spiceboxv1alpha1.Channel) error
+	// RunAnchor derives, as a copy, the binding a goal run starts from: the
+	// same conversation with any thread anchor cleared. It never mutates b.
+	RunAnchor(b *spiceboxv1alpha1.ChannelBinding) (*spiceboxv1alpha1.ChannelBinding, error)
+	// GroupBinding derives, without any session, the binding of the
+	// conversation memberRef names on ch — the base a group goal's run takes
+	// RunAnchor of, so a run never reads the session the goal was created in.
+	// memberRef is a ref this kind's ConversationMemberRef returns, and the
+	// result's ConversationMemberRef is memberRef again; anything else is an
+	// error. Name, Kind, Key and External are set; Capabilities and the NATS
+	// prefix are the caller's.
+	GroupBinding(ch *spiceboxv1alpha1.Channel, memberRef string) (*spiceboxv1alpha1.ChannelBinding, error)
+	// RunAnchorWritten reports whether b carries a complete, self-consistent
+	// thread anchor of the shape this kind's sender writes back into a run's
+	// binding on its first post (key and anchor fields agreeing). With
+	// RunAnchor, it lets the goal-session webhook admit exactly that one
+	// write without naming any kind's fields: RunAnchor(after) must equal the
+	// unanchored before, and after must be RunAnchorWritten. A kind that never
+	// writes an anchor back returns false.
+	RunAnchorWritten(b *spiceboxv1alpha1.ChannelBinding) bool
+	// GroupMemberLinks lists the subject-set link types of
+	// ConversationMemberRef ONLY (e.g. "slack_channel#member") — the types this
+	// kind contributes as group-goal owners, composed into
+	// agent_goal_domain#member_group. Audience refs (ConversationAudienceRef's
+	// types) are never listed here and never composed into the schema: they are
+	// resolved through AudienceResolver, and admitting one into member_group
+	// would make a goal's owners as wide as everyone who can see the
+	// conversation.
+	GroupMemberLinks() []string
 }
 
 // OutboundAnchorProvider is an optional Kind capability: seed the initial

@@ -21,6 +21,9 @@
 //	*Preferences — <class>*                            ← preferences (self-submitting)
 //	[ … ]
 //	──────────────────────────────
+//	*Group goals*                                      ← goals (app_home_goals_view.go)
+//	In #channel / *Title* · Active / [View plan] [Pause] …
+//	──────────────────────────────
 //	💡 Tag this agent in any channel…                  ← context (footer)
 //	Powered by OAP · Open Agent Primitives             ← context (branding)
 //
@@ -28,8 +31,10 @@
 // views.publish (no cache). Slack's per-app per-user view IS the cache; our
 // own layer would only introduce staleness.
 //
-// Slack constraints honored: one agent's page is well under the 100-block
-// view cap even with many preference keys, so there is no truncation loop.
+// Slack constraints honored: the page stays under the 100-block view cap
+// (appHomeMaxBlocks). The group goals section is cut to the room the rest of
+// the page leaves (goalsSectionWithin). Preferences are not cut: a class that
+// declares more keys than fit was already over the cap before goals.
 package slack
 
 import (
@@ -43,6 +48,10 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/preferences"
 )
 
+// appHomeMaxBlocks is Slack's limit on blocks in one view. views.publish
+// rejects a Home tab over it outright, so the page is built to fit.
+const appHomeMaxBlocks = 100
+
 // appHomeViewInput is what internal/cmd/channelsd assembles before calling the
 // view builder. The handler reads:
 //   - Agent: the single AgentClass this listener's Channel is bound to, resolved
@@ -55,6 +64,10 @@ import (
 type appHomeViewInput struct {
 	Agent           *appHomeAgent
 	ExternalBaseURL string
+	// Notice is a one-shot message for this viewer at the top of the tab —
+	// the outcome of the goal action that triggered this republish. "" on a
+	// plain open.
+	Notice string
 }
 
 // appHomeAgent is the single agent this Home tab is about.
@@ -105,16 +118,23 @@ type appHomeAgent struct {
 	// renders a "couldn't load" notice instead of silently showing nothing,
 	// which would be indistinguishable from "this agent has no preferences".
 	PreferencesLoadFailed bool
+
+	// Goals is the group goals section (app_home_goals_view.go). nil renders no
+	// section.
+	Goals *appHomeGoals
 }
 
 // buildAppHomeView produces the slackapi.HomeTabViewRequest payload passed to
 // views.publish. Exactly one agent, or the empty state.
 func buildAppHomeView(in appHomeViewInput) slackapi.HomeTabViewRequest {
 	var blocks []slackapi.Block
+	if in.Notice != "" {
+		blocks = append(blocks, homeNoticeBlock(in.Notice))
+	}
 	if in.Agent == nil {
-		blocks = emptyStateBlocks()
+		blocks = append(blocks, emptyStateBlocks()...)
 	} else {
-		blocks = agentPageBlocks(*in.Agent, in.ExternalBaseURL)
+		blocks = append(blocks, agentPageBlocks(*in.Agent, in.ExternalBaseURL, len(blocks))...)
 	}
 	return slackapi.HomeTabViewRequest{
 		Type:   slackapi.VTHomeTab,
@@ -148,7 +168,10 @@ func emptyStateBlocks() []slackapi.Block {
 // nothing it is handed. That split is the fix for two separate injection
 // escapes, both of which were a transform standing next to the sweep rather
 // than inside its pipeline — see appHomePageText and inertText.
-func agentPageBlocks(a appHomeAgent, externalBaseURL string) []slackapi.Block {
+//
+// reserved is how many blocks the caller places above the page (a notice), so
+// the goals section can be cut to the room Slack's block limit leaves.
+func agentPageBlocks(a appHomeAgent, externalBaseURL string, reserved int) []slackapi.Block {
 	slots := appHomePageText(a)
 
 	// Hero name (bold) + identity badge subtitle. The name is swept and lands
@@ -233,7 +256,7 @@ func agentPageBlocks(a appHomeAgent, externalBaseURL string) []slackapi.Block {
 	}
 
 	// Footer: how to use, plus OAP branding.
-	blocks = append(blocks,
+	footer := []slackapi.Block{
 		slackapi.NewDividerBlock(),
 		slackapi.NewContextBlock("home_footer",
 			slackapi.NewTextBlockObject(slackapi.MarkdownType,
@@ -241,8 +264,13 @@ func agentPageBlocks(a appHomeAgent, externalBaseURL string) []slackapi.Block {
 				false, false),
 		),
 		brandingFooterBlock(),
-	)
-	return blocks
+	}
+
+	// Group goals the viewer can see, when a goals client is configured, cut
+	// to the room the rest of the page leaves under Slack's block limit.
+	blocks = append(blocks, goalsSectionWithin(a.Goals, appHomeMaxBlocks-reserved-len(blocks)-len(footer))...)
+
+	return append(blocks, footer...)
 }
 
 // brandingFooterBlock is the one place the product name appears on this

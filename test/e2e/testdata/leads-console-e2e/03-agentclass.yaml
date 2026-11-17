@@ -43,7 +43,7 @@ spec:
   # gates on (01-mcpserver.yaml) as a slot, which does two things guardian's
   # ComposeSlots (pkg/authz/guardian/schema/slots.go) is the single owner of:
   # it creates dealbook_lead's "advance" permission as
-  # `slot_grant_advance->interact + owner` (the trailing "owner" is the
+  # `slot_grant_advance + slot_grant_advance->interact + owner` (the trailing "owner" is the
   # RELATION 01-mcpserver.yaml declares, not this slot's permission — a
   # slotted permission may never be named "owner" itself, since ComposeSlots'
   # direct-standing leg always references a relation of that exact name and

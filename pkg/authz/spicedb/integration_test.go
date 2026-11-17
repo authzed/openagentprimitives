@@ -568,15 +568,15 @@ definition demo_target {
     relation slot_grant_mutate: agentsession with expiration
     relation slot_pin: agentsession
     relation owner: user
-    permission reachable = slot_grant_reachable->interact + owner
-    permission mutate = slot_grant_mutate->interact + owner
+    permission reachable = slot_grant_reachable + slot_grant_reachable->interact + owner
+    permission mutate = slot_grant_mutate + slot_grant_mutate->interact + owner
 }
 
 definition demo_widget {
     relation slot_grant_usable: agentsession with expiration
     relation slot_pin: agentsession
     relation owner: user
-    permission usable = slot_grant_usable->interact + owner
+    permission usable = slot_grant_usable + slot_grant_usable->interact + owner
 }
 `
 

@@ -453,7 +453,7 @@ func TestCheck_External_AllowedByASlotGrantForThisSession(t *testing.T) {
 }
 
 // AMBIENT OWNERSHIP does NOT satisfy an external call. The composed permission
-// is `slot_grant_<p>->interact + owner`, so checking it would conflate "a human
+// is `slot_grant_<p> + slot_grant_<p>->interact + owner`, so checking it would conflate "a human
 // approved this" with "the requester owns this" — and an agent could then take
 // irreversible outbound actions on anything its user owns with nobody ever
 // seeing them.

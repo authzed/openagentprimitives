@@ -31,7 +31,7 @@ const SlotGrantRelationPrefix = "slot_grant_"
 // git CLI) reaches the same resource id with different args.
 //
 // A single shared relation name breaks that outright: the composer emits
-// `permission <p> = <rel>->interact + owner` per declared permission, so one
+// `permission <p> = <rel> + <rel>->interact + owner` per declared permission, so one
 // tuple would satisfy every one of them. Composition is global, so the two
 // permissions need not even come from the same AgentClass. Encoding the
 // permission in the relation is what keeps the grants disjoint — the same
@@ -50,7 +50,10 @@ func SlotGrantRelationName(permission string) string {
 // from the session to the resource then checks the resource's permission for
 // the ORIGINAL user, who lacks it by construction. Pointing the tuple at the
 // session instead means the resource's permission resolves the session's member
-// set, so the Check is per-requester.
+// set, so the Check is per-requester — and, through the composer's direct leg,
+// the named session itself holds the permission too, which is what a session
+// acting in its own right (a group goal run, a userless session) is checked as.
+// That leg names this one session only: no child, no sibling.
 func SlotGrantRelation(resourceType, resourceID, permission string, scope SessionRef) Relation {
 	return Relation{
 		ResourceType: resourceType,

@@ -32,6 +32,17 @@ func (e *statusError) Error() string {
 	return fmt.Sprintf("httpclient: status=%d body=%s", e.code, e.msg)
 }
 
+// StatusCode reports the HTTP status of a non-2xx response err came from,
+// when it came from one. A caller whose server answers a domain refusal by
+// status (the goal server's 409 conflict) uses it to rebuild that refusal.
+func StatusCode(err error) (int, bool) {
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.code, true
+	}
+	return 0, false
+}
+
 // sentinelError is a memory sentinel rebuilt from a response the server
 // identified with sentinel.Header — the far half of the contract httpsrv holds
 // up, and the reason errors.Is(err, memory.ErrInvalidQuery) means the same

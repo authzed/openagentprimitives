@@ -365,7 +365,7 @@ spicedbSchema:
       #
       # `expr` is INERT, not a permission model. schema.ComposeSlots REPLACES the
       # expression of every permission an AgentClass slots with
-      # slot_grant_<permission>->interact, so what is written here survives only
+      # slot_grant_<permission> + slot_grant_<permission>->interact, so what is written here survives only
       # for a class that failed to slot the permission — and `session` is a
       # relation nothing ever writes a tuple for, so that leftover resolves to
       # nobody. The composer owns the EXPR; the prose is published as declared.

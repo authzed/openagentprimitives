@@ -69,7 +69,7 @@ spec:
           # ComposeSlots (pkg/authz/guardian/schema/slots.go) OWNS the
           # permission line for every slotted (type, permission) pair at
           # runtime — it REPLACES the placeholder with
-          # `permission advance = slot_grant_advance->interact + owner`,
+          # `permission advance = slot_grant_advance + slot_grant_advance->interact + owner`,
           # referencing this "owner" RELATION as the direct-standing leg.
           # That is also why advance_lead_stage's check below is
           # stateImpact: external, not readwrite — a direct `owner` tuple

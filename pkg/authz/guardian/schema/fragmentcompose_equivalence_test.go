@@ -102,7 +102,7 @@ func TestComposeFragments_MatchesTheConcatenationItReplaces(t *testing.T) {
 	oldText, err := composeAllParseOnly(frags, baseline, nil)
 	require.NoError(t, err)
 
-	newText, skipped, err := composeAllWithSkipped(frags, baseline, nil, nil)
+	newText, skipped, err := composeAllWithSkipped(frags, baseline, nil, nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, skipped, "no grant pairs were passed, so nothing should be skipped")
 

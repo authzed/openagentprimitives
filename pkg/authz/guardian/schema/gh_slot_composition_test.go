@@ -36,7 +36,7 @@ func shippedSchema(t *testing.T) string {
 // lets the GitHub directory sync contribute repository access ADDITIVELY, on top
 // of whatever local `owner` grant already worked. composeOneSlot OWNS a slot
 // permission's expression line and REPLACES whatever the author wrote with
-// `slot_grant_<perm>->interact + owner`. So for any AgentClass that declares a
+// `slot_grant_<perm> + slot_grant_<perm>->interact + owner`. So for any AgentClass that declares a
 // slot on that permission, `repo->can_read` is gone and the sync contributes
 // nothing through it.
 //
@@ -78,7 +78,7 @@ func TestComposeSlots_ErasesTheGhForgeTraversal(t *testing.T) {
 	block := definitionBlock(t, out, "github_repo_url")
 
 	assert.Contains(t, block,
-		"permission read = "+schema.SlotGrantRelationName("read")+"->interact + owner",
+		composedLine("read", true),
 		"the composer owns the line and writes its own expression")
 	assert.NotContains(t, block, "repo->can_read",
 		"KNOWN LIMITATION: a slot erases the forge traversal on the permission it names. "+
@@ -102,7 +102,7 @@ func TestComposeSlots_ErasesTheGhForgeTraversal(t *testing.T) {
 // ComposeSlots skips only a type the schema does not DECLARE, and github_repo is
 // still declared — as the forge-keyed type — so a stale slot is composed onto it
 // and the composer CREATES the permission it does not find. Without an `owner`
-// relation the result is `permission read = slot_grant_read->interact + owner`
+// relation the result is `permission read = slot_grant_read + slot_grant_read->interact + owner`
 // referencing nothing, and the pass that would catch that in RunAll —
 // ValidateComposedSchema, in-process — refuses the ENTIRE composed schema
 // before it ever reaches a live SpiceDB, cluster-wide, for every

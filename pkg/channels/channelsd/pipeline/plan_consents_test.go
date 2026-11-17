@@ -26,6 +26,17 @@ type planConsentCommitter struct {
 	keys      provenance.MapKeyLookup
 	decisions map[string]memory.Entry
 	failID    string
+	// checkErr is the goal server's pre-write answer; checks records askers.
+	checkErr error
+	checks   []string
+}
+
+func (c *planConsentCommitter) CheckGoalConsent(_ context.Context, request memory.Entry, decider string, _ bool) error {
+	if err := provenance.VerifyEntrySignature(c.keys, request); err != nil {
+		return err
+	}
+	c.checks = append(c.checks, decider)
+	return c.checkErr
 }
 
 func (c *planConsentCommitter) CommitGoalConsent(_ context.Context, entry memory.Entry) error {

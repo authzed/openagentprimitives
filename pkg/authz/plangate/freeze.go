@@ -144,11 +144,30 @@ func FreezeFrom(
 			}
 			ph.Consents = append(ph.Consents, canonical)
 		}
+		// A negative count is not a bound: every reader treats a count <= 0
+		// as unbounded, so a copied -1 would spend without limit while
+		// comparing as smaller than any real bound. Reported and dropped to
+		// the undeclared default (Max 1, which narrows; Budget unbounded,
+		// which is what the gate already made of it), never copied.
 		if p.Max != nil {
-			ph.Max = MaxSpec{Count: p.Max.Count, Why: p.Max.Why}
+			if p.Max.Count < 0 {
+				problems = append(problems, FreezeProblem{
+					PhaseIndex: i,
+					Detail:     fmt.Sprintf("max.count %d is negative; a negative max is not a bound, so it was dropped to the default of 1", p.Max.Count),
+				})
+			} else {
+				ph.Max = MaxSpec{Count: p.Max.Count, Why: p.Max.Why}
+			}
 		}
 		if p.Budget != nil {
-			ph.Budget = BudgetSpec{Calls: p.Budget.Calls, Why: p.Budget.Why}
+			if p.Budget.Calls < 0 {
+				problems = append(problems, FreezeProblem{
+					PhaseIndex: i,
+					Detail:     fmt.Sprintf("budget.calls %d is negative; a negative budget is not a bound, so it was dropped", p.Budget.Calls),
+				})
+			} else {
+				ph.Budget = BudgetSpec{Calls: p.Budget.Calls, Why: p.Budget.Why}
+			}
 		}
 
 		for _, perm := range p.Permissions {

@@ -20,6 +20,13 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
+// GroupGoalRunChecker answers, from the operator's occurrence record and never
+// from anything on the session a caller could write, whether ns/name is the
+// live run of a group-owned goal.
+type GroupGoalRunChecker interface {
+	GroupGoalRun(ctx context.Context, ns, name string) (bool, error)
+}
+
 // HandleInteractionDecision is the category-generic decision pipe: validate,
 // reject an already-resolved click, check standing per the category's
 // DeciderPolicy (fail-closed), invoke the bound handler, publish Applied to
@@ -66,7 +73,9 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 			return fmt.Errorf("decision session trust lookup: %w", err)
 		}
 		if session.Spec.GoalExecution != nil {
-			return fmt.Errorf("bounded goal decisions require component-only ingress")
+			if err := p.admitGoalRunChannelDecision(ctx, ns, name); err != nil {
+				return err
+			}
 		}
 	}
 	cat, ok := channelinteractions.Get(pl.Category)
@@ -334,6 +343,34 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 	// returning an error at this point.
 	if err := p.clearPendingInteraction(ctx, ns, name, pl.RequestRef); err != nil {
 		logger.Info("interaction decision: clear pending-interaction entry failed", "err", err.Error())
+	}
+	return nil
+}
+
+// admitGoalRunChannelDecision decides whether a decision on a goal run may
+// arrive on the session's ordinary inbound subject rather than the component
+// tree. A private goal's run may not. A group goal's run may: its approvals
+// (plan-gate phases, leakage shares, permission requests) are cards posted
+// into the group's conversation, and a manager's click there reaches this pipe
+// the way any transport click does. Admission says nothing about who may
+// decide — the category's decider policy below still runs unchanged, and for
+// a group run the session's approve set is the goal's managers. Participant-
+// policy categories (queued messages, provider-error retry) are therefore
+// decidable by the group's members on a group run, as on any session.
+//
+// Whether the run is a group run comes only from the operator's occurrence
+// record (GroupGoalRuns), never from the session's spec or annotations; with
+// no collaborator, or a failed lookup, the decision is refused.
+func (p *Pipeline) admitGoalRunChannelDecision(ctx context.Context, ns, name string) error {
+	if p.GroupGoalRuns == nil {
+		return fmt.Errorf("bounded goal decisions require component-only ingress")
+	}
+	group, err := p.GroupGoalRuns.GroupGoalRun(ctx, ns, name)
+	if err != nil {
+		return fmt.Errorf("goal run decision ingress (session %s/%s): %w", ns, name, err)
+	}
+	if !group {
+		return fmt.Errorf("bounded goal decisions require component-only ingress")
 	}
 	return nil
 }

@@ -287,3 +287,41 @@ func TestFreezeAndRecordPhases_tier0BudgetPricesTheUnionNotTheSum(t *testing.T) 
 	assert.Equal(t, 2, countTier0(),
 		"re-planning identical readonly reach stays auto-approved — the budget prices the union, not the sum")
 }
+
+// A group goal's run plan that names two instances of one slot type is refused
+// before it is stored: the run could hold only one, so approving it would fail
+// at the first bind. Other sessions keep today's behavior.
+func TestFreezeAndRecordPhases_groupRunRefusesTwoInstancesOfOneSlotType(t *testing.T) {
+	twoRepos := []plangate.AuthoredPhase{{
+		ID: "read", Label: "Read", Why: "read first",
+		Permissions: []plangate.AuthoredPermission{{Handle: "perm:read:tracker_issue", Why: "to read"}},
+		Slots: []plangate.AuthoredSlot{
+			{Type: "tracker_issue", ID: "issue-1", Why: "the first"},
+			{Type: "tracker_issue", ID: "issue-2", Why: "the second"},
+		},
+	}}
+	cases := []struct {
+		name      string
+		groupRun  bool
+		wantError string
+	}{
+		{name: "group run: refused, a run holds one", groupRun: true, wantError: "a run can hold one tracker_issue at a time"},
+		{name: "any other session: frozen as before", groupRun: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l, _ := freezeLoop(t)
+			l.PlanGateSlotTypes = []string{"tracker_issue"}
+			l.GroupGoalRun = tc.groupRun
+			_, err := l.FreezeAndRecordPhases(context.Background(), twoRepos)
+			if tc.wantError == "" {
+				require.NoError(t, err)
+				assert.True(t, l.planGateHasPlan)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantError)
+			assert.False(t, l.planGateHasPlan, "a refused plan governs nothing")
+		})
+	}
+}

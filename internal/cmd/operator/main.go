@@ -48,7 +48,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	_ "github.com/authzed/openagentprimitives/pkg/agent/harness/apnative"     // register the default harness
+	_ "github.com/authzed/openagentprimitives/pkg/agent/harness/apnative" // register the default harness
+	"github.com/authzed/openagentprimitives/pkg/agent/runner/leakagewiring"
 	_ "github.com/authzed/openagentprimitives/pkg/agent/tool/meta/capability" // register meta-tool capabilities for AgentClass validation
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
@@ -100,7 +101,8 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/github"      // register github kind for channel-controller validation + WebhookURLDrift; the SAME import also runs relsync_kind.go's init(), registering github's relsync.Kind for the relationshipsource controller (relsync.Get) — also reachable transitively via the relsource/imports blank import above, but this is the explicit wiring site for THIS aspect, not an accident of that one
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/local"       // register local kind for channel-controller validation
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/onepassword" // register onepassword relsync.Kind for the relationshipsource controller (relsync.Get); also reachable transitively via the relsource/imports blank import above, but this is the explicit wiring site for THIS aspect, not an accident of that one
-	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/slack"       // register slack kind for channel-controller validation
+	channelregistry "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
+	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/slack" // register slack kind for channel-controller validation
 	"github.com/authzed/openagentprimitives/pkg/cli/clikit"
 	agentclassctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentclass"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentidentity"
@@ -2293,7 +2295,15 @@ func run(cfg *config) {
 			os.Exit(1)
 		}
 	}
-	goalService := &goalmodel.Service{Store: goalStore}
+	// Group-goal writes check every reader of the conversation against the
+	// goal's sources through the kind's AudienceResolver; the Slack kind's
+	// resolver needs this binary's SpiceDB client, as in channelsd and the
+	// runner. Without it a Slack group write is refused ("audience could not
+	// be resolved"), never let through.
+	if spiceDBClient != nil {
+		leakagewiring.WireChannelKindAudienceResolvers(spiceDBClient)
+	}
+	goalService := &goalmodel.Service{Store: goalStore, GroupLinks: channelregistry.GroupMemberLinks}
 	var goalAuth goalweb.Authority
 	if spiceDBClient != nil {
 		goalAuth = spiceDBClient
@@ -2341,7 +2351,7 @@ func run(cfg *config) {
 	var goalValidator agentsessionctrl.GoalSessionValidator
 	if occurrenceStore, ok := goalStore.(goalmodel.OccurrenceStore); ok && goalAuth != nil && monitoringPublish != nil {
 		goalService.ExecutionAuth = goalHandler
-		dispatcher := &goalctrl.Dispatcher{EventRouter: eventRouter, EventDispatcher: eventDispatcher, Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString(), DeliveryMemory: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}}
+		dispatcher := &goalctrl.Dispatcher{EventRouter: eventRouter, EventDispatcher: eventDispatcher, Service: goalService, Store: occurrenceStore, Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Worker: uuid.NewString(), DeliveryMemory: &goalReplyMemory{Memory: goalMemory, Writer: opSigned}, RunGrants: goalHandler}
 		if eventHandler != nil {
 			dispatcher.EventIngester = eventHandler.Ingester
 		}
@@ -3064,7 +3074,7 @@ func run(cfg *config) {
 	ws.Register(webtoolcall.Path, &admission.Webhook{Handler: webtoolcall.New(dec)})
 	ws.Register(webskill.PathClusterSkill, &admission.Webhook{Handler: newClusterSkillWebhook(mgr.GetClient(), dec, operatorSAUsername)})
 	ws.Register(websession.Path, &admission.Webhook{Handler: websession.New(dec)})
-	ws.Register(webgoalexecution.Path, &admission.Webhook{Handler: &webgoalexecution.Handler{Decoder: dec, OperatorSubject: "system:serviceaccount:" + systemNS + ":spicebox-operator"}})
+	ws.Register(webgoalexecution.Path, &admission.Webhook{Handler: &webgoalexecution.Handler{Decoder: dec, OperatorSubject: "system:serviceaccount:" + systemNS + ":spicebox-operator", ChannelsdSubject: "system:serviceaccount:" + systemNS + ":spicebox-channelsd"}})
 	ws.Register(websubagentreq.Path, &admission.Webhook{Handler: websubagentreq.New(dec)})
 	ws.Register(webworkspacejob.Path, &admission.Webhook{Handler: webworkspacejob.New(mgr.GetAPIReader(), dec)})
 	// spiceDBClient is a real, non-nil *spicedb.Client here (construction

@@ -582,7 +582,12 @@ func run(rootCtx context.Context, cfg *config) error {
 	// no per-write signing needed — CommitPreference is not an append-only
 	// write). Satisfies pipeline.PreferenceCommitter's one method.
 	pl.PreferenceCommitter = mem.client
+	// Also the pipeline.GoalConsentChecker group goal consent requires (the
+	// assertion below keeps that from silently lapsing).
 	pl.GoalConsentCommitter = mem.client
+	// The goal server's occurrence record decides whether a goal run is a
+	// group run, whose managers' clicks arrive by ordinary channel ingress.
+	pl.GroupGoalRuns = mem.client
 
 	// Wire RestartCapable kinds. No kind implements it yet, so this loop is
 	// currently a no-op.
@@ -873,6 +878,8 @@ func run(rootCtx context.Context, cfg *config) error {
 	// constructed); a nil minter degrades to "no Manage button on App
 	// Home" rather than failing the listener.
 	mgr := newChannelManager(cli, nc, mem, mem.MemoryV2(), mem.Preferences(), personalizableClassLookup{az: az}, pl, wd, az, nil)
+	// Set before Run starts any listener, so every Deps carries it.
+	mgr.goals = mem.Goals()
 	go mgr.Run(rootCtx)
 	defer mgr.Stop(logger)
 

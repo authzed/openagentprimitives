@@ -223,6 +223,9 @@ knowledge-graph layer and durable artifacts.
   facts. Separately approved discovery policies can suggest monitoring goals.
   Each proposal needs exact human acceptance before a goal or watch exists;
   finite question limits, expiry, and source access constrain those suggestions.
+  Group goals, owned by a multi-person conversation, are opt-in and kind-neutral
+  behind `channelkinds.GroupGoalHost`: per-goal managers approve a standing plan
+  of concrete resources, and a run that needs more asks a manager.
 - **Authorization of recall:** `pkg/memory/spicedbauthorizer/`
 - **Artifacts:** `pkg/platform/artifacts/` (versioning, labels, resolve),
   `pkg/platform/artifactstore/` (the `Store` interface + `blob/`, a gocloud.dev

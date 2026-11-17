@@ -13,6 +13,10 @@ import (
 type Config struct {
 	Enabled    *bool       `json:"enabled,omitempty"`
 	EventFeeds []EventFeed `json:"eventFeeds,omitempty"`
+	// Groups opts the class in to group goals: goals owned by the members of
+	// a multi-person conversation (spec.capabilities.goals.groups). Opting in
+	// is necessary, not sufficient; the conversation's kind must qualify too.
+	Groups bool `json:"groups,omitempty"`
 }
 
 type EventFeed struct {

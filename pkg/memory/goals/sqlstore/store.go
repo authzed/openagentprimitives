@@ -218,6 +218,11 @@ func (s *Store) Commit(ctx context.Context, m goals.Mutation) (goals.Goal, error
 }
 
 func (s *Store) commit(ctx context.Context, m goals.Mutation) (goals.Goal, error) {
+	// An update must name the goal it read: the revision alone cannot see a
+	// change committed in place.
+	if m.Expected != 0 && len(m.Prior) == 0 {
+		return goals.Goal{}, fmt.Errorf("%w: an update must carry the goal it read", goals.ErrConflict)
+	}
 	gb, err := json.Marshal(m.Goal)
 	if err != nil {
 		return goals.Goal{}, err
@@ -248,6 +253,11 @@ func (s *Store) commit(ctx context.Context, m goals.Mutation) (goals.Goal, error
 	if n == 0 {
 		g, _, err := s.receipt(ctx, tx, m.Goal.Domain, m.RequestID, m.Hash)
 		return g, err
+	}
+	if m.Expected != 0 {
+		if err := s.checkPrior(ctx, tx, m); err != nil {
+			return goals.Goal{}, err
+		}
 	}
 	if m.Expected == 0 {
 		res, err = tx.ExecContext(ctx, s.query(`INSERT INTO oap_goals(domain,id,revision,state,payload) VALUES(?,?,?,?,?) ON CONFLICT(domain,id) DO NOTHING`), m.Goal.Domain.ID(), m.Goal.ID, m.Goal.Revision, string(m.Goal.State), string(gb))
@@ -313,8 +323,10 @@ func (s *Store) Published(ctx context.Context, id string) error {
 	return affected(res, err)
 }
 
+// eventTable routes an event by its id: run and in-place events are
+// sequenced in the execution audit, since neither changes the goal's revision.
 func eventTable(id string) string {
-	if strings.HasPrefix(id, "goalev-occ-") {
+	if strings.HasPrefix(id, "goalev-occ-") || strings.HasPrefix(id, "goalev-inplace-") {
 		return "oap_goal_execution_events"
 	}
 	return "oap_goal_events"
@@ -386,4 +398,79 @@ func (s *Store) migrateEventOccurrences(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+var _ goals.DomainListStore = (*Store)(nil)
+
+// inDomains is "domain IN (?, …)" for ids, with its arguments.
+func inDomains(ids []string) (string, []any) {
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return "domain IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + ")", args
+}
+
+// ListDomains reads goals by domain-ID set. The goal row carries its domain's
+// ID, and its payload the Domain itself, so no join is needed.
+func (s *Store) ListDomains(ctx context.Context, ids []string, r goals.ListRequest) (goals.Page, error) {
+	if err := goals.ValidDomainSet(ids, r); err != nil {
+		return goals.Page{}, err
+	}
+	if len(ids) == 0 {
+		return goals.Page{Goals: []goals.Goal{}}, nil
+	}
+	in, args := inDomains(ids)
+	q := `SELECT payload FROM oap_goals WHERE ` + in + ` AND id>?`
+	args = append(args, r.After)
+	if r.State != "" {
+		q += ` AND state=?`
+		args = append(args, string(r.State))
+	}
+	q += ` ORDER BY id LIMIT ?`
+	args = append(args, r.Limit+1)
+	rows, err := s.db.QueryContext(ctx, s.query(q), args...)
+	if err != nil {
+		return goals.Page{}, fmt.Errorf("list goals in %d domains: %w", len(ids), err)
+	}
+	defer rows.Close()
+	p := goals.Page{Goals: []goals.Goal{}}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return goals.Page{}, err
+		}
+		g, err := decode(raw)
+		if err != nil {
+			return goals.Page{}, err
+		}
+		p.Goals = append(p.Goals, g)
+	}
+	if err := rows.Err(); err != nil {
+		return goals.Page{}, err
+	}
+	if len(p.Goals) > r.Limit {
+		p.Goals = p.Goals[:r.Limit]
+		p.Next = p.Goals[len(p.Goals)-1].ID
+	}
+	return p, nil
+}
+
+func (s *Store) GetInDomains(ctx context.Context, ids []string, id string) (goals.Goal, error) {
+	if err := goals.ValidDomainSet(ids, goals.ListRequest{Limit: 1}); err != nil {
+		return goals.Goal{}, err
+	}
+	if len(ids) == 0 {
+		return goals.Goal{}, goals.ErrNotFound
+	}
+	in, args := inDomains(ids)
+	var raw string
+	err := s.db.QueryRowContext(ctx, s.query(`SELECT payload FROM oap_goals WHERE `+in+` AND id=?`), append(args, id)...).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return goals.Goal{}, goals.ErrNotFound
+	}
+	if err != nil {
+		return goals.Goal{}, fmt.Errorf("read goal %s in %d domains: %w", id, len(ids), err)
+	}
+	return decode(raw)
 }

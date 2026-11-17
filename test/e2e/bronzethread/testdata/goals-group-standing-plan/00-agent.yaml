@@ -1,0 +1,149 @@
+# Group-goal fixture: an agent-mode class opted in to group goals, with one
+# MCP tool per session-only resource type (a repository digest, a release
+# board), so the only route to an allowed call is a slot grant a plan approval
+# wrote — a standing plan's derived approval, or a manager's click. Two types
+# because a session's slot holds one instance of a type: a run that widens the
+# standing plan does so by naming a second resource of another type.
+#
+# Uses the scripted test provider and must not be deployed to a real cluster.
+#
+# The fake kind hosts group goals through the base schema's `group` type: a
+# conversation whose inbounds carry External["group"]=team belongs to
+# group:team, and the bundle seeds that group's members.
+#
+# grpdemo_repo is named for this fixture so guardian's cluster-wide schema
+# composition cannot collide with any toolkit's own resource type.
+apiVersion: v1
+kind: Secret
+metadata: {name: grpdemo-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "grpdemo-model-key-never-read-by-provider-test"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: grpdemo-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "grpdemo-channel-creds-never-read-by-the-fake-kind"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: grpdemo-mcp-token, namespace: default}
+type: Opaque
+stringData: {access_token: "grpdemo-mcp-token-never-checked-by-the-stub"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata: {name: grpdemo-identity, namespace: default}
+spec:
+  description: "Group-goal e2e fixture: static MCP bearer token."
+  credentials:
+    - name: grpdemo-mcp-bearer
+      type: static
+      static: {secretRef: {name: grpdemo-mcp-token, key: access_token}}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: MCPServer
+metadata: {name: grpdemo-fixture, namespace: default}
+spec:
+  name: grpdemo-fixture
+  version: v1
+  intent: "Self-contained repository-digest fixture for the e2e harness."
+  server:
+    url: "{{MCP_URL}}"   # Rewritten by the e2e harness before apply.
+    transport: http
+  auth:
+    credential: grpdemo-mcp-bearer
+  spicedbSchema:
+    resources:
+      - name: grpdemo_repo
+        # Nobody holds standing on these repositories: the only allow is
+        # the slot grant an approval writes for the run session.
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          - {name: digest, expr: owner, title: "Read the repository's weekly digest"}
+      - name: grpdemo_board
+        standing: session-only
+        relations:
+          - {name: owner, subjectType: user}
+        permissions:
+          - {name: view, expr: owner, title: "Read the release board"}
+  tools:
+    - name: digest
+      intent: "Return a repository's weekly digest."
+      args:
+        allowedFields: [repo]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: grpdemo_repo
+          resourceIDExpr: '"" + args.repo'
+          permission: digest
+      effects:
+        readOnly: true
+        idempotent: true
+    - name: board
+      intent: "Return a release board's open items."
+      args:
+        allowedFields: [board]
+      permission:
+        stateImpact: external
+        check:
+          resourceType: grpdemo_board
+          resourceIDExpr: '"" + args.board'
+          permission: view
+      effects:
+        readOnly: true
+        idempotent: true
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: grpdemo, namespace: default}
+spec:
+  displayName: GroupDigestBot
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: grpdemo-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a group-goal fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You post repository digests to the group on a schedule.
+  identityMode: agent
+  agentIdentity: grpdemo-identity
+  mcpServers:
+    - name: grpdemo
+      ref: grpdemo-fixture
+  capabilities:
+    goals: {groups: true}
+  authz:
+    informationLeakage:
+      mode: enforcing
+    toolCalls:
+      mode: enforcing
+    slots:
+      - resourceType: grpdemo_repo
+        description: "A repository whose digest the group reads"
+        permission: digest
+      - resourceType: grpdemo_board
+        description: "A release board the digest may include"
+        permission: view
+    planGate:
+      mode: enforcing
+      requirePlan: true
+      rendering:
+        maxAutoApproveHandles: 0
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: grpdemo-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: grpdemo
+  credentialsRef: {secretName: grpdemo-fake-creds}
+  fake: {echo: false}

@@ -46,7 +46,7 @@ spec:
 #
 # code_repo declares `standing: session-only` and a single `read` permission.
 # Because the AgentClass below declares code_repo as an authz slot, the composer
-# rewrites read to `slot_grant_read->interact + owner` and emits
+# rewrites read to `slot_grant_read + slot_grant_read->interact + owner` and emits
 # `relation slot_grant_read: agentsession` plus the per-type
 # `relation slot_pin: agentsession` single-occupancy carries. ONE permission on
 # ONE instance per call — deliberately not the git_repo read-on-"workspace" +

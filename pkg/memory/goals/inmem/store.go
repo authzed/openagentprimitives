@@ -97,6 +97,9 @@ func (s *Store) Commit(_ context.Context, m goals.Mutation) (goals.Goal, error) 
 	if g, ok, err := s.receipt(m.Goal.Domain, m.RequestID, m.Hash); err != nil || ok {
 		return g, err
 	}
+	if m.Expected != 0 && len(m.Prior) == 0 {
+		return goals.Goal{}, goals.ErrConflict // an update must carry the goal it read
+	}
 	b, exists := s.rows[key(m.Goal.Domain, m.Goal.ID)]
 	if m.Expected == 0 && exists || m.Expected != 0 && !exists {
 		return goals.Goal{}, goals.ErrConflict
@@ -109,6 +112,66 @@ func (s *Store) Commit(_ context.Context, m goals.Mutation) (goals.Goal, error) 
 		if old.Revision != m.Expected {
 			return goals.Goal{}, goals.ErrConflict
 		}
+		if ok, err := s.priorMatches(m); err != nil || !ok {
+			if err == nil {
+				err = goals.ErrConflict
+			}
+			return goals.Goal{}, err
+		}
+	}
+	gb, err := json.Marshal(m.Goal)
+	if err != nil {
+		return goals.Goal{}, err
+	}
+	eb, err := json.Marshal(m.Event)
+	if err != nil {
+		return goals.Goal{}, err
+	}
+	s.rows[key(m.Goal.Domain, m.Goal.ID)] = gb
+	s.receipts[key(m.Goal.Domain, m.RequestID)] = receipt{m.Hash, gb}
+	s.events[m.Event.ID] = event{data: eb}
+	s.order = append(s.order, m.Event.ID)
+	return decode(gb)
+}
+
+var _ goals.InPlaceStore = (*Store)(nil)
+
+// priorMatches reports whether the stored goal still encodes as m.Prior.
+func (s *Store) priorMatches(m goals.Mutation) (bool, error) {
+	if len(m.Prior) == 0 {
+		return true, nil
+	}
+	b, exists := s.rows[key(m.Goal.Domain, m.Goal.ID)]
+	if !exists {
+		return false, nil
+	}
+	current, err := decode(b)
+	if err != nil {
+		return false, err
+	}
+	have, err := json.Marshal(current)
+	if err != nil {
+		return false, err
+	}
+	return string(have) == string(m.Prior), nil
+}
+
+// CommitInPlace implements goals.InPlaceStore: a payload rewrite at the
+// current revision, guarded by the full stored content.
+func (s *Store) CommitInPlace(_ context.Context, m goals.Mutation) (goals.Goal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if g, ok, err := s.receipt(m.Goal.Domain, m.RequestID, m.Hash); err != nil || ok {
+		return g, err
+	}
+	if m.Expected == 0 || m.Expected != m.Goal.Revision || len(m.Prior) == 0 {
+		return goals.Goal{}, goals.ErrConflict
+	}
+	if ok, err := s.priorMatches(m); err != nil || !ok {
+		if err == nil {
+			err = goals.ErrConflict
+		}
+		return goals.Goal{}, err
 	}
 	gb, err := json.Marshal(m.Goal)
 	if err != nil {
@@ -187,4 +250,48 @@ func (s *Store) Published(_ context.Context, id string) error {
 	e.published = true
 	s.events[id] = e
 	return nil
+}
+
+var _ goals.DomainListStore = (*Store)(nil)
+
+func (s *Store) ListDomains(_ context.Context, ids []string, r goals.ListRequest) (goals.Page, error) {
+	if err := goals.ValidDomainSet(ids, r); err != nil {
+		return goals.Page{}, err
+	}
+	in := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		in[id] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := goals.Page{Goals: []goals.Goal{}}
+	for _, b := range s.rows {
+		g, err := decode(b)
+		if err != nil {
+			return goals.Page{}, err
+		}
+		if in[g.Domain.ID()] && g.ID > r.After && (r.State == "" || g.State == r.State) {
+			p.Goals = append(p.Goals, g)
+		}
+	}
+	sort.Slice(p.Goals, func(i, j int) bool { return p.Goals[i].ID < p.Goals[j].ID })
+	if len(p.Goals) > r.Limit {
+		p.Goals = p.Goals[:r.Limit]
+		p.Next = p.Goals[len(p.Goals)-1].ID
+	}
+	return p, nil
+}
+
+func (s *Store) GetInDomains(_ context.Context, ids []string, id string) (goals.Goal, error) {
+	if err := goals.ValidDomainSet(ids, goals.ListRequest{Limit: 1}); err != nil {
+		return goals.Goal{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range ids {
+		if b, ok := s.rows[d+"/"+id]; ok {
+			return decode(b)
+		}
+	}
+	return goals.Goal{}, goals.ErrNotFound
 }

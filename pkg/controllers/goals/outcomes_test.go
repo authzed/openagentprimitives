@@ -455,3 +455,47 @@ func TestDispatcherEndsOccurrenceWhoseNameIsTaken(t *testing.T) {
 		assert.NoError(t, f.k8s.Get(ctx, client.ObjectKeyFromObject(squatter), &v1.AgentSession{}), "the squatter is not deleted")
 	})
 }
+
+// secondCallRefuses lets the dispatcher's first dispatch check pass and refuses
+// the one made just before creating the session.
+type secondCallRefuses struct {
+	*runAuthority
+	calls int
+}
+
+func (a *secondCallRefuses) AuthorizeDispatch(ctx context.Context, g domain.Goal) error {
+	a.calls++
+	if a.calls > 1 {
+		return domain.ErrDenied
+	}
+	return a.runAuthority.AuthorizeDispatch(ctx, g)
+}
+
+// TestPrivateRunRefusedAtLaunchIsRetried pins that a private run refused by the
+// check just before its session is created keeps returning the error for
+// retry; only a group run's refusal ends it.
+func TestPrivateRunRefusedAtLaunchIsRetried(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 3, 5, 0, 0, 0, time.UTC)
+	source := &v1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "source", UID: "source-uid"}, Spec: v1.AgentSessionSpec{OutputChannel: &v1.ChannelBinding{Name: "inbox", Kind: "fake"}}}
+	f := newRunFixture(t, &now, nil, source)
+	_, err := f.store.Finish(ctx, f.occ, domain.OccurrenceCancelled, now)
+	require.NoError(t, err)
+	g, err := f.svc.Update(ctx, f.actor, domain.Change{ID: f.goal.ID, Revision: f.goal.Revision, RequestID: "revise", Action: "revise", Outcome: ptr.To("Send a reminder again")})
+	require.NoError(t, err)
+	g, err = f.svc.RequestExecution(ctx, f.actor, domain.ExecutionRequest{ID: g.ID, Revision: g.Revision, RequestID: "request-again", Terms: f.goal.Execution.Terms})
+	require.NoError(t, err)
+	g, err = f.svc.DecideExecution(ctx, f.actor.Domain, g.ID, domain.ExecutionDecision{RequestID: "approval-again", Digest: g.Execution.Digest, Owner: f.actor.Domain.Owner, Approved: true, Witness: "test-only-human-witness"})
+	require.NoError(t, err)
+	o, err := f.store.Schedule(ctx, g)
+	require.NoError(t, err)
+
+	auth := &secondCallRefuses{runAuthority: f.auth}
+	f.svc.Auth, f.svc.ExecutionAuth = auth, auth
+	require.ErrorIs(t, f.dispatcher("controller").Tick(ctx), domain.ErrDenied)
+	require.Equal(t, 2, auth.calls, "the refusal came from the launch-time check")
+	got, err := f.store.Occurrence(ctx, o.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Outcome, "no outcome: the private run is retried")
+	assert.NotEqual(t, domain.OccurrenceCancelled, got.State)
+}

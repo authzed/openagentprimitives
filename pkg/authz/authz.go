@@ -340,7 +340,7 @@ type Inputs struct {
 	// External denies outright without it, which is the safe default: the grant
 	// leg is asked about the SESSION (agentsession:<ns>/<name>), and with no
 	// session there is nothing to ask. Deliberately NOT the composed permission,
-	// which is `slot_grant_<p>->interact + owner` and cannot tell "a human
+	// which is `slot_grant_<p> + slot_grant_<p>->interact + owner` and cannot tell "a human
 	// approved this instance for this session" from "the requester owns it".
 	AgentSessionRef string
 

@@ -548,13 +548,13 @@ definition wiring_probe {
 	}
 
 	cleanIO := &fakeSchemaIO{}
-	res, err := schema.RunAll(context.Background(), cleanIO, identify(cleanFragment), nil, nil, nil)
+	res, err := schema.RunAll(context.Background(), cleanIO, identify(cleanFragment), nil, nil, nil, nil)
 	require.NoError(t, err, "wiring_probe without the injected `+ owner` arm must compose and write")
 	assert.True(t, res.Changed, "the clean fixture must be written")
 	assert.Equal(t, 1, cleanIO.writes, "the clean fixture must reach WriteSchema exactly once")
 
 	io := &fakeSchemaIO{}
-	_, err = schema.RunAll(context.Background(), io, identify(danglingFragment), nil, nil, nil)
+	_, err = schema.RunAll(context.Background(), io, identify(danglingFragment), nil, nil, nil, nil)
 	require.Error(t, err, "a self-contained dangling reference must refuse the compose, not merely report it")
 	assert.Contains(t, err.Error(), "owner")
 	assert.Equal(t, 0, io.writes, "an invalid schema must never reach WriteSchema")

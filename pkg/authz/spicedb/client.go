@@ -278,6 +278,18 @@ func (c *Client) CheckOnResource(ctx context.Context, resType, resID, permission
 		fmt.Sprintf("%s:%s#%s", resType, resID, permission))
 }
 
+// CheckSubjectOnResource answers <resType>:<resID>#<permission> for a
+// non-user subject <subjType>:<subjID> — an object, not a person, such as a
+// group goal's domain checked against its own execution grant. Not cached.
+func (c *Client) CheckSubjectOnResource(ctx context.Context, resType, resID, permission, subjType, subjID string, fullyConsistent bool) (bool, error) {
+	return c.check(ctx, &v1.CheckPermissionRequest{
+		Resource:    &v1.ObjectReference{ObjectType: resType, ObjectId: resID},
+		Permission:  permission,
+		Subject:     &v1.SubjectReference{Object: &v1.ObjectReference{ObjectType: subjType, ObjectId: subjID}},
+		Consistency: consistencyFor(fullyConsistent),
+	}, fmt.Sprintf("%s:%s#%s@%s:%s", resType, resID, permission, subjType, subjID))
+}
+
 // HasAnyOfType reports whether the subject holds `permission` on AT LEAST ONE
 // resource of `resType`.
 //
@@ -689,6 +701,37 @@ func (c *Client) ListDeniedUsers(ctx context.Context, ns, name string) ([]string
 		out = append(out, sub.GetObjectId())
 	}
 	return out, nil
+}
+
+// ListUserSubjects returns the canonical IDs of every user directly on
+// <resourceType>:<resourceID>#<relation>, fully consistent. Non-user subjects
+// are skipped. Used to reconcile relation tuples against a durable record of
+// who should hold them (a group goal's managers).
+func (c *Client) ListUserSubjects(ctx context.Context, resourceType, resourceID, relation string) ([]string, error) {
+	stream, err := c.cl.ReadRelationships(ctx, &v1.ReadRelationshipsRequest{
+		Consistency: &v1.Consistency{Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true}},
+		RelationshipFilter: &v1.RelationshipFilter{
+			ResourceType:       resourceType,
+			OptionalResourceId: resourceID,
+			OptionalRelation:   relation,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read %s#%s: %w", resourceType, relation, err)
+	}
+	var out []string
+	for {
+		resp, rerr := stream.Recv()
+		if rerr == io.EOF {
+			return out, nil
+		}
+		if rerr != nil {
+			return nil, fmt.Errorf("read %s#%s recv: %w", resourceType, relation, rerr)
+		}
+		if sub := resp.GetRelationship().GetSubject().GetObject(); sub.GetObjectType() == "user" {
+			out = append(out, sub.GetObjectId())
+		}
+	}
 }
 
 // CheckDenied checks agentsession:<ns>/<name>#is_denied@user:<canonicalID>.

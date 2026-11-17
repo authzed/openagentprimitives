@@ -12,6 +12,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	chregistry "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalactor"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/web/viewurn"
 )
@@ -153,9 +154,11 @@ func (p *Pipeline) deliverViewMessage(ctx context.Context, env channelevents.Env
 		if !allowed {
 			return channelkinds.DecisionToWire(channelkinds.InboundDecision{Outcome: channelkinds.OutcomeDeniedByPermission}), nil
 		}
+		// AttestOnly attests the opening prompt (spec.prompt, the runner's
+		// turn 0), which the fixed initial-prompt ref names.
 		if err := p.recordGoalActor(ctx, &sess, channelkinds.InboundEvent{ExternalIDs: channelkinds.ExternalIdentity{
 			Kind: pl.Author.Kind, ExternalID: externalID, Email: pl.Author.Email, TeamScope: pl.Author.TeamScope,
-		}}); err != nil {
+		}}, goalactor.InitialPromptRef); err != nil {
 			return fail(err)
 		}
 		return channelkinds.DecisionToWire(channelkinds.InboundDecision{Outcome: channelkinds.OutcomeRouted, RequesterCanonicalID: canonical.String()}), nil

@@ -37,9 +37,11 @@ func (channelInteractionCapability) Offer(o OfferContext) ([]tool.Tool, *SkipRea
 		return nil, nil // not channel-attached → no channel tools, not a skip
 	}
 	e := o.Env
-	var acceptReply func(context.Context, channelevents.OutboundUserMessagePayload) (delivery.Receipt, error)
+	var acceptReply func(context.Context, channelevents.OutboundUserMessagePayload) (*delivery.Receipt, error)
+	var replyPublishFailed func(context.Context, channelevents.OutboundUserMessagePayload) error
 	if o.Session != nil && o.Session.Spec.GoalExecution != nil {
 		acceptReply = meta.GoalReplyAcceptor(e.GoalsCaller)
+		replyPublishFailed = meta.GoalReplyPublishFailed(e.GoalsCaller)
 	}
 	tools := []tool.Tool{
 		meta.NewAwait(meta.AwaitConfig{
@@ -69,7 +71,8 @@ func (channelInteractionCapability) Offer(o OfferContext) ([]tool.Tool, *SkipRea
 	// reads.
 	return append([]tool.Tool{
 		meta.New(meta.RespondConfig{
-			AcceptReply: acceptReply,
+			AcceptReply:        acceptReply,
+			ReplyPublishFailed: replyPublishFailed,
 			// Both from the OUTBOUND binding: what a reply may carry, and which
 			// dialect it is written in, are facts about the transport that will
 			// RENDER it. On a split-channel session (a webhook in, a chat

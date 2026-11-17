@@ -386,7 +386,7 @@ func TestIntegration_RunAllConvergesAgainstRealSpiceDB(t *testing.T) {
 	pairs := []guardianschema.GrantPair{{ResourceType: "conv_doc", Permission: "read"}}
 	frags := []guardianschema.IdentifiedFragment{{Fragment: fragment}}
 
-	first, err := guardianschema.RunAll(ctx, io, frags, nil, pairs, nil)
+	first, err := guardianschema.RunAll(ctx, io, frags, nil, pairs, nil, nil)
 	require.NoError(t, err, "RunAll pass 1")
 	assert.True(t, first.Changed, "pass 1 must write: the grant relation is not in the base schema yet")
 
@@ -397,7 +397,7 @@ func TestIntegration_RunAllConvergesAgainstRealSpiceDB(t *testing.T) {
 	// Re-run with identical inputs. Every pass after the first must be a no-op
 	// against what the server actually returns.
 	for pass := 2; pass <= 4; pass++ {
-		res, err := guardianschema.RunAll(ctx, io, frags, nil, pairs, nil)
+		res, err := guardianschema.RunAll(ctx, io, frags, nil, pairs, nil, nil)
 		require.NoErrorf(t, err, "RunAll pass %d", pass)
 		assert.Falsef(t, res.Changed,
 			"pass %d rewrote the schema; the loop never converges and the controller rewrites SpiceDB on every reconcile", pass)

@@ -14,6 +14,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -384,6 +385,18 @@ func (h *runnerHost) AwaitDecision(ctx context.Context, reqID string, timeout ti
 		// log. Tell it the request expired so it clears that surface instead
 		// of stranding it. Deny-only; a lapsed deadline never approves.
 		h.publishTimeoutApplied(ctx, reqID, pa.kind)
+		// A group goal run ends on an approval nobody answered: no one is
+		// waiting at the other end of a run to unblock it later. Only an ask
+		// that paused the turn counts; a widget's proxy-exec approval is not
+		// the run's own. The loop reports and concludes once this turn's
+		// results are recorded.
+		//
+		// Only the approval's own deadline counts: IsTimeout also matches a
+		// cancelled context, and a cancel, pause or shutdown of the run while
+		// it waited is not a human leaving the ask unanswered.
+		if pausesTurn && groupRunApprovalDeadlineLapsed(ctx, awaitErr) {
+			h.l.noteGroupRunApprovalExpired(reqID, pa.kind)
+		}
 	}
 	// A genuine transport/publish failure inside Await — the executor cannot turn
 	// it into a verdict, so it fails closed as a Halt. A timeout is NOT an error:
@@ -486,6 +499,14 @@ func (h *runnerHost) AwaitDecision(ctx context.Context, reqID string, timeout ti
 	}
 
 	return d.Approved, d.ApproverID, timedOut, nil
+}
+
+// groupRunApprovalDeadlineLapsed reports whether an await ended because the
+// approval's own deadline passed while the run itself was still live: the
+// wait's deadline was exceeded and the caller's context is neither cancelled
+// nor past its own deadline.
+func groupRunApprovalDeadlineLapsed(ctx context.Context, awaitErr error) bool {
+	return errors.Is(awaitErr, context.DeadlineExceeded) && ctx.Err() == nil
 }
 
 // publishTimeoutApplied notifies channelsd that a host-driven approval
@@ -2300,7 +2321,7 @@ func (h *runnerHost) approverCanDelegateSlots(
 			// This does NOT weaken enforcement downstream: the grant this produces
 			// is still written, still carries a mandatory expiry, is still scoped to
 			// the session, is still revocable, and the tool-call Check still
-			// resolves slot_grant_<perm>->interact + owner against it. The only
+			// resolves slot_grant_<perm> + slot_grant_<perm>->interact + owner against it. The only
 			// dropped step is "did the approver already hold it".
 			out[ref] = permSet(perms)
 			continue
@@ -2454,10 +2475,7 @@ func (h *runnerHost) recordPlanGateDecision(
 	// which also erased it from those phases' audit records; MovePin's idempotency
 	// made that band-aid unnecessary.)
 
-	// Asked ONCE for the union and intersected per phase. A plan-scoped card
-	// covers several phases that often request the same instance, and asking
-	// SpiceDB per phase would repeat identical lookups while a human waits.
-	delegable, err := h.approverCanDelegateSlots(ctx, unionSlotRefs(pg, h.l.PlanGateSlotStanding, ConstantInstancesOf(h.l.PlanGateSurface)), approver)
+	phases, _, err := h.resolveApprovedPhases(ctx, pg, approver)
 	if err != nil {
 		// Fail closed on the GRANT. Reading an undeterminable subset as "they
 		// hold everything" would turn a lookup blip into a grant nobody
@@ -2478,21 +2496,88 @@ func (h *runnerHost) recordPlanGateDecision(
 		return
 	}
 
-	// Every covered phase's bindings are resolved BEFORE any is written, so the
-	// approval can be judged as a whole (conflictingMoveTargets) and its outcome
-	// reported once (approvalOutcome) rather than once per phase.
-	type phaseBind struct {
-		rec      plangateaudit.Content
-		bindings []authz.SlotBinding
+	for i := range phases {
+		phases[i].rec.Event = plangateaudit.EventPhaseApproved
+		phases[i].rec.PlanDigest = pg.planDigest
+		phases[i].rec.Mode = h.l.PlanGateMode
+		phases[i].rec.Provenance = "plan_gate:approved"
+		phases[i].rec.At = time.Now().UTC()
+	}
+
+	// A plan whose phases MOVE one single-occupancy pin to two different
+	// instances cannot be honored: bound phase by phase, the first move commits
+	// (revoking the prior instance) and the second then fails against the moved
+	// pin. Refuse the whole approval before anything is written or recorded, and
+	// say why — the card will be asked again and conflict again until the plan
+	// changes.
+	if conflict := phaseMoveConflict(phases); conflict != nil {
+		cause := fmt.Errorf("plan moves a single-occupancy slot to more than one instance: %v", conflict)
+		slog.Default().Info("plan_gate: refusing an approval whose phases move one pin to different instances; "+
+			"recording no approval and telling the approver",
+			"session", h.sess.Namespace+"/"+h.sess.Name,
+			"approver", approverIDOf(approver), "phase", pg.phaseIndex, "conflict", conflict)
+		h.publishPlanGateApprovalFailed(ctx, cause, moveConflictNotice(conflict))
+		return
+	}
+
+	var outcome approvalOutcome
+	for _, ph := range phases {
+		// Writes the instance-scoped SpiceDB grant that makes the approved
+		// instance the permitted one (a call against a DIFFERENT instance of
+		// the same type has no grant to succeed on) and records the matching
+		// session_scope entry alongside it — see narrowToApproved's doc comment
+		// for what each half currently does and does not enforce.
+		//
+		// Its error is not lost: a failure before any grant ran is logged
+		// inside, and a per-type failure is carried by outcome and reported to
+		// the approver below. The human's decision is recorded either way.
+		_ = h.narrowToApproved(ctx, ph.rec, ph.bindings, &outcome)
+		h.writePlanGateDecision(ctx, ph.rec)
+	}
+	// ONE notice for the whole approval, true for every type it covered.
+	if n, ok := outcome.notice(); ok {
+		slog.Default().Info("plan_gate: an approved slot bind did not fully apply; telling the approver",
+			"session", h.sess.Namespace+"/"+h.sess.Name,
+			"committed", outcome.typesWith(slotMoveCommitted), "refused", outcome.typesWith(slotRefused),
+			"faulted", outcome.typesWith(slotFault), "err", outcome.cause().Error())
+		h.publishPlanGateApprovalFailed(ctx, outcome.cause(), n)
+	}
+}
+
+// phaseBind is one approved record with the slot bindings its approval writes.
+type phaseBind struct {
+	rec      plangateaudit.Content
+	bindings []authz.SlotBinding
+	// requested and granted are the record's slot requests and the subset the
+	// approver may delegate; equal when the approver holds everything asked.
+	requested, granted []plangateaudit.SlotRef
+}
+
+// resolveApprovedPhases is the delegation half of an approval: which of every
+// covered phase's slot requests this approver may delegate, each record
+// narrowed to that subset, and the bindings each phase's approval writes. The
+// human click path and a standing approval (bindApprovedPhase) both run it, so
+// the two cannot disagree about what one approver's yes grants.
+//
+// Every covered phase's bindings are resolved BEFORE any is written, so the
+// approval can be judged as a whole (conflictingMoveTargets) and its outcome
+// reported once (approvalOutcome) rather than once per phase.
+//
+// An error means the delegable subset could not be established; the caller
+// must grant nothing, because reading an undeterminable subset as "they hold
+// everything" would turn a lookup blip into a grant nobody authorized.
+func (h *runnerHost) resolveApprovedPhases(
+	ctx context.Context, pg *pendingPlanGate, approver identity.Principal,
+) ([]phaseBind, map[plangateaudit.SlotRef]map[string]struct{}, error) {
+	// Asked ONCE for the union and intersected per phase. A plan-scoped card
+	// covers several phases that often request the same instance, and asking
+	// SpiceDB per phase would repeat identical lookups while a human waits.
+	delegable, err := h.approverCanDelegateSlots(ctx, unionSlotRefs(pg, h.l.PlanGateSlotStanding, ConstantInstancesOf(h.l.PlanGateSurface)), approver)
+	if err != nil {
+		return nil, nil, err
 	}
 	var phases []phaseBind
 	for _, rec := range approvedPhaseRecords(pg) {
-		rec.Event = plangateaudit.EventPhaseApproved
-		rec.PlanDigest = pg.planDigest
-		rec.Mode = h.l.PlanGateMode
-		rec.Provenance = "plan_gate:approved"
-		rec.At = time.Now().UTC()
-
 		// BOTH spellings narrow together, from ONE filtered list, so they cannot
 		// disagree: Slots is the type spelling every existing reader speaks and
 		// SlotRefs is the instance spelling carry-over reads, and a record that
@@ -2524,47 +2609,74 @@ func (h *runnerHost) recordPlanGateDecision(
 		// card can cover two phases that bind the same resource type to two
 		// different instances (clone from upstream/repo, push to fork/repo), and
 		// each must get its own grant, not just whichever phase raised the card.
-		phases = append(phases, phaseBind{rec: rec, bindings: h.approvedBindings(rec, pg, requested, granted, delegable)})
+		phases = append(phases, phaseBind{rec: rec, bindings: h.approvedBindings(rec, pg, requested, granted, delegable), requested: requested, granted: granted})
 	}
+	return phases, delegable, nil
+}
 
-	// A plan whose phases MOVE one single-occupancy pin to two different
-	// instances cannot be honored: bound phase by phase, the first move commits
-	// (revoking the prior instance) and the second then fails against the moved
-	// pin. Refuse the whole approval before anything is written or recorded, and
-	// say why — the card will be asked again and conflict again until the plan
-	// changes.
+// phaseMoveConflict reports the single-occupancy types the phases move to more
+// than one instance, nil when none (see conflictingMoveTargets).
+func phaseMoveConflict(phases []phaseBind) map[string][]string {
 	all := make([][]authz.SlotBinding, 0, len(phases))
 	for _, ph := range phases {
 		all = append(all, ph.bindings)
 	}
-	if conflict := conflictingMoveTargets(all); conflict != nil {
-		cause := fmt.Errorf("plan moves a single-occupancy slot to more than one instance: %v", conflict)
-		slog.Default().Info("plan_gate: refusing an approval whose phases move one pin to different instances; "+
-			"recording no approval and telling the approver",
-			"session", h.sess.Namespace+"/"+h.sess.Name,
-			"approver", approverIDOf(approver), "phase", pg.phaseIndex, "conflict", conflict)
-		h.publishPlanGateApprovalFailed(ctx, cause, moveConflictNotice(conflict))
-		return
-	}
+	return conflictingMoveTargets(all)
+}
 
+// bindApprovedPhase binds the slots of a phase approved WITHOUT a click — a
+// group goal run's phase covered by the goal's standing plan — with approver
+// (the manager who approved that plan) as delegator. rec is the record the
+// plan gate already wrote; nothing is recorded here.
+//
+// It runs the click path's own delegation and bind (resolveApprovedPhases →
+// narrowToApproved → authz.BindApproved), so a standing approval writes
+// exactly what that approver's click on the same phase would. Two things
+// differ, both in the fail-closed direction, because no human is watching:
+//
+//   - The approver's standing is re-asked here even though the goal server
+//     asked it moments ago (defense in depth: the runner's answer is the one
+//     the grant rests on), and it must cover EVERY permission of EVERY slot
+//     the phase names. A click narrows to what the approver holds and lets
+//     the rest escalate; a standing approval that bound less than the plan a
+//     manager approved would be a different approval, so it fails instead.
+//   - Any failure is returned rather than published as a notice; the gate
+//     denies the call on it.
+func (h *runnerHost) bindApprovedPhase(ctx context.Context, rec plangateaudit.Content, approver identity.Principal) error {
+	if h.l == nil || h.l.Mem == nil {
+		return fmt.Errorf("no session memory to bind the approved phase into")
+	}
+	pg := &pendingPlanGate{
+		planDigest: rec.PlanDigest, phaseIndex: phaseIndexOf(rec), phaseKey: rec.PhaseKey,
+		ceiling: rec.Ceiling, handle: rec.Handle, slots: rec.Slots, maxCount: rec.MaxCount,
+		requires: rec.Requires, consents: rec.Consents, covered: []plangateaudit.Content{rec},
+	}
+	phases, delegable, err := h.resolveApprovedPhases(ctx, pg, approver)
+	if err != nil {
+		return fmt.Errorf("could not establish which slots the approver may delegate: %w", err)
+	}
+	for _, ph := range phases {
+		for _, ref := range ph.requested {
+			held := delegable[ref]
+			for _, perm := range slotPermissionCeiling(h.l, ref.Type) {
+				if _, ok := held[perm]; !ok {
+					return fmt.Errorf("the approver can no longer delegate %s on %s", perm, slotRefLabel(ref))
+				}
+			}
+		}
+	}
+	if conflict := phaseMoveConflict(phases); conflict != nil {
+		return fmt.Errorf("plan moves a single-occupancy slot to more than one instance: %v", conflict)
+	}
 	var outcome approvalOutcome
 	for _, ph := range phases {
-		// Writes the instance-scoped SpiceDB grant that makes the approved
-		// instance the permitted one (a call against a DIFFERENT instance of
-		// the same type has no grant to succeed on) and records the matching
-		// session_scope entry alongside it — see narrowToApproved's doc comment
-		// for what each half currently does and does not enforce.
-		h.narrowToApproved(ctx, ph.rec, ph.bindings, &outcome)
-		h.writePlanGateDecision(ctx, ph.rec)
+		// narrowToApproved returns BindApproved's error itself — a per-type
+		// refusal or fault as well as a failure before any grant ran.
+		if err := h.narrowToApproved(ctx, ph.rec, ph.bindings, &outcome); err != nil {
+			return err
+		}
 	}
-	// ONE notice for the whole approval, true for every type it covered.
-	if n, ok := outcome.notice(); ok {
-		slog.Default().Info("plan_gate: an approved slot bind did not fully apply; telling the approver",
-			"session", h.sess.Namespace+"/"+h.sess.Name,
-			"committed", outcome.typesWith(slotMoveCommitted), "refused", outcome.typesWith(slotRefused),
-			"faulted", outcome.typesWith(slotFault), "err", outcome.cause().Error())
-		h.publishPlanGateApprovalFailed(ctx, outcome.cause(), n)
-	}
+	return nil
 }
 
 // narrowToApproved writes an INSTANCE-SCOPED SpiceDB slot grant for the
@@ -2606,9 +2718,9 @@ func (h *runnerHost) recordPlanGateDecision(
 //
 // The per-type outcome is folded into outcome rather than published here: a plan-scoped approval calls this once
 // per covered phase, and the approver gets one notice for the whole approval.
-func (h *runnerHost) narrowToApproved(ctx context.Context, rec plangateaudit.Content, bindings []authz.SlotBinding, outcome *approvalOutcome) {
+func (h *runnerHost) narrowToApproved(ctx context.Context, rec plangateaudit.Content, bindings []authz.SlotBinding, outcome *approvalOutcome) error {
 	if h.l.Mem == nil || len(bindings) == 0 {
-		return
+		return nil
 	}
 	scp := memory.Scope{Kind: "session", ID: h.l.SessionKey.Namespace + "/" + h.l.SessionKey.Name}
 	sess := authz.SessionRef{Namespace: h.l.SessionKey.Namespace, Name: h.l.SessionKey.Name}
@@ -2647,7 +2759,7 @@ func (h *runnerHost) narrowToApproved(ctx context.Context, rec plangateaudit.Con
 		slog.Default().Info("plan_gate: the approval was recorded but did not narrow the session; "+
 			"the approved instance is permitted and others are not excluded",
 			"session", scp.ID, "bindings", len(bindings), "err", err.Error())
-		return
+		return err
 	}
 	// Every type that bound — possibly by a MOVE — supersedes any recorded
 	// promotion refusal for it: a refusal that said "pinned to A" must not be
@@ -2660,6 +2772,7 @@ func (h *runnerHost) narrowToApproved(ctx context.Context, rec plangateaudit.Con
 	// failed, and a committed move changed the pin even on error); see
 	// mirrorApprovedSlotPins' doc comment.
 	mirrorApprovedSlotPins(ctx, h.l.Status, h.l.SlotBinder, sess, rec, bindings, time.Now())
+	return err
 }
 
 // boundResourceTypes is bindingResourceTypes minus every type err reports a

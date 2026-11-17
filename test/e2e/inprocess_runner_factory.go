@@ -1008,7 +1008,7 @@ func (f *InProcessRunnerFactory) ensurePrefsServer() bool {
 				mux.Handle("/session-events/", f.EventServer)
 			}
 		} else if f.SpiceDB != nil {
-			svc := &goalcore.Service{Store: goalinmem.New()}
+			svc := &goalcore.Service{Store: goalinmem.New(), GroupLinks: chregistry.GroupMemberLinks}
 			var keys provenance.PublisherKeyLookup
 			if f.Tokens != nil {
 				keys = f.Tokens
@@ -1553,6 +1553,14 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 				return nil
 			}
 			return func(ctx context.Context, r goalcore.Request) (goalcore.Response, error) {
+				// Stamped here, never by the tool, mirroring
+				// internal/cmd/runner/main.go's GoalsCaller: the turn's
+				// originating inbound is runner state. A group-scope request
+				// without it is refused ("request names no turn").
+				r.TurnRef = ""
+				if loop != nil {
+					r.TurnRef = loop.TurnRef()
+				}
 				return c.Goals(ctx, sess.Namespace, sess.Name, r)
 			}
 		}(),
@@ -1725,11 +1733,24 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		Logger:       logr.FromSlogHandler(slog.Default().Handler()),
 	})
 	tools := assembled.Tools
+	// groupGoalRun mirrors internal/cmd/runner/main.go: the run's exact terms
+	// come from authorize_execution, a group run keeps the class's catalog
+	// (BoundedGoalToolsForTerms), acts as its own session (GroupGoalRun) and
+	// binds standing-plan approvals (PlanGateBindsStanding).
+	groupGoalRun := false
 	if sess.Spec.GoalExecution != nil {
 		call := func(ctx context.Context, req goalcore.Request) (goalcore.Response, error) {
 			return f.preferencesClientFor(sess).Goals(ctx, sess.Namespace, sess.Name, req)
 		}
-		tools = meta.BoundedGoalTools(tools, sess.Spec.GoalExecution.ConsentDigest, func(ctx context.Context) error {
+		authority, err := call(context.Background(), goalcore.Request{Operation: "authorize_execution"})
+		if err != nil {
+			return nil, fmt.Errorf("inprocess: read goal execution terms: %w", err)
+		}
+		if authority.ExecutionTerms == nil {
+			return nil, fmt.Errorf("inprocess: goal execution terms unavailable")
+		}
+		groupGoalRun = authority.ExecutionTerms.Group != nil
+		tools = meta.BoundedGoalToolsForTerms(tools, sess.Spec.GoalExecution.ConsentDigest, *authority.ExecutionTerms, func(ctx context.Context) error {
 			_, err := call(ctx, goalcore.Request{Operation: "authorize_execution"})
 			return err
 		}, call)
@@ -1958,6 +1979,19 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 			})
 		}(),
 		PlanGateMaxCardHandles: runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
+		PlanGateBindsStanding:  groupGoalRun,
+		GroupGoalRun:           groupGoalRun,
+		// Mirror internal/cmd/runner/main.go: a group run reports blocked
+		// itself when an approval it raised expires undecided.
+		GroupRunReport: func() func(context.Context, goalcore.RunProposal) error {
+			if !groupGoalRun {
+				return nil
+			}
+			return func(ctx context.Context, p goalcore.RunProposal) error {
+				_, err := f.preferencesClientFor(sess).Goals(ctx, sess.Namespace, sess.Name, goalcore.Request{Operation: "report_execution_result", Proposal: p})
+				return err
+			}
+		}(),
 
 		System:            composedSystem,
 		UserPrompt:        userPrompt,

@@ -12,8 +12,10 @@ import (
 
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
+	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
+	"github.com/authzed/openagentprimitives/pkg/channels/notice"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
@@ -54,7 +56,12 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 		if err := p.Service.ExecutionAuth.VerifyDecision(ctx, g, *g.Execution.Decision); err != nil {
 			return err
 		}
-		if err := p.Service.ExecutionAuth.Validate(ctx, g, g.Execution.Terms); err != nil {
+		if g.Domain.GroupOwned() {
+			eligible, err := p.validateApprovedGroup(ctx, g)
+			if err != nil || !eligible {
+				return err
+			}
+		} else if err := p.Service.ExecutionAuth.Validate(ctx, g, g.Execution.Terms); err != nil {
 			if errors.Is(err, domain.ErrDenied) {
 				log.FromContext(ctx).Info("approved goal is no longer eligible for scheduling", "goal", g.ID, "error", err)
 				return nil
@@ -73,44 +80,39 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 		_, err = store.Schedule(ctx, g)
 		return err
 	}
-	if event.Action != "request_execution" {
+	if event.Action != "request_execution" && event.Action != "request_renewal" {
 		return nil
 	}
 	g, err := p.Service.Store.Get(ctx, event.Goal.Domain, event.Goal.ID)
 	if err != nil {
 		return err
 	}
-	if g.Execution == nil || g.Revision != event.Goal.Revision || g.Execution.Decision != nil {
+	if event.Action == "request_renewal" {
+		// A renewal's card is the goal as the renewal would have it, posted
+		// in the run session that hosts it (its Session), and only while it
+		// is still the undecided renewal of the approval in force.
+		r := g.PendingRenewal
+		if r == nil || event.Goal.PendingRenewal == nil || r.Digest != event.Goal.PendingRenewal.Digest || r.Decision != nil || g.Revision != r.RequestRevision+1 {
+			return nil
+		}
+		g = domain.RenewalView(g)
+	} else if g.Execution == nil || g.Revision != event.Goal.Revision || g.Execution.Decision != nil {
 		return nil
 	}
 	c := g.Execution
+	// A consent requested from a management surface is decided there, in
+	// the same click; it is never posted as a card.
+	if c.ManagementHosted() {
+		return nil
+	}
 	ns, name, ok := strings.Cut(c.Session, "/")
 	if !ok {
 		return domain.ErrInvalid
 	}
 	scope := memory.Scope{Kind: "session", ID: ns + "/" + name}
-	id := "goalconsent-request-" + c.Digest
 	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
-	entry, found, err := goalconsent.Find(ctx, p.Memory, scope, id)
+	_, request, err := p.ensureRequest(ctx, g)
 	if err != nil {
-		return err
-	}
-	if !found {
-		entry, err = consentEntry(g, time.Now().UTC())
-		if err != nil {
-			return err
-		}
-		entry, err = p.Writer.Put(ctx, entry)
-		if err != nil {
-			return err
-		}
-	}
-	var content goalconsent.Content
-	if err := json.Unmarshal(entry.Content, &content); err != nil {
-		return err
-	}
-	var request channelevents.InteractionRequestPayload
-	if err := json.Unmarshal(content.Request, &request); err != nil {
 		return err
 	}
 	if request.ExpiresAt == nil || !time.Now().Before(*request.ExpiresAt) {
@@ -119,12 +121,157 @@ func (p *ConsentPublisher) Notify(ctx context.Context, event domain.Event) error
 	if c.ApprovalMode == "plan" {
 		return nil
 	}
-	return p.publishRetainedRequest(ctx, scope, request)
+	var notice func()
+	// The operator's renewal card lasts only as long as its run, so a notice
+	// says how else to renew. A manager's own renewal is in their own
+	// conversation, where they asked.
+	if event.Action == "request_renewal" && c.SystemRenewal() {
+		notice = func() { p.noticeRenewal(ctx, g, ns, name) }
+	}
+	return p.publishRetainedRequest(ctx, scope, request, notice)
+}
+
+// EnsureRequest is ensureRequest under the publisher's lock, so it never
+// races Notify writing the same append-only record.
+func (p *ConsentPublisher) EnsureRequest(ctx context.Context, g domain.Goal) (memory.Entry, channelevents.InteractionRequestPayload, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ensureRequest(memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator"), g)
+}
+
+// FindRequest is the operator-signed request record for the consent in
+// g.Execution if it is already recorded in the consent's host scope, under
+// the publisher's lock; found is false otherwise. Unlike EnsureRequest it
+// never writes: a caller that is not the consent's host (a management
+// surface deciding a run-hosted renewal) must not re-create a record whose
+// host scope may be gone.
+func (p *ConsentPublisher) FindRequest(ctx context.Context, g domain.Goal) (memory.Entry, channelevents.InteractionRequestPayload, bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
+	entry, found, err := p.findRequest(ctx, g)
+	if err != nil || !found {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, false, err
+	}
+	request, err := requestOf(entry)
+	if err != nil {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, false, fmt.Errorf("goal %s: decoding consent request %s: %w", g.ID, entry.ID, err)
+	}
+	return entry, request, true, nil
+}
+
+// findRequest reads the request record for the consent in g.Execution from
+// its host scope.
+func (p *ConsentPublisher) findRequest(ctx context.Context, g domain.Goal) (memory.Entry, bool, error) {
+	c := g.Execution
+	if c == nil {
+		return memory.Entry{}, false, domain.ErrInvalid
+	}
+	id := "goalconsent-request-" + c.Digest
+	entry, found, err := goalconsent.Find(ctx, p.Memory, memory.Scope{Kind: "session", ID: c.Session}, id)
+	if err != nil {
+		return memory.Entry{}, false, fmt.Errorf("goal %s: reading consent request %s: %w", g.ID, id, err)
+	}
+	return entry, found, nil
+}
+
+// requestOf is the card a request record carries.
+func requestOf(entry memory.Entry) (channelevents.InteractionRequestPayload, error) {
+	var content goalconsent.Content
+	if err := json.Unmarshal(entry.Content, &content); err != nil {
+		return channelevents.InteractionRequestPayload{}, err
+	}
+	var request channelevents.InteractionRequestPayload
+	if err := json.Unmarshal(content.Request, &request); err != nil {
+		return channelevents.InteractionRequestPayload{}, err
+	}
+	return request, nil
+}
+
+// ensureRequest returns the operator-signed request record for the consent
+// in g.Execution (g is the goal as that consent's card shows it: a renewal's
+// RenewalView), writing it into the consent's host scope if it is not there
+// yet, with the card it carries. Its decision, by a card click or from a
+// management surface, is recorded beside it and witnesses it.
+func (p *ConsentPublisher) ensureRequest(ctx context.Context, g domain.Goal) (memory.Entry, channelevents.InteractionRequestPayload, error) {
+	entry, found, err := p.findRequest(ctx, g)
+	if err != nil {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, err
+	}
+	if !found {
+		entry, err = consentEntry(g, time.Now().UTC())
+		if err != nil {
+			return memory.Entry{}, channelevents.InteractionRequestPayload{}, err
+		}
+		entry, err = p.Writer.Put(ctx, entry)
+		if err != nil {
+			return memory.Entry{}, channelevents.InteractionRequestPayload{}, fmt.Errorf("goal %s: recording consent request %s: %w", g.ID, "goalconsent-request-"+g.Execution.Digest, err)
+		}
+	}
+	request, err := requestOf(entry)
+	if err != nil {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, err
+	}
+	return entry, request, nil
+}
+
+// noticeRenewal posts, beside a renewal card, a plain notice in the run that
+// hosts it (g is the renewal view): the card lasts only as long as that run,
+// so the notice says when the approval runs out and how else to renew it.
+// It is best-effort: a failure is logged, and the card is unaffected.
+func (p *ConsentPublisher) noticeRenewal(ctx context.Context, g domain.Goal, ns, name string) {
+	if g.PriorExecution == nil {
+		return
+	}
+	title := []rune(strings.Join(strings.Fields(g.Title), " "))
+	if len(title) > 200 {
+		title = append(title[:199], '…')
+	}
+	n := notice.New(categories.GoalApprovalExpiring, notice.Args{
+		Lead:     fmt.Sprintf("%s: approval expires %s.", string(title), g.PriorExecution.Terms.ExpiresAt.UTC().Format("2 Jan 2006, 15:04 UTC")),
+		NextStep: "A manager can renew it from the agent's home view, where available, or by asking me to renew it.",
+		Audience: channelevents.InteractionAudience{Scope: channelevents.AudienceParticipants},
+	})
+	if err := n.Publish(p.Publish, channelevents.SessionRef{Namespace: ns, Name: name}, "goalrenewal-notice-"+g.Execution.Digest); err != nil {
+		log.FromContext(ctx).Info("group goal renewal notice could not be posted; the renewal card was", "goal", g.ID, "session", ns+"/"+name, "error", err)
+	}
+}
+
+// validateApprovedGroup re-runs the group rules for an approved group goal,
+// with the approving manager (Decision.Owner) as the decider.
+//
+//	(true, nil)   eligible: schedule it.
+//	(false, nil)  definitively ineligible (definitiveGroupRefusal): logged,
+//	              and the event is consumed — retrying cannot help, and a
+//	              fresh approval is a new event.
+//	(false, err)  anything else — a lookup that failed, membership not yet
+//	              synced, no group validator: logged and returned, so the
+//	              outbox keeps the event and retries it.
+func (p *ConsentPublisher) validateApprovedGroup(ctx context.Context, g domain.Goal) (bool, error) {
+	v, ok := p.Service.ExecutionAuth.(domain.GroupExecutionValidator)
+	if !ok {
+		err := fmt.Errorf("group goal execution is not served by this authority")
+		log.FromContext(ctx).Info("approved group goal could not be checked for scheduling; will retry", "goal", g.ID, "digest", g.Execution.Digest, "error", err)
+		return false, err
+	}
+	err := v.ValidateGroupExecution(ctx, g, g.Execution.Terms, g.Execution.Decision.Owner)
+	if err == nil {
+		return true, nil
+	}
+	if definitiveGroupRefusal(err) {
+		log.FromContext(ctx).Info("approved group goal is no longer eligible for scheduling; it needs a fresh approval", "goal", g.ID, "digest", g.Execution.Digest, "error", err)
+		return false, nil
+	}
+	log.FromContext(ctx).Info("approved group goal could not be checked for scheduling; will retry", "goal", g.ID, "digest", g.Execution.Digest, "error", err)
+	return false, err
 }
 
 // publishRetainedRequest keeps the outbox pending until the relay records the
 // exact request. A successful bus publish alone can lose a card during restart.
-func (p *ConsentPublisher) publishRetainedRequest(ctx context.Context, scope memory.Scope, request channelevents.InteractionRequestPayload) error {
+//
+// afterPublish, when set, runs once the card itself has been handed to the
+// bus (not on a replay that finds it already retained).
+func (p *ConsentPublisher) publishRetainedRequest(ctx context.Context, scope memory.Scope, request channelevents.InteractionRequestPayload, afterPublish func()) error {
 	retained := func() (bool, error) {
 		record, found, err := parkedprompt.Find(ctx, p.Memory, scope, request.RequestRef)
 		if err != nil || !found {
@@ -160,6 +307,9 @@ func (p *ConsentPublisher) publishRetainedRequest(ctx context.Context, scope mem
 	}
 	if err := channelevents.PublishOut(p.Publish, ns, name, channelevents.KindInteractionRequest, request); err != nil {
 		return err
+	}
+	if afterPublish != nil {
+		afterPublish()
 	}
 	if found, err := retained(); err != nil || found {
 		return err
@@ -218,6 +368,13 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 	}
 	scope := memory.Scope{Kind: "session", ID: c.Session}
 	id := "goalconsent-request-" + c.Digest
+	if g.Domain.GroupOwned() {
+		request, err := groupConsentRequest(g, ns, name, id, now)
+		if err != nil {
+			return memory.Entry{}, err
+		}
+		return consentRecord(g, scope, id, request, now)
+	}
 	owner := identity.CanonicalFromTrusted(g.Domain.Owner, "verified goal domain owner")
 	email := identity.DecodeForDisplay(owner.String())
 	audience := channelevents.ExternalIdentity{Kind: "email", ExternalID: identity.RawExternalID(email), Email: identity.Email(email)}
@@ -227,18 +384,12 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 	if e != nil || canonical != owner {
 		return memory.Entry{}, domain.ErrDenied
 	}
-	details, e := json.Marshal(g)
+	details, e := json.Marshal(cardGoal(g))
 	if e != nil {
 		return memory.Entry{}, e
 	}
-	expiry := now.UTC().Add(time.Duration(c.Terms.Bounds.ApprovalSeconds) * time.Second)
-	if expiry.After(c.Terms.ExpiresAt) {
-		expiry = c.Terms.ExpiresAt
-	}
-	evidence := make([]string, 0, len(c.Terms.Evidence))
-	for _, item := range c.Terms.Evidence {
-		evidence = append(evidence, fmt.Sprintf("• %s", item))
-	}
+	expiry := cardExpiry(c, now)
+	evidence := evidenceLines(c.Terms)
 	b := c.Terms.Bounds
 	request := channelevents.InteractionRequestPayload{AgentSessionRef: channelevents.SessionRef{Namespace: ns, Name: name}, Category: categories.GoalExecutionConsent, RequestRef: id,
 		Lead: "Allow one private reminder?", Body: "Runs once at the time below. You’ll approve a fresh plan before it sends the report or reminder.",
@@ -311,11 +462,17 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 			request.Fields[len(request.Fields)-2].Value = "Unattended private reporting within these terms. A plan that asks for any other action is refused."
 		}
 	}
+	return consentRecord(g, scope, id, request, now)
+}
+
+// consentRecord is the retained request record: the goal as reviewed and the
+// exact card, bounded so its later copy into a decision witness fits.
+func consentRecord(g domain.Goal, scope memory.Scope, id string, request channelevents.InteractionRequestPayload, now time.Time) (memory.Entry, error) {
 	raw, e := json.Marshal(request)
 	if e != nil {
 		return memory.Entry{}, e
 	}
-	content, e := json.Marshal(goalconsent.Content{Goal: g, Request: raw})
+	content, e := json.Marshal(goalconsent.Content{Goal: cardGoal(g), Request: raw})
 	if e != nil {
 		return memory.Entry{}, e
 	}
@@ -324,6 +481,136 @@ func consentEntry(g domain.Goal, now time.Time) (memory.Entry, error) {
 		return memory.Entry{}, err
 	}
 	return entry, nil
+}
+
+// cardExpiry is when the card lapses unanswered: the approval timeout, but
+// never after the authorization itself ends.
+func cardExpiry(c *domain.ExecutionConsent, now time.Time) time.Time {
+	expiry := now.UTC().Add(time.Duration(c.Terms.Bounds.ApprovalSeconds) * time.Second)
+	if expiry.After(c.Terms.ExpiresAt) {
+		expiry = c.Terms.ExpiresAt
+	}
+	return expiry
+}
+
+// renewalCardExpiry is when a renewal card lapses unanswered: when the
+// approval it renews runs out, or when the run hosting it can last no longer,
+// whichever is first — not the per-run plan approval timeout, which would
+// give managers seconds to renew. The run may end sooner still; the card is
+// best-effort, and the notice beside it says how else to renew.
+//
+// A manager's own renewal (not SystemRenewal) is posted in their own
+// conversation, which outlives a run: it lasts until the approval runs out.
+func renewalCardExpiry(c, renewed *domain.ExecutionConsent, now time.Time) time.Time {
+	expiry := renewed.Terms.ExpiresAt.UTC()
+	if c.SystemRenewal() {
+		expiry = now.UTC().Add(time.Duration(c.Terms.Bounds.DurationSeconds) * time.Second)
+	}
+	if expiry.After(renewed.Terms.ExpiresAt) {
+		expiry = renewed.Terms.ExpiresAt.UTC()
+	}
+	return expiry
+}
+
+// cardGoal is g as a consent card and its signed record carry it: the goal
+// and the consent asked for, without the other consents it holds (what a
+// renewal replaces, the last approved terms), which the decision never reads
+// and which would crowd the record past its size bound.
+func cardGoal(g domain.Goal) domain.Goal {
+	g.PriorExecution, g.LastApprovedTerms, g.PendingRenewal, g.BlockedReason = nil, nil, nil, ""
+	return g
+}
+
+func evidenceLines(t domain.ExecutionTerms) []string {
+	evidence := make([]string, 0, len(t.Evidence))
+	for _, item := range t.Evidence {
+		evidence = append(evidence, fmt.Sprintf("• %s", item))
+	}
+	return evidence
+}
+
+// groupConsentRequest is a group goal's consent card. It is posted in the
+// conversation the goal was requested from (the requesting session's own
+// route), for everyone there to see; who may decide is not the audience but
+// the card's one resource — manage on this goal, checked at click time — so
+// any current manager can approve and nobody else can. No email-canonical
+// owner is needed: a group has none.
+//
+// Trusted fields are computed from the terms: schedule, bounds, destination
+// and the standing plan's What, rendered by the plan gate's own card builder.
+// Everything the model wrote (title, outcome, evidence, the plan's Why) goes in
+// the inert excerpt.
+func groupConsentRequest(g domain.Goal, ns, name, id string, now time.Time) (channelevents.InteractionRequestPayload, error) {
+	c := g.Execution
+	t := c.Terms
+	if t.Group == nil {
+		return channelevents.InteractionRequestPayload{}, fmt.Errorf("%w: a group goal's consent needs its group destination", domain.ErrInvalid)
+	}
+	details, err := json.Marshal(cardGoal(g))
+	if err != nil {
+		return channelevents.InteractionRequestPayload{}, err
+	}
+	expiry := cardExpiry(c, now)
+	if c.IsRenewal() && g.PriorExecution != nil {
+		expiry = renewalCardExpiry(c, g.PriorExecution, now)
+	}
+	b := t.Bounds
+	when := channelevents.InteractionField{Label: "Run once", Value: t.DueAt.UTC().Format("2 Jan 2006, 15:04:05 UTC")}
+	if schedule := t.Schedule; schedule != nil {
+		description, err := sessionschedule.Describe(*schedule)
+		if err != nil {
+			return channelevents.InteractionRequestPayload{}, err
+		}
+		loc, err := time.LoadLocation(schedule.Timezone)
+		if err != nil {
+			return channelevents.InteractionRequestPayload{}, err
+		}
+		when = channelevents.InteractionField{Label: "Schedule", Value: fmt.Sprintf("%s at %s · %s · up to %d runs", description, t.DueAt.In(loc).Format("15:04:05"), schedule.Timezone, schedule.MaxRuns)}
+	}
+	identityLine := "The agent's own identity"
+	if t.AgentIdentity != "" {
+		identityLine = "The agent's identity " + strconv.Quote(t.AgentIdentity)
+	}
+	fields := []channelevents.InteractionField{
+		when,
+		{Label: "Authorization ends", Value: t.ExpiresAt.UTC().Format("2 Jan 2006, 15:04:05 UTC")},
+		{Label: "Limits per run", Value: fmt.Sprintf("%d seconds · %d turns · %d tokens", b.DurationSeconds, b.Turns, b.Tokens)},
+		{Label: "Posts to", Value: t.Group.Channel + " (this conversation)"},
+		// "Agent" is read back as the agent's display name; keep it bare.
+		{Label: "Agent", Value: g.Domain.Class},
+		{Label: "Acts as", Value: identityLine},
+		{Label: "Who can approve", Value: fmt.Sprintf("Any manager of this goal (%d listed)", len(g.Managers))},
+		{Label: "Plan approval timeout", Value: fmt.Sprintf("%d seconds", b.ApprovalSeconds)},
+	}
+	body := "Runs act as the agent and post here. Each run asks a manager of this goal to approve a fresh plan before it acts. Any manager can pause or cancel it."
+	var rationale string
+	if t.StandingPlan != nil {
+		plan := plangate.BuildCard(plangate.CardInput{Plan: *t.StandingPlan, WholePlan: true})
+		fields = append(fields, channelevents.InteractionField{Label: "Standing plan", Value: plan.What})
+		rationale = plan.Why
+		if t.ActionApproval == "standing_plan" {
+			body = "Runs act as the agent and post here. A run whose plan stays within the standing plan below needs no further approval; anything beyond it asks a manager of this goal. Any manager can pause or cancel it."
+		}
+	}
+	excerpt := fmt.Sprintf("%s\n\nOutcome: %s\n\nRequired evidence:\n%s", g.Title, g.Outcome, strings.Join(evidenceLines(t), "\n"))
+	if rationale != "" {
+		excerpt += "\n\nThe agent's reasons for the plan:\n" + rationale
+	}
+	lead := "Approve this group goal's standing plan?"
+	if c.IsRenewal() {
+		// The operator asks, not a person: say what it continues.
+		lead = "Renew this group goal's approval?"
+		body = "Approving continues the current approval on the same terms from the time below; until then the current approval stays in force, and if nobody approves, the goal stops when it runs out. " + body
+	}
+	typ, goalID, perm := g.ManageRef()
+	return channelevents.InteractionRequestPayload{AgentSessionRef: channelevents.SessionRef{Namespace: ns, Name: name}, Category: categories.GoalGroupExecutionConsent, RequestRef: id,
+		Lead: lead, Body: body, Fields: fields,
+		Excerpt:   &channelevents.InteractionExcerpt{Label: fmt.Sprintf("Goal · revision %d", g.Revision), Content: excerpt},
+		Details:   details,
+		Resources: []channelevents.InteractionResourceRef{{Type: typ, ID: goalID, Permission: perm}},
+		Audience:  channelevents.InteractionAudience{Scope: channelevents.AudienceParticipants},
+		ExpiresAt: &expiry,
+		Actions:   []channelevents.InteractionAction{{ID: "approve", Label: "Approve", Kind: channelevents.ActionKindDecision}, {ID: "deny", Label: "Decline", Kind: channelevents.ActionKindDecision}}}, nil
 }
 
 const maxConsentContentBytes = 30000

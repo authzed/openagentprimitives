@@ -53,6 +53,15 @@ func (a *authority) WriteRelationships(_ context.Context, rels []authz.Relation)
 	return nil
 }
 func (a *authority) DeleteRelationships(context.Context, []authz.Relation) error { return nil }
+func (a *authority) ListUserSubjects(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+func (a *authority) LookupResourceIDs(_ context.Context, typ, perm string, _ identity.CanonicalUserID) ([]string, bool, error) {
+	return nil, false, fmt.Errorf("unexpected lookup %s#%s on a private goal", typ, perm)
+}
+func (a *authority) CheckSubjectOnResource(_ context.Context, typ, id, perm, subjType, _ string, _ bool) (bool, error) {
+	return false, fmt.Errorf("unexpected subject check %s:%s#%s@%s on a private goal", typ, id, perm, subjType)
+}
 func (a *authority) GrantSlots(context.Context, string, string, []authz.SlotBinding, time.Time) error {
 	a.grants++
 	return nil

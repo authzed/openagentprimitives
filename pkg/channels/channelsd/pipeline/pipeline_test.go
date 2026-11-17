@@ -116,9 +116,12 @@ type fakeAuthz struct {
 	// checkOwnerResult.
 	checkApproveResult bool
 	checkApproveErr    error
-	checkOwnerResult   bool
-	checkOwnerErr      error
-	checkOwnerFn       func(resType, resID, canonicalID string) (bool, error)
+	// checkApproveFn, when set, answers CheckApprove per decider and takes
+	// priority over checkApproveResult.
+	checkApproveFn   func(canonicalID string) (bool, error)
+	checkOwnerResult bool
+	checkOwnerErr    error
+	checkOwnerFn     func(resType, resID, canonicalID string) (bool, error)
 }
 
 func (f *fakeAuthz) TouchSlackUser(_ context.Context, _, _ string) error {
@@ -227,7 +230,10 @@ func (f *fakeAuthz) LookupInteractSubjects(_ context.Context, _, _ string) ([]st
 }
 
 // CheckApprove and CheckOwnerOnResource satisfy engine.ApproverCheckerImpl.
-func (f *fakeAuthz) CheckApprove(_ context.Context, _, _ string, _ identity.CanonicalUserID, _ bool) (bool, error) {
+func (f *fakeAuthz) CheckApprove(_ context.Context, _, _ string, canonicalID identity.CanonicalUserID, _ bool) (bool, error) {
+	if f.checkApproveFn != nil {
+		return f.checkApproveFn(canonicalID.String())
+	}
 	return f.checkApproveResult, f.checkApproveErr
 }
 func (f *fakeAuthz) CheckOwnerOnResource(_ context.Context, resType, resID string, canonicalID identity.CanonicalUserID, _ bool) (bool, error) {
