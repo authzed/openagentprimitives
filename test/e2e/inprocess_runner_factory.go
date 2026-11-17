@@ -1008,7 +1008,7 @@ func (f *InProcessRunnerFactory) ensurePrefsServer() bool {
 				mux.Handle("/session-events/", f.EventServer)
 			}
 		} else if f.SpiceDB != nil {
-			svc := &goalcore.Service{Store: goalinmem.New()}
+			svc := &goalcore.Service{Store: goalinmem.New(), GroupLinks: chregistry.GroupMemberLinks}
 			var keys provenance.PublisherKeyLookup
 			if f.Tokens != nil {
 				keys = f.Tokens
@@ -1553,6 +1553,14 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 				return nil
 			}
 			return func(ctx context.Context, r goalcore.Request) (goalcore.Response, error) {
+				// Stamped here, never by the tool, mirroring
+				// internal/cmd/runner/main.go's GoalsCaller: the turn's
+				// originating inbound is runner state. A group-scope request
+				// without it is refused ("request names no turn").
+				r.TurnRef = ""
+				if loop != nil {
+					r.TurnRef = loop.TurnRef()
+				}
 				return c.Goals(ctx, sess.Namespace, sess.Name, r)
 			}
 		}(),

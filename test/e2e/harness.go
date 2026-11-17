@@ -2347,6 +2347,31 @@ func (h *Harness) applyManifestLabeled(yamlBlob, source string) {
 					source, gvk.Kind, obj.GetName(), err, upErr)
 			}
 		}
+		h.reapplyExplicitSpec(ctx, source, gvk, obj, raw)
+	}
+}
+
+// reapplyExplicitSpec merge-patches the manifest's own spec back onto one of
+// this project's objects after the typed write.
+//
+// The typed write drops every zero value on an omitempty field, so the API
+// server's default fills it in: `maxAutoApproveHandles: 0` written in a
+// fixture arrives as the CRD default 8. Goal execution requires that zero, and
+// no fixture could say so. The patch carries the manifest bytes as written, so
+// an explicit zero survives the way it does under kubectl apply; for a spec
+// with no explicit zero it changes nothing.
+func (h *Harness) reapplyExplicitSpec(ctx context.Context, source string, gvk *metav1.GroupVersionKind, obj client.Object, raw map[string]any) {
+	h.t.Helper()
+	spec, ok := raw["spec"]
+	if !ok || gvk.Group != spiceboxv1alpha1.GroupName {
+		return
+	}
+	patch, err := json.Marshal(map[string]any{"spec": spec})
+	if err != nil {
+		h.t.Fatalf("ApplyManifest(%s): %s/%s: encode spec patch: %v", source, gvk.Kind, obj.GetName(), err)
+	}
+	if err := h.K8s.Patch(ctx, obj, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		h.t.Fatalf("ApplyManifest(%s): %s/%s: re-apply explicit spec: %v", source, gvk.Kind, obj.GetName(), err)
 	}
 }
 

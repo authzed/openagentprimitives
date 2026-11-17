@@ -1,6 +1,7 @@
 // The "interaction" sub-channel sender for the fake kind: the generic
-// Interaction model's recorder. One sub-channel name routes BOTH the request
-// leg (KindInteractionRequest) and the applied leg (KindInteractionApplied),
+// Interaction model's recorder. One sub-channel name routes the request leg
+// (KindInteractionRequest), the applied leg (KindInteractionApplied) and a
+// refused click's notice to its clicker (KindInteractionDecisionRejected),
 // mirroring the outbound relay's dispatch. Sender, recorded types and public
 // accessors live together here rather than split across kind.go.
 package fake
@@ -59,6 +60,15 @@ func (s *fakeInteractionSender) Send(_ context.Context, sess channelkinds.Sessio
 		s.drv.interactionApplieds = append(s.drv.interactionApplieds, recordedInteractionApplied{Payload: pl, SessionRef: sess})
 		s.drv.mu.Unlock()
 		return channelkinds.SubChannelSendResult{RequestRef: pl.RequestRef}, nil
+	case channelevents.KindInteractionDecisionRejected:
+		var pl channelevents.InteractionDecisionRejectedPayload
+		if err := json.Unmarshal(env.Payload, &pl); err != nil {
+			return channelkinds.SubChannelSendResult{}, fmt.Errorf("fake interaction sender: decode decision rejection: %w", err)
+		}
+		s.drv.mu.Lock()
+		s.drv.interactionRejections = append(s.drv.interactionRejections, InteractionRejection{Payload: pl, SessionRef: sess})
+		s.drv.mu.Unlock()
+		return channelkinds.SubChannelSendResult{RequestRef: pl.RequestRef}, nil
 	default:
 		return channelkinds.SubChannelSendResult{}, fmt.Errorf("fake interaction sender: unsupported envelope kind %q", env.Kind)
 	}
@@ -110,4 +120,20 @@ func (d *Driver) InteractionApplieds() []InteractionApplied {
 		out[i] = InteractionApplied{Payload: p.Payload, SessionRef: p.SessionRef}
 	}
 	return out
+}
+
+// InteractionRejection is one captured KindInteractionDecisionRejected
+// envelope: the decision pipe refused a click, and this is the notice a real
+// surface would show the clicker.
+type InteractionRejection struct {
+	Payload    channelevents.InteractionDecisionRejectedPayload
+	SessionRef channelkinds.SessionInfo
+}
+
+// InteractionRejections returns a snapshot of every refused click recorded by
+// this Driver's interaction sub-channel sender, in arrival order.
+func (d *Driver) InteractionRejections() []InteractionRejection {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]InteractionRejection(nil), d.interactionRejections...)
 }

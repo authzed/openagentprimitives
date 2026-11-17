@@ -1,0 +1,1023 @@
+{
+  "name": "goals-group-standing-plan",
+  "description": "A group goal's whole life on the fake kind's group contract, driven through the production goal server, consent, dispatcher, runner gates and delivery receiver. creator@example.com (a member of group:team) creates a group goal in the shared conversation, adds approver@example.com as a manager and steps down; the conversation's own goal writes go through an enforcing plan gate, and the second person joins the thread through the starter's session-join card. approver@example.com asks for four scheduled runs under a standing plan naming one concrete repository. The standing-plan consent card is posted in the conversation: the creator's click is REFUSED (no longer a manager) and the approver's is applied.\n\nRun 1 declares exactly the standing plan: no card is published in its session, and the digest tool, which is EXTERNAL on a session-only type, returns its value — reachable only through the slot grant the derived standing approval bound for the run session. Run 2 widens phase 0 with a second resource (a release board), so it falls back to a plan card in its own thread: the creator's click is refused (members are participants, not approvers), the approver's is applied, and the board tool's result arrives. Run 3 declares exactly the standing plan again, AFTER a widened run: still no card, and the digest still arrives through the derived binding — the standing approval was neither consumed by run 1 nor replaced by run 2's card. Run 4 widens the same way as run 2 and nobody answers: after the terms' 20-second approvalSeconds the runner ends the run itself and records a blocked result naming the unanswered approval.\n\nEvery claim about a run is read from the occurrence ledger (assert.goalRuns: reported status, summary, reply delivery state, cards per run session) and from the tool results the transcript is handed, never from the agent's reply. Four runs because the claim is durability: a covered run after a widened one proves the standing approval keeps covering run after run, and the widened runs prove it keeps refusing to cover more than it names. Runs fire on the real clock (60-second interval), so this bundle takes about three minutes.",
+  "agentDir": "testdata/goals-group-standing-plan",
+  "agentClass": "grpdemo",
+  "defaultUser": "creator@example.com",
+  "seedRelationships": [
+    {
+      "resource": "group:team",
+      "relation": "member",
+      "subject": "user:creator@example.com"
+    },
+    {
+      "resource": "group:team",
+      "relation": "member",
+      "subject": "user:approver@example.com"
+    }
+  ],
+  "goals": {
+    "execution": true,
+    "conversation": {
+      "group": "team"
+    },
+    "decisions": [
+      {
+        "category": "plan_phase",
+        "as": "creator@example.com",
+        "action": "approve",
+        "want": "applied"
+      },
+      {
+        "category": "permission_request",
+        "as": "creator@example.com",
+        "action": "approve",
+        "want": "applied"
+      },
+      {
+        "category": "goal_group_execution_consent",
+        "as": "creator@example.com",
+        "action": "approve",
+        "want": "rejected"
+      },
+      {
+        "category": "goal_group_execution_consent",
+        "as": "approver@example.com",
+        "action": "approve",
+        "want": "applied"
+      },
+      {
+        "category": "plan_phase",
+        "as": "creator@example.com",
+        "action": "approve",
+        "want": "rejected",
+        "nth": 1
+      },
+      {
+        "category": "plan_phase",
+        "as": "approver@example.com",
+        "action": "approve",
+        "want": "applied",
+        "nth": 1
+      }
+    ],
+    "audience": [
+      "creator@example.com",
+      "approver@example.com"
+    ]
+  },
+  "userTurns": [
+    "Create a weekly digest goal for acme-widgets for this group, make approver@example.com its manager, and take me off it.",
+    {
+      "text": "Run the digest every minute, four times, under a standing plan that reads acme-widgets and posts here.",
+      "user": "approver@example.com"
+    }
+  ],
+  "toolOutputs": {
+    "digest": {
+      "digest": "DIGEST-7F3A"
+    },
+    "board": {
+      "items": "BOARD-91C2"
+    }
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "weekly digest goal",
+        "toolOffered": "create_goal"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "list_goals",
+            "args": {
+              "scope": "group"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "list_goals",
+        "lastToolResultIsError": false,
+        "capture": {
+          "resource": "\"resource\":\"([^\"]+)\""
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "setup",
+                  "label": "Set up the group's digest goal",
+                  "status": "pending",
+                  "phase": "manage"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "manage",
+                  "label": "Set up the group goal",
+                  "why": "the group asked for a weekly digest goal",
+                  "permissions": [
+                    {
+                      "handle": "perm:manage:agent_goal_domain",
+                      "why": "create the goal, hand it over and ask for its runs"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "create_goal",
+            "args": {
+              "scope": "group",
+              "resource": "{{resource}}",
+              "requestID": "create-digest",
+              "title": "Weekly repository digest",
+              "outcome": "Post the acme-widgets digest to the group"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "create_goal",
+        "lastToolResultIsError": false,
+        "capture": {
+          "goal": "\"goal\":\\{.*?\"id\":\"([^\"]+)\"",
+          "rev": "\"goal\":\\{.*?\"revision\":(\\d+)"
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_goal",
+            "args": {
+              "scope": "group",
+              "resource": "{{resource}}",
+              "requestID": "activate-digest",
+              "id": "{{goal}}",
+              "revision": "{{int:rev}}",
+              "action": "activate"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_goal",
+        "lastToolResultIsError": false,
+        "capture": {
+          "rev": "\"goal\":\\{.*?\"revision\":(\\d+)"
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_goal",
+            "args": {
+              "scope": "group",
+              "resource": "{{resource}}",
+              "requestID": "add-approver",
+              "id": "{{goal}}",
+              "revision": "{{int:rev}}",
+              "action": "add_manager",
+              "manager": "{{user:approver@example.com}}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_goal",
+        "lastToolResultIsError": false,
+        "capture": {
+          "rev": "\"goal\":\\{.*?\"revision\":(\\d+)"
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_goal",
+            "args": {
+              "scope": "group",
+              "resource": "{{resource}}",
+              "requestID": "remove-creator",
+              "id": "{{goal}}",
+              "revision": "{{int:rev}}",
+              "action": "remove_manager",
+              "manager": "{{user:creator@example.com}}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_goal",
+        "lastToolResultIsError": false,
+        "capture": {
+          "rev": "\"goal\":\\{.*?\"revision\":(\\d+)"
+        }
+      },
+      "reply": [
+        {
+          "text": "Created the weekly digest goal; approver@example.com now manages it."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "group goal created"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "userTextContains": "standing plan",
+        "toolOffered": "request_goal_execution"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "request_goal_execution",
+            "args": {
+              "scope": "group",
+              "resource": "{{resource}}",
+              "requestID": "digest-standing",
+              "id": "{{goal}}",
+              "revision": "{{int:rev}}",
+              "terms": {
+                "actionApproval": "standing_plan",
+                "dueAt": "{{now+30s}}",
+                "expiresAt": "{{now+120h}}",
+                "schedule": {
+                  "kind": "interval",
+                  "timezone": "UTC",
+                  "intervalSeconds": 60,
+                  "maxRuns": 4,
+                  "runWindowSeconds": 55
+                },
+                "bounds": {
+                  "durationSeconds": 180,
+                  "turns": 20,
+                  "tokens": 20000,
+                  "approvalSeconds": 20
+                },
+                "allowedOperations": [
+                  "respond_to_user"
+                ],
+                "evidence": [
+                  "digest token"
+                ],
+                "standingPlan": [
+                  {
+                    "id": "read",
+                    "label": "Read the repository digest",
+                    "why": "the group asked for a weekly digest of this repository",
+                    "permissions": [
+                      {
+                        "handle": "perm:digest:grpdemo_repo",
+                        "why": "read the digest"
+                      }
+                    ],
+                    "slots": [
+                      {
+                        "type": "grpdemo_repo",
+                        "id": "acme-widgets",
+                        "why": "the repository the digest covers"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "post",
+                    "label": "Post the digest",
+                    "why": "deliver the digest to the group",
+                    "permissions": [
+                      {
+                        "handle": "perm:execute:agent_goal_execution",
+                        "why": "deliver and record the digest"
+                      }
+                    ],
+                    "requires": [
+                      {
+                        "phase": "read",
+                        "why": "nothing to post before the digest is read"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "request_goal_execution",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "text": "Asked the goal's managers to approve the standing plan."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "standing plan requested"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "userTextContains": "bounded execution of group goal",
+        "toolOffered": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "read",
+                  "label": "Read the digest",
+                  "status": "pending",
+                  "phase": "read"
+                },
+                {
+                  "id": "post",
+                  "label": "Post the digest",
+                  "status": "pending",
+                  "phase": "post"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "read",
+                  "label": "Read the repository digest",
+                  "why": "this run reads the digest",
+                  "permissions": [
+                    {
+                      "handle": "perm:digest:grpdemo_repo",
+                      "why": "read the digest"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "grpdemo_repo",
+                      "id": "acme-widgets",
+                      "why": "the repository the digest covers"
+                    }
+                  ]
+                },
+                {
+                  "id": "post",
+                  "label": "Post the digest",
+                  "why": "deliver it to the group",
+                  "permissions": [
+                    {
+                      "handle": "perm:execute:agent_goal_execution",
+                      "why": "deliver and record the digest"
+                    }
+                  ],
+                  "requires": [
+                    {
+                      "phase": "read",
+                      "why": "nothing to post before the digest is read"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "grpdemo_digest",
+            "args": {
+              "operation_id": "op-digest-1",
+              "_reason": "reading the digest this run posts",
+              "args": {
+                "repo": "acme-widgets"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "grpdemo_digest",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "DIGEST-7F3A"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "complete_phase",
+            "args": {
+              "index": 0,
+              "outcome": "read the digest"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "complete_phase",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "select_phase",
+            "args": {
+              "index": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "select_phase",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "text": "Weekly digest for acme-widgets: DIGEST-7F3A"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "report_goal_result",
+            "args": {
+              "requestID": "run-1",
+              "status": "reported_success",
+              "summary": "Posted the acme-widgets digest (DIGEST-7F3A)",
+              "evidence": [
+                "digest DIGEST-7F3A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "report_goal_result",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "digest posted"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "userTextContains": "bounded execution of group goal",
+        "toolOffered": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "read",
+                  "label": "Read the digest",
+                  "status": "pending",
+                  "phase": "read"
+                },
+                {
+                  "id": "post",
+                  "label": "Post the digest",
+                  "status": "pending",
+                  "phase": "post"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "read",
+                  "label": "Read the repository digest",
+                  "why": "this run reads the digest",
+                  "permissions": [
+                    {
+                      "handle": "perm:digest:grpdemo_repo",
+                      "why": "read the digest"
+                    },
+                    {
+                      "handle": "perm:view:grpdemo_board",
+                      "why": "read the release board"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "grpdemo_repo",
+                      "id": "acme-widgets",
+                      "why": "the repository the digest covers"
+                    },
+                    {
+                      "type": "grpdemo_board",
+                      "id": "release-board",
+                      "why": "this week's digest also lists the release board"
+                    }
+                  ]
+                },
+                {
+                  "id": "post",
+                  "label": "Post the digest",
+                  "why": "deliver it to the group",
+                  "permissions": [
+                    {
+                      "handle": "perm:execute:agent_goal_execution",
+                      "why": "deliver and record the digest"
+                    }
+                  ],
+                  "requires": [
+                    {
+                      "phase": "read",
+                      "why": "nothing to post before the digest is read"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "grpdemo_board",
+            "args": {
+              "operation_id": "op-board-2",
+              "_reason": "reading the release board this digest adds",
+              "args": {
+                "board": "release-board"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "grpdemo_board",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "BOARD-91C2"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "complete_phase",
+            "args": {
+              "index": 0,
+              "outcome": "read the digest"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "complete_phase",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "select_phase",
+            "args": {
+              "index": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "select_phase",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "text": "Weekly digest with the release board: BOARD-91C2"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "report_goal_result",
+            "args": {
+              "requestID": "run-2",
+              "status": "reported_success",
+              "summary": "Posted the digest with the release board (BOARD-91C2)",
+              "evidence": [
+                "board BOARD-91C2"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "report_goal_result",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "digest posted"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "userTextContains": "bounded execution of group goal",
+        "toolOffered": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "read",
+                  "label": "Read the digest",
+                  "status": "pending",
+                  "phase": "read"
+                },
+                {
+                  "id": "post",
+                  "label": "Post the digest",
+                  "status": "pending",
+                  "phase": "post"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "read",
+                  "label": "Read the repository digest",
+                  "why": "this run reads the digest",
+                  "permissions": [
+                    {
+                      "handle": "perm:digest:grpdemo_repo",
+                      "why": "read the digest"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "grpdemo_repo",
+                      "id": "acme-widgets",
+                      "why": "the repository the digest covers"
+                    }
+                  ]
+                },
+                {
+                  "id": "post",
+                  "label": "Post the digest",
+                  "why": "deliver it to the group",
+                  "permissions": [
+                    {
+                      "handle": "perm:execute:agent_goal_execution",
+                      "why": "deliver and record the digest"
+                    }
+                  ],
+                  "requires": [
+                    {
+                      "phase": "read",
+                      "why": "nothing to post before the digest is read"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "grpdemo_digest",
+            "args": {
+              "operation_id": "op-digest-3",
+              "_reason": "reading the digest this run posts",
+              "args": {
+                "repo": "acme-widgets"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "grpdemo_digest",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "DIGEST-7F3A"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "complete_phase",
+            "args": {
+              "index": 0,
+              "outcome": "read the digest"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "complete_phase",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "select_phase",
+            "args": {
+              "index": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "select_phase",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "text": "Weekly digest for acme-widgets: DIGEST-7F3A"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "report_goal_result",
+            "args": {
+              "requestID": "run-3",
+              "status": "reported_success",
+              "summary": "Posted the acme-widgets digest (DIGEST-7F3A)",
+              "evidence": [
+                "digest DIGEST-7F3A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "report_goal_result",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "digest posted"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "userTextContains": "bounded execution of group goal",
+        "toolOffered": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "read",
+                  "label": "Read the digest",
+                  "status": "pending",
+                  "phase": "read"
+                },
+                {
+                  "id": "post",
+                  "label": "Post the digest",
+                  "status": "pending",
+                  "phase": "post"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "read",
+                  "label": "Read the repository digest",
+                  "why": "this run reads the digest",
+                  "permissions": [
+                    {
+                      "handle": "perm:digest:grpdemo_repo",
+                      "why": "read the digest"
+                    },
+                    {
+                      "handle": "perm:view:grpdemo_board",
+                      "why": "read the release board"
+                    }
+                  ],
+                  "slots": [
+                    {
+                      "type": "grpdemo_repo",
+                      "id": "acme-widgets",
+                      "why": "the repository the digest covers"
+                    },
+                    {
+                      "type": "grpdemo_board",
+                      "id": "release-board",
+                      "why": "this week's digest also lists the release board"
+                    }
+                  ]
+                },
+                {
+                  "id": "post",
+                  "label": "Post the digest",
+                  "why": "deliver it to the group",
+                  "permissions": [
+                    {
+                      "handle": "perm:execute:agent_goal_execution",
+                      "why": "deliver and record the digest"
+                    }
+                  ],
+                  "requires": [
+                    {
+                      "phase": "read",
+                      "why": "nothing to post before the digest is read"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "grpdemo_board",
+            "args": {
+              "operation_id": "op-board-3",
+              "_reason": "reading the release board this digest adds",
+              "args": {
+                "board": "release-board"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "toolsCalled": [
+      "list_goals",
+      "create_goal",
+      "update_goal",
+      "request_goal_execution"
+    ],
+    "agentReplyContains": [
+      "approver@example.com now manages it",
+      "Asked the goal's managers"
+    ],
+    "approvalPrompts": 5,
+    "goalRuns": [
+      {
+        "proposal": "reported_success",
+        "summaryContains": "acme-widgets",
+        "approvalPrompts": 0,
+        "reply": "accepted"
+      },
+      {
+        "proposal": "reported_success",
+        "summaryContains": "release board",
+        "approvalPrompts": 1,
+        "reply": "accepted"
+      },
+      {
+        "proposal": "reported_success",
+        "summaryContains": "acme-widgets",
+        "approvalPrompts": 0,
+        "reply": "accepted"
+      },
+      {
+        "proposal": "blocked",
+        "summaryContains": "received no decision before its deadline",
+        "approvalPrompts": 1
+      }
+    ]
+  }
+}
