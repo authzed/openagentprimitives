@@ -30,6 +30,9 @@ type turnContent struct {
 	Refused bool `json:"refused,omitempty"`
 	// Model is "<provider>/<served-model>"; empty on user turns.
 	Model string `json:"model,omitempty"`
+	// InboundRef is channelsd's per-inbound ref, on an "inbox" item and the
+	// "user" turn drained from it.
+	InboundRef string `json:"inboundRef,omitempty"`
 }
 
 // EntryID is the deterministic ID for a turn. The zero-padded index keeps
@@ -54,7 +57,7 @@ func EntryToTurn(e memory.Entry) (memory.Turn, error) {
 	return memory.Turn{
 		Index: index, Role: role, Content: c.Content,
 		Usage: c.Usage, CreatedAt: e.CreatedAt, Author: c.Author, Via: c.Via,
-		Refused: c.Refused, Model: c.Model,
+		Refused: c.Refused, Model: c.Model, InboundRef: c.InboundRef,
 	}, nil
 }
 
@@ -81,7 +84,7 @@ func NewAppender(mem memory.Memory, scope memory.Scope) *Appender {
 // through to a blind Put, which would drop both the error and the check.
 func (a *Appender) Append(ctx context.Context, t memory.Turn) error {
 	id := EntryID(t.Index, t.Role)
-	raw, err := json.Marshal(turnContent{Content: t.Content, Usage: t.Usage, Author: t.Author, Via: t.Via, Refused: t.Refused, Model: t.Model})
+	raw, err := json.Marshal(turnContent{Content: t.Content, Usage: t.Usage, Author: t.Author, Via: t.Via, Refused: t.Refused, Model: t.Model, InboundRef: t.InboundRef})
 	if err != nil {
 		return fmt.Errorf("turn.Append: marshal: %w", err)
 	}

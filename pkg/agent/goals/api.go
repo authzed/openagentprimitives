@@ -26,6 +26,15 @@ type Request struct {
 	Execution    ExecutionRequest                          `json:"execution,omitempty"`
 	List         ListRequest                               `json:"list,omitempty"`
 	ID           string                                    `json:"id,omitempty"`
+	// Scope selects whose goals a request addresses: "" or "private" (the
+	// verified human's own) or "group" (the members of this conversation).
+	// The owning group itself is always resolved server-side from the
+	// session's binding, never from this field.
+	Scope string `json:"scope,omitempty"`
+	// TurnRef names the inbound that started the caller's current turn. It
+	// only selects which signed attestation to consult; the server never
+	// takes it as evidence of who spoke.
+	TurnRef string `json:"turnRef,omitempty"`
 }
 
 type Response struct {

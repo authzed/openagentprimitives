@@ -12,10 +12,19 @@ import (
 
 const KindName = "goal_actor"
 
+// InitialPromptRef names the opening prompt's inbound. That message is the
+// runner's turn 0, placed from spec.prompt rather than drained from an inbox
+// item, so it has no minted ref for the runner to carry.
+const InitialPromptRef = "initial-prompt"
+
 type Content struct {
 	Owner      string `json:"owner"`
 	SessionUID string `json:"sessionUID"`
 	ClassUID   string `json:"classUID"`
+	// InboundRef names the inbound this attestation was recorded for; the
+	// same value rides on the inbox item the runner drains. It is a selector
+	// only: the owner named here is what the server trusts, never the ref.
+	InboundRef string `json:"inboundRef,omitempty"`
 }
 
 type Kind struct{}

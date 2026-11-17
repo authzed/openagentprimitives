@@ -87,7 +87,7 @@ func (e *EventExecution) goal(ctx context.Context, sub sessionevents.Subscriptio
 		return Goal{}, ErrDenied
 	}
 	var target eventTarget
-	if err := json.Unmarshal([]byte(sub.Target), &target); err != nil || target.Domain.Validate() != nil {
+	if err := json.Unmarshal([]byte(sub.Target), &target); err != nil || e.Service.validateDomain(target.Domain) != nil {
 		return Goal{}, ErrDenied
 	}
 	g, err := e.Service.Store.Get(ctx, target.Domain, target.GoalID)

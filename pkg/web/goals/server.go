@@ -29,11 +29,18 @@ import (
 
 const ResourceType = "agent_goal_domain"
 
+// GoalResourceType is one group goal, the object its managers are written on
+// (agent_goal:<goalID>#manager); see the schema's agent_goal.
+const GoalResourceType = "agent_goal"
+
 type Authority interface {
 	Relations() authz.RelWriter
 	GrantSlots(context.Context, string, string, []authz.SlotBinding, time.Time) error
 	CheckInteract(context.Context, string, string, identity.CanonicalUserID, bool) (bool, error)
 	CheckOnResource(context.Context, string, string, string, identity.CanonicalUserID, bool) (bool, error)
+	// ListUserSubjects lists the users directly on resourceType:id#relation,
+	// fully consistent. Group goals reconcile their manager tuples with it.
+	ListUserSubjects(ctx context.Context, resourceType, resourceID, relation string) ([]string, error)
 }
 
 type ExecutionSessionAuthority interface {
@@ -211,6 +218,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(out); err != nil {
 			log.FromContext(ctx).Info("goal authority response failed", "session", ns+"/"+name, "error", err)
 		}
+		return
+	}
+	group, err := s.isGroupRequest(ctx, ns, name, req)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if group {
+		s.serveGroup(ctx, w, r, ns, name, req)
 		return
 	}
 	a, err := s.resolve(ctx, ns, name)
@@ -402,41 +418,16 @@ func (s *Server) resolve(ctx context.Context, ns, name string) (domain.Actor, er
 }
 
 // actor re-derives the session's human actor from the platform attestation
-// and the owner's live interact standing, without writing anything.
+// and the owner's live interact standing, without writing anything. This is
+// the private-scope rule: the first and latest attestations must name the
+// same human, so the conversation stays pinned to whoever opened it.
 func (s *Server) actor(ctx context.Context, ns, name string) (domain.Actor, error) {
-	var sess v1.AgentSession
-	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sess); err != nil {
-		return domain.Actor{}, fmt.Errorf("%w: session lookup: %v", domain.ErrDenied, err)
-	}
-	if sess.Spec.Parent != nil || sess.UID == "" || !sess.DeletionTimestamp.IsZero() {
-		return domain.Actor{}, domain.ErrDenied
-	}
-	var class v1.AgentClass
-	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: sess.Spec.Class}, &class); err != nil {
-		return domain.Actor{}, fmt.Errorf("%w: class lookup: %v", domain.ErrDenied, err)
-	}
-	grant, err := agentcaps.GrantOf(&class, "goals")
-	if err != nil {
-		return domain.Actor{}, err
-	}
-	if class.Spec.GetAuthz().InformationLeakage.ResolvedMode() != "enforcing" {
-		return domain.Actor{}, fmt.Errorf("%w: goals require enforcing information leakage policy", domain.ErrDenied)
-	}
-	if !agentcaps.Active(false, grant) || class.UID == "" || !class.DeletionTimestamp.IsZero() {
-		return domain.Actor{}, domain.ErrDenied
-	}
-	rows, err := s.actorRecords(ctx, ns, name)
+	sess, class, rows, err := s.attestations(ctx, ns, name)
 	if err != nil {
 		return domain.Actor{}, err
 	}
 	var latest, first memory.Entry
-	for _, e := range rows.Entries {
-		if e.Provenance == nil || e.Provenance.Publisher != "system:channelsd" {
-			continue
-		}
-		if err := provenance.VerifyEntrySignature(s.Keys, e); err != nil {
-			return domain.Actor{}, err
-		}
+	for _, e := range rows {
 		if first.Provenance == nil || e.Provenance.Seq < first.Provenance.Seq {
 			first = e
 		}
@@ -461,6 +452,110 @@ func (s *Server) actor(ctx context.Context, ns, name string) (domain.Actor, erro
 	if initial.Owner != proof.Owner || initial.SessionUID != proof.SessionUID || initial.ClassUID != proof.ClassUID {
 		return domain.Actor{}, domain.ErrDenied
 	}
+	return s.attestedActor(ctx, ns, name, sess, class, latest, proof)
+}
+
+// actorForTurn is the group-scope rule. Several people may speak in a group
+// conversation, and the runner's requester advances on every drained inbound,
+// so "whoever spoke last" would let a reply landing mid-turn lend its author
+// to someone else's request. Instead the actor is the author of the signed
+// attestation for the inbound that started the turn, named by turnRef. The
+// ref is the runner's claim and only SELECTS an attestation: the owner comes
+// from channelsd's signature, and if anyone else has been attested since
+// (a higher seq), the request is refused rather than guessing whose it is.
+func (s *Server) actorForTurn(ctx context.Context, ns, name, turnRef string) (domain.Actor, error) {
+	a, _, _, err := s.turnActor(ctx, ns, name, turnRef)
+	return a, err
+}
+
+// turnActor is actorForTurn, also returning the session and class it checked
+// so a group caller can derive the conversation's domain without reloading
+// them.
+func (s *Server) turnActor(ctx context.Context, ns, name, turnRef string) (domain.Actor, *v1.AgentSession, *v1.AgentClass, error) {
+	if turnRef == "" {
+		return domain.Actor{}, nil, nil, fmt.Errorf("%w: request names no turn", domain.ErrDenied)
+	}
+	sess, class, rows, err := s.attestations(ctx, ns, name)
+	if err != nil {
+		return domain.Actor{}, nil, nil, err
+	}
+	contents := make([]goalactor.Content, len(rows))
+	selected := -1
+	for i, e := range rows {
+		if err := json.Unmarshal(e.Content, &contents[i]); err != nil {
+			return domain.Actor{}, nil, nil, err
+		}
+		// The earliest match: a ref is minted per inbound, but if one were
+		// ever recorded twice, starting earlier only checks more speakers.
+		if contents[i].InboundRef == turnRef && (selected < 0 || e.Provenance.Seq < rows[selected].Provenance.Seq) {
+			selected = i
+		}
+	}
+	if selected < 0 {
+		return domain.Actor{}, nil, nil, fmt.Errorf("%w: no trusted attestation for this turn", domain.ErrDenied)
+	}
+	proof := contents[selected]
+	if proof.Owner == "" || proof.SessionUID != string(sess.UID) || proof.ClassUID != string(class.UID) {
+		return domain.Actor{}, nil, nil, domain.ErrDenied
+	}
+	for i, e := range rows {
+		if e.Provenance.Seq > rows[selected].Provenance.Seq && contents[i].Owner != proof.Owner {
+			return domain.Actor{}, nil, nil, fmt.Errorf("%w: this goal change must come from the person whose request the agent is working on, or be asked again once the agent has finished; another participant has spoken since — ask again", domain.ErrDenied)
+		}
+	}
+	a, err := s.attestedActor(ctx, ns, name, sess, class, rows[selected], proof)
+	if err != nil {
+		return domain.Actor{}, nil, nil, err
+	}
+	return a, sess, class, nil
+}
+
+// attestations loads the session and class a goal actor is derived for, checks
+// that both may use goals, and returns every channelsd goal_actor attestation
+// in the session's scope with its signature verified. Entries from any other
+// publisher are ignored; a channelsd entry that fails verification is an error.
+func (s *Server) attestations(ctx context.Context, ns, name string) (*v1.AgentSession, *v1.AgentClass, []memory.Entry, error) {
+	var sess v1.AgentSession
+	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &sess); err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: session lookup: %v", domain.ErrDenied, err)
+	}
+	if sess.Spec.Parent != nil || sess.UID == "" || !sess.DeletionTimestamp.IsZero() {
+		return nil, nil, nil, domain.ErrDenied
+	}
+	var class v1.AgentClass
+	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: sess.Spec.Class}, &class); err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: class lookup: %v", domain.ErrDenied, err)
+	}
+	grant, err := agentcaps.GrantOf(&class, "goals")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if class.Spec.GetAuthz().InformationLeakage.ResolvedMode() != "enforcing" {
+		return nil, nil, nil, fmt.Errorf("%w: goals require enforcing information leakage policy", domain.ErrDenied)
+	}
+	if !agentcaps.Active(false, grant) || class.UID == "" || !class.DeletionTimestamp.IsZero() {
+		return nil, nil, nil, domain.ErrDenied
+	}
+	rows, err := s.actorRecords(ctx, ns, name)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	verified := make([]memory.Entry, 0, len(rows.Entries))
+	for _, e := range rows.Entries {
+		if e.Provenance == nil || e.Provenance.Publisher != "system:channelsd" {
+			continue
+		}
+		if err := provenance.VerifyEntrySignature(s.Keys, e); err != nil {
+			return nil, nil, nil, err
+		}
+		verified = append(verified, e)
+	}
+	return &sess, &class, verified, nil
+}
+
+// attestedActor checks the attested owner's live interact standing and builds
+// the actor, carrying the verified envelope as its authorship evidence.
+func (s *Server) attestedActor(ctx context.Context, ns, name string, sess *v1.AgentSession, class *v1.AgentClass, entry memory.Entry, proof goalactor.Content) (domain.Actor, error) {
 	owner := identity.CanonicalFromTrusted(proof.Owner, "channelsd goal actor")
 	ok, err := s.Auth.CheckInteract(ctx, ns, name, owner, true)
 	if err != nil {
@@ -469,16 +564,19 @@ func (s *Server) actor(ctx context.Context, ns, name string) (domain.Actor, erro
 	if !ok {
 		return domain.Actor{}, domain.ErrDenied
 	}
-	attestation, err := json.Marshal(latest)
+	attestation, err := json.Marshal(entry)
 	if err != nil {
 		return domain.Actor{}, err
 	}
-	return domain.Actor{Domain: domain.Domain{Namespace: ns, Owner: proof.Owner, Class: class.Name, ClassUID: string(class.UID)}, Session: ns + "/" + name, SessionUID: string(sess.UID), Proof: latest.ID, Attestation: string(attestation)}, nil
+	return domain.Actor{Domain: domain.Domain{Namespace: ns, Owner: proof.Owner, Class: class.Name, ClassUID: string(class.UID)}, Session: ns + "/" + name, SessionUID: string(sess.UID), Proof: entry.ID, Attestation: string(attestation)}, nil
 }
 
 // Authorize runs at every operation, including deduplication retries, and
 // rechecks the latest platform actor record so a stale turn cannot retain access.
 func (s *Server) Authorize(ctx context.Context, a domain.Actor, write bool) error {
+	if a.Domain.GroupOwned() {
+		return s.authorizeGroupWrite(ctx, a, write)
+	}
 	ns, name, ok := strings.Cut(a.Session, "/")
 	if !ok {
 		return domain.ErrDenied
@@ -530,10 +628,20 @@ func (s *Server) Sources(ctx context.Context, a domain.Actor) ([]domain.Source, 
 	if err := s.ReadGoal(ctx, a, domain.Goal{Sources: sources}); err != nil {
 		return nil, err
 	}
+	if a.Domain.GroupOwned() {
+		// A group goal's content is shown to the whole conversation, so a
+		// source only the actor can read must not become one of its sources.
+		if err := s.audienceCanRead(ctx, a, sources); err != nil {
+			return nil, err
+		}
+	}
 	return sources, nil
 }
 
 func (s *Server) ReadGoal(ctx context.Context, a domain.Actor, g domain.Goal) error {
+	if a.Domain.GroupOwned() {
+		return s.readGroupGoal(ctx, a, g)
+	}
 	owner := identity.CanonicalFromTrusted(a.Domain.Owner, "channelsd goal actor")
 	for _, src := range g.Sources {
 		ok, err := s.Auth.CheckOnResource(ctx, src.ResourceType, src.ResourceID, src.Permission, owner, true)

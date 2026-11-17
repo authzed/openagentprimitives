@@ -41,6 +41,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/notice"
 	"github.com/authzed/openagentprimitives/pkg/controllers/conditions"
 	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalactor"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/passthroughcatalog"
@@ -187,6 +188,9 @@ type MemTurn struct {
 	Author identity.Subject `json:"author,omitempty"`
 	// Signed view URN of the surface it arrived through; empty for the channel.
 	Via string `json:"via,omitempty"`
+	// InboundRef is the per-inbound ref the goal_actor attestation for this
+	// message also carries; empty for turns no attestation was recorded for.
+	InboundRef string `json:"inboundRef,omitempty"`
 }
 
 // MemContent is one content block within a MemTurn.
@@ -882,7 +886,9 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 			}
 		}
 		// Allow (or a service subject, which skips the check) means fall through.
-		if err := p.recordGoalActor(ctx, active, ev); err != nil {
+		// inboundRef ties the attestation to the inbox item appended below.
+		inboundRef := newInboundRef()
+		if err := p.recordGoalActor(ctx, active, ev, inboundRef); err != nil {
 			return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
 		}
 
@@ -1022,7 +1028,7 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 		// controls bytes, never awareness, but a denied sender gets neither.
 		content := p.attachmentContent(ctx, ev, active.Spec.Class, active.Namespace, active.Name)
 		if err := p.Memory.Append(ctx, active.Namespace, active.Name, MemTurn{
-			Role: "user", Author: authorSubject(ev), Via: ev.Via, Content: content,
+			Role: "user", Author: authorSubject(ev), Via: ev.Via, Content: content, InboundRef: inboundRef,
 		}); err != nil {
 			return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError},
 				fmt.Errorf("memory append: %w", err)
@@ -1786,7 +1792,9 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 	}
 
 	if created {
-		if err := p.recordGoalActor(ctx, sess, ev); err != nil {
+		// The message is spec.prompt, the runner's turn 0, so it is named by
+		// the fixed initial-prompt ref rather than a minted one.
+		if err := p.recordGoalActor(ctx, sess, ev, goalactor.InitialPromptRef); err != nil {
 			return channelkinds.InboundDecision{Outcome: channelkinds.OutcomeInternalError}, err
 		}
 	}
@@ -1831,7 +1839,7 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 			}
 			content = append(content, blocks...)
 			if err := p.Memory.Append(ctx, sess.Namespace, sess.Name, MemTurn{
-				Role: "inbox", Author: authorSubject(ev), Via: ev.Via, Content: content,
+				Role: "inbox", Author: authorSubject(ev), Via: ev.Via, Content: content, InboundRef: goalactor.InitialPromptRef,
 			}); err != nil {
 				// Best-effort: the session was already created — the expensive,
 				// hard-to-retry part — so failing the whole inbound is worse
@@ -3181,7 +3189,8 @@ func (p *Pipeline) handlePermissionDeny(
 // written and the matching PendingRequester confirmed removed. Otherwise this
 // smuggles an unauthorized message past the permission check.
 func (p *Pipeline) ResubmitAuthorized(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ev channelkinds.InboundEvent) error {
-	if err := p.recordGoalActor(ctx, sess, ev); err != nil {
+	inboundRef := newInboundRef()
+	if err := p.recordGoalActor(ctx, sess, ev, inboundRef); err != nil {
 		return err
 	}
 	if ev.MessageText == "" && len(ev.Attachments) == 0 {
@@ -3189,7 +3198,7 @@ func (p *Pipeline) ResubmitAuthorized(ctx context.Context, sess *spiceboxv1alpha
 	}
 	content := p.attachmentContent(ctx, ev, sess.Spec.Class, sess.Namespace, sess.Name)
 	if err := p.Memory.Append(ctx, sess.Namespace, sess.Name, MemTurn{
-		Role: "user", Author: authorSubject(ev), Via: ev.Via, Content: content,
+		Role: "user", Author: authorSubject(ev), Via: ev.Via, Content: content, InboundRef: inboundRef,
 	}); err != nil {
 		return fmt.Errorf("resubmit memory append: %w", err)
 	}

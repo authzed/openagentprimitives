@@ -1625,8 +1625,8 @@ func (h *Harness) startChannelsdPlumbing(t *testing.T, mgrCtx context.Context) {
 	// AgentSession controllers above), so a SpiceDB schema mismatch
 	// surfaces here as a test failure rather than a silent deny.
 	pl := pipeline.NewPipeline(h.K8s, h.SpiceDB, mem, pubAdapter, caps)
-	pl.RecordGoalActor = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alpha1.AgentClass, owner identity.CanonicalUserID) error {
-		return goalactor.Record(ctx, h.goalActorSigned, pkgmemory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}, goalactor.Content{Owner: owner.String(), SessionUID: string(sess.UID), ClassUID: string(class.UID)})
+	pl.RecordGoalActor = func(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alpha1.AgentClass, owner identity.CanonicalUserID, inboundRef string) error {
+		return goalactor.Record(ctx, h.goalActorSigned, pkgmemory.Scope{Kind: "session", ID: sess.Namespace + "/" + sess.Name}, goalactor.Content{Owner: owner.String(), SessionUID: string(sess.UID), ClassUID: string(class.UID), InboundRef: inboundRef})
 	}
 
 	// The durable memory facade, mirroring internal/cmd/channelsd/main.go's pl.Mem. It
@@ -2123,6 +2123,9 @@ func (a *pipelineMemAdapter) Append(ctx context.Context, ns, name string, t pipe
 		// and the multiplayer-attribution assertion would test a harness
 		// artifact, not the real inbox->user Author-preservation path.
 		Author: t.Author,
+		// Same for the per-inbound ref the goal_actor attestation carries, so
+		// the runner's turn ref resolves in-process as it does deployed.
+		InboundRef: t.InboundRef,
 	}
 	return a.appenderFor(ns, name).Append(ctx, turn)
 }

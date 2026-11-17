@@ -15,7 +15,9 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
-// groupGoalFixture is one group-owned goal domain and the people around it:
+// groupGoalFixture is one group-owned goal domain with two goals, and the
+// people around them. Managers are per goal: "manager" below is of goal; bob
+// manages only other.
 //
 //	alice  member + manager           — the ordinary manager
 //	bob    member                     — a plain member
@@ -25,9 +27,12 @@ import (
 //	frank  nobody                     — outsider
 type groupGoalFixture struct {
 	domain, group, class, session string
+	goal, other                   string
 	alice, bob, carol, dave, eve  identity.CanonicalUserID
 	frank                         identity.CanonicalUserID
 }
+
+const goalType = "agent_goal"
 
 func rel(resType, resID, relation, subjType, subjID, subjRel string) authz.Relation {
 	return authz.Relation{ResourceType: resType, ResourceID: resID, Relation: relation, SubjectType: subjType, SubjectID: subjID, SubjectRel: subjRel}
@@ -40,6 +45,8 @@ func newGroupGoalFixture(t *testing.T, c *Client) groupGoalFixture {
 		group:   uniq(t, "gggrp-"),
 		class:   uniq(t, "ggcls-"),
 		session: "goals/" + uniq(t, "ggrun-"),
+		goal:    uniq(t, "gggoal-"),
+		other:   uniq(t, "ggother-"),
 		alice:   uniqCanon(t, "alice-"),
 		bob:     uniqCanon(t, "bob-"),
 		carol:   uniqCanon(t, "carol-"),
@@ -51,9 +58,12 @@ func newGroupGoalFixture(t *testing.T, c *Client) groupGoalFixture {
 	rels := []authz.Relation{
 		rel(gd, f.domain, "member_group", "group", f.group, "member"),
 		rel(gd, f.domain, "class", "agentclass", f.class, ""),
-		rel(gd, f.domain, "manager", "user", f.alice.String(), ""),
-		rel(gd, f.domain, "manager", "user", f.carol.String(), ""),
-		rel(gd, f.domain, "manager", "user", f.eve.String(), ""),
+		rel(goalType, f.goal, "domain", gd, f.domain, ""),
+		rel(goalType, f.goal, "manager", "user", f.alice.String(), ""),
+		rel(goalType, f.goal, "manager", "user", f.carol.String(), ""),
+		rel(goalType, f.goal, "manager", "user", f.eve.String(), ""),
+		rel(goalType, f.other, "domain", gd, f.domain, ""),
+		rel(goalType, f.other, "manager", "user", f.bob.String(), ""),
 		rel(gd, f.domain, "denied", "user", f.eve.String(), ""),
 		rel("group", f.group, "member", "user", f.alice.String(), ""),
 		rel("group", f.group, "member", "user", f.bob.String(), ""),
@@ -61,7 +71,7 @@ func newGroupGoalFixture(t *testing.T, c *Client) groupGoalFixture {
 		rel("agentclass", f.class, "platform", "platform", "platform", ""),
 		rel("platform", "platform", "admin", "user", f.dave.String(), ""),
 		// The goal-managed run session: managers own it, the group participates.
-		rel("agentsession", f.session, "owner", gd, f.domain, "manage"),
+		rel("agentsession", f.session, "owner", goalType, f.goal, "manage"),
 		rel("agentsession", f.session, "participant", "group", f.group, "member"),
 	}
 	require.NoError(t, c.Relations().WriteRelationships(context.Background(), rels), "write fixture")
@@ -80,7 +90,7 @@ func TestGroupGoal_DomainPermissionsBySubject(t *testing.T) {
 		want want
 	}{
 		{"plain member: sees and pauses, cannot manage", f.bob, want{view: true, pause: true}},
-		{"manager in the group: everything", f.alice, want{true, true, true, true}},
+		{"a goal's manager: sees and pauses; managing is per goal, not on the domain", f.alice, want{view: true, pause: true}},
 		{"manager who left the group: nothing", f.carol, want{}},
 		{"platform admin with no membership: sees, pauses and manages", f.dave, want{true, true, true, true}},
 		{"denied member-manager: nothing", f.eve, want{}},
@@ -101,21 +111,52 @@ func TestGroupGoal_DomainPermissionsBySubject(t *testing.T) {
 	}
 }
 
+// Managers are per goal: managing one of the group's goals grants nothing on
+// another goal in the same domain.
+func TestGroupGoal_ManagePerGoal(t *testing.T) {
+	c := newIntegrationClient(t)
+	f := newGroupGoalFixture(t, c)
+	ctx := context.Background()
+
+	cases := []struct {
+		name            string
+		who             identity.CanonicalUserID
+		goal, otherGoal bool
+	}{
+		{"alice manages her goal only", f.alice, true, false},
+		{"bob manages the other goal only", f.bob, false, true},
+		{"manager who left the group: neither", f.carol, false, false},
+		{"platform admin: both", f.dave, true, true},
+		{"denied on the domain: neither", f.eve, false, false},
+		{"outsider: neither", f.frank, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, err := c.CheckOnResource(ctx, goalType, f.goal, "manage", tc.who, true)
+			require.NoError(t, err)
+			assert.Equal(t, tc.goal, ok, "goal")
+			ok, err = c.CheckOnResource(ctx, goalType, f.other, "manage", tc.who, true)
+			require.NoError(t, err)
+			assert.Equal(t, tc.otherGoal, ok, "other goal in the same domain")
+		})
+	}
+}
+
 // Management is the intersection with live membership: removing a manager
-// from the group removes their manage, with no tuple on the domain touched.
+// from the group removes their manage, with no tuple on the goal touched.
 func TestGroupGoal_ManagerRemovedFromGroupLosesManage(t *testing.T) {
 	c := newIntegrationClient(t)
 	f := newGroupGoalFixture(t, c)
 	ctx := context.Background()
 
-	ok, err := c.CheckOnResource(ctx, "agent_goal_domain", f.domain, "manage", f.alice, true)
+	ok, err := c.CheckOnResource(ctx, goalType, f.goal, "manage", f.alice, true)
 	require.NoError(t, err)
 	require.True(t, ok, "precondition: alice manages")
 
 	require.NoError(t, c.Relations().DeleteRelationships(ctx, []authz.Relation{
 		rel("group", f.group, "member", "user", f.alice.String(), ""),
 	}))
-	ok, err = c.CheckOnResource(ctx, "agent_goal_domain", f.domain, "manage", f.alice, true)
+	ok, err = c.CheckOnResource(ctx, goalType, f.goal, "manage", f.alice, true)
 	require.NoError(t, err)
 	assert.False(t, ok, "alice left the group: no longer manages")
 
@@ -161,8 +202,9 @@ func TestGroupGoal_ExecuteGroupNeedsUnexpiredDomainApproval(t *testing.T) {
 		"expired approval: refused")
 }
 
-// A run session owned by agent_goal_domain:X#manage hands approve to the
-// managers and only to them; members talk in it as participants.
+// A run session owned by agent_goal:X#manage hands approve to goal X's
+// managers and only to them — not to another goal's manager in the same
+// group; members talk in it as participants.
 func TestGroupGoal_RunSessionApproveFollowsManage(t *testing.T) {
 	c := newIntegrationClient(t)
 	f := newGroupGoalFixture(t, c)
@@ -175,7 +217,7 @@ func TestGroupGoal_RunSessionApproveFollowsManage(t *testing.T) {
 	}{
 		{"manager: approves and talks", f.alice, true, true},
 		{"platform admin: approves (manage) and talks via owner", f.dave, true, true},
-		{"plain member: talks, cannot approve", f.bob, false, true},
+		{"plain member who manages another goal of the group: talks, cannot approve", f.bob, false, true},
 		{"manager outside the group: neither", f.carol, false, false},
 		{"denied on the domain: talks as a member, cannot approve", f.eve, false, true},
 		{"outsider: neither", f.frank, false, false},

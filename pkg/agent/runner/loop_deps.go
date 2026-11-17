@@ -1091,6 +1091,18 @@ type Loop struct {
 	// inherit an authorization mode's gating.
 	lastInboundAuthor identity.Subject
 
+	// turnRef is the channelsd InboundRef of the inbound that started the
+	// current turn (see TurnRef). Atomic because the goals client reads it
+	// from tool goroutines while the loop goroutine advances it.
+	turnRef atomic.Pointer[string]
+	// turnStartPending marks that the next drainInbox opens a new turn, so its
+	// first human inbound sets turnRef. Loop goroutine only.
+	turnStartPending bool
+	// turnOpener is the author of the inbound that opened the current turn;
+	// a mid-turn drain advances turnRef only when every human in it is this
+	// person. Empty when unknown. Loop goroutine only.
+	turnOpener identity.Subject
+
 	// speakerProfileMu guards the four speakerProfile* fields below together —
 	// one cohesive piece of per-turn memoization state, read and written as a unit
 	// by hydrateSpeakerProfile/decideSpeakerProfile. Guarded (like

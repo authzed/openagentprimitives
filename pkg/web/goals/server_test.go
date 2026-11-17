@@ -53,6 +53,9 @@ func (a *authority) WriteRelationships(_ context.Context, rels []authz.Relation)
 	return nil
 }
 func (a *authority) DeleteRelationships(context.Context, []authz.Relation) error { return nil }
+func (a *authority) ListUserSubjects(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
 func (a *authority) GrantSlots(context.Context, string, string, []authz.SlotBinding, time.Time) error {
 	a.grants++
 	return nil

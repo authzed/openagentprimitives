@@ -8,6 +8,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -184,4 +185,16 @@ func TestAnUnresolvableToolIsAnErrorNotReadonly(t *testing.T) {
 	require.Error(t, err)
 	assert.NotEqual(t, authz.Readonly, impact,
 		"an unclassifiable call must not present as read-only, which is the leg the trifecta needs to be false")
+}
+
+// TestGroupGoalWriteCountsAsLegC: the group-scope variant of a goal write
+// relaxes WHO the dispatch check admits, never what the call is.
+func TestGroupGoalWriteCountsAsLegC(t *testing.T) {
+	l := legsLoop(nil, nil, nil)
+	l.Tools = meta.NewGoalTools(nil)
+	for _, name := range []string{"create_goal", "update_goal", "request_goal_execution"} {
+		impact, err := l.trifectaCallImpact(name, map[string]any{"scope": "group", "resource": "agent_goal_domain:d"})
+		require.NoError(t, err)
+		assert.Equal(t, authz.Readwrite, impact, name)
+	}
 }

@@ -196,6 +196,9 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 	if g.State != Active {
 		return Goal{}, fmt.Errorf("%w: execution requires active goal", ErrInvalid)
 	}
+	if err := s.requireGroupManager(ctx, a, g, "request_execution"); err != nil {
+		return Goal{}, err
+	}
 	sources, err := s.Auth.Sources(ctx, a)
 	if err != nil {
 		return Goal{}, err
@@ -240,7 +243,7 @@ func (s *Service) RequestExecution(ctx context.Context, a Actor, r ExecutionRequ
 // witness is retained atomically with the decision and audit intent. A grant
 // write may be retried independently: no dispatch is possible until both agree.
 func (s *Service) DecideExecution(ctx context.Context, d Domain, id string, decision ExecutionDecision) (Goal, error) {
-	if s.ExecutionAuth == nil || s.Auth == nil || d.Validate() != nil || !validRequestID(decision.RequestID) {
+	if s.ExecutionAuth == nil || s.Auth == nil || s.validateDomain(d) != nil || !validRequestID(decision.RequestID) {
 		return Goal{}, ErrDenied
 	}
 	g, err := s.Store.Get(ctx, d, id)

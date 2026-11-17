@@ -63,9 +63,34 @@ func (t *goalTool) Name() string {
 	return t.op + "_goal"
 }
 
-func (t *goalTool) Kind() tool.Kind                               { return tool.KindMeta }
-func (t *goalTool) PipelineRouted() bool                          { return true }
-func (t *goalTool) PermissionVariants() []authz.PermissionVariant { return nil }
+func (t *goalTool) Kind() tool.Kind      { return tool.KindMeta }
+func (t *goalTool) PipelineRouted() bool { return true }
+
+// groupScopeWhen matches a call addressing the conversation's group goals.
+const groupScopeWhen = `has(args.scope) && args.scope == "group"`
+
+// PermissionVariants relaxes WHO dispatch admits for a group-scope write,
+// never WHAT the call is: it stays Readwrite, so the trifecta's leg C and the
+// pre-dispatch snapshot see a write exactly as for private scope.
+//
+// The check is pause (any member of the conversation's group, or a platform
+// admin) rather than manage, because the goal server is the authority for
+// group writes: it checks the author of the turn's opening message — dispatch
+// would ask about whoever spoke last — with manage, pause or membership as the
+// operation needs, plus the goal's own manager list. A creator manages
+// nothing before the goal exists, so manage here would refuse every create.
+// The resource arg comes from list_goals with scope group, whose resolve
+// writes the domain's member_group tuple, so a member passes. The plan gate
+// still governs the call by the tool's static handle.
+func (t *goalTool) PermissionVariants() []authz.PermissionVariant {
+	if !IsGoalWrite(t.Name()) {
+		return nil
+	}
+	check := *t.Permission().Check
+	check.Permission = "pause"
+	return []authz.PermissionVariant{{When: groupScopeWhen, Check: authz.Permission{StateImpact: authz.Readwrite, Check: &check}}}
+}
+
 func (t *goalTool) Permission() authz.Permission {
 	if !IsGoalWrite(t.Name()) {
 		return authz.Permission{StateImpact: authz.Stateless}
@@ -87,7 +112,7 @@ func (t *goalTool) Description() string {
 			"and acceptance, without cancelling already accepted goals. Never infer discovery consent " +
 			"from read access or scheduling. No external capabilities are granted."
 	}
-	return "Manage private durable goals for this session's verified human and AgentClass. Call " +
+	return groupGoalsGuidance + "Manage private durable goals for this session's verified human and AgentClass. Call " +
 		"list_goals first to obtain the resource for writes and discover eventFeeds, which contain " +
 		"exact accessible source references and supported eventKinds. Use a configured or " +
 		"goal-produced feed matching the request; never invent a source kind, source ID or event " +
@@ -127,6 +152,19 @@ func (t *goalTool) Description() string {
 		"same requestID only when retrying identical arguments. Completion is reported success with " +
 		"evidence, not independent verification. A different employee must use their own session."
 }
+
+// groupGoalsGuidance leads every goal tool's description.
+const groupGoalsGuidance = "scope selects whose goals: private (the default, below) or group. " +
+	"scope=group addresses goals owned by everyone in this shared conversation; the platform " +
+	"resolves the group from the conversation, never from arguments. Group goals act as the " +
+	"agent, not as any one person. Any member may list, read, create and pause them; the " +
+	"creator becomes the first manager, and only a manager may revise, resume, cancel or " +
+	"complete one, add or remove managers (update_goal action=add_manager/remove_manager with " +
+	"manager), or ask for it to run, which needs a manager's approval. A group goal always keeps " +
+	"at least one manager in the group. A group request acts for the person whose message " +
+	"started this turn; if it is refused because someone else spoke since, ask them to repeat " +
+	"the request. Pass the same scope on every call for a goal, and use the resource that " +
+	"list_goals returns for that scope. "
 
 func (t *goalTool) InputSchema() json.RawMessage {
 	props := map[string]any{}
@@ -198,12 +236,14 @@ func (t *goalTool) InputSchema() json.RawMessage {
 		} else {
 			props["id"] = str()
 			props["revision"] = map[string]any{"type": "integer", "minimum": 1}
-			props["action"] = map[string]any{"type": "string", "enum": []string{"revise", "activate", "pause", "resume", "cancel", "complete"}}
+			props["action"] = map[string]any{"type": "string", "enum": []string{"revise", "activate", "pause", "resume", "cancel", "complete", "add_manager", "remove_manager"}}
+			props["manager"] = map[string]any{"type": "string", "description": "add_manager/remove_manager only (group goals): the person's canonical user id, as goal managers lists them."}
 			props["clearDue"] = map[string]any{"type": "boolean"}
 			props["result"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"summary", "evidence"}, "properties": map[string]any{"summary": str(), "evidence": map[string]any{"type": "array", "items": str(), "minItems": 1}}}
 			required = append(required, "id", "revision", "action")
 		}
 	}
+	props["scope"] = map[string]any{"type": "string", "enum": []string{"private", "group"}, "description": "private (default): this session's verified human's goals. group: goals owned by everyone in this shared conversation."}
 	b, err := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "properties": props, "required": required})
 	if err != nil {
 		panic(fmt.Sprintf("goal schema: %v", err))
@@ -218,11 +258,12 @@ func (t *goalTool) Execute(ctx context.Context, raw json.RawMessage, sess *tool.
 	var base struct {
 		Resource string `json:"resource"`
 		ID       string `json:"id"`
+		Scope    string `json:"scope"`
 	}
 	if err := json.Unmarshal(raw, &base); err != nil {
 		return tool.Result{IsError: true, Content: err.Error()}, nil
 	}
-	req := goals.Request{Operation: t.op, Resource: base.Resource, ID: base.ID}
+	req := goals.Request{Operation: t.op, Resource: base.Resource, ID: base.ID, Scope: base.Scope}
 	var err error
 	switch t.op {
 	case "request_discovery":

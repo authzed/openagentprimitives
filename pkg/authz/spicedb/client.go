@@ -691,6 +691,37 @@ func (c *Client) ListDeniedUsers(ctx context.Context, ns, name string) ([]string
 	return out, nil
 }
 
+// ListUserSubjects returns the canonical IDs of every user directly on
+// <resourceType>:<resourceID>#<relation>, fully consistent. Non-user subjects
+// are skipped. Used to reconcile relation tuples against a durable record of
+// who should hold them (a group goal's managers).
+func (c *Client) ListUserSubjects(ctx context.Context, resourceType, resourceID, relation string) ([]string, error) {
+	stream, err := c.cl.ReadRelationships(ctx, &v1.ReadRelationshipsRequest{
+		Consistency: &v1.Consistency{Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true}},
+		RelationshipFilter: &v1.RelationshipFilter{
+			ResourceType:       resourceType,
+			OptionalResourceId: resourceID,
+			OptionalRelation:   relation,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read %s#%s: %w", resourceType, relation, err)
+	}
+	var out []string
+	for {
+		resp, rerr := stream.Recv()
+		if rerr == io.EOF {
+			return out, nil
+		}
+		if rerr != nil {
+			return nil, fmt.Errorf("read %s#%s recv: %w", resourceType, relation, rerr)
+		}
+		if sub := resp.GetRelationship().GetSubject().GetObject(); sub.GetObjectType() == "user" {
+			out = append(out, sub.GetObjectId())
+		}
+	}
+}
+
 // CheckDenied checks agentsession:<ns>/<name>#is_denied@user:<canonicalID>.
 // Pipeline resolves canonical from Facts before calling; same shape
 // contract as CheckInteract.

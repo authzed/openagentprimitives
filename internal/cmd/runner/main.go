@@ -1608,6 +1608,13 @@ func run(cfg *config) error {
 
 	env := capability.RunnerEnv{
 		GoalsCaller: func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+			// Stamped here, never by the tool: the turn's originating inbound
+			// is runner state, not something the model may choose. Before the
+			// Loop exists there is no turn, and an empty ref is refused.
+			req.TurnRef = ""
+			if l := loopRef.Load(); l != nil {
+				req.TurnRef = l.TurnRef()
+			}
 			return memHTTP.Goals(ctx, ns, name, req)
 		},
 		NATSPublish:      pubFn,
