@@ -57,6 +57,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		return l.fail(ctx, spiceboxv1alpha1.ReasonAgentSessionMemoryDown, fmt.Sprintf("read memory: %v", err))
 	}
 	messages, nextIndex, hadInitialPrompt := replay(prior, l.SessionKey.Namespace+"/"+l.SessionKey.Name)
+	// How much of the conversation came from the durable transcript, before
+	// anything this Run adds (a drained inbox turn, a bound slot). The resume
+	// park below compares against it: see resumedWithNothingToDo.
+	replayed := len(messages)
 	// Seed the emit-time memory index from the durable replay base so a resumed
 	// Run's first loop-side activity signal (start-of-turn active) sorts after
 	// prior turns rather than from 0. Advanced per turn below.
@@ -458,7 +462,9 @@ func (l *Loop) Run(ctx context.Context) error {
 	// assistant message, which providers reject outright ("This model does not
 	// support assistant message prefill. The conversation must end with a user
 	// message."), and the runner exits into AwaitingRetry where every retry
-	// reproduces it — for a turn with nothing to respond to.
+	// reproduces it — for a turn with nothing to respond to. A round closed by a
+	// successful agent_work_complete ends instead with that tool's result, which
+	// the live loop never showed the model; resuming onto it is just as empty.
 	//
 	// Reachable because a wake can arrive with no message attached: channelsd
 	// wakes a session only when it has something to deliver, but a wake requested
@@ -469,9 +475,15 @@ func (l *Loop) Run(ctx context.Context) error {
 	// wait, off the same InboundCh, under the same idle TTL, reusing the one
 	// mechanism that governs how long a runner lives. Once something DOES arrive,
 	// fall through and drain it into the turn below.
-	if resumedWithNothingToDo(hadInitialPrompt, messages) {
+	// Only a channel-attached, non-delegated session parks on a completed round:
+	// that is the one case where the live loop parks Idle after
+	// agent_work_complete. A kubectl session or a delegated child ends that
+	// round Succeeded instead, so a resume there takes its turn as before and
+	// reaches the terminal write through the loop.
+	completedRound := l.ChannelAttached && !l.DelegatedChild && completedRoundAtRest(prior)
+	if shape := resumedWithNothingToDo(hadInitialPrompt, completedRound, replayed, messages); shape != resumeHasWork {
 		slog.Default().Info("resume with an empty inbox: parking without a turn (nothing to respond to)",
-			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "messages", len(messages))
+			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "messages", len(messages), "shape", string(shape))
 		if !l.parkUntilInbound(ctx, sess) {
 			// The wait ended without new input — the idle TTL elapsed, or the
 			// context was cancelled. Both mean this runner is done, and it must
@@ -482,7 +494,23 @@ func (l *Loop) Run(ctx context.Context) error {
 			// `return nil` instead leaves the session at Pending forever,
 			// reporting busy for a runner that had finished, and drops any message
 			// that raced the park.
-			if l.ChannelAttached {
+			switch {
+			case shape == resumeCompletedRound:
+				// The round closed through agent_work_complete, whose own gate
+				// already allowed this settle — met, or bypassed with a reason
+				// the user was told. The live loop never re-checks after it (the
+				// terminal branch parks directly; the yield exit skips the gate
+				// when the terminal tool ran: gateAlreadyRan). Re-checking here
+				// would refuse a bypassed completion all over again, since the
+				// bypass is not carried across runs, and hand the model a stray
+				// turn demanding a second bypass. The resting reason is the one
+				// the round ended with; no second AgentWorkComplete audit event,
+				// because no second completion happened.
+				l.emitLifecycleSignal(ctx, lifecycle.SigSessionIdle, map[string]string{"reason": "idle"})
+				l.emitLifecycleEvent(ctx, idleYieldEventFor(false))
+				l.fireSessionEnd(ctx, "idle")
+				return l.idleWithWakeRecheck(ctx, spiceboxv1alpha1.ReasonAgentSessionAgentWorkComplete)
+			case l.ChannelAttached:
 				// Completion gate, resume-park exit. A settle is a settle even
 				// when no turn ran: a round that ended earlier still owing
 				// something reaches its resting phase HERE, and the model is not
@@ -499,7 +527,7 @@ func (l *Loop) Run(ctx context.Context) error {
 					l.fireSessionEnd(ctx, "idle")
 					return l.idleWithWakeRecheck(ctx, spiceboxv1alpha1.ReasonAgentSessionAwaitingUserMsg)
 				}
-			} else {
+			default:
 				// Not channel-attached: nothing can deliver a message here, so
 				// there is no idle-and-wakeable state to record — the run is simply
 				// over, with no terminal write to gate. parkUntilInbound already
