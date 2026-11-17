@@ -14,6 +14,7 @@ import (
 	domain "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -44,14 +45,24 @@ import (
 const defaultManageLimit = 20
 
 // firstPartyAttestation is a first-party actor's authorship evidence, kept
-// in each audit event it causes in place of a session's signed attestation.
+// in each audit event it causes where a session's actor keeps its signed
+// channelsd entry.
+//
+// It is NOT a signed entry and must not read as one. The goal server builds
+// it (RecordedBy), from a request authenticated only by channelsd's bearer
+// token (Via), whose word names Viewer. So it has no "publisher" (the field a
+// signed entry's provenance names its signer by) and no "provenance", and
+// says Unsigned outright: an auditor weighs it as the operator's record of
+// channelsd's claim, not as channelsd's signature.
 type firstPartyAttestation struct {
-	Publisher string    `json:"publisher"`
-	Surface   string    `json:"surface"`
-	Viewer    string    `json:"viewer"`
-	Goal      string    `json:"goal"`
-	Action    string    `json:"action"`
-	At        time.Time `json:"at"`
+	RecordedBy string    `json:"recordedBy"`
+	Via        string    `json:"via"`
+	Unsigned   bool      `json:"unsigned"`
+	Surface    string    `json:"surface"`
+	Viewer     string    `json:"viewer"`
+	Goal       string    `json:"goal"`
+	Action     string    `json:"action"`
+	At         time.Time `json:"at"`
 }
 
 func (s *Server) manageHTTP(w http.ResponseWriter, r *http.Request) {
@@ -94,14 +105,20 @@ func (s *Server) manageHTTP(w http.ResponseWriter, r *http.Request) {
 	case domain.ManageList:
 		out.Goals, out.Total, err = s.listForViewer(ctx, viewer, req.Namespace, req.Class, req.Limit)
 	case domain.ManagePlan:
-		out.Plan, err = s.standingPlanFor(ctx, viewer, req.Namespace, req.Goal)
+		out.Plan, out.Title, out.Digest, err = s.standingPlanFor(ctx, viewer, req.Namespace, req.Goal, req.Action)
 	case domain.ManageAct:
-		out.Approval, err = s.manageAct(ctx, viewer, req.Namespace, req.Goal, req.Action)
+		out.Approval, err = s.manageAct(ctx, viewer, req.Namespace, req.Goal, req.Action, req.Digest)
 	default:
 		err = fmt.Errorf("%w: unknown management operation %q", domain.ErrInvalid, req.Operation)
 	}
 	if err != nil {
 		log.FromContext(ctx).Info("goal management refused", "operation", req.Operation, "viewer", req.Viewer, "namespace", req.Namespace, "goal", req.Goal, "action", req.Action, "error", err)
+		if errors.Is(err, domain.ErrPlanChanged) {
+			// Its own status, so the surface can say "reopen it" rather than
+			// a generic conflict.
+			http.Error(w, err.Error(), http.StatusPreconditionFailed)
+			return
+		}
 		s.failGroup(w, r, err)
 		return
 	}
@@ -137,7 +154,7 @@ func (s *Server) viewerDomains(ctx context.Context, viewer identity.CanonicalUse
 
 // firstPartyActor is the session-less management actor for viewer on g.
 func firstPartyActor(viewer identity.CanonicalUserID, g domain.Goal, action string) (domain.Actor, error) {
-	att, err := json.Marshal(firstPartyAttestation{Publisher: "system:channelsd", Surface: "management", Viewer: viewer.String(), Goal: g.ID, Action: action, At: time.Now().UTC()})
+	att, err := json.Marshal(firstPartyAttestation{RecordedBy: "system:operator", Via: "channelsd-token", Unsigned: true, Surface: "management", Viewer: viewer.String(), Goal: g.ID, Action: action, At: time.Now().UTC()})
 	if err != nil {
 		return domain.Actor{}, fmt.Errorf("goal %s: encoding the management attestation: %w", g.ID, err)
 	}
@@ -327,27 +344,56 @@ func (s *Server) findGoal(ctx context.Context, viewer identity.CanonicalUserID, 
 	return g, nil
 }
 
-// standingPlanFor is the standing plan of the goal resource names: the one
-// in force or awaiting approval, else the one it last ran under.
-func (s *Server) standingPlanFor(ctx context.Context, viewer identity.CanonicalUserID, ns, resource string) (*plangate.Plan, error) {
+// standingPlanFor is the plan the goal resource names shows before action,
+// with the goal's title and, for an approval (resume, renew), the binding
+// digest the act must hand back.
+//
+// For resume and renew it is exactly what that act would approve now
+// (selectApproval, the selection the act itself runs), so a manager is never
+// shown one plan and asked to approve another. For View plan (no action) and
+// the other actions it is the plan in force or awaiting approval, else the
+// one the goal last ran under; only View plan treats "none" as an error.
+func (s *Server) standingPlanFor(ctx context.Context, viewer identity.CanonicalUserID, ns, resource, action string) (*plangate.Plan, string, string, error) {
 	g, err := s.findGoal(ctx, viewer, ns, resource)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	a, err := firstPartyActor(viewer, g, domain.ManagePlan)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	if err := s.ReadGoal(ctx, a, g); err != nil {
-		return nil, err
+		return nil, "", "", err
+	}
+	switch action {
+	case domain.ActResume, domain.ActRenew:
+		target, err := selectApproval(g, action, s.serviceNow())
+		if err != nil {
+			return nil, "", "", err
+		}
+		if target.terms.StandingPlan == nil {
+			return nil, "", "", fmt.Errorf("%w: goal %s has no standing plan to approve", domain.ErrNotFound, g.ID)
+		}
+		binding, err := approvalBinding(target.terms)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("goal %s: digesting the plan %s approves: %w", g.ID, action, err)
+		}
+		plan := *target.terms.StandingPlan
+		return &plan, g.Title, binding, nil
+	case "", domain.ActPause, domain.ActRemove:
+	default:
+		return nil, "", "", fmt.Errorf("%w: unknown goal action %q (pause, resume, renew or remove)", domain.ErrInvalid, action)
 	}
 	for _, t := range []*domain.ExecutionTerms{executionTerms(g.Execution), executionTerms(g.PendingRenewal), g.LastApprovedTerms} {
 		if t != nil && t.StandingPlan != nil {
 			plan := *t.StandingPlan
-			return &plan, nil
+			return &plan, g.Title, "", nil
 		}
 	}
-	return nil, fmt.Errorf("%w: goal %s has no standing plan", domain.ErrNotFound, g.ID)
+	if action != "" {
+		return nil, g.Title, "", nil
+	}
+	return nil, "", "", fmt.Errorf("%w: goal %s has no standing plan", domain.ErrNotFound, g.ID)
 }
 
 func executionTerms(c *domain.ExecutionConsent) *domain.ExecutionTerms {
@@ -357,9 +403,121 @@ func executionTerms(c *domain.ExecutionConsent) *domain.ExecutionTerms {
 	return &c.Terms
 }
 
+// approvalSource is which consent an approving management act decides.
+type approvalSource int
+
+const (
+	// approveNothing: resume on a goal whose approval is in force; there is
+	// nothing left to approve.
+	approveNothing approvalSource = iota
+	// approvePendingRenewal: the undecided renewal of the approval in force.
+	approvePendingRenewal
+	// approveRenewal: a new renewal of the approval in force.
+	approveRenewal
+	// approveOpenRequest: the undecided request an earlier click left at the
+	// goal's management host.
+	approveOpenRequest
+	// approveLastTerms: the terms the goal last ran under, asked for again
+	// with a fresh window.
+	approveLastTerms
+)
+
+// approvalTarget is what an approving act decides, and the terms it decides.
+// For a renewal or a fresh request the terms' window moves when the request
+// is made; approvalBinding leaves the window out for that reason.
+type approvalTarget struct {
+	source approvalSource
+	terms  domain.ExecutionTerms
+}
+
+// selectApproval is what resume or renew on g approves at now — the ONE
+// selection both the plan read a manager is shown and the act itself use, so
+// the two cannot disagree. It reads only g: a request whose card has lapsed,
+// or whose record is gone, is found by the act, which then falls through to
+// renewalFallback and re-checks the binding against that.
+func selectApproval(g domain.Goal, action string, now time.Time) (approvalTarget, error) {
+	switch action {
+	case domain.ActResume:
+		if g.LastApprovedTerms == nil {
+			return approvalTarget{}, fmt.Errorf("%w: goal %s has never been approved, so there is nothing to resume it under; ask the agent in its conversation to request approval", domain.ErrInvalid, g.ID)
+		}
+		switch g.State {
+		case domain.Paused:
+			// Resuming bumps the revision, so no earlier request or approval
+			// survives it: the re-approval is of the last approved terms.
+			return approvalTarget{source: approveLastTerms, terms: *g.LastApprovedTerms}, nil
+		case domain.Active:
+			return lastTermsTarget(g, now)
+		}
+		return approvalTarget{}, fmt.Errorf("%w: goal %s is %s; only a paused goal can be resumed", domain.ErrInvalid, g.ID, g.State)
+	case domain.ActRenew:
+		if g.State != domain.Active {
+			return approvalTarget{}, fmt.Errorf("%w: goal %s is %s; only an active goal can be renewed (resume a paused one)", domain.ErrInvalid, g.ID, g.State)
+		}
+		if domain.RenewalPending(g) && g.PendingRenewal.Decision == nil {
+			return approvalTarget{source: approvePendingRenewal, terms: g.PendingRenewal.Terms}, nil
+		}
+		return renewalFallback(g, now)
+	}
+	return approvalTarget{}, fmt.Errorf("%w: %q is not an approval", domain.ErrInvalid, action)
+}
+
+// renewalFallback is what renew approves when no pending renewal can be
+// decided: a renewal of the approval in force, else the last approved terms.
+func renewalFallback(g domain.Goal, now time.Time) (approvalTarget, error) {
+	if domain.ApprovalInForce(g, now) {
+		return approvalTarget{source: approveRenewal, terms: g.Execution.Terms}, nil
+	}
+	return lastTermsTarget(g, now)
+}
+
+// lastTermsTarget is what re-approving active goal g's last approved terms
+// decides: nothing with an approval in force; the undecided request an
+// earlier click left at the management host; else the last approved terms.
+func lastTermsTarget(g domain.Goal, now time.Time) (approvalTarget, error) {
+	if domain.ApprovalInForce(g, now) {
+		return approvalTarget{source: approveNothing, terms: g.Execution.Terms}, nil
+	}
+	if c := g.Execution; c != nil && c.Decision == nil && c.ManagementHosted() && g.Revision == c.RequestRevision && now.Before(c.Terms.ExpiresAt) {
+		return approvalTarget{source: approveOpenRequest, terms: c.Terms}, nil
+	}
+	if g.LastApprovedTerms == nil {
+		return approvalTarget{}, fmt.Errorf("%w: goal %s has never been approved; ask the agent in its conversation to request approval", domain.ErrInvalid, g.ID)
+	}
+	return approvalTarget{source: approveLastTerms, terms: *g.LastApprovedTerms}, nil
+}
+
+// approvalBinding digests what approving t approves: every term but its
+// window (DueAt, ExpiresAt, ScheduleWindows), which a renewal or a fresh
+// request moves forward on its own when it is made. It binds a surface's
+// approval to the plan it showed; it is never authority — the act still
+// checks the viewer, and the decision is still the signed record.
+func approvalBinding(t domain.ExecutionTerms) (string, error) {
+	t.DueAt, t.ExpiresAt, t.ScheduleWindows = time.Time{}, time.Time{}, nil
+	d, err := digest(t)
+	if err != nil {
+		return "", err
+	}
+	return "approval-binding:" + d, nil
+}
+
+// checkShown refuses target unless shown is its binding: the act would
+// approve something other than what the viewer was shown.
+func checkShown(g domain.Goal, target approvalTarget, shown string) error {
+	binding, err := approvalBinding(target.terms)
+	if err != nil {
+		return fmt.Errorf("goal %s: digesting the plan to approve: %w", g.ID, err)
+	}
+	if shown == "" || shown != binding {
+		return fmt.Errorf("%w: goal %s: the plan changed since you opened this; reopen it to see the plan you would approve", domain.ErrPlanChanged, g.ID)
+	}
+	return nil
+}
+
 // manageAct takes action on the goal resource names, as viewer. For resume
-// and renew it returns the consent request viewer's click decides.
-func (s *Server) manageAct(ctx context.Context, viewer identity.CanonicalUserID, ns, resource, action string) (*memory.Entry, error) {
+// and renew it returns the consent request viewer's click decides, refused
+// unless shown is the binding of what it approves.
+func (s *Server) manageAct(ctx context.Context, viewer identity.CanonicalUserID, ns, resource, action, shown string) (*memory.Entry, error) {
 	g, err := s.findGoal(ctx, viewer, ns, resource)
 	if err != nil {
 		return nil, err
@@ -374,9 +532,9 @@ func (s *Server) manageAct(ctx context.Context, viewer identity.CanonicalUserID,
 	case domain.ActRemove:
 		return nil, s.manageChange(ctx, a, g, "cancel")
 	case domain.ActResume:
-		return s.resumeInModal(ctx, a, g)
+		return s.resumeInModal(ctx, a, g, shown)
 	case domain.ActRenew:
-		return s.renewInModal(ctx, a, g)
+		return s.renewInModal(ctx, a, g, shown)
 	}
 	return nil, fmt.Errorf("%w: unknown goal action %q (pause, resume, renew or remove)", domain.ErrInvalid, action)
 }
@@ -413,14 +571,18 @@ func (s *Server) manageChange(ctx context.Context, a domain.Actor, g domain.Goal
 
 // resumeInModal resumes paused goal g and re-approves the terms it last ran
 // under, with a fresh window, as a's decision. The re-approval is checked
-// first (manager, start gate, every pin), so a manager whose approval could
-// not be recorded does not leave the goal half-resumed.
-func (s *Server) resumeInModal(ctx context.Context, a domain.Actor, g domain.Goal) (*memory.Entry, error) {
+// first (manager, the plan shown, start gate, every pin), so a manager whose
+// approval could not be recorded does not leave the goal half-resumed.
+func (s *Server) resumeInModal(ctx context.Context, a domain.Actor, g domain.Goal, shown string) (*memory.Entry, error) {
 	if err := s.AuthorizeGoalManager(ctx, a, g); err != nil {
 		return nil, err
 	}
-	if g.LastApprovedTerms == nil {
-		return nil, fmt.Errorf("%w: goal %s has never been approved, so there is nothing to resume it under; ask the agent in its conversation to request approval", domain.ErrInvalid, g.ID)
+	target, err := selectApproval(g, domain.ActResume, s.serviceNow())
+	if err != nil {
+		return nil, err
+	}
+	if err := checkShown(g, target, shown); err != nil {
+		return nil, err
 	}
 	if g.State == domain.Paused {
 		if err := s.ValidateGroupExecution(ctx, g, *g.LastApprovedTerms, a.User); err != nil {
@@ -438,27 +600,41 @@ func (s *Server) resumeInModal(ctx context.Context, a domain.Actor, g domain.Goa
 	if g.State != domain.Active {
 		return nil, fmt.Errorf("%w: goal %s is %s; only a paused goal can be resumed", domain.ErrInvalid, g.ID, g.State)
 	}
-	return s.approveLastTerms(ctx, a, g)
+	return s.approveLastTerms(ctx, a, g, shown)
 }
 
 // renewInModal renews active goal g's approval as a's decision: the pending
 // renewal if one awaits a manager, else a renewal of the approval in force,
-// else (it ran out) a fresh approval of the terms it last ran under.
-func (s *Server) renewInModal(ctx context.Context, a domain.Actor, g domain.Goal) (*memory.Entry, error) {
+// else (it ran out) a fresh approval of the terms it last ran under — the
+// selection selectApproval makes, refused unless shown is its binding.
+func (s *Server) renewInModal(ctx context.Context, a domain.Actor, g domain.Goal, shown string) (*memory.Entry, error) {
 	if err := s.AuthorizeGoalManager(ctx, a, g); err != nil {
 		return nil, err
 	}
-	if g.State != domain.Active {
-		return nil, fmt.Errorf("%w: goal %s is %s; only an active goal can be renewed (resume a paused one)", domain.ErrInvalid, g.ID, g.State)
+	now := s.serviceNow()
+	target, err := selectApproval(g, domain.ActRenew, now)
+	if err != nil {
+		return nil, err
 	}
-	if domain.RenewalPending(g) && g.PendingRenewal.Decision == nil {
+	if err := checkShown(g, target, shown); err != nil {
+		return nil, err
+	}
+	if target.source == approvePendingRenewal {
 		entry, ok, err := s.decidableRequest(ctx, domain.RenewalView(g))
 		if err != nil || ok {
 			return entry, err
 		}
+		// Its card lapsed, or its record is gone with the run that hosted
+		// it: renew as if none were pending, if that is still what was shown.
+		if target, err = renewalFallback(g, now); err != nil {
+			return nil, err
+		}
+		if err := checkShown(g, target, shown); err != nil {
+			return nil, err
+		}
 	}
-	if !domain.ApprovalInForce(g, s.serviceNow()) {
-		return s.approveLastTerms(ctx, a, g)
+	if target.source != approveRenewal {
+		return s.approveLastTerms(ctx, a, g, shown)
 	}
 	pending := ""
 	if g.PendingRenewal != nil {
@@ -480,22 +656,34 @@ func (s *Server) renewInModal(ctx context.Context, a domain.Actor, g domain.Goal
 
 // approveLastTerms requests active goal g's last approved terms again, with a
 // fresh window, hosted at its management host, and returns the request for
-// a to decide. An undecided request an earlier click left there is offered
-// again rather than asked twice. With an approval in force there is nothing
-// to approve.
-func (s *Server) approveLastTerms(ctx context.Context, a domain.Actor, g domain.Goal) (*memory.Entry, error) {
+// a to decide (lastTermsTarget). An undecided request an earlier click left
+// there is offered again rather than asked twice. With an approval in force
+// there is nothing to approve. Whatever it approves must be what was shown.
+func (s *Server) approveLastTerms(ctx context.Context, a domain.Actor, g domain.Goal, shown string) (*memory.Entry, error) {
 	now := s.serviceNow()
-	if domain.ApprovalInForce(g, now) {
-		return nil, nil
+	target, err := lastTermsTarget(g, now)
+	if err != nil {
+		return nil, err
 	}
-	if c := g.Execution; c != nil && c.Decision == nil && c.ManagementHosted() && g.Revision == c.RequestRevision && now.Before(c.Terms.ExpiresAt) {
+	if err := checkShown(g, target, shown); err != nil {
+		return nil, err
+	}
+	switch target.source {
+	case approveNothing:
+		return nil, nil
+	case approveOpenRequest:
 		entry, ok, err := s.decidableRequest(ctx, g)
 		if err != nil || ok {
 			return entry, err
 		}
-	}
-	if g.LastApprovedTerms == nil {
-		return nil, fmt.Errorf("%w: goal %s has never been approved; ask the agent in its conversation to request approval", domain.ErrInvalid, g.ID)
+		// Lapsed: ask again for the last approved terms, if that is what
+		// was shown.
+		if g.LastApprovedTerms == nil {
+			return nil, fmt.Errorf("%w: goal %s has never been approved; ask the agent in its conversation to request approval", domain.ErrInvalid, g.ID)
+		}
+		if err := checkShown(g, approvalTarget{source: approveLastTerms, terms: *g.LastApprovedTerms}, shown); err != nil {
+			return nil, err
+		}
 	}
 	terms, err := freshLastApproved(*g.LastApprovedTerms, now)
 	if err != nil {
@@ -513,13 +701,33 @@ func (s *Server) approveLastTerms(ctx context.Context, a domain.Actor, g domain.
 }
 
 // decidableRequest returns the operator-signed request for the consent in
-// view.Execution, recording it if need be, while its card is still open (a
-// decision after the card lapses would not verify). ok is false once lapsed.
+// view.Execution while its card is still open (a decision after the card
+// lapses would not verify). ok is false once lapsed.
+//
+// The record is written only into the management host. A consent hosted
+// elsewhere — a renewal the operator asked for from a run, or one a manager
+// asked for in their own conversation — is decided here only if its record
+// is already there: its host scope may be gone with its run, and re-creating
+// a record there would leave the decision in a scope nothing reads. ok is
+// false then too, and the caller renews from the management host instead.
 func (s *Server) decidableRequest(ctx context.Context, view domain.Goal) (*memory.Entry, bool, error) {
 	if s.Consent == nil || s.Consent.Writer == nil || s.Consent.Memory == nil {
 		return nil, false, fmt.Errorf("%w: approvals from a management surface are not served here", domain.ErrDenied)
 	}
-	entry, request, err := s.Consent.EnsureRequest(ctx, view)
+	var entry memory.Entry
+	var request channelevents.InteractionRequestPayload
+	var err error
+	if view.Execution.ManagementHosted() {
+		entry, request, err = s.Consent.EnsureRequest(ctx, view)
+	} else {
+		var found bool
+		entry, request, found, err = s.Consent.FindRequest(ctx, view)
+		if err == nil && !found {
+			log.FromContext(ctx).Info("goal management: a pending consent's request record is not in its host; not re-creating it there",
+				"goal", view.ID, "host", view.Execution.Session, "digest", view.Execution.Digest)
+			return nil, false, nil
+		}
+	}
 	if err != nil {
 		return nil, false, err
 	}

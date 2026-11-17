@@ -139,21 +139,64 @@ func (p *ConsentPublisher) EnsureRequest(ctx context.Context, g domain.Goal) (me
 	return p.ensureRequest(memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator"), g)
 }
 
+// FindRequest is the operator-signed request record for the consent in
+// g.Execution if it is already recorded in the consent's host scope, under
+// the publisher's lock; found is false otherwise. Unlike EnsureRequest it
+// never writes: a caller that is not the consent's host (a management
+// surface deciding a run-hosted renewal) must not re-create a record whose
+// host scope may be gone.
+func (p *ConsentPublisher) FindRequest(ctx context.Context, g domain.Goal) (memory.Entry, channelevents.InteractionRequestPayload, bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ctx = memory.WithCaller(memory.WithSystemApproval(ctx, "system:operator"), "system:operator")
+	entry, found, err := p.findRequest(ctx, g)
+	if err != nil || !found {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, false, err
+	}
+	request, err := requestOf(entry)
+	if err != nil {
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, false, fmt.Errorf("goal %s: decoding consent request %s: %w", g.ID, entry.ID, err)
+	}
+	return entry, request, true, nil
+}
+
+// findRequest reads the request record for the consent in g.Execution from
+// its host scope.
+func (p *ConsentPublisher) findRequest(ctx context.Context, g domain.Goal) (memory.Entry, bool, error) {
+	c := g.Execution
+	if c == nil {
+		return memory.Entry{}, false, domain.ErrInvalid
+	}
+	id := "goalconsent-request-" + c.Digest
+	entry, found, err := goalconsent.Find(ctx, p.Memory, memory.Scope{Kind: "session", ID: c.Session}, id)
+	if err != nil {
+		return memory.Entry{}, false, fmt.Errorf("goal %s: reading consent request %s: %w", g.ID, id, err)
+	}
+	return entry, found, nil
+}
+
+// requestOf is the card a request record carries.
+func requestOf(entry memory.Entry) (channelevents.InteractionRequestPayload, error) {
+	var content goalconsent.Content
+	if err := json.Unmarshal(entry.Content, &content); err != nil {
+		return channelevents.InteractionRequestPayload{}, err
+	}
+	var request channelevents.InteractionRequestPayload
+	if err := json.Unmarshal(content.Request, &request); err != nil {
+		return channelevents.InteractionRequestPayload{}, err
+	}
+	return request, nil
+}
+
 // ensureRequest returns the operator-signed request record for the consent
 // in g.Execution (g is the goal as that consent's card shows it: a renewal's
 // RenewalView), writing it into the consent's host scope if it is not there
 // yet, with the card it carries. Its decision, by a card click or from a
 // management surface, is recorded beside it and witnesses it.
 func (p *ConsentPublisher) ensureRequest(ctx context.Context, g domain.Goal) (memory.Entry, channelevents.InteractionRequestPayload, error) {
-	c := g.Execution
-	if c == nil {
-		return memory.Entry{}, channelevents.InteractionRequestPayload{}, domain.ErrInvalid
-	}
-	scope := memory.Scope{Kind: "session", ID: c.Session}
-	id := "goalconsent-request-" + c.Digest
-	entry, found, err := goalconsent.Find(ctx, p.Memory, scope, id)
+	entry, found, err := p.findRequest(ctx, g)
 	if err != nil {
-		return memory.Entry{}, channelevents.InteractionRequestPayload{}, fmt.Errorf("goal %s: reading consent request %s: %w", g.ID, id, err)
+		return memory.Entry{}, channelevents.InteractionRequestPayload{}, err
 	}
 	if !found {
 		entry, err = consentEntry(g, time.Now().UTC())
@@ -162,15 +205,11 @@ func (p *ConsentPublisher) ensureRequest(ctx context.Context, g domain.Goal) (me
 		}
 		entry, err = p.Writer.Put(ctx, entry)
 		if err != nil {
-			return memory.Entry{}, channelevents.InteractionRequestPayload{}, fmt.Errorf("goal %s: recording consent request %s: %w", g.ID, id, err)
+			return memory.Entry{}, channelevents.InteractionRequestPayload{}, fmt.Errorf("goal %s: recording consent request %s: %w", g.ID, "goalconsent-request-"+g.Execution.Digest, err)
 		}
 	}
-	var content goalconsent.Content
-	if err := json.Unmarshal(entry.Content, &content); err != nil {
-		return memory.Entry{}, channelevents.InteractionRequestPayload{}, err
-	}
-	var request channelevents.InteractionRequestPayload
-	if err := json.Unmarshal(content.Request, &request); err != nil {
+	request, err := requestOf(entry)
+	if err != nil {
 		return memory.Entry{}, channelevents.InteractionRequestPayload{}, err
 	}
 	return entry, request, nil

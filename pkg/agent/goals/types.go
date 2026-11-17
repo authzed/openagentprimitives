@@ -18,6 +18,9 @@ var (
 	ErrConflict = errors.New("goal revision or request key conflict")
 	ErrNotFound = errors.New("goal not found")
 	ErrDenied   = errors.New("goal access denied")
+	// ErrPlanChanged: a management approval named a plan (ManageRequest.Digest)
+	// that is no longer what the action would approve. The surface reopens it.
+	ErrPlanChanged = errors.New("the goal's plan changed since it was shown")
 )
 
 // Causes of a group run's refusal that can never clear without a fresh

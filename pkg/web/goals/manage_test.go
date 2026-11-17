@@ -15,6 +15,7 @@ import (
 	core "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/pipeline"
 	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
@@ -78,9 +79,29 @@ func (m *manageFlow) list(t *testing.T, viewer string) core.ManageResponse {
 	return out
 }
 
+// act takes action as viewer the way a surface does: an approval (resume,
+// renew) first reads the plan it approves and hands its digest back.
 func (m *manageFlow) act(t *testing.T, viewer, action string) (int, core.ManageResponse, string) {
 	t.Helper()
-	return m.manage(t, "channelsd", core.ManageRequest{Operation: core.ManageAct, Viewer: viewer, Namespace: groupNS, Goal: GoalResourceType + ":" + m.goal.ID, Action: action})
+	shown := ""
+	if action == core.ActResume || action == core.ActRenew {
+		if status, out, _ := m.plan(t, viewer, action); status == http.StatusOK {
+			shown = out.Digest
+		}
+	}
+	return m.actShown(t, viewer, action, shown)
+}
+
+// actShown takes action as viewer, naming the plan digest it was shown.
+func (m *manageFlow) actShown(t *testing.T, viewer, action, digest string) (int, core.ManageResponse, string) {
+	t.Helper()
+	return m.manage(t, "channelsd", core.ManageRequest{Operation: core.ManageAct, Viewer: viewer, Namespace: groupNS, Goal: GoalResourceType + ":" + m.goal.ID, Action: action, Digest: digest})
+}
+
+// plan reads the goal's plan as viewer, as shown before action.
+func (m *manageFlow) plan(t *testing.T, viewer, action string) (int, core.ManageResponse, string) {
+	t.Helper()
+	return m.manage(t, "channelsd", core.ManageRequest{Operation: core.ManagePlan, Viewer: viewer, Namespace: groupNS, Goal: GoalResourceType + ":" + m.goal.ID, Action: action})
 }
 
 // decide completes an in-modal approval as channelsd does: the viewer's
@@ -328,7 +349,20 @@ func TestManageChangeIsAuditedWithTheFirstPartyAttestation(t *testing.T) {
 	assert.Empty(t, last.Session)
 	var att firstPartyAttestation
 	require.NoError(t, json.Unmarshal(last.ActorProof, &att))
-	assert.Equal(t, firstPartyAttestation{Publisher: "system:channelsd", Surface: "management", Viewer: m.bob, Goal: m.goal.ID, Action: core.ActPause, At: att.At}, att)
+	assert.Equal(t, firstPartyAttestation{RecordedBy: "system:operator", Via: "channelsd-token", Unsigned: true,
+		Surface: "management", Viewer: m.bob, Goal: m.goal.ID, Action: core.ActPause, At: att.At}, att,
+		"recorded by the operator on channelsd's token's word, and says it is unsigned")
+
+	// It must not pass for a signed component entry: no publisher claim, and
+	// nothing an entry verifier would read as provenance.
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(last.ActorProof, &raw))
+	assert.NotContains(t, raw, "publisher")
+	assert.NotContains(t, raw, "provenance")
+	var asEntry memory.Entry
+	require.NoError(t, json.Unmarshal(last.ActorProof, &asEntry))
+	assert.Nil(t, asEntry.Provenance, "decoded as an entry, it carries no provenance to verify")
+	assert.NotContains(t, string(last.ActorProof), "system:channelsd")
 }
 
 func TestManageRenew(t *testing.T) {
@@ -398,6 +432,8 @@ func TestManageStandingPlan(t *testing.T) {
 			}
 			require.NotNil(t, out.Plan)
 			assert.Equal(t, m.goal.Execution.Terms.StandingPlan.Digest(), out.Plan.Digest())
+			assert.Equal(t, m.goal.Title, out.Title)
+			assert.Empty(t, out.Digest, "viewing approves nothing, so nothing is bound")
 		})
 	}
 }
@@ -408,4 +444,162 @@ func TestManageGoalInAnotherNamespaceIsNotFound(t *testing.T) {
 	status, _, body := m.manage(t, "channelsd", core.ManageRequest{Operation: core.ManageAct, Viewer: m.bob, Namespace: "elsewhere", Goal: GoalResourceType + ":" + m.goal.ID, Action: core.ActPause})
 	assert.Equal(t, http.StatusNotFound, status, body)
 	assert.Equal(t, core.Active, m.current(t).State)
+}
+
+// requestOtherTerms has alice ask, in her own conversation, for a daily
+// series under a different standing plan (the read phase re-pointed at
+// another repo), leaving it undecided in Execution.
+func (m *manageFlow) requestOtherTerms(t *testing.T) core.Goal {
+	t.Helper()
+	g := m.current(t)
+	phases := groupStandingPhases()
+	phases[0].Slots[0].ID = "acme/other"
+	terms := core.ExecutionTerms{
+		Bounds:            core.ExecutionBounds{DurationSeconds: 180, Turns: 10, Tokens: 10000, ApprovalSeconds: 90},
+		AllowedOperations: []string{"respond_to_user", "report_goal_result"}, Evidence: []string{"weekly summary"},
+		ActionApproval: "standing_plan",
+	}
+	dailyTerms(&terms)
+	status, r, body := m.f.as(t, "r1", core.Request{Operation: "request_execution", Scope: "group", Resource: groupResource(),
+		Execution: core.ExecutionRequest{RequestID: "exec-other", ID: g.ID, Revision: g.Revision, Terms: terms, StandingPlan: phases}})
+	require.Equal(t, http.StatusOK, status, body)
+	require.NotNil(t, r.Goal.Execution)
+	require.Nil(t, r.Goal.Execution.Decision)
+	require.False(t, r.Goal.Execution.ManagementHosted())
+	return *r.Goal
+}
+
+// The plan a manager is shown before resume or renew is the plan the act
+// approves: the read and the act share one selection, and the read's digest
+// is what the act approves.
+func TestManageShownPlanIsThePlanApproved(t *testing.T) {
+	cases := []struct {
+		name   string
+		action string
+		setup  func(t *testing.T, m *manageFlow)
+	}{
+		{name: "resume a paused goal: its last approved terms", action: core.ActResume, setup: func(t *testing.T, m *manageFlow) {
+			status, _, body := m.act(t, m.bob, core.ActPause)
+			require.Equal(t, http.StatusOK, status, body)
+		}},
+		{name: "renew with a renewal pending: the pending renewal", action: core.ActRenew, setup: func(t *testing.T, m *manageFlow) { m.renew(t) }},
+		{name: "renew with none pending: a renewal of the approval in force", action: core.ActRenew, setup: func(*testing.T, *manageFlow) {}},
+		{name: "renew after the approval ran out: the last approved terms", action: core.ActRenew, setup: func(t *testing.T, m *manageFlow) {
+			now := m.goal.Execution.Terms.ExpiresAt.Add(time.Hour)
+			m.f.s.Service.Now = func() time.Time { return now }
+		}},
+		{name: "renew while another manager's request is open: the last approved terms, not that request", action: core.ActRenew, setup: func(t *testing.T, m *manageFlow) {
+			m.requestOtherTerms(t)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newManageFlow(t)
+			approved := *m.goal.LastApprovedTerms.StandingPlan
+			tc.setup(t, m)
+			other := m.current(t).Execution
+
+			status, shown, body := m.plan(t, m.carol, tc.action)
+			require.Equal(t, http.StatusOK, status, body)
+			require.NotNil(t, shown.Plan)
+			require.NotEmpty(t, shown.Digest)
+			assert.Equal(t, m.goal.Title, shown.Title, "the server supplies the title")
+			assert.Equal(t, approved, *shown.Plan, "every case here approves the plan last approved")
+			if other != nil && other.Decision == nil && !other.ManagementHosted() {
+				assert.NotEqual(t, *other.Terms.StandingPlan, *shown.Plan, "the open request's plan is not what renew approves")
+			}
+
+			status, res, body := m.actShown(t, m.carol, tc.action, shown.Digest)
+			require.Equal(t, http.StatusOK, status, body)
+			require.NotNil(t, res.Approval)
+			require.NoError(t, m.decide(t, *res.Approval, m.carol))
+			g := m.current(t)
+			require.NotNil(t, g.Execution.Decision)
+			assert.Equal(t, m.carol, g.Execution.Decision.Owner)
+			assert.Equal(t, *shown.Plan, *g.Execution.Terms.StandingPlan, "the plan shown is the plan approved")
+			binding, err := approvalBinding(g.Execution.Terms)
+			require.NoError(t, err)
+			assert.Equal(t, shown.Digest, binding, "and so are the rest of its terms")
+		})
+	}
+}
+
+// An approval names the plan it was shown; anything else is refused before
+// anything is requested or replaced.
+func TestManageApprovalIsBoundToThePlanShown(t *testing.T) {
+	t.Run("no digest: refused, the goal stays paused", func(t *testing.T) {
+		m := newManageFlow(t)
+		status, _, body := m.act(t, m.bob, core.ActPause)
+		require.Equal(t, http.StatusOK, status, body)
+		status, res, body := m.actShown(t, m.carol, core.ActResume, "")
+		assert.Equal(t, http.StatusPreconditionFailed, status, body)
+		assert.Contains(t, body, "reopen")
+		assert.Nil(t, res.Approval)
+		assert.Equal(t, core.Paused, m.current(t).State)
+	})
+	t.Run("a digest of some other plan: refused", func(t *testing.T) {
+		m := newManageFlow(t)
+		before := m.current(t)
+		status, _, body := m.actShown(t, m.carol, core.ActRenew, "approval-binding:not-this-one")
+		assert.Equal(t, http.StatusPreconditionFailed, status, body)
+		after := m.current(t)
+		assert.Nil(t, after.PendingRenewal, "no renewal was requested")
+		assert.Equal(t, before.Revision, after.Revision)
+	})
+	t.Run("the plan changed after it was shown: refused, the new approval untouched", func(t *testing.T) {
+		m := newManageFlow(t)
+		status, shown, body := m.plan(t, m.carol, core.ActRenew)
+		require.Equal(t, http.StatusOK, status, body)
+		// Meanwhile alice asks for, and approves, a different plan.
+		m.goal = m.requestOtherTerms(t)
+		require.NoError(t, m.publisher.Notify(context.Background(), core.Event{Goal: m.goal, Action: "request_execution"}))
+		_, err := m.click(t, "alice@example.com")
+		require.NoError(t, err)
+		approved := m.current(t)
+		require.True(t, core.ApprovalInForce(approved, time.Now()))
+
+		status, res, body := m.actShown(t, m.carol, core.ActRenew, shown.Digest)
+		assert.Equal(t, http.StatusPreconditionFailed, status, body)
+		assert.Nil(t, res.Approval)
+		after := m.current(t)
+		assert.Nil(t, after.PendingRenewal, "nothing was renewed")
+		assert.Equal(t, approved.Execution.Digest, after.Execution.Digest)
+	})
+	t.Run("the digest of the plan shown: approved", func(t *testing.T) {
+		m := newManageFlow(t)
+		status, shown, body := m.plan(t, m.carol, core.ActRenew)
+		require.Equal(t, http.StatusOK, status, body)
+		status, res, body := m.actShown(t, m.carol, core.ActRenew, shown.Digest)
+		require.Equal(t, http.StatusOK, status, body)
+		require.NotNil(t, res.Approval)
+	})
+}
+
+// A system renewal whose request record is gone with the run that hosted it
+// is never re-created there: renew falls through to a renewal of the
+// approval in force, hosted at the management host.
+func TestManageRenewNeverRecreatesAGoneRunScopedRenewalRequest(t *testing.T) {
+	m := newManageFlow(t)
+	ctx := context.Background()
+	// Requested from run-1 but never published: its request record is not in
+	// the run's scope, as after the run's scope is collected.
+	renewed, err := m.f.s.Service.RequestRenewal(ctx, m.goal.Domain, m.goal.ID, renewalRun, time.Now())
+	require.NoError(t, err)
+	require.True(t, renewed.PendingRenewal.SystemRenewal())
+
+	status, res, body := m.act(t, m.carol, core.ActRenew)
+	require.Equal(t, http.StatusOK, status, body)
+	require.NotNil(t, res.Approval)
+	g := m.current(t)
+	require.NotNil(t, g.PendingRenewal)
+	assert.True(t, g.PendingRenewal.ManagementHosted(), "renewed at the management host")
+	assert.NotEqual(t, renewed.PendingRenewal.Digest, g.PendingRenewal.Digest, "the run's renewal was replaced")
+	_, found, err := goalconsent.Find(operatorCtx(), m.f.mem, memory.Scope{Kind: "session", ID: renewalRun.Session}, "goalconsent-request-"+renewed.PendingRenewal.Digest)
+	require.NoError(t, err)
+	assert.False(t, found, "nothing was written into the run's scope")
+
+	require.NoError(t, m.decide(t, *res.Approval, m.carol))
+	after := m.current(t)
+	assert.Equal(t, g.PendingRenewal.Digest, after.Execution.Digest)
+	assert.Equal(t, m.carol, after.Execution.Decision.Owner)
 }

@@ -64,6 +64,8 @@ func (c *Client) ManageGoals(ctx context.Context, req webgoals.ManageRequest) (w
 		sentinel = webgoals.ErrInvalid
 	case http.StatusConflict:
 		sentinel = webgoals.ErrConflict
+	case http.StatusPreconditionFailed:
+		sentinel = webgoals.ErrPlanChanged
 	default:
 		return webgoals.ManageResponse{}, err
 	}

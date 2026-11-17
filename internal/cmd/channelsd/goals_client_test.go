@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/inmem"
@@ -81,7 +83,7 @@ func TestGoalsClientAct(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			consent := &countingConsent{}
 			c := &goalsClient{api: tc.api, consent: consent, mem: memory.NewLocal(inmem.NewBackend())}
-			err := c.Act(context.Background(), viewer, "team", "agent_goal:goal-1", goals.ActRemove)
+			err := c.Act(context.Background(), viewer, "team", "agent_goal:goal-1", goals.ActRemove, "")
 			require.Len(t, tc.api.reqs, 1)
 			assert.Equal(t, goals.ManageRequest{Operation: goals.ManageAct, Viewer: "viewer-1", Namespace: "team", Goal: "agent_goal:goal-1", Action: goals.ActRemove}, tc.api.reqs[0])
 			assert.Zero(t, consent.checks, "never asked the server to check a decision")
@@ -95,6 +97,52 @@ func TestGoalsClientAct(t *testing.T) {
 				assert.ErrorIs(t, err, tc.sentinel)
 			}
 			assert.Contains(t, err.Error(), tc.contains)
+		})
+	}
+}
+
+// An approval's act carries the plan digest the viewer was shown to the goal
+// server, unchanged.
+func TestGoalsClientActCarriesThePlanDigest(t *testing.T) {
+	viewer := identity.CanonicalFromTrusted("viewer-1", "test")
+	api := &fakeGoalManager{}
+	c := &goalsClient{api: api, consent: &countingConsent{}, mem: memory.NewLocal(inmem.NewBackend())}
+	require.NoError(t, c.Act(context.Background(), viewer, "team", "agent_goal:goal-1", goals.ActRenew, "approval-binding:d1"))
+	require.Len(t, api.reqs, 1)
+	assert.Equal(t, goals.ManageRequest{Operation: goals.ManageAct, Viewer: "viewer-1", Namespace: "team", Goal: "agent_goal:goal-1", Action: goals.ActRenew, Digest: "approval-binding:d1"}, api.reqs[0])
+}
+
+func TestGoalsClientStandingPlan(t *testing.T) {
+	viewer := identity.CanonicalFromTrusted("viewer-1", "test")
+	plan := &plangate.Plan{Phases: []plangate.Phase{{Label: "read"}}}
+	for _, tc := range []struct {
+		name   string
+		action string
+		out    goals.ManageResponse
+		want   channelkinds.GoalPlan
+		err    error
+	}{
+		{name: "renew: the plan to approve, its digest and the goal's title", action: goals.ActRenew,
+			out:  goals.ManageResponse{Plan: plan, Title: "Weekly", Digest: "approval-binding:d1"},
+			want: channelkinds.GoalPlan{Title: "Weekly", Plan: *plan, Digest: "approval-binding:d1"}},
+		{name: "resume with no digest: not found, nothing to bind an approval to", action: goals.ActResume,
+			out: goals.ManageResponse{Plan: plan, Title: "Weekly"}, err: goals.ErrNotFound},
+		{name: "view with no plan: not found", out: goals.ManageResponse{Title: "Weekly"}, err: goals.ErrNotFound},
+		{name: "remove with no plan: the title alone", action: goals.ActRemove,
+			out: goals.ManageResponse{Title: "Weekly"}, want: channelkinds.GoalPlan{Title: "Weekly"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeGoalManager{out: tc.out}
+			c := &goalsClient{api: api}
+			got, err := c.StandingPlan(context.Background(), viewer, "team", "agent_goal:goal-1", tc.action)
+			require.Len(t, api.reqs, 1)
+			assert.Equal(t, goals.ManageRequest{Operation: goals.ManagePlan, Viewer: "viewer-1", Namespace: "team", Goal: "agent_goal:goal-1", Action: tc.action}, api.reqs[0])
+			if tc.err != nil {
+				assert.ErrorIs(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

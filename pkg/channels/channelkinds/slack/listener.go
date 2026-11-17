@@ -223,6 +223,11 @@ type slackListener struct {
 	// preferences section, same as a user who has interacted with nothing.
 	personalizableClasses channelkinds.PersonalizableClassLookup
 
+	// goals lists and manages the group goals the App Home goals section
+	// shows (app_home_goals_*.go). Nil when channelsd has no goals client;
+	// the section is then omitted.
+	goals channelkinds.GoalsClient
+
 	// restartSubmit is the channelsd-provided function that publishes a
 	// RestartTrigger envelope to NATS. Wired via RegisterRestartTrigger
 	// (channelkinds.RestartCapable). Nil until wired; handleRestartSubmit
@@ -403,6 +408,7 @@ func newSlackListener(deps channelkinds.Deps) *slackListener {
 		restartMem:            deps.Memory,
 		preferences:           deps.Preferences,
 		personalizableClasses: deps.PersonalizableClasses,
+		goals:                 deps.Goals,
 	}
 }
 
@@ -694,6 +700,9 @@ func (l *slackListener) handle(ctx context.Context, evt socketmode.Event) {
 //   - "home:pref:<ns>/<class>:<key>" / "home:pref_save:<ns>/<class>" — App
 //     Home preference edits; see handleHomePrefClick
 //     (app_home_pref_interaction.go).
+//   - "home:goal:<action>:<goal>" — App Home group goal buttons, and the
+//     view_submission of their "home:goal:confirm:<action>" modals; see
+//     app_home_goals_interaction.go.
 //
 // Unknown ActionIDs are silently skipped.
 func (l *slackListener) onInteraction(ctx context.Context, cb slackapi.InteractionCallback) error {
@@ -707,6 +716,13 @@ func (l *slackListener) onInteraction(ctx context.Context, cb slackapi.Interacti
 	// clicked Restart. Re-resolves the session + cut and calls restartSubmit.
 	if cb.Type == slackapi.InteractionTypeViewSubmission && cb.View.CallbackID == RestartModalCallbackID {
 		return l.handleRestartSubmit(ctx, cb)
+	}
+	// App Home goal confirmation submit: the decision for resume, renew and
+	// remove (app_home_goals_interaction.go). Acts as the submitting user.
+	if handled, err := l.handleHomeGoalSubmit(ctx, cb); err != nil {
+		return err
+	} else if handled {
+		return nil
 	}
 	if cb.Type != slackapi.InteractionTypeBlockActions {
 		return nil
@@ -767,6 +783,14 @@ func (l *slackListener) onInteraction(ctx context.Context, cb slackapi.Interacti
 	// Commits through the clicker's OWN canonical subject and republishes
 	// the Home tab; never reads a subject off cb.
 	if handled, err := l.handleHomePrefClick(ctx, cb); err != nil {
+		return err
+	} else if handled {
+		return nil
+	}
+	// App Home goal buttons: "home:goal:<action>:<goal>". View plan and the
+	// confirmations open modals; pause acts and republishes. Resolves the
+	// clicker server-side, like the preference clicks above.
+	if handled, err := l.handleHomeGoalClick(ctx, cb); err != nil {
 		return err
 	} else if handled {
 		return nil

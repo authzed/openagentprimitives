@@ -27,6 +27,7 @@ func TestManageGoalsRebuildsTheGoalRefusal(t *testing.T) {
 		{name: "404: ErrNotFound", status: http.StatusNotFound, sentinel: goals.ErrNotFound},
 		{name: "400: ErrInvalid", status: http.StatusBadRequest, sentinel: goals.ErrInvalid},
 		{name: "409: ErrConflict", status: http.StatusConflict, sentinel: goals.ErrConflict},
+		{name: "412: ErrPlanChanged (the approval named a plan no longer to be approved)", status: http.StatusPreconditionFailed, sentinel: goals.ErrPlanChanged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

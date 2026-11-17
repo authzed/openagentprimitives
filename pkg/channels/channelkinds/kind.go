@@ -662,12 +662,31 @@ type GoalsClient interface {
 	// ListForViewer lists class's group goals in ns that viewer can see:
 	// the first limit rows, and how many there are in all.
 	ListForViewer(ctx context.Context, viewer identity.CanonicalUserID, ns, class string, limit int) ([]GoalSummary, int, error)
-	// StandingPlan is the goal's standing plan, to show before an approval.
-	StandingPlan(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource string) (plangate.Plan, error)
+	// StandingPlan is what to show before action on the goal: its title and
+	// standing plan. For an approval (goals.ActResume, ActRenew) it is the
+	// plan that act would approve, with the Digest the act must name; for
+	// "" (View plan) it is the plan in force, awaiting approval or last run
+	// under. For goals.ActRemove the plan may be empty.
+	StandingPlan(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action string) (GoalPlan, error)
 	// Act takes action — goals.ActPause, ActResume, ActRenew or ActRemove —
 	// as viewer. Resume and renew are approvals decided by this call (the
 	// click is the decision); nothing is posted into the conversation.
-	Act(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action string) error
+	// planDigest is the GoalPlan.Digest the viewer was shown: an approval is
+	// refused with goals.ErrPlanChanged unless it still matches. Pause and
+	// remove take "".
+	Act(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action, planDigest string) error
+}
+
+// GoalPlan is what a management surface shows before an action on a goal.
+// Everything in it is the goal server's, not the surface's own view.
+type GoalPlan struct {
+	// Title is the goal's title. It is agent-authored: render it inert.
+	Title string
+	Plan  plangate.Plan
+	// Digest binds an approval to this plan. It is not authority: the
+	// surface carries it to Act unchanged, and the server refuses an
+	// approval whose plan no longer has it.
+	Digest string
 }
 
 // PersonalizableClassLookup gives channel kinds a narrow, read-only way to

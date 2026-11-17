@@ -11,7 +11,6 @@ import (
 
 	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
-	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/pipeline"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -404,19 +403,28 @@ func (g *goalsClient) ListForViewer(ctx context.Context, viewer identity.Canonic
 	return out.Goals, out.Total, nil
 }
 
-func (g *goalsClient) StandingPlan(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource string) (plangate.Plan, error) {
-	out, err := g.api.ManageGoals(ctx, goals.ManageRequest{Operation: goals.ManagePlan, Viewer: viewer.String(), Namespace: ns, Goal: goalResource})
+func (g *goalsClient) StandingPlan(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action string) (channelkinds.GoalPlan, error) {
+	out, err := g.api.ManageGoals(ctx, goals.ManageRequest{Operation: goals.ManagePlan, Viewer: viewer.String(), Namespace: ns, Goal: goalResource, Action: action})
 	if err != nil {
-		return plangate.Plan{}, fmt.Errorf("standing plan of %s for %s: %w", goalResource, viewer, err)
+		return channelkinds.GoalPlan{}, fmt.Errorf("standing plan of %s for %s: %w", goalResource, viewer, err)
 	}
-	if out.Plan == nil {
-		return plangate.Plan{}, fmt.Errorf("standing plan of %s for %s: %w: the goal server returned none", goalResource, viewer, goals.ErrNotFound)
+	// An approval with nothing to bind it to cannot be decided: the server
+	// refuses an approval naming no digest, so refuse to show one here.
+	if (action == goals.ActResume || action == goals.ActRenew) && (out.Plan == nil || out.Digest == "") {
+		return channelkinds.GoalPlan{}, fmt.Errorf("standing plan of %s for %s: %w: the goal server returned no plan to approve", goalResource, viewer, goals.ErrNotFound)
 	}
-	return *out.Plan, nil
+	if action == "" && out.Plan == nil {
+		return channelkinds.GoalPlan{}, fmt.Errorf("standing plan of %s for %s: %w: the goal server returned none", goalResource, viewer, goals.ErrNotFound)
+	}
+	gp := channelkinds.GoalPlan{Title: out.Title, Digest: out.Digest}
+	if out.Plan != nil {
+		gp.Plan = *out.Plan
+	}
+	return gp, nil
 }
 
-func (g *goalsClient) Act(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action string) error {
-	out, err := g.api.ManageGoals(ctx, goals.ManageRequest{Operation: goals.ManageAct, Viewer: viewer.String(), Namespace: ns, Goal: goalResource, Action: action})
+func (g *goalsClient) Act(ctx context.Context, viewer identity.CanonicalUserID, ns, goalResource, action, planDigest string) error {
+	out, err := g.api.ManageGoals(ctx, goals.ManageRequest{Operation: goals.ManageAct, Viewer: viewer.String(), Namespace: ns, Goal: goalResource, Action: action, Digest: planDigest})
 	if err != nil {
 		return fmt.Errorf("%s %s for %s: %w", action, goalResource, viewer, err)
 	}
