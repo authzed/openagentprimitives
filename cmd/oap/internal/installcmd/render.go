@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +23,23 @@ type MemoryTokenLinks struct {
 	Channelsd string
 	Webd      string
 	Authzd    string
+}
+
+// memoryTokenLink is one component's memory-token Secret: the default name the
+// bootstrap Job mints, the user's link (empty = mint), and the flag that sets it.
+type memoryTokenLink struct {
+	flag, def, linked string
+}
+
+// byComponent lists the three links with their default names, in the order of
+// bootstrap.MemoryTokenSecretNames. The rewrite and the validation both range
+// over it, so they cannot disagree about which default belongs to which flag.
+func (l MemoryTokenLinks) byComponent() []memoryTokenLink {
+	return []memoryTokenLink{
+		{"--channelsd-memory-token-secret", bootstrap.ChannelsdMemoryTokenSecret, l.Channelsd},
+		{"--webd-memory-token-secret", bootstrap.WebdMemoryTokenSecret, l.Webd},
+		{"--authzd-memory-token-secret", bootstrap.AuthzdMemoryTokenSecret, l.Authzd},
+	}
 }
 
 // RenderConfig is the full input to `oap render`. It is populated from flags and
@@ -189,6 +207,17 @@ func validateRenderFlags(cfg RenderConfig) error {
 	// mints the defaults regardless of links: `--webd-memory-token-secret` pointed
 	// at channelsd's default name (channelsd left to mint) is the same leak as
 	// linking both to one Secret, and must be refused just the same.
+	// A link naming ANOTHER component's default Secret is refused outright: the
+	// Job still mints that default for its own component, and the overlay's name
+	// rewrite cannot tell the two apart, so the reference would be ambiguous.
+	links := cfg.MemoryToken.byComponent()
+	for _, l := range links {
+		for _, other := range links {
+			if l.linked != "" && other.def != l.def && l.linked == other.def {
+				return fmt.Errorf("%s=%q names the %s default Secret; link a Secret of its own (or leave it unset to have one minted)", l.flag, l.linked, strings.TrimSuffix(strings.TrimPrefix(other.flag, "--"), "-memory-token-secret"))
+			}
+		}
+	}
 	eff := func(link, def string) string {
 		if link != "" {
 			return link

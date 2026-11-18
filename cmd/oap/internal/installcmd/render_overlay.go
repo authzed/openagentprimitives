@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 
-	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
 )
@@ -51,18 +51,23 @@ func processBundle(load func() ([][]byte, error), cfg RenderConfig, storageClass
 // applyMemoryTokenLinks rewrites each linked component's default memory-token
 // Secret name to the user-supplied existing name, across the whole base (every
 // reference). An unset link leaves the default name (the operator mints it).
-// Index-aligned with bootstrap.MemoryTokenSecretNames: [channelsd, webd, authzd].
+//
+// The rewrite is a single pass (strings.Replacer does not re-scan replaced
+// text), so one link's output is never rewritten again by another: chained
+// replaces let a link equal to another component's default name be rewritten a
+// second time, landing webd on authzd's write-capable Secret.
+// validateRenderFlags refuses such a link outright as well.
 func applyMemoryTokenLinks(base []byte, links MemoryTokenLinks) []byte {
-	repl := func(b []byte, def, linked string) []byte {
-		if linked == "" {
-			return b
+	var oldnew []string
+	for _, l := range links.byComponent() {
+		if l.linked != "" {
+			oldnew = append(oldnew, l.def, l.linked)
 		}
-		return bytes.ReplaceAll(b, []byte(def), []byte(linked))
 	}
-	base = repl(base, bootstrap.ChannelsdMemoryTokenSecret, links.Channelsd)
-	base = repl(base, bootstrap.WebdMemoryTokenSecret, links.Webd)
-	base = repl(base, bootstrap.AuthzdMemoryTokenSecret, links.Authzd)
-	return base
+	if len(oldnew) == 0 {
+		return base
+	}
+	return []byte(strings.NewReplacer(oldnew...).Replace(string(base)))
 }
 
 // clusterKindPatchFile is the overlay patch that stamps AP_CLUSTER_KIND onto the

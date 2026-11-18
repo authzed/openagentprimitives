@@ -612,3 +612,58 @@ func TestRender_CreateDBJobHasNoDeadline(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, found, "no activeDeadlineSeconds on the rendered createdb Job")
 }
+
+// TestValidateRenderFlags_RefusesLinkToAnotherComponentsDefault: a link equal
+// to a DIFFERENT component's default name cannot be rewritten unambiguously.
+// The first case is the reproduction: authzd linked away and webd pointed at
+// authzd's default passed the effective-name check, and the chained rewrite
+// then landed webd on authzd's write-capable Secret.
+func TestValidateRenderFlags_RefusesLinkToAnotherComponentsDefault(t *testing.T) {
+	cases := []struct {
+		name  string
+		links MemoryTokenLinks
+	}{
+		{"webd -> authzd default with authzd linked away: refused", MemoryTokenLinks{Authzd: "x", Webd: bootstrap.AuthzdMemoryTokenSecret}},
+		{"channelsd -> webd default: refused", MemoryTokenLinks{Channelsd: bootstrap.WebdMemoryTokenSecret}},
+		{"authzd -> channelsd default: refused", MemoryTokenLinks{Authzd: bootstrap.ChannelsdMemoryTokenSecret}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := gkeConfig()
+			c.MemoryToken = tc.links
+			assert.ErrorContains(t, validateRenderFlags(c), "default Secret")
+		})
+	}
+
+	c := gkeConfig()
+	c.MemoryToken = MemoryTokenLinks{Webd: bootstrap.WebdMemoryTokenSecret}
+	assert.NoError(t, validateRenderFlags(c), "a link equal to the component's OWN default is a no-op, not ambiguous")
+}
+
+// TestApplyMemoryTokenLinks_EachLinkOnlyOnItsOwnReferences: the rewrite is one
+// pass, so a linked name is never rewritten again by another link.
+func TestApplyMemoryTokenLinks_EachLinkOnlyOnItsOwnReferences(t *testing.T) {
+	base := []byte("channelsd: " + bootstrap.ChannelsdMemoryTokenSecret + "\n" +
+		"webd: " + bootstrap.WebdMemoryTokenSecret + "\n" +
+		"authzd: " + bootstrap.AuthzdMemoryTokenSecret + "\n")
+	cases := []struct {
+		name  string
+		links MemoryTokenLinks
+		want  string
+	}{
+		{"none linked: unchanged", MemoryTokenLinks{}, string(base)},
+		{"all linked", MemoryTokenLinks{Channelsd: "ch", Webd: "wd", Authzd: "az"}, "channelsd: ch\nwebd: wd\nauthzd: az\n"},
+		{"webd linked only", MemoryTokenLinks{Webd: "wd"}, "channelsd: " + bootstrap.ChannelsdMemoryTokenSecret + "\nwebd: wd\nauthzd: " + bootstrap.AuthzdMemoryTokenSecret + "\n"},
+		{
+			// Refused by validateRenderFlags; still must not chain if reached.
+			"webd -> authzd default, authzd -> x: webd keeps authzd's default, not x",
+			MemoryTokenLinks{Webd: bootstrap.AuthzdMemoryTokenSecret, Authzd: "x"},
+			"channelsd: " + bootstrap.ChannelsdMemoryTokenSecret + "\nwebd: " + bootstrap.AuthzdMemoryTokenSecret + "\nauthzd: x\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, string(applyMemoryTokenLinks(base, tc.links)))
+		})
+	}
+}
