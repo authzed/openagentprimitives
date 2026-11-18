@@ -51,7 +51,7 @@ kind: Job
 metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-2"
-  name: spicebox-bootstrap-secrets-98a5b8aef4
+  name: spicebox-bootstrap-secrets-7050da40e4
   namespace: agentprimitives-system
 spec:
   backoffLimit: 6
@@ -67,6 +67,21 @@ spec:
         - --skip-postgres-token
         image: spicebox-operator:dev
         name: bootstrap-secrets
-        resources: {}
+        resources:
+          limits:
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
       restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: spicebox-bootstrap

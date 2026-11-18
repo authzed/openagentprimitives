@@ -8,11 +8,13 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/authzed/openagentprimitives/pkg/platform/apimage"
 	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
+	"github.com/authzed/openagentprimitives/pkg/platform/podspec"
 )
 
 // bootstrapJobFile is the overlay file holding the pre-start secret-minting Job.
@@ -44,29 +46,29 @@ func bootstrapJobArgs(cfg RenderConfig) []string {
 }
 
 // bootstrapJobName names the Job by a hash of what it runs and what it mints: the
-// resolved operator image ref, the entrypoint args, and
+// whole pod template as it will be written (resolved operator image ref, the
+// entrypoint args, security context, resources), and
 // bootstrap.MintSetFingerprint — the last so an upgrade that adds a Secret or
 // widens a NATS grant re-runs the Job even under an unchanged (mutable) image
-// tag. A Job's
-// spec.template is immutable once applied, so a GitOps re-sync after an operator
-// image bump would try to patch it and be rejected (Argo/Flux SyncFailed). A
-// content-addressed name instead makes a changed template a NEW object the
-// controller prunes-and-creates, while a byte-identical re-render hashes the same
-// → same name → a no-op apply (preserving SSA idempotency). The image ref is
-// substituted the same way the emitted manifest's is, so the hash tracks exactly
-// what will be written.
+// tag. A Job's spec.template is immutable once applied, so a GitOps re-sync
+// after any template change would try to patch it and be rejected (Argo/Flux
+// SyncFailed). A content-addressed name instead makes a changed template a NEW
+// object the controller prunes-and-creates, while a byte-identical re-render
+// hashes the same → same name → a no-op apply (preserving SSA idempotency). The
+// template is substituted the same way the emitted manifest is, so the hash
+// tracks exactly what will be written.
 func bootstrapJobName(cfg RenderConfig) (string, error) {
-	img, err := manifests.Substitute([]byte(apimage.Operator.LocalRef()), cfg.Tags)
+	tmpl, err := marshalClean(buildBootstrapJob(cfg, "").Spec.Template)
+	if err != nil {
+		return "", err
+	}
+	tmpl, err = manifests.Substitute(tmpl, cfg.Tags)
 	if err != nil {
 		return "", err
 	}
 	h := sha256.New()
-	h.Write(img)
+	h.Write(tmpl)
 	h.Write([]byte{0})
-	for _, a := range bootstrapJobArgs(cfg) {
-		h.Write([]byte(a))
-		h.Write([]byte{0})
-	}
 	h.Write([]byte(bootstrap.MintSetFingerprint()))
 	return bootstrapJobBaseName + "-" + hex.EncodeToString(h.Sum(nil))[:10], nil
 }
@@ -148,10 +150,30 @@ func buildBootstrapJob(cfg RenderConfig, name string) *batchv1.Job {
 				Spec: corev1.PodSpec{
 					ServiceAccountName: bootstrapIdentity,
 					RestartPolicy:      corev1.RestartPolicyOnFailure,
+					// The same pod/container hardening as the operator Deployment
+					// (config/manager/deployment.yaml), which runs this image: a
+					// namespace enforcing Pod Security "restricted" or an admission
+					// policy would otherwise reject the pod and stall the cold
+					// start at this Job. The entrypoint only talks to the API
+					// server, so a read-only root filesystem costs nothing.
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot:   ptr(true),
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					},
 					Containers: []corev1.Container{{
-						Name:  "bootstrap-secrets",
-						Image: apimage.Operator.LocalRef(),
-						Args:  bootstrapJobArgs(cfg),
+						Name:            "bootstrap-secrets",
+						Image:           apimage.Operator.LocalRef(),
+						Args:            bootstrapJobArgs(cfg),
+						SecurityContext: podspec.HardenedContainerSecurityContext(),
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10m"),
+								corev1.ResourceMemory: resource.MustParse("32Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceMemory: resource.MustParse("128Mi"),
+							},
+						},
 					}},
 				},
 			},

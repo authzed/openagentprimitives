@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -666,4 +668,30 @@ func TestApplyMemoryTokenLinks_EachLinkOnlyOnItsOwnReferences(t *testing.T) {
 			assert.Equal(t, tc.want, string(applyMemoryTokenLinks(base, tc.links)))
 		})
 	}
+}
+
+// TestRender_BootstrapJobPodIsHardened: the Job runs the operator image and must
+// pass the same admission the operator does (Pod Security "restricted", or an
+// equivalent policy), or the cold start stalls at its wave.
+func TestRender_BootstrapJobPodIsHardened(t *testing.T) {
+	doc := findDoc(buildDocs(t, gkeConfig()), "Job", bootstrapJobBaseName)
+	require.NotNil(t, doc, "bootstrap Job present")
+	var job batchv1.Job
+	require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(doc.Object, &job))
+
+	pod := job.Spec.Template.Spec
+	require.NotNil(t, pod.SecurityContext)
+	assert.Equal(t, ptr(true), pod.SecurityContext.RunAsNonRoot)
+	require.NotNil(t, pod.SecurityContext.SeccompProfile)
+	assert.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, pod.SecurityContext.SeccompProfile.Type)
+
+	require.Len(t, pod.Containers, 1)
+	c := pod.Containers[0]
+	require.NotNil(t, c.SecurityContext)
+	assert.Equal(t, ptr(false), c.SecurityContext.AllowPrivilegeEscalation)
+	assert.Equal(t, ptr(true), c.SecurityContext.ReadOnlyRootFilesystem)
+	require.NotNil(t, c.SecurityContext.Capabilities)
+	assert.Equal(t, []corev1.Capability{"ALL"}, c.SecurityContext.Capabilities.Drop)
+	assert.False(t, c.Resources.Requests.Memory().IsZero(), "memory request set")
+	assert.False(t, c.Resources.Limits.Memory().IsZero(), "memory limit set")
 }
