@@ -51,7 +51,7 @@ kind: Job
 metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-2"
-  name: spicebox-bootstrap-secrets-ca4a276801
+  name: spicebox-bootstrap-secrets-81e7a324a3
   namespace: agentprimitives-system
 spec:
   backoffLimit: 6

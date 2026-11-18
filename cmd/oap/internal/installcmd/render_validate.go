@@ -10,7 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/cliout"
-	"github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz/spicedb"
 	"github.com/authzed/openagentprimitives/pkg/platform/apimage"
 	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
@@ -110,24 +109,13 @@ func runRenderValidate(ctx context.Context, out io.Writer, cfg RenderConfig, dir
 
 // jobMintedSecretNames is the set of internal Secrets the pre-start bootstrap Job
 // mints for this config — so --validate treats their references as satisfied.
-// The memory tokens, admind token and passthrough key are always minted; the
-// SpiceDB/Postgres tokens are minted unless the user externalized that instance.
+// It is bootstrap.MintedSecretNames under the same skips bootstrapJobArgs passes
+// the Job, so the two cannot disagree.
 func jobMintedSecretNames(cfg RenderConfig) []string {
-	names := append([]string{}, bootstrap.MemoryTokenSecretNames...)
-	names = append(names, bootstrap.AdmindTokenSecretName, v1alpha1.PassthroughLinkSigningKeySecret,
-		"spicebox-nats-identity", "spicebox-nats-tls", "spicebox-channelsd-nats-creds", "spicebox-webd-nats-creds",
-		"spicebox-postgres-token", "spicebox-spicedb-token")
-	out := names[:0:len(names)]
-	for _, n := range names {
-		if n == "spicebox-spicedb-token" && cfg.externalSpiceDB() {
-			continue
-		}
-		if n == "spicebox-postgres-token" && cfg.ExternalPostgres {
-			continue
-		}
-		out = append(out, n)
-	}
-	return out
+	return bootstrap.MintedSecretNames(bootstrap.MintOptions{
+		SkipSpiceDBToken:  cfg.externalSpiceDB(),
+		SkipPostgresToken: cfg.ExternalPostgres,
+	})
 }
 
 // externalSecretNames are the Secrets the USER chose to provide themselves via

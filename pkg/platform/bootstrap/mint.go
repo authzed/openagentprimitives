@@ -14,12 +14,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
 )
 
 const (
 	spiceDBTokenSecretName  = "spicebox-spicedb-token"
 	postgresTokenSecretName = "spicebox-postgres-token"
+	natsIdentitySecretName  = "spicebox-nats-identity"
+	natsTLSSecretName       = "spicebox-nats-tls"
 )
 
 // MintOptions tunes which optional, instance-coupled Secrets MintAllInternalSecrets
@@ -58,10 +61,10 @@ func MintAllInternalSecrets(ctx context.Context, reader client.Reader, writer cl
 	}
 	// NATS identity → TLS → client creds (creds require the first two). Always
 	// bundled; never gated by the external flags.
-	if err := ensureLogged(ctx, reader, "spicebox-nats-identity", logf, func() error { return EnsureNATSIdentity(ctx, writer) }); err != nil {
+	if err := ensureLogged(ctx, reader, natsIdentitySecretName, logf, func() error { return EnsureNATSIdentity(ctx, writer) }); err != nil {
 		return err
 	}
-	if err := ensureLogged(ctx, reader, "spicebox-nats-tls", logf, func() error { return EnsureNATSTLS(ctx, writer) }); err != nil {
+	if err := ensureLogged(ctx, reader, natsTLSSecretName, logf, func() error { return EnsureNATSTLS(ctx, writer) }); err != nil {
 		return err
 	}
 	if err := EnsureNATSClientCreds(ctx, writer, logf); err != nil {
@@ -86,6 +89,26 @@ func MintAllInternalSecrets(ctx context.Context, reader client.Reader, writer cl
 		}
 	}
 	return nil
+}
+
+// MintedSecretNames is every Secret MintAllInternalSecrets(opts) creates, in
+// mint order. It is the one list the mint-set fingerprint and `oap render
+// --validate` derive from; TestMintedSecretNames_MatchesWhatMintAllCreates
+// keeps it equal to what MintAllInternalSecrets actually creates.
+func MintedSecretNames(opts MintOptions) []string {
+	names := append(append([]string{}, MemoryTokenSecretNames...),
+		AdmindTokenSecretName, v1alpha1.PassthroughLinkSigningKeySecret,
+		natsIdentitySecretName, natsTLSSecretName)
+	for _, c := range natsClientCreds() {
+		names = append(names, c.secretName)
+	}
+	if !opts.SkipPostgresToken {
+		names = append(names, postgresTokenSecretName)
+	}
+	if !opts.SkipSpiceDBToken {
+		names = append(names, spiceDBTokenSecretName)
+	}
+	return names
 }
 
 func logMinted(logf func(string, ...any), name string, created bool) {
