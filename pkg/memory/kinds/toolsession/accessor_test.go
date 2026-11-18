@@ -135,3 +135,19 @@ func mustMarshal(t *testing.T, ev toolsession.Event) []byte {
 	require.NoError(t, err)
 	return raw
 }
+
+// TestRecordReplacesUnstorableCharacters: an event's Text is whatever the
+// inner tool streamed, and the facade refuses an entry carrying NUL. Record is
+// best-effort, so a refusal would drop the event from the replayed stream.
+func TestRecordReplacesUnstorableCharacters(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	mem := newMemory(t)
+	require.NoError(t, toolsession.Record(ctx, mem, testScope, toolsession.Event{
+		ToolCallRef: "call-1", EventType: "text_delta", Text: "before\x00after",
+	}))
+
+	got, err := toolsession.ReadAll(ctx, mem, testScope)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "before�after", got[0].Text)
+}
