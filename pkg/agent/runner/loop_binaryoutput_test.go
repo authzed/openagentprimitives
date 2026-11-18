@@ -67,6 +67,14 @@ func TestSanitizeToolOutput(t *testing.T) {
 			},
 		},
 		{
+			name:    "NUL records with ASCII unit separators (git log -z --format=%H%x1f%s): text kept, NULs replaced",
+			in:      "abc\x1fdef\x00ghi\x1f\x00",
+			cleanup: outputNULReplaced,
+			check: func(t *testing.T, out string) {
+				assert.Equal(t, "abc\x1fdef\ufffdghi\x1f\ufffd", out)
+			},
+		},
+		{
 			name:    "a multi-byte character straddling the sniff window's edge: not mistaken for invalid UTF-8",
 			in:      "a\x00" + strings.Repeat("b", binarySniffLen-3) + "日tail",
 			cleanup: outputNULReplaced,

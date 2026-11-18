@@ -68,8 +68,10 @@ func replaceNUL(content string) string {
 
 // looksBinary reports whether the sniff window holds a NUL and does not read
 // as text. "Not text" is either of: bytes that are not valid UTF-8, or a
-// control character other than NUL itself, whitespace, backspace and ESC (the
-// last two so terminal-styled output still counts as text). An executable or
+// control character other than NUL itself, whitespace, backspace and ESC (so
+// terminal-styled output still counts as text), and the ASCII file, group,
+// record and unit separators 0x1C-0x1F (so delimited output such as
+// `git log -z --format=%H%x1f%s` does too). An executable or
 // an image trips one of those within a few bytes of its header; a NUL-separated
 // listing trips neither.
 func looksBinary(content string) bool {
@@ -91,7 +93,7 @@ func looksBinary(content string) bool {
 	}
 	for _, r := range window {
 		switch {
-		case r == 0, r == '\b', r == '\x1b', unicode.IsSpace(r):
+		case r == 0, r == '\b', r == '\x1b', r >= 0x1c && r <= 0x1f, unicode.IsSpace(r):
 		case unicode.IsControl(r):
 			return true
 		}

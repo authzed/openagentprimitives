@@ -85,11 +85,14 @@ func NewAppender(mem memory.Memory, scope memory.Scope) *Appender {
 // here rather than left for Put to refuse. A turn is the session's durable
 // record, so refusing it fails the session, over one character in a model's
 // reply or a user's message. A tool call's arguments are not at risk: they are
-// bytes, stored base64-encoded. Every writer of a turn — the runner, and
+// bytes, stored base64-encoded. Every writer of a NEW turn — the runner, and
 // channelsd for inbound messages — comes through this method, so replacing
 // here covers all of them and every field, and it happens before the entry is
-// signed. The live conversation keeps the original; only the record carries
-// the placeholder, and the log line below says so.
+// signed. The one writer that does not is memcopy.CopyPrefix, which re-puts a
+// parent's existing turns into a forked child; it makes the same replacement
+// itself, for turns recorded before the store refused these characters. The
+// live conversation keeps the original; only the record carries the
+// placeholder, and the log line below says so.
 func (a *Appender) Append(ctx context.Context, t memory.Turn) error {
 	id := EntryID(t.Index, t.Role)
 	raw, err := json.Marshal(turnContent{Content: t.Content, Usage: t.Usage, Author: t.Author, Via: t.Via, Refused: t.Refused, Model: t.Model})
