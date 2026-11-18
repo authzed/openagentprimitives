@@ -59,6 +59,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/apimage"
 	"github.com/authzed/openagentprimitives/pkg/platform/artifactstore"
 	blobstore "github.com/authzed/openagentprimitives/pkg/platform/artifactstore/blob"
+	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/web/admind"
 
 	// mcpui is registered ONLY here (the artifactrender controller's
@@ -90,6 +91,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/revocation"
 	"github.com/authzed/openagentprimitives/pkg/authz/spicedb"
 	_ "github.com/authzed/openagentprimitives/pkg/authz/spicedb/relsource/imports" // completes the relsource claim table before any guarded write (BootstrapSource, pttagmint, ...) is checked
+	spicedbschema "github.com/authzed/openagentprimitives/pkg/authz/spicedb/schema"
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelassets/mcpui"
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelassets/svg"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
@@ -855,6 +857,9 @@ func newCommand() *cobra.Command {
 			return nil
 		},
 	}
+	// Pre-start bootstrap Job entrypoint: `operator bootstrap-secrets` mints the
+	// internal Secrets and exits, without starting the manager.
+	cmd.AddCommand(newBootstrapSecretsCmd())
 	fs := cmd.Flags()
 	fs.StringVar(&cfg.metricsAddr, "metrics-bind-address", "127.0.0.1:8080",
 		"Address for the metrics endpoint. The endpoint is unauthenticated, so the default binds loopback-only; widen it (e.g. \":8080\") only behind an authenticating or network-policy-enforced scrape path.")
@@ -2959,7 +2964,12 @@ func run(cfg *config) {
 	// wiring. Claims nothing DELIBERATELY — the bootstrap surface's
 	// relations are arbitrary and operator-supplied, so it can own none of
 	// them: see pkg/authz/spicedb/relsource and pkg/authz/spicedb/writer.go.
-	var schemaIO guardianschema.SchemaIO = spicedb.SchemaIOFor(spiceDBClient)
+	//
+	// serialSchemaIO is shared with the leader-only bootstrap seed below, so the
+	// seed's read-then-write cannot interleave with a guardian composition write
+	// (bootstrap.SerializedSchemaIO).
+	serialSchemaIO := bootstrap.NewSerializedSchemaIO(spicedb.SchemaIOFor(spiceDBClient))
+	var schemaIO guardianschema.SchemaIO = serialSchemaIO
 	guardianReconciler := guardianctrl.NewReconciler(mgr.GetClient(), schemaIO, spiceDBClient.Writer(spicedb.BootstrapSource))
 	// Reader wires SpiceDBBootstrap drift detection's read-back. spiceDBClient
 	// is the same guaranteed-non-nil *spicedb.Client as above — assigned
@@ -3161,6 +3171,22 @@ func run(cfg *config) {
 		log.Info("admind token file empty; admin API disabled", "path", admindTokenFile)
 	} else {
 		log.Info("admind token not present; admin API disabled", "path", admindTokenFile)
+	}
+
+	// Leader-only bootstrap: seed the SpiceDB base schema when the datastore has
+	// none, so a bare GitOps apply (Argo/Flux, no `oap install`) is not left
+	// schema-less. A populated schema is the guardian's and is never touched
+	// here, and an unreachable SpiceDB is retried rather than returned (an error
+	// would stop the manager). The internal Secrets are minted earlier, by the
+	// pre-start bootstrap Job. A plain RunnableFunc does not implement
+	// LeaderElectionRunnable, so controller-runtime runs it only on the leader.
+	// serialSchemaIO wraps the real, non-nil *spicedb.Client (construction
+	// failure exits above) and is the same instance the guardian writes through.
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		return bootstrap.RunBootstrap(ctx, log.WithName("bootstrap"), serialSchemaIO, spicedbschema.Schema)
+	})); err != nil {
+		log.Error(err, "registering bootstrap runnable")
+		os.Exit(1)
 	}
 
 	if adm != nil {

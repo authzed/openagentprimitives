@@ -3,6 +3,8 @@ package installcmd
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +21,7 @@ import (
 )
 
 func TestSpiceDBDatabaseJob_ShapeAndIdempotentCreate(t *testing.T) {
-	doc, err := buildSpiceDBDatabaseJob()
+	doc, err := buildSpiceDBDatabaseJob(installCreateDBDeadlineSeconds)
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, yaml.Unmarshal(doc, &m))
@@ -49,12 +51,54 @@ func TestSpiceDBDatabaseJob_ShapeAndIdempotentCreate(t *testing.T) {
 		"createdb Job pod template must carry the owner label the postgres/spicedb-egress NetworkPolicies select on")
 }
 
+// TestSpiceDBDatabaseJob_Deadline pins that only oap install bounds the Job:
+// it applies the Job after Postgres is Ready, while the GitOps overlay's Job
+// lands in the same apply as Postgres and must survive a slow cold start.
+func TestSpiceDBDatabaseJob_Deadline(t *testing.T) {
+	cases := []struct {
+		name     string
+		deadline int64
+		want     *int64
+	}{
+		{"install: 120s deadline", installCreateDBDeadlineSeconds, ptr(int64(120))},
+		{"render (0): no deadline", 0, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := buildSpiceDBDatabaseJob(tc.deadline)
+			require.NoError(t, err)
+			var job batchv1.Job
+			require.NoError(t, yaml.Unmarshal(doc, &job))
+			assert.Equal(t, tc.want, job.Spec.ActiveDeadlineSeconds)
+			assert.Equal(t, ptr(int32(6)), job.Spec.BackoffLimit, "backoffLimit bounds the Job either way")
+		})
+	}
+}
+
+// TestCreateDBScript_WaitsForPostgresThenStaysIdempotent checks the script
+// parses and keeps its shape: a bounded wait for Postgres, each connect bounded
+// by PGCONNECT_TIMEOUT, then the pg_database-guarded create.
+func TestCreateDBScript_WaitsForPostgresThenStaysIdempotent(t *testing.T) {
+	out, err := exec.Command("sh", "-n", "-c", createDBScript).CombinedOutput()
+	require.NoError(t, err, "script must parse: %s", out)
+
+	wait := strings.Index(createDBScript, `-tAc "SELECT 1" `)
+	guard := strings.Index(createDBScript, "pg_database")
+	require.GreaterOrEqual(t, wait, 0, "script waits for Postgres")
+	assert.Less(t, wait, guard, "the wait precedes the existence check")
+	assert.Contains(t, createDBScript, `-ge 60`, "the wait is bounded")
+
+	doc, err := buildSpiceDBDatabaseJob(0)
+	require.NoError(t, err)
+	assert.Contains(t, string(doc), "PGCONNECT_TIMEOUT", "each connect attempt is bounded")
+}
+
 // TestSpiceDBDatabaseJob_NoStatusStanza guards against server-side-applying a
 // `status: {}` stanza: batchv1.JobStatus has no omitempty fields, so marshaling
 // the typed Job directly always emits one, and AGENTS.md forbids a client
 // applying status.
 func TestSpiceDBDatabaseJob_NoStatusStanza(t *testing.T) {
-	doc, err := buildSpiceDBDatabaseJob()
+	doc, err := buildSpiceDBDatabaseJob(installCreateDBDeadlineSeconds)
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, yaml.Unmarshal(doc, &m))

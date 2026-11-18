@@ -1,0 +1,7 @@
+apiVersion: v1
+data:
+  endpoint: spicedb.example.com:443
+kind: ConfigMap
+metadata:
+  name: spicebox-spicedb-config
+  namespace: agentprimitives-system

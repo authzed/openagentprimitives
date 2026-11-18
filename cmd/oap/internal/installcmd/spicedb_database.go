@@ -18,7 +18,24 @@ import (
 // Postgres instance. Connecting via the memory-database admin URI is fine —
 // CREATE DATABASE can be issued from any connection. Guarded by pg_database so
 // a re-run (existing PVC, re-install) is a no-op.
+//
+// It first waits up to ~5 minutes (60 × 5s, each connect bounded by
+// PGCONNECT_TIMEOUT) for Postgres to answer, so a pod that starts before
+// Postgres exists — the GitOps single-pass apply, where nothing orders this Job
+// after Postgres — survives the cold start instead of burning its backoff on
+// refused connects. If Postgres never answers, the existence check below fails
+// and the pod exits non-zero, so the Job's backoffLimit still bounds the total.
 const createDBScript = `set -eu
+i=0
+until psql "$POSTGRES_URI" -tAc "SELECT 1" >/dev/null 2>&1; do
+  i=$((i+1))
+  if [ "$i" -ge 60 ]; then
+    echo "postgres not reachable after $i attempts"
+    break
+  fi
+  echo "waiting for postgres ($i)"
+  sleep 5
+done
 if psql "$POSTGRES_URI" -tAc "SELECT 1 FROM pg_database WHERE datname='spicedb'" | grep -q 1; then
   echo "database spicedb already exists"
 else
@@ -26,12 +43,29 @@ else
   echo "database spicedb created"
 fi`
 
+// installCreateDBDeadlineSeconds bounds the createdb Job oap install applies.
+// Install applies it only after Postgres is Ready, so a run past this is a
+// netpol-blocked/hung connect, and failing fast surfaces it instead of quietly
+// burning the createdb wait deadline.
+const installCreateDBDeadlineSeconds int64 = 120
+
 // buildSpiceDBDatabaseJob renders a one-shot Job that ensures the 'spicedb'
 // database exists. The operator's migration Job creates SpiceDB's tables inside
 // it but never creates the database itself.
-func buildSpiceDBDatabaseJob() ([]byte, error) {
+//
+// activeDeadlineSeconds of 0 omits the deadline. The GitOps overlay must: its
+// Job is created in the same apply as Postgres, the deadline runs from Job
+// creation (pod Pending on its Secret and on Postgres included), and a GitOps
+// controller does not recreate an unchanged Job that ended in DeadlineExceeded
+// — so a cold start slower than the deadline would leave the database
+// uncreated for good. Without it, the script's bounded wait and backoffLimit
+// bound the Job instead.
+func buildSpiceDBDatabaseJob(activeDeadlineSeconds int64) ([]byte, error) {
 	backoff := int32(6)
-	activeDeadline := int64(120)
+	var activeDeadline *int64
+	if activeDeadlineSeconds > 0 {
+		activeDeadline = &activeDeadlineSeconds
+	}
 	job := &batchv1.Job{
 		TypeMeta: metav1.TypeMeta{APIVersion: "batch/v1", Kind: "Job"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -39,12 +73,8 @@ func buildSpiceDBDatabaseJob() ([]byte, error) {
 			Namespace: "agentprimitives-system",
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: &backoff,
-			// A netpol-blocked/hung psql connect would otherwise hang each
-			// attempt for the pod's default (unbounded) lifetime; bound it so
-			// a misconfigured NetworkPolicy fails fast instead of quietly
-			// burning the createdb wait deadline.
-			ActiveDeadlineSeconds: &activeDeadline,
+			BackoffLimit:          &backoff,
+			ActiveDeadlineSeconds: activeDeadline,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					// Same owner label the spicedb-operator stamps on its
@@ -61,6 +91,11 @@ func buildSpiceDBDatabaseJob() ([]byte, error) {
 						Image:   "pgvector/pgvector:pg17",
 						Command: []string{"sh", "-c", createDBScript},
 						Env: []corev1.EnvVar{{
+							// Bounds each psql connect, so a netpol-dropped
+							// connect cannot hang an attempt indefinitely.
+							Name:  "PGCONNECT_TIMEOUT",
+							Value: "5",
+						}, {
 							Name: "POSTGRES_URI",
 							ValueFrom: &corev1.EnvVarSource{
 								SecretKeyRef: &corev1.SecretKeySelector{

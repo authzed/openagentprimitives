@@ -1,0 +1,53 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - base/install.yaml
+  - base/channelsd.yaml
+  - base/nats.yaml
+  - bootstrap-job.yaml
+  - spicedb.yaml
+  - routing.yaml
+  - webhook-cert.yaml
+  - cloud-network.yaml
+patches:
+  - path: patches/cluster-kind.yaml
+  - path: patches/sync-waves.yaml
+  - path: patches/webhook-ca-inject.yaml
+  - target:
+      kind: ValidatingWebhookConfiguration
+      name: spicebox-settings
+    patch: |-
+      - op: remove
+        path: /webhooks/0/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/1/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/2/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/3/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/4/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/5/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/6/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/7/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/8/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/9/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/10/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/11/clientConfig/caBundle
+      - op: remove
+        path: /webhooks/12/clientConfig/caBundle
+  - target:
+      kind: ValidatingWebhookConfiguration
+      name: spicebox-goal-execution
+    patch: |-
+      - op: remove
+        path: /webhooks/0/clientConfig/caBundle
+components:
+  - components/postgres
