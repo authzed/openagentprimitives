@@ -544,3 +544,59 @@ func TestBootstrapJobName_TracksTheMintSet(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, before, after, "a new Secret in the mint set re-runs the Job even with the same image ref")
 }
+
+// TestRender_CloudNetworkResourcesMatchInstall pins that the overlay carries
+// the per-cloud network objects `oap install` layers on the bundled
+// default-deny, built from the same definitions: DNS egress outside kube-system
+// on every render for a cloud that needs it, and the LB health-check ingress +
+// probe path only alongside the emitted Gateway. (local/desktop are refused by
+// validateRenderFlags, so default stands in for a kind needing none.)
+func TestRender_CloudNetworkResourcesMatchInstall(t *testing.T) {
+	withRouting := func(c RenderConfig) RenderConfig {
+		c.Routing.trustedHostname = "webd.example.com"
+		c.Routing.gatewayClass = "example-class"
+		return c
+	}
+	forKind := func(key string) RenderConfig { return RenderConfig{ClusterKind: key, Strat: cloud.MustFor(key)} }
+	cases := []struct {
+		name                         string
+		cfg                          RenderConfig
+		wantDNS, wantGateway, wantHC bool
+	}{
+		{"gke with routing: dns + gateway ingress + health check", withRouting(forKind(cloud.KeyGKE)), true, true, true},
+		{"gke without routing: dns only", forKind(cloud.KeyGKE), true, false, false},
+		{"eks with routing: none", withRouting(forKind(cloud.KeyEKS)), false, false, false},
+		{"default without routing: none", forKind(cloud.KeyDefault), false, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docs := buildDocs(t, tc.cfg)
+
+			dns := findDoc(docs, "NetworkPolicy", "allow-dns-cloud")
+			assert.Equal(t, tc.wantDNS, dns != nil, "allow-dns-cloud presence")
+			if dns != nil {
+				var np networkingv1.NetworkPolicy
+				require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(dns.Object, &np))
+				assert.Equal(t, cloud.DNSEgressPolicy(tc.cfg.Strat.DNSEgressCIDRs()).Spec, np.Spec, "same spec oap install applies")
+				require.Len(t, np.Spec.Egress, 1)
+				assert.Equal(t, "169.254.0.0/16", np.Spec.Egress[0].To[0].IPBlock.CIDR)
+				assert.Len(t, np.Spec.Egress[0].Ports, 2, "UDP and TCP 53")
+			}
+
+			gw := findDoc(docs, "NetworkPolicy", "allow-webd-gateway")
+			assert.Equal(t, tc.wantGateway, gw != nil, "allow-webd-gateway presence")
+			if gw != nil {
+				var np networkingv1.NetworkPolicy
+				require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(gw.Object, &np))
+				assert.Equal(t, cloud.GatewayBackendIngressPolicy(tc.cfg.Strat.GatewayBackendIngressCIDRs()).Spec, np.Spec, "same spec oap install applies")
+			}
+
+			hc := findDoc(docs, "HealthCheckPolicy", cloud.WebdGatewayName)
+			assert.Equal(t, tc.wantHC, hc != nil, "HealthCheckPolicy presence")
+			if hc != nil {
+				path, _, _ := unstructured.NestedString(hc.Object, "spec", "default", "config", "httpHealthCheck", "requestPath")
+				assert.Equal(t, "/healthz", path)
+			}
+		})
+	}
+}

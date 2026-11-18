@@ -37,6 +37,7 @@ func goldenOverlayFiles(t *testing.T, dir string) map[string]string {
 			rel == "bootstrap-job.yaml" ||
 			rel == "webhook-cert.yaml" ||
 			rel == "spicedb.yaml" ||
+			rel == cloudNetworkResourceFile ||
 			strings.HasPrefix(rel, "patches/") ||
 			(strings.HasPrefix(rel, "components/") && filepath.Base(rel) == "kustomization.yaml")
 		if !keep {

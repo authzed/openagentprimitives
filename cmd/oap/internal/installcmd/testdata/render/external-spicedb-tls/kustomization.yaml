@@ -7,6 +7,7 @@ resources:
   - bootstrap-job.yaml
   - spicedb.yaml
   - webhook-cert.yaml
+  - cloud-network.yaml
 patches:
   - path: patches/cluster-kind.yaml
   - path: patches/sync-waves.yaml

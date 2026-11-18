@@ -8,6 +8,7 @@ resources:
   - spicedb.yaml
   - routing.yaml
   - webhook-cert.yaml
+  - cloud-network.yaml
 patches:
   - path: patches/cluster-kind.yaml
   - path: patches/sync-waves.yaml

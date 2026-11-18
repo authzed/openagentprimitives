@@ -40,6 +40,8 @@ deploy/oap/
     webhook-ca-inject.yaml # cert-manager ca-injector annotation on the webhooks
   components/postgres/     # Postgres — omitted with --external-postgres
   routing.yaml             # Gateway + HTTPRoute(s) — only when --trusted-hostname is set
+  cloud-network.yaml       # the cluster kind's DNS egress and, with routing, its load-balancer
+                           # health-check ingress + probe — only for kinds that need them (gke)
 ```
 
 Like `oap install`, the overlay ships **Postgres and SpiceDB**: a

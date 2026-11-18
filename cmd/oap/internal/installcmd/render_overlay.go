@@ -138,6 +138,18 @@ func WriteOverlay(cfg RenderConfig) error {
 		}
 	}
 
+	// Cloud-specific network objects oap install layers on the base default-deny
+	// (DNS egress, and with routing the LB health-check ingress + probe path).
+	cloudNet, emitted, err := renderCloudNetworkResources(cfg)
+	if err != nil {
+		return fmt.Errorf("render cloud network resources: %w", err)
+	}
+	if emitted {
+		if err := os.WriteFile(filepath.Join(cfg.OutputDir, cloudNetworkResourceFile), cloudNet, 0o644); err != nil {
+			return err
+		}
+	}
+
 	// Argo sync-waves: the base Namespace joins the bootstrap-prerequisites wave
 	// (the Job and its RBAC carry their own waves).
 	if err := os.WriteFile(filepath.Join(cfg.OutputDir, syncWavePatchFile), syncWavePatch(), 0o644); err != nil {
@@ -227,6 +239,11 @@ func renderKustomization(cfg RenderConfig) ([]byte, error) {
 	}
 	if !cfg.ExternalWebhookTLS {
 		resources += "  - " + webhookCertResourceFile + "\n"
+	}
+	if _, emitted, err := renderCloudNetworkResources(cfg); err != nil {
+		return nil, err
+	} else if emitted {
+		resources += "  - " + cloudNetworkResourceFile + "\n"
 	}
 	patches := "patches:\n  - path: " + clusterKindPatchFile + "\n  - path: " + syncWavePatchFile + "\n"
 	if !cfg.ExternalWebhookTLS {
