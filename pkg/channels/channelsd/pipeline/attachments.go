@@ -21,6 +21,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/resolve"
 	"github.com/authzed/openagentprimitives/pkg/channels/notice"
+	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/assetlimits"
 	"github.com/authzed/openagentprimitives/pkg/platform/extract"
 )
@@ -666,10 +667,20 @@ func (p *Pipeline) attachmentContent(ctx context.Context, ev channelkinds.Inboun
 	default:
 		text = text + "\n\n" + attachmentText
 	}
-	content := make([]MemContent, 0, 1+len(blocks))
+	content := make([]MemContent, 0, 2+len(blocks))
 	content = append(content, MemContent{Type: "text", Text: text})
 	content = append(content, blocks...)
-	return content
+	return appendSenderMention(content, ev)
+}
+
+// appendSenderMention adds ev's sender mention token as its own block, so the
+// agent learns how to address the person without the token ever becoming part
+// of what they wrote. No-op when the kind supplied none.
+func appendSenderMention(content []MemContent, ev channelkinds.InboundEvent) []MemContent {
+	if ev.SenderMention == "" {
+		return content
+	}
+	return append(content, MemContent{Type: memory.BlockTypeSenderMention, Text: ev.SenderMention})
 }
 
 // processAttachments is the gate: Channel.spec.attachments.enabled AND the

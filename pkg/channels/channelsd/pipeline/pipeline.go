@@ -191,7 +191,7 @@ type MemTurn struct {
 
 // MemContent is one content block within a MemTurn.
 type MemContent struct {
-	// Block discriminator: "text" or "attachment".
+	// Block discriminator: "text", "attachment" or memory.BlockTypeSenderMention.
 	Type string `json:"type"`
 	// Block body; set for Type "text".
 	Text string `json:"text,omitempty"`
@@ -1602,6 +1602,11 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 	// carried a human, and for a trigger whose kind offers no sentence.
 	if sessionOpening != "" {
 		sess.Annotations[spiceboxv1alpha1.AnnotationSessionOpening] = sessionOpening
+	}
+	// The first message's sender token, on the Create for the same reason:
+	// turn 0 is placed from spec.prompt by the runner, not appended here.
+	if ev.SenderMention != "" {
+		sess.Annotations[spiceboxv1alpha1.AnnotationStarterMention] = ev.SenderMention
 	}
 	// The acting subject for a session with no human in it, on the Create for
 	// the same reason as the two above: the runner resolves the subject it

@@ -88,6 +88,9 @@ func TestFakeslack_InjectDM_DispatchesThroughRealListenerToHandleDM(t *testing.T
 	if got.External["channel_id"] != "D01" {
 		t.Errorf("External[channel_id] = %q, want D01", got.External["channel_id"])
 	}
+	if got.SenderMention != "<@U_ALICE>" {
+		t.Errorf("SenderMention = %q, want <@U_ALICE>", got.SenderMention)
+	}
 	if got.External["message_ts"] != ts {
 		t.Errorf("External[message_ts] = %q, want %q", got.External["message_ts"], ts)
 	}
@@ -133,5 +136,10 @@ func TestFakeslack_InjectMention_DispatchesThroughRealListenerToHandleChannelMes
 	}
 	if got.External["channel_id"] != "C01" {
 		t.Errorf("External[channel_id] = %q, want C01", got.External["channel_id"])
+	}
+	// The text opens with the BOT's mention; the sender's token must be Bob's,
+	// or the agent has nothing to address him by but its own.
+	if got.SenderMention != "<@U_BOB>" {
+		t.Errorf("SenderMention = %q, want <@U_BOB>", got.SenderMention)
 	}
 }

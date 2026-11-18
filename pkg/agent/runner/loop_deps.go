@@ -617,6 +617,12 @@ type Loop struct {
 	// AgentSession. Empty for kubectl-driven sessions.
 	StartedByCanonical identity.CanonicalUserID
 
+	// StarterMention is the channel-native mention token of the person whose
+	// message created the session (AnnotationStarterMention). Turn 0 carries
+	// it as a memory.BlockTypeSenderMention block, the same way channelsd
+	// stamps every later message. Empty when the kind supplied none.
+	StarterMention string
+
 	// ChannelKind / LastInboundExternalID feed the Requester field of the
 	// ToolApprovalRequestPayload. Empty values flow through as empty strings
 	// (channelsd's sender tolerates that for kubectl-driven approval prompts,

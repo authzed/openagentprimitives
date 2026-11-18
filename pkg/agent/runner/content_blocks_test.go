@@ -170,3 +170,18 @@ func TestContentBlocksFromMemory_UnknownFutureType_FallsBackToPlaceholder(t *tes
 	require.NoError(t, err, "the placeholder fallback must itself produce a valid LLM request")
 	require.Len(t, params.Messages[0].Content, 1)
 }
+
+// TestContentBlocksFromMemory_RendersSenderMention: the stored bare token
+// becomes a labelled plain "text" block (a raw "sender_mention" type would
+// hard-error every provider adapter), and an empty one renders nothing.
+func TestContentBlocksFromMemory_RendersSenderMention(t *testing.T) {
+	out := contentBlocksFromMemory([]memory.ContentBlock{
+		{Type: "text", Text: "<@U0BOT> can you check the build?"},
+		{Type: memory.BlockTypeSenderMention, Text: "<@U1>"},
+		{Type: memory.BlockTypeSenderMention, Text: ""},
+	})
+	require.Len(t, out, 2, "the empty sender block renders nothing")
+	assert.Equal(t, llm.ContentBlock{Type: "text", Text: "<@U0BOT> can you check the build?"}, out[0])
+	assert.Equal(t, llm.ContentBlock{Type: "text", Text: senderMentionText("<@U1>")}, out[1])
+	assert.Contains(t, out[1].Text, "<@U1>")
+}

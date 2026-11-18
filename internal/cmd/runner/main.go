@@ -2548,6 +2548,7 @@ func run(cfg *config) error {
 	// short-circuit through the IsError path instead.
 	loop.Approval = approval.New()
 	loop.StartedByCanonical = spiceboxv1alpha1.ResolveStartedByCanonical(&sess)
+	loop.StarterMention = sess.Annotations[spiceboxv1alpha1.AnnotationStarterMention]
 	if sess.Spec.InputChannel != nil {
 		loop.ChannelKind = sess.Spec.InputChannel.Kind
 	}

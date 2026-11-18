@@ -1490,8 +1490,11 @@ func (l *slackListener) handleChannelMessage(
 		ExternalIDs: identity,
 		ChannelKey:  channelKey,
 		MessageText: text,
-		Attachments: attachments,
-		ThreadEntry: classifyThreadEntry(threadTS, msgTS),
+		// The sender's own token, so the agent addresses THEM rather than
+		// copying the first <@…> out of the text — which is the bot's.
+		SenderMention: mentionToken(userID),
+		Attachments:   attachments,
+		ThreadEntry:   classifyThreadEntry(threadTS, msgTS),
 		// Derived from the origin the admit site classified, not re-derived
 		// from userID here. originOtherAgent is the ONLY value that spends
 		// wake credit: self and unattributed never reach this call, and a
@@ -1640,7 +1643,10 @@ func (l *slackListener) handleDM(ctx context.Context, userID, channelID, msgTS, 
 		ExternalIDs: identity,
 		ChannelKey:  channelKey,
 		MessageText: text,
-		Attachments: attachments,
+		// The sender's own token, so the agent addresses THEM rather than
+		// copying the first <@…> out of the text — which is the bot's.
+		SenderMention: mentionToken(userID),
+		Attachments:   attachments,
 		// The DM's own message ts IS the anchor the reply threads under, and
 		// it is handed over so the pipeline writes it before waking. This is
 		// the exact path that posted orphan top-level replies under load.

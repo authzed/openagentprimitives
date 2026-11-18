@@ -2273,6 +2273,7 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		// envelopes into the per-session orchestrator's Deliver.
 		loop.Approval = approval.New()
 		loop.StartedByCanonical = spiceboxv1alpha1.ResolveStartedByCanonical(sess)
+		loop.StarterMention = sess.Annotations[spiceboxv1alpha1.AnnotationStarterMention]
 		if sess.Spec.InputChannel != nil {
 			loop.ChannelKind = sess.Spec.InputChannel.Kind
 		}
