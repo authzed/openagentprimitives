@@ -84,6 +84,12 @@ func wantSessionPhaseFor(b bt.Bundle) string {
 		// same reason: without it the state checks below would read the run
 		// mid-flight, before its last update_view call had even landed.
 		return spiceboxv1alpha1.AgentSessionPhaseIdle
+	case "reviewbot-runner-failure-answers-trigger":
+		// The runner fails this triggered session on its own budget before the
+		// agent answers the pull request. Failed is both the claim (the run
+		// really ended, it did not idle) and deliverTrigger's barrier: the
+		// check run is only complete once the runner's failure path has run.
+		return spiceboxv1alpha1.AgentSessionPhaseFailed
 	}
 	return ""
 }

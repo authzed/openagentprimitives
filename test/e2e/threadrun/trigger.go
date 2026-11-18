@@ -121,8 +121,13 @@ func deliverTrigger(t *testing.T, h *e2e.Harness, dir string, b bt.Bundle, ch *s
 
 	sessions := h.EventuallySessions(t, b.Trigger.ChannelKey, 1, 60*time.Second)
 	require.Len(t, sessions, 1)
-	h.WaitForSessionPhase(sessions[0].Namespace, sessions[0].Name,
-		spiceboxv1alpha1.AgentSessionPhaseIdle, 90*time.Second)
+	// A round ends Idle, unless the bundle's point is that it ends some other
+	// way (a runner-side failure ends Failed and never idles).
+	endPhase := wantSessionPhaseFor(b)
+	if endPhase == "" {
+		endPhase = spiceboxv1alpha1.AgentSessionPhaseIdle
+	}
+	h.WaitForSessionPhase(sessions[0].Namespace, sessions[0].Name, endPhase, 90*time.Second)
 }
 
 // checkTriggerStatus asserts on what the run left on the triggering resource,

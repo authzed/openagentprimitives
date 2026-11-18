@@ -54,6 +54,7 @@ import (
 
 	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/channels/triggeranswer"
 )
 
 // runDurationGrace is how far past the enforced cap a session's reported
@@ -110,6 +111,6 @@ func (r *Reconciler) reconcileRunDuration(ctx context.Context, sess *spiceboxv1a
 	// write persisted, so a transition that did not land publishes nothing;
 	// best-effort and read-before-write, so a verdict already posted is kept.
 	reason := spiceboxv1alpha1.ReasonAgentSessionBudget
-	r.concludeTriggerStatusOnOperatorFailure(ctx, sess, reason, operatorStoppedSummary(reason))
+	r.concludeTriggerStatusOnOperatorFailure(ctx, sess, reason, triggeranswer.StoppedSummary(reason))
 	return true, nil
 }

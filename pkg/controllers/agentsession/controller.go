@@ -42,6 +42,7 @@ import (
 	imagepin "github.com/authzed/openagentprimitives/pkg/authz/pinning/kinds/image"
 	"github.com/authzed/openagentprimitives/pkg/authz/revocation"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/triggeranswer"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession/cosidecar"
 	"github.com/authzed/openagentprimitives/pkg/controllers/conditions"
 	apreconcile "github.com/authzed/openagentprimitives/pkg/controllers/internal/reconcile"
@@ -3701,7 +3702,7 @@ func (r *Reconciler) markBootFailed(ctx context.Context, sess *spiceboxv1alpha1.
 		// forever. After applyEvent, so a transition that could not be recorded
 		// does not publish a verdict for a session that is not failing yet.
 		if !hadLiveRunner {
-			r.concludeTriggerStatusOnOperatorFailure(ctx, sess, reason, bootFailureSummary(reason))
+			r.concludeTriggerStatusOnOperatorFailure(ctx, sess, reason, triggeranswer.CouldNotStartSummary(reason))
 		}
 	}
 	sess.Status.FailureReason = reason

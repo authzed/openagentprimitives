@@ -93,6 +93,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories" // registers the category set the applied-envelope bridge resolves against; also referenced directly for notice categories
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
+	"github.com/authzed/openagentprimitives/pkg/channels/triggeranswer"
 	"github.com/authzed/openagentprimitives/pkg/platform/artifacts"
 	"github.com/authzed/openagentprimitives/pkg/x/besteffort"
 
@@ -2520,6 +2521,15 @@ func run(cfg *config) error {
 	loop.StartedByCanonical = spiceboxv1alpha1.ResolveStartedByCanonical(&sess)
 	if sess.Spec.InputChannel != nil {
 		loop.ChannelKind = sess.Spec.InputChannel.Kind
+		// So a failure the runner writes also answers the event that started
+		// the session (a pull request's check run), rather than leaving it
+		// showing the work in progress. Same client the trigger-status tools
+		// read the Channel and its credentials with.
+		loop.FailedTrigger = &triggeranswer.Trigger{
+			Client:    c,
+			Namespace: ns,
+			Binding:   sess.Spec.InputChannel,
+		}
 	}
 	// Same closure-over-the-stamped-value the capability.RunnerEnv.WebdBaseURL
 	// above uses (the address can arrive after this process started); consulted
