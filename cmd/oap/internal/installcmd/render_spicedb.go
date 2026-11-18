@@ -47,7 +47,9 @@ func renderSpiceDBResources(cfg RenderConfig) ([]byte, error) {
 	// (validateRenderFlags), and buildSpiceDBClusterDoc refuses to emit
 	// datastoreBootstrapFiles for this mode, so the overlay cannot carry the
 	// first-boot-only seed that is fatal against a non-empty datastore.
-	db, err := buildSpiceDBDatabaseJob()
+	// No activeDeadlineSeconds: this Job lands in the same apply as Postgres
+	// (see buildSpiceDBDatabaseJob).
+	db, err := buildSpiceDBDatabaseJob(0)
 	if err != nil {
 		return nil, fmt.Errorf("build spicedb database job: %w", err)
 	}

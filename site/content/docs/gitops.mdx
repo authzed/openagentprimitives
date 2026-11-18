@@ -155,9 +155,13 @@ carries `SkipDryRunOnMissingResource=true` because its CRD is applied in the
 same sync.
 
 **Flux** has no waves: it applies the Kustomization in one pass. The same order
-emerges by retry. The Job retries (its `backoffLimit`) until its namespace and
-ServiceAccount exist, the workloads sit in `CreateContainerConfigError` until
-the Secrets they mount appear, and the operator retries SpiceDB until it serves.
+emerges by retry. The bootstrap Job retries (its `backoffLimit`) until its
+namespace and ServiceAccount exist, and the workloads sit in
+`CreateContainerConfigError` until the Secrets they mount appear. The SpiceDB
+database Job carries no deadline in the overlay: its pod waits for the Postgres
+token, then polls Postgres for several minutes before creating the database,
+and only then spends its `backoffLimit`. The operator retries SpiceDB until it
+serves.
 Set `wait: true` and a `timeout` of several minutes on the Flux `Kustomization`
 so the first reconcile is not reported failed while this settles.
 

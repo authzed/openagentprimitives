@@ -12,7 +12,6 @@ metadata:
   name: spicebox-spicedb-createdb
   namespace: agentprimitives-system
 spec:
-  activeDeadlineSeconds: 120
   backoffLimit: 6
   template:
     metadata:
@@ -25,6 +24,16 @@ spec:
         - -c
         - |-
           set -eu
+          i=0
+          until psql "$POSTGRES_URI" -tAc "SELECT 1" >/dev/null 2>&1; do
+            i=$((i+1))
+            if [ "$i" -ge 60 ]; then
+              echo "postgres not reachable after $i attempts"
+              break
+            fi
+            echo "waiting for postgres ($i)"
+            sleep 5
+          done
           if psql "$POSTGRES_URI" -tAc "SELECT 1 FROM pg_database WHERE datname='spicedb'" | grep -q 1; then
             echo "database spicedb already exists"
           else
@@ -32,6 +41,8 @@ spec:
             echo "database spicedb created"
           fi
         env:
+        - name: PGCONNECT_TIMEOUT
+          value: "5"
         - name: POSTGRES_URI
           valueFrom:
             secretKeyRef:

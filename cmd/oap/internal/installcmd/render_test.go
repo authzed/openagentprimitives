@@ -600,3 +600,15 @@ func TestRender_CloudNetworkResourcesMatchInstall(t *testing.T) {
 		})
 	}
 }
+
+// TestRender_CreateDBJobHasNoDeadline: the overlay's createdb Job is applied in
+// the same pass as Postgres, so a deadline running from Job creation could
+// expire before Postgres exists, and a GitOps controller does not recreate an
+// unchanged failed Job.
+func TestRender_CreateDBJobHasNoDeadline(t *testing.T) {
+	job := findDoc(buildDocs(t, gkeConfig()), "Job", "spicebox-spicedb-createdb")
+	require.NotNil(t, job, "createdb Job shipped with the bundled SpiceDB")
+	_, found, err := unstructured.NestedFieldNoCopy(job.Object, "spec", "activeDeadlineSeconds")
+	require.NoError(t, err)
+	assert.False(t, found, "no activeDeadlineSeconds on the rendered createdb Job")
+}

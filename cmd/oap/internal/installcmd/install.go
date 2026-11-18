@@ -2441,7 +2441,7 @@ func buildCoreComponents(bundle *kube.Bundle, tags manifests.Tags, statefulClass
 				DisplayName: "SpiceDB database (Postgres)",
 				DependsOn:   []string{"postgres"},
 				Manifests: func() ([][]byte, error) {
-					doc, err := buildSpiceDBDatabaseJob()
+					doc, err := buildSpiceDBDatabaseJob(installCreateDBDeadlineSeconds)
 					if err != nil {
 						return nil, err
 					}
