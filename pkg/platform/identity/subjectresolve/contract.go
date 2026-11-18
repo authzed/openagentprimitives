@@ -58,6 +58,12 @@ type Resolution struct {
 	// value is unproven on purpose — a future resolver that forgets to claim
 	// proof gets the stricter treatment, not the looser one.
 	SubjectProven bool
+	// ConcealSubject asks the consumer not to echo Subject back to the
+	// caller. Set when the reference did not already carry what Subject
+	// reveals: a name reference resolves to an email-derived subject, and
+	// returning it would hand a caller who knew only a name that person's
+	// address. The consumer still uses Subject internally (reads, audit).
+	ConcealSubject bool
 	// Reason says why resolution failed, in words an agent may relay.
 	Reason string
 }

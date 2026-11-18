@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -68,6 +70,89 @@ func TestPreferencesGetUserRef_EmailKnownViaUserIdentity_ResolvesToDefaults(t *t
 	entries := listAudit(t, mem)
 	require.Len(t, entries, 1)
 	assert.Equal(t, preferenceaccess.OutcomeOK, entries[0].Outcome)
+}
+
+// TestPreferencesGetUserRef_EmailKnownOnlyWithoutVouchedChannelIdentity_Refused
+// pins the narrowed existence bar: a UserIdentity that no channel vouched an
+// email on — one an identity link created under whatever address the person
+// signed in with — is not evidence that this address holds their preferences,
+// so it gets the unknown-subject refusal, which lets the caller fall back.
+func TestPreferencesGetUserRef_EmailKnownOnlyWithoutVouchedChannelIdentity_Refused(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*v1alpha1.UserIdentity)
+	}{
+		{name: "no channel identities: 422, unknown subject", mutate: func(ui *v1alpha1.UserIdentity) {
+			ui.Status.ChannelIdentities = nil
+		}},
+		{name: "channel identity without a vouched email: 422, unknown subject", mutate: func(ui *v1alpha1.UserIdentity) {
+			ui.Status.ChannelIdentities[0].Email = ""
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ui := userIdentityFor(t, "alice@example.com", "alice", "Alice Moreno")
+			tc.mutate(ui)
+			class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
+			sess := buildSession(prefsNS, prefsSession, prefsClass)
+			srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess, ui)
+
+			resp, _ := getPreferencesForUserRef(t, srv, prefsNS, prefsSession, "email:alice@example.com", prefsToken)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode)
+
+			entries := listAudit(t, mem)
+			require.Len(t, entries, 1)
+			assert.Equal(t, preferenceaccess.OutcomeUnknownSubject, entries[0].Outcome)
+		})
+	}
+}
+
+// getUserRefRaw reads the user-ref endpoint without decoding, so a test can
+// assert on everything the response carries.
+func getUserRefRaw(t *testing.T, srvURL, ref string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet,
+		srvURL+"/memory/_preferences/"+prefsNS+"/"+prefsSession+"?user-ref="+url.QueryEscape(ref), nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+prefsToken)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, string(body)
+}
+
+// TestPreferencesGetUserRef_NameRefDisclosesNoIdentity pins that a caller who
+// knew only a name learns the snapshot and nothing else: the 200 carries
+// neither the matched person's email nor their email-derived subject (the
+// audit entry still records the subject), and "nobody" and "several" refuse
+// with the same words.
+func TestPreferencesGetUserRef_NameRefDisclosesNoIdentity(t *testing.T) {
+	class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
+	sess := buildSession(prefsNS, prefsSession, prefsClass)
+	srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess,
+		userIdentityFor(t, "alice@example.com", "amoreno", "Alice Moreno"),
+		userIdentityFor(t, "jo@example.com", "jo", "Jo Park"),
+		userIdentityFor(t, "jpark@example.com", "jpark", "Jo Park"),
+	)
+	putUserPreference(t, mem, mustCanonicalEmail(t, "alice@example.com"), prefsNS, prefsClass, "language", json.RawMessage(`"de"`))
+	aliceSubject := mustCanonicalEmail(t, "alice@example.com")
+
+	status, body := getUserRefRaw(t, srv.URL, "name:Alice Moreno")
+	require.Equal(t, http.StatusOK, status, body)
+	assert.NotContains(t, body, "alice@example.com")
+	assert.NotContains(t, body, aliceSubject)
+	assert.Contains(t, body, `"de"`, "the snapshot itself is still returned")
+
+	entries := listAudit(t, mem)
+	require.Len(t, entries, 1)
+	assert.Equal(t, aliceSubject, entries[0].ResolvedSubject, "the audit keeps the full detail")
+
+	_, several := getUserRefRaw(t, srv.URL, "name:Jo Park")
+	_, nobody := getUserRefRaw(t, srv.URL, "name:Robin Hale")
+	assert.Equal(t, strings.ReplaceAll(nobody, "Robin Hale", "Jo Park"), several)
 }
 
 // TestPreferencesGetUserRef_NameRef covers a "name:" reference end to end: it

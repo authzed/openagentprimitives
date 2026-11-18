@@ -10,6 +10,7 @@ import (
 	"golang.org/x/text/runes"
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
@@ -53,6 +54,8 @@ const noUserDirectoryReason = "name references are not available on this deploym
 //
 // Resolutions stay SubjectProven == false, like the email resolver's: a name
 // match picks a real user, but it does not prove the reference IS that user.
+// They also set ConcealSubject: the subject encodes the matched person's
+// email, which a caller that knew only a name must not learn from the answer.
 type nameResolver struct{}
 
 func (nameResolver) Usage() (string, string) {
@@ -77,27 +80,36 @@ func (nameResolver) TryResolve(ctx context.Context, ref string, env Env) (Resolu
 	}
 
 	matched := map[string]bool{}
+	malformed := 0
 	for i := range users {
 		if !userHasName(&users[i], want) {
 			continue
 		}
 		canon, cerr := identity.Subject(users[i].Spec.Subject).CanonicalUserID()
 		if cerr != nil {
-			// A UserIdentity whose subject is not a user: subject cannot be a
-			// preference target; skip it rather than fail the whole lookup.
+			// A vouched person carries this name but their record's subject
+			// is not a user, so it cannot be a preference target. It still
+			// counts against uniqueness: skipping it would let it turn an
+			// ambiguous name into a "unique" match for someone else.
+			log.FromContext(ctx).Info("subjectresolve: name match on a UserIdentity whose subject is not a user; refusing the name reference",
+				"userIdentity", users[i].Name, "subject", users[i].Spec.Subject, "err", cerr.Error())
+			malformed++
 			continue
 		}
 		matched[canon.String()] = true
 	}
-	switch len(matched) {
-	case 0:
-		return Resolution{Reason: fmt.Sprintf("no platform user is recorded under the name %q", truncateRef(raw))}, true, nil
-	case 1:
+	if len(matched) == 1 && malformed == 0 {
 		for subject := range matched {
-			return Resolution{Subject: subject}, true, nil
+			return Resolution{Subject: subject, ConcealSubject: true}, true, nil
 		}
 	}
-	return Resolution{Reason: fmt.Sprintf("%d platform users are recorded under the name %q; a name reference must match exactly one", len(matched), truncateRef(raw))}, true, nil
+	if len(matched)+malformed > 1 {
+		log.FromContext(ctx).Info("subjectresolve: name reference matched more than one platform user; refusing",
+			"matchedUsers", len(matched), "malformedRecords", malformed)
+	}
+	// One reason for "nobody" and "several": a distinct answer, or a count,
+	// would let a caller probe the user directory one name at a time.
+	return Resolution{Reason: fmt.Sprintf("no single platform user is recorded under the name %q; a name reference must match exactly one", truncateRef(raw))}, true, nil
 }
 
 // userHasName reports whether a name recorded on one of ui's vouched channel

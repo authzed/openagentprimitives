@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -354,15 +355,17 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 			// authority behind the reference and no record behind the
 			// subject, this is the unresolved case wearing a well-formed
 			// address, and it is refused the same way below — unless the
-			// platform has a UserIdentity for the subject. That record is
-			// written only from a channel inbound (channelsd's
-			// recordChannelIdentity) or an identity link, so it is a real
-			// user who simply never saved a preference, and the class
-			// defaults are the right answer for them. What it proves is
-			// existence, not the profile text on it: the names it records
-			// are self-set and unverified, which is why the name resolver
-			// matches only channel identities that carry a vouched email.
-			known, kerr := h.userIdentityExists(r.Context(), subject)
+			// platform has a UserIdentity for the subject carrying a channel
+			// identity with a channel-vouched email: someone who has talked
+			// to an agent under exactly this address, where any preference
+			// they saved in chat would have landed, so the class defaults are
+			// the right answer for them. A UserIdentity alone is not enough:
+			// an identity link (an OAuth or token credential connected from
+			// the browser) creates one under whatever address the person
+			// signed in with, which may not be the address their chat
+			// preferences live under — answering defaults there would hide a
+			// `never` saved elsewhere, and suppress the caller's fallback.
+			known, kerr := h.userIdentityVouched(r.Context(), subject)
 			if kerr != nil {
 				log.FromContext(r.Context()).Info("memory: preferences UserIdentity lookup failed",
 					"session", scope.ID, "subject", subject, "err", kerr.Error())
@@ -427,8 +430,15 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 	}
 
 	snap := preferences.Resolve(classVisible, classVisibleGlobals, userVals)
+	// The audit entry above keeps the subject either way; only the response
+	// withholds it when the resolver says the caller must not learn it (a
+	// name reference's subject encodes the matched person's email).
+	respSubject := subject
+	if res.ConcealSubject {
+		respSubject = ""
+	}
 	writeJSON(w, r, http.StatusOK, preferences.SnapshotResponse{
-		Subject:        subject,
+		Subject:        respSubject,
 		ClassNamespace: ns,
 		ClassName:      className,
 		Snapshot:       snap,
@@ -1072,15 +1082,18 @@ func (h *handler) handlePreferencesFirstPartyCommit(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// userIdentityExists reports whether a UserIdentity is recorded for the bare
-// canonical subject. NotFound is an answer (false), not a fault.
-func (h *handler) userIdentityExists(ctx context.Context, subject string) (bool, error) {
+// userIdentityVouched reports whether a UserIdentity is recorded for the bare
+// canonical subject AND carries at least one channel identity whose email the
+// channel vouched for. NotFound is an answer (false), not a fault.
+func (h *handler) userIdentityVouched(ctx context.Context, subject string) (bool, error) {
 	name := useridentity.NameForSubject(identity.CanonicalFromTrusted(subject, "a subject this handler just resolved").Subject())
 	var ui v1alpha1.UserIdentity
 	err := h.prefsReader.Get(ctx, types.NamespacedName{Name: name}, &ui)
 	switch {
 	case err == nil:
-		return true, nil
+		return slices.ContainsFunc(ui.Status.ChannelIdentities, func(ci v1alpha1.ChannelIdentity) bool {
+			return ci.Email != ""
+		}), nil
 	case apierrors.IsNotFound(err):
 		return false, nil
 	default:

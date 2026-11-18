@@ -3,6 +3,7 @@ package subjectresolve
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,7 +99,52 @@ func TestResolve_Name(t *testing.T) {
 				assert.NotEmpty(t, res.Reason)
 			} else {
 				assert.Empty(t, res.Reason)
+				assert.True(t, res.ConcealSubject, "a name match must not disclose the email-derived subject")
 			}
+		})
+	}
+}
+
+// TestResolve_NameRefusalDoesNotDistinguishNobodyFromSeveral pins that a
+// caller cannot probe the directory: "no match" and "two matches" refuse with
+// the same reason, and neither carries a count.
+func TestResolve_NameRefusalDoesNotDistinguishNobodyFromSeveral(t *testing.T) {
+	directory := fakeUsers(
+		userNamed(t, "sam.ortiz@example.com", "Sam Ortiz", ""),
+		userNamed(t, "sortiz@example.com", "sortiz", "Sam Ortiz"),
+	)
+	several, err := Resolve(t.Context(), "name:Sam Ortiz", Env{UserIdentities: directory})
+	require.NoError(t, err)
+	nobody, err := Resolve(t.Context(), "name:Robin Hale", Env{UserIdentities: directory})
+	require.NoError(t, err)
+
+	assert.Equal(t, strings.ReplaceAll(nobody.Reason, "Robin Hale", "Sam Ortiz"), several.Reason)
+	assert.NotContains(t, several.Reason, "2")
+}
+
+// TestResolve_NameMatchOnNonUserSubjectRefuses covers a vouched channel
+// identity carrying the name on a UserIdentity whose subject is not a user:
+// it cannot be the answer, and it must not be skipped either, or it would turn
+// an ambiguous name into a unique match for the other record.
+func TestResolve_NameMatchOnNonUserSubjectRefuses(t *testing.T) {
+	nonUser := userNamed(t, "svc@example.com", "svc", "Pat Quinlan")
+	nonUser.Spec.Subject = "serviceaccount:pat"
+
+	cases := []struct {
+		name  string
+		users []spiceboxv1alpha1.UserIdentity
+	}{
+		{name: "alone: unresolved", users: []spiceboxv1alpha1.UserIdentity{nonUser}},
+		{name: "beside one valid match: unresolved, not a unique match", users: []spiceboxv1alpha1.UserIdentity{
+			nonUser, userNamed(t, "pat@example.com", "pat", "Pat Quinlan"),
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := Resolve(t.Context(), "name:Pat Quinlan", Env{UserIdentities: fakeUsers(tc.users...)})
+			require.NoError(t, err)
+			assert.Empty(t, res.Subject)
+			assert.NotEmpty(t, res.Reason)
 		})
 	}
 }

@@ -103,7 +103,6 @@ func (k *Kind) lookupByEmail(ctx context.Context, cli slackClient, email string)
 		Email:       u.Profile.Email,
 		TeamID:      u.TeamID,
 		DisplayName: disp,
-		RealName:    strings.TrimSpace(u.Profile.RealName),
 	})
 	return u.ID, disp, nil
 }
