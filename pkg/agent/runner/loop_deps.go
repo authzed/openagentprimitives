@@ -404,7 +404,7 @@ type Loop struct {
 	// own mutex (see interruptRegistry), so it needs no additional lock here.
 	interrupts interruptRegistry
 
-	// budgetStatefulDrain overrides the package budgetStatefulDrain when
+	// budgetStatefulDrain overrides the package BudgetStatefulDrain when
 	// positive. Tests only (see SetBudgetStatefulDrainForTest).
 	budgetStatefulDrain time.Duration
 

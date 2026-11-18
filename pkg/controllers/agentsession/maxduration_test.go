@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/runner"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/inmem"
@@ -334,4 +335,19 @@ func testWedgedSessionFailsThenReaps(t *testing.T, classValid bool) {
 	var gotRunner corev1.Pod
 	err = c.Get(ctx, client.ObjectKey{Namespace: "default", Name: RunnerPodName(sess)}, &gotRunner)
 	assert.True(t, apierrors.IsNotFound(err), "the wedged runner pod must be reaped, got err=%v", err)
+}
+
+// TestRunDurationGraceCoversTheStatefulDrain guards the cross-package ordering
+// the two constants depend on: at maxDuration the runner lets in-flight
+// stateful tools drain for runner.BudgetStatefulDrain before cancelling them,
+// and only then fails the session. If the operator's grace did not cover that
+// drain plus the cancelled call unwinding, the runner's 30s runDuration flush
+// and its failure write, the backstop would fail the session (and reap the pod)
+// under a tool the runner was still deliberately letting finish.
+func TestRunDurationGraceCoversTheStatefulDrain(t *testing.T) {
+	// 30s flush interval + time for the cancelled call to unwind and the
+	// runner's failure write to land.
+	const margin = 2 * time.Minute
+	assert.Greater(t, runDurationGrace, runner.BudgetStatefulDrain+margin,
+		"runDurationGrace must exceed the runner's stateful drain plus %s; raise the grace or shorten the drain", margin)
 }

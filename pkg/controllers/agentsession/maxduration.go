@@ -59,7 +59,7 @@ import (
 // runDurationGrace is how far past the enforced cap a session's reported
 // run-time may go before the operator steps in. The runner's own enforcement
 // starts AT the cap (its watchdog cancels the LLM call and stateless/readonly
-// tools then, and lets stateful tools drain for up to budgetStatefulDrain, 5m,
+// tools then, and lets stateful tools drain for up to runner.BudgetStatefulDrain, 5m,
 // in pkg/agent/runner/budget.go), so the grace has to cover that drain, the
 // cancelled calls unwinding, the runner's 30s runDuration flush interval, and
 // its failure write, so the operator never races a healthy runner to the

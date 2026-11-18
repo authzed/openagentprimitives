@@ -417,7 +417,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	// boundaries, so without this an LLM call or tool call that straddles the cap
 	// runs on until it returns. When active run-time reaches the cap the watchdog
 	// cancels the LLM call and every stateless/readonly tool at once, lets
-	// stateful tools drain for budgetStatefulDrain, then cancels what is left;
+	// stateful tools drain for BudgetStatefulDrain, then cancels what is left;
 	// the Send error path and the post-dispatch Check below then fail the session
 	// as MaxDurationExceeded.
 	budgetWatchCtx, budgetWatchCancel := context.WithCancel(ctx)

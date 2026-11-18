@@ -108,7 +108,7 @@ func TestInterruptRegistry_CancelForBudget(t *testing.T) {
 	reg.registerTool("tu_rw", rw("terraform_apply"), rwCancel)
 	reg.setProvider(provCancel)
 
-	assert.Empty(t, reg.cancelStatefulForBudget(), "the drain cut-off is a no-op before the budget is spent")
+	assert.Empty(t, reg.cancelRemainingForBudget(), "the drain cut-off is a no-op before the budget is spent")
 	assert.NoError(t, rwCtx.Err())
 
 	draining := reg.cancelForBudget(errMaxDurationExceeded)
@@ -131,7 +131,7 @@ func TestInterruptRegistry_CancelForBudget(t *testing.T) {
 	// Once the drain window runs out, whatever is still in flight is cut.
 	reg.deregisterTool("tu_ro")
 	reg.deregisterTool("tu_late")
-	assert.Equal(t, []string{"terraform_apply"}, reg.cancelStatefulForBudget())
+	assert.Equal(t, []string{"terraform_apply"}, reg.cancelRemainingForBudget())
 	assert.ErrorIs(t, context.Cause(rwCtx), errMaxDurationExceeded, "stateful tool cancelled after the drain")
 }
 

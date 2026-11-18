@@ -131,8 +131,8 @@ func mutatesState(t tool.Tool) bool {
 //
 // In-flight STATEFUL tools are spared here and returned by name. Cutting a
 // terraform apply or a git push mid-mutation leaves state nobody recorded, so
-// the loop lets them drain for budgetStatefulDrain and only then calls
-// cancelStatefulForBudget. One that finishes inside the window records its
+// the loop lets them drain for BudgetStatefulDrain and only then calls
+// cancelRemainingForBudget. One that finishes inside the window records its
 // result, and the post-dispatch Budget.Check fails the session as usual.
 //
 // It does not set requested: this is not a queue-jump, and the loop fails the
@@ -154,10 +154,10 @@ func (r *interruptRegistry) cancelForBudget(cause error) (draining []string) {
 	return draining
 }
 
-// cancelStatefulForBudget is the second half: once the drain window has run
+// cancelRemainingForBudget is the second half: once the drain window has run
 // out, every tool still in flight is cancelled with the cause cancelForBudget
 // recorded, and their names are returned. A no-op before cancelForBudget.
-func (r *interruptRegistry) cancelStatefulForBudget() (cut []string) {
+func (r *interruptRegistry) cancelRemainingForBudget() (cut []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.budgetCause == nil {
