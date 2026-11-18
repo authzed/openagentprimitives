@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -51,6 +52,15 @@ func (b *Budget) MaxDuration() time.Duration {
 // tight loop for the whole wait.
 const durationWatchFloor = time.Second
 
+// budgetStatefulDrain is how long a stateful tool already in flight when
+// maxDuration is reached may keep running before it is cancelled too (see
+// interruptRegistry.cancelForBudget). It must stay well inside the operator's
+// runDurationGrace (10m, pkg/controllers/agentsession/maxduration.go), which
+// also has to cover the cancelled call unwinding, the 30s runDuration flush and
+// the failure write; otherwise the operator reaps the pod under a tool that
+// was still being allowed to finish.
+const budgetStatefulDrain = 5 * time.Minute
+
 // watchDuration blocks until ctx is done or active run-time reaches
 // MaxDuration, then calls onExceeded once. Check only runs at turn boundaries,
 // so this is what makes maxDuration a deadline on an in-flight LLM call or tool
@@ -98,4 +108,35 @@ func (b *Budget) Check(turns int32, inputTokens, outputTokens int64) string {
 		return BudgetReasonExpired
 	}
 	return ""
+}
+
+// cutOffForBudget is the watchdog's action once maxDuration is reached:
+// cancel the LLM call and the stateless/readonly tools now, give in-flight
+// stateful tools budgetStatefulDrain to finish, then cancel any still running.
+// Returns early if ctx (the Run's watch context) ends first, which is the
+// normal case once the drained tools return and the loop fails the session.
+func (l *Loop) cutOffForBudget(ctx context.Context) {
+	sessRef := l.SessionKey.Namespace + "/" + l.SessionKey.Name
+	drain := l.budgetStatefulDrain
+	if drain <= 0 {
+		drain = budgetStatefulDrain
+	}
+	draining := l.interrupts.cancelForBudget(errMaxDurationExceeded)
+	slog.Default().Info("maxDuration reached; cancelled the in-flight LLM call and stateless/readonly tools",
+		"session", sessRef, "maxDuration", l.Budget.MaxDuration().String(),
+		"drainingStatefulTools", draining, "drain", drain.String())
+	if len(draining) == 0 {
+		return
+	}
+	t := time.NewTimer(drain)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-t.C:
+	}
+	if cut := l.interrupts.cancelStatefulForBudget(); len(cut) > 0 {
+		slog.Default().Info("maxDuration drain window ran out; cancelled stateful tools still in flight",
+			"session", sessRef, "tools", cut, "drain", drain.String())
+	}
 }

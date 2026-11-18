@@ -15,8 +15,8 @@ import (
 
 // concludeTriggerStatusOnOperatorFailure answers the trigger that started
 // sess, when the operator is failing sess and nothing inside it can: either it
-// died before its runner came up (markBootFailed), or its runner is wedged or
-// past its budget and the operator is ending it (failSessionByOperator).
+// died before its runner came up (markBootFailed), or its runner is wedged
+// past its run-time budget and the operator is ending it (reconcileRunDuration).
 // summary is the prose published on the trigger's surface; see
 // bootFailureSummary and operatorStoppedSummary.
 //
@@ -131,8 +131,8 @@ func bootFailureSummary(reason string) string {
 }
 
 // operatorStoppedSummary is bootFailureSummary's counterpart for a session that
-// DID start and was ended by the operator (its run-time or lifetime budget ran
-// out while its runner could not report). Same rule: the stable reason token,
+// DID start and was ended by the operator mid-run (its run-time budget ran out
+// while its runner could not end it). Same rule: the stable reason token,
 // never the operator-facing message.
 func operatorStoppedSummary(reason string) string {
 	return fmt.Sprintf(

@@ -68,6 +68,13 @@ func (r *Reconciler) reconcileExpiration(ctx context.Context, sess *spiceboxv1al
 		return false, deadline.Sub(now), nil
 	}
 
+	// The trigger is deliberately NOT answered here, unlike the maxDuration
+	// backstop. This sweep only reaches Idle/asleep sessions, and a session
+	// goes Idle after agent_work_complete whether or not it concluded its
+	// trigger, so "stopped before it finished" could contradict a review it
+	// already posted. The Idle → Succeeded archive sweep publishes nothing for
+	// the same reason; which of the two deadlines comes first must not change
+	// what the pull request is told.
 	if err := r.failSessionByOperator(ctx, sess, lifecyclecore.Expired{},
 		spiceboxv1alpha1.ReasonAgentSessionExpired,
 		fmt.Sprintf("session expired after %s (wall-clock lifetime cap)", expiration)); err != nil {

@@ -416,15 +416,14 @@ func (l *Loop) Run(ctx context.Context) error {
 	// maxDuration as a deadline on in-flight work: Budget.Check only runs at turn
 	// boundaries, so without this an LLM call or tool call that straddles the cap
 	// runs on until it returns. When active run-time reaches the cap the watchdog
-	// cancels whatever is in flight; the Send error path and the post-dispatch
-	// Check below then fail the session as MaxDurationExceeded.
+	// cancels the LLM call and every stateless/readonly tool at once, lets
+	// stateful tools drain for budgetStatefulDrain, then cancels what is left;
+	// the Send error path and the post-dispatch Check below then fail the session
+	// as MaxDurationExceeded.
 	budgetWatchCtx, budgetWatchCancel := context.WithCancel(ctx)
 	defer budgetWatchCancel()
 	go l.Budget.watchDuration(budgetWatchCtx, func() {
-		slog.Default().Info("maxDuration reached; cancelling in-flight LLM and tool calls",
-			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name,
-			"maxDuration", l.Budget.MaxDuration().String())
-		l.interrupts.cancelForBudget(errMaxDurationExceeded)
+		l.cutOffForBudget(budgetWatchCtx)
 	})
 
 	// Session-context the meta tools see. agent_work_complete writes here via

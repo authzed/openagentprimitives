@@ -13,8 +13,7 @@ import (
 // failSessionByOperator moves a live session to Failed on the operator's own
 // authority (a budget it is enforcing in place of the runner): records ev in
 // the signed lifecycle log, stamps phase, failureReason, finishedAt and the
-// Failed condition on sess, persists them, and then answers the session's
-// trigger, since a session failed from outside has a runner that will not.
+// Failed condition on sess, and persists them.
 //
 // The write goes through applyStatus, not a WriteOwned against sess: earlier
 // steps of this reconcile may have mutated sess without writing (a re-derived
@@ -22,10 +21,11 @@ import (
 // drop those changes. A Failed session's later reconciles return at the
 // terminal reap block before re-deriving them, so they would stay lost.
 //
-// The trigger answer runs only after the write succeeds, so a transition that
-// did not persist publishes nothing, and it is best-effort and read-before-write
-// (see concludeTriggerStatusOnOperatorFailure): a verdict the runner already
-// posted is kept.
+// It does NOT answer the session's trigger; whether that is owed depends on
+// what the session was doing, so each caller decides. The maxDuration backstop
+// ends a Running session mid-work and does answer it (reconcileRunDuration);
+// the lifetime sweep ends an Idle one that may already have delivered, and
+// does not (reconcileExpiration).
 func (r *Reconciler) failSessionByOperator(
 	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ev lifecyclecore.Event, reason, msg string,
 ) error {
@@ -40,9 +40,5 @@ func (r *Reconciler) failSessionByOperator(
 		Type: spiceboxv1alpha1.AgentSessionConditionFailed, Status: metav1.ConditionTrue,
 		Reason: reason, Message: msg,
 	})
-	if err := r.applyStatus(ctx, sess); err != nil {
-		return err
-	}
-	r.concludeTriggerStatusOnOperatorFailure(ctx, sess, reason, operatorStoppedSummary(reason))
-	return nil
+	return r.applyStatus(ctx, sess)
 }

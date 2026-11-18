@@ -58,10 +58,12 @@ import (
 
 // runDurationGrace is how far past the enforced cap a session's reported
 // run-time may go before the operator steps in. The runner's own enforcement
-// fires AT the cap (its watchdog cancels in-flight work then), so the grace
-// only has to cover the cancelled calls unwinding, the runner's 30s
-// runDuration flush interval, and its failure write, so the operator never
-// races a healthy runner to the verdict.
+// starts AT the cap (its watchdog cancels the LLM call and stateless/readonly
+// tools then, and lets stateful tools drain for up to budgetStatefulDrain, 5m,
+// in pkg/agent/runner/budget.go), so the grace has to cover that drain, the
+// cancelled calls unwinding, the runner's 30s runDuration flush interval, and
+// its failure write, so the operator never races a healthy runner to the
+// verdict. Keep the two in step.
 const runDurationGrace = 10 * time.Minute
 
 // reconcileRunDuration fails a Running session whose reported active run-time
@@ -103,5 +105,11 @@ func (r *Reconciler) reconcileRunDuration(ctx context.Context, sess *spiceboxv1a
 		spiceboxv1alpha1.ReasonAgentSessionBudget, msg); err != nil {
 		return false, err
 	}
+	// The session was Running, so whatever its trigger asked for was still in
+	// progress, and its wedged runner is not going to answer. Only after the
+	// write persisted, so a transition that did not land publishes nothing;
+	// best-effort and read-before-write, so a verdict already posted is kept.
+	reason := spiceboxv1alpha1.ReasonAgentSessionBudget
+	r.concludeTriggerStatusOnOperatorFailure(ctx, sess, reason, operatorStoppedSummary(reason))
 	return true, nil
 }

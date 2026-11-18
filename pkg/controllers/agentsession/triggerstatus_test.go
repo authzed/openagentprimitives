@@ -337,63 +337,55 @@ func TestBootFailure_AProviderThatCannotBeReadIsNotOverwritten(t *testing.T) {
 	assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed, sess.Status.FailureReason)
 }
 
-// TestOperatorFailure_AnswersTheTriggerOfASessionItEnds: a session the operator
-// fails mid-run, because its runner blew through its run-time budget or its
-// wall-clock lifetime, has a runner that is not going to answer either. The
-// pull request must hear that the work stopped, not that the agent never
-// started.
+// TestOperatorFailure_AnswersTheTriggerOfASessionItEnds: a Running session the
+// operator fails because its runner blew through its run-time budget has a
+// runner that is not going to answer either. The pull request must hear that
+// the work stopped, not that the agent never started.
 func TestOperatorFailure_AnswersTheTriggerOfASessionItEnds(t *testing.T) {
-	cases := []struct {
-		name       string
-		mut        func(s *spiceboxv1alpha1.AgentSession)
-		fail       func(r *agentsession.Reconciler, s *spiceboxv1alpha1.AgentSession) (bool, error)
-		wantReason string
-	}{
-		{
-			name: "maxDuration backstop: could_not_finish naming BudgetExceeded",
-			mut: func(s *spiceboxv1alpha1.AgentSession) {
-				s.Status.RunDuration = &metav1.Duration{Duration: 31 * time.Hour}
-				s.Status.EnforcedMaxDuration = &metav1.Duration{Duration: 2 * time.Hour}
-			},
-			fail: func(r *agentsession.Reconciler, s *spiceboxv1alpha1.AgentSession) (bool, error) {
-				return r.ReconcileRunDurationForTest(context.Background(), s)
-			},
-			wantReason: spiceboxv1alpha1.ReasonAgentSessionBudget,
-		},
-		{
-			name: "sessionExpiration sweep: could_not_finish naming SessionExpired",
-			mut: func(s *spiceboxv1alpha1.AgentSession) {
-				started := metav1.NewTime(time.Now().Add(-48 * time.Hour))
-				s.Status.StartedAt = &started
-				s.Status.EffectiveSettings = &spiceboxv1alpha1.EffectiveSettings{
-					Budget: spiceboxv1alpha1.BudgetConfig{SessionExpiration: metav1.Duration{Duration: time.Hour}},
-				}
-			},
-			fail: func(r *agentsession.Reconciler, s *spiceboxv1alpha1.AgentSession) (bool, error) {
-				return r.ReconcileExpirationForTest(context.Background(), s)
-			},
-			wantReason: spiceboxv1alpha1.ReasonAgentSessionExpired,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			k := resetTriggerKind(t)
-			sess := bootFailedSession(tsKindName)
-			sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseRunning
-			tc.mut(sess)
-			r := triggerReconciler(t, sess)
+	k := resetTriggerKind(t)
+	sess := bootFailedSession(tsKindName)
+	sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseRunning
+	sess.Status.RunDuration = &metav1.Duration{Duration: 31 * time.Hour}
+	sess.Status.EnforcedMaxDuration = &metav1.Duration{Duration: 2 * time.Hour}
+	r := triggerReconciler(t, sess)
 
-			failed, err := tc.fail(r, sess)
-			require.NoError(t, err)
-			require.True(t, failed, "the operator must fail this session")
+	failed, err := r.ReconcileRunDurationForTest(context.Background(), sess)
+	require.NoError(t, err)
+	require.True(t, failed, "the operator must fail this session")
 
-			claims, published := k.snapshot()
-			assert.Equal(t, 1, claims, "the surface is READ before it is written")
-			require.Len(t, published, 1, "the pull request must be told the work stopped")
-			assert.Equal(t, channelkinds.TriggerOutcomeCouldNotFinish, published[0].Outcome)
-			assert.Contains(t, published[0].Summary, tc.wantReason)
-			assert.NotContains(t, published[0].Summary, "could not start",
-				"this session started; the boot-failure wording would be false")
-		})
+	claims, published := k.snapshot()
+	assert.Equal(t, 1, claims, "the surface is READ before it is written")
+	require.Len(t, published, 1, "the pull request must be told the work stopped")
+	assert.Equal(t, channelkinds.TriggerOutcomeCouldNotFinish, published[0].Outcome)
+	assert.Contains(t, published[0].Summary, spiceboxv1alpha1.ReasonAgentSessionBudget)
+	assert.NotContains(t, published[0].Summary, "could not start",
+		"this session started; the boot-failure wording would be false")
+}
+
+// TestExpiration_LeavesTheTriggerOfAnIdleSessionAlone: the lifetime sweep only
+// reaches Idle sessions, and a session goes Idle after agent_work_complete
+// whether or not it concluded its trigger. Telling the pull request the work is
+// incomplete could contradict a review the agent already posted, so expiring
+// one fails the session and publishes nothing, exactly as the Idle → Succeeded
+// archive sweep does.
+func TestExpiration_LeavesTheTriggerOfAnIdleSessionAlone(t *testing.T) {
+	k := resetTriggerKind(t)
+	sess := bootFailedSession(tsKindName)
+	sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseIdle
+	started := metav1.NewTime(time.Now().Add(-48 * time.Hour))
+	sess.Status.StartedAt = &started
+	sess.Status.EffectiveSettings = &spiceboxv1alpha1.EffectiveSettings{
+		Budget: spiceboxv1alpha1.BudgetConfig{SessionExpiration: metav1.Duration{Duration: time.Hour}},
 	}
+	r := triggerReconciler(t, sess)
+
+	failed, err := r.ReconcileExpirationForTest(context.Background(), sess)
+	require.NoError(t, err)
+	require.True(t, failed, "the lifetime cap still fails the session")
+	assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, sess.Status.Phase)
+	assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionExpired, sess.Status.FailureReason)
+
+	claims, published := k.snapshot()
+	assert.Zero(t, claims, "the trigger is not even read: nothing will be written to it")
+	assert.Empty(t, published, "an expired Idle session must not tell the pull request its work is incomplete")
 }

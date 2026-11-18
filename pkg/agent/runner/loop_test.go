@@ -1673,4 +1673,98 @@ func TestLoop_MaxDurationCutsOffInFlightWork(t *testing.T) {
 		assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
 		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
 	})
+
+	// A stateful tool is not cut mid-mutation at the cap: it gets a drain
+	// window, and only one still running when the window closes is cancelled.
+	requireExecuted := func(t *testing.T, tl *statefulBlockingTool) {
+		t.Helper()
+		select {
+		case <-tl.started:
+		default:
+			require.FailNow(t, "the stateful tool never reached Execute, so the drain was not exercised")
+		}
+	}
+	statefulLoop := func(t *testing.T, tl *statefulBlockingTool, drain time.Duration) *runner.Loop {
+		t.Helper()
+		l, _, _, _ := newLoopFixture(t, []llmfake.Step{callStep("tu_1", tl.name, `{}`)})
+		l.Tools = append(meta.Load(), tl)
+		// Readwrite needs a SpiceDB check to reach Execute; this fixture wires
+		// none, and the authz path is not what is under test.
+		l.ToolAuthMode = runner.ToolAuthModeDisabled
+		l.Budget = durationBudget()
+		l.SetBudgetStatefulDrainForTest(drain)
+		return l
+	}
+
+	t.Run("stateful tool finishing inside the drain: not cancelled, then Failed/BudgetExceeded", func(t *testing.T) {
+		tl := newStatefulBlockingTool("terraform_apply")
+		l := statefulLoop(t, tl, time.Minute)
+		go func() {
+			<-tl.started
+			// Well past the 50ms cap, well inside the one-minute drain.
+			time.Sleep(300 * time.Millisecond)
+			close(tl.release)
+		}()
+
+		got := runToEnd(t, l)
+		requireExecuted(t, tl)
+		assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
+		assert.NoError(t, tl.ctxErrAtReturn(), "the stateful call ran to completion instead of being cut at the cap")
+	})
+
+	t.Run("stateful tool hung past the drain: cancelled, Failed/BudgetExceeded", func(t *testing.T) {
+		tl := newStatefulBlockingTool("terraform_apply")
+		l := statefulLoop(t, tl, 100*time.Millisecond)
+
+		got := runToEnd(t, l)
+		requireExecuted(t, tl)
+		assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
+		assert.Error(t, tl.ctxErrAtReturn(), "a stateful call still running when the drain closes is cancelled")
+	})
+}
+
+// statefulBlockingTool is a Readwrite tool that blocks in Execute until it is
+// released or its context is cancelled, recording which happened.
+type statefulBlockingTool struct {
+	name    string
+	started chan struct{}
+	release chan struct{}
+
+	mu        sync.Mutex
+	ctxErrOut error
+}
+
+func newStatefulBlockingTool(name string) *statefulBlockingTool {
+	return &statefulBlockingTool{name: name, started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (b *statefulBlockingTool) Name() string                 { return b.name }
+func (b *statefulBlockingTool) Kind() tool.Kind              { return tool.KindMCP }
+func (b *statefulBlockingTool) Description() string          { return "" }
+func (b *statefulBlockingTool) InputSchema() json.RawMessage { return json.RawMessage(`{}`) }
+func (b *statefulBlockingTool) Permission() authz.Permission {
+	return authz.Permission{StateImpact: authz.Readwrite}
+}
+func (b *statefulBlockingTool) PermissionVariants() []authz.PermissionVariant { return nil }
+func (b *statefulBlockingTool) Execute(ctx context.Context, _ json.RawMessage, _ *tool.SessionContext) (tool.Result, error) {
+	close(b.started)
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	b.mu.Lock()
+	b.ctxErrOut = ctx.Err()
+	b.mu.Unlock()
+	if ctx.Err() != nil {
+		return tool.Result{Content: "cancelled", IsError: true}, ctx.Err()
+	}
+	return tool.Result{Content: "applied"}, nil
+}
+
+func (b *statefulBlockingTool) ctxErrAtReturn() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ctxErrOut
 }

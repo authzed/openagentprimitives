@@ -108,22 +108,31 @@ func TestInterruptRegistry_CancelForBudget(t *testing.T) {
 	reg.registerTool("tu_rw", rw("terraform_apply"), rwCancel)
 	reg.setProvider(provCancel)
 
-	reg.cancelForBudget(errMaxDurationExceeded)
+	assert.Empty(t, reg.cancelStatefulForBudget(), "the drain cut-off is a no-op before the budget is spent")
+	assert.NoError(t, rwCtx.Err())
 
-	assert.ErrorIs(t, context.Cause(roCtx), errMaxDurationExceeded, "readonly tool cancelled")
-	assert.ErrorIs(t, context.Cause(rwCtx), errMaxDurationExceeded,
-		"stateful tool cancelled too: a spent budget ends the session regardless")
-	assert.ErrorIs(t, context.Cause(provCtx), errMaxDurationExceeded, "provider call cancelled")
+	draining := reg.cancelForBudget(errMaxDurationExceeded)
+
+	assert.ErrorIs(t, context.Cause(roCtx), errMaxDurationExceeded, "readonly tool cancelled at the cap")
+	assert.ErrorIs(t, context.Cause(provCtx), errMaxDurationExceeded, "provider call cancelled at the cap")
+	assert.NoError(t, rwCtx.Err(), "stateful tool is left to drain, not cut mid-mutation")
+	assert.Equal(t, []string{"terraform_apply"}, draining, "the draining stateful tools are named for the log")
 	assert.False(t, reg.takeRequested(), "a budget cancel is not a user interrupt")
 
-	// Registrations after the budget is spent are cancelled on arrival, so a
-	// call started in the window after the watchdog fired cannot run unbounded.
+	// Registrations after the budget is spent are cancelled on arrival,
+	// stateful ones included: a call that has not started has nothing to drain.
 	lateTool, lateToolCancel := context.WithCancelCause(context.Background())
 	lateProv, lateProvCancel := context.WithCancelCause(context.Background())
-	reg.registerTool("tu_late", rw("terraform_apply"), lateToolCancel)
+	reg.registerTool("tu_late", rw("git_push"), lateToolCancel)
 	reg.setProvider(lateProvCancel)
-	assert.ErrorIs(t, context.Cause(lateTool), errMaxDurationExceeded, "late tool cancelled on register")
+	assert.ErrorIs(t, context.Cause(lateTool), errMaxDurationExceeded, "late stateful tool cancelled on register")
 	assert.ErrorIs(t, context.Cause(lateProv), errMaxDurationExceeded, "late provider call cancelled on set")
+
+	// Once the drain window runs out, whatever is still in flight is cut.
+	reg.deregisterTool("tu_ro")
+	reg.deregisterTool("tu_late")
+	assert.Equal(t, []string{"terraform_apply"}, reg.cancelStatefulForBudget())
+	assert.ErrorIs(t, context.Cause(rwCtx), errMaxDurationExceeded, "stateful tool cancelled after the drain")
 }
 
 // regTool registers t under id in l's live interrupt registry and returns

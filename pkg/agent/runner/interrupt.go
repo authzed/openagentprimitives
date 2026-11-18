@@ -111,23 +111,63 @@ func (r *interruptRegistry) setProvider(c context.CancelCauseFunc) {
 	r.providerCancel = c
 }
 
-// cancelForBudget cancels the in-flight provider call and EVERY in-flight tool
-// with cause, and makes later registrations cancel on arrival. Unlike fire it
-// does not spare stateful tools: a user interrupt must never cut a durable
-// mutation short, but a spent budget ends the session regardless, and the
-// alternative to cancelling the call here is the operator reaping the whole pod
-// under it, which no tool can clean up after. It does not set requested — this
-// is not a queue-jump, and the loop fails the session rather than draining.
-func (r *interruptRegistry) cancelForBudget(cause error) {
+// mutatesState reports whether t changes durable state (anything but stateless
+// or readonly). The budget watchdog drains these rather than cutting them at
+// the cap; see cancelForBudget.
+func mutatesState(t tool.Tool) bool {
+	switch t.Permission().StateImpact {
+	case authz.Stateless, authz.Readonly:
+		return false
+	default:
+		return true
+	}
+}
+
+// cancelForBudget is the first half of the maxDuration cut-off. It cancels the
+// in-flight provider call and every in-flight tool that mutates no durable
+// state with cause, and makes every later registration, stateful or not,
+// cancel on arrival: a call that has not started yet has nothing to drain, and
+// starting new work after the budget is spent is exactly what the cap forbids.
+//
+// In-flight STATEFUL tools are spared here and returned by name. Cutting a
+// terraform apply or a git push mid-mutation leaves state nobody recorded, so
+// the loop lets them drain for budgetStatefulDrain and only then calls
+// cancelStatefulForBudget. One that finishes inside the window records its
+// result, and the post-dispatch Budget.Check fails the session as usual.
+//
+// It does not set requested: this is not a queue-jump, and the loop fails the
+// session rather than draining the inbox.
+func (r *interruptRegistry) cancelForBudget(cause error) (draining []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.budgetCause = cause
 	for _, e := range r.cancels {
+		if mutatesState(e.tool) {
+			draining = append(draining, e.tool.Name())
+			continue
+		}
 		e.cancel(cause)
 	}
 	if r.providerCancel != nil {
 		r.providerCancel(cause)
 	}
+	return draining
+}
+
+// cancelStatefulForBudget is the second half: once the drain window has run
+// out, every tool still in flight is cancelled with the cause cancelForBudget
+// recorded, and their names are returned. A no-op before cancelForBudget.
+func (r *interruptRegistry) cancelStatefulForBudget() (cut []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.budgetCause == nil {
+		return nil
+	}
+	for _, e := range r.cancels {
+		cut = append(cut, e.tool.Name())
+		e.cancel(r.budgetCause)
+	}
+	return cut
 }
 
 func (r *interruptRegistry) clearProvider() {
