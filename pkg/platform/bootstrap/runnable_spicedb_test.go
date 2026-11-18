@@ -61,7 +61,7 @@ func TestRunBootstrapSpiceDB_LeavesComposedSchemaAndRelationships(t *testing.T) 
 	require.NoError(t, err, "write relationship on the fragment definition")
 
 	io := newSchemaIO(t, endpoint, token)
-	require.NoError(t, bootstrap.RunBootstrap(ctx, logr.Discard(), io, spicedbschema.Schema))
+	require.NoError(t, bootstrap.RunBootstrap(ctx, logr.Discard(), bootstrap.NewSerializedSchemaIO(io), spicedbschema.Schema))
 
 	live, err := io.ReadSchema(ctx)
 	require.NoError(t, err, "ReadSchema after bootstrap")
@@ -82,7 +82,7 @@ func TestRunBootstrapSpiceDB_SeedsEmptyDatastore(t *testing.T) {
 	endpoint := testspicedb.Endpoint(t)
 	io := newSchemaIO(t, endpoint, testspicedb.UniqueToken(t))
 
-	require.NoError(t, bootstrap.RunBootstrap(ctx, logr.Discard(), io, spicedbschema.Schema))
+	require.NoError(t, bootstrap.RunBootstrap(ctx, logr.Discard(), bootstrap.NewSerializedSchemaIO(io), spicedbschema.Schema))
 
 	live, err := io.ReadSchema(ctx)
 	require.NoError(t, err, "an empty datastore is seeded")
