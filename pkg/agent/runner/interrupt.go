@@ -41,6 +41,10 @@ func isInterruptibleTool(t tool.Tool) bool {
 
 var errInterruptedByUser = errors.New("interrupted by user")
 
+// errMaxDurationExceeded is the cancel cause for an in-flight LLM call or tool
+// call cut off because active run-time reached budget.maxDuration.
+var errMaxDurationExceeded = errors.New("session reached its maxDuration budget")
+
 // interruptEntry pairs a live in-flight tool with its cancel func, so the
 // registry can decide at fire() time whether cancelling it is truthful
 // (Cancellable AND stateless/readonly) without a caller-supplied snapshot.
@@ -60,11 +64,18 @@ type interruptRegistry struct {
 	cancels        map[string]interruptEntry
 	providerCancel context.CancelCauseFunc
 	requested      bool
+	// budgetCause is set by cancelForBudget and never cleared: once the budget
+	// is spent, every call registered afterwards is cancelled on arrival, which
+	// closes the window between the watchdog firing and the next registration.
+	budgetCause error
 }
 
 func (r *interruptRegistry) registerTool(id string, t tool.Tool, c context.CancelCauseFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.budgetCause != nil {
+		c(r.budgetCause)
+	}
 	if r.cancels == nil {
 		r.cancels = map[string]interruptEntry{}
 	}
@@ -94,7 +105,69 @@ func (r *interruptRegistry) deregisterTool(id string) {
 func (r *interruptRegistry) setProvider(c context.CancelCauseFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.budgetCause != nil {
+		c(r.budgetCause)
+	}
 	r.providerCancel = c
+}
+
+// mutatesState reports whether t changes durable state (anything but stateless
+// or readonly). The budget watchdog drains these rather than cutting them at
+// the cap; see cancelForBudget.
+func mutatesState(t tool.Tool) bool {
+	switch t.Permission().StateImpact {
+	case authz.Stateless, authz.Readonly:
+		return false
+	default:
+		return true
+	}
+}
+
+// cancelForBudget is the first half of the maxDuration cut-off. It cancels the
+// in-flight provider call and every in-flight tool that mutates no durable
+// state with cause, and makes every later registration, stateful or not,
+// cancel on arrival: a call that has not started yet has nothing to drain, and
+// starting new work after the budget is spent is exactly what the cap forbids.
+//
+// In-flight STATEFUL tools are spared here and returned by name. Cutting a
+// terraform apply or a git push mid-mutation leaves state nobody recorded, so
+// the loop lets them drain for BudgetStatefulDrain and only then calls
+// cancelRemainingForBudget. One that finishes inside the window records its
+// result, and the post-dispatch Budget.Check fails the session as usual.
+//
+// It does not set requested: this is not a queue-jump, and the loop fails the
+// session rather than draining the inbox.
+func (r *interruptRegistry) cancelForBudget(cause error) (draining []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.budgetCause = cause
+	for _, e := range r.cancels {
+		if mutatesState(e.tool) {
+			draining = append(draining, e.tool.Name())
+			continue
+		}
+		e.cancel(cause)
+	}
+	if r.providerCancel != nil {
+		r.providerCancel(cause)
+	}
+	return draining
+}
+
+// cancelRemainingForBudget is the second half: once the drain window has run
+// out, every tool still in flight is cancelled with the cause cancelForBudget
+// recorded, and their names are returned. A no-op before cancelForBudget.
+func (r *interruptRegistry) cancelRemainingForBudget() (cut []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.budgetCause == nil {
+		return nil
+	}
+	for _, e := range r.cancels {
+		cut = append(cut, e.tool.Name())
+		e.cancel(r.budgetCause)
+	}
+	return cut
 }
 
 func (r *interruptRegistry) clearProvider() {

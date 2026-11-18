@@ -149,6 +149,17 @@ type AgentSessionStatus struct {
 	// +optional
 	RunDuration *metav1.Duration `json:"runDuration,omitempty"`
 
+	// EnforcedMaxDuration is the budget.maxDuration the CURRENT runner pod is
+	// enforcing, written alongside runDuration. The runner reads its budget
+	// from status.effectiveSettings once at pod start, while the operator
+	// re-resolves effectiveSettings every reconcile, so the two diverge after a
+	// class or session budget edit. The operator's run-duration backstop
+	// compares runDuration against THIS value, the cap the runner actually
+	// holds, so a lowered class cap cannot fail a healthy session mid-run.
+	// Absent when the runner enforces no maxDuration.
+	// +optional
+	EnforcedMaxDuration *metav1.Duration `json:"enforcedMaxDuration,omitempty"`
+
 	// LastWakeAt records the most-recent wake-requested-at the operator has
 	// acted on. Compared against the metadata annotation to detect new
 	// wake-up requests.

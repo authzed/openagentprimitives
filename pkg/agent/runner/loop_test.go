@@ -1625,3 +1625,146 @@ func TestLoop_RecordsToolCatalogOnChangeOnly(t *testing.T) {
 		"the catalog must be keyed on the transcript index of the assistant turn it produced, "+
 			"so a capture walking memory.Turn indices resolves it via ForTurn")
 }
+
+// TestLoop_MaxDurationCutsOffInFlightWork proves maxDuration is a deadline on
+// in-flight work, not only a turn-boundary check: an LLM call or tool call that
+// never returns on its own is cancelled once active run-time reaches the cap,
+// and the session fails as BudgetExceeded rather than hanging in Running (or,
+// for the Send case, parking in AwaitingRetry as if the provider had failed).
+func TestLoop_MaxDurationCutsOffInFlightWork(t *testing.T) {
+	durationBudget := func() *runner.Budget {
+		return runner.NewBudget(spiceboxv1alpha1.BudgetConfig{
+			MaxDuration: metav1.Duration{Duration: 50 * time.Millisecond},
+		}, runner.NewRunClock(0, time.Now), time.Now())
+	}
+	runToEnd := func(t *testing.T, l *runner.Loop) spiceboxv1alpha1.AgentSession {
+		t.Helper()
+		ctx := memory.WithSystemApproval(context.Background(), "test")
+		done := make(chan error, 1)
+		go func() { done <- l.Run(ctx) }()
+		select {
+		case err := <-done:
+			require.NoError(t, err, "Run")
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run did not end: in-flight work outlived maxDuration")
+		}
+		var got spiceboxv1alpha1.AgentSession
+		require.NoError(t, l.Status.Get(ctx, &got), "Get after Run")
+		return got
+	}
+
+	t.Run("LLM call hung past the cap: Failed/BudgetExceeded, not AwaitingRetry", func(t *testing.T) {
+		prov := &interruptibleProvider{sending: make(chan struct{})}
+		l, _, _ := newLoopFixtureWithProvider(t, prov)
+		l.Budget = durationBudget()
+
+		got := runToEnd(t, l)
+		assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
+	})
+
+	t.Run("tool call hung past the cap: Failed/BudgetExceeded", func(t *testing.T) {
+		tl := &blockingCancellableTool{name: "slow_read", started: make(chan struct{})}
+		l, _, _, _ := newLoopFixture(t, []llmfake.Step{callStep("tu_1", "slow_read", `{}`)})
+		l.Tools = append(meta.Load(), tl)
+		l.Budget = durationBudget()
+
+		got := runToEnd(t, l)
+		assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
+	})
+
+	// A stateful tool is not cut mid-mutation at the cap: it gets a drain
+	// window, and only one still running when the window closes is cancelled.
+	requireExecuted := func(t *testing.T, tl *statefulBlockingTool) {
+		t.Helper()
+		select {
+		case <-tl.started:
+		default:
+			require.FailNow(t, "the stateful tool never reached Execute, so the drain was not exercised")
+		}
+	}
+	statefulLoop := func(t *testing.T, tl *statefulBlockingTool, drain time.Duration) *runner.Loop {
+		t.Helper()
+		l, _, _, _ := newLoopFixture(t, []llmfake.Step{callStep("tu_1", tl.name, `{}`)})
+		l.Tools = append(meta.Load(), tl)
+		// Readwrite needs a SpiceDB check to reach Execute; this fixture wires
+		// none, and the authz path is not what is under test.
+		l.ToolAuthMode = runner.ToolAuthModeDisabled
+		l.Budget = durationBudget()
+		l.SetBudgetStatefulDrainForTest(drain)
+		return l
+	}
+
+	t.Run("stateful tool finishing inside the drain: not cancelled, then Failed/BudgetExceeded", func(t *testing.T) {
+		tl := newStatefulBlockingTool("terraform_apply")
+		l := statefulLoop(t, tl, time.Minute)
+		go func() {
+			<-tl.started
+			// Well past the 50ms cap, well inside the one-minute drain.
+			time.Sleep(300 * time.Millisecond)
+			close(tl.release)
+		}()
+
+		got := runToEnd(t, l)
+		requireExecuted(t, tl)
+		assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
+		assert.NoError(t, tl.ctxErrAtReturn(), "the stateful call ran to completion instead of being cut at the cap")
+	})
+
+	t.Run("stateful tool hung past the drain: cancelled, Failed/BudgetExceeded", func(t *testing.T) {
+		tl := newStatefulBlockingTool("terraform_apply")
+		l := statefulLoop(t, tl, 100*time.Millisecond)
+
+		got := runToEnd(t, l)
+		requireExecuted(t, tl)
+		assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionBudget, got.Status.FailureReason)
+		assert.Error(t, tl.ctxErrAtReturn(), "a stateful call still running when the drain closes is cancelled")
+	})
+}
+
+// statefulBlockingTool is a Readwrite tool that blocks in Execute until it is
+// released or its context is cancelled, recording which happened.
+type statefulBlockingTool struct {
+	name    string
+	started chan struct{}
+	release chan struct{}
+
+	mu        sync.Mutex
+	ctxErrOut error
+}
+
+func newStatefulBlockingTool(name string) *statefulBlockingTool {
+	return &statefulBlockingTool{name: name, started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (b *statefulBlockingTool) Name() string                 { return b.name }
+func (b *statefulBlockingTool) Kind() tool.Kind              { return tool.KindMCP }
+func (b *statefulBlockingTool) Description() string          { return "" }
+func (b *statefulBlockingTool) InputSchema() json.RawMessage { return json.RawMessage(`{}`) }
+func (b *statefulBlockingTool) Permission() authz.Permission {
+	return authz.Permission{StateImpact: authz.Readwrite}
+}
+func (b *statefulBlockingTool) PermissionVariants() []authz.PermissionVariant { return nil }
+func (b *statefulBlockingTool) Execute(ctx context.Context, _ json.RawMessage, _ *tool.SessionContext) (tool.Result, error) {
+	close(b.started)
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	b.mu.Lock()
+	b.ctxErrOut = ctx.Err()
+	b.mu.Unlock()
+	if ctx.Err() != nil {
+		return tool.Result{Content: "cancelled", IsError: true}, ctx.Err()
+	}
+	return tool.Result{Content: "applied"}, nil
+}
+
+func (b *statefulBlockingTool) ctxErrAtReturn() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ctxErrOut
+}

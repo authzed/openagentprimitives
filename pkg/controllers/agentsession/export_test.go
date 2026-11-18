@@ -57,6 +57,20 @@ func (r *Reconciler) MarkBootFailedForTest(ctx context.Context, sess *spiceboxv1
 	return r.markBootFailed(ctx, sess, reason, msg)
 }
 
+// ReconcileRunDurationForTest exposes the maxDuration backstop to
+// agentsession_test, so the trigger-status answer it makes for a session the
+// operator ends can be driven against the fixture reporter kind. Test-only.
+func (r *Reconciler) ReconcileRunDurationForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (bool, error) {
+	return r.reconcileRunDuration(ctx, sess)
+}
+
+// ReconcileExpirationForTest is ReconcileRunDurationForTest's counterpart for
+// the wall-clock lifetime sweep. Test-only.
+func (r *Reconciler) ReconcileExpirationForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (bool, error) {
+	transitioned, _, err := r.reconcileExpiration(ctx, sess)
+	return transitioned, err
+}
+
 // SidecarPodFailureForTest exposes the unexported sidecarPodFailure classifier
 // to agentsession_test. Test-only.
 func SidecarPodFailureForTest(pod *corev1.Pod) *spiceboxv1alpha1.SidecarPodFailure {
