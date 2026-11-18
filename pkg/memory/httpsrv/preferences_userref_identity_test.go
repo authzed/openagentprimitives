@@ -201,3 +201,45 @@ func TestPreferencesGetUserRef_NameRef(t *testing.T) {
 		})
 	}
 }
+
+// TestPreferencesGetUserRef_NameRefGatedOnTriggerOwnerTrust pins the session
+// wiring of the trust gate end to end: in a session a pull request opened, a
+// name reference reads the matched person's value only when the author was
+// trusted, and is refused (audited unresolved) for an outside contributor.
+func TestPreferencesGetUserRef_NameRefGatedOnTriggerOwnerTrust(t *testing.T) {
+	cases := []struct {
+		name        string
+		trusted     string
+		wantStatus  int
+		wantOutcome string
+	}{
+		{name: "trusted author: 200, value read", trusted: v1alpha1.AnnotationTriggerOwnerTrustedTrue,
+			wantStatus: http.StatusOK, wantOutcome: preferenceaccess.OutcomeOK},
+		{name: "outside contributor: 422, unresolved", trusted: v1alpha1.AnnotationTriggerOwnerTrustedFalse,
+			wantStatus: http.StatusUnprocessableEntity, wantOutcome: preferenceaccess.OutcomeUnresolved},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
+			sess := buildSession(prefsNS, prefsSession, prefsClass)
+			sess.Annotations = map[string]string{
+				v1alpha1.AnnotationTriggerOwnerSubject: "github_user:42#user",
+				v1alpha1.AnnotationTriggerOwnerTrusted: tc.trusted,
+			}
+			srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess,
+				userIdentityFor(t, "alice@example.com", "amoreno", "Alice Moreno"))
+			putUserPreference(t, mem, mustCanonicalEmail(t, "alice@example.com"), prefsNS, prefsClass, "language", json.RawMessage(`"de"`))
+
+			status, body := getUserRefRaw(t, srv.URL, "name:Alice Moreno")
+			assert.Equal(t, tc.wantStatus, status, body)
+			if tc.wantStatus != http.StatusOK {
+				assert.Contains(t, body, "not honored")
+				assert.NotContains(t, body, `"de"`)
+			}
+
+			entries := listAudit(t, mem)
+			require.Len(t, entries, 1)
+			assert.Equal(t, tc.wantOutcome, entries[0].Outcome)
+		})
+	}
+}

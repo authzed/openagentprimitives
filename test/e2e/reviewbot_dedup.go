@@ -617,16 +617,12 @@ func webhookInboundNATSHandler(cli client.Client, pl *pipeline.Pipeline) func(*n
 		// the additional-owner write.
 		var preTurn map[string]string
 		if k, ok := chregistry.Get(ch.Spec.Kind); ok {
-			if op, ok := k.WebhookReceiver(channelkinds.Deps{}).(channelkinds.TriggerOwnerProvider); ok {
-				subject, has, oerr := op.TriggerOwnerSubject(&ch, p.DeliveryEvent, p.RawDelivery)
-				switch {
-				case oerr != nil:
-					fmt.Fprintf(os.Stderr, "e2e: webhook_inbound: trigger owner derivation failed for %s/%s key=%s: %v\n",
-						p.ChannelNamespace, p.ChannelName, p.ChannelKey, oerr)
-				case has:
-					preTurn = map[string]string{spiceboxv1alpha1.AnnotationTriggerOwnerSubject: subject}
-				}
+			owner, oerr := channelkinds.TriggerOwnerAnnotations(k.WebhookReceiver(channelkinds.Deps{}), &ch, p.DeliveryEvent, p.RawDelivery)
+			if oerr != nil {
+				fmt.Fprintf(os.Stderr, "e2e: webhook_inbound: trigger owner derivation failed for %s/%s key=%s: %v\n",
+					p.ChannelNamespace, p.ChannelName, p.ChannelKey, oerr)
 			}
+			preTurn = owner
 		}
 		dec, err := pl.Deliver(ctx, channelkinds.InboundEvent{
 			Channel:      &ch,

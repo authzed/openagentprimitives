@@ -51,6 +51,17 @@ func fakeUsers(users ...spiceboxv1alpha1.UserIdentity) func(context.Context) ([]
 	return func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error) { return users, nil }
 }
 
+// annotations serves a session's annotations to the resolver.
+func annotations(a map[string]string) func(context.Context) (map[string]string, error) {
+	return func(context.Context) (map[string]string, error) { return a, nil }
+}
+
+// nameEnv is the resolver environment of a session with the given annotations
+// (nil: a session no trigger opened) over the given user directory.
+func nameEnv(sessionAnnotations map[string]string, users func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error)) Env {
+	return Env{SessionAnnotations: annotations(sessionAnnotations), UserIdentities: users}
+}
+
 func TestResolve_Name(t *testing.T) {
 	directory := fakeUsers(
 		// Display name is a handle; only the Slack real name carries the full name.
@@ -91,7 +102,7 @@ func TestResolve_Name(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := Resolve(t.Context(), tc.ref, Env{UserIdentities: directory})
+			res, err := Resolve(t.Context(), tc.ref, nameEnv(nil, directory))
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantSubject, res.Subject)
 			assert.False(t, res.SubjectProven, "a name match never proves the reference")
@@ -113,9 +124,9 @@ func TestResolve_NameRefusalDoesNotDistinguishNobodyFromSeveral(t *testing.T) {
 		userNamed(t, "sam.ortiz@example.com", "Sam Ortiz", ""),
 		userNamed(t, "sortiz@example.com", "sortiz", "Sam Ortiz"),
 	)
-	several, err := Resolve(t.Context(), "name:Sam Ortiz", Env{UserIdentities: directory})
+	several, err := Resolve(t.Context(), "name:Sam Ortiz", nameEnv(nil, directory))
 	require.NoError(t, err)
-	nobody, err := Resolve(t.Context(), "name:Robin Hale", Env{UserIdentities: directory})
+	nobody, err := Resolve(t.Context(), "name:Robin Hale", nameEnv(nil, directory))
 	require.NoError(t, err)
 
 	assert.Equal(t, strings.ReplaceAll(nobody.Reason, "Robin Hale", "Sam Ortiz"), several.Reason)
@@ -141,7 +152,7 @@ func TestResolve_NameMatchOnNonUserSubjectRefuses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := Resolve(t.Context(), "name:Pat Quinlan", Env{UserIdentities: fakeUsers(tc.users...)})
+			res, err := Resolve(t.Context(), "name:Pat Quinlan", nameEnv(nil, fakeUsers(tc.users...)))
 			require.NoError(t, err)
 			assert.Empty(t, res.Subject)
 			assert.NotEmpty(t, res.Reason)
@@ -151,13 +162,13 @@ func TestResolve_NameMatchOnNonUserSubjectRefuses(t *testing.T) {
 
 func TestResolve_NameSameUserUnderSeveralNamesCountsOnce(t *testing.T) {
 	ui := userNamed(t, "kim.lee@example.com", "Kim Lee", "Kim Lee")
-	res, err := Resolve(t.Context(), "name:Kim Lee", Env{UserIdentities: fakeUsers(ui)})
+	res, err := Resolve(t.Context(), "name:Kim Lee", nameEnv(nil, fakeUsers(ui)))
 	require.NoError(t, err)
 	assert.Equal(t, mustEmailSubject(t, "kim.lee@example.com"), res.Subject)
 }
 
 func TestResolve_NameWithoutDirectoryIsUnresolved(t *testing.T) {
-	res, err := Resolve(t.Context(), "name:Kim Lee", Env{})
+	res, err := Resolve(t.Context(), "name:Kim Lee", Env{SessionAnnotations: annotations(nil)})
 	require.NoError(t, err)
 	assert.Empty(t, res.Subject)
 	assert.Equal(t, noUserDirectoryReason, res.Reason)
@@ -166,14 +177,72 @@ func TestResolve_NameWithoutDirectoryIsUnresolved(t *testing.T) {
 func TestResolve_NameDirectoryErrorIsReturned(t *testing.T) {
 	boom := errors.New("list failed")
 	_, err := Resolve(t.Context(), "name:Kim Lee", Env{
-		UserIdentities: func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error) { return nil, boom },
+		SessionAnnotations: annotations(nil),
+		UserIdentities:     func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error) { return nil, boom },
 	})
 	assert.ErrorIs(t, err, boom)
 }
 
 func TestResolve_NameContainingAtIsNotClaimedAsEmail(t *testing.T) {
-	res, err := Resolve(t.Context(), "name:Kim @ Lee", Env{UserIdentities: fakeUsers()})
+	res, err := Resolve(t.Context(), "name:Kim @ Lee", nameEnv(nil, fakeUsers()))
 	require.NoError(t, err)
 	assert.Empty(t, res.Subject)
 	assert.Contains(t, res.Reason, "recorded under the name")
+}
+
+// TestResolve_NameGatedOnTriggerOwnerTrust pins that in a session a trigger
+// opened, a name reference resolves only when the provider vouched for the
+// trigger owner: there the name is text the owner chose, so an outside
+// contributor must not be able to pick whose settings apply.
+func TestResolve_NameGatedOnTriggerOwnerTrust(t *testing.T) {
+	directory := fakeUsers(userNamed(t, "pat@example.com", "pat", "Pat Quinlan"))
+	owner := "github_user:42#user"
+
+	cases := []struct {
+		name        string
+		annotations map[string]string
+		env         *Env
+		wantSubject string
+		wantReason  string
+	}{
+		{name: "session no trigger opened: resolves", annotations: map[string]string{},
+			wantSubject: mustEmailSubject(t, "pat@example.com")},
+		{name: "trusted trigger owner: resolves", annotations: map[string]string{
+			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
+			spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue,
+		}, wantSubject: mustEmailSubject(t, "pat@example.com")},
+		{name: "untrusted trigger owner: refused", annotations: map[string]string{
+			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
+			spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedFalse,
+		}, wantReason: untrustedTriggerOwnerReason},
+		{name: "trigger owner with no trust bit: refused", annotations: map[string]string{
+			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
+		}, wantReason: untrustedTriggerOwnerReason},
+		{name: "trigger owner with a garbage trust bit: refused", annotations: map[string]string{
+			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
+			spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: "yes",
+		}, wantReason: untrustedTriggerOwnerReason},
+		{name: "no session context: refused", env: &Env{UserIdentities: directory}, wantReason: noSessionForNameReason},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := nameEnv(tc.annotations, directory)
+			if tc.env != nil {
+				env = *tc.env
+			}
+			res, err := Resolve(t.Context(), "name:Pat Quinlan", env)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSubject, res.Subject)
+			assert.Equal(t, tc.wantReason, res.Reason)
+		})
+	}
+}
+
+func TestResolve_NameSessionAnnotationErrorIsReturned(t *testing.T) {
+	boom := errors.New("session read failed")
+	_, err := Resolve(t.Context(), "name:Pat Quinlan", Env{
+		SessionAnnotations: func(context.Context) (map[string]string, error) { return nil, boom },
+		UserIdentities:     fakeUsers(),
+	})
+	assert.ErrorIs(t, err, boom)
 }

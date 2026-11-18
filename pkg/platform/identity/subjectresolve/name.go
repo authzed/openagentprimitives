@@ -23,6 +23,15 @@ const namePrefix = "name:"
 // no Env.UserIdentities: there is nothing to match a name against.
 const noUserDirectoryReason = "name references are not available on this deployment"
 
+// noSessionForNameReason answers a name reference resolved with no session
+// context: whether the session's trigger owner is trusted cannot be checked.
+const noSessionForNameReason = "name references need a session context to check who opened it"
+
+// untrustedTriggerOwnerReason answers a name reference in a session a trigger
+// opened for an owner the provider did not vouch for (for a pull request: an
+// author who is not a member, owner or collaborator of the repository).
+const untrustedTriggerOwnerReason = "name references are not honored in a session whose trigger owner the provider does not vouch for (for a pull request: an author who is not a member, owner or collaborator)"
+
 // nameResolver resolves "name:<full name>" to the ONE platform user whose
 // recorded name matches it — the displayName or realName of a channel identity
 // that carries a channel-vouched email — compared case-, accent- and
@@ -52,6 +61,11 @@ const noUserDirectoryReason = "name references are not available on this deploym
 // than full names do. The cost is that a person with a single legal name
 // (a mononym) cannot be reached by name; they are reached by email instead.
 //
+// In a session a trigger opened, a name reference is honored only when the
+// provider vouched for the trigger owner (see untrustedTriggerReason): there
+// the name is text the owner chose, and an outside contributor must not be
+// able to choose whose settings apply.
+//
 // Resolutions stay SubjectProven == false, like the email resolver's: a name
 // match picks a real user, but it does not prove the reference IS that user.
 // They also set ConcealSubject: the subject encodes the matched person's
@@ -70,6 +84,9 @@ func (nameResolver) TryResolve(ctx context.Context, ref string, env Env) (Resolu
 	want := normalizeName(raw)
 	if len(strings.Fields(want)) < 2 {
 		return Resolution{Reason: fmt.Sprintf("%q is not a full name; a name reference needs at least a first and last name", truncateRef(raw))}, true, nil
+	}
+	if reason, err := untrustedTriggerReason(ctx, env); err != nil || reason != "" {
+		return Resolution{Reason: reason}, true, err
 	}
 	if env.UserIdentities == nil {
 		return Resolution{Reason: noUserDirectoryReason}, true, nil
@@ -110,6 +127,32 @@ func (nameResolver) TryResolve(ctx context.Context, ref string, env Env) (Resolu
 	// One reason for "nobody" and "several": a distinct answer, or a count,
 	// would let a caller probe the user directory one name at a time.
 	return Resolution{Reason: fmt.Sprintf("no single platform user is recorded under the name %q; a name reference must match exactly one", truncateRef(raw))}, true, nil
+}
+
+// untrustedTriggerReason refuses a name reference in a session an untrusted
+// party opened. In a triggered session the name being looked up is text the
+// trigger owner chose (a pull request author's profile name), so honoring it
+// would let an outside contributor pick whose settings apply. A session with a
+// trigger owner is trusted only when channelsd recorded the provider vouching
+// for that owner (AnnotationTriggerOwnerTrusted, from a verified delivery);
+// anything else — "false", missing, garbage — refuses. A session no trigger
+// opened (no owner annotation) is unaffected. With no session context at all
+// there is nothing to check, so that refuses too.
+func untrustedTriggerReason(ctx context.Context, env Env) (string, error) {
+	if env.SessionAnnotations == nil {
+		return noSessionForNameReason, nil
+	}
+	annotations, err := env.SessionAnnotations(ctx)
+	if err != nil {
+		return "", err
+	}
+	if annotations[spiceboxv1alpha1.AnnotationTriggerOwnerSubject] == "" {
+		return "", nil
+	}
+	if annotations[spiceboxv1alpha1.AnnotationTriggerOwnerTrusted] == spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue {
+		return "", nil
+	}
+	return untrustedTriggerOwnerReason, nil
 }
 
 // userHasName reports whether a name recorded on one of ui's vouched channel
