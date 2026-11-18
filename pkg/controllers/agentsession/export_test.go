@@ -5,6 +5,7 @@ package agentsession
 
 import (
 	"context"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -62,6 +63,14 @@ func (r *Reconciler) MarkBootFailedForTest(ctx context.Context, sess *spiceboxv1
 func (r *Reconciler) ReconcileRunDurationForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (bool, error) {
 	return r.reconcileRunDuration(ctx, sess)
 }
+
+// ReconcileFailedTriggerForTest exposes the failed-session trigger backstop.
+func (r *Reconciler) ReconcileFailedTriggerForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) time.Duration {
+	return r.reconcileFailedTrigger(ctx, sess)
+}
+
+// FailedTriggerAnswerWindowForTest is the backstop's answer window.
+const FailedTriggerAnswerWindowForTest = failedTriggerAnswerWindow
 
 // ReconcileExpirationForTest is ReconcileRunDurationForTest's counterpart for
 // the wall-clock lifetime sweep. Test-only.

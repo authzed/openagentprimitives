@@ -4,7 +4,7 @@
 # change: budget.maxTurns is 2, so the runner itself fails the session at the
 # top of its third turn — before the agent has concluded the check run it
 # claimed. Everything else is kept identical so the only thing that can answer
-# the pull request is the runner's own failure path.
+# the pull request is the operator's backstop for failed sessions.
 apiVersion: v1
 kind: Secret
 metadata: {name: reviewbot-placeholder, namespace: default}

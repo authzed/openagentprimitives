@@ -87,8 +87,8 @@ func wantSessionPhaseFor(b bt.Bundle) string {
 	case "reviewbot-runner-failure-answers-trigger":
 		// The runner fails this triggered session on its own budget before the
 		// agent answers the pull request. Failed is both the claim (the run
-		// really ended, it did not idle) and deliverTrigger's barrier: the
-		// check run is only complete once the runner's failure path has run.
+		// really ended, it did not idle) and deliverTrigger's barrier; the
+		// operator's answer lands after it, which checkTriggerStatus waits on.
 		return spiceboxv1alpha1.AgentSessionPhaseFailed
 	}
 	return ""

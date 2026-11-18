@@ -4,15 +4,15 @@
 //
 // # Who calls this
 //
-// Whoever moves a session to Failed answers its trigger, at the moment it does
-// so. The operator does it when it fails a session itself (a boot failure, the
-// maxDuration backstop); the runner does it when IT fails the session (a budget
-// cap, a provider error, a halt). There is no third party watching for "any
-// Failed session": the runner writes the terminal phase straight onto status,
-// so an observer would see only a state, not the transition, and would need a
-// durable marker of its own to avoid re-asking the provider on every reconcile
-// of every failed session. The writer of the transition already knows it is
-// the one transition, so it is the one place this runs exactly once.
+// The operator, and only the operator. It answers in two ways: immediately, in
+// the reconcile where it fails a session itself (a boot failure, the
+// maxDuration backstop), and as a backstop for EVERY Failed session it
+// observes — whoever wrote Failed (the runner's own budget, halt and protocol
+// failures, the retry TTL and retry cap after a provider error, a pod
+// failure). The backstop records that it settled a session in a status
+// condition, so the provider is asked once rather than on every reconcile.
+// The runner does not answer for itself: it would race the backstop, both
+// claiming an open trigger and both concluding it.
 //
 // # Read before write
 //
@@ -20,8 +20,9 @@
 // trigger that already carries an answer is left exactly as it is: an agent
 // that posted its verdict and then failed on the way out (its budget ran out
 // after concluding, say) must not have that verdict replaced with "could not
-// finish". When Claim itself fails, whether there is a verdict is UNKNOWN, so
-// nothing is written for the same reason.
+// finish", and the backstop re-checking a trigger the operator already
+// answered reads it back as AlreadyAnswered. When Claim itself fails, whether
+// there is a verdict is UNKNOWN, so nothing is written for the same reason.
 //
 // # Wording
 //
@@ -147,8 +148,8 @@ func (t Trigger) AnswerCouldNotFinish(ctx context.Context, summary string) (Repo
 	return rep, nil
 }
 
-// Log records what AnswerCouldNotFinish did, for both of its callers, so the
-// two cannot drift in what they say. Every outcome but NotOwed is logged: the
+// Log records what AnswerCouldNotFinish did, for every caller, so they cannot
+// drift in what they say. Every outcome but NotOwed is logged: the
 // visible symptom of a give-up (a pull request still showing "in progress")
 // is otherwise untraceable, and a kept verdict is worth seeing next to a
 // failure that might have been expected to overwrite it.
@@ -175,9 +176,9 @@ func CouldNotStartSummary(reason string) string {
 }
 
 // StoppedSummary is CouldNotStartSummary's counterpart for a session that DID
-// start and was ended before it finished — by the operator (its run-time
-// budget ran out while its runner could not end it) or by the runner itself (a
-// budget cap, a provider error, a halt).
+// start and was ended before it finished: its runner failed it (a budget cap,
+// a halt), a provider error outlasted its retries, or the operator ended a
+// runner that could not end itself.
 func StoppedSummary(reason string) string {
 	return fmt.Sprintf(
 		"This agent was stopped before it finished, so its work for this commit is incomplete and no result is coming. "+

@@ -37,7 +37,6 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/leakagewiring"
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/userprofilegate"
 	"github.com/authzed/openagentprimitives/pkg/agent/secretout"
-
 	// The completion-requirement kinds an AgentClass may declare, mirroring the
 	// blank imports in internal/cmd/runner: which requirements exist is a
 	// property of the build, and the gate resolves a declared key through the
@@ -46,7 +45,6 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/agent/completion/kinds/plansteps"
 	_ "github.com/authzed/openagentprimitives/pkg/agent/completion/kinds/triggerconcluded"
 	"github.com/authzed/openagentprimitives/pkg/agent/session/state"
-
 	// Registers the "deliveries" state kind, which respond_to_user writes and
 	// the artifact-delivered requirement reads.
 	_ "github.com/authzed/openagentprimitives/pkg/agent/session/state/deliveries"
@@ -79,7 +77,6 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/toolguard"
 	"github.com/authzed/openagentprimitives/pkg/authz/trifecta"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
-
 	// The renderer kinds, mirroring internal/cmd/runner. AvailableAssetKinds
 	// reads this registry, and an empty one makes the artifacts capability skip
 	// with "no renderer registered" — so a scenario granting `artifacts` would
@@ -94,7 +91,6 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	chregistry "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/resolve"
-	"github.com/authzed/openagentprimitives/pkg/channels/triggeranswer"
 	agentsession "github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession/cosidecar"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -2117,17 +2113,6 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		IsDelegatedChild: sess.Spec.Parent != nil,
 		K8sClient:        f.K8s,
 		SecretOut:        secretout.NewSessionStore(string(sess.UID)),
-	}
-	// Mirrors internal/cmd/runner/main.go: a failure the runner writes answers
-	// the trigger that started the session, pointed at the same stand-in
-	// provider the trigger-status tools use.
-	if sess.Spec.InputChannel != nil && f.K8s != nil {
-		loop.FailedTrigger = &triggeranswer.Trigger{
-			Client:             f.K8s,
-			Namespace:          sess.Namespace,
-			Binding:            sess.Spec.InputChannel,
-			ProviderAPIBaseURL: f.TriggerStatusAPIBaseURL,
-		}
 	}
 	if len(bundleSessionMap) > 0 {
 		sctx.BundleSessions = bundleSessionMap

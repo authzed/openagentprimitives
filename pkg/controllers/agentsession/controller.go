@@ -643,6 +643,13 @@ type Reconciler struct {
 	// negative disables reaping. From --failed-sandbox-reap-grace (1m).
 	FailedSandboxReapGrace time.Duration
 
+	// TriggerStatusAPIBaseURL returns the provider API host the operator
+	// answers a failed session's trigger through (see reconcileFailedTrigger).
+	// Nil, or "", means each kind's real default, which is what production
+	// uses. A getter because the e2e harness stands its fixture provider up
+	// after the manager starts; mirrors the runner's TriggerStatusAPIBaseURL.
+	TriggerStatusAPIBaseURL func() string
+
 	// SpiceDBDeleter, when non-nil, wipes all agentsession relationships in
 	// SpiceDB during finalization, before the finalizer is removed. Nil skips
 	// SpiceDB cleanup, logged rather than silent.
@@ -1386,6 +1393,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// REVOKE on them. Errors fail the reconcile (see syncArtifactOrgViewer).
 	if err := r.syncArtifactOrgViewer(ctx, &sess); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Answer the trigger of a Failed session that nobody answered — whichever
+	// party wrote Failed (the runner's own budget/halt paths, the retry TTL, a
+	// pod failure). Above the reap short-circuit, which every later reconcile
+	// of a terminal session stops at. A transient provider failure requeues
+	// this pass (skipping one reap pass, which is idempotent and runs on the
+	// retry); it is bounded by the answer window. See failedtrigger.go.
+	if retry := r.reconcileFailedTrigger(ctx, &sess); retry > 0 {
+		return ctrl.Result{RequeueAfter: retry}, nil
 	}
 
 	// Reap a terminal session's pods once eligible: Succeeded immediately, Failed

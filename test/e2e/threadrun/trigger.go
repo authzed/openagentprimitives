@@ -147,6 +147,16 @@ func checkTriggerStatus(t *testing.T, h *e2e.Harness, b bt.Bundle) {
 
 	owner, repo := ownerRepoFromChannelKey(t, b.Trigger.ChannelKey)
 	run := h.FakeGitHub.CheckRunIn(owner, repo, b.Trigger.HeadSHA, b.Trigger.StatusName)
+	// A run the AGENT concluded is final by the time the round ends. One the
+	// operator answers for a failed session lands on a later reconcile, after
+	// the Failed phase this driver waited on, so give it a bounded settle.
+	if ts.Status != "" {
+		deadline := time.Now().Add(30 * time.Second)
+		for (run == nil || run.Status != ts.Status) && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+			run = h.FakeGitHub.CheckRunIn(owner, repo, b.Trigger.HeadSHA, b.Trigger.StatusName)
+		}
+	}
 	require.NotNil(t, run,
 		"nothing was published for %s/%s@%s under name %q — the review answered nobody",
 		owner, repo, b.Trigger.HeadSHA, b.Trigger.StatusName)

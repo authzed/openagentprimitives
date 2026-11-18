@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/go-logr/logr/funcr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -40,6 +41,7 @@ type answerKind struct {
 	standing    *channelkinds.TriggerClaim
 	claimErr    error
 	concludeErr error
+	noSurface   bool
 	claims      int
 	published   []channelkinds.TriggerConclusion
 }
@@ -64,6 +66,9 @@ func (k *answerKind) TriggerSurface(
 	}
 	if opts.ProviderAPIBaseURL != "https://provider.test" {
 		return nil, errors.New("fixture: the provider override did not reach the kind")
+	}
+	if k.noSurface {
+		return nil, nil // "this binding carries no trigger"
 	}
 	return &answerSurface{kind: k}, nil
 }
@@ -109,6 +114,7 @@ func reset(t *testing.T) *answerKind {
 	registered.mu.Lock()
 	defer registered.mu.Unlock()
 	registered.standing, registered.claimErr, registered.concludeErr = nil, nil, nil
+	registered.noSurface = false
 	registered.claims, registered.published = 0, nil
 	return registered
 }
@@ -193,6 +199,12 @@ func TestAnswerCouldNotFinish(t *testing.T) {
 			wantResult: triggeranswer.NotOwed,
 		},
 		{
+			name:    "kind says this binding carries no trigger: not owed, provider never touched",
+			binding: binding(taKindName), withChannel: true, withSecret: true,
+			arrange:    func(k *answerKind) { k.noSurface = true },
+			wantResult: triggeranswer.NotOwed,
+		},
+		{
 			name:    "input Channel missing: error, provider never touched",
 			binding: binding(taKindName), withSecret: true,
 			wantErr: "read the input Channel",
@@ -245,4 +257,41 @@ func TestSummaries_CarryTheReasonTokenAndSayDifferentThings(t *testing.T) {
 	assert.Contains(t, start, "could not start")
 	assert.Contains(t, stopped, "stopped before it finished")
 	assert.NotContains(t, stopped, "could not start")
+}
+
+func TestAnswerCouldNotFinish_NoClientIsAnErrorNotAPanic(t *testing.T) {
+	reset(t)
+	_, err := triggeranswer.Trigger{Namespace: taNS, Binding: binding(taKindName)}.
+		AnswerCouldNotFinish(context.Background(), "s")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no Kubernetes client")
+}
+
+func TestLog(t *testing.T) {
+	cases := []struct {
+		name    string
+		rep     triggeranswer.Report
+		err     error
+		wantMsg string // "" means nothing is logged
+	}{
+		{name: "error: logged as still in progress", err: errors.New("boom"), wantMsg: "keeps showing the work as in progress"},
+		{name: "already answered: logged as kept", rep: triggeranswer.Report{Result: triggeranswer.AlreadyAnswered, Standing: channelkinds.TriggerOutcomeClean}, wantMsg: "did not overwrite it"},
+		{name: "answered: logged", rep: triggeranswer.Report{Result: triggeranswer.Answered}, wantMsg: "answered on behalf of a failed session"},
+		{name: "not owed: silent", rep: triggeranswer.Report{Result: triggeranswer.NotOwed}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var lines []string
+			logger := funcr.New(func(prefix, args string) { lines = append(lines, args) }, funcr.Options{})
+			triggeranswer.Log(logger, "ns/sess", "BudgetExceeded", tc.rep, tc.err)
+			if tc.wantMsg == "" {
+				assert.Empty(t, lines)
+				return
+			}
+			require.Len(t, lines, 1)
+			assert.Contains(t, lines[0], tc.wantMsg)
+			assert.Contains(t, lines[0], "ns/sess")
+			assert.Contains(t, lines[0], "BudgetExceeded")
+		})
+	}
 }

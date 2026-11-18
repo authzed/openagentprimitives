@@ -33,7 +33,6 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/trifecta"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
-	"github.com/authzed/openagentprimitives/pkg/channels/triggeranswer"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakageaudit"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
@@ -845,14 +844,6 @@ type Loop struct {
 	// anchor.
 	Client    k8sclient.Client
 	Artifacts *artifacts.Service
-
-	// FailedTrigger addresses the trigger that started this session (a pull
-	// request's check run), so that when the runner fails the session it can
-	// answer that trigger as could_not_finish instead of leaving it showing
-	// the work in progress forever. Set by internal/cmd/runner from
-	// spec.inputChannel. Nil — a kubectl-driven session, local mode, most
-	// tests — answers nothing. See Loop.fail and package triggeranswer.
-	FailedTrigger *triggeranswer.Trigger
 
 	// ArtifactReader fetches stored attachment bytes for the hydration pass
 	// (hydrateAttachments, attachments.go). May be nil (kubectl-driven sessions

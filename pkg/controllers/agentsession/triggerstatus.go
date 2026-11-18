@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"context"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -9,17 +10,23 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/triggeranswer"
 )
 
+// triggerAnswerTimeout bounds one answer's provider round trips (a token mint,
+// a head-commit read, a check-run read and write), so a slow provider cannot
+// hold a reconcile worker.
+const triggerAnswerTimeout = 30 * time.Second
+
 // concludeTriggerStatusOnOperatorFailure answers the trigger that started
-// sess, when the operator is failing sess and nothing inside it can: either it
-// died before its runner came up (markBootFailed), or its runner is wedged
-// past its run-time budget and the operator is ending it (reconcileRunDuration).
-// summary is the prose published on the trigger's surface; see
-// triggeranswer.CouldNotStartSummary and triggeranswer.StoppedSummary.
+// sess, at the moment the operator itself fails sess and nothing inside it
+// can: either it died before its runner came up (markBootFailed), or its
+// runner is wedged past its run-time budget and the operator is ending it
+// (reconcileRunDuration). summary is the prose published on the trigger's
+// surface; see triggeranswer.CouldNotStartSummary and
+// triggeranswer.StoppedSummary.
 //
-// The runner answers for the failures IT writes (Loop.fail); this answers for
-// the operator's. See package triggeranswer for why the writer of the Failed
-// transition is the one that answers, and for the read-before-write rule that
-// keeps a verdict already posted.
+// These two answer immediately, in the reconcile that writes Failed, with the
+// wording only they know is right. Every other Failed session — the runner's
+// own failures, the retry TTL — is answered by reconcileFailedTrigger, which
+// also re-checks these two on the next pass and finds them AlreadyAnswered.
 //
 // # Why the reconciler and not the agent
 //
@@ -36,17 +43,29 @@ import (
 //
 // Best-effort throughout, and never silent. Nothing here may fail the reconcile
 // that is marking the session Failed — reaching the terminal state matters more
-// than reporting it, and a session wedged mid-transition by a provider outage
-// would be strictly worse. No ProviderAPIBaseURL override: the operator talks
-// to the real provider, and the tests drive a registered fixture kind that
-// ignores it.
+// than reporting it. A give-up here is retried by reconcileFailedTrigger.
 func (r *Reconciler) concludeTriggerStatusOnOperatorFailure(
 	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, reason, summary string,
 ) {
-	rep, err := triggeranswer.Trigger{
-		Client:    r.Client,
-		Namespace: sess.Namespace,
-		Binding:   sess.Spec.InputChannel,
-	}.AnswerCouldNotFinish(ctx, summary)
+	rep, err := r.answerTrigger(ctx, sess, summary)
 	triggeranswer.Log(log.FromContext(ctx), sess.Namespace+"/"+sess.Name, reason, rep, err)
+}
+
+// answerTrigger is the operator's one route to triggeranswer: the session's
+// input binding, the operator's own client, the provider override, a bound.
+func (r *Reconciler) answerTrigger(
+	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, summary string,
+) (triggeranswer.Report, error) {
+	var apiBase string
+	if r.TriggerStatusAPIBaseURL != nil {
+		apiBase = r.TriggerStatusAPIBaseURL()
+	}
+	actx, cancel := context.WithTimeout(ctx, triggerAnswerTimeout)
+	defer cancel()
+	return triggeranswer.Trigger{
+		Client:             r.Client,
+		Namespace:          sess.Namespace,
+		Binding:            sess.Spec.InputChannel,
+		ProviderAPIBaseURL: apiBase,
+	}.AnswerCouldNotFinish(actx, summary)
 }

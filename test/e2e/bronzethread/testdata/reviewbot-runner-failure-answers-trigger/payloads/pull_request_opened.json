@@ -9,7 +9,7 @@
       "login": "demo-contributor"
     },
     "head": {
-      "sha": "0000000000000000000000000000000000000000",
+      "sha": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
       "repo": {
         "fork": false,
         "full_name": "demo-org/demo-repo"

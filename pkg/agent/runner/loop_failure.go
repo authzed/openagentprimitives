@@ -5,14 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
-
-	"github.com/go-logr/logr"
 
 	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
-	"github.com/authzed/openagentprimitives/pkg/channels/triggeranswer"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
 	"github.com/authzed/openagentprimitives/pkg/x/besteffort"
@@ -72,41 +68,7 @@ func (l *Loop) fail(ctx context.Context, reason, message string) error {
 	if err := l.Status.WriteFailed(ctx, reason, message); err != nil {
 		return fmt.Errorf("loop terminal write (reason=%s msg=%s): %w", reason, message, err)
 	}
-	// Only after the Failed write persisted, so a transition that did not land
-	// publishes no verdict for a session that is not failing.
-	l.answerFailedTrigger(ctx, reason)
 	return nil
-}
-
-// failedTriggerAnswerTimeout bounds the provider round trip that answers a
-// failed session's trigger, so a slow provider cannot hold the runner's exit.
-const failedTriggerAnswerTimeout = 30 * time.Second
-
-// answerFailedTrigger tells the trigger that started this session (a pull
-// request's check run) that no result is coming, now that the runner has
-// failed the session. Without it a triggered session that fails in the runner
-// — a budget cap, a provider error, a halt — leaves its check run showing the
-// work in progress indefinitely.
-//
-// The runner answers here because the runner is the one writing this Failed
-// transition; the operator answers for the failures it writes itself
-// (concludeTriggerStatusOnOperatorFailure). Same conclusion, same wording,
-// same read-before-write: a verdict the agent already posted is kept.
-//
-// reason, never message, reaches the summary: message is operator-facing.
-// Detached from ctx's cancellation and bounded by its own timeout instead: the
-// Failed status is already written, so a shutdown racing this call should not
-// be what decides whether the pull request hears about it. Best-effort and logged, never returned: the terminal status is
-// already written, and reporting it must not turn into a runner error.
-func (l *Loop) answerFailedTrigger(ctx context.Context, reason string) {
-	if l.FailedTrigger == nil {
-		return
-	}
-	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failedTriggerAnswerTimeout)
-	defer cancel()
-	rep, err := l.FailedTrigger.AnswerCouldNotFinish(actx, triggeranswer.StoppedSummary(reason))
-	triggeranswer.Log(logr.FromSlogHandler(slog.Default().Handler()),
-		l.SessionKey.Namespace+"/"+l.SessionKey.Name, reason, rep, err)
 }
 
 // fireSessionEnd runs the SessionEnd pipeline point so the SessionCleanup hook
