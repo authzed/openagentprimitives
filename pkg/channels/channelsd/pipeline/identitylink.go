@@ -22,7 +22,7 @@ import (
 func upsertChannelIdentity(list []spiceboxv1alpha1.ChannelIdentity, ci spiceboxv1alpha1.ChannelIdentity) ([]spiceboxv1alpha1.ChannelIdentity, bool) {
 	for i := range list {
 		if list[i].Kind == ci.Kind && list[i].Domain == ci.Domain && list[i].ExternalID == ci.ExternalID {
-			if list[i].DisplayName == ci.DisplayName && list[i].Email == ci.Email {
+			if list[i].DisplayName == ci.DisplayName && list[i].RealName == ci.RealName && list[i].Email == ci.Email {
 				return list, false
 			}
 			list[i] = ci
@@ -85,6 +85,7 @@ func (p *Pipeline) recordChannelIdentity(ctx context.Context, ev channelkinds.In
 		Domain:      ev.ExternalIDs.TeamScope.String(),
 		ExternalID:  ev.ExternalIDs.ExternalID.String(),
 		DisplayName: ev.ExternalIDs.DisplayName,
+		RealName:    ev.ExternalIDs.RealName,
 		Email:       ev.ExternalIDs.Email.String(),
 	})
 	if !changed {

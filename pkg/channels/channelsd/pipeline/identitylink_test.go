@@ -28,6 +28,14 @@ func TestUpsertChannelIdentity(t *testing.T) {
 	assert.True(t, changed3)
 	assert.Equal(t, "Alice A.", got3[0].DisplayName)
 
+	// Same tuple, real name learned: also an update, so an identity recorded
+	// before real names were captured picks one up on the user's next message.
+	withReal := renamed
+	withReal.RealName = "Alice Anders"
+	gotReal, changedReal := upsertChannelIdentity(got3, withReal)
+	assert.True(t, changedReal)
+	assert.Equal(t, "Alice Anders", gotReal[0].RealName)
+
 	// Same person, DIFFERENT workspace: a second entry (one canonical -> many).
 	other := spiceboxv1alpha1.ChannelIdentity{Kind: "slack", Domain: "T0PARTNER", ExternalID: "U0GUEST", DisplayName: "Alice"}
 	got4, changed4 := upsertChannelIdentity(got3, other)

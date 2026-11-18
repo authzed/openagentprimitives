@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/userpreference"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity/subjectresolve"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/useridentity"
 	"github.com/authzed/openagentprimitives/pkg/platform/preferences"
 )
 
@@ -300,6 +302,13 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 		SessionAnnotations: func(context.Context) (map[string]string, error) {
 			return sess.Annotations, nil
 		},
+		UserIdentities: func(ctx context.Context) ([]v1alpha1.UserIdentity, error) {
+			var list v1alpha1.UserIdentityList
+			if err := h.prefsReader.List(ctx, &list); err != nil {
+				return nil, fmt.Errorf("list UserIdentities: %w", err)
+			}
+			return list.Items, nil
+		},
 	}
 	res, rerr := subjectresolve.Resolve(r.Context(), ref, env)
 	switch {
@@ -345,14 +354,29 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 			// for ANY class. Canonicalizing is not resolving: with no linkage
 			// authority behind the reference and no record behind the
 			// subject, this is the unresolved case wearing a well-formed
-			// address, and it is refused the same way below. The bar is
-			// "some user_preference entry exists" — any class, a cleared
-			// tombstone included — because a saved (or deliberately cleared)
-			// value is the one record only a real, human-confirmed user can
-			// leave, and it needs no new infrastructure to check: the query
-			// above already fetched it.
-			outcome = preferenceaccess.OutcomeUnknownSubject
-			res.Reason = "no platform user is known by this reference"
+			// address, and it is refused the same way below — unless the
+			// platform has a UserIdentity for the subject carrying a channel
+			// identity with a channel-vouched email: someone who has talked
+			// to an agent under exactly this address, where any preference
+			// they saved in chat would have landed, so the class defaults are
+			// the right answer for them. A UserIdentity alone is not enough:
+			// an identity link (an OAuth or token credential connected from
+			// the browser) creates one under whatever address the person
+			// signed in with, which may not be the address their chat
+			// preferences live under — answering defaults there would hide a
+			// `never` saved elsewhere, and suppress the caller's fallback.
+			known, kerr := h.userIdentityVouched(r.Context(), subject)
+			if kerr != nil {
+				log.FromContext(r.Context()).Info("memory: preferences UserIdentity lookup failed",
+					"session", scope.ID, "subject", subject, "err", kerr.Error())
+				auditFault(preferenceaccess.OutcomeQueryError, subject, kerr)
+				httpError(w, kerr, http.StatusBadGateway)
+				return
+			}
+			if !known {
+				outcome = preferenceaccess.OutcomeUnknownSubject
+				res.Reason = "no platform user is known by this reference"
+			}
 		}
 		for _, e := range qres.Entries {
 			var p userpreference.Preference
@@ -406,8 +430,15 @@ func (h *handler) handlePreferencesGetForUserRef(w http.ResponseWriter, r *http.
 	}
 
 	snap := preferences.Resolve(classVisible, classVisibleGlobals, userVals)
+	// The audit entry above keeps the subject either way; only the response
+	// withholds it when the resolver says the caller must not learn it (a
+	// name reference's subject encodes the matched person's email).
+	respSubject := subject
+	if res.ConcealSubject {
+		respSubject = ""
+	}
 	writeJSON(w, r, http.StatusOK, preferences.SnapshotResponse{
-		Subject:        subject,
+		Subject:        respSubject,
 		ClassNamespace: ns,
 		ClassName:      className,
 		Snapshot:       snap,
@@ -1049,4 +1080,23 @@ func (h *handler) handlePreferencesFirstPartyCommit(w http.ResponseWriter, r *ht
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// userIdentityVouched reports whether a UserIdentity is recorded for the bare
+// canonical subject AND carries at least one channel identity whose email the
+// channel vouched for. NotFound is an answer (false), not a fault.
+func (h *handler) userIdentityVouched(ctx context.Context, subject string) (bool, error) {
+	name := useridentity.NameForSubject(identity.CanonicalFromTrusted(subject, "a subject this handler just resolved").Subject())
+	var ui v1alpha1.UserIdentity
+	err := h.prefsReader.Get(ctx, types.NamespacedName{Name: name}, &ui)
+	switch {
+	case err == nil:
+		return slices.ContainsFunc(ui.Status.ChannelIdentities, func(ci v1alpha1.ChannelIdentity) bool {
+			return ci.Email != ""
+		}), nil
+	case apierrors.IsNotFound(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("get UserIdentity %s: %w", name, err)
+	}
 }

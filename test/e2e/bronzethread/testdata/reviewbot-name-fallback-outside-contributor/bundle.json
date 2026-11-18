@@ -1,0 +1,133 @@
+{
+  "name": "reviewbot-name-fallback-outside-contributor",
+  "description": "The pull request author's only commit email is a GitHub noreply address, so the email join key is unavailable and the agent falls back to the author's full name from GitHub (`name:Robin Hale`). The platform already knows exactly one person by that name: a chat workspace member whose vouched email is robin.hale@example.com, with a saved notifications preference. Here GitHub's signed webhook reports the author only as a CONTRIBUTOR: an outside party, whose profile name is text they chose and could set to anyone's. The server refuses the name: the TOOL RESULT is an ERROR saying name references are not honored for this trigger owner, and it does not carry the matched person's saved value (`always`, seeded so a broken gate would visibly read it). The agent treats the error as the class contract says, like `never`: plain login, no mention.",
+  "agentDir": "testdata/agent-reviewbot",
+  "agentClass": "demo-reviewbot",
+  "seedUserIdentities": [
+    {
+      "email": "robin.hale@example.com",
+      "realName": "Robin Hale"
+    }
+  ],
+  "seedUserPreferences": [
+    {
+      "subject": "email:robin.hale@example.com",
+      "key": "notifications",
+      "value": "always"
+    }
+  ],
+  "trigger": {
+    "channel": "demo-reviewbot-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#4",
+    "headSHA": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+    "statusName": "demo-reviewbot"
+  },
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Pull request demo-org/demo-repo#4 was opened",
+        "toolOffered": "claim_trigger_status"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "claim_trigger_status",
+            "args": {}
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "claim_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"already_concluded\":false",
+        "toolOffered": "get_preferences"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "get_preferences",
+            "args": {
+              "user": "name:Robin Hale"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "get_preferences",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "name references are not honored in a session whose trigger owner the provider does not vouch for",
+        "lastToolResultNotContains": "always"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "Reviewed PR #4 \"Update README.md\" (demo-org/demo-repo) for demo-contributor.\n\nDocumentation-only change (+3/-1 lines in README.md); no code, config, or tests touched. No security, correctness, or logic issues. Safe to merge as-is.\n\n(demo-contributor could not be identified as a platform user, so this note names them by login rather than pinging them.)"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "conclude_trigger_status",
+            "args": {
+              "outcome": "clean",
+              "summary": "Docs-only change to README.md (+3/-1), no code/config/tests touched. No security or correctness issues. Safe to merge."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "conclude_trigger_status",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "recorded on the GitHub check run on demo-org/demo-repo#4: clean"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Reviewed demo-org/demo-repo#4 (docs-only README.md change). No issues found. The author could not be identified (the name lookup was refused for an outside contributor), so delivered without a mention. Concluded the check run as clean."
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "toolsCalled": [
+      "get_preferences"
+    ],
+    "approvalPrompts": 0,
+    "triggerStatus": {
+      "status": "completed",
+      "conclusion": "success",
+      "externalID": "d00dfeedd00dfeedd00dfeedd00dfeedd00dfeed",
+      "creates": 1,
+      "updates": 1
+    },
+    "channel": {
+      "postCount": 2,
+      "postsContain": [
+        "Picked up pull request demo-org/demo-repo#4",
+        "demo-contributor"
+      ]
+    }
+  }
+}

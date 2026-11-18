@@ -1,0 +1,251 @@
+package subjectresolve
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+)
+
+// userNamed builds the UserIdentity channelsd records for a full member of the
+// installed workspace: the email-canonical subject of addr, spec.displayName
+// set from the Slack display name, and a Slack channel identity carrying
+// slackDisplay/slackReal alongside the email the channel vouched for.
+func userNamed(t *testing.T, addr, slackDisplay, slackReal string) spiceboxv1alpha1.UserIdentity {
+	t.Helper()
+	return spiceboxv1alpha1.UserIdentity{
+		Spec: spiceboxv1alpha1.UserIdentitySpec{
+			Subject:     "user:" + mustEmailSubject(t, addr),
+			DisplayName: slackDisplay,
+		},
+		Status: spiceboxv1alpha1.UserIdentityStatus{ChannelIdentities: []spiceboxv1alpha1.ChannelIdentity{{
+			Kind: "slack", Domain: "T1", ExternalID: "U-" + addr,
+			DisplayName: slackDisplay, RealName: slackReal, Email: addr,
+		}}},
+	}
+}
+
+// unvouchedNamed builds the UserIdentity channelsd records for a sender the
+// channel did not vouch for — a guest, shared-channel stranger or
+// foreign-workspace user: a team-scoped synthetic subject, and a channel
+// identity with the self-set names but no email.
+func unvouchedNamed(team, userID, slackReal string) spiceboxv1alpha1.UserIdentity {
+	return spiceboxv1alpha1.UserIdentity{
+		Spec: spiceboxv1alpha1.UserIdentitySpec{
+			Subject:     "user:synthetic-" + team + "-" + userID,
+			DisplayName: slackReal,
+		},
+		Status: spiceboxv1alpha1.UserIdentityStatus{ChannelIdentities: []spiceboxv1alpha1.ChannelIdentity{{
+			Kind: "slack", Domain: team, ExternalID: userID,
+			DisplayName: slackReal, RealName: slackReal,
+		}}},
+	}
+}
+
+func fakeUsers(users ...spiceboxv1alpha1.UserIdentity) func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error) {
+	return func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error) { return users, nil }
+}
+
+// annotations serves a session's annotations to the resolver.
+func annotations(a map[string]string) func(context.Context) (map[string]string, error) {
+	return func(context.Context) (map[string]string, error) { return a, nil }
+}
+
+// nameEnv is the resolver environment of a session with the given annotations
+// (nil: a session no trigger opened) over the given user directory.
+func nameEnv(sessionAnnotations map[string]string, users func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error)) Env {
+	return Env{SessionAnnotations: annotations(sessionAnnotations), UserIdentities: users}
+}
+
+func TestResolve_Name(t *testing.T) {
+	directory := fakeUsers(
+		// Display name is a handle; only the Slack real name carries the full name.
+		userNamed(t, "pat@example.com", "pat", "Pat Quinlan"),
+		userNamed(t, "jose@example.com", "squid", "José Núñez Peña"),
+		userNamed(t, "kim.lee@example.com", "Kim Lee", ""),
+		// A full name written without spaces: a single token.
+		userNamed(t, "wang@example.com", "wxm", "王小明"),
+		// Two different vouched people recorded under one full name.
+		userNamed(t, "sam.ortiz@example.com", "Sam Ortiz", ""),
+		userNamed(t, "sortiz@example.com", "sortiz", "Sam Ortiz"),
+		// A guest who set their name to a member's: neither a match nor an
+		// ambiguity vote, so Pat still resolves.
+		unvouchedNamed("T1", "UGUEST", "Pat Quinlan"),
+		// A guest, and a foreign-workspace user, claiming a name no vouched
+		// member carries: a self-set name alone must never resolve.
+		unvouchedNamed("T1", "UGUEST2", "Dana Whitfield"),
+		unvouchedNamed("TFOREIGN", "UFOREIGN", "Ari Castellanos"),
+		// Only spec.displayName carries the name, with no vouched channel
+		// identity behind it.
+		spiceboxv1alpha1.UserIdentity{Spec: spiceboxv1alpha1.UserIdentitySpec{Subject: "user:" + mustEmailSubject(t, "lee@example.com"), DisplayName: "Lee Chandra"}},
+	)
+
+	cases := []struct {
+		name        string
+		ref         string
+		wantSubject string
+	}{
+		{name: "full name on the Slack real name resolves", ref: "name:Pat Quinlan", wantSubject: mustEmailSubject(t, "pat@example.com")},
+		{name: "case and spacing are ignored", ref: "name:  pat   QUINLAN ", wantSubject: mustEmailSubject(t, "pat@example.com")},
+		{name: "accents are ignored", ref: "name:Jose Nunez Pena", wantSubject: mustEmailSubject(t, "jose@example.com")},
+		{name: "full name on a vouched Slack display name resolves", ref: "name:Kim Lee", wantSubject: mustEmailSubject(t, "kim.lee@example.com")},
+		{name: "two vouched users share the name: unresolved", ref: "name:Sam Ortiz"},
+		{name: "name only an unvouched guest carries: unresolved", ref: "name:Dana Whitfield"},
+		{name: "name only a foreign-workspace user carries: unresolved", ref: "name:Ari Castellanos"},
+		{name: "name only on spec.displayName: unresolved", ref: "name:Lee Chandra"},
+		{name: "nobody has the name: unresolved", ref: "name:Robin Hale"},
+		{name: "single word is not a full name: unresolved even when one user matches", ref: "name:pat"},
+		{name: "unspaced CJK name is one token: unresolved even when one user matches", ref: "name:王小明"},
+		{name: "empty name: unresolved", ref: "name:"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := Resolve(t.Context(), tc.ref, nameEnv(nil, directory))
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSubject, res.Subject)
+			assert.False(t, res.SubjectProven, "a name match never proves the reference")
+			if tc.wantSubject == "" {
+				assert.NotEmpty(t, res.Reason)
+			} else {
+				assert.Empty(t, res.Reason)
+				assert.True(t, res.ConcealSubject, "a name match must not disclose the email-derived subject")
+			}
+		})
+	}
+}
+
+// TestResolve_NameRefusalDoesNotDistinguishNobodyFromSeveral pins that a
+// caller cannot probe the directory: "no match" and "two matches" refuse with
+// the same reason, and neither carries a count.
+func TestResolve_NameRefusalDoesNotDistinguishNobodyFromSeveral(t *testing.T) {
+	directory := fakeUsers(
+		userNamed(t, "sam.ortiz@example.com", "Sam Ortiz", ""),
+		userNamed(t, "sortiz@example.com", "sortiz", "Sam Ortiz"),
+	)
+	several, err := Resolve(t.Context(), "name:Sam Ortiz", nameEnv(nil, directory))
+	require.NoError(t, err)
+	nobody, err := Resolve(t.Context(), "name:Robin Hale", nameEnv(nil, directory))
+	require.NoError(t, err)
+
+	assert.Equal(t, strings.ReplaceAll(nobody.Reason, "Robin Hale", "Sam Ortiz"), several.Reason)
+	assert.NotContains(t, several.Reason, "2")
+}
+
+// TestResolve_NameMatchOnNonUserSubjectRefuses covers a vouched channel
+// identity carrying the name on a UserIdentity whose subject is not a user:
+// it cannot be the answer, and it must not be skipped either, or it would turn
+// an ambiguous name into a unique match for the other record.
+func TestResolve_NameMatchOnNonUserSubjectRefuses(t *testing.T) {
+	nonUser := userNamed(t, "svc@example.com", "svc", "Pat Quinlan")
+	nonUser.Spec.Subject = "serviceaccount:pat"
+
+	cases := []struct {
+		name  string
+		users []spiceboxv1alpha1.UserIdentity
+	}{
+		{name: "alone: unresolved", users: []spiceboxv1alpha1.UserIdentity{nonUser}},
+		{name: "beside one valid match: unresolved, not a unique match", users: []spiceboxv1alpha1.UserIdentity{
+			nonUser, userNamed(t, "pat@example.com", "pat", "Pat Quinlan"),
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := Resolve(t.Context(), "name:Pat Quinlan", nameEnv(nil, fakeUsers(tc.users...)))
+			require.NoError(t, err)
+			assert.Empty(t, res.Subject)
+			assert.NotEmpty(t, res.Reason)
+		})
+	}
+}
+
+func TestResolve_NameSameUserUnderSeveralNamesCountsOnce(t *testing.T) {
+	ui := userNamed(t, "kim.lee@example.com", "Kim Lee", "Kim Lee")
+	res, err := Resolve(t.Context(), "name:Kim Lee", nameEnv(nil, fakeUsers(ui)))
+	require.NoError(t, err)
+	assert.Equal(t, mustEmailSubject(t, "kim.lee@example.com"), res.Subject)
+}
+
+func TestResolve_NameWithoutDirectoryIsUnresolved(t *testing.T) {
+	res, err := Resolve(t.Context(), "name:Kim Lee", Env{SessionAnnotations: annotations(nil)})
+	require.NoError(t, err)
+	assert.Empty(t, res.Subject)
+	assert.Equal(t, noUserDirectoryReason, res.Reason)
+}
+
+func TestResolve_NameDirectoryErrorIsReturned(t *testing.T) {
+	boom := errors.New("list failed")
+	_, err := Resolve(t.Context(), "name:Kim Lee", Env{
+		SessionAnnotations: annotations(nil),
+		UserIdentities:     func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error) { return nil, boom },
+	})
+	assert.ErrorIs(t, err, boom)
+}
+
+func TestResolve_NameContainingAtIsNotClaimedAsEmail(t *testing.T) {
+	res, err := Resolve(t.Context(), "name:Kim @ Lee", nameEnv(nil, fakeUsers()))
+	require.NoError(t, err)
+	assert.Empty(t, res.Subject)
+	assert.Contains(t, res.Reason, "recorded under the name")
+}
+
+// TestResolve_NameGatedOnTriggerOwnerTrust pins that in a session a trigger
+// opened, a name reference resolves only when the provider vouched for the
+// trigger owner: there the name is text the owner chose, so an outside
+// contributor must not be able to pick whose settings apply.
+func TestResolve_NameGatedOnTriggerOwnerTrust(t *testing.T) {
+	directory := fakeUsers(userNamed(t, "pat@example.com", "pat", "Pat Quinlan"))
+	owner := "github_user:42#user"
+
+	cases := []struct {
+		name        string
+		annotations map[string]string
+		env         *Env
+		wantSubject string
+		wantReason  string
+	}{
+		{name: "session no trigger opened: resolves", annotations: map[string]string{},
+			wantSubject: mustEmailSubject(t, "pat@example.com")},
+		{name: "trusted trigger owner: resolves", annotations: map[string]string{
+			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
+			spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue,
+		}, wantSubject: mustEmailSubject(t, "pat@example.com")},
+		{name: "untrusted trigger owner: refused", annotations: map[string]string{
+			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
+			spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedFalse,
+		}, wantReason: untrustedTriggerOwnerReason},
+		{name: "trigger owner with no trust bit: refused", annotations: map[string]string{
+			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
+		}, wantReason: untrustedTriggerOwnerReason},
+		{name: "trigger owner with a garbage trust bit: refused", annotations: map[string]string{
+			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
+			spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: "yes",
+		}, wantReason: untrustedTriggerOwnerReason},
+		{name: "no session context: refused", env: &Env{UserIdentities: directory}, wantReason: noSessionForNameReason},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := nameEnv(tc.annotations, directory)
+			if tc.env != nil {
+				env = *tc.env
+			}
+			res, err := Resolve(t.Context(), "name:Pat Quinlan", env)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSubject, res.Subject)
+			assert.Equal(t, tc.wantReason, res.Reason)
+		})
+	}
+}
+
+func TestResolve_NameSessionAnnotationErrorIsReturned(t *testing.T) {
+	boom := errors.New("session read failed")
+	_, err := Resolve(t.Context(), "name:Pat Quinlan", Env{
+		SessionAnnotations: func(context.Context) (map[string]string, error) { return nil, boom },
+		UserIdentities:     fakeUsers(),
+	})
+	assert.ErrorIs(t, err, boom)
+}
