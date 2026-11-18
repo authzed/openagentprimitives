@@ -60,6 +60,10 @@ const untrustedTriggerOwnerReason = "name references are not honored in a sessio
 // words are handles ("alex", "chris") that collide across people far more often
 // than full names do. The cost is that a person with a single legal name
 // (a mononym) cannot be reached by name; they are reached by email instead.
+// A name written without spaces (common in CJK scripts, e.g. "王小明") is one
+// token too and is refused for the same reason: a single token is too weak to
+// identify one person, and the resolver does not guess where one name part
+// ends and the next begins.
 //
 // In a session a trigger opened, a name reference is honored only when the
 // provider vouched for the trigger owner (see untrustedTriggerReason): there

@@ -68,6 +68,8 @@ func TestResolve_Name(t *testing.T) {
 		userNamed(t, "pat@example.com", "pat", "Pat Quinlan"),
 		userNamed(t, "jose@example.com", "squid", "José Núñez Peña"),
 		userNamed(t, "kim.lee@example.com", "Kim Lee", ""),
+		// A full name written without spaces: a single token.
+		userNamed(t, "wang@example.com", "wxm", "王小明"),
 		// Two different vouched people recorded under one full name.
 		userNamed(t, "sam.ortiz@example.com", "Sam Ortiz", ""),
 		userNamed(t, "sortiz@example.com", "sortiz", "Sam Ortiz"),
@@ -98,6 +100,7 @@ func TestResolve_Name(t *testing.T) {
 		{name: "name only on spec.displayName: unresolved", ref: "name:Lee Chandra"},
 		{name: "nobody has the name: unresolved", ref: "name:Robin Hale"},
 		{name: "single word is not a full name: unresolved even when one user matches", ref: "name:pat"},
+		{name: "unspaced CJK name is one token: unresolved even when one user matches", ref: "name:王小明"},
 		{name: "empty name: unresolved", ref: "name:"},
 	}
 	for _, tc := range cases {
