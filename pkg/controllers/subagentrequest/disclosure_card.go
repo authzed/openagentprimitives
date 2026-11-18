@@ -73,7 +73,7 @@ func (r *Reconciler) publishDisclosureCards(
 		pl := channelevents.InteractionRequestPayload{
 			AgentSessionRef: channelevents.SessionRef{Namespace: parent.Namespace, Name: parent.Name},
 			Category:        categories.DataSlotDisclosure,
-			RequestRef:      fmt.Sprintf("dsd-%s-%s", sr.Name, slot.Slot),
+			RequestRef:      disclosureRequestRef(sr, slot.Slot),
 			Lead:            fmt.Sprintf("%s wants to share data with %s", parent.Name, sr.Spec.Class),
 			Body: fmt.Sprintf(
 				"It would fill %s's %q input slot with data you can see and %s's readers may not, "+
@@ -101,6 +101,59 @@ func (r *Reconciler) publishDisclosureCards(
 		}
 		logger.Info("data slot disclosure: asked for a decision",
 			"request", sr.Namespace+"/"+sr.Name, "slot", slot.Slot, "tag", slot.TagID)
+	}
+}
+
+// disclosureRequestRef is the RequestRef a slot's card is published under, and
+// so the key its timeout report has to name. Deterministic from the request and
+// the slot, which is what lets the retire path find a card it never stored.
+func disclosureRequestRef(sr *v1.SubagentRequest, slot string) string {
+	return fmt.Sprintf("dsd-%s-%s", sr.Name, slot)
+}
+
+// retireDisclosureCards tells channelsd that each slot's card lapsed undecided,
+// the same interaction_applied(expired) the runner publishes when one of its own
+// approvals times out. channelsd parked the parent on each card it was handed
+// (a PendingInteractions entry plus the InfoLeakageApprovalPending condition)
+// and clears that only on a decision or on this report. A click on the expired
+// card used to be the other way out, but the outbound relay drops a card whose
+// deadline passed in transit, so without this the parent stays marked as
+// awaiting a decision nobody can make.
+//
+// Best-effort like publishDisclosureCards: the delegation is failing with its
+// own stated reason, and a publish failure is logged, not returned, so it
+// cannot hold that verdict back. Called before the status write, so a write
+// conflict re-runs this on the retry; a repeated report is harmless, because
+// channelsd keys it on the RequestRef and an entry clears only once. A slot
+// whose card was never published (no deciders) reports anyway and clears
+// nothing, the same as a runner timeout for a card that never went out.
+func (r *Reconciler) retireDisclosureCards(
+	ctx context.Context, sr *v1.SubagentRequest, parent *v1.AgentSession, slots []v1.DataSlotRequest,
+) {
+	logger := log.FromContext(ctx)
+	if r.PublishInteraction == nil {
+		logger.Info("data slot disclosure: no interaction publisher wired; lapsed cards are not retired",
+			"request", sr.Namespace+"/"+sr.Name, "pending", len(slots))
+		return
+	}
+	for _, slot := range slots {
+		env, err := channelevents.BuildEnvelope(parent.Namespace, parent.Name, channelevents.KindInteractionApplied,
+			channelevents.InteractionAppliedPayload{
+				AgentSessionRef: channelevents.SessionRef{Namespace: parent.Namespace, Name: parent.Name},
+				Category:        categories.DataSlotDisclosure,
+				RequestRef:      disclosureRequestRef(sr, slot.Slot),
+				Outcome:         channelevents.OutcomeExpired,
+				Reason:          "timeout",
+			})
+		if err != nil {
+			logger.Info("data slot disclosure: could not build the expiry report; the parent stays marked as awaiting this card",
+				"request", sr.Namespace+"/"+sr.Name, "slot", slot.Slot, "err", err.Error())
+			continue
+		}
+		if err := r.PublishInteraction(ctx, parent.Namespace, parent.Name, env); err != nil {
+			logger.Info("data slot disclosure: expiry report publish failed; the parent stays marked as awaiting this card",
+				"request", sr.Namespace+"/"+sr.Name, "slot", slot.Slot, "err", err.Error())
+		}
 	}
 }
 

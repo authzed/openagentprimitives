@@ -108,6 +108,7 @@ func (r *Reconciler) settleDataSlotsBeforeChild(
 			"handing %d data slot(s) to %s needed a decision from someone who can speak for that data, and none "+
 				"arrived within %s. The delegation was not made — no part of it ran.",
 			len(awaiting), sr.Spec.Class, disclosureWaitWindow)
+		r.retireDisclosureCards(ctx, sr, parent, awaiting)
 		return false, ctrl.Result{}, r.Status().Update(ctx, sr)
 	}
 

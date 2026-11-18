@@ -4,14 +4,19 @@ package subagentrequest
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/handoff"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 )
 
 // TestAHumansNoEndsItImmediately.
@@ -139,4 +144,50 @@ func TestNoDeciderPublishesNothingAndStillDoesNotBind(t *testing.T) {
 	got := getRequest(t, r.Client, "req-noowner")
 	assert.Equal(t, v1.SubagentRequestPhaseAwaitingDisclosure, got.Status.Phase)
 	assert.Empty(t, az.grantedDataSlots, "and it certainly does not bind")
+}
+
+// TestALapsedWindowRetiresEachCardItAsked.
+//
+// channelsd parks the parent on every disclosure card and clears that only on a
+// decision or a timeout report. Failing the delegation at the window is the
+// controller's half; the other half is telling channelsd the cards lapsed, or
+// the parent stays marked as awaiting a decision nobody can make. A click on
+// the expired card used to clear it, but a card that expires on its way out is
+// never delivered, so there is nothing to click.
+func TestALapsedWindowRetiresEachCardItAsked(t *testing.T) {
+	az := &fakeAuthz{tagAccess: map[string]bool{"ptt-a": true, "ptt-b": true}}
+	sr := requestWithDataSlots(t, "req-lapsed",
+		v1.DataSlotRequest{Slot: "logs", TagID: "ptt-a"},
+		v1.DataSlotRequest{Slot: "notes", TagID: "ptt-b"})
+	longAgo := metav1.NewTime(time.Now().Add(-24 * time.Hour))
+	sr.Status.DisclosureRequestedAt = &longAgo
+	r, _ := reconcilerWithAuthz(t, az, sr)
+	r.Grader = gradeFunc(map[string]handoff.Grade{"ptt-a": handoff.GradeRoute, "ptt-b": handoff.GradeRoute}, nil)
+	var published []channelevents.Envelope
+	var targets []string
+	r.PublishInteraction = func(_ context.Context, ns, name string, env channelevents.Envelope) error {
+		published = append(published, env)
+		targets = append(targets, ns+"/"+name)
+		return nil
+	}
+
+	reconcileOnce(t, r, "req-lapsed")
+
+	got := getRequest(t, r.Client, "req-lapsed")
+	require.Equal(t, v1.SubagentRequestPhaseFailed, got.Status.Phase, "the window still ends the delegation")
+	require.Len(t, published, 2, "one expiry report per card that was asked")
+	refs := make([]string, 0, len(published))
+	for i, env := range published {
+		assert.Equal(t, channelevents.KindInteractionApplied, env.Kind)
+		assert.Equal(t, sr.Spec.Parent.Namespace+"/"+sr.Spec.Parent.Name, targets[i],
+			"reported on the PARENT's subject, where the card parked it")
+		var pl channelevents.InteractionAppliedPayload
+		require.NoError(t, json.Unmarshal(env.Payload, &pl))
+		assert.Equal(t, categories.DataSlotDisclosure, pl.Category)
+		assert.Equal(t, channelevents.OutcomeExpired, pl.Outcome, "a lapsed window never approves")
+		refs = append(refs, pl.RequestRef)
+	}
+	assert.ElementsMatch(t, []string{
+		disclosureRequestRef(sr, "logs"), disclosureRequestRef(sr, "notes"),
+	}, refs, "each report names the card it retires")
 }
