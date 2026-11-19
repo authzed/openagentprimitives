@@ -77,9 +77,12 @@ func TestInstall_AgentClassApply_IsIdempotentViaHarness(t *testing.T) {
 	// Applied as unstructured with status removed, as install does. The typed
 	// struct would serialize an empty status stanza, which the apiserver
 	// discards but still counts as a change — not a payload install ever sends.
+	// The null creationTimestamp the conversion adds goes too: it is harmless
+	// to the apply, but install's payload does not carry one either.
 	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(typed)
 	require.NoError(t, err, "convert the desired AgentClass to unstructured")
 	unstructured.RemoveNestedField(content, "status")
+	unstructured.RemoveNestedField(content, "metadata", "creationTimestamp")
 	want := &unstructured.Unstructured{Object: content}
 
 	idempotency.RequireApplyIdempotent(t, ctx, env.Client, want, install.FieldManager)

@@ -123,6 +123,11 @@ func CheckApplyIdempotent(ctx context.Context, c client.Client, want client.Obje
 // waitForNextSecond blocks until the wall clock has entered the second after
 // the current one. See CheckApplyIdempotent for why the two applies must not
 // share a second.
+//
+// It reads this process's clock, while the managedFields time is stamped from
+// the apiserver's. The two are the same clock under envtest, where the
+// apiserver runs on this host; against a remote apiserver with a skewed clock
+// the wait would no longer guarantee the boundary is crossed.
 func waitForNextSecond(ctx context.Context) error {
 	next := time.Now().Truncate(time.Second).Add(time.Second)
 	timer := time.NewTimer(time.Until(next))
