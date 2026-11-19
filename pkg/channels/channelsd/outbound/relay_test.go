@@ -2336,3 +2336,52 @@ func TestRelay_ExpiredInTransitIsRecordedWithItsExpiredOutcome(t *testing.T) {
 	assert.True(t, requested, "the dropped request is in the destination's history")
 	assert.True(t, expired, "and so is an expired outcome for it, so it never replays as live")
 }
+
+// promptExpiredInTransit takes now as a parameter, so the exact-deadline
+// boundary is pinned here with a fixed clock rather than through the relay,
+// whose call site reads the wall clock. The kind filter and the
+// deliver-on-decode-failure rule are pinned here too: dropping anything other
+// than an expired request would be a silent loss.
+func TestPromptExpiredInTransit(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	request := func(t *testing.T, expiresAt *time.Time) channelevents.Envelope {
+		t.Helper()
+		return buildEnv(t, "foo", channelevents.KindInteractionRequest, channelevents.InteractionRequestPayload{
+			Category:   "test_category",
+			RequestRef: "req-1",
+			Lead:       "Approve this?",
+			Audience:   channelevents.InteractionAudience{Scope: channelevents.AudienceParticipants},
+			ExpiresAt:  expiresAt,
+		})
+	}
+	at := func(d time.Duration) *time.Time { ts := now.Add(d); return &ts }
+	cases := []struct {
+		name string
+		env  func(t *testing.T) channelevents.Envelope
+		want bool
+	}{
+		{name: "request past its deadline: dropped", env: func(t *testing.T) channelevents.Envelope { return request(t, at(-time.Second)) }, want: true},
+		{name: "request exactly at its deadline: dropped", env: func(t *testing.T) channelevents.Envelope { return request(t, at(0)) }, want: true},
+		{name: "request before its deadline: delivered", env: func(t *testing.T) channelevents.Envelope { return request(t, at(time.Second)) }, want: false},
+		{name: "request with no deadline: delivered", env: func(t *testing.T) channelevents.Envelope { return request(t, nil) }, want: false},
+		{name: "non-request kind with a past expiresAt in its payload: delivered", env: func(t *testing.T) channelevents.Envelope {
+			env := request(t, at(-time.Hour))
+			env.Kind = channelevents.KindInteractionApplied
+			return env
+		}, want: false},
+		{name: "request whose payload will not decode: delivered", env: func(t *testing.T) channelevents.Envelope {
+			env := request(t, at(-time.Hour))
+			env.Payload = json.RawMessage(`{"expiresAt": 5}`)
+			return env
+		}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pl, got := promptExpiredInTransit(tc.env(t), now)
+			assert.Equal(t, tc.want, got)
+			if tc.want {
+				assert.Equal(t, "req-1", pl.RequestRef, "a dropped request comes back decoded, for the drop log and history")
+			}
+		})
+	}
+}
