@@ -15,8 +15,17 @@ import (
 // the loopback bind with a forged/foreign Origin. curl/CLI callers never send
 // Origin at all, which this treats as fine — Origin is a browser-only
 // header.
+//
+// Every response also forbids framing. The Origin check cannot stop a
+// cross-site page from loading one of these pages in a hidden iframe: the
+// frame's own requests carry the loopback Origin and pass. Nothing frames
+// these pages legitimately (each is shown top-level in its own native
+// window), so refusing every ancestor closes off clickjacking the setup and
+// settings forms.
 func LoopbackGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 		if !isLoopbackHost(r.Host) {
 			http.Error(w, "forbidden: loopback only", http.StatusForbidden)
 			return

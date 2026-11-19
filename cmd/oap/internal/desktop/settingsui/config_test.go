@@ -495,3 +495,167 @@ func TestConfigPUT(t *testing.T) {
 type assertionError string
 
 func (e assertionError) Error() string { return string(e) }
+
+// installSourcesFixture is a made-up custom prefix used by the install-source
+// cases below.
+const installSourcesFixture = "ghcr.io/acme/agents/"
+
+func getInstallSourcesConfig(t *testing.T, s *Server) configResponse {
+	t.Helper()
+	resp, err := authedClient(t, s).Get("http://" + s.Addr() + "/api/config")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var got configResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	return got
+}
+
+// putInstallSources PUTs a keep-everything body plus the given extra fields
+// and returns the status, the outcomes (on 200), and the saved config.
+func putInstallSources(t *testing.T, dir string, s *Server, extra map[string]any) (int, []fieldOutcome, desktop.Config) {
+	t.Helper()
+	seed := baseSeed()
+	body := map[string]any{
+		"model":               keepModelBody(seed),
+		"healthNotifications": true,
+	}
+	for k, v := range extra {
+		body[k] = v
+	}
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPut, "http://"+s.Addr()+"/api/config", bytes.NewReader(b))
+	require.NoError(t, err)
+	resp, err := authedClient(t, s).Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var outcomes []fieldOutcome
+	if resp.StatusCode == http.StatusOK {
+		var got configUpdateResponse
+		require.NoError(t, json.Unmarshal(raw, &got))
+		outcomes = got.Outcomes
+	}
+	saved, err := desktop.Load(dir)
+	require.NoError(t, err)
+	return resp.StatusCode, outcomes, saved
+}
+
+func installSourcesServer(t *testing.T, seed desktop.Config) (string, *Server) {
+	t.Helper()
+	dir := t.TempDir()
+	seedConfig(t, dir, seed)
+	return dir, startTestServer(t, Deps{
+		SupportDir:                 dir,
+		State:                      func() State { return State{} },
+		OnHealthNotificationsSaved: func(bool) {},
+	})
+}
+
+func seedWithSources(prefixes ...string) desktop.Config {
+	c := baseSeed()
+	list := []desktop.InstallSource{}
+	for _, p := range prefixes {
+		list = append(list, desktop.InstallSource{Prefix: p})
+	}
+	c.InstallSources = &list
+	return c
+}
+
+func TestConfigInstallSources(t *testing.T) {
+	const def = "ghcr.io/authzed/openagentprimitives/"
+
+	t.Run("GET without the field returns the default list and installSourcesDefault=true", func(t *testing.T) {
+		_, s := installSourcesServer(t, baseSeed())
+		got := getInstallSourcesConfig(t, s)
+		assert.Equal(t, []string{def}, got.InstallSources)
+		assert.True(t, got.InstallSourcesDefault)
+		assert.Equal(t, def, got.PinnedInstallPrefix)
+	})
+
+	t.Run("GET with an explicit empty list returns [] (not null) and installSourcesDefault=false", func(t *testing.T) {
+		_, s := installSourcesServer(t, seedWithSources())
+		got := getInstallSourcesConfig(t, s)
+		assert.NotNil(t, got.InstallSources)
+		assert.Empty(t, got.InstallSources)
+		assert.False(t, got.InstallSourcesDefault)
+	})
+
+	t.Run("PUT with installSources absent leaves a stored list untouched and reports no installSources outcome", func(t *testing.T) {
+		dir, s := installSourcesServer(t, seedWithSources(installSourcesFixture))
+		status, outcomes, saved := putInstallSources(t, dir, s, nil)
+		require.Equal(t, http.StatusOK, status)
+		require.NotNil(t, saved.InstallSources)
+		assert.Equal(t, []desktop.InstallSource{{Prefix: installSourcesFixture}}, *saved.InstallSources)
+		assert.Empty(t, outcomes)
+	})
+
+	t.Run("PUT with installSources absent leaves an unset (default) list unset", func(t *testing.T) {
+		dir, s := installSourcesServer(t, baseSeed())
+		status, _, saved := putInstallSources(t, dir, s, nil)
+		require.Equal(t, http.StatusOK, status)
+		assert.Nil(t, saved.InstallSources)
+	})
+
+	t.Run("PUT [] stores an empty list, GET returns [], outcome installSources/applied", func(t *testing.T) {
+		dir, s := installSourcesServer(t, baseSeed())
+		status, outcomes, saved := putInstallSources(t, dir, s, map[string]any{"installSources": []string{}})
+		require.Equal(t, http.StatusOK, status)
+		require.NotNil(t, saved.InstallSources)
+		assert.Empty(t, *saved.InstallSources)
+		assert.Equal(t, []fieldOutcome{{Field: "installSources", Outcome: "applied"}}, outcomes)
+		got := getInstallSourcesConfig(t, s)
+		assert.NotNil(t, got.InstallSources)
+		assert.Empty(t, got.InstallSources)
+	})
+
+	t.Run("PUT resubmitting the identical list reports no outcome", func(t *testing.T) {
+		dir, s := installSourcesServer(t, seedWithSources(installSourcesFixture))
+		status, outcomes, _ := putInstallSources(t, dir, s, map[string]any{"installSources": []string{installSourcesFixture}})
+		require.Equal(t, http.StatusOK, status)
+		assert.Empty(t, outcomes)
+	})
+
+	t.Run("PUT with an invalid prefix is 400 and nothing is saved", func(t *testing.T) {
+		seed := seedWithSources(installSourcesFixture)
+		dir, s := installSourcesServer(t, seed)
+		status, _, saved := putInstallSources(t, dir, s, map[string]any{"installSources": []string{"ghcr.io/acme/agents"}})
+		assert.Equal(t, http.StatusBadRequest, status)
+		assert.Equal(t, seed, saved)
+	})
+
+	t.Run("PUT with a duplicate prefix is 400 and nothing is saved", func(t *testing.T) {
+		seed := seedWithSources(installSourcesFixture)
+		dir, s := installSourcesServer(t, seed)
+		status, _, saved := putInstallSources(t, dir, s, map[string]any{"installSources": []string{installSourcesFixture, installSourcesFixture}})
+		assert.Equal(t, http.StatusBadRequest, status)
+		assert.Equal(t, seed, saved)
+	})
+
+	t.Run("reset keeps a custom entry, re-adds the default first, and reports applied", func(t *testing.T) {
+		dir, s := installSourcesServer(t, seedWithSources(installSourcesFixture))
+		status, outcomes, saved := putInstallSources(t, dir, s, map[string]any{"resetInstallSources": true})
+		require.Equal(t, http.StatusOK, status)
+		require.NotNil(t, saved.InstallSources)
+		assert.Equal(t, []desktop.InstallSource{{Prefix: def}, {Prefix: installSourcesFixture}}, *saved.InstallSources)
+		assert.Equal(t, []fieldOutcome{{Field: "installSources", Outcome: "applied"}}, outcomes)
+	})
+
+	t.Run("reset from the unset default writes an explicit list and reports no change", func(t *testing.T) {
+		dir, s := installSourcesServer(t, baseSeed())
+		status, outcomes, saved := putInstallSources(t, dir, s, map[string]any{"resetInstallSources": true})
+		require.Equal(t, http.StatusOK, status)
+		require.NotNil(t, saved.InstallSources, "reset must write an explicit list, never nil")
+		assert.Equal(t, []desktop.InstallSource{{Prefix: def}}, *saved.InstallSources)
+		assert.Empty(t, outcomes)
+	})
+
+	t.Run("reset does not duplicate the default when already present", func(t *testing.T) {
+		dir, s := installSourcesServer(t, seedWithSources(installSourcesFixture, def))
+		status, _, saved := putInstallSources(t, dir, s, map[string]any{"resetInstallSources": true})
+		require.Equal(t, http.StatusOK, status)
+		assert.Equal(t, []desktop.InstallSource{{Prefix: def}, {Prefix: installSourcesFixture}}, *saved.InstallSources)
+	})
+}

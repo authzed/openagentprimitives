@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm/models"
+	"github.com/authzed/openagentprimitives/pkg/platform/oap/oci"
+	"github.com/authzed/openagentprimitives/pkg/platform/oap/trustedkeys"
 )
 
 // modelProvider is what the desktop first-run flow needs to know about one
@@ -112,6 +114,53 @@ type Config struct {
 	// an explicit false is the user having unchecked "Notify on health issues"
 	// in the menubar. See HealthNotificationsEnabled.
 	HealthNotifications *bool `json:"healthNotifications,omitempty"`
+
+	// InstallSources is the allowlist of OCI ref prefixes an oap:// install
+	// link may name. nil — the default for an unset/pre-existing config.json —
+	// means DefaultInstallSources; a pointer to an empty list is the user
+	// having removed every entry, which disables install links. See
+	// EffectiveInstallSources.
+	InstallSources *[]InstallSource `json:"installSources,omitempty"`
+}
+
+// InstallSource is one allowlist entry. It is an object rather than a bare
+// string so a per-entry setting can be added later without a format change.
+type InstallSource struct {
+	// Prefix is an OCI ref prefix ("host[:port]/path/…/", trailing slash
+	// required); see oci.ValidatePrefix.
+	Prefix string `json:"prefix"`
+}
+
+// DefaultInstallSources is the allowlist used when none is configured: the
+// project's signed example agents.
+func DefaultInstallSources() []InstallSource {
+	return []InstallSource{{Prefix: trustedkeys.OAPAgentsPrefix}}
+}
+
+// EffectiveInstallSources resolves the nil-means-default convention: nil
+// yields DefaultInstallSources, anything else (including an empty list) is
+// returned as configured.
+func (c Config) EffectiveInstallSources() []InstallSource {
+	if c.InstallSources == nil {
+		return DefaultInstallSources()
+	}
+	return *c.InstallSources
+}
+
+// AllowedSource returns the longest-prefix entry of sources that ref falls
+// under. ok is false when none does (including for an empty list). A
+// malformed entry or unparseable ref is an error, never a match.
+func AllowedSource(sources []InstallSource, ref string) (src InstallSource, ok bool, err error) {
+	for _, s := range sources {
+		match, err := oci.RefHasPrefix(ref, s.Prefix)
+		if err != nil {
+			return InstallSource{}, false, fmt.Errorf("install source %q: %w", s.Prefix, err)
+		}
+		if match && (!ok || len(s.Prefix) > len(src.Prefix)) {
+			src, ok = s, true
+		}
+	}
+	return src, ok, nil
 }
 
 func (c Config) Validate() error {
@@ -137,6 +186,18 @@ func (c Config) Validate() error {
 	if c.Channel != nil {
 		if _, ok := knownExternalChannelKinds[c.Channel.Kind]; !ok {
 			return fmt.Errorf("desktop config: unknown external channel kind %q", c.Channel.Kind)
+		}
+	}
+	if c.InstallSources != nil {
+		seen := map[string]struct{}{}
+		for _, s := range *c.InstallSources {
+			if err := oci.ValidatePrefix(s.Prefix); err != nil {
+				return fmt.Errorf("desktop config: install source %q: %w", s.Prefix, err)
+			}
+			if _, dup := seen[s.Prefix]; dup {
+				return fmt.Errorf("desktop config: duplicate install source %q", s.Prefix)
+			}
+			seen[s.Prefix] = struct{}{}
 		}
 	}
 	// Ngrok is optional — no error when unset.

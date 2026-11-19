@@ -32,6 +32,12 @@ export interface ConfigResponse {
   healthNotifications: boolean;
   passwordSet: boolean;
   configPath: string;
+  // The effective oap:// install allowlist; [] means install links are off.
+  installSources: string[];
+  // True when no list is stored and the default applies.
+  installSourcesDefault: boolean;
+  // The prefix whose installs are signature-checked.
+  pinnedInstallPrefix: string;
 }
 
 // ConfigUpdateModel mirrors settingsui.configUpdateRequest's Model group.
@@ -58,12 +64,17 @@ export interface ConfigUpdateRequest {
   clearNgrok: boolean;
   healthNotifications: boolean;
   password?: ConfigPasswordChange;
+  // Absent = keep the stored allowlist (every other tab's PUT omits it, so
+  // it can't wipe it); [] turns install links off.
+  installSources?: string[];
+  // Sets the stored list to the default entry plus the current entries.
+  resetInstallSources?: boolean;
 }
 
 // FieldOutcome mirrors settingsui.fieldOutcome — what happened to one changed
 // field group as a result of a config PUT.
 export interface FieldOutcome {
-  field: string; // "model" | "password" | "ngrok" | "healthNotifications"
+  field: string; // "model" | "password" | "ngrok" | "healthNotifications" | "installSources"
   outcome: string; // "applied" | "next-start" | "failed"
   message?: string;
 }

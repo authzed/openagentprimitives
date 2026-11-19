@@ -18,15 +18,19 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/oap/install"
 )
 
-func newDesktopOapWorkflow(ctx context.Context, kb *kube.Bundle, out io.Writer, root *oap.Bundle, namespace, sourceDigest string) *install.Workflow {
+// newDesktopOapWorkflow builds the non-interactive desktop workflow. source
+// carries only the provenance fields (SourceKind/SourceRef/SourceDigest); the
+// rest of the options are fixed here.
+func newDesktopOapWorkflow(ctx context.Context, kb *kube.Bundle, out io.Writer, root *oap.Bundle, namespace string, source install.InstallOpts) *install.Workflow {
 	capacity := agentcmd.NewCapacityQuestions(ctx, kb)
 	rootName := root.Manifest.Agent.Name
 	return &install.Workflow{
 		Client: kb.Controller,
 		Options: install.InstallOpts{
 			Namespace:           namespace,
-			SourceKind:          "file",
-			SourceDigest:        sourceDigest,
+			SourceKind:          source.SourceKind,
+			SourceRef:           source.SourceRef,
+			SourceDigest:        source.SourceDigest,
 			Interactive:         false,
 			AdoptSecretsAllowed: true,
 		},
