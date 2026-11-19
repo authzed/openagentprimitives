@@ -3,6 +3,7 @@ package subagentrequest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -120,22 +121,28 @@ func disclosureRequestRef(sr *v1.SubagentRequest, slot string) string {
 // deadline passed in transit, so without this the parent stays marked as
 // awaiting a decision nobody can make.
 //
-// Best-effort like publishDisclosureCards: the delegation is failing with its
-// own stated reason, and a publish failure is logged, not returned, so it
-// cannot hold that verdict back. Called before the status write, so a write
-// conflict re-runs this on the retry; a repeated report is harmless, because
-// channelsd keys it on the RequestRef and an entry clears only once. A slot
-// whose card was never published (no deciders) reports anyway and clears
-// nothing, the same as a runner timeout for a card that never went out.
+// A report that could not be published is returned, joined across slots, so the
+// caller can hold the terminal verdict back and try again: once the request is
+// Failed nothing reconciles it, so a report lost here is lost for good and the
+// parent stays parked. The caller bounds that retry (disclosureRetireGrace). A
+// repeated report is harmless, because channelsd keys it on the RequestRef and
+// an entry clears only once, so every slot is reported again on each attempt
+// rather than tracking which ones got through. A slot whose card was never
+// published (no deciders) reports anyway and clears nothing, the same as a
+// runner timeout for a card that never went out.
+//
+// Two failures are logged and NOT returned, because trying again cannot change
+// them: no publisher wired, and an envelope that will not build.
 func (r *Reconciler) retireDisclosureCards(
 	ctx context.Context, sr *v1.SubagentRequest, parent *v1.AgentSession, slots []v1.DataSlotRequest,
-) {
+) error {
 	logger := log.FromContext(ctx)
 	if r.PublishInteraction == nil {
 		logger.Info("data slot disclosure: no interaction publisher wired; lapsed cards are not retired",
 			"request", sr.Namespace+"/"+sr.Name, "pending", len(slots))
-		return
+		return nil
 	}
+	var failed []error
 	for _, slot := range slots {
 		env, err := channelevents.BuildEnvelope(parent.Namespace, parent.Name, channelevents.KindInteractionApplied,
 			channelevents.InteractionAppliedPayload{
@@ -151,10 +158,12 @@ func (r *Reconciler) retireDisclosureCards(
 			continue
 		}
 		if err := r.PublishInteraction(ctx, parent.Namespace, parent.Name, env); err != nil {
-			logger.Info("data slot disclosure: expiry report publish failed; the parent stays marked as awaiting this card",
+			logger.Info("data slot disclosure: expiry report publish failed",
 				"request", sr.Namespace+"/"+sr.Name, "slot", slot.Slot, "err", err.Error())
+			failed = append(failed, fmt.Errorf("slot %q: %w", slot.Slot, err))
 		}
 	}
+	return errors.Join(failed...)
 }
 
 // disclosureFields are the supporting rows. Deliberately structural — the slot

@@ -100,7 +100,27 @@ func (r *Reconciler) settleDataSlotsBeforeChild(
 		r.publishDisclosureCards(ctx, sr, parent, awaiting)
 		started = sr.Status.DisclosureRequestedAt
 	}
-	if r.clock().Sub(started.Time) > disclosureWaitWindow {
+	if waited := r.clock().Sub(started.Time); waited > disclosureWaitWindow {
+		// Retire the cards BEFORE the verdict is written. A Failed request is
+		// never reconciled again, so a report that did not get out now has no
+		// later chance, and the parent would stay marked as awaiting a decision
+		// nobody can make. While the grace lasts, a failed report leaves status
+		// untouched and the request comes back on the poll interval. Past it the
+		// delegation fails anyway: an outage on the bus must not keep the
+		// parent's call from ever getting its stated reason.
+		if rerr := r.retireDisclosureCards(ctx, sr, parent, awaiting); rerr != nil {
+			if waited <= disclosureWaitWindow+disclosureRetireGrace {
+				log.FromContext(ctx).Info("disclosure decision window elapsed, but the lapsed cards could not be retired; "+
+					"holding the failure back to try again",
+					"request", sr.Namespace+"/"+sr.Name, "retryIn", disclosurePollInterval,
+					"giveUpAfter", disclosureRetireGrace, "err", rerr.Error())
+				return false, ctrl.Result{RequeueAfter: disclosurePollInterval}, nil
+			}
+			log.FromContext(ctx).Info("lapsed disclosure cards could not be retired within the grace; failing the delegation anyway, "+
+				"and the parent stays marked as awaiting those cards",
+				"request", sr.Namespace+"/"+sr.Name, "parent", parent.Namespace+"/"+parent.Name,
+				"grace", disclosureRetireGrace, "err", rerr.Error())
+		}
 		log.FromContext(ctx).Info("disclosure decision window elapsed; failing the delegation",
 			"request", sr.Namespace+"/"+sr.Name, "pending", len(awaiting), "window", disclosureWaitWindow)
 		sr.Status.Phase = v1.SubagentRequestPhaseFailed
@@ -108,7 +128,6 @@ func (r *Reconciler) settleDataSlotsBeforeChild(
 			"handing %d data slot(s) to %s needed a decision from someone who can speak for that data, and none "+
 				"arrived within %s. The delegation was not made — no part of it ran.",
 			len(awaiting), sr.Spec.Class, disclosureWaitWindow)
-		r.retireDisclosureCards(ctx, sr, parent, awaiting)
 		return false, ctrl.Result{}, r.Status().Update(ctx, sr)
 	}
 
