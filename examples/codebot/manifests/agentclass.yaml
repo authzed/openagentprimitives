@@ -80,7 +80,12 @@ spec:
       # toolkit's schema, and leaving them out of this ceiling is what stops an
       # approval on this slot ever binding them: a typo-fixing agent has no
       # business merging its own PR or creating repositories.
-      - resourceType: github_repo
+      #
+      # github_repo_url, not github_repo. Every gh check resolves against the
+      # URL-keyed type; github_repo is the forge-keyed one the directory sync
+      # writes, and a slot declared there composes a grant no gh call ever
+      # reads — the class stays Valid and every gh write still asks per call.
+      - resourceType: github_repo_url
         description: "GitHub repository the agent reads and opens pull requests against (owner/name)."
         permission: write
         permissions: [read]
