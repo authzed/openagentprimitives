@@ -1,3 +1,4 @@
 site/public/media/*.mp4 filter=lfs diff=lfs merge=lfs -text
 site/public/media/*.webm filter=lfs diff=lfs merge=lfs -text
 site/public/media/*.png filter=lfs diff=lfs merge=lfs -text
+site/public/media/*.jpg filter=lfs diff=lfs merge=lfs -text

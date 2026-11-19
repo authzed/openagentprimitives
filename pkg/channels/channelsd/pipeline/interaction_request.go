@@ -236,16 +236,8 @@ func (p *Pipeline) HandleInteractionApplied(ctx context.Context, env channeleven
 			if found {
 				if !record.Resolved {
 					frozen := pl
-					frozen.AgentSessionRef, frozen.ResponseRef, frozen.MintedURL = env.Session, "", ""
-					canonical, err := channelevents.BuildEnvelope(key.Namespace, key.Name, env.Kind, frozen)
-					if err != nil {
-						return err
-					}
-					raw, err := json.Marshal(canonical)
-					if err != nil {
-						return err
-					}
-					record, err = parkedprompt.ResolveWithOutcome(ctx, p.Mem, promptScope(key.Namespace, key.Name), pl.RequestRef, raw)
+					frozen.AgentSessionRef = env.Session
+					record, err = p.retainResolution(ctx, frozen)
 					if err != nil {
 						return err
 					}

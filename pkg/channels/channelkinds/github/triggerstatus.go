@@ -59,7 +59,14 @@ func (Kind) TriggerSurface(
 	if err != nil {
 		return nil, fmt.Errorf("github: Channel %s/%s: %w", ch.Namespace, ch.Name, err)
 	}
+	return newCheckRunSurface(ch, checkruns.Repo{Owner: owner, Name: repo}, number, secrets, opts.ProviderAPIBaseURL)
+}
 
+// newCheckRunSurface builds the surface for one pull request's check run.
+// Shared by TriggerSurface (a session's binding) and ReportDeferral (a
+// delivery that started no session), so both name, authenticate and address
+// the same run the same way. ch.Spec.GitHub must be non-nil.
+func newCheckRunSurface(ch *spiceboxv1alpha1.Channel, repo checkruns.Repo, number int, secrets channelkinds.WebhookSecrets, apiBaseURL string) (*checkRunSurface, error) {
 	appID := string(secrets.Data["app-id"])
 	privateKey := secrets.Data["private-key"]
 	installationID := string(secrets.Data["installation-id"])
@@ -82,25 +89,25 @@ func (Kind) TriggerSurface(
 	}
 
 	return &checkRunSurface{
-		repo:           checkruns.Repo{Owner: owner, Name: repo},
+		repo:           repo,
 		number:         number,
 		name:           checkRunName(ch),
 		appID:          appID,
 		privateKey:     privateKey,
 		installationID: installationID,
-		minter:         githubapp.NewHTTPMinter(githubapp.WithBaseURL(providerAPIBaseURL(opts))),
-		api:            checkruns.New(checkruns.WithBaseURL(opts.ProviderAPIBaseURL)),
+		minter:         githubapp.NewHTTPMinter(githubapp.WithBaseURL(minterBaseURL(apiBaseURL))),
+		api:            checkruns.New(checkruns.WithBaseURL(apiBaseURL)),
 	}, nil
 }
 
-// providerAPIBaseURL resolves the minter's host. The minter's own default is
-// the real API, and its WithBaseURL takes the value verbatim, so an empty
+// minterBaseURL resolves the minter's host. The minter's own default is the
+// real API, and its WithBaseURL takes the value verbatim, so an empty
 // override has to be turned back into "leave the default alone" here.
-func providerAPIBaseURL(opts channelkinds.TriggerStatusOptions) string {
-	if opts.ProviderAPIBaseURL == "" {
+func minterBaseURL(apiBaseURL string) string {
+	if apiBaseURL == "" {
 		return "https://api.github.com"
 	}
-	return opts.ProviderAPIBaseURL
+	return apiBaseURL
 }
 
 // checkRunName is the name the check run carries on the pull request.
@@ -163,6 +170,21 @@ func (s *checkRunSurface) Claim(ctx context.Context) (channelkinds.TriggerClaim,
 				Outcome:   outcomeFromConclusion(existing.Conclusion),
 			}, nil
 		}
+		// A queued run is a deferral notice (Defer), not a claim: the review
+		// it promised is starting now, so it says so rather than leaving
+		// "deferred" on the PR for the length of the review.
+		if existing.Status == "queued" {
+			if err := s.api.Update(ctx, token, s.repo, existing.ID, checkruns.Write{
+				Status:    "in_progress",
+				StartedAt: time.Now().UTC().Format(time.RFC3339),
+				Output: &checkruns.Output{
+					Title:   "Review in progress",
+					Summary: "The review this pull request was waiting for has started.",
+				},
+			}); err != nil {
+				return channelkinds.TriggerClaim{}, fmt.Errorf("github: start deferred check run on %s#%d: %w", s.repo, s.number, err)
+			}
+		}
 		return channelkinds.TriggerClaim{Ref: s.ref(existing.ID)}, nil
 	}
 
@@ -176,6 +198,38 @@ func (s *checkRunSurface) Claim(ctx context.Context) (channelkinds.TriggerClaim,
 		return channelkinds.TriggerClaim{}, fmt.Errorf("github: open check run on %s#%d: %w", s.repo, s.number, err)
 	}
 	return channelkinds.TriggerClaim{Ref: s.ref(run.ID)}, nil
+}
+
+// Defer leaves a QUEUED check run on the pull request's head saying its
+// review is waiting, and why. It is the visible half of a deferral: without
+// it the PR shows nothing at all, and when the delivery that would end the
+// deferral never comes, nothing ever tells anyone.
+//
+// Queued rather than completed on purpose. A completed run would read as a
+// verdict, and a neutral one would satisfy a required check — letting a PR
+// that was never reviewed merge into the default branch if the delivery that
+// starts its review is lost. Queued blocks a required check until a review
+// concludes it, and Claim adopts this same run when that review starts.
+//
+// A run already on the head commit (an earlier notice, or a finished review
+// of this commit) is left untouched: a notice must never overwrite an answer.
+func (s *checkRunSurface) Defer(ctx context.Context, title, summary string) error {
+	token, sha, existing, err := s.locate(ctx)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return nil
+	}
+	if _, err := s.api.Create(ctx, token, s.repo, checkruns.Write{
+		Name:    s.name,
+		HeadSHA: sha,
+		Status:  "queued",
+		Output:  &checkruns.Output{Title: title, Summary: boundSummary(summary)},
+	}); err != nil {
+		return fmt.Errorf("github: record deferred review on %s#%d: %w", s.repo, s.number, err)
+	}
+	return nil
 }
 
 // Conclude writes the final answer onto the check run.

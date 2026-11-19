@@ -1,0 +1,287 @@
+/* The artifact live viewer (chrome/ArtifactViewer.tsx). OAP's web UI is
+ * dark-only, so these colors do not follow the Slack theme. The rendered
+ * artifact sits on its own white canvas, as it does inside the real viewer's
+ * sandboxed iframe. */
+.av-app {
+  --av-bg: #0b0c0e;
+  --av-card: #131519;
+  --av-border: #262a31;
+  --av-fg: #e6e8eb;
+  --av-muted: #9aa1ab;
+  --av-pin: #e3b341;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--av-bg);
+  color: var(--av-fg);
+  font: 14px/1.5 -apple-system, 'Segoe UI', Inter, system-ui, sans-serif;
+  animation: av-in 0.22s ease-out;
+}
+@keyframes av-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+.av-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 14px;
+  background: var(--av-card);
+  border-bottom: 1px solid var(--av-border);
+}
+.av-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--av-muted);
+}
+.av-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.av-title b {
+  font-size: 13px;
+  font-weight: 600;
+}
+.av-title span,
+.av-status {
+  font-size: 12px;
+  color: var(--av-muted);
+}
+.av-vdiv {
+  width: 1px;
+  height: 26px;
+  background: var(--av-border);
+}
+.av-spacer {
+  margin-left: auto;
+}
+.av-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  font-size: 12px;
+  background: #1c2128;
+  border: 1px solid var(--av-border);
+  border-radius: 6px;
+}
+.av-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2ea043;
+}
+
+.av-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.av-side,
+.av-panel {
+  background: var(--av-card);
+  overflow-y: auto;
+}
+.av-side {
+  width: 260px;
+  padding: 10px;
+  border-right: 1px solid var(--av-border);
+}
+.av-side h4 {
+  margin: 4px 6px 10px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--av-muted);
+}
+.av-rev {
+  margin-bottom: 4px;
+  padding: 9px 10px;
+  border-radius: 8px;
+}
+.av-rev.is-sel {
+  background: #1b2230;
+  outline: 1px solid #2b3a55;
+}
+.av-rev-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.av-rev-m {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--av-muted);
+}
+.av-tag {
+  padding: 1px 7px;
+  font-size: 10px;
+  color: #cbd5e1;
+  background: #24304a;
+  border-radius: 999px;
+}
+
+.av-canvas {
+  position: relative;
+  flex: 1;
+  overflow-y: auto;
+  background: #fbfbfa;
+}
+.av-doc {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.av-doc > * {
+  flex: 1;
+}
+/* An annotated element: outlined, with its number in a corner badge. */
+.av-doc [data-av-pin] {
+  position: relative;
+  outline: 2px solid var(--av-pin);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+.av-doc [data-av-pin]::after {
+  content: attr(data-av-pin);
+  position: absolute;
+  top: -16px;
+  left: -16px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  font: 700 12px/1 -apple-system, system-ui, sans-serif;
+  color: #1f2328;
+  background: var(--av-pin);
+  border-radius: 50%;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+.av-pop {
+  position: absolute;
+  z-index: 5;
+  width: 280px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #1f2328;
+  background: #fff;
+  border: 1px solid var(--av-pin);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2);
+  animation: av-in 0.18s ease-out;
+}
+.av-pop-who {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+.av-pop-n {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #1f2328;
+  background: var(--av-pin);
+  border-radius: 50%;
+}
+.av-chip {
+  margin-left: auto;
+  padding: 1px 8px;
+  font-size: 10.5px;
+  color: #8a5a00;
+  background: #fff4d6;
+  border: 1px solid #f0d58a;
+  border-radius: 999px;
+}
+
+.av-panel {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  border-left: 1px solid var(--av-border);
+}
+.av-panel h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--av-border);
+}
+.av-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--av-muted);
+}
+.av-notes {
+  flex: 1;
+  padding: 10px 12px;
+  overflow-y: auto;
+}
+.av-empty {
+  margin: 6px 2px;
+  font-size: 12.5px;
+  color: var(--av-muted);
+}
+.av-ncard {
+  margin-bottom: 8px;
+  padding: 9px 11px;
+  background: #171a1f;
+  border: 1px solid var(--av-border);
+  border-radius: 10px;
+  animation: av-in 0.18s ease-out;
+}
+.av-ref {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--av-pin);
+}
+.av-ref .av-chip {
+  color: var(--av-pin);
+  background: transparent;
+  border-color: #5c4a1e;
+}
+.av-txt {
+  font-size: 12.5px;
+}
+.av-send {
+  padding: 12px;
+  border-top: 1px solid var(--av-border);
+}
+.av-send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+.av-send-btn:disabled {
+  opacity: 0.4;
+}
+.av-sent {
+  padding: 8px;
+  font-size: 12.5px;
+  text-align: center;
+  color: #7ee2a8;
+  background: #12261b;
+  border: 1px solid #1f4d33;
+  border-radius: 8px;
+}

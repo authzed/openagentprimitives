@@ -6685,6 +6685,17 @@ spec:
                 - reportSessionCost
                 - requireSubagentDigestPins
                 type: object
+              enforcedMaxDuration:
+                description: |-
+                  EnforcedMaxDuration is the budget.maxDuration the CURRENT runner pod is
+                  enforcing, written alongside runDuration. The runner reads its budget
+                  from status.effectiveSettings once at pod start, while the operator
+                  re-resolves effectiveSettings every reconcile, so the two diverge after a
+                  class or session budget edit. The operator's run-duration backstop
+                  compares runDuration against THIS value, the cap the runner actually
+                  holds, so a lowered class cap cannot fail a healthy session mid-run.
+                  Absent when the runner enforces no maxDuration.
+                type: string
               estimatedCost:
                 description: |-
                   EstimatedCost is the best-effort end-of-session USD cost estimate.
@@ -7629,7 +7640,8 @@ spec:
                         reason:
                           description: |-
                             Reason is the kubelet's terminal container Waiting reason, e.g.
-                            "CrashLoopBackOff" or "ImagePullBackOff".
+                            "CrashLoopBackOff" or "ImagePullBackOff", or "NotReadyDeadlineExceeded"
+                            for a pod that stayed not-Ready past the operator's deadline without one.
                           type: string
                       required:
                       - reason
@@ -11603,6 +11615,42 @@ spec:
                       true - so the one value a user reaches for when they DO want draft PRs
                       reviewed is the one value the field cannot hold. Same shape as
                       ChannelMetaagentSpec.Enabled in this file.
+                    type: boolean
+                  skipStacked:
+                    description: |-
+                      SkipStacked defers pull requests that are STACKED on another branch —
+                      whose base is not the repository's default branch, which is how a PR
+                      that depends on an earlier, still-open PR is opened. Nil means false,
+                      so a Channel written before this field existed keeps reviewing into
+                      every base branch; `oap channel create` writes `true` for a new one.
+
+                      When true, such a PR is not reviewed while it is stacked (opening it,
+                      pushing to it, or marking it ready all wait), and each deferred delivery
+                      leaves a queued check run on the PR saying what it is waiting for. It is
+                      reviewed when its base is changed to the default branch — an "edited"
+                      delivery, admitted without being listed in Events whenever Events lists
+                      any review action (opened, reopened, ready_for_review, synchronize). A
+                      retarget that arrives while the PR is a draft is dropped like any draft,
+                      so ready_for_review is admitted the same way when drafts are skipped. A
+                      renamed default branch moves every open PR and is indistinguishable from
+                      a retarget, so it re-reviews each, most finding their head commit
+                      already concluded.
+
+                      GitHub changes the base itself only when the PR it was stacked on
+                      merges AND that PR's branch is deleted, so pair this with the
+                      repository's "Automatically delete head branches" setting (or a
+                      stacking tool that retargets); otherwise, and when the lower PR is
+                      closed without merging, change the PR's base to the default branch by
+                      hand to start its review. Reviewing every PR of a ten-deep stack at
+                      once re-reviews each change in every PR above it, and starts a burst of
+                      sessions the cluster may not have room for.
+
+                      Leave it off for repositories that genuinely review into a non-default
+                      branch (release branches, long-lived integration branches): the check
+                      cannot tell those from a stack, and with it on they would never be
+                      reviewed. The same goes for the old default branch after the default is
+                      switched to a different branch: PRs still open against it are deferred
+                      until their base is changed.
                     type: boolean
                 required:
                 - appSlug

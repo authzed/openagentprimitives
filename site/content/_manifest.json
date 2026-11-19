@@ -347,5 +347,28 @@
     "kind": "screenshot",
     "src": "/media/builder-permissions.png",
     "caption": "Permissions, in the person's words: what the agent will do on its own, what it will ask about first, and what it will never do."
+  },
+  "messagingbot-design": {
+    "kind": "clip",
+    "webm": "/media/messagingbot-design.webm",
+    "mp4": "/media/messagingbot-design.mp4",
+    "poster": "/media/messagingbot-design.png",
+    "caption": "Simulated messagingbot: a scoped brief, a read-only look at the brand repos, an HTML artifact, and a revision driven by notes pinned to the rendered page.",
+    "title": "Building Claude Design on OAP: messagingbot",
+    "uploadDate": "2026-10-22",
+    "duration": "PT1M42S",
+    "transcript": [
+      "Claude Design, rebuilt from OAP parts. messagingbot turns a brief into an on-brand page, and takes feedback pinned right onto the design.",
+      "Like a good designer, messagingbot scopes the brief before it draws anything: who it's for, the one message, and what the button should do.",
+      "Jordan answers, and points it at the brand repos. Those are the only repositories this install lets it read.",
+      "It posts a plan, loads its design skill, and reads the real colour tokens and approved copy, through a GitHub tool that can only read from approved repos.",
+      "The design comes back as an artifact: versioned, stored durably, and rendered inert, so its HTML can't run a single script.",
+      "View live opens it in OAP's artifact viewer: the rendered page, its revision history, and a live link back to the session.",
+      "Now the Claude Design move. Jordan clicks the headline and pins a note to it: it's off-message.",
+      "And another on the button: wrong words, and the wrong colour.",
+      "Both notes go back as one structured batch. The server checks that Jordan may view this exact artifact before the agent sees a word of it.",
+      "messagingbot revises the same artifact. Revision 2 fixes both notes and says so in its change note, and revision 1 is still there, byte for byte.",
+      "No new platform feature made this possible. It's an agent definition, a read-only tool, two skills, and the artifact viewer OAP already ships."
+    ]
   }
 }

@@ -121,6 +121,42 @@ func TestDerive_SchedulingOnlyWhileInFlight(t *testing.T) {
 	}
 }
 
+// A session HELD for capacity says so — queued, will start by itself, gives up
+// at a named time — instead of the bare "waiting for capacity", and only while
+// it is in flight.
+func TestDerive_CapacityHoldReplacesTheSchedulingLead(t *testing.T) {
+	sched := cond(spiceboxv1alpha1.AgentSessionConditionSandboxScheduling,
+		metav1.ConditionFalse, spiceboxv1alpha1.ReasonSandboxUnschedulable, "0/6 nodes are available: 5 Insufficient cpu.")
+	hold := cond(spiceboxv1alpha1.AgentSessionConditionCapacityHold, metav1.ConditionTrue,
+		spiceboxv1alpha1.ReasonCapacityHoldWaiting, "The cluster is out of room right now; this will start on its own once capacity frees up (gives up at 17:23 UTC).")
+
+	got := sessionnotice.Derive(sess(spiceboxv1alpha1.AgentSessionPhasePending, sched, hold))
+	require.Len(t, got, 1)
+	assert.Equal(t, sessionnotice.KindCapacityHold, got[0].Kind)
+	assert.Equal(t, sessionnotice.ToneRoutine, got[0].Tone, "a hold is the system queueing as designed")
+	assert.Contains(t, got[0].Lead, "gives up at 17:23 UTC")
+	assert.Contains(t, got[0].Body, "Insufficient cpu", "the scheduler detail still travels")
+
+	_, held := sessionnotice.CapacityHold(sess(spiceboxv1alpha1.AgentSessionPhaseIdle, sched, hold))
+	assert.False(t, held, "a parked session is not held for anything")
+}
+
+// A hold that ran out fails the session as BundleFailed, but the tools did not
+// "fail to start" — the lead says the cluster never had room.
+func TestDerive_CapacityHoldExpiredNamesTheCluster(t *testing.T) {
+	s := sess(spiceboxv1alpha1.AgentSessionPhaseFailed,
+		cond(spiceboxv1alpha1.AgentSessionConditionFailed, metav1.ConditionTrue,
+			spiceboxv1alpha1.ReasonAgentSessionBundleFail, "waited 1h0m0s for cluster capacity"),
+		cond(spiceboxv1alpha1.AgentSessionConditionCapacityHold, metav1.ConditionFalse,
+			spiceboxv1alpha1.ReasonCapacityHoldExpired, "waited 1h0m0s for cluster capacity and none freed up"))
+	s.Status.FailureReason = spiceboxv1alpha1.ReasonAgentSessionBundleFail
+
+	got := sessionnotice.Derive(s)
+	require.Len(t, got, 1)
+	assert.Equal(t, sessionnotice.CapacityHoldExpiredLead, got[0].Lead)
+	assert.True(t, sessionnotice.CapacityHoldExpired(s))
+}
+
 // The actionable notice leads. A session both parked and mid-startup should not
 // bury the one thing the user can act on under a wait they can only watch.
 func TestDerive_ActionableNoticeComesFirst(t *testing.T) {

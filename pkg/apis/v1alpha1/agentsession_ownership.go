@@ -106,6 +106,9 @@ var operatorOwnedStatusFields = map[string]bool{
 	"sidecarReachability": true,
 	"progress":            true,
 	"runDuration":         true,
+	// enforcedMaxDuration is written by the runner's StatusPatcher in the same
+	// patch as runDuration and read by the operator's maxDuration backstop.
+	"enforcedMaxDuration": true,
 	"result":              true,
 	// pinnedMessage is the runner's projection of the opening-message status;
 	// channelsd only READS it to edit the message, so a runner merge-patch of it

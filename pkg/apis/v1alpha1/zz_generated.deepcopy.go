@@ -835,6 +835,11 @@ func (in *AgentSessionStatus) DeepCopyInto(out *AgentSessionStatus) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.EnforcedMaxDuration != nil {
+		in, out := &in.EnforcedMaxDuration, &out.EnforcedMaxDuration
+		*out = new(v1.Duration)
+		**out = **in
+	}
 	if in.LastWakeAt != nil {
 		in, out := &in.LastWakeAt, &out.LastWakeAt
 		*out = (*in).DeepCopy()
@@ -3154,6 +3159,11 @@ func (in *GitHubChannelConfig) DeepCopyInto(out *GitHubChannelConfig) {
 	}
 	if in.SkipDrafts != nil {
 		in, out := &in.SkipDrafts, &out.SkipDrafts
+		*out = new(bool)
+		**out = **in
+	}
+	if in.SkipStacked != nil {
+		in, out := &in.SkipStacked, &out.SkipStacked
 		*out = new(bool)
 		**out = **in
 	}

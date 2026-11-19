@@ -198,6 +198,8 @@ func mcpProbeFunc(ctx context.Context, url string) ([]mcpprobe.Tool, error) {
 //
 // `notify` delivers the user-visible half of a terminal-failure report. Nil for
 // callers with no channel surface, leaving only the agent-facing advisory.
+// The two halves dedup differently: the notice fires once per failure for the
+// life of the session, the advisory once per failure per runner process.
 func newSidecarToolRefresher(
 	c client.Client,
 	sessKey client.ObjectKey,
@@ -236,6 +238,13 @@ func newSidecarToolRefresher(
 		// start — so an in-memory-only record re-reports the same failure into
 		// the thread on every restart. Seeded here rather than at construction
 		// because this is where the session is read.
+		//
+		// The seeded set suppresses only the USER-facing notice. The agent-facing
+		// advisory is transient — never replayed from history — so a fresh
+		// process's model has not been told, even about a failure the thread
+		// already shows. alreadyNotified collects those sidecars so the first
+		// pass re-advises the agent without re-notifying the user.
+		var alreadyNotified []spiceboxv1alpha1.ResolvedSidecarToolbox
 		if !seeded {
 			for name, fp := range decodeNotifiedFailures(sess.Annotations[sidecarFailureReportedAnnotation]) {
 				if _, ok := notified[name]; !ok {
@@ -243,6 +252,14 @@ func newSidecarToolRefresher(
 				}
 			}
 			seeded = true
+			for _, rt := range resolved {
+				if rt.RunMode != "separate-pod" || rt.PodFailure == nil {
+					continue
+				}
+				if notified[rt.Name] == podFailureFingerprint(rt.PodFailure) {
+					alreadyNotified = append(alreadyNotified, rt)
+				}
+			}
 		}
 		before := len(notified)
 
@@ -257,6 +274,9 @@ func newSidecarToolRefresher(
 			if notify != nil {
 				notify(ctx, sidecarFailureNotice(rt))
 			}
+			res.Advisories = append(res.Advisories, sidecarFailureAdvisory(rt))
+		}
+		for _, rt := range alreadyNotified {
 			res.Advisories = append(res.Advisories, sidecarFailureAdvisory(rt))
 		}
 		// Drop the record for any sidecar that is no longer failing, so a LATER

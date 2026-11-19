@@ -2,7 +2,6 @@ package runner
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -414,6 +413,18 @@ func (l *Loop) Run(ctx context.Context) error {
 		defer flushCancel()
 		go l.runDurationFlusher(flushCtx, runDurationFlushInterval)
 	}
+	// maxDuration as a deadline on in-flight work: Budget.Check only runs at turn
+	// boundaries, so without this an LLM call or tool call that straddles the cap
+	// runs on until it returns. When active run-time reaches the cap the watchdog
+	// cancels the LLM call and every stateless/readonly tool at once, lets
+	// stateful tools drain for BudgetStatefulDrain, then cancels what is left;
+	// the Send error path and the post-dispatch Check below then fail the session
+	// as MaxDurationExceeded.
+	budgetWatchCtx, budgetWatchCancel := context.WithCancel(ctx)
+	defer budgetWatchCancel()
+	go l.Budget.watchDuration(budgetWatchCtx, func() {
+		l.cutOffForBudget(budgetWatchCtx)
+	})
 
 	// Session-context the meta tools see. agent_work_complete writes here via
 	// SubmitResult; the runner reads it after the loop ends.
@@ -685,25 +696,29 @@ func (l *Loop) Run(ctx context.Context) error {
 		// never be fired against a completed call.
 		interruptCtx, sendCancel := context.WithCancelCause(ctx)
 		l.interrupts.setProvider(sendCancel)
-		// Bound the call by what is left of the time budget. Budget.Check runs
-		// only between turns, so a call that never returns would otherwise hold
-		// the session past maxDuration indefinitely. The interrupt cause still
+		// Bound the call by what is left of the session's wall-clock lifetime.
+		// The maxDuration watchdog (Budget.watchDuration) cancels through the
+		// interrupt registry above; sessionExpiration has no watcher, and
+		// Budget.Check runs only between turns, so a call that never returns
+		// would otherwise outlive it. An interrupt or maxDuration cause still
 		// propagates: a child ctx reports its parent's cancel cause.
-		sendCtx, stopBudgetDeadline := interruptCtx, context.CancelFunc(func() {})
-		if remaining, reason, ok := l.Budget.Remaining(); ok {
-			sendCtx, stopBudgetDeadline = context.WithTimeoutCause(interruptCtx, remaining, budgetDeadlineError{reason: reason})
+		sendCtx, stopExpiryDeadline := interruptCtx, context.CancelFunc(func() {})
+		if remaining, ok := l.Budget.UntilExpiration(); ok {
+			sendCtx, stopExpiryDeadline = context.WithTimeoutCause(interruptCtx, remaining, errSessionExpired)
 		}
 		resp, err := l.Provider.Send(sendCtx, req)
 		l.interrupts.clearProvider()
-		stopBudgetDeadline()
+		stopExpiryDeadline()
 		sendCancel(nil)
 		if err != nil {
-			var budgetHit budgetDeadlineError
-			if errors.As(context.Cause(sendCtx), &budgetHit) {
-				slog.Default().Info("turn: LLM call cut off by the session's time budget",
+			if context.Cause(sendCtx) == errMaxDurationExceeded {
+				return l.fail(ctx, budgetFailReason(BudgetReasonDuration), BudgetReasonDuration)
+			}
+			if context.Cause(sendCtx) == errSessionExpired {
+				slog.Default().Info("turn: LLM call cut off at the session's sessionExpiration",
 					"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name,
-					"turn", turnCount+1, "reason", budgetHit.reason, "err", err.Error())
-				return l.fail(ctx, budgetFailReason(budgetHit.reason), budgetHit.reason)
+					"turn", turnCount+1, "err", err.Error())
+				return l.fail(ctx, budgetFailReason(BudgetReasonExpired), BudgetReasonExpired)
 			}
 			if context.Cause(sendCtx) == errInterruptedByUser {
 				// The user interrupted the LLM call to jump the queue. Not a

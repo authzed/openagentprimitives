@@ -66,6 +66,19 @@ type UI struct {
 	k8s      client.Client
 	publish  func(subject string, payload []byte) error
 	kindDeps channelkinds.Deps
+
+	// providerAPIBaseURL is handed to a receiver's ReportDeferral. Empty in
+	// production: the kind's real provider. Set by WithProviderAPIBaseURL.
+	providerAPIBaseURL string
+}
+
+// Option configures the plug-in beyond its two required dependencies.
+type Option func(*UI)
+
+// WithProviderAPIBaseURL points provider API calls the route makes on a
+// kind's behalf (reporting a deferred delivery) at a stand-in server.
+func WithProviderAPIBaseURL(u string) Option {
+	return func(ui *UI) { ui.providerAPIBaseURL = u }
 }
 
 // New constructs the channelwebhook plug-in. Both k8s and publish are
@@ -73,14 +86,14 @@ type UI struct {
 // func would nil-panic the first time a verified delivery reached step 7.
 // Refusing here — once, at webd startup — is the fail-closed alternative to
 // discovering either gap on the first live GitHub delivery.
-func New(k8s client.Client, publish func(subject string, payload []byte) error) (webui.WebUI, error) {
+func New(k8s client.Client, publish func(subject string, payload []byte) error, opts ...Option) (webui.WebUI, error) {
 	if k8s == nil {
 		return nil, errors.New("channelwebhook: k8s client is required")
 	}
 	if publish == nil {
 		return nil, errors.New("channelwebhook: NATS publish func is required")
 	}
-	return &UI{
+	ui := &UI{
 		k8s:     k8s,
 		publish: publish,
 		// kindDeps is the construction-time context handed to
@@ -89,7 +102,11 @@ func New(k8s client.Client, publish func(subject string, payload []byte) error) 
 		// per call (see channelkinds.WebhookReceiver), since one kind's
 		// receiver serves every Channel of that kind.
 		kindDeps: channelkinds.Deps{K8sClient: k8s, NATSPublish: publish},
-	}, nil
+	}
+	for _, o := range opts {
+		o(ui)
+	}
+	return ui, nil
 }
 
 func (u *UI) Name() string { return "channelwebhook" }
@@ -228,6 +245,15 @@ func (u *UI) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if inb == nil {
+		// A deferred delivery answers the same 204: the deferral already
+		// happened, and a retry would defer again. Reporting it is the only
+		// trace a person waiting on the PR gets, so a failure is logged.
+		if rep, ok := rcv.(channelkinds.WebhookDeferralReporter); ok {
+			if err := rep.ReportDeferral(ctx, &ch, channelkinds.WebhookSecrets{Data: sec.Data}, req, u.providerAPIBaseURL); err != nil {
+				logger.Info("webhook: deferred delivery could not be reported to the provider",
+					"kind", kindName, "ns", ns, "channel", chName, "deliveryID", deliveryID, "err", err.Error())
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

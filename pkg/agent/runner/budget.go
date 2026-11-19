@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"context"
+	"log/slog"
 	"time"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -35,6 +37,58 @@ func NewBudget(cfg spiceboxv1alpha1.BudgetConfig, runClock *RunClock, sessionSta
 	return &Budget{cfg: cfg, runClock: runClock, sessionStartedAt: sessionStartedAt, now: time.Now}
 }
 
+// MaxDuration is the active run-time cap this budget enforces (0 ⇒ none).
+// Nil-safe.
+func (b *Budget) MaxDuration() time.Duration {
+	if b == nil {
+		return 0
+	}
+	return b.cfg.MaxDuration.Duration
+}
+
+// durationWatchFloor bounds how often watchDuration re-arms. While the run
+// clock is paused (parked on a human) the remaining budget does not shrink, so
+// without a floor a nearly-spent budget would re-arm a near-zero timer in a
+// tight loop for the whole wait.
+const durationWatchFloor = time.Second
+
+// BudgetStatefulDrain is how long a stateful tool already in flight when
+// maxDuration is reached may keep running before it is cancelled too (see
+// interruptRegistry.cancelForBudget). It must stay well inside the operator's
+// runDurationGrace (10m, pkg/controllers/agentsession/maxduration.go), which
+// also has to cover the cancelled call unwinding, the 30s runDuration flush and
+// the failure write; otherwise the operator reaps the pod under a tool that
+// was still being allowed to finish. Exported only so the operator package can
+// assert that ordering in a test (TestRunDurationGraceCoversTheStatefulDrain).
+const BudgetStatefulDrain = 5 * time.Minute
+
+// watchDuration blocks until ctx is done or active run-time reaches
+// MaxDuration, then calls onExceeded once. Check only runs at turn boundaries,
+// so this is what makes maxDuration a deadline on an in-flight LLM call or tool
+// call rather than a bound checked after it returns. It measures the run
+// clock, not wall-clock, so time parked on an approval or await_user_message
+// inside a tool call is excluded exactly as Check excludes it. No-op when no
+// cap or no clock is configured.
+func (b *Budget) watchDuration(ctx context.Context, onExceeded func()) {
+	if b.MaxDuration() <= 0 || b.runClock == nil {
+		return
+	}
+	for {
+		remaining := b.cfg.MaxDuration.Duration - b.runClock.Elapsed()
+		if remaining <= 0 {
+			onExceeded()
+			return
+		}
+		t := time.NewTimer(max(remaining, durationWatchFloor))
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // Check returns "" when within budget; otherwise the first BudgetReason* tripped.
 //
 // turns is completed assistant turns; inputTokens/outputTokens are cumulative
@@ -57,32 +111,48 @@ func (b *Budget) Check(turns int32, inputTokens, outputTokens int64) string {
 	return ""
 }
 
-// Remaining reports how long an in-flight call may run before a time-based cap
-// (maxDuration run-time, or sessionExpiration wall-clock) trips, and which cap
-// it is — the nearer of the two. ok is false when neither cap is configured.
+// UntilExpiration reports how long an in-flight call may run before the
+// wall-clock sessionExpiration cap trips. ok is false when no expiration is
+// configured or the session start is not stamped yet, matching Check. A cap
+// already reached yields a value <= 0.
 //
-// Check only runs between turns, so without this a call that never returns
-// (a stalled provider stream) holds the session past its budget indefinitely.
-// The loop bounds each provider call by this window so the budget fires
-// mid-call. A cap already reached yields remaining <= 0.
-func (b *Budget) Remaining() (remaining time.Duration, reason string, ok bool) {
-	if b.cfg.MaxDuration.Duration > 0 {
-		remaining, reason, ok = b.cfg.MaxDuration.Duration-b.runClock.Elapsed(), BudgetReasonDuration, true
+// Check only runs between turns and watchDuration covers maxDuration alone, so
+// without this a provider call that never returns holds the session past its
+// expiration. The loop bounds each provider call by this window.
+func (b *Budget) UntilExpiration() (remaining time.Duration, ok bool) {
+	if b.cfg.SessionExpiration.Duration <= 0 || b.sessionStartedAt.IsZero() {
+		return 0, false
 	}
-	if b.cfg.SessionExpiration.Duration > 0 && !b.sessionStartedAt.IsZero() {
-		exp := b.cfg.SessionExpiration.Duration - b.now().Sub(b.sessionStartedAt)
-		if !ok || exp < remaining {
-			remaining, reason, ok = exp, BudgetReasonExpired, true
-		}
-	}
-	return remaining, reason, ok
+	return b.cfg.SessionExpiration.Duration - b.now().Sub(b.sessionStartedAt), true
 }
 
-// budgetDeadlineError is the cancel cause of a provider call cut off by
-// Budget.Remaining, so the loop can tell a budget stop from a provider error
-// or a user interrupt. reason is the BudgetReason* that tripped.
-type budgetDeadlineError struct{ reason string }
-
-func (e budgetDeadlineError) Error() string {
-	return "LLM call exceeded the session's time budget (" + e.reason + ")"
+// cutOffForBudget is the watchdog's action once maxDuration is reached:
+// cancel the LLM call and the stateless/readonly tools now, give in-flight
+// stateful tools BudgetStatefulDrain to finish, then cancel any still running.
+// Returns early if ctx (the Run's watch context) ends first, which is the
+// normal case once the drained tools return and the loop fails the session.
+func (l *Loop) cutOffForBudget(ctx context.Context) {
+	sessRef := l.SessionKey.Namespace + "/" + l.SessionKey.Name
+	drain := l.budgetStatefulDrain
+	if drain <= 0 {
+		drain = BudgetStatefulDrain
+	}
+	draining := l.interrupts.cancelForBudget(errMaxDurationExceeded)
+	slog.Default().Info("maxDuration reached; cancelled the in-flight LLM call and stateless/readonly tools",
+		"session", sessRef, "maxDuration", l.Budget.MaxDuration().String(),
+		"drainingStatefulTools", draining, "drain", drain.String())
+	if len(draining) == 0 {
+		return
+	}
+	t := time.NewTimer(drain)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-t.C:
+	}
+	if cut := l.interrupts.cancelRemainingForBudget(); len(cut) > 0 {
+		slog.Default().Info("maxDuration drain window ran out; cancelled stateful tools still in flight",
+			"session", sessRef, "tools", cut, "drain", drain.String())
+	}
 }

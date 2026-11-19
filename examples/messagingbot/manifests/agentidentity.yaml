@@ -1,0 +1,24 @@
+# AgentIdentity for messagingbot: supplies the read-only GitHub PAT to the gh
+# tool bundle as GITHUB_TOKEN, and authenticates the SkillSource clones. The
+# messagingbot-github Secret is materialized at install time from the
+# githubToken question (oap.yaml).
+#
+# The credential MUST be named `github-token`: the gh toolkit declares the
+# GITHUB_TOKEN env var with `credential: github-token`, so the runner resolves
+# the credential of that name and projects its value into the sandbox.
+#
+# metadata.namespace is intentionally omitted — `oap agent install --namespace`
+# stamps it, so the bundle stays namespace-portable.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: messagingbot-id
+spec:
+  description: "Read-only GitHub PAT for messagingbot's gh tool and skill clones."
+  credentials:
+    - name: github-token
+      type: static
+      static:
+        secretRef:
+          name: messagingbot-github
+          key: token
