@@ -989,6 +989,34 @@ const (
 	ReasonAgentSessionStorageReclaimed    = "RetentionElapsed"
 )
 
+// AgentSessionConditionTriggerAnswered records that the operator has settled
+// what a Failed session owes the event that started it (a pull request's check
+// run, say), so the failed-trigger backstop asks the provider once rather than
+// on every reconcile of a dead session. Set once, True, by the operator only;
+// its reason says how it was settled. Present only on sessions whose input
+// kind reports a trigger status at all.
+const (
+	AgentSessionConditionTriggerAnswered = "TriggerAnswered"
+	// ReasonTriggerAnswered: the trigger now reads could_not_finish.
+	ReasonTriggerAnswered = "Answered"
+	// ReasonTriggerAlreadyAnswered: the trigger already carried an answer
+	// (the agent's verdict, or an earlier operator answer), which was kept.
+	ReasonTriggerAlreadyAnswered = "AlreadyAnswered"
+	// ReasonTriggerNotOwed: nothing is owed — the kind reports no trigger for
+	// this binding, the failure is one that deliberately publishes nothing
+	// (lifetime expiry of an Idle session), or a continuation took it over.
+	ReasonTriggerNotOwed = "NotOwed"
+	// ReasonTriggerAnswerWindowElapsed: the session failed too long ago to
+	// answer safely (the pull request may have moved on), or every attempt in
+	// the window failed. Nothing was written to the trigger.
+	ReasonTriggerAnswerWindowElapsed = "AnswerWindowElapsed"
+	// ReasonTriggerUnanswerable: the trigger could not be addressed at all —
+	// the session's input Channel or its credentials Secret is gone or
+	// unusable — so retrying could not help. Nothing was written to the
+	// trigger; the condition message names what was missing.
+	ReasonTriggerUnanswerable = "Unanswerable"
+)
+
 // Reasons for the AgentSession.Idle condition's per-cause subdivision.
 const (
 	ReasonAgentSessionAgentWorkComplete = "AgentWorkComplete" // agent_work_complete tool was called

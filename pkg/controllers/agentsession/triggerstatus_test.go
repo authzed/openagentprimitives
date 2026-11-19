@@ -56,6 +56,13 @@ type operatorTriggerKind struct {
 	// claims and published are what the reconciler actually did to the surface.
 	claims    int
 	published []channelkinds.TriggerConclusion
+	// sawDeadline records whether the last Claim ran under a deadline, and
+	// deadline what it was.
+	sawDeadline bool
+	deadline    time.Time
+	// hang makes Claim block until its context ends, like a provider that
+	// accepts the connection and never answers.
+	hang bool
 }
 
 func (*operatorTriggerKind) Name() string { return tsKindName }
@@ -97,10 +104,15 @@ func (*operatorTriggerSurface) Surface() string {
 	return "the fixture check run on demo-org/platform#42"
 }
 
-func (s *operatorTriggerSurface) Claim(context.Context) (channelkinds.TriggerClaim, error) {
+func (s *operatorTriggerSurface) Claim(ctx context.Context) (channelkinds.TriggerClaim, error) {
 	s.kind.mu.Lock()
 	defer s.kind.mu.Unlock()
 	s.kind.claims++
+	s.kind.deadline, s.kind.sawDeadline = ctx.Deadline()
+	if s.kind.hang {
+		<-ctx.Done()
+		return channelkinds.TriggerClaim{}, ctx.Err()
+	}
 	if s.kind.claimErr != nil {
 		return channelkinds.TriggerClaim{}, s.kind.claimErr
 	}
@@ -114,6 +126,9 @@ func (s *operatorTriggerSurface) Conclude(_ context.Context, c channelkinds.Trig
 	s.kind.mu.Lock()
 	defer s.kind.mu.Unlock()
 	s.kind.published = append(s.kind.published, c)
+	// Like the real provider: once concluded, a later Claim reads the answer
+	// back, which is what makes a second answerer see AlreadyAnswered.
+	s.kind.standing = &channelkinds.TriggerClaim{Ref: "fixture run 1", Concluded: true, Outcome: c.Outcome}
 	return nil
 }
 
@@ -140,6 +155,9 @@ func resetTriggerKind(t *testing.T) *operatorTriggerKind {
 	triggerKind.claimErr = nil
 	triggerKind.claims = 0
 	triggerKind.published = nil
+	triggerKind.sawDeadline = false
+	triggerKind.deadline = time.Time{}
+	triggerKind.hang = false
 	return triggerKind
 }
 
