@@ -2123,6 +2123,10 @@ func run(cfg *config) error {
 	composeOpts = append(composeOpts, runner.WithAuthoredExamples(runner.AuthoredExamplesOf(&class)))
 	composeOpts = append(composeOpts, runner.WithPlanningNotes(runner.PlanningNotesOf(&class)))
 	composeOpts = append(composeOpts, runner.WithUserProfileActive(profileActive))
+	// Not a capability section: a summoning message opens with the agent's own
+	// token whether or not the class offers lookup_user_for_mention, so the
+	// warning about it cannot ride with that tool.
+	composeOpts = append(composeOpts, runner.WithSelfMention(runner.SelfMentionOf(resolvedKind, bindingOrNil)))
 	composeOpts = append(composeOpts, runner.WithFineGrainedInfoLeakage(runner.FineGrainedInfoLeakageActive(&class)))
 	if runner.PlanGateRequirePlan(sess.Status.EffectiveSettings) {
 		composeOpts = append(composeOpts, runner.WithRequirePlan())
