@@ -498,7 +498,7 @@ export interface ExternalIdentity {
 // click (the clicker lacked standing, the prompt was already resolved by
 // someone else, a category mismatch, or the bound handler failed — e.g. a
 // tool_approval grant-write error). class is machine-readable:
-// "not_authorized" | "already_resolved" | "handler_error" |
+// "not_authorized" | "already_resolved" | "expired" | "handler_error" |
 // "category_mismatch". originalDecider/originalOutcome are set only for the
 // already_resolved class, naming who actually resolved it.
 export interface InteractionDecisionRejectedInner {

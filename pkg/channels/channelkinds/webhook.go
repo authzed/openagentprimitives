@@ -68,6 +68,33 @@ type WebhookReceiver interface {
 	Translate(ctx context.Context, ch *spiceboxv1alpha1.Channel, r WebhookRequest) (*WebhookInbound, error)
 }
 
+// WebhookDeferralReporter is an optional WebhookReceiver capability for a
+// kind that can DEFER a delivery it would otherwise act on — accept it, start
+// nothing now, and expect a later delivery to start the work instead (github
+// defers a pull request stacked on another one until it is retargeted onto
+// the default branch). The webd route discovers it by type-asserting the
+// receiver, the same shape as TriggerFactProvider.
+//
+// It exists because a deferral is otherwise invisible: Translate's (nil, nil)
+// answers 204 and nothing is recorded, so a person waiting on the deferred
+// work sees nothing, and if the later delivery never comes (a provider
+// setting that suppresses it, a lost delivery) nothing ever will.
+type WebhookDeferralReporter interface {
+	// ReportDeferral is called after Translate returned (nil, nil) for a
+	// verified delivery. It decides — by the same rule Translate used —
+	// whether that delivery was deferred and, if it was, makes the deferral
+	// visible where the people waiting on it look (github: a queued check
+	// run on the pull request). A delivery that was simply uninteresting is
+	// a no-op returning nil. secrets is the Channel's resolved credentials
+	// Secret. providerAPIBaseURL overrides the provider's API host (tests, or
+	// a self-hosted instance); "" means the implementation's real default.
+	//
+	// An error means the deferral is NOT visible. It does not change the
+	// delivery's answer: the deferral itself already happened, and a retry
+	// would defer again.
+	ReportDeferral(ctx context.Context, ch *spiceboxv1alpha1.Channel, secrets WebhookSecrets, r WebhookRequest, providerAPIBaseURL string) error
+}
+
 // WebhookURLDriftChecker is an optional Kind capability for a kind whose
 // inbound webhook is registered out-of-band with a third-party provider (a
 // GitHub App's hook_attributes.url is the case that exists today) — a

@@ -28,6 +28,7 @@ type Kind string
 const (
 	KindStartup       Kind = "startup"
 	KindScheduling    Kind = "scheduling"
+	KindCapacityHold  Kind = "capacity_hold"
 	KindAwaitingRetry Kind = "awaiting_retry"
 	KindRestartDenied Kind = "restart_denied"
 	KindFailed        Kind = "failed"
@@ -69,6 +70,10 @@ const (
 	AwaitingRetryNext  = "Send a message to retry; it picks up where it left off."
 	RestartDeniedLead  = "This session could not be restarted."
 	GenericFailedLead  = "This request stopped before finishing."
+	// CapacityHoldExpiredLead replaces the failure-reason lead when a capacity
+	// hold ran out: the tools did not "fail to start", the cluster never had
+	// room for them.
+	CapacityHoldExpiredLead = "This request couldn't run — the cluster stayed out of capacity for the whole time it was queued. Try again once it's less busy."
 )
 
 // terminalFailureLeads maps a session's FailureReason token to friendly,
@@ -137,6 +142,9 @@ func Derive(sess *spiceboxv1alpha1.AgentSession) []Notice {
 		if lead == "" {
 			lead = GenericFailedLead
 		}
+		if CapacityHoldExpired(sess) {
+			lead = CapacityHoldExpiredLead
+		}
 		return []Notice{{
 			Kind: KindFailed, Tone: ToneFailed,
 			Lead: lead,
@@ -174,13 +182,47 @@ func Derive(sess *spiceboxv1alpha1.AgentSession) []Notice {
 		sess.Status.Phase == spiceboxv1alpha1.AgentSessionPhaseRunning {
 		if c := meta.FindStatusCondition(sess.Status.Conditions,
 			spiceboxv1alpha1.AgentSessionConditionSandboxScheduling); c != nil && c.Status == metav1.ConditionFalse {
-			out = append(out, Notice{
+			n := Notice{
 				Kind: KindScheduling, Tone: ToneRoutine,
 				Lead: SchedulingLead, Body: c.Message,
-			})
+			}
+			if text, ok := CapacityHold(sess); ok {
+				n.Kind, n.Lead = KindCapacityHold, text
+			}
+			out = append(out, n)
 		}
 	}
 	return out
+}
+
+// CapacityHold reports whether the session is HELD for cluster capacity — the
+// operator's CapacityHold=True — and the user-facing line to show, which the
+// operator writes as the condition Message (it carries the give-up time).
+// Gated to Pending/Running for the same reason the scheduling notice is: a
+// parked or terminal session has nothing queued for the user to wait on.
+func CapacityHold(sess *spiceboxv1alpha1.AgentSession) (string, bool) {
+	if sess == nil || (sess.Status.Phase != spiceboxv1alpha1.AgentSessionPhasePending &&
+		sess.Status.Phase != spiceboxv1alpha1.AgentSessionPhaseRunning) {
+		return "", false
+	}
+	c := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		return "", false
+	}
+	if c.Message == "" {
+		return SchedulingLead, true
+	}
+	return c.Message, true
+}
+
+// CapacityHoldExpired reports whether the session failed because its capacity
+// hold ran out — the operator's CapacityHold=False/HoldExpired.
+func CapacityHoldExpired(sess *spiceboxv1alpha1.AgentSession) bool {
+	if sess == nil {
+		return false
+	}
+	c := meta.FindStatusCondition(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionCapacityHold)
+	return c != nil && c.Status == metav1.ConditionFalse && c.Reason == spiceboxv1alpha1.ReasonCapacityHoldExpired
 }
 
 func conditionMessage(sess *spiceboxv1alpha1.AgentSession, condType string) string {

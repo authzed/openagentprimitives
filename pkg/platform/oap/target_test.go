@@ -16,6 +16,14 @@ func TestParseTarget_AppendMarker(t *testing.T) {
 	assert.Equal(t, []Segment{{Field: "spec"}, {Field: "toolchains", Append: true}}, got.Path)
 }
 
+func TestParseTarget_FilterMarker(t *testing.T) {
+	// `field[?]` marks the terminal segment as a filter: the CR's list is cut
+	// down to the elements the answer names, instead of being added to.
+	got, err := ParseTarget("AgentClass/demo-agent#spec.skills[?]")
+	require.NoError(t, err)
+	assert.Equal(t, []Segment{{Field: "spec"}, {Field: "skills", Filter: true}}, got.Path)
+}
+
 func TestParseTarget(t *testing.T) {
 	t.Run("scalar path", func(t *testing.T) {
 		got, err := ParseTarget("MCPServer/pm-linear#spec.upstream.endpoint")
@@ -42,6 +50,7 @@ func TestParseTarget(t *testing.T) {
 		{"empty segment", "AgentClass/pm#spec..x", "empty path segment"},
 		{"unterminated selector", "AgentClass/pm#spec.boundEntities[github_repo.defaults", "unterminated selector"},
 		{"append marker not final", "AgentClass/pm#spec.boundEntities[].defaults", "final segment"},
+		{"filter marker not final", "AgentClass/pm#spec.skills[?].ref", "final segment"},
 	}
 	for _, tc := range bad {
 		t.Run(tc.name+": error", func(t *testing.T) {

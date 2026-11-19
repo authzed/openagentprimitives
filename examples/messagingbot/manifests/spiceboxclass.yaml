@@ -1,0 +1,28 @@
+# Sandbox class for messagingbot: gh only, network-restricted to GitHub, bound
+# to the read-only messagingbot-gh-read toolspec. SpiceboxClass is
+# cluster-scoped (no metadata.namespace).
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceboxClass
+metadata:
+  name: messagingbot-gh
+spec:
+  # image omitted — the operator's default sandbox image (portable across local + cloud).
+  resources:
+    cpu: "500m"
+    memory: "256Mi"
+    ephemeralStorage: "500Mi"
+    pidsLimit: 64
+  network:
+    mode: allowlist
+    allowedHosts:
+      - api.github.com
+      - github.com
+  tools:
+    - name: gh
+      command: ["/usr/bin/gh"]
+      expectedDuration: short
+  toolspecs:
+    - name: messagingbot-gh-read
+  sessionDefaults:
+    idleTTL: "30m"
+    maxDuration: "1h"

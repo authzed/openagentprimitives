@@ -13,6 +13,43 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 )
 
+// retainResolution freezes applied as the parked prompt's canonical outcome and
+// resolves the prompt with it, returning the record for
+// deliverInteractionResolution. The transient per-click callbacks (ResponseRef,
+// MintedURL) are stripped: the frozen copy is what every later reader sees.
+func (p *Pipeline) retainResolution(ctx context.Context, applied channelevents.InteractionAppliedPayload) (parkedprompt.Content, error) {
+	ns, name := applied.AgentSessionRef.Namespace, applied.AgentSessionRef.Name
+	applied.ResponseRef, applied.MintedURL = "", ""
+	canonical, err := channelevents.BuildEnvelope(ns, name, channelevents.KindInteractionApplied, applied)
+	if err != nil {
+		return parkedprompt.Content{}, err
+	}
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		return parkedprompt.Content{}, err
+	}
+	return parkedprompt.ResolveWithOutcome(ctx, p.Mem, promptScope(ns, name), applied.RequestRef, raw)
+}
+
+// resolvedAsExpired reports whether a resolved parked prompt's retained
+// outcome is an expiry, so a later click can be told the request expired
+// rather than that someone else decided it. A record with no retained outcome
+// (a plain tombstone) is not an expiry.
+func resolvedAsExpired(record parkedprompt.Content) (bool, error) {
+	if len(record.Resolution) == 0 {
+		return false, nil
+	}
+	var env channelevents.Envelope
+	if err := json.Unmarshal(record.Resolution, &env); err != nil {
+		return false, err
+	}
+	var applied channelevents.InteractionAppliedPayload
+	if err := json.Unmarshal(env.Payload, &applied); err != nil {
+		return false, err
+	}
+	return applied.Outcome == channelevents.OutcomeExpired, nil
+}
+
 func (p *Pipeline) deliverInteractionResolution(ctx context.Context, record parkedprompt.Content, live ...channelevents.InteractionAppliedPayload) error {
 	var env channelevents.Envelope
 	if err := json.Unmarshal(record.Resolution, &env); err != nil {
