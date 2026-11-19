@@ -15,9 +15,9 @@ import (
 	"os"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
+	"github.com/authzed/openagentprimitives/pkg/agent/llm/anthropic/sdkclient"
 )
 
 type Provider struct {
@@ -30,7 +30,7 @@ func New(apiKey string) *Provider {
 	if apiKey == "" {
 		panic("anthropic.New: apiKey must be non-empty")
 	}
-	c := sdk.NewClient(option.WithAPIKey(apiKey))
+	c := sdkclient.New(apiKey)
 	return &Provider{client: &c}
 }
 

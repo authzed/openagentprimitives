@@ -364,6 +364,49 @@ func TestLoopBudgetExhausts(t *testing.T) {
 	}
 }
 
+// hangingProvider never answers: Send blocks until its ctx is cancelled,
+// the shape of a provider stream that went silent on a live connection.
+type hangingProvider struct{ llmfake.Provider }
+
+func (*hangingProvider) Send(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	<-ctx.Done()
+	return llm.Response{}, ctx.Err()
+}
+
+// TestLoop_HungProviderCall_FailsOnSessionExpirationMidCall proves the
+// wall-clock sessionExpiration fires DURING a provider call, not only between
+// turns: a Send that never returns would otherwise hold the session in Running
+// past its lifetime, because the budget check at the top of the next iteration
+// is never reached. (maxDuration's mid-call cut-off is a separate mechanism,
+// covered by TestLoop_MaxDurationCutsOffInFlightWork.) The session must land on
+// Failed/SessionExpired, not the generic budget reason and not the retryable
+// provider-error path, even when channel-attached: retrying cannot recover an
+// expired session.
+func TestLoop_HungProviderCall_FailsOnSessionExpirationMidCall(t *testing.T) {
+	l, _, _ := newLoopFixtureWithProvider(t, &hangingProvider{})
+	l.ChannelAttached = true
+	l.Budget = runner.NewBudget(spiceboxv1alpha1.BudgetConfig{
+		MaxTurns:          50,
+		MaxTokens:         100000,
+		SessionExpiration: metav1.Duration{Duration: 300 * time.Millisecond},
+	}, runner.NewRunClock(0, time.Now), time.Now())
+
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	done := make(chan error, 1)
+	go func() { done <- l.Run(ctx) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "Run records the expiration failure and returns")
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run blocked in a provider call past sessionExpiration")
+	}
+
+	var got spiceboxv1alpha1.AgentSession
+	require.NoError(t, l.Status.Get(ctx, &got), "Get after Run")
+	assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, got.Status.Phase)
+	assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionExpired, got.Status.FailureReason)
+}
+
 func TestLoopProviderError(t *testing.T) {
 	// Protocol-violation sites in loop.go intentionally use l.fail (not
 	// failProviderError) so they always land on Failed regardless of
