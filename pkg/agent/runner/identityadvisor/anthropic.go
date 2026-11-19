@@ -8,7 +8,7 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 
-	llmanthropic "github.com/authzed/openagentprimitives/pkg/agent/llm/anthropic"
+	"github.com/authzed/openagentprimitives/pkg/agent/llm/anthropic/sdkclient"
 )
 
 // AnthropicModel is the Claude model used for identity recommendations.
@@ -29,7 +29,7 @@ func NewAnthropic(apiKey string) *AnthropicProvider {
 	if apiKey == "" {
 		panic("identityadvisor.NewAnthropic: apiKey must be non-empty")
 	}
-	c := llmanthropic.NewSDKClient(apiKey)
+	c := sdkclient.New(apiKey)
 	return &AnthropicProvider{
 		client: &c,
 	}

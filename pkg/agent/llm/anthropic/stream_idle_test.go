@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
+	"github.com/authzed/openagentprimitives/pkg/agent/llm/anthropic/sdkclient"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm/llmhttp"
 )
 
@@ -29,7 +30,7 @@ func TestSend_StalledStream_ReturnsStreamIdleError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewSDKClient("sk-ant-test",
+	c := sdkclient.New("sk-ant-test",
 		option.WithBaseURL(srv.URL+"/"),
 		option.WithHTTPClient(llmhttp.NewClient(llmhttp.Config{StreamIdleTimeout: 200 * time.Millisecond})),
 		option.WithMaxRetries(0),
