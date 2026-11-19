@@ -70,6 +70,18 @@ const disclosurePollInterval = 15 * time.Second
 // the sentence a user needs.
 const disclosureWaitWindow = 20 * time.Minute
 
+// disclosureRetireGrace bounds how long a delegation whose window has lapsed is
+// held back from Failed because its cards' expiry reports could not be
+// published.
+//
+// The report is what un-parks the parent, and a terminal request is never
+// reconciled again, so it has to get out first. But it cannot be a condition of
+// failing: with the bus down for good the request would sit in
+// AwaitingDisclosure forever. Eight attempts at disclosurePollInterval covers a
+// reconnect, and window plus grace still lands well inside the delegate tool's
+// own 30m timeout, so the parent's call gets the stated failure either way.
+const disclosureRetireGrace = 2 * time.Minute
+
 const maxCopiedResultLen = 4096
 
 // truncationMarker is appended (within the maxCopiedResultLen budget) when a

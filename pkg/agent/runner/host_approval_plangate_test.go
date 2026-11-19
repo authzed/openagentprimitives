@@ -1282,3 +1282,46 @@ func TestApproverCanDelegateSlots_HoldingNonePermissionsDropsTheRef(t *testing.T
 	require.NoError(t, err)
 	assert.Empty(t, got, "no permission held → nothing to delegate")
 }
+
+// Both plan-gate categories park, so a lapsed one must tell channelsd the way
+// every other parking kind does. Without the timeout report the only thing that
+// ever cleared the pending entry was a click on the expired card, and the
+// outbound relay now drops a card whose deadline passed in transit, so the
+// AwaitingDecision surface would stay up for a request nobody can answer.
+func TestAwaitDecision_planGateTimeoutPublishesInteractionAppliedExpired(t *testing.T) {
+	cases := []struct {
+		ask      pipeline.ApprovalAsk
+		category string
+	}{
+		{ask: planPhaseAsk(), category: categories.PlanPhase},
+		{ask: planAmendmentAsk(), category: categories.PlanAmendment},
+	}
+	for _, tc := range cases {
+		t.Run(tc.category+": timeout publishes one expired applied on IN", func(t *testing.T) {
+			var published channelevents.Envelope
+			h := planGateHost(t, &published)
+			h.l.Mem = memory.NewLocal(inmem.NewBackend())
+			var applied []channelevents.Envelope
+			h.l.TimeoutAppliedPublish = func(_ context.Context, _, _ string, env channelevents.Envelope) error {
+				applied = append(applied, env)
+				return nil
+			}
+
+			reqID, err := h.PublishApproval(context.Background(), tc.ask)
+			require.NoError(t, err)
+
+			approved, _, timedOut, err := h.AwaitDecision(context.Background(), reqID, 20*time.Millisecond)
+			require.NoError(t, err, "a timeout is a deny, never a Halt")
+			assert.True(t, timedOut)
+			assert.False(t, approved, "a lapsed deadline never clears a phase")
+
+			require.Len(t, applied, 1, "timeout must publish exactly one applied envelope")
+			assert.Equal(t, channelevents.KindInteractionApplied, applied[0].Kind)
+			var pl channelevents.InteractionAppliedPayload
+			require.NoError(t, json.Unmarshal(applied[0].Payload, &pl))
+			assert.Equal(t, tc.category, pl.Category)
+			assert.Equal(t, reqID, pl.RequestRef)
+			assert.Equal(t, channelevents.OutcomeExpired, pl.Outcome)
+		})
+	}
+}

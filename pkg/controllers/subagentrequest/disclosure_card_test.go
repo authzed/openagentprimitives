@@ -4,14 +4,20 @@ package subagentrequest
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/authz/handoff"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 )
 
 // TestAHumansNoEndsItImmediately.
@@ -139,4 +145,168 @@ func TestNoDeciderPublishesNothingAndStillDoesNotBind(t *testing.T) {
 	got := getRequest(t, r.Client, "req-noowner")
 	assert.Equal(t, v1.SubagentRequestPhaseAwaitingDisclosure, got.Status.Phase)
 	assert.Empty(t, az.grantedDataSlots, "and it certainly does not bind")
+}
+
+// TestALapsedWindowRetiresEachCardItAsked.
+//
+// channelsd parks the parent on every disclosure card and clears that only on a
+// decision or a timeout report. Failing the delegation at the window is the
+// controller's half; the other half is telling channelsd the cards lapsed, or
+// the parent stays marked as awaiting a decision nobody can make. A click on
+// the expired card used to clear it, but a card that expires on its way out is
+// never delivered, so there is nothing to click.
+func TestALapsedWindowRetiresEachCardItAsked(t *testing.T) {
+	az := &fakeAuthz{tagAccess: map[string]bool{"ptt-a": true, "ptt-b": true}}
+	sr := requestWithDataSlots(t, "req-lapsed",
+		v1.DataSlotRequest{Slot: "logs", TagID: "ptt-a"},
+		v1.DataSlotRequest{Slot: "notes", TagID: "ptt-b"})
+	longAgo := metav1.NewTime(time.Now().Add(-24 * time.Hour))
+	sr.Status.DisclosureRequestedAt = &longAgo
+	r, _ := reconcilerWithAuthz(t, az, sr)
+	r.Grader = gradeFunc(map[string]handoff.Grade{"ptt-a": handoff.GradeRoute, "ptt-b": handoff.GradeRoute}, nil)
+	var published []channelevents.Envelope
+	var targets []string
+	r.PublishInteraction = func(_ context.Context, ns, name string, env channelevents.Envelope) error {
+		published = append(published, env)
+		targets = append(targets, ns+"/"+name)
+		return nil
+	}
+
+	reconcileOnce(t, r, "req-lapsed")
+
+	got := getRequest(t, r.Client, "req-lapsed")
+	require.Equal(t, v1.SubagentRequestPhaseFailed, got.Status.Phase, "the window still ends the delegation")
+	require.Len(t, published, 2, "one expiry report per card that was asked")
+	refs := make([]string, 0, len(published))
+	for i, env := range published {
+		assert.Equal(t, channelevents.KindInteractionApplied, env.Kind)
+		assert.Equal(t, sr.Spec.Parent.Namespace+"/"+sr.Spec.Parent.Name, targets[i],
+			"reported on the PARENT's subject, where the card parked it")
+		var pl channelevents.InteractionAppliedPayload
+		require.NoError(t, json.Unmarshal(env.Payload, &pl))
+		assert.Equal(t, categories.DataSlotDisclosure, pl.Category)
+		assert.Equal(t, channelevents.OutcomeExpired, pl.Outcome, "a lapsed window never approves")
+		refs = append(refs, pl.RequestRef)
+	}
+	assert.ElementsMatch(t, []string{
+		disclosureRequestRef(sr, "logs"), disclosureRequestRef(sr, "notes"),
+	}, refs, "each report names the card it retires")
+}
+
+// lapsedRequest builds a two-slot request whose disclosure window opened
+// sinceAsked ago, parked awaiting the decision, with the reconciler's clock
+// pinned so the window and the retire grace are measured exactly.
+func lapsedRequest(t *testing.T, name string, sinceAsked time.Duration) (*Reconciler, *v1.SubagentRequest) {
+	t.Helper()
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	az := &fakeAuthz{tagAccess: map[string]bool{"ptt-a": true, "ptt-b": true}}
+	sr := requestWithDataSlots(t, name,
+		v1.DataSlotRequest{Slot: "logs", TagID: "ptt-a"},
+		v1.DataSlotRequest{Slot: "notes", TagID: "ptt-b"})
+	asked := metav1.NewTime(now.Add(-sinceAsked))
+	sr.Status.DisclosureRequestedAt = &asked
+	sr.Status.Phase = v1.SubagentRequestPhaseAwaitingDisclosure
+	r, _ := reconcilerWithAuthz(t, az, sr)
+	r.Now = func() time.Time { return now }
+	r.Grader = gradeFunc(map[string]handoff.Grade{"ptt-a": handoff.GradeRoute, "ptt-b": handoff.GradeRoute}, nil)
+	return r, sr
+}
+
+// TestALapsedWindowHoldsTheVerdictUntilItsCardsAreRetired.
+//
+// A Failed request is never reconciled again, so the expiry reports have one
+// chance: before the verdict is written. If a report cannot be published and
+// the request goes terminal anyway, the parent stays marked as awaiting a card
+// nobody can click, with nothing left to clear it. So a failed report holds the
+// verdict back and retries — but only for a bounded grace, because a bus that
+// never recovers must not keep the delegation from ever failing.
+func TestALapsedWindowHoldsTheVerdictUntilItsCardsAreRetired(t *testing.T) {
+	cases := []struct {
+		name        string
+		sinceAsked  time.Duration
+		publishErr  error
+		wantPhase   string
+		wantRequeue time.Duration
+	}{
+		{
+			name:        "report publish fails inside the grace: still AwaitingDisclosure, requeued to retry",
+			sinceAsked:  disclosureWaitWindow + time.Second,
+			publishErr:  errors.New("nats: connection closed"),
+			wantPhase:   v1.SubagentRequestPhaseAwaitingDisclosure,
+			wantRequeue: disclosurePollInterval,
+		},
+		{
+			name:        "report publish fails at the last instant of the grace: still held back",
+			sinceAsked:  disclosureWaitWindow + disclosureRetireGrace,
+			publishErr:  errors.New("nats: connection closed"),
+			wantPhase:   v1.SubagentRequestPhaseAwaitingDisclosure,
+			wantRequeue: disclosurePollInterval,
+		},
+		{
+			name:       "report publish still failing past the grace: Failed anyway, no requeue",
+			sinceAsked: disclosureWaitWindow + disclosureRetireGrace + time.Second,
+			publishErr: errors.New("nats: connection closed"),
+			wantPhase:  v1.SubagentRequestPhaseFailed,
+		},
+		{
+			name:       "report published: Failed at once, no requeue",
+			sinceAsked: disclosureWaitWindow + time.Second,
+			wantPhase:  v1.SubagentRequestPhaseFailed,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := lapsedRequest(t, "req-hold", tc.sinceAsked)
+			var attempts int
+			r.PublishInteraction = func(context.Context, string, string, channelevents.Envelope) error {
+				attempts++
+				return tc.publishErr
+			}
+
+			res := reconcileOnce(t, r, "req-hold")
+
+			got := getRequest(t, r.Client, "req-hold")
+			assert.Equal(t, tc.wantPhase, got.Status.Phase)
+			assert.Equal(t, tc.wantRequeue, res.RequeueAfter)
+			assert.Equal(t, 2, attempts, "every slot's report is attempted, even after one fails")
+			if tc.wantPhase == v1.SubagentRequestPhaseFailed {
+				assert.Contains(t, got.Status.Determination, "none arrived within",
+					"a retire failure never changes the stated reason")
+			}
+		})
+	}
+}
+
+// TestAHeldVerdictLandsOnceTheReportsGetOut is the recovery half: the pass
+// after the bus comes back retires every card and writes the verdict. Every
+// slot is reported again, including one whose report got through the first
+// time, because channelsd clears an entry once and ignores the repeat.
+func TestAHeldVerdictLandsOnceTheReportsGetOut(t *testing.T) {
+	r, sr := lapsedRequest(t, "req-recover", disclosureWaitWindow+time.Second)
+	var busUp bool
+	var retired []string
+	r.PublishInteraction = func(_ context.Context, _, _ string, env channelevents.Envelope) error {
+		var pl channelevents.InteractionAppliedPayload
+		require.NoError(t, json.Unmarshal(env.Payload, &pl))
+		if !busUp && pl.RequestRef == disclosureRequestRef(sr, "notes") {
+			return errors.New("nats: connection closed")
+		}
+		if busUp {
+			retired = append(retired, pl.RequestRef)
+		}
+		return nil
+	}
+
+	reconcileOnce(t, r, "req-recover")
+	require.Equal(t, v1.SubagentRequestPhaseAwaitingDisclosure, getRequest(t, r.Client, "req-recover").Status.Phase,
+		"one slot's report failed, so the verdict is held back")
+
+	busUp = true
+	res := reconcileOnce(t, r, "req-recover")
+
+	assert.Equal(t, v1.SubagentRequestPhaseFailed, getRequest(t, r.Client, "req-recover").Status.Phase)
+	assert.Zero(t, res.RequeueAfter)
+	assert.ElementsMatch(t, []string{
+		disclosureRequestRef(sr, "logs"), disclosureRequestRef(sr, "notes"),
+	}, retired, "the retry reports every card, not only the one that failed")
 }

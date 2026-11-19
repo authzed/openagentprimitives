@@ -260,7 +260,7 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 	//
 	// Checked only after standing, so a clicker who could not have decided the
 	// request learns nothing about its state and writes nothing.
-	if req != nil && expiresAtPassed(req.ExpiresAt, p.nowOrWallClock()) {
+	if req != nil && req.ExpiredAt(p.nowOrWallClock()) {
 		logger.Info("interaction decision: request is past its deadline; rejecting as expired",
 			"expiresAt", req.ExpiresAt.UTC().Format(time.RFC3339))
 		p.retireExpiredRequest(ctx, logger, ns, name, pl)

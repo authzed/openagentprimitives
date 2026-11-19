@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -196,4 +197,56 @@ func TestHandleInteractionDecision_ClearsDurablePendingInteraction(t *testing.T)
 	var got spiceboxv1alpha1.AgentSession
 	require.NoError(t, cli.Get(context.Background(), sessKey, &got))
 	assert.Empty(t, got.Status.PendingInteractions, "decision must clear the durable PendingInteractions entry")
+}
+
+// TestHandleInteractionRequest_ExpiredOnArrivalIsNeitherParkedNorReEmitted: a
+// request whose deadline passed before channelsd got it (a lagging IN leg, or a
+// runner re-publishing after a restart) must not mark the session as awaiting a
+// decision its producer already stopped waiting for. The boundary is the shared
+// inclusive rule: at the deadline is already expired.
+func TestHandleInteractionRequest_ExpiredOnArrivalIsNeitherParkedNorReEmitted(t *testing.T) {
+	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		expiresAt time.Time
+		wantPark  bool
+	}{
+		{name: "deadline passed: not parked, not re-emitted", expiresAt: now.Add(-time.Minute), wantPark: false},
+		{name: "exactly at deadline: not parked, not re-emitted", expiresAt: now, wantPark: false},
+		{name: "deadline ahead: parked and re-emitted", expiresAt: now.Add(time.Minute), wantPark: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			registerContentInspectionCategory(t)
+			cli := newFakeK8sClientWithExistingSession(t, "U_ALICE")
+			sessKey := sessKeyForFixture()
+			natsRec := &fakeNATS{}
+			p := newTestPipeline(t, cli, &fakeAuthz{}, natsRec)
+			p.Now = func() time.Time { return now }
+
+			pl := ciInteractionRequest("req-1")
+			pl.ExpiresAt = &tc.expiresAt
+			env, err := channelevents.BuildEnvelope(sessKey.Namespace, sessKey.Name, channelevents.KindInteractionRequest, pl)
+			require.NoError(t, err)
+
+			require.NoError(t, p.HandleInteractionRequest(context.Background(), env),
+				"an expired request is not an error: nothing failed, there is just nothing left to ask")
+
+			var got spiceboxv1alpha1.AgentSession
+			require.NoError(t, cli.Get(context.Background(), sessKey, &got))
+			var reEmitted bool
+			for _, s := range natsRec.subjects {
+				if strings.HasSuffix(s, ".out.interaction_request") {
+					reEmitted = true
+				}
+			}
+			if tc.wantPark {
+				assert.Len(t, got.Status.PendingInteractions, 1)
+				assert.True(t, reEmitted, "a live request is re-emitted for the renderer")
+			} else {
+				assert.Empty(t, got.Status.PendingInteractions, "an expired request must not park the session")
+				assert.False(t, reEmitted, "an expired request must not be re-emitted; subjects=%v", natsRec.subjects)
+			}
+		})
+	}
 }
