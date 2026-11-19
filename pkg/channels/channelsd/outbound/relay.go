@@ -616,6 +616,35 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 		return
 	}
 
+	// A prompt whose deadline passed while it sat in the relay's queue is not
+	// delivered: the runner has already stopped waiting, and its timeout report
+	// rides IN, so it can reach channelsd before this card does and find nothing
+	// to retire. Delivered anyway, the card would arrive armed — a Slack
+	// approver card is an ephemeral a later expiry cannot edit — and noted as
+	// live, for a request nobody can act on. Re-surfacing applies the same rule
+	// to a parked prompt.
+	//
+	// The drop is still recorded in the destination's interaction history, with
+	// the same audience and chain stamps a delivered card gets below, so the
+	// timeline shows the request and that it expired. See noteExpiredInTransit.
+	//
+	// Checked here, as soon as the destination is known and ahead of everything
+	// that touches it: the record needs the resolved binding, its owner and the
+	// chain, and nothing else. Any later and a card that is about to be dropped
+	// would first cost a channel-id recovery lookup and could post the session's
+	// opening line, rooting a thread on a prompt that never arrives.
+	if pl, expired := promptExpiredInTransit(env, time.Now()); expired {
+		logger.Info("outbound relay: drop, interaction request expired before delivery",
+			"requestRef", pl.RequestRef, "category", pl.Category,
+			"expiresAt", pl.ExpiresAt.UTC().Format(time.RFC3339))
+		recorded := restampAudienceKinds(env, outBinding.Kind, registry.DeliversToHuman, logger)
+		recorded = stampAskingChain(recorded, bindingChain, logger)
+		noteExpiredInTransit(ctx, logger, r.Mem,
+			memory.Scope{Kind: "session", ID: bindingOwner.Namespace + "/" + bindingOwner.Name},
+			string(sess.UID), recorded, pl)
+		return
+	}
+
 	// Recover a channel_id the binding never got (or lost) from the destination
 	// Channel CR before any send — the reviewbot incident, where a Slack output
 	// binding with no channel_id made every reply fail "external.channel_id
@@ -758,29 +787,6 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 			return
 		}
 		env.Payload = reb
-	}
-
-	// A prompt whose deadline passed while it sat in the relay's queue is not
-	// delivered: the runner has already stopped waiting, and its timeout report
-	// rides IN, so it can reach channelsd before this card does and find nothing
-	// to retire. Delivered anyway, the card would arrive armed — a Slack
-	// approver card is an ephemeral a later expiry cannot edit — and noted as
-	// live, for a request nobody can act on. Re-surfacing applies the same rule
-	// to a parked prompt.
-	//
-	// The drop is still recorded in the destination's interaction history, with
-	// the same audience and chain stamps a delivered card gets below, so the
-	// timeline shows the request and that it expired. See noteExpiredInTransit.
-	if pl, expired := promptExpiredInTransit(env, time.Now()); expired {
-		logger.Info("outbound relay: drop, interaction request expired before delivery",
-			"requestRef", pl.RequestRef, "category", pl.Category,
-			"expiresAt", pl.ExpiresAt.UTC().Format(time.RFC3339))
-		recorded := restampAudienceKinds(env, outBinding.Kind, registry.DeliversToHuman, logger)
-		recorded = stampAskingChain(recorded, bindingChain, logger)
-		noteExpiredInTransit(ctx, logger, r.Mem,
-			memory.Scope{Kind: "session", ID: bindingOwner.Namespace + "/" + bindingOwner.Name},
-			string(sess.UID), recorded, pl)
-		return
 	}
 
 	// Durably record relayed prompt REQUEST envelopes so the inbound pipeline can
