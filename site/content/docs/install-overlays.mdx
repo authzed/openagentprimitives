@@ -1,0 +1,90 @@
+export const meta = {
+  title: 'Customizing the install',
+  section: 'Guides',
+  group: 'Operations',
+  order: 202,
+  description:
+    'Keep cluster-specific changes, like a raised memory limit, in kustomize overlays you own, so every re-install and upgrade applies them instead of resetting them.',
+}
+
+# Customizing the install
+
+<div className="doc-lede">
+  <code>oap install</code> applies the bundled platform manifests, and every re-install or upgrade applies them
+  again. A change made by hand on the cluster, such as a memory limit raised with <code>kubectl</code>, is reset
+  the next time. To keep a change, put it in an overlay and pass it on every install.
+</div>
+
+## Write an overlay
+
+An overlay is a directory holding a [kustomize Component](https://kubectl.docs.kubernetes.io/guides/config_management/components/):
+a `kustomization.yaml` of `kind: Component` plus the patches it lists. It does not name a base. OAP supplies the
+base: the manifests it is about to install.
+
+This one raises the operator's memory limit:
+
+```yaml
+# overlays/operator-memory/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - path: memory.yaml
+```
+
+```yaml
+# overlays/operator-memory/memory.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicebox-operator
+  namespace: agentprimitives-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: operator
+          resources:
+            limits:
+              memory: 2Gi
+```
+
+Any kustomize patch works, including strategic-merge and JSON 6902 patches. A patch can target any resource OAP
+installs: the operator, webd, authzd, extractord, channelsd, NATS, Postgres, Neo4j and Graphiti.
+
+## Apply it
+
+Pass `--overlay` to `oap init` or `oap install`. Repeat the flag to layer several, applied in the order given:
+
+```bash
+oap install --overlay overlays/operator-memory --overlay overlays/webd-env ...
+```
+
+The install lists each resource the overlays change before it starts. Pass the same overlays on every later
+install and upgrade. The overlay is an input like any other flag: an install run without it puts the bundled values
+back.
+
+## What is refused
+
+Overlays are checked against every manifest OAP ships before anything is built or applied. The install stops
+with an error when:
+
+- **Two overlays conflict.** Two overlays that set the same field to different values are refused, and the error
+  names the resource, the field and both values. Overlays that agree on a value, or change different fields, are
+  fine.
+- **A patch matches nothing.** A misspelled resource name fails rather than being silently ignored.
+- **An overlay adds, removes or renames a resource.** Overlays change the resources OAP installs; they do not
+  change which resources it installs.
+- **The directory is not a Component.** A classic overlay, which names its own base with `resources: [../base]`,
+  is refused with a pointer to `kind: Component`.
+
+Overlays patch the manifests as the install will apply them, with image references already rewritten for your
+registry, so every field an overlay does not name keeps the value the install gave it. Image pull secrets and registry
+mirrors are applied after the overlays and take precedence on the fields they set.
+
+## With GitOps
+
+[`oap render`](/docs/gitops) accepts the same `--overlay` flags. It copies each overlay into the output's
+`overlays/` directory and lists it under `components:`, so an overlay written for direct installs carries over
+unchanged. It runs the same checks, against the resources the render emits: the core install, channelsd, NATS and
+the dependency components enabled by flags. Render does not emit Neo4j or Graphiti, and emits Postgres only with
+`--with-postgres`, so an overlay that patches one of those is refused unless the render includes it.
