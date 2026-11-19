@@ -809,7 +809,18 @@ func run(rootCtx context.Context, cfg *config) error {
 	// setStatus notifications, plan_update) into the same machine via
 	// ApplyEvent / OnTurnActivity, which both re-arms the silence window and
 	// gates stale/post-yield captions.
-	sr := newSenderResolver(cli, nc, assetFetcher)
+	// The outbound relay reads every session's AgentSession (and, per stream
+	// delta, its AgentClass) on one serialized goroutine. Serve those reads from
+	// an informer cache so the relay's throughput is not the API server's
+	// round-trip time, rate-limited — see relayClient. The sender resolver shares
+	// it for the same per-delta AgentClass read.
+	relayCache, err := newRelayCache(rootCtx, restCfg, scm, 2*time.Minute)
+	if err != nil {
+		return err
+	}
+	relayCli := newRelayClient(cli, relayCache)
+
+	sr := newSenderResolver(relayCli, nc, assetFetcher)
 	wd := newStatusWatchdog(cli, sr)
 	// The watchdog's stall notice rides the bus like every other notice, so the
 	// outbound relay resolves the sender and binding. Without a publish func it
@@ -838,7 +849,7 @@ func run(rootCtx context.Context, cfg *config) error {
 	// captions are gated from one ordered place.
 	relay := &outbound.Relay{
 		NC:               nc,
-		K8s:              cli,
+		K8s:              relayCli,
 		Senders:          sr,
 		ApplyStatusEvent: wd.ApplyEvent,
 		OnTurnActivity:   wd.OnTurnActivity,
