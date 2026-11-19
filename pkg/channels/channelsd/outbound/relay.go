@@ -335,18 +335,60 @@ func notePendingPrompt(ctx context.Context, mem memory.Memory, ns, name string, 
 }
 
 // promptExpiredInTransit reports whether env is an interaction request whose
-// deadline has passed by now. Any other kind, or a payload that will not
-// decode, is delivered: dropping on a decode failure would be the silent hang
-// the relay exists to prevent.
-func promptExpiredInTransit(env channelevents.Envelope, now time.Time) bool {
-	if env.Kind != channelevents.KindInteractionRequest {
-		return false
-	}
+// deadline has passed by now, and returns the decoded request when it has. Any
+// other kind, or a payload that will not decode, is delivered: dropping on a
+// decode failure would be the silent hang the relay exists to prevent.
+func promptExpiredInTransit(env channelevents.Envelope, now time.Time) (channelevents.InteractionRequestPayload, bool) {
 	var pl channelevents.InteractionRequestPayload
-	if err := json.Unmarshal(env.Payload, &pl); err != nil {
-		return false
+	if env.Kind != channelevents.KindInteractionRequest {
+		return pl, false
 	}
-	return pl.ExpiredAt(now)
+	if err := json.Unmarshal(env.Payload, &pl); err != nil {
+		return pl, false
+	}
+	return pl, pl.ExpiredAt(now)
+}
+
+// noteExpiredInTransit records a dropped request in interaction history
+// together with an expired outcome for it, so the destination's timeline shows
+// that the agent asked and the request lapsed before reaching anyone.
+//
+// Both halves are written, never the request alone. The web timeline pairs a
+// request with its outcome by (source, category, requestRef) and does not read
+// ExpiresAt, so a request recorded without an outcome replays as a live card.
+// A click on that card would reach the decision pipe with no parked-prompt
+// record, which is the one case its deadline check cannot see. The producer's
+// own timeout report, when it arrives, is recorded as a second outcome for
+// the same key, which the timeline already tolerates.
+//
+// Failures are logged, not returned: the card is dropped either way, and a
+// missing history entry costs the timeline a line, not a decision.
+func noteExpiredInTransit(ctx context.Context, logger logr.Logger, mem memory.Memory, destination memory.Scope, sourceUID string, env channelevents.Envelope, pl channelevents.InteractionRequestPayload) {
+	if mem == nil {
+		return
+	}
+	if err := noteInteractionHistory(ctx, mem, destination, sourceUID, env); err != nil {
+		logger.Info("outbound relay: interaction history write for expired request failed",
+			"requestRef", pl.RequestRef, "destinationSession", destination.ID, "err", err.Error())
+		return
+	}
+	expired, err := channelevents.BuildEnvelope(env.Session.Namespace, env.Session.Name, channelevents.KindInteractionApplied,
+		channelevents.InteractionAppliedPayload{
+			AgentSessionRef: env.Session,
+			Category:        pl.Category,
+			RequestRef:      pl.RequestRef,
+			Outcome:         channelevents.OutcomeExpired,
+			Reason:          "expired before delivery",
+		})
+	if err != nil {
+		logger.Info("outbound relay: build expired outcome for history failed; the timeline will show the request unresolved until a timeout report arrives",
+			"requestRef", pl.RequestRef, "err", err.Error())
+		return
+	}
+	if err := noteInteractionHistory(ctx, mem, destination, sourceUID, expired); err != nil {
+		logger.Info("outbound relay: interaction history write for expired outcome failed; the timeline will show the request unresolved until a timeout report arrives",
+			"requestRef", pl.RequestRef, "destinationSession", destination.ID, "err", err.Error())
+	}
 }
 
 func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
@@ -725,8 +767,19 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 	// approver card is an ephemeral a later expiry cannot edit — and noted as
 	// live, for a request nobody can act on. Re-surfacing applies the same rule
 	// to a parked prompt.
-	if promptExpiredInTransit(env, time.Now()) {
-		logger.Info("outbound relay: drop, interaction request expired before delivery")
+	//
+	// The drop is still recorded in the destination's interaction history, with
+	// the same audience and chain stamps a delivered card gets below, so the
+	// timeline shows the request and that it expired. See noteExpiredInTransit.
+	if pl, expired := promptExpiredInTransit(env, time.Now()); expired {
+		logger.Info("outbound relay: drop, interaction request expired before delivery",
+			"requestRef", pl.RequestRef, "category", pl.Category,
+			"expiresAt", pl.ExpiresAt.UTC().Format(time.RFC3339))
+		recorded := restampAudienceKinds(env, outBinding.Kind, registry.DeliversToHuman, logger)
+		recorded = stampAskingChain(recorded, bindingChain, logger)
+		noteExpiredInTransit(ctx, logger, r.Mem,
+			memory.Scope{Kind: "session", ID: bindingOwner.Namespace + "/" + bindingOwner.Name},
+			string(sess.UID), recorded, pl)
 		return
 	}
 

@@ -26,11 +26,13 @@ import (
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkey"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/watchdog"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/inmem"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/interactionhistory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
@@ -2279,4 +2281,58 @@ func TestRelay_DropsInteractionRequestExpiredInTransit(t *testing.T) {
 	var pl channelevents.InteractionRequestPayload
 	require.NoError(t, json.Unmarshal(got[0].Payload, &pl))
 	assert.Equal(t, "live", pl.RequestRef)
+}
+
+// A dropped request is still recorded in the destination's interaction history,
+// and always with an expired outcome beside it. The web timeline pairs a
+// request with its outcome and never reads ExpiresAt, so a request recorded on
+// its own would replay as a live, clickable card for a request nobody is
+// waiting on any more.
+func TestRelay_ExpiredInTransitIsRecordedWithItsExpiredOutcome(t *testing.T) {
+	nc := connectNATS(t)
+	cli := fakeClientWith(t, defaultSession())
+	subCap := &captureSender{}
+	mem := memory.NewLocal(inmem.NewBackend())
+	startRelay(t, nc, cli, &fixedResolver{s: &captureSender{}, subS: subCap}, func(r *Relay) { r.Mem = mem })
+
+	request := func(ref string, expiresIn time.Duration) channelevents.Envelope {
+		deadline := time.Now().Add(expiresIn)
+		return buildEnv(t, "foo", channelevents.KindInteractionRequest, channelevents.InteractionRequestPayload{
+			Category:   categories.PlanPhase,
+			RequestRef: ref,
+			Lead:       "Approve this phase?",
+			Audience: channelevents.InteractionAudience{
+				Scope:     channelevents.AudienceApprovers,
+				Approvers: []channelevents.ExternalIdentity{{Kind: "fake", ExternalID: "U0X"}},
+			},
+			ExpiresAt: &deadline,
+		})
+	}
+	publishOut(t, nc, "default", "foo", "interaction_request", request("expired", -time.Minute))
+	publishOut(t, nc, "default", "foo", "interaction_request", request("live", time.Hour))
+	require.Eventually(t, func() bool { return subCap.count() >= 1 }, 5*time.Second, 20*time.Millisecond,
+		"the live request is delivered, which proves the expired one was handled first")
+	require.Len(t, subCap.envelopes(), 1, "the expired request is still not delivered")
+
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	res, err := mem.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: "default/foo"},
+		Kinds: []string{interactionhistory.KindName}})
+	require.NoError(t, err)
+	var requested, expired bool
+	for _, e := range res.Entries {
+		var c interactionhistory.Content
+		require.NoError(t, json.Unmarshal(e.Content, &c))
+		if c.Request != nil && c.Request.RequestRef == "expired" {
+			requested = true
+		}
+		if c.Applied != nil && c.Applied.RequestRef == "expired" {
+			expired = true
+			assert.Equal(t, channelevents.OutcomeExpired, c.Applied.Outcome)
+			assert.Equal(t, categories.PlanPhase, c.Applied.Category)
+			assert.Equal(t, c.Source, c.Applied.AgentSessionRef,
+				"the timeline rejects an outcome whose session differs from its record's source")
+		}
+	}
+	assert.True(t, requested, "the dropped request is in the destination's history")
+	assert.True(t, expired, "and so is an expired outcome for it, so it never replays as live")
 }
