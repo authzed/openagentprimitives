@@ -18,7 +18,10 @@
 // Settled once, durably: the TriggerAnswered condition is the operator's
 // observation in status, and its presence stops every later reconcile of the
 // session from reaching the provider at all. A transient failure leaves it
-// unset and requeues, so the answer is retried rather than dropped.
+// unset and asks for a retry, so the answer is retried rather than dropped. A
+// failure retrying cannot fix (the Channel or its Secret is gone) is settled
+// as Unanswerable instead. Neither holds up the session's cleanup: Reconcile
+// folds the retry into the terminal block's requeue and goes on to reap.
 //
 // Bounded by failedTriggerAnswerWindow from finishedAt. Past it nothing is
 // written: the pull request may well have moved to a newer commit with a new
@@ -47,12 +50,20 @@ const (
 	failedTriggerAnswerWindow = time.Hour
 	// failedTriggerRetry is the requeue after a failed answer attempt.
 	failedTriggerRetry = time.Minute
+	// failedTriggerAnswerTimeout bounds one backstop attempt. Tighter than
+	// triggerAnswerTimeout because this attempt repeats: a provider that hangs
+	// rather than failing costs a reconcile worker this long per failed
+	// session per failedTriggerRetry for the whole answer window, and an
+	// attempt cut short here is simply retried.
+	failedTriggerAnswerTimeout = 10 * time.Second
 )
 
 // reconcileFailedTrigger answers sess's trigger if sess is Failed and its
 // trigger is still unsettled. It returns a requeue delay when an attempt failed
-// and should be retried, else 0. It never fails the reconcile: a status write
-// error is logged and the next reconcile re-runs it.
+// and should be retried, else 0. It never fails the reconcile, and the caller
+// must not stop on the delay — the session's reap, GC and storage reclaim
+// still run in this pass. A status write error is logged and the next
+// reconcile re-runs it.
 func (r *Reconciler) reconcileFailedTrigger(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) time.Duration {
 	if sess.Status.Phase != spiceboxv1alpha1.AgentSessionPhaseFailed {
 		return 0
@@ -96,8 +107,15 @@ func (r *Reconciler) reconcileFailedTrigger(ctx context.Context, sess *spiceboxv
 		return 0
 	}
 
-	rep, err := r.answerTrigger(ctx, sess, failedTriggerSummary(sess))
+	rep, err := r.answerTrigger(ctx, sess, failedTriggerSummary(sess), failedTriggerAnswerTimeout)
 	triggeranswer.Log(logger, sessRef, reason, rep, err)
+	if triggeranswer.IsUnanswerable(err) {
+		// Retrying cannot produce a different result, so settle rather than
+		// ask again every failedTriggerRetry until the window closes.
+		r.markTriggerSettled(ctx, sess, spiceboxv1alpha1.ReasonTriggerUnanswerable,
+			"not answered: "+err.Error())
+		return 0
+	}
 	if err != nil {
 		return failedTriggerRetry
 	}

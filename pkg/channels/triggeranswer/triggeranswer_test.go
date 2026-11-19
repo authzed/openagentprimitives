@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
@@ -123,7 +124,7 @@ func binding(kind string) *spiceboxv1alpha1.ChannelBinding {
 	return &spiceboxv1alpha1.ChannelBinding{Name: taChannelName, Kind: kind, Key: taBindingKey}
 }
 
-func cluster(t *testing.T, withChannel, withSecret bool) client.Client {
+func cluster(t *testing.T, withChannel, withSecret bool) client.WithWatch {
 	t.Helper()
 	sch := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(sch))
@@ -158,8 +159,10 @@ func TestAnswerCouldNotFinish(t *testing.T) {
 		wantResult              triggeranswer.Result
 		wantStanding            channelkinds.TriggerOutcome
 		wantErr                 string
-		wantClaims              int
-		wantPublished           bool
+		// wantUnanswerable: the error is one retrying cannot fix.
+		wantUnanswerable bool
+		wantClaims       int
+		wantPublished    bool
 	}{
 		{
 			name:    "open trigger: concluded could_not_finish with the caller's summary",
@@ -182,7 +185,7 @@ func TestAnswerCouldNotFinish(t *testing.T) {
 			wantClaims: 1,
 		},
 		{
-			name:    "conclude fails: error returned",
+			name:    "conclude fails: error returned, worth retrying",
 			binding: binding(taKindName), withChannel: true, withSecret: true,
 			arrange:    func(k *answerKind) { k.concludeErr = errors.New("provider down") },
 			wantErr:    "conclude the fixture check run",
@@ -205,14 +208,22 @@ func TestAnswerCouldNotFinish(t *testing.T) {
 			wantResult: triggeranswer.NotOwed,
 		},
 		{
-			name:    "input Channel missing: error, provider never touched",
+			name:    "input Channel missing: unanswerable, provider never touched",
 			binding: binding(taKindName), withSecret: true,
-			wantErr: "read the input Channel",
+			wantErr: "read the input Channel", wantUnanswerable: true,
 		},
 		{
-			name:    "credentials Secret missing: error, provider never touched",
+			name:    "credentials Secret missing: unanswerable, provider never touched",
 			binding: binding(taKindName), withChannel: true,
-			wantErr: "read the credentials Secret",
+			wantErr: "read the credentials Secret", wantUnanswerable: true,
+		},
+		{
+			name: "kind cannot address the binding: unanswerable, provider never touched",
+			binding: &spiceboxv1alpha1.ChannelBinding{
+				Name: taChannelName, Kind: taKindName, Key: "pr:demo-org/elsewhere#7",
+			},
+			withChannel: true, withSecret: true,
+			wantErr: "address the trigger", wantUnanswerable: true,
 		},
 	}
 	for _, tc := range cases {
@@ -231,6 +242,8 @@ func TestAnswerCouldNotFinish(t *testing.T) {
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.Equal(t, tc.wantUnanswerable, triggeranswer.IsUnanswerable(err),
+					"only a failure retrying cannot fix is unanswerable")
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tc.wantResult, rep.Result)
@@ -247,6 +260,46 @@ func TestAnswerCouldNotFinish(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAnswerCouldNotFinish_ChannelWithoutACredentialsSecretIsUnanswerable: a
+// Channel naming no Secret is refused before any read, as a failure retrying
+// cannot fix, rather than as a Get of an empty name.
+func TestAnswerCouldNotFinish_ChannelWithoutACredentialsSecretIsUnanswerable(t *testing.T) {
+	k := reset(t)
+	c := cluster(t, true, true)
+	var ch spiceboxv1alpha1.Channel
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: taNS, Name: taChannelName}, &ch))
+	ch.Spec.CredentialsRef.SecretName = ""
+	require.NoError(t, c.Update(context.Background(), &ch))
+
+	_, err := triggeranswer.Trigger{
+		Client: c, Namespace: taNS, Binding: binding(taKindName), ProviderAPIBaseURL: "https://provider.test",
+	}.AnswerCouldNotFinish(context.Background(), "stopped")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "names no credentials Secret")
+	assert.True(t, triggeranswer.IsUnanswerable(err))
+	assert.Zero(t, k.claims, "the provider is never reached")
+}
+
+// TestAnswerCouldNotFinish_FailedReadIsWorthRetrying: only NotFound means the
+// object is gone. Any other read failure may be the API server's, so it must
+// not be classified as unanswerable and settled for good.
+func TestAnswerCouldNotFinish_FailedReadIsWorthRetrying(t *testing.T) {
+	reset(t)
+	c := interceptor.NewClient(cluster(t, true, true), interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return errors.New("etcdserver: request timed out")
+		},
+	})
+
+	_, err := triggeranswer.Trigger{
+		Client: c, Namespace: taNS, Binding: binding(taKindName), ProviderAPIBaseURL: "https://provider.test",
+	}.AnswerCouldNotFinish(context.Background(), "stopped")
+
+	require.Error(t, err)
+	assert.False(t, triggeranswer.IsUnanswerable(err))
 }
 
 func TestSummaries_CarryTheReasonTokenAndSayDifferentThings(t *testing.T) {

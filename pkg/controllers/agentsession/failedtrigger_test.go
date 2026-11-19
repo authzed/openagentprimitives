@@ -58,12 +58,16 @@ func TestFailedTriggerBackstop(t *testing.T) {
 		name    string
 		sess    func() *spiceboxv1alpha1.AgentSession
 		arrange func(k *operatorTriggerKind)
+		// withoutChannel deletes the session's input Channel before the pass.
+		withoutChannel bool
 		// wantClaims: how many times the provider was read.
 		wantClaims int
 		// wantSummary: non-empty means exactly one could_not_finish was
 		// published, carrying this text.
 		wantSummary string
 		wantMarker  string
+		// wantMessage: a substring the marker's message must carry.
+		wantMessage string
 		wantRetry   bool
 	}{
 		{
@@ -138,6 +142,15 @@ func TestFailedTriggerBackstop(t *testing.T) {
 			wantRetry:  true,
 		},
 		{
+			name: "Channel deleted: settled as Unanswerable naming it, no requeue",
+			sess: func() *spiceboxv1alpha1.AgentSession {
+				return failedSession(tsKindName, spiceboxv1alpha1.ReasonAgentSessionBudget, time.Minute)
+			},
+			withoutChannel: true,
+			wantMarker:     spiceboxv1alpha1.ReasonTriggerUnanswerable,
+			wantMessage:    "not answered: read the input Channel " + tsChannelName,
+		},
+		{
 			name: "already settled: the provider is not touched again",
 			sess: func() *spiceboxv1alpha1.AgentSession {
 				s := failedSession(tsKindName, spiceboxv1alpha1.ReasonAgentSessionBudget, time.Minute)
@@ -196,9 +209,14 @@ func TestFailedTriggerBackstop(t *testing.T) {
 			}
 			sess := tc.sess()
 			r := triggerReconciler(t, sess)
+			if tc.withoutChannel {
+				require.NoError(t, r.Client.Delete(context.Background(), &spiceboxv1alpha1.Channel{
+					ObjectMeta: metav1.ObjectMeta{Name: tsChannelName, Namespace: tsNS},
+				}))
+			}
 
 			retry := r.ReconcileFailedTriggerForTest(context.Background(), sess)
-			assert.Equal(t, tc.wantRetry, retry > 0, "requeue only when an attempt failed")
+			assert.Equal(t, tc.wantRetry, retry > 0, "requeue only when an attempt failed and another could succeed")
 
 			claims, published := k.snapshot()
 			assert.Equal(t, tc.wantClaims, claims)
@@ -210,6 +228,11 @@ func TestFailedTriggerBackstop(t *testing.T) {
 				assert.Empty(t, published)
 			}
 			assert.Equal(t, tc.wantMarker, settledReason(t, r, sess))
+			if tc.wantMessage != "" {
+				c := conditions.Find(sess.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionTriggerAnswered)
+				require.NotNil(t, c)
+				assert.Contains(t, c.Message, tc.wantMessage)
+			}
 		})
 	}
 }
@@ -261,15 +284,46 @@ func TestFailedTriggerBackstop_SecondWriterSeesTheFirstAnswer(t *testing.T) {
 }
 
 // TestFailedTriggerBackstop_BoundsTheProviderCall: the answer runs under its
-// own deadline, so a provider that hangs cannot hold a reconcile worker.
+// own deadline, so a provider that hangs cannot hold a reconcile worker — and
+// under the backstop's tighter one, not the immediate answers', because this
+// attempt is the one that repeats.
 func TestFailedTriggerBackstop_BoundsTheProviderCall(t *testing.T) {
 	k := resetTriggerKind(t)
 	sess := failedSession(tsKindName, spiceboxv1alpha1.ReasonAgentSessionBudget, time.Minute)
 	r := triggerReconciler(t, sess)
 
+	before := time.Now()
 	r.ReconcileFailedTriggerForTest(context.Background(), sess)
 
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	assert.True(t, k.sawDeadline, "Claim must run under a bounded context")
+	require.True(t, k.sawDeadline, "Claim must run under a bounded context")
+	assert.LessOrEqual(t, k.deadline.Sub(before), agentsession.FailedTriggerAnswerTimeoutForTest+time.Second,
+		"the backstop's own bound, not the immediate answers' longer one")
+	assert.Less(t, agentsession.FailedTriggerAnswerTimeoutForTest, agentsession.TriggerAnswerTimeoutForTest)
+}
+
+// TestFailedTriggerBackstop_HangingProviderIsCutOffAtTheBound drives a
+// provider that never answers and asserts the pass returns, asking for a
+// retry, once its bound expires.
+func TestFailedTriggerBackstop_HangingProviderIsCutOffAtTheBound(t *testing.T) {
+	k := resetTriggerKind(t)
+	k.hang = true
+	sess := failedSession(tsKindName, spiceboxv1alpha1.ReasonAgentSessionBudget, time.Minute)
+	r := triggerReconciler(t, sess)
+
+	// The reconcile's own context stands in for the bound here so the test
+	// does not sit out the real one; the answer derives its deadline from it.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan time.Duration, 1)
+	go func() { done <- r.ReconcileFailedTriggerForTest(ctx, sess) }()
+
+	select {
+	case retry := <-done:
+		assert.Positive(t, retry, "a cut-off attempt is retried, not settled")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the backstop did not return once its context expired")
+	}
+	assert.Empty(t, settledReason(t, r, sess))
 }

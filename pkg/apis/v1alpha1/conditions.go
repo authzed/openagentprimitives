@@ -1010,6 +1010,11 @@ const (
 	// answer safely (the pull request may have moved on), or every attempt in
 	// the window failed. Nothing was written to the trigger.
 	ReasonTriggerAnswerWindowElapsed = "AnswerWindowElapsed"
+	// ReasonTriggerUnanswerable: the trigger could not be addressed at all —
+	// the session's input Channel or its credentials Secret is gone or
+	// unusable — so retrying could not help. Nothing was written to the
+	// trigger; the condition message names what was missing.
+	ReasonTriggerUnanswerable = "Unanswerable"
 )
 
 // Reasons for the AgentSession.Idle condition's per-cause subdivision.

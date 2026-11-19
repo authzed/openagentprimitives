@@ -12,7 +12,9 @@ import (
 
 // triggerAnswerTimeout bounds one answer's provider round trips (a token mint,
 // a head-commit read, a check-run read and write), so a slow provider cannot
-// hold a reconcile worker.
+// hold a reconcile worker. It is the bound for the two immediate answers, each
+// of which runs once, in the reconcile that writes Failed. The backstop, which
+// retries, runs under the tighter failedTriggerAnswerTimeout.
 const triggerAnswerTimeout = 30 * time.Second
 
 // concludeTriggerStatusOnOperatorFailure answers the trigger that started
@@ -47,20 +49,21 @@ const triggerAnswerTimeout = 30 * time.Second
 func (r *Reconciler) concludeTriggerStatusOnOperatorFailure(
 	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, reason, summary string,
 ) {
-	rep, err := r.answerTrigger(ctx, sess, summary)
+	rep, err := r.answerTrigger(ctx, sess, summary, triggerAnswerTimeout)
 	triggeranswer.Log(log.FromContext(ctx), sess.Namespace+"/"+sess.Name, reason, rep, err)
 }
 
 // answerTrigger is the operator's one route to triggeranswer: the session's
-// input binding, the operator's own client, the provider override, a bound.
+// input binding, the operator's own client, the provider override, and bound,
+// the deadline over the whole answer.
 func (r *Reconciler) answerTrigger(
-	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, summary string,
+	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, summary string, bound time.Duration,
 ) (triggeranswer.Report, error) {
 	var apiBase string
 	if r.TriggerStatusAPIBaseURL != nil {
 		apiBase = r.TriggerStatusAPIBaseURL()
 	}
-	actx, cancel := context.WithTimeout(ctx, triggerAnswerTimeout)
+	actx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 	return triggeranswer.Trigger{
 		Client:             r.Client,

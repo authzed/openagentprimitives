@@ -35,10 +35,12 @@ package triggeranswer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -90,11 +92,38 @@ type Report struct {
 	Standing channelkinds.TriggerOutcome
 }
 
+// UnanswerableError marks a failure that trying again cannot fix: what the
+// answer is addressed through is gone or unusable — the input Channel or its
+// credentials Secret no longer exists, or the kind cannot build a surface from
+// what they hold. Nothing reached the provider. A caller that retries failed
+// answers stops on this one and records why; every other error (an API read
+// that failed, a provider round trip) is worth another attempt.
+type UnanswerableError struct{ Err error }
+
+func (e *UnanswerableError) Error() string { return e.Err.Error() }
+func (e *UnanswerableError) Unwrap() error { return e.Err }
+
+// IsUnanswerable reports whether err is, or wraps, an UnanswerableError.
+func IsUnanswerable(err error) bool {
+	var u *UnanswerableError
+	return errors.As(err, &u)
+}
+
+// unanswerableIfNotFound classifies a Get failure: an object that does not
+// exist will not exist on the next attempt either, while any other read error
+// may be the API server's.
+func unanswerableIfNotFound(err error) error {
+	if apierrors.IsNotFound(err) {
+		return &UnanswerableError{Err: err}
+	}
+	return err
+}
+
 // AnswerCouldNotFinish concludes the trigger as could_not_finish with summary,
 // unless it already carries an answer. An error means the trigger was left as
 // it was and is still showing the work in progress; the caller logs it and
 // carries on, since reaching the terminal state matters more than reporting
-// it.
+// it. IsUnanswerable tells a caller whether retrying could help.
 func (t Trigger) AnswerCouldNotFinish(ctx context.Context, summary string) (Report, error) {
 	if t.Binding == nil {
 		return Report{Result: NotOwed}, nil
@@ -112,17 +141,25 @@ func (t Trigger) AnswerCouldNotFinish(ctx context.Context, summary string) (Repo
 
 	var ch spiceboxv1alpha1.Channel
 	if err := t.Client.Get(ctx, types.NamespacedName{Namespace: t.Namespace, Name: t.Binding.Name}, &ch); err != nil {
-		return Report{}, fmt.Errorf("read the input Channel %s: %w", t.Binding.Name, err)
+		return Report{}, unanswerableIfNotFound(fmt.Errorf("read the input Channel %s: %w", t.Binding.Name, err))
+	}
+	secretName := ch.Spec.CredentialsRef.SecretName
+	if secretName == "" {
+		return Report{}, &UnanswerableError{Err: fmt.Errorf("input Channel %s names no credentials Secret", t.Binding.Name)}
 	}
 	var sec corev1.Secret
-	if err := t.Client.Get(ctx, types.NamespacedName{Namespace: t.Namespace, Name: ch.Spec.CredentialsRef.SecretName}, &sec); err != nil {
-		return Report{}, fmt.Errorf("read the credentials Secret for Channel %s: %w", t.Binding.Name, err)
+	if err := t.Client.Get(ctx, types.NamespacedName{Namespace: t.Namespace, Name: secretName}, &sec); err != nil {
+		return Report{}, unanswerableIfNotFound(fmt.Errorf("read the credentials Secret %s for Channel %s: %w", secretName, t.Binding.Name, err))
 	}
 
 	surface, err := reporter.TriggerSurface(&ch, t.Binding, channelkinds.WebhookSecrets{Data: sec.Data},
 		channelkinds.TriggerStatusOptions{ProviderAPIBaseURL: t.ProviderAPIBaseURL})
 	if err != nil {
-		return Report{}, fmt.Errorf("address the trigger of kind %s: %w", t.Binding.Kind, err)
+		// TriggerSurface does no I/O, so its refusal is a property of the
+		// Channel, the binding and the Secret as they stand (a Secret missing a
+		// key, a binding key the kind cannot parse) and repeats until one of
+		// them is edited.
+		return Report{}, &UnanswerableError{Err: fmt.Errorf("address the trigger of kind %s: %w", t.Binding.Kind, err)}
 	}
 	if surface == nil {
 		return Report{Result: NotOwed}, nil // the kind's "this binding carries no trigger" answer

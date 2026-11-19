@@ -150,6 +150,11 @@ func checkTriggerStatus(t *testing.T, h *e2e.Harness, b bt.Bundle) {
 	// A run the AGENT concluded is final by the time the round ends. One the
 	// operator answers for a failed session lands on a later reconcile, after
 	// the Failed phase this driver waited on, so give it a bounded settle.
+	//
+	// The settle ends on the first read showing the wanted status, and the
+	// call counts below are read right after it. They therefore say how the
+	// run REACHED that status (which run was patched, how many times), not
+	// that nothing touches the provider afterwards.
 	if ts.Status != "" {
 		deadline := time.Now().Add(30 * time.Second)
 		for (run == nil || run.Status != ts.Status) && time.Now().Before(deadline) {

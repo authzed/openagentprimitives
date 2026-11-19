@@ -56,8 +56,13 @@ type operatorTriggerKind struct {
 	// claims and published are what the reconciler actually did to the surface.
 	claims    int
 	published []channelkinds.TriggerConclusion
-	// sawDeadline records whether the last Claim ran under a deadline.
+	// sawDeadline records whether the last Claim ran under a deadline, and
+	// deadline what it was.
 	sawDeadline bool
+	deadline    time.Time
+	// hang makes Claim block until its context ends, like a provider that
+	// accepts the connection and never answers.
+	hang bool
 }
 
 func (*operatorTriggerKind) Name() string { return tsKindName }
@@ -103,7 +108,11 @@ func (s *operatorTriggerSurface) Claim(ctx context.Context) (channelkinds.Trigge
 	s.kind.mu.Lock()
 	defer s.kind.mu.Unlock()
 	s.kind.claims++
-	_, s.kind.sawDeadline = ctx.Deadline()
+	s.kind.deadline, s.kind.sawDeadline = ctx.Deadline()
+	if s.kind.hang {
+		<-ctx.Done()
+		return channelkinds.TriggerClaim{}, ctx.Err()
+	}
 	if s.kind.claimErr != nil {
 		return channelkinds.TriggerClaim{}, s.kind.claimErr
 	}
@@ -147,6 +156,8 @@ func resetTriggerKind(t *testing.T) *operatorTriggerKind {
 	triggerKind.claims = 0
 	triggerKind.published = nil
 	triggerKind.sawDeadline = false
+	triggerKind.deadline = time.Time{}
+	triggerKind.hang = false
 	return triggerKind
 }
 

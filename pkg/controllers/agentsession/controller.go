@@ -1407,12 +1407,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Answer the trigger of a Failed session that nobody answered — whichever
 	// party wrote Failed (the runner's own budget/halt paths, the retry TTL, a
 	// pod failure). Above the reap short-circuit, which every later reconcile
-	// of a terminal session stops at. A transient provider failure requeues
-	// this pass (skipping one reap pass, which is idempotent and runs on the
-	// retry); it is bounded by the answer window. See failedtrigger.go.
-	if retry := r.reconcileFailedTrigger(ctx, &sess); retry > 0 {
-		return ctrl.Result{RequeueAfter: retry}, nil
-	}
+	// of a terminal session stops at. A transient provider failure asks for a
+	// retry, which is NOT returned here: the reap, session GC and storage
+	// reclaim below must still run in this pass, so the delay is folded into
+	// the terminal block's requeue instead. See failedtrigger.go.
+	triggerRetry := r.reconcileFailedTrigger(ctx, &sess)
 
 	// Reap a terminal session's pods once eligible: Succeeded immediately, Failed
 	// after the configured grace so a crash stays debuggable. Otherwise the
@@ -1465,6 +1464,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// terminal session, and nothing else in this block would schedule it.
 		if gcAfter > 0 && (reclaimAfter == 0 || gcAfter < reclaimAfter) {
 			reclaimAfter = gcAfter
+		}
+		// And the failed-trigger retry, for the same reason: every branch
+		// below already threads reclaimAfter into its requeue, including the
+		// reap itself, which would otherwise return no requeue and lose it.
+		if triggerRetry > 0 && (reclaimAfter == 0 || triggerRetry < reclaimAfter) {
+			reclaimAfter = triggerRetry
 		}
 		switch action, remaining := terminalReapAction(sess.Status.Phase, sess.Status.FinishedAt, sess.CreationTimestamp, r.FailedSandboxReapGrace, r.now()); action {
 		case reapActionRequeue:
@@ -3794,12 +3799,13 @@ func (r *Reconciler) markBootFailed(ctx context.Context, sess *spiceboxv1alpha1.
 		if err := r.applyEvent(ctx, sess, lifecyclecore.ProvablyUnschedulable{}); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Answer the trigger that started this session — but ONLY when no runner
-		// ever came up. podAlreadyStarted is exactly the "is there a live agent to
-		// tell" question the sidecar-pod branch above already turns on: once there
-		// is one, reporting is the agent's, and an agent that ran and finished
-		// without answering is the `trigger-status-concluded` completion
-		// requirement's business, not this one's.
+		// Answer the trigger that started this session IMMEDIATELY — but only
+		// when no runner ever came up, because "could not start" is the wording
+		// only this path knows is right. podAlreadyStarted is exactly the "is
+		// there a live agent to tell" question the sidecar-pod branch above
+		// already turns on. A session that did have a runner is not left
+		// unanswered: the Failed-session backstop (failedtrigger.go) answers it
+		// on the next reconcile, keeping any verdict its agent already posted.
 		//
 		// Inside the not-yet-terminal guard, so this is the pass that MOVES the
 		// session into Failed: a persistently failing session re-reconciles every

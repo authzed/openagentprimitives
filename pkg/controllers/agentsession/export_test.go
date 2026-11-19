@@ -72,6 +72,13 @@ func (r *Reconciler) ReconcileFailedTriggerForTest(ctx context.Context, sess *sp
 // FailedTriggerAnswerWindowForTest is the backstop's answer window.
 const FailedTriggerAnswerWindowForTest = failedTriggerAnswerWindow
 
+// FailedTriggerAnswerTimeoutForTest and TriggerAnswerTimeoutForTest are the
+// bounds on one backstop attempt and on one immediate answer.
+const (
+	FailedTriggerAnswerTimeoutForTest = failedTriggerAnswerTimeout
+	TriggerAnswerTimeoutForTest       = triggerAnswerTimeout
+)
+
 // ReconcileExpirationForTest is ReconcileRunDurationForTest's counterpart for
 // the wall-clock lifetime sweep. Test-only.
 func (r *Reconciler) ReconcileExpirationForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (bool, error) {
