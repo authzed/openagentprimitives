@@ -480,7 +480,8 @@ func (l *Loop) Run(ctx context.Context) error {
 	// agent_work_complete. A kubectl session or a delegated child ends that
 	// round Succeeded instead, so a resume there takes its turn as before and
 	// reaches the terminal write through the loop.
-	completedRound := l.ChannelAttached && !l.DelegatedChild && completedRoundAtRest(prior)
+	completedAt, roundAtRest := completedRoundAtRest(prior)
+	completedRound := l.ChannelAttached && !l.DelegatedChild && roundAtRest
 	if shape := resumedWithNothingToDo(hadInitialPrompt, completedRound, replayed, messages); shape != resumeHasWork {
 		slog.Default().Info("resume with an empty inbox: parking without a turn (nothing to respond to)",
 			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "messages", len(messages), "shape", string(shape))
@@ -494,8 +495,20 @@ func (l *Loop) Run(ctx context.Context) error {
 			// `return nil` instead leaves the session at Pending forever,
 			// reporting busy for a runner that had finished, and drops any message
 			// that raced the park.
-			switch {
-			case shape == resumeCompletedRound:
+			if !l.ChannelAttached {
+				// Nothing can deliver a message here, so there is no
+				// idle-and-wakeable state to record — the run is simply over,
+				// with no terminal write to gate. parkUntilInbound already
+				// declines to wait at all for such a session; this is the belt to
+				// that braces.
+				return nil
+			}
+			// The two shapes leave through one idle exit and differ only in what
+			// it records, and in whether the completion gate gets a say first.
+			reason := spiceboxv1alpha1.ReasonAgentSessionAwaitingUserMsg
+			exitEvent := idleYieldEventFor(false)
+			settled := true
+			if shape == resumeCompletedRound {
 				// The round closed through agent_work_complete, whose own gate
 				// already allowed this settle — met, or bypassed with a reason
 				// the user was told. The live loop never re-checks after it (the
@@ -504,13 +517,12 @@ func (l *Loop) Run(ctx context.Context) error {
 				// would refuse a bypassed completion all over again, since the
 				// bypass is not carried across runs, and hand the model a stray
 				// turn demanding a second bypass. The resting reason is the one
-				// the round ended with; no second AgentWorkComplete audit event,
-				// because no second completion happened.
-				l.emitLifecycleSignal(ctx, lifecycle.SigSessionIdle, map[string]string{"reason": "idle"})
-				l.emitLifecycleEvent(ctx, idleYieldEventFor(false))
-				l.fireSessionEnd(ctx, "idle")
-				return l.idleWithWakeRecheck(ctx, spiceboxv1alpha1.ReasonAgentSessionAgentWorkComplete)
-			case l.ChannelAttached:
+				// the round ended with, and the audit event is IdleYield unless
+				// the round's own AgentWorkComplete never reached the log — see
+				// completedRoundExitEvent.
+				reason = spiceboxv1alpha1.ReasonAgentSessionAgentWorkComplete
+				exitEvent = l.completedRoundExitEvent(ctx, completedAt)
+			} else if refusal, blocked := l.completionSettleRefusal(ctx, sess); blocked {
 				// Completion gate, resume-park exit. A settle is a settle even
 				// when no turn ran: a round that ended earlier still owing
 				// something reaches its resting phase HERE, and the model is not
@@ -518,22 +530,15 @@ func (l *Loop) Run(ctx context.Context) error {
 				// exiting — waking the agent to finish or to say why is exactly
 				// what is owed — and costs a turn only when something is
 				// genuinely outstanding.
-				if refusal, blocked := l.completionSettleRefusal(ctx, sess); blocked {
-					l.noteCompletionSettleBlocked(ctx, "resume park expiry")
-					messages = append(messages, refusalTurn(refusal))
-				} else {
-					l.emitLifecycleSignal(ctx, lifecycle.SigSessionIdle, map[string]string{"reason": "idle"})
-					l.emitLifecycleEvent(ctx, idleYieldEventFor(false))
-					l.fireSessionEnd(ctx, "idle")
-					return l.idleWithWakeRecheck(ctx, spiceboxv1alpha1.ReasonAgentSessionAwaitingUserMsg)
-				}
-			default:
-				// Not channel-attached: nothing can deliver a message here, so
-				// there is no idle-and-wakeable state to record — the run is simply
-				// over, with no terminal write to gate. parkUntilInbound already
-				// declines to wait at all for such a session; this is the belt to
-				// that braces.
-				return nil
+				l.noteCompletionSettleBlocked(ctx, "resume park expiry")
+				messages = append(messages, refusalTurn(refusal))
+				settled = false
+			}
+			if settled {
+				l.emitLifecycleSignal(ctx, lifecycle.SigSessionIdle, map[string]string{"reason": "idle"})
+				l.emitLifecycleEvent(ctx, exitEvent)
+				l.fireSessionEnd(ctx, "idle")
+				return l.idleWithWakeRecheck(ctx, reason)
 			}
 		}
 		if placed, drained, derr := l.drainInbox(ctx, nextIndex); derr != nil {
