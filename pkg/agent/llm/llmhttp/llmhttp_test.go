@@ -68,6 +68,38 @@ func TestClient_StreamIdle_TrickleKeepsStreamAlive(t *testing.T) {
 	assert.Contains(t, string(body), "event: ping")
 }
 
+// A consumer that is slow between reads (an SDK handing each event to a
+// callback that blocks) is not an idle stream: only time spent waiting on the
+// provider counts, so a healthy response must survive a pause longer than the
+// idle window.
+func TestClient_StreamIdle_SlowConsumerBetweenReadsIsNotIdle(t *testing.T) {
+	const idle = 150 * time.Millisecond
+	srv := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "first\n")
+		w.(http.Flusher).Flush()
+		// Well inside the idle window, so the stream itself is never idle.
+		time.Sleep(idle / 3)
+		_, _ = io.WriteString(w, "second\n")
+	})
+	c := llmhttp.NewClient(llmhttp.Config{StreamIdleTimeout: idle})
+
+	resp, err := c.Get(srv.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	buf := make([]byte, len("first\n"))
+	_, err = io.ReadFull(resp.Body, buf)
+	require.NoError(t, err, "first chunk")
+
+	time.Sleep(3 * idle) // the consumer, not the provider, is slow
+
+	rest, err := io.ReadAll(resp.Body)
+	require.NoError(t, err, "time between reads must not count as stream idleness")
+	assert.Equal(t, "second\n", string(rest))
+}
+
 func TestClient_ResponseHeaderTimeout_AbortsSilentServer(t *testing.T) {
 	srv := newServer(t, func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done() // never sends headers

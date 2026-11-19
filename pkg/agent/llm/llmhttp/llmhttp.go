@@ -9,14 +9,27 @@
 //
 //   - connect, TLS handshake, and response-header timeouts;
 //   - HTTP/2 health pings, so a connection whose peer vanished is torn down;
-//   - a stream-idle timeout: once headers arrive, every body read that
-//     returns data re-arms a timer, and a body that delivers nothing for
-//     StreamIdleTimeout is aborted with ErrStreamIdle.
+//   - a stream-idle timeout: once headers arrive, a body read that waits
+//     StreamIdleTimeout without receiving anything is aborted with
+//     ErrStreamIdle. Only time spent waiting on the network counts; time the
+//     consumer spends between reads does not.
 //
 // There is deliberately no total-request timeout: a long generation that is
-// still streaming is healthy. Providers send keepalive traffic while they
-// work (Anthropic emits `ping` events during long generations), so minutes of
-// total silence means the stream is dead, not slow.
+// still streaming is healthy. The idle window assumes a provider keeps bytes
+// flowing while it works. Anthropic emits `ping` events during long
+// generations and OpenRouter sends SSE comment keepalives while a request is
+// processing; OpenAI's Chat Completions stream documents no keepalive, so a
+// model that reasons silently for longer than StreamIdleTimeout before its
+// first token is cut off as if it were dead.
+//
+// These are per-attempt bounds, not a bound on a whole SDK call. A dial, TLS
+// or response-header timeout fails the round trip with no response, which both
+// SDKs treat as a retryable connection error (two retries by default), so a
+// provider that accepts the connection and never answers holds a call for up
+// to three ResponseHeaderTimeouts plus backoff (about 9 minutes at the
+// defaults), re-sending the request each time. A stream-idle abort happens
+// after the response has started and is not retried by the SDK. The runner
+// additionally cuts its main provider call off at the session's time budget.
 package llmhttp
 
 import (
@@ -36,8 +49,9 @@ var ErrStreamIdle = errors.New("llm response stream idle")
 
 // Defaults for Config's zero fields.
 const (
-	DefaultDialTimeout           = 30 * time.Second
-	DefaultTLSHandshakeTimeout   = 30 * time.Second
+	DefaultDialTimeout         = 30 * time.Second
+	DefaultTLSHandshakeTimeout = 30 * time.Second
+	// Per attempt: the SDKs retry a header timeout (see the package doc).
 	DefaultResponseHeaderTimeout = 3 * time.Minute
 	DefaultStreamIdleTimeout     = 5 * time.Minute
 	// HTTP/2: send a PING after this long without a frame, and drop the
@@ -112,13 +126,21 @@ func (t *idleTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	b := &idleBody{rc: resp.Body, ctx: ctx, cancel: cancel, idle: t.idle}
+	// Created stopped: the timer runs only while a Read is waiting.
 	b.timer = time.AfterFunc(t.idle, func() { cancel(ErrStreamIdle) })
+	b.timer.Stop()
 	resp.Body = b
 	return resp, nil
 }
 
-// idleBody aborts the request (cancelling its context, which unblocks an
-// in-flight Read) when no data arrives for idle.
+// idleBody aborts the request (cancelling its context, which unblocks the
+// in-flight Read) when a single Read waits idle without receiving data.
+//
+// The timer is armed for the duration of each Read and stopped when it
+// returns, so it measures only time spent waiting on the provider. A consumer
+// that is slow between reads (an SDK handing each event to a callback that
+// blocks) must not turn a healthy, or already complete, response into
+// ErrStreamIdle.
 type idleBody struct {
 	rc     io.ReadCloser
 	ctx    context.Context
@@ -128,10 +150,9 @@ type idleBody struct {
 }
 
 func (b *idleBody) Read(p []byte) (int, error) {
+	b.timer.Reset(b.idle)
 	n, err := b.rc.Read(p)
-	if n > 0 {
-		b.timer.Reset(b.idle)
-	}
+	b.timer.Stop()
 	if err != nil && errors.Is(context.Cause(b.ctx), ErrStreamIdle) {
 		return n, fmt.Errorf("%w: no data received for %s", ErrStreamIdle, b.idle)
 	}
