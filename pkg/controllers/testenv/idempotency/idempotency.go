@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
@@ -52,6 +53,17 @@ import (
 // Any resourceVersion already on want is cleared before each apply:
 // resourceVersion is never a field an apply payload should carry, and a stale
 // one would raise a conflict unrelated to the question being asked.
+//
+// The second apply is held until the wall clock has moved into a later second
+// than the first. The apiserver restamps the applying manager's managedFields
+// time (one-second resolution) whenever it sees the payload as a change, even
+// one it then discards — a status stanza sent to a resource with a status
+// subresource is the usual case, and a typed struct always serializes one. Two
+// such applies inside the same second store identical bytes and look like a
+// no-op; across a second boundary they bump resourceVersion. Without the wait
+// this check therefore passed or failed on scheduling alone, which is how an
+// intermittent CI failure came to be read as a flake. With it, the bump is
+// reported every time.
 //
 // MUST run against a REAL apiserver. The fake client bumps resourceVersion on
 // every accepted Patch instead of reproducing the apiserver's byte-equality
@@ -81,6 +93,9 @@ func CheckApplyIdempotent(ctx context.Context, c client.Client, want client.Obje
 	if err != nil {
 		return err
 	}
+	if err := waitForNextSecond(ctx); err != nil {
+		return fmt.Errorf("idempotency: CheckApplyIdempotent: waiting between applies: %w", err)
+	}
 	second, err := apply(2)
 	if err != nil {
 		return err
@@ -94,10 +109,30 @@ func CheckApplyIdempotent(ctx context.Context, c client.Client, want client.Obje
 		"idempotency: apply is NOT idempotent for %s (fieldManager=%q): resourceVersion changed %s -> %s across two applies of the identical payload — a volatile value (time.Now(), a random ID, a recomputed digest) is likely leaking into an applied field; move it to controller-owned status instead (see AGENTS.md \"Server-side apply: keep applied fields idempotent; put observations in status\")",
 		client.ObjectKeyFromObject(first), fieldManager, first.GetResourceVersion(), second.GetResourceVersion(),
 	)
-	if d, derr := diffObjects(first, second); derr == nil && d != "" {
+	switch d, derr := diffObjects(first, second); {
+	case derr != nil:
+		msg += fmt.Sprintf("\n(could not diff the two applied objects: %v)", derr)
+	case d != "":
 		msg += fmt.Sprintf("\ndiff between the two applied objects (-first, +second):\n%s", d)
+	default:
+		msg += "\nthe two applied objects are otherwise identical, so only managedFields moved: the payload carries something the apiserver accepts as a change and then discards. The usual cause is a status stanza — a typed struct serializes an empty one — sent to a resource with a status subresource; apply spec and metadata only"
 	}
 	return errors.New(msg)
+}
+
+// waitForNextSecond blocks until the wall clock has entered the second after
+// the current one. See CheckApplyIdempotent for why the two applies must not
+// share a second.
+func waitForNextSecond(ctx context.Context) error {
+	next := time.Now().Truncate(time.Second).Add(time.Second)
+	timer := time.NewTimer(time.Until(next))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // RequireApplyIdempotent is the require-based wrapper over
