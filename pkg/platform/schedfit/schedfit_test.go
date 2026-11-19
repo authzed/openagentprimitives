@@ -221,3 +221,49 @@ func TestEffectiveRequests_NativeSidecarAddsRatherThanSettingAFloor(t *testing.T
 	assert.Equal(t, int64(2)*1024*1024*1024, h.MemBytes,
 		"app(1Gi)+sidecar(1Gi)=2Gi booked of 4Gi; treating the sidecar as a floor would leave 3Gi")
 }
+
+// TestEffectiveRequests_UnsetRequestDefaultsToLimit covers a PodSpec that has
+// not been through the API server yet. The apiserver defaults a container's
+// unset request to its limit, per resource, at admission; an in-memory spec a
+// controller has only BUILT (podspec.BuildClassSpec sets Limits alone) has not
+// had that applied, so reading Requests alone would price it at zero.
+func TestEffectiveRequests_UnsetRequestDefaultsToLimit(t *testing.T) {
+	cases := []struct {
+		name               string
+		container          corev1.ResourceRequirements
+		init               *corev1.ResourceRequirements
+		cpu, mem, ephBytes int64
+	}{
+		{
+			name:      "limits only: every dimension is priced at its limit",
+			container: corev1.ResourceRequirements{Limits: reqList("500m", "1Gi", "2Gi")},
+			cpu:       500, mem: gib, ephBytes: 2 * gib,
+		},
+		{
+			name: "explicit request below the limit: the request wins, limit is not a request",
+			container: corev1.ResourceRequirements{
+				Requests: reqList("100m", "", ""),
+				Limits:   reqList("500m", "1Gi", ""),
+			},
+			cpu: 100, mem: gib,
+		},
+		{
+			name:      "limits-only init container larger than the app: sets the floor",
+			container: corev1.ResourceRequirements{Limits: reqList("", "1Gi", "")},
+			init:      &corev1.ResourceRequirements{Limits: reqList("", "3Gi", "")},
+			mem:       3 * gib,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Resources: tc.container}}}
+			if tc.init != nil {
+				spec.InitContainers = []corev1.Container{{Name: "setup", Resources: *tc.init}}
+			}
+			cpu, mem, eph := EffectiveRequests(&spec)
+			assert.Equal(t, tc.cpu, cpu, "cpu millicores")
+			assert.Equal(t, tc.mem, mem, "memory bytes")
+			assert.Equal(t, tc.ephBytes, eph, "ephemeral-storage bytes")
+		})
+	}
+}

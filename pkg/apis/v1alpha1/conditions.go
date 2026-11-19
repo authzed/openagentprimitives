@@ -511,6 +511,45 @@ const (
 	ReasonCapacityHoldExpired         = "HoldExpired"
 )
 
+// AgentSession admission.
+const (
+	// AgentSessionConditionAdmitted is True while the operator has admitted the
+	// session's whole pod set against its AgentClass's line, and False once the
+	// session has been released back to the line (reclaimed, or a placement
+	// misfit). Absent until the session first joins a line.
+	AgentSessionConditionAdmitted = "Admitted"
+)
+
+// AgentSessionConditionAdmitted reasons.
+const (
+	ReasonAdmitted = "Admitted"
+	// ReasonAdmissionQueued marks a session that has reached the admission
+	// gate and is waiting in line. Its transition time is the moment it
+	// arrived, which the waiting timeout is measured from; the admitter
+	// considers only sessions carrying it, so a session parked at an earlier
+	// gate never reserves anything.
+	ReasonAdmissionQueued = "Queued"
+	// ReasonAdmissionAdopted marks a session whose pods were created before
+	// admission was switched on: the admitter adopts it as admitted, so it is
+	// counted as a holder rather than gated with its pods already up.
+	ReasonAdmissionAdopted = "Adopted"
+	// ReasonAdmittedUnknownCapacity marks a session admitted while the
+	// admitter had no reliable view of cluster capacity (no node data, a
+	// failed snapshot, or a namespace-scoped operator that cannot see other
+	// namespaces' pods). Nothing proved its set fits, so a stall is not
+	// treated as a misfit: its pods keep the ordinary pod-level hold.
+	ReasonAdmittedUnknownCapacity = "AdmittedUnknownCapacity"
+	// ReasonAdmissionReclaimed marks a session released so a session ahead of
+	// it in line could be admitted.
+	ReasonAdmissionReclaimed = "Reclaimed"
+	// ReasonAdmissionMisfit marks a session released because its pods did not
+	// fit where they were placed.
+	ReasonAdmissionMisfit = "PlacementMismatch"
+	// ReasonCapacityHoldWaitingAdmission is the CapacityHold reason while a
+	// session waits in line to be admitted.
+	ReasonCapacityHoldWaitingAdmission = "WaitingForAdmission"
+)
+
 // Settings reasons (shared by AgentClass + AgentSession SettingsAccepted and the
 // Settings CR SelfConsistent conditions).
 const (
@@ -1027,6 +1066,15 @@ const (
 	// what it has already acted on, so re-stamping while a spawn is in flight
 	// coalesces rather than duplicating.
 	AnnotationUIServeRequestedAt = "agentprimitives.authzed.com/ui-serve-requested-at"
+
+	// AnnotationReclaimRequested asks the operator to put a warm Idle session
+	// to sleep now, ahead of its sleepAfter grace, because a session of the
+	// same AgentClass is waiting in the admission line and freeing this one's
+	// pods lets it in. Written by the admitter (RFC3339 of the pass that asked;
+	// left alone if already present); the AgentSession reconciler's sleep path
+	// honors it — still behind the SessionHold guard — and removes it once the
+	// session is slept, or as stale once the session has left Idle.
+	AnnotationReclaimRequested = "agentprimitives.authzed.com/reclaim-requested"
 
 	// AnnotationSidecarFailureReported carries, as a JSON object, the
 	// sidecar-name â failure-fingerprint map the runner has already reported to

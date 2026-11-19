@@ -448,6 +448,15 @@ var pinnedStatusFields = []pinnedStatusField{
 			"tie-breaker for which session owns a thread (newestActiveSession)",
 	},
 	{
+		name: "admission",
+		get:  func(s *spiceboxv1alpha1.AgentSessionStatus) any { return s.Admission },
+		why: "it is the admitter's record of this session's place in its AgentClass's admission line — position, line length " +
+			"and join time — and only the leader-only admitter writes it (pkg/controllers/admission/admitter). The admitter " +
+			"compares against the stored value to decide whether to write at all, so a forged value is not corrected until the " +
+			"real position next changes, and it is the source the 'Nth in line' notice to the waiting human is built from. " +
+			"A runner has no business in the queue it is waiting in",
+	},
+	{
 		name: "effectiveSettings",
 		get:  func(s *spiceboxv1alpha1.AgentSessionStatus) any { return s.EffectiveSettings },
 		why: "the operator recomputes it early in each reconcile, but the revocation sweep reads the PERSISTED value BEFORE " +

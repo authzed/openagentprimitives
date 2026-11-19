@@ -54,6 +54,9 @@ var notProjectedFields = map[string]bool{
 	"WorkspaceSource":        true,
 	"ToolSessionLog":         true,
 	"Budget":                 true,
+	// MaxConcurrentSessions caps the source agent's own sessions; a stand-in
+	// is a different class with no line worth limiting.
+	"MaxConcurrentSessions":  true,
 	"BoundEntities":          true,
 	"Channels":               true,
 	"Authz":                  true,

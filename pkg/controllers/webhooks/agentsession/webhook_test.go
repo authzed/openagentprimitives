@@ -626,6 +626,13 @@ func TestRunnerCannotForgeSessionIdentity(t *testing.T) {
 			},
 		},
 		{
+			name: "runner rewrites status.admission to the head of its line: denied (the admitter alone owns the queue position a waiting human is shown)",
+			sub:  "status",
+			mut: func(s *spiceboxv1alpha1.AgentSession) {
+				s.Status.Admission = &spiceboxv1alpha1.AdmissionStatus{Position: 1, LineLength: 1}
+			},
+		},
+		{
 			// The operator turns spiceboxSessionName into BOTH a Role
 			// resourceName and a memory-API token scope, on every reconcile,
 			// without re-deriving the list in any parked phase.

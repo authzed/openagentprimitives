@@ -42,7 +42,7 @@ var (
 //
 // Names are sorted and deduplicated so the result — and therefore the frozen
 // status, the set digest, and the PodSpec — is a pure function of the class.
-func Resolve(ctx context.Context, c client.Client, names []string) ([]spiceboxv1alpha1.ToolchainMount, string, error) {
+func Resolve(ctx context.Context, c client.Reader, names []string) ([]spiceboxv1alpha1.ToolchainMount, string, error) {
 	uniq := make([]string, 0, len(names))
 	seen := map[string]struct{}{}
 	for _, n := range names {

@@ -78,6 +78,7 @@ func WriteOwned(ctx context.Context, c client.Client, sess, original *spiceboxv1
 		prior := fresh.DeepCopy()
 		for i := range set {
 			meta.SetStatusCondition(&fresh.Status.Conditions, set[i])
+			carryRestampedTransition(fresh.Status.Conditions, original, set[i])
 		}
 		for _, t := range removed {
 			meta.RemoveStatusCondition(&fresh.Status.Conditions, t)
@@ -89,6 +90,23 @@ func WriteOwned(ctx context.Context, c client.Client, sess, original *spiceboxv1
 		// re-serialized nor re-validated against this writer's possibly-stale types.
 		return c.Status().Patch(ctx, &fresh, client.MergeFromWithOptions(prior, client.MergeFromWithOptimisticLock{}))
 	})
+}
+
+// carryRestampedTransition persists a transition time the writer moved on
+// purpose. meta.SetStatusCondition keeps the stored LastTransitionTime
+// whenever the status is unchanged, and a writer that builds its conditions
+// through it never moves the time on such a change — so a time later than the
+// one in original, on an unchanged status, is a deliberate re-stamp (a
+// session arriving in line again: Admitted False/Reclaimed → False/Queued at
+// now) and is copied onto the stored condition.
+func carryRestampedTransition(stored []metav1.Condition, original *spiceboxv1alpha1.AgentSession, cur metav1.Condition) {
+	old := meta.FindStatusCondition(original.Status.Conditions, cur.Type)
+	if old == nil || old.Status != cur.Status || !cur.LastTransitionTime.After(old.LastTransitionTime.Time) {
+		return
+	}
+	if c := meta.FindStatusCondition(stored, cur.Type); c != nil && c.Status == cur.Status {
+		c.LastTransitionTime = cur.LastTransitionTime
+	}
 }
 
 // diffOwnedConditions returns the owner's conditions that were added or changed

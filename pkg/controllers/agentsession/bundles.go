@@ -15,6 +15,31 @@ func BundleSessionName(sess *spiceboxv1alpha1.AgentSession, bundle spiceboxv1alp
 	return sess.Name + "-" + bundle.Name
 }
 
+// desiredBundleSession is the SpiceboxSession the reconciler applies for
+// bundle b: it resolves the bundle's identity (bundle, then session, then
+// class) and its tier-resolved sandbox backend, then calls BuildBundleSession.
+// Shared by the reconciler's bundle loop and DemandFor so both always describe
+// the same sandbox.
+func desiredBundleSession(sess *spiceboxv1alpha1.AgentSession, ac *spiceboxv1alpha1.AgentClass, b spiceboxv1alpha1.ToolBundle, claimName string) *spiceboxv1alpha1.SpiceboxSession {
+	identity := b.AgentIdentity
+	if identity == "" {
+		identity = sess.Spec.AgentIdentity
+	}
+	if identity == "" {
+		identity = ac.Spec.AgentIdentity
+	}
+	// The tier-resolved sandbox backend for this bundle, or nil when no tier
+	// expressed a preference — BuildBundleSession then leaves spec.sandbox
+	// unset, so the SpiceboxClass's own setting stands.
+	var resolvedSandbox *spiceboxv1alpha1.SandboxBackend
+	if eff := sess.Status.EffectiveSettings; eff != nil {
+		if backend, ok := eff.Sandbox[b.Name]; ok {
+			resolvedSandbox = &backend
+		}
+	}
+	return BuildBundleSession(sess, b, identity, claimName, sess.Status.ResolvedSkillBundles, resolvedSandbox, ac.Spec.Config)
+}
+
 // BuildBundleSession returns the SpiceboxSession spec/object the AgentSession
 // reconciler will create for one bundle. AgentIdentity binds via spec.agent;
 // the toolspec subset is mirrored onto spec.toolspecs to scope which toolspecs

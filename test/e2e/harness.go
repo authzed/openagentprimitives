@@ -288,6 +288,10 @@ type Options struct {
 	//
 	// nil — every scenario but a replay — leaves assembly untouched.
 	ReplaceAssembledTool func(tool.Tool) (tool.Tool, error)
+
+	// Admission, when non-nil, gates session pods on whole-set admission and
+	// runs the admitter against its fixed capacity. See AdmissionOptions.
+	Admission *AdmissionOptions
 }
 
 // delayedSchemaIO wraps a guardian SchemaIO and stalls WriteSchema, widening
@@ -1325,9 +1329,12 @@ func (h *Harness) startManager(t *testing.T, env *testenv.Env, spdbCli *spicedb.
 		// mandatory-dependency check.
 		DeniedLister:    spdbCli,
 		SlotGrantCopier: spdbCli,
+		// Zero (ungated) unless the scenario opted into admission.
+		AdmissionEnabled: h.opts.Admission != nil,
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("e2e: register AgentSession controller: %v", err)
 	}
+	h.registerAdmitter(t, mgr)
 
 	// SubagentRequest — authorizes and performs delegation (roster/identity
 	// checks, child creation, lineage tuples) AND propagates the child's
@@ -1546,12 +1553,14 @@ func (h *Harness) RestartOperator(t *testing.T) {
 		ForkChecker:                h.SpiceDB,
 		// StartChecker: the start gate is enforced in e2e exactly as in
 		// production; StartRefusedNoticePublish is left nil (logged and dropped).
-		StartChecker:    h.SpiceDB,
-		DeniedLister:    h.SpiceDB,
-		SlotGrantCopier: h.SpiceDB,
+		StartChecker:     h.SpiceDB,
+		DeniedLister:     h.SpiceDB,
+		SlotGrantCopier:  h.SpiceDB,
+		AdmissionEnabled: h.opts.Admission != nil,
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("e2e: RestartOperator: register AgentSession controller: %v", err)
 	}
+	h.registerAdmitter(t, mgr)
 
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
 	mgrDone := make(chan struct{})

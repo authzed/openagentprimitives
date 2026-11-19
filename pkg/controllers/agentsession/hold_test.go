@@ -916,3 +916,88 @@ func TestReconcile_activeHoldOnRunningSessionParksAndReaps(t *testing.T) {
 	err = c.Get(ctx, client.ObjectKey{Namespace: "default", Name: RunnerPodName(sess)}, &gotRunner)
 	assert.True(t, apierrors.IsNotFound(err), "the runner pod must still be reaped, got err=%v", err)
 }
+
+// TestReconcileHold_releasesAdmission pins that a forensic hold gives the
+// session's admission back with its pods: Admitted=False/Reclaimed, persisted
+// with the Held projection, so a held session holds no phantom reservation.
+// A session admission never knew of is left without a condition; one that
+// was admitted rejoins the line through the gate once its hold is released.
+func TestReconcileHold_releasesAdmission(t *testing.T) {
+	newHold := func(phase string) *spiceboxv1alpha1.SessionHold {
+		return &spiceboxv1alpha1.SessionHold{
+			ObjectMeta: metav1.ObjectMeta{Name: "h1", Namespace: "demo"},
+			Spec: spiceboxv1alpha1.SessionHoldSpec{
+				SessionRef: spiceboxv1alpha1.NamespacedRef{Namespace: "demo", Name: "s1"},
+				Reason:     "denial streak",
+			},
+			Status: spiceboxv1alpha1.SessionHoldStatus{Phase: phase},
+		}
+	}
+	cases := []struct {
+		name       string
+		admitted   bool
+		wantReason string // "" = no Admitted condition
+	}{
+		{name: "admitted Running session held: Admitted=False/Reclaimed persisted", admitted: true, wantReason: spiceboxv1alpha1.ReasonAdmissionReclaimed},
+		{name: "session with no Admitted condition and no pods recorded held: no condition written"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := memory.WithSystemApproval(context.Background(), "test")
+			sess := &spiceboxv1alpha1.AgentSession{
+				ObjectMeta: metav1.ObjectMeta{Name: "s1", Namespace: "demo"},
+				Status:     spiceboxv1alpha1.AgentSessionStatus{Phase: spiceboxv1alpha1.AgentSessionPhaseRunning},
+			}
+			if tc.admitted {
+				sess.Status.Conditions = []metav1.Condition{{
+					Type: spiceboxv1alpha1.AgentSessionConditionAdmitted, Status: metav1.ConditionTrue,
+					Reason: spiceboxv1alpha1.ReasonAdmitted, LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Hour)),
+				}}
+			}
+			c, r := newParkTestReconciler(t, sess, newHold(spiceboxv1alpha1.SessionHoldPhaseActive))
+			r.AdmissionEnabled = true
+
+			_, proceed, err := r.reconcileHold(ctx, sess)
+			require.NoError(t, err)
+			require.False(t, proceed)
+
+			var got spiceboxv1alpha1.AgentSession
+			require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &got))
+			assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseHeld, got.Status.Phase)
+			adm := conditionsFind(got.Status.Conditions)
+			if tc.wantReason == "" {
+				assert.Nil(t, adm, "no Admitted condition invented")
+				return
+			}
+			require.NotNil(t, adm, "Admitted condition")
+			assert.Equal(t, metav1.ConditionFalse, adm.Status)
+			assert.Equal(t, tc.wantReason, adm.Reason)
+
+			// Released: back to Pending, and through the gate like any arrival.
+			require.NoError(t, c.Delete(ctx, newHold(spiceboxv1alpha1.SessionHoldPhaseActive)))
+			require.NoError(t, c.Create(ctx, func() *spiceboxv1alpha1.SessionHold {
+				h := newHold(spiceboxv1alpha1.SessionHoldPhaseReleased)
+				h.Status.ReleasedBy = "user:approver-1"
+				return h
+			}()))
+			r.LifecycleMemory = memory.NewLocal(inmem.NewBackend())
+			res, proceed, err := r.reconcileHold(ctx, &got)
+			require.NoError(t, err)
+			assert.False(t, proceed, "an unadmitted release stops this pass, which runs below the admission gate")
+			assert.Positive(t, res.RequeueAfter, "requeued so the next pass meets the gate")
+			var persisted spiceboxv1alpha1.AgentSession
+			require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sess), &persisted))
+			assert.Equal(t, spiceboxv1alpha1.AgentSessionPhasePending, persisted.Status.Phase, "Pending projection persisted")
+			assert.True(t, r.awaitingAdmission(&persisted), "a released hold rejoins the line at the gate")
+		})
+	}
+}
+
+func conditionsFind(conds []metav1.Condition) *metav1.Condition {
+	for i := range conds {
+		if conds[i].Type == spiceboxv1alpha1.AgentSessionConditionAdmitted {
+			return &conds[i]
+		}
+	}
+	return nil
+}

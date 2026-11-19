@@ -1,0 +1,453 @@
+{
+  "name": "admission-burst",
+  "description": "A burst on a full cluster: three reviewer sessions arrive together, then a session of a second agent, on a cluster with room for exactly two sessions' whole pod sets. The line, not the scheduler, decides who runs.\n\nWhat is claimed, and how each claim is read from the run rather than from the transcript:\n- every session runs to completion and gives its room back (each reaches Idle after being admitted, then sleeps, which releases its admission);\n- the reviewer line is FIFO: a1 and a2 are admitted before a3, and a3 finishes after both;\n- fair share between lines: when a1 frees its room while a2 still holds one, the notes agent's session is admitted ahead of the burst's tail (b before a3);\n- never more than two sessions admitted at once, and exactly two at the peak (so the line actually queued);\n- no session ever holds part of a pod set: a waiting session holds none of its bundle SpiceboxSessions, a Running one holds all of them. The driver watches every session for the whole run to check this.\nEach session's sandbox call is asserted on its TOOL RESULT (lastToolResultContains / IsError), which proves the call reached that session's own bundle sandbox.\n\nWhy a1 and a2 park in await_user_message: a finished session keeps its admission until it sleeps, so WHICH holder frees its room first is an input to this scenario, not a race to leave to timing. a1 parks until every session has arrived, so its release cannot reach the line before b is waiting; a2 parks until b has finished, so it is still holding when a1's room frees, which is the moment fair share has to choose. The notes agent sleeps after 10s rather than 1s for the same reason: a3's room should come from a2 finishing, so a3 finishing last is a fact about the line, not a guess about speed.\n\nCapacity is two, not one, deliberately. With room for a single session no line ever HOLDS capacity at the moment a choice is made (the only holder is the session that just left), both lines tie at zero share, and the earlier arrival wins — so the second agent would be admitted last and fair share could not be observed at all.",
+  "agentDir": "testdata/admission-burst/manifests",
+  "agentClass": "burst-reviewer",
+  "admission": {
+    "capacitySessions": 2
+  },
+  "userTurns": [
+    {
+      "text": "review pull request 101",
+      "thread": "a1",
+      "channel": "burst-reviewer-fake"
+    },
+    {
+      "text": "review pull request 202",
+      "thread": "a2",
+      "channel": "burst-reviewer-fake"
+    },
+    {
+      "text": "review pull request 303",
+      "thread": "a3",
+      "channel": "burst-reviewer-fake"
+    },
+    {
+      "text": "check notes for pull request 404",
+      "thread": "b",
+      "channel": "burst-notes-fake"
+    },
+    {
+      "text": "a1 go ahead and finish",
+      "thread": "a1",
+      "channel": "burst-reviewer-fake",
+      "waitFor": [
+        {
+          "thread": "a1",
+          "until": "awaitingInput"
+        }
+      ]
+    },
+    {
+      "text": "a2 go ahead and finish",
+      "thread": "a2",
+      "channel": "burst-reviewer-fake",
+      "waitFor": [
+        {
+          "thread": "a2",
+          "until": "awaitingInput"
+        },
+        {
+          "thread": "b",
+          "until": "idle"
+        }
+      ]
+    }
+  ],
+  "toolOutputs": {
+    "gitlike_gh": {
+      "stdout": "title: Update README.md\nstate: OPEN\nmergeable: MERGEABLE\n"
+    }
+  },
+  "llm": [
+    {
+      "thread": "a1",
+      "expect": {
+        "userTextContains": "review pull request 101"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "new_operation",
+            "args": {
+              "description": "look at pull request 101"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a1",
+      "expect": {
+        "lastToolResult": "new_operation",
+        "lastToolResultIsError": false,
+        "capture": {
+          "op_a1": "\"operation_id\":\"([^\"]+)\""
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_gh",
+            "args": {
+              "operation_id": "{{op_a1}}",
+              "_reason": "reading pull request 101",
+              "args": [
+                "pr",
+                "view",
+                "101",
+                "--repo",
+                "demo-org/demo-repo"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a1",
+      "expect": {
+        "lastToolResult": "gitlike_gh",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "state: OPEN"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "pull request 101 is open and mergeable"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a1",
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "await_user_message",
+            "args": {}
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a2",
+      "expect": {
+        "userTextContains": "review pull request 202"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "new_operation",
+            "args": {
+              "description": "look at pull request 202"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a2",
+      "expect": {
+        "lastToolResult": "new_operation",
+        "lastToolResultIsError": false,
+        "capture": {
+          "op_a2": "\"operation_id\":\"([^\"]+)\""
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_gh",
+            "args": {
+              "operation_id": "{{op_a2}}",
+              "_reason": "reading pull request 202",
+              "args": [
+                "pr",
+                "view",
+                "202",
+                "--repo",
+                "demo-org/demo-repo"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a2",
+      "expect": {
+        "lastToolResult": "gitlike_gh",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "state: OPEN"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "pull request 202 is open and mergeable"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a2",
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "await_user_message",
+            "args": {}
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a3",
+      "expect": {
+        "userTextContains": "review pull request 303"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "new_operation",
+            "args": {
+              "description": "look at pull request 303"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a3",
+      "expect": {
+        "lastToolResult": "new_operation",
+        "lastToolResultIsError": false,
+        "capture": {
+          "op_a3": "\"operation_id\":\"([^\"]+)\""
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_gh",
+            "args": {
+              "operation_id": "{{op_a3}}",
+              "_reason": "reading pull request 303",
+              "args": [
+                "pr",
+                "view",
+                "303",
+                "--repo",
+                "demo-org/demo-repo"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a3",
+      "expect": {
+        "lastToolResult": "gitlike_gh",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "state: OPEN"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "pull request 303 is open and mergeable"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a3",
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "looked at pull request 303"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "b",
+      "expect": {
+        "userTextContains": "check notes for pull request 404"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "new_operation",
+            "args": {
+              "description": "look at pull request 404"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "b",
+      "expect": {
+        "lastToolResult": "new_operation",
+        "lastToolResultIsError": false,
+        "capture": {
+          "op_b": "\"operation_id\":\"([^\"]+)\""
+        }
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "gitlike_gh",
+            "args": {
+              "operation_id": "{{op_b}}",
+              "_reason": "reading pull request 404",
+              "args": [
+                "pr",
+                "view",
+                "404",
+                "--repo",
+                "demo-org/demo-repo"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "b",
+      "expect": {
+        "lastToolResult": "gitlike_gh",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "state: OPEN"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "pull request 404 is open and mergeable"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "b",
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "looked at pull request 404"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a1",
+      "expect": {
+        "userTextContains": "a1 go ahead and finish"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "reviewed pull request 101"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "thread": "a2",
+      "expect": {
+        "userTextContains": "a2 go ahead and finish"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "reviewed pull request 202"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "admission": {
+      "peakAdmitted": 2,
+      "admittedBefore": [
+        {
+          "first": "a1",
+          "then": "a3"
+        },
+        {
+          "first": "a2",
+          "then": "a3"
+        },
+        {
+          "first": "a1",
+          "then": "b"
+        },
+        {
+          "first": "a2",
+          "then": "b"
+        },
+        {
+          "first": "b",
+          "then": "a3"
+        }
+      ],
+      "completedBefore": [
+        {
+          "first": "a1",
+          "then": "a2"
+        },
+        {
+          "first": "a1",
+          "then": "a3"
+        },
+        {
+          "first": "a2",
+          "then": "a3"
+        },
+        {
+          "first": "a1",
+          "then": "b"
+        }
+      ]
+    }
+  }
+}

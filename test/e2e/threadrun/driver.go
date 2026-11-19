@@ -183,6 +183,8 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 		HoldToolsFromAssembly:         toolCatalog.HeldFromAssembly(),
 		FilterOfferedTools:            toolCatalog.Filter(),
 		ReplaceAssembledTool:          metaCanner.Replacer(),
+		Admission:                     admissionOptionsFor(b),
+		AwaitIdleTTL:                  awaitIdleTTLFor(b),
 	})
 
 	// Canned outputs for the tools whose disposition is ReplayOutput. Keyed by
@@ -426,8 +428,21 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	// function's own doc for why this lives in the general turn loop rather
 	// than a per-bundle hook, and for the no-op it is for every other bundle.
 	workshopSessionBound := false
+	// The admission watch starts before the first turn: what it guards — no
+	// partial set, never over capacity — must hold from the first session on.
+	var watch *admissionWatch
+	if b.Admission != nil {
+		watch = startAdmissionWatch(t, h, b)
+	}
+	opened := map[string]bool{}
 	for i, turn := range b.UserTurns {
-		h.SendUserMessage(turn.Text, e2e.InThread("bt-"+b.Name), e2e.WithAttachments(bundleAttachments(t, dir, i, turn)...))
+		waitForBarriers(t, h, b, turn)
+		opts := append(turnSendOptions(b, turn), e2e.WithAttachments(bundleAttachments(t, dir, i, turn)...))
+		h.SendUserMessage(turn.Text, opts...)
+		if b.Admission != nil && turn.Thread != "" && !opened[turn.Thread] {
+			awaitArrival(t, h, b, turn.Thread)
+		}
+		opened[turn.Thread] = true
 		// Contains and NotContains are positional and run on the SAME reply, so a
 		// turn asserting both awaits its reply once and checks presence + absence
 		// together. A turn with neither is not awaited (some turns produce no
@@ -443,6 +458,14 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 			h.ExpectAgentReply(preds...)
 		}
 		bindWorkshopSessionOnce(t, h, &workshopSessionBound)
+	}
+
+	// An admission bundle's barrier: every session admitted, ran and gave its
+	// room back. Before the transcript check, which is only meaningful once
+	// the last queued session has had its turn.
+	if watch != nil {
+		waitAllReleased(t, h, b)
+		checkAdmission(t, watch, b)
 	}
 
 	checkTranscriptConsumed(t, b, tr)
@@ -466,7 +489,12 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	checkSpiceDB(t, h, b)
 	checkTranscriptLength(t, h, b)
 	checkToolsCalled(t, h, b)
-	checkGoldenTrace(t, h, dir)
+	// A golden trace is ONE session's log. A multi-session bundle has several
+	// and no defined way to fold them into one file, so it has no golden (yet)
+	// and asserts on its sessions through its own claims instead.
+	if len(b.Threads()) == 0 {
+		checkGoldenTrace(t, h, dir)
+	}
 	checkMintedIDsConsumed(t, mintedIDs)
 	checkProviderIDsConsumed(t, providerIDs)
 	checkToolCatalogConsulted(t, toolCatalog)
@@ -1120,12 +1148,16 @@ func registerTranscript(t *testing.T, h *e2e.Harness, b bt.Bundle) *transcript {
 		parts := parseReplyParts(t, i, step.Reply)
 		captures := compileCaptures(t, i, step.Expect.Capture)
 		scope := scopes[step.AgentClass]
+		opening := b.OpeningText(step.Thread) // "" for an unscoped step
 		h.LLM.On(func(req llm.Request) bool {
 			// Scope FIRST: an unmatched scope must leave the step pending for
 			// its own session, so a request from the other side falls through
 			// to that side's next rule rather than consuming this one — and
 			// checkExpect must not report on a request this step never claimed.
 			if scope != "" && !strings.Contains(systemPromptOf(req), scope) {
+				return false
+			}
+			if opening != "" && !mentionsText(req, opening) {
 				return false
 			}
 			checkExpect(t, i, step.Expect, req)
@@ -1177,12 +1209,16 @@ func checkTranscriptConsumed(t *testing.T, b bt.Bundle, tr *transcript) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	for i, step := range b.LLM {
-		if step.AgentClass == "" {
+		scope := step.AgentClass
+		if step.Thread != "" {
+			scope = "thread " + step.Thread
+		}
+		if scope == "" {
 			continue
 		}
 		assert.True(t, tr.consumed[i],
 			"llm step %d was scoped to %q and never ran: that session did not take the turn the transcript says it did",
-			i, step.AgentClass)
+			i, scope)
 	}
 }
 

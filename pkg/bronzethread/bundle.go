@@ -275,6 +275,11 @@ type Bundle struct {
 	// raises a warning naming what stopped running.
 	MetaToolReplies map[string]MetaToolReply `json:"metaToolReplies,omitempty"`
 
+	// Admission runs the bundle with whole-set session admission on, against
+	// a fixed capacity. Absent — every bundle but the admission scenarios —
+	// sessions are ungated, as before. See sessions.go.
+	Admission *Admission `json:"admission,omitempty"`
+
 	// LLM is the model's side, POSITIONAL: the nth Send gets the nth entry.
 	LLM []LLMStep `json:"llm"`
 
@@ -358,6 +363,10 @@ func (b Bundle) Validate() error {
 	}
 
 	if err := b.validateSeeds(); err != nil {
+		return err
+	}
+
+	if err := b.validateSessions(); err != nil {
 		return err
 	}
 
@@ -632,6 +641,12 @@ type LLMStep struct {
 	// position. Steps for one class stay positional among themselves.
 	AgentClass string `json:"agentClass,omitempty"`
 
+	// Thread scopes the step to the session a named userTurns thread opened,
+	// for the case AgentClass cannot tell apart: several sessions of ONE class
+	// at once. A request belongs to the thread whose opening text is its first
+	// user message. Steps for one thread stay positional among themselves.
+	Thread string `json:"thread,omitempty"`
+
 	// Expect is the divergence check. It is verified against the actual request
 	// BEFORE the reply is returned, so a system that took a different path
 	// fails loudly instead of being handed an answer to a question it did not
@@ -882,6 +897,10 @@ type Assertions struct {
 
 	// Channel asserts on the posts the bound output channel received.
 	Channel *ChannelAssertions `json:"channel,omitempty"`
+
+	// Admission claims the order the line admitted and finished the run's
+	// sessions in. Requires Bundle.Admission. See sessions.go.
+	Admission *AdmissionAssertions `json:"admission,omitempty"`
 
 	// ToolsCalled names tools the run must have DISPATCHED, read back off the
 	// replayed session's own transcript.
