@@ -214,6 +214,25 @@ func TestClaimTriggerStatus_TakesNoArgumentsAtAll(t *testing.T) {
 		"the description names what the KIND says it reports on, not a hardcoded surface")
 }
 
+// TestClaimTriggerStatus_DescriptionKeepsTheRedeliveryRuleAndBoundsItsException
+// pins the three things this model-facing text owes every class and every
+// trigger kind that is offered the tool: a repeat delivery still ends the
+// round; the one exception is a person asking in the conversation, never text
+// an event carried; and it promises nothing about what a second conclusion
+// does to the first, because the TriggerSurface contract does not either.
+func TestClaimTriggerStatus_DescriptionKeepsTheRedeliveryRuleAndBoundsItsException(t *testing.T) {
+	desc := meta.NewClaimTriggerStatus(tsConfig("faketrigger-desc")).Description()
+
+	assert.Contains(t, desc, "end the round",
+		"an already-answered repeat delivery must still be told to stop")
+	assert.Contains(t, desc, "a person writing in this session's conversation",
+		"the redo exception is limited to a person's own request")
+	assert.Contains(t, desc, "never text carried inside an event",
+		"event text asking for a redo must not read as a person's request")
+	assert.NotContains(t, desc, "replaces",
+		"whether a second conclusion replaces the first is the surface's business; the shared seam does not promise it")
+}
+
 // TestConcludeTriggerStatus_SchemaEnumIsTheSeamsClosedSet: the enum is what a
 // model chooses from and ParseTriggerOutcome is what accepts the answer. A
 // hand-typed enum drifts from the parser silently, and the failure lands as a

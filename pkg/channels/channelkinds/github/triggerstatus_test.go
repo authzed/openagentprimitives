@@ -300,6 +300,78 @@ func TestTriggerSurface_ConcludeTargetsTheOpenClaim(t *testing.T) {
 	}
 }
 
+// TestTriggerSurface_ConcludeOverwritesACompletedRun is the re-review case: a
+// person asked for the work to be redone on a commit that already carries an
+// answer. Claim reports that answer and leaves it alone; Conclude then writes
+// the new one onto the SAME run, in whichever direction it moved, rather than
+// leaving two answers on one commit.
+func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
+	cases := []struct {
+		name           string
+		existing       string
+		wantClaimed    channelkinds.TriggerOutcome
+		outcome        channelkinds.TriggerOutcome
+		wantConclusion string
+		wantTitle      string
+	}{
+		{
+			name:     "problems_found then clean: the same run turns success",
+			existing: "action_required", wantClaimed: channelkinds.TriggerOutcomeProblemsFound,
+			outcome: channelkinds.TriggerOutcomeClean, wantConclusion: "success", wantTitle: "No blocking findings",
+		},
+		{
+			name:     "clean then problems_found: the same run turns action_required",
+			existing: "success", wantClaimed: channelkinds.TriggerOutcomeClean,
+			outcome: channelkinds.TriggerOutcomeProblemsFound, wantConclusion: "action_required", wantTitle: "Findings need attention",
+		},
+		{
+			name:     "could_not_finish then clean: the same run turns success",
+			existing: "neutral", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeClean, wantConclusion: "success", wantTitle: "No blocking findings",
+		},
+		{
+			name:     "clean then could_not_finish: the same run turns neutral",
+			existing: "success", wantClaimed: channelkinds.TriggerOutcomeClean,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantConclusion: "neutral", wantTitle: "Could not complete",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newFakeGitHub(t)
+			g.existing = []map[string]any{{
+				"id": 4242, "name": fxAppSlug, "status": "completed", "conclusion": tc.existing,
+			}}
+			surface := newSurface(t, g)
+
+			claim, err := surface.Claim(context.Background())
+			require.NoError(t, err)
+			require.True(t, claim.Concluded, "the commit already carries an answer")
+			assert.Equal(t, tc.wantClaimed, claim.Outcome)
+			require.Empty(t, g.writes(), "claiming an answered commit writes nothing")
+
+			err = surface.Conclude(context.Background(), channelkinds.TriggerConclusion{
+				Outcome:    tc.outcome,
+				Summary:    "Reviewed again at a person's request.",
+				DetailsURL: "https://example.test/thread/2",
+			})
+			require.NoError(t, err)
+
+			writes := g.writes()
+			require.Len(t, writes, 1, "the new answer updates the existing run; it does not open a second")
+			assert.Equal(t, http.MethodPatch, writes[0].Method)
+			assert.Equal(t, "/repos/"+fxOwner+"/"+fxRepo+"/check-runs/4242", writes[0].Path,
+				"the run that carried the old answer is the one rewritten")
+			assert.Equal(t, "completed", writes[0].Body["status"])
+			assert.Equal(t, tc.wantConclusion, writes[0].Body["conclusion"])
+			assert.Equal(t, "https://example.test/thread/2", writes[0].Body["details_url"])
+			output, _ := writes[0].Body["output"].(map[string]any)
+			require.NotNil(t, output)
+			assert.Equal(t, tc.wantTitle, output["title"])
+			assert.Equal(t, "Reviewed again at a person's request.", output["summary"])
+		})
+	}
+}
+
 // TestTriggerSurface_ConcludeWithNoClaimStillWritesTheAnswer is what makes
 // claiming optional and stops a missed claim from losing a verdict: with
 // nothing open, concluding opens a run that is already completed.

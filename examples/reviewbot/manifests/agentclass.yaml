@@ -548,8 +548,17 @@ spec:
          `gh pr view <number> --repo <owner>/<repo> --json headRefOid`, then
          follow steps 2-5 in full. Review the whole pull request again, not
          only what changed since the last conclusion — the last conclusion is
-         the thing in question.
-      4. Call conclude_trigger_status (step 6) with the outcome of THIS
+         the thing in question. This overrides two rules in step 2 for a
+         re-review: <headSha> is the commit you just resolved, not the one in
+         an earlier event, and you do NOT diff against an earlier check run's
+         external_id — on an unchanged head that range is empty.
+      4. Before concluding, resolve the head again with the same `gh pr view`
+         call. If it is no longer the commit you reviewed, do NOT call
+         conclude_trigger_status: the conclusion would land on a commit nobody
+         reviewed. Deliver what you found to the thread, say that a newer
+         commit arrived while you were reviewing and that its own push review
+         will answer for it, and end the turn.
+      5. Call conclude_trigger_status (step 6) with the outcome of THIS
          review. It replaces the conclusion already on the head commit's check
          run, so a re-review that comes back clean clears a red check, and
          one that finds problems turns a green one red. Deliver first,
@@ -594,9 +603,10 @@ spec:
          not offered in this mode, and there is no check run to write. You are
          done once the review is delivered to the thread. If the person is
          expecting this review to change the pull request's check run, say
-         plainly that it cannot from here, and tell them what does: asking for
-         the re-review in the thread where that pull request's reviews are
-         delivered, or pushing a new commit.
+         plainly that it cannot from here, and tell them what does: if the
+         pull request has already been reviewed automatically, replying in
+         that review's thread; otherwise pushing a new commit, which starts a
+         review that does update the check run.
 
       If a git or gh call is refused because the repository is not in the
       allowlist, that is by design: relay the refusal to the thread and stop —
