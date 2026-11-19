@@ -421,11 +421,25 @@ func (*Kind) PublicSecretKeys(*spiceboxv1alpha1.Channel) []string { return nil }
 // generic pipeline uses this in deny / notification strings that
 // need a clickable user handle without switching on kind.
 func (*Kind) RenderMention(externalID string) string {
-	if externalID == "" {
+	return mentionToken(externalID)
+}
+
+// SelfMention returns the bot's own mention token from the binding's
+// "bot_user_id", which the listener stamps on every inbound it delivers.
+func (*Kind) SelfMention(external map[string]string) string {
+	return mentionToken(external["bot_user_id"])
+}
+
+// mentionToken is Slack's <@USERID> syntax, shared by every path that
+// renders one so the listener and the kind cannot disagree on the shape.
+func mentionToken(userID string) string {
+	if userID == "" {
 		return ""
 	}
-	return "<@" + externalID + ">"
+	return "<@" + userID + ">"
 }
+
+var _ channelkinds.SelfMentioner = (*Kind)(nil)
 
 var _ channelkinds.OriginLinkProvider = (*Kind)(nil)
 

@@ -1512,6 +1512,18 @@ const AnnotationForkedFromThread = "agentprimitives.authzed.com/forked-from-thre
 // person's own message, and on a trigger whose kind cannot describe itself.
 const AnnotationSessionOpening = "agentprimitives.authzed.com/session-opening"
 
+// AnnotationStarterMention carries the channel-native mention token of the
+// person whose message created this session (Slack's "<@U…>"), minted by the
+// listener that received it.
+//
+// Every LATER message carries its sender's token on its own memory turn, but
+// the first one becomes spec.prompt and is placed as turn 0 by the runner, so
+// its token has to ride on the object instead. Stamped on the Create by the
+// channelsd pipeline — the runner is spawned off the object's existence, so a
+// later patch could lose the race to turn 0. Absent when the kind supplied no
+// token.
+const AnnotationStarterMention = "agentprimitives.authzed.com/starter-mention"
+
 // AnnotationSessionOpeningSent marks that the AnnotationSessionOpening line has
 // already been posted, independently of the text itself (which is retained,
 // not cleared, for the pinned-status renderer).
