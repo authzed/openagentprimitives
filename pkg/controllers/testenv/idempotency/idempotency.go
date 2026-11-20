@@ -57,13 +57,18 @@ import (
 // The second apply is held until the wall clock has moved into a later second
 // than the first. The apiserver restamps the applying manager's managedFields
 // time (one-second resolution) whenever it sees the payload as a change, even
-// one it then discards — a status stanza sent to a resource with a status
-// subresource is the usual case, and a typed struct always serializes one. Two
-// such applies inside the same second store identical bytes and look like a
-// no-op; across a second boundary they bump resourceVersion. Without the wait
-// this check therefore passed or failed on scheduling alone, which is how an
+// one it then discards. The case seen so far is a status stanza (a typed CRD
+// struct serializes an empty one) applied to a custom resource with a status
+// subresource: the stored object has no status, so the merge counts the
+// stanza as a change before the status reset throws it away. Built-in types
+// are not affected the same way, because their live object already converts
+// with an empty status (a typed ResourceQuota applies cleanly). Two such
+// applies inside the same second store identical bytes and look like a no-op;
+// across a second boundary they bump resourceVersion. Without the wait this
+// check therefore passed or failed on scheduling alone, which is how an
 // intermittent CI failure came to be read as a flake. With it, the bump is
-// reported every time.
+// reported every time (under envtest; see waitForNextSecond for the clock
+// caveat).
 //
 // MUST run against a REAL apiserver. The fake client bumps resourceVersion on
 // every accepted Patch instead of reproducing the apiserver's byte-equality
@@ -115,7 +120,7 @@ func CheckApplyIdempotent(ctx context.Context, c client.Client, want client.Obje
 	case d != "":
 		msg += fmt.Sprintf("\ndiff between the two applied objects (-first, +second):\n%s", d)
 	default:
-		msg += "\nthe two applied objects are otherwise identical, so only managedFields moved: the payload carries something the apiserver accepts as a change and then discards. The usual cause is a status stanza — a typed struct serializes an empty one — sent to a resource with a status subresource; apply spec and metadata only"
+		msg += "\nthe two applied objects differ only in server-managed bookkeeping (managedFields, uid, creationTimestamp, generation): the payload likely carries something the apiserver accepts as a change and then discards, which restamps the managedFields time. One known cause is a status stanza (a typed CRD struct serializes an empty one) applied to a custom resource with a status subresource; apply spec and metadata only. The other possibility is that something deleted and recreated the object between the two applies"
 	}
 	return errors.New(msg)
 }

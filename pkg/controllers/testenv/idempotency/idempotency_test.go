@@ -101,8 +101,8 @@ func TestCheckApplyIdempotent_StablePayloadIsNoOp(t *testing.T) {
 	idempotency.RequireApplyIdempotent(t, ctx, env.Client, want, testFieldManager)
 }
 
-// A payload carrying a status stanza is not a no-op on a resource with a status
-// subresource: the apiserver discards the status but still restamps the
+// A payload carrying a status stanza is not a no-op on a custom resource with a
+// status subresource: the apiserver discards the status but still restamps the
 // manager's managedFields time. Nothing a caller applied differs between the
 // two objects, so the report has no diff to show and must say what to look for
 // instead.
