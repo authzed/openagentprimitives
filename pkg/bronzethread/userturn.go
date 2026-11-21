@@ -45,6 +45,16 @@ type BundleAttachment struct {
 type UserTurn struct {
 	Text        string             `json:"text"`
 	Attachments []BundleAttachment `json:"attachments,omitempty"`
+
+	// DeleteSessionFirst deletes the conversation's session, and waits until
+	// it is gone, before this turn is sent. The turn then reaches a channel key
+	// whose session no longer exists while that session's transcript still
+	// does: turns are append-only audit evidence that outlives the CR, in a
+	// scope keyed by the session's NAME. That is the state a person returning
+	// to a deleted (or archived-then-collected) conversation is in, and no
+	// other step can produce it. Refused on the first turn, where there is
+	// nothing to delete.
+	DeleteSessionFirst bool `json:"deleteSessionFirst,omitempty"`
 }
 
 // UnmarshalJSON accepts the bare-string and object forms.

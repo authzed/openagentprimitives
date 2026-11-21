@@ -427,6 +427,9 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	// than a per-bundle hook, and for the no-op it is for every other bundle.
 	workshopSessionBound := false
 	for i, turn := range b.UserTurns {
+		if turn.DeleteSessionFirst {
+			deleteSessionBeforeTurn(t, h, i)
+		}
 		h.SendUserMessage(turn.Text, e2e.InThread("bt-"+b.Name), e2e.WithAttachments(bundleAttachments(t, dir, i, turn)...))
 		// Contains and NotContains are positional and run on the SAME reply, so a
 		// turn asserting both awaits its reply once and checks presence + absence
@@ -473,6 +476,21 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	checkMetaRepliesApplied(t, metaCanner)
 
 	return h
+}
+
+// deleteSessionBeforeTurn carries out a turn's deleteSessionFirst: the
+// conversation's one session is deleted, and gone, before the turn is sent.
+//
+// It waits for the session to come to rest first. The previous turn's reply can
+// land before the runner has written Idle, and deleting a session mid-write
+// would make the scenario about that race rather than about what the delete
+// leaves behind — the session's transcript, which outlives it by design.
+func deleteSessionBeforeTurn(t *testing.T, h *e2e.Harness, turnIdx int) {
+	t.Helper()
+	ns, name := h.SessionRef()
+	h.WaitForSessionPhase(ns, name, spiceboxv1alpha1.AgentSessionPhaseIdle, 60*time.Second)
+	h.DeleteSession(ns, name, 60*time.Second)
+	t.Logf("bronzethread: before turn %d, deleted session %s/%s (its transcript stays in memory)", turnIdx, ns, name)
 }
 
 // checkMetaRepliesApplied proves every canned meta reply was actually installed.
@@ -1442,6 +1460,10 @@ func checkExpect(t *testing.T, idx int, e bt.Expect, req llm.Request) {
 					"llm step %d: tool result isError (content: %q)", idx, blk.Content)
 			}
 		}
+	}
+	if e.RequestNotContains != "" {
+		assert.False(t, requestMentions(req, e.RequestNotContains),
+			"llm step %d: %q reached the model's context", idx, e.RequestNotContains)
 	}
 	if len(e.ToolResultCounts) > 0 {
 		assert.True(t, toolResultCountsMatch(req, e.ToolResultCounts),

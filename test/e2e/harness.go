@@ -2144,6 +2144,18 @@ func (a *pipelineMemAdapter) ReadAll(ctx context.Context, ns, name string) ([]pi
 	return out, nil
 }
 
+// ScopeHasEntries reports whether the (ns, name) session scope holds any entry
+// of any kind, through the same in-process memory.Local, shape-equivalent with
+// the production memoryClient's single-entry probe.
+func (a *pipelineMemAdapter) ScopeHasEntries(ctx context.Context, ns, name string) (bool, error) {
+	ctx = pkgmemory.WithSystemApproval(ctx, "e2e-channelsd")
+	res, err := a.mem.Query(ctx, pkgmemory.Query{Scope: pkgmemory.Scope{Kind: "session", ID: ns + "/" + name}, Limit: 1})
+	if err != nil {
+		return false, fmt.Errorf("pipelineMemAdapter: ScopeHasEntries: %w", err)
+	}
+	return len(res.Entries) > 0, nil
+}
+
 // RecordChannelMsgRef writes a channel_msg_ref memory entry mapping
 // (kind, ref) → turnIndex at the (ns, name) session scope. Uses the
 // in-process memory.Local directly (no HTTP hop) to stay

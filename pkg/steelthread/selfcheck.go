@@ -1659,6 +1659,7 @@ func expectAssertsNothing(e bt.Expect) bool {
 		e.LastToolResult == "" &&
 		e.LastToolResultContains == "" &&
 		e.LastToolResultNotContains == "" &&
+		e.RequestNotContains == "" &&
 		e.LastToolResultIsError == nil &&
 		len(e.ToolResultCounts) == 0 &&
 		e.ToolOffered == "" &&

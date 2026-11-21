@@ -467,6 +467,19 @@ func TestSelfCheck_CleanCaptureHasNoFindings(t *testing.T) {
 	assert.Empty(t, steelthread.SelfCheck(cleanCapture(t)))
 }
 
+// requestNotContains is a claim checkExpect compares, so a step carrying only
+// it is guarded. Read as "asserts nothing", it would raise a hard empty-expect
+// finding against a perfectly good step.
+func TestSelfCheck_RequestNotContainsAloneIsAnAssertion(t *testing.T) {
+	in := cleanCapture(t)
+	in.Folded.LLM[0].Expect = bt.Expect{RequestNotContains: "a value the session never read"}
+
+	for _, f := range steelthread.SelfCheck(in) {
+		assert.NotEqual(t, steelthread.CodeEmptyExpect, f.Code,
+			"a step asserting requestNotContains is not unguarded: %v", f)
+	}
+}
+
 // TestSelfCheck_UnseededAllowSaysWhichSlotCaseTheReaderIsIn pins the one thing
 // the finding's key cannot say: WHY this permission survived the declared-slot
 // exemption.
