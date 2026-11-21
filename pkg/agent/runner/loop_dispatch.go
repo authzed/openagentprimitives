@@ -349,7 +349,7 @@ type containParams struct {
 	suppressHalt bool
 	// proxyExec marks a viewer-attributed proxy execution (app-tool call): the
 	// approval-card Requester derives from `requester` (the viewer, D-D1) rather
-	// than the session's LastInboundExternalID. false on the LLM path.
+	// than the current speaker (llmPathRequester). false on the LLM path.
 	proxyExec bool
 	// uiDataBinding marks a proxy-exec whose result is bound for the BROWSER,
 	// not the model: an agent-UI data binding (Loop.HandleUIDataBinding),

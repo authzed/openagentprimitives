@@ -37,6 +37,19 @@ func DecodeForDisplay(subject string) string {
 	return s
 }
 
+// SplitSynthetic parses the decoded "kind:teamScope:externalID" form a
+// synthetic canonical carries (DecodeForDisplay's output, or the raw base64url
+// decode of one). teamScope may be empty ("slack::U1"); ok is false when there
+// are not three parts or the external id is blank. An email-typed decode is
+// not a synthetic and reports ok=false.
+func SplitSynthetic(decoded string) (kind Kind, team TeamScope, externalID RawExternalID, ok bool) {
+	parts := strings.SplitN(decoded, ":", 3)
+	if len(parts) != 3 || strings.TrimSpace(parts[2]) == "" {
+		return "", "", "", false
+	}
+	return Kind(parts[0]), TeamScope(parts[1]), RawExternalID(parts[2]), true
+}
+
 // IsCanonicalUserIDShape reports whether s has the shape every
 // CanonicalUserID has — non-empty and a valid base64url
 // (RawURLEncoding, unpadded) string — which is what Principal.Canonical

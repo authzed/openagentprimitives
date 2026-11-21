@@ -192,6 +192,113 @@ func TestBuildToolCallPending_NoResourceUsesSessionGate(t *testing.T) {
 	require.Len(t, pl.Audience.Approvers, 1)
 }
 
+// publishToolCallCard drives one tool_call ask through PublishApproval and the
+// publish hook, and returns the interaction_request payload the approver's
+// surface would receive.
+func publishToolCallCard(t *testing.T, ask pipeline.ApprovalAsk) channelevents.InteractionRequestPayload {
+	t.Helper()
+	var published channelevents.Envelope
+	l := &Loop{
+		ResourceStandings: testResourceStandings(),
+		Status:            LocalStatusPatcher(),
+		Approval:          approval.New(),
+		ChannelKind:       "slack",
+		SpiceDBLookupSubjects: func(_ context.Context, _, _ string) ([]string, error) {
+			return []string{"user:owner@corp.example"}, nil
+		},
+		InteractionRequestPublish: func(_ context.Context, _, _ string, env channelevents.Envelope) error {
+			published = env
+			return nil
+		},
+	}
+	h := newRunnerHost(l, hostSession{Namespace: "ns", Name: "s"})
+
+	reqID, err := h.PublishApproval(context.Background(), ask)
+	require.NoError(t, err, "PublishApproval")
+	pa, ok := h.pending().m[reqID]
+	require.True(t, ok, "pending approval must be registered under reqID")
+	require.NoError(t, pa.onPublish(context.Background()), "onPublish")
+
+	var pl channelevents.InteractionRequestPayload
+	require.NoError(t, json.Unmarshal(published.Payload, &pl), "decode published interaction_request")
+	return pl
+}
+
+// The tool-approval card names WHO is asking. It used to show the agent's
+// reason, the call and the permission, and nothing about the person whose
+// session raised it — so an approver could not tell a teammate's request from
+// a stranger's.
+//
+// The requester rides the row as a structured identity (Mentions), never as
+// mention markup: the runner is channel-agnostic, so each surface renders the
+// identity its own way (Slack: a live <@U…> mention) and Value is the plain
+// fallback for surfaces that resolve no mentions. With no requester known the
+// row is omitted outright — "Requested by: (unknown)" is noise, not
+// information.
+func TestBuildToolCallPending_NamesTheRequester(t *testing.T) {
+	slackAlice := channelevents.ExternalIdentity{Kind: identity.KindSlack, ExternalID: "U_ALICE"}
+	widgetViewer := channelevents.ExternalIdentity{
+		Kind: identity.KindIdP, Email: "viewer@corp.example", ExternalID: "viewer@corp.example",
+	}
+	cardRows := []string{"Why", "What", "Tool", "Permission"}
+
+	cases := []struct {
+		name      string
+		requester channelevents.ExternalIdentity
+		// wantValue is the plain display fallback; "" means no row at all.
+		wantValue string
+	}{
+		{
+			name:      "slack session starter: Requested by row leads the card, carrying the identity as a Mention",
+			requester: slackAlice,
+			wantValue: "U_ALICE",
+		},
+		{
+			name:      "app-tool widget viewer (idp): Requested by row shows the viewer's email",
+			requester: widgetViewer,
+			wantValue: "viewer@corp.example",
+		},
+		{
+			name:      "no requester known: no Requested by row, the card is unchanged",
+			requester: channelevents.ExternalIdentity{},
+		},
+		{
+			name:      "channel kind but no id (kubectl-started session): no Requested by row",
+			requester: channelevents.ExternalIdentity{Kind: identity.KindSlack},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ask := toolCallAsk()
+			payload := ToolCallApprovalPayload{
+				SessNS: "ns", SessName: "s", ToolName: "write_repo", Permission: "write",
+				ResourceType: "repo", ResourceID: "r1", StateImpact: "external", ArgsHash: "h1",
+				Justification: "need to land the fix", Perm: authz.Permission{StateImpact: authz.External},
+				UseID: "tu-1", Requester: tc.requester,
+			}
+			ask.Payload = payload.ToMap()
+
+			pl := publishToolCallCard(t, ask)
+
+			labels := make([]string, 0, len(pl.Fields))
+			for _, f := range pl.Fields {
+				labels = append(labels, f.Label)
+			}
+			if tc.wantValue == "" {
+				assert.Equal(t, cardRows, labels, "an unknown requester must leave the card exactly as it was")
+				return
+			}
+			assert.Equal(t, append([]string{"Requested by"}, cardRows...), labels,
+				"who is asking is the first thing an approver reads")
+			got := pl.Fields[0]
+			assert.Equal(t, tc.wantValue, got.Value, "Value is the plain fallback for surfaces that resolve no mentions")
+			assert.Equal(t, []channelevents.ExternalIdentity{tc.requester}, got.Mentions,
+				"the requester travels as the full structured identity, for the surface to render")
+			assert.NotContains(t, got.Value, "<@", "the runner never composes channel mention markup")
+		})
+	}
+}
+
 // TestBuildToolCallPending_FailsClosedWithoutApprovers verifies the fail-closed
 // guard: no resolvable approvers refuses to publish an undeliverable prompt.
 func TestBuildToolCallPending_FailsClosedWithoutApprovers(t *testing.T) {

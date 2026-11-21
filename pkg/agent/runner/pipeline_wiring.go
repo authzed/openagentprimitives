@@ -357,7 +357,7 @@ func (l *Loop) toolCallAuthzDeps() hooks.ToolCallAuthzDeps {
 		buildApprovalAsk = func(ctx context.Context, in pipeline.Input, argsMap map[string]any, perm authz.Permission, justification string) (*pipeline.ApprovalAsk, error) {
 			// in.Requester / in.ProxyExec attribute the approver-facing
 			// Requester to the widget viewer on a proxy-exec (D-D1); the LLM
-			// path (ProxyExec=false) keeps the session's LastInbound display.
+			// path (ProxyExec=false) names the current speaker (llmPathRequester).
 			return l.buildToolCallApprovalAsk(ctx, in.Tool.Name, argsMap, perm, in.Tool.UseID, justification, in.Requester, in.ProxyExec)
 		}
 	}
@@ -627,7 +627,7 @@ func redactSensitiveArgs(t tool.Tool, argsMap map[string]any, sessionKey, toolNa
 // useID is the LLM tool_use block ID; justification is the agent's stated reason
 // from the _reason envelope field. reqSubject + proxyExec drive the
 // approver-facing Requester: on a proxy-exec (app-tool) call it is the widget
-// VIEWER (reqSubject); on the LLM path it is the session's LastInbound requester.
+// VIEWER (reqSubject); on the LLM path it is the current speaker (llmPathRequester).
 func (l *Loop) buildToolCallApprovalAsk(ctx context.Context, toolName string, argsMap map[string]any, perm authz.Permission, useID, justification string, reqSubject identity.CanonicalUserID, proxyExec bool) (*pipeline.ApprovalAsk, error) {
 	resourceType := ""
 	resourceID := ""
@@ -739,11 +739,11 @@ func (l *Loop) buildToolCallApprovalAsk(ctx context.Context, toolName string, ar
 	}
 
 	// Requester attribution: on a proxy-exec (app-tool) call the approver must see
-	// the WIDGET VIEWER ("alice's widget wants to delete X"), not the session's
-	// LastInbound requester. The viewer's canonical subject is
+	// the WIDGET VIEWER ("alice's widget wants to delete X"), not whoever is
+	// speaking in the thread. The viewer's canonical subject is
 	// "user:<base64url(email)>"; DecodeForDisplay recovers the email, mirroring
-	// interact/mcp_ui_action.go's round-trip. The LLM path keeps the
-	// channel-native LastInbound display.
+	// interact/mcp_ui_action.go's round-trip. The LLM path names the person
+	// speaking now (llmPathRequester).
 	var requester channelevents.ExternalIdentity
 	// On a proxy-exec the post-approval re-verify must re-check
 	// the VIEWER (reqSubject), not the loop's session subject — thread the viewer
@@ -762,14 +762,7 @@ func (l *Loop) buildToolCallApprovalAsk(ctx context.Context, toolName string, ar
 		checkSubject = reqSubject.String()
 		checkSubjects = []string{reqSubject.String()}
 	} else {
-		requesterExt := l.LastInboundExternalID
-		if requesterExt == "" && l.AgentSession != nil {
-			requesterExt = l.AgentSession.Annotations[spiceboxv1alpha1.AnnotationStartedByExternalID]
-		}
-		requester = channelevents.ExternalIdentity{
-			Kind:       identity.Kind(l.AddressableChannelKind()),
-			ExternalID: identity.RawExternalID(requesterExt),
-		}
+		requester = l.llmPathRequester()
 	}
 
 	// Build summary via the summarizer LLM, from the same redacted args the

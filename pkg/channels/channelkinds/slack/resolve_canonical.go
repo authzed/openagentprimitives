@@ -59,11 +59,11 @@ func resolveSlackUserIDFromCanonical(ctx context.Context, cli slackClient, canon
 
 	case strings.HasPrefix(decoded, "slack:"):
 		// `slack:<team>:<userID>` (team may be empty: `slack::U…`).
-		parts := strings.SplitN(decoded, ":", 3)
-		if len(parts) != 3 || parts[2] == "" {
+		_, _, userID, ok := identity.SplitSynthetic(decoded)
+		if !ok {
 			return "", fmt.Errorf("resolve slack user: malformed slack-typed canonical %q", decoded)
 		}
-		return parts[2], nil
+		return string(userID), nil
 
 	default:
 		return "", fmt.Errorf("resolve slack user: unrecognized canonical form %q (expected an email or slack:<team>:<id>)", decoded)

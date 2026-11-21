@@ -67,6 +67,11 @@ func (l *Loop) Run(ctx context.Context) error {
 	// further for every turn drained after this point (see
 	// setCurrentUserTurnIndex's doc).
 	l.setCurrentUserTurnIndex(highestUserTurnIndex(prior))
+	// Same for "who is speaking right now": a resumed runner whose newest
+	// turn is already placed never re-drains it, so without this seed the
+	// approval card would fall back to the session starter for a call another
+	// participant asked for. The resume drain below advances it further.
+	l.lastInboundAuthor, l.lastInboundAuthorless = lastInboundSpeaker(prior)
 
 	// A fresh/resumed Run has not yielded yet; clear any awaitingUserInputSince
 	// left by a prior pod that crashed mid-await, so the silence watchdog isn't

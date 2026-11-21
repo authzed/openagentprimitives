@@ -64,6 +64,34 @@ func TestDecodeForDisplay_RoundtripsEmail(t *testing.T) {
 	}
 }
 
+func TestSplitSynthetic(t *testing.T) {
+	cases := []struct {
+		name     string
+		decoded  string
+		wantKind identity.Kind
+		wantTeam identity.TeamScope
+		wantID   identity.RawExternalID
+		wantOK   bool
+	}{
+		{name: "full triple: all three parts", decoded: "slack:T1:U1", wantKind: "slack", wantTeam: "T1", wantID: "U1", wantOK: true},
+		{name: "empty team scope: still a triple", decoded: "slack::U1", wantKind: "slack", wantID: "U1", wantOK: true},
+		{name: "colon inside the external id: kept whole", decoded: "github:org:a:b", wantKind: "github", wantTeam: "org", wantID: "a:b", wantOK: true},
+		{name: "two parts: not ok", decoded: "slack:U1", wantOK: false},
+		{name: "blank external id: not ok", decoded: "slack:T1: ", wantOK: false},
+		{name: "email payload: not ok", decoded: "alice@example.com", wantOK: false},
+		{name: "empty: not ok", decoded: "", wantOK: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kind, team, id, ok := identity.SplitSynthetic(tc.decoded)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.wantKind, kind)
+			assert.Equal(t, tc.wantTeam, team)
+			assert.Equal(t, tc.wantID, id)
+		})
+	}
+}
+
 func TestIsCanonicalUserIDShape(t *testing.T) {
 	syntheticSubject, err := identity.FromExternal(
 		identity.KindSlack, identity.TeamScope("T1"), identity.RawExternalID("U1"), identity.Email(""),

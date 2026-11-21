@@ -28,7 +28,7 @@ type ToolCallChecker interface {
 // It receives the whole pipeline.Input so the runner can attribute the ask to
 // the PER-CALL principal: in.Tool.Name / in.Tool.UseID identify the call, and
 // in.Requester / in.ProxyExec drive the approver-facing Requester (the widget
-// VIEWER on a proxy-exec, the session's LastInbound requester otherwise —
+// VIEWER on a proxy-exec, the current speaker otherwise —
 // D-D1). justification is the agent's stated reason, possibly annotated by the
 // hook (pin-drift), which is why it is passed separately rather than read from
 // in.Tool.Justification.
