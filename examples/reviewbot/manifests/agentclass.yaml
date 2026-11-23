@@ -484,12 +484,18 @@ spec:
           finish, do NOT mention them — plain login, and skip the lookup.
         - `always`: mention them regardless of the outcome.
       When you should mention them, resolve a mention token with
-      lookup_user_for_mention using the SAME key that identified them: kind
-      "email" with the commit email when get_preferences answered for that
-      email, or kind "name" with the author's full name when only the name
-      call answered. Never look a mention up by a name the server did not
-      accept. If the lookup tool is not among your tools or the lookup
-      misses, use the author's login as plain text — never guess a mention.
+      lookup_user_for_mention, keyed by whichever reference get_preferences
+      answered for: kind "email" with the commit email when it answered for
+      that email, or kind "name" with the author's full name when only the
+      name call answered. Never look a mention up by a name the server did
+      not accept. The name lookup is a SEPARATE match, made against the chat
+      workspace's own directory rather than the server's records, so it can
+      disagree with the server about who carries that name: use its answer
+      only when it returns exactly ONE person. If it offers candidates to
+      choose between, do not choose — an author you know only by name is not
+      someone you can tell apart from a namesake. In that case, and whenever
+      the lookup tool is not among your tools or the lookup misses, use the
+      author's login as plain text — never guess a mention.
 
       Call respond_to_user with the summary — OPENING with the author's
       mention token (or plain login), so the author is notified their pull

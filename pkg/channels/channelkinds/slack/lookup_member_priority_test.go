@@ -128,6 +128,33 @@ func TestLookupByNameSkipsDeactivatedAndPrefersMember(t *testing.T) {
 			wantID: "U_EMP",
 		},
 		{
+			name: "guest's display name is a member's real name: member returned, guest cannot take the mention",
+			users: []slackapi.User{
+				{ID: "U_GST", IsRestricted: true, Profile: slackapi.UserProfile{DisplayName: dupName, RealName: "Guest Account"}},
+				{ID: "U_EMP", Profile: slackapi.UserProfile{DisplayName: "rhart", RealName: dupName}},
+			},
+			query:  dupName,
+			wantID: "U_EMP",
+		},
+		{
+			name: "one member's display name is another member's real name: candidates, neither auto-picked",
+			users: []slackapi.User{
+				{ID: "U_A", Profile: slackapi.UserProfile{DisplayName: dupName, RealName: "Someone Else"}},
+				{ID: "U_B", Profile: slackapi.UserProfile{DisplayName: "rhart", RealName: dupName}},
+			},
+			query:         dupName,
+			wantCandIDs:   []string{"U_A", "U_B"},
+			wantCandTypes: []string{"member", "member"},
+		},
+		{
+			name: "one account carries the name in both fields: returned once",
+			users: []slackapi.User{
+				{ID: "U_EMP", Profile: slackapi.UserProfile{DisplayName: dupName, RealName: dupName}},
+			},
+			query:  dupName,
+			wantID: "U_EMP",
+		},
+		{
 			name: "bot with matching name is never matched",
 			users: []slackapi.User{
 				{ID: "U_BOT", IsBot: true, Profile: slackapi.UserProfile{DisplayName: dupName}},
