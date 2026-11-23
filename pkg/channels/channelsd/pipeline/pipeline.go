@@ -2753,6 +2753,24 @@ func renderMention(kind, externalID string) string {
 	return externalID
 }
 
+// senderMentionFor returns the token that mentions externalID on the named
+// channel kind, for an inbound rebuilt from a stored identity rather than
+// received from a listener (which stamps InboundEvent.SenderMention itself).
+// "" when the kind is not registered or has no such token — unlike
+// renderMention there is no bare-id fallback, because the result is handed to
+// the agent as something that pings a person, and a bare id does not.
+func senderMentionFor(kind, externalID string) string {
+	k, ok := chregistry.Get(kind)
+	if !ok {
+		return ""
+	}
+	sm, ok := k.(channelkinds.SenderMentioner)
+	if !ok {
+		return ""
+	}
+	return sm.SenderMention(externalID)
+}
+
 // archivedSessionNotYoursNotice builds the notice for someone trying to revive
 // an archived session that another user started.
 //

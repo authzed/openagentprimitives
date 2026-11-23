@@ -8,6 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 )
@@ -90,6 +93,64 @@ func TestDeliverNewSession_StampsStarterMention(t *testing.T) {
 			got, ok := sess.Annotations[spiceboxv1alpha1.AnnotationStarterMention]
 			assert.Equal(t, tc.wantStamped, ok, "annotation presence")
 			assert.Equal(t, tc.senderMention, got)
+		})
+	}
+}
+
+// TestDecidePermissionApprove_ResubmittedTurnCarriesSenderMention covers the
+// held-then-approved guest. Their message is replayed from the stashed
+// requester, long after the listener's event (and the token it carried) is
+// gone, so the token has to be derived again from the requester's own kind and
+// external id — and this is the sender the agent is LEAST able to address
+// without it, having never spoken to them before.
+func TestDecidePermissionApprove_ResubmittedTurnCarriesSenderMention(t *testing.T) {
+	cases := []struct {
+		name        string
+		requester   channelkinds.ExternalIdentity
+		wantContent []MemContent
+	}{
+		{
+			name:      "kind with a sender token: sender block appended after the stashed text",
+			requester: channelkinds.ExternalIdentity{Kind: "slack", ExternalID: "UGUEST", Email: "guest@example.com"},
+			wantContent: []MemContent{
+				{Type: "text", Text: "<@U0BOT> can I join?"},
+				{Type: memory.BlockTypeSenderMention, Text: "<@UGUEST>"},
+			},
+		},
+		{
+			name:      "kind with no mention syntax: text block only, never the bare id",
+			requester: channelkinds.ExternalIdentity{Kind: "fake", ExternalID: "UGUEST", Email: "guest@example.com"},
+			wantContent: []MemContent{
+				{Type: "text", Text: "<@U0BOT> can I join?"},
+			},
+		},
+		{
+			name:      "unregistered kind: text block only",
+			requester: channelkinds.ExternalIdentity{Kind: "no-such-kind", ExternalID: "UGUEST", Email: "guest@example.com"},
+			wantContent: []MemContent{
+				{Type: "text", Text: "<@U0BOT> can I join?"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := existingSession(t, "c1-held-guest", "U_OWNER", spiceboxv1alpha1.AgentSessionPhaseRunning)
+			p, _, mem, _, _ := newPipeline(t, sess)
+			seedPendingRequester(t, p, sess, "perm-held-1", tc.requester, "<@U0BOT> can I join?", "thread:C1:1")
+
+			out, err := p.decidePermission(context.Background(), channelinteractions.Decision{
+				Session: channelevents.SessionRef{Namespace: sess.Namespace, Name: sess.Name},
+				Payload: channelevents.InteractionDecisionPayload{
+					Category:   categories.PermissionRequest,
+					RequestRef: "perm-held-1",
+					ActionID:   "approve",
+					Decider:    channelevents.ExternalIdentity{Kind: "slack", ExternalID: "U_OWNER", Email: "owner@example.com"},
+				},
+			})
+			require.NoError(t, err, "decidePermission")
+			require.Equal(t, channelevents.OutcomeApproved, out.Result)
+			require.Len(t, mem.appends, 1, "the approved message is replayed as one turn")
+			assert.Equal(t, tc.wantContent, mem.appends[0].turn.Content)
 		})
 	}
 }

@@ -430,6 +430,13 @@ func (*Kind) SelfMention(external map[string]string) string {
 	return mentionToken(external["bot_user_id"])
 }
 
+// SenderMention returns the mention token of the Slack user with this id: the
+// same token the listener stamps on InboundEvent.SenderMention, for callers
+// that rebuild an inbound from a stored requester.
+func (*Kind) SenderMention(externalID string) string {
+	return mentionToken(externalID)
+}
+
 // mentionToken is Slack's <@USERID> syntax, shared by every path that
 // renders one so the listener and the kind cannot disagree on the shape.
 func mentionToken(userID string) string {
@@ -440,6 +447,8 @@ func mentionToken(userID string) string {
 }
 
 var _ channelkinds.SelfMentioner = (*Kind)(nil)
+
+var _ channelkinds.SenderMentioner = (*Kind)(nil)
 
 var _ channelkinds.OriginLinkProvider = (*Kind)(nil)
 
