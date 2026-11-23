@@ -2016,10 +2016,13 @@ func TestNotePendingPromptDoesNotResurrectAResolvedPrompt(t *testing.T) {
 // Stream-delta cost tests — head-of-line blocking of the primary path
 // -----------------------------------------------------------------------------
 
-// slowGetClient charges a fixed delay to every Get, standing in for client-go's
-// default rate limiter on the uncached clients webd and channelsd hand the relay
-// (5 QPS / burst 10 when no QPS override is set). It also counts the Gets so a
-// failure message can say what the wall-clock was spent on.
+// slowGetClient charges a fixed delay to every Get, standing in for a saturated
+// client-side rate limiter on the uncached clients webd and channelsd hand the
+// relay. It is a worst-case model, not the configured budget: in-cluster those
+// clients get kube.DefaultQPS/DefaultBurst, and the per-Get delay here is what
+// a Get costs once that budget is exhausted (or under client-go's own 5 QPS /
+// burst 10, which applied before kube.RestConfig set a default). It also counts
+// the Gets so a failure message can say what the wall-clock was spent on.
 type slowGetClient struct {
 	client.Client
 	delay time.Duration
