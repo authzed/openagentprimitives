@@ -324,6 +324,9 @@ func summarizeTurnContent(blocks []memory.ContentBlock) string {
 				}
 				parts = append(parts, prefix+b.ToolResult.Content)
 			}
+		case memory.BlockTypeSenderMention:
+			// Addressing metadata for the agent, not something anyone said;
+			// the turn's author already names the sender here.
 		default:
 			parts = append(parts, "["+b.Type+"]")
 		}
@@ -366,6 +369,8 @@ func turnContentBlocks(blocks []memory.ContentBlock) []logBlock {
 				Content: rawJSONOrString(b.ToolResult.Content),
 				IsError: b.ToolResult.IsError,
 			})
+		case memory.BlockTypeSenderMention:
+			// Skipped for the same reason as in summarizeTurnContent.
 		default:
 			out = append(out, logBlock{Type: b.Type})
 		}
