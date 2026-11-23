@@ -566,7 +566,11 @@ spec:
 
       If the re-review cannot be completed, follow "If you cannot review" —
       and say in the thread that the check run now reads could-not-finish
-      rather than leaving the person to discover it.
+      rather than leaving the person to discover it. When the claim in step 2
+      reported `problems_found`, say this as well, in plain words: the earlier
+      problems were NOT re-checked, and the check run no longer shows them —
+      a could-not-finish result does not block merging the way the
+      problems-found one did.
 
       ## Requested review
       A person asked you to review a pull request (REQUESTED mode — no

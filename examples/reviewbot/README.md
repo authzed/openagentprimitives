@@ -420,8 +420,17 @@ anyone who can interact with that session — everyone able to post in its threa
 — can ask for a re-review, as often as they like; nothing bounds the number of
 retries. The new result replaces the old one in either direction: a clean
 re-review clears a red check on unchanged code, and one that cannot be completed
-turns a green check into could-not-finish. If the check is required for merging,
-treat access to the review thread as access to that gate.
+turns a green check into could-not-finish.
+
+A re-review that cannot be completed also replaces a RED result, and that
+direction matters most. Could-not-finish is published as a `neutral` check run,
+and GitHub counts `neutral` as passing a required check. So a pull request
+blocked by a problems-found review stops being blocked if someone asks for a
+re-review and it fails — a clone error, an exhausted budget — with the problems
+still there. The findings stay in the thread, and the agent is told to say there
+that the check run changed, but the pull request itself no longer shows them. If
+the check is required for merging, treat access to the review thread as access
+to that gate.
 
 ## Deferred / known limitations
 
@@ -453,6 +462,27 @@ treat access to the review thread as access to that gate.
   feeds into. **Any future bundle should do the same** for every
   `SpiceboxClass`, `SpiceboxToolspec` (and any other cluster-scoped kind) it
   declares, rather than reusing a generic name another example might also use.
+- **A re-review asked for in the thread has four known gaps**, none of which a
+  review started by a push has:
+  - The check run keeps showing the previous result for as long as the re-review
+    runs, and keeps it if the session dies first. It is not moved back to in
+    progress, so a pull request can be merged on a green result that a re-review
+    in flight is about to turn red.
+  - Nothing holds a re-review to its conclusion. The session already recorded an
+    outcome for the earlier review, so the `trigger-status-concluded`
+    requirement is met before the re-review starts; if the agent skips the
+    conclude step, or the call fails, the turn still finishes and the previous
+    result stays. Any fix must still let a re-review that finds a newer head
+    commit finish without concluding.
+  - It can end a stacked pull request's deferral early. If a pull request was
+    reviewed, then retargeted onto another pull request's branch and pushed, the
+    deferral leaves a queued check run on the new head; a re-review adopts and
+    completes that run before the pull request lands on the default branch.
+    Whether a person's request should override a deferral is undecided.
+  - A commit pushed in the moment between the re-review's last head check and
+    its conclusion receives the conclusion without having been reviewed, because
+    the conclusion is written to whatever the head is at that instant. A review
+    started by a push has the same race.
 - **No webhook replay dedup.** GitHub retries a failed delivery, and a retry
   whose publish succeeded but whose HTTP response was lost is reprocessed. This
   produces a repeated turn in the same session (bounded by the
