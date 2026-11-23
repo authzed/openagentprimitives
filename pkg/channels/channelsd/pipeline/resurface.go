@@ -178,16 +178,7 @@ func promptExpired(env channelevents.Envelope, now time.Time) bool {
 	if err := json.Unmarshal(env.Payload, &pl); err != nil {
 		return false
 	}
-	return expiresAtPassed(pl.ExpiresAt, now)
-}
-
-// expiresAtPassed is the one definition of a request's deadline having passed,
-// shared by re-surfacing and the decision pipe so the two never disagree about
-// a prompt. Inclusive: the runner's own wait is a context.WithTimeout that
-// fires AT the deadline, so a request is dead at ExpiresAt, not after it. A nil
-// expiresAt never passes.
-func expiresAtPassed(expiresAt *time.Time, now time.Time) bool {
-	return expiresAt != nil && !now.Before(*expiresAt)
+	return pl.ExpiredAt(now)
 }
 
 // republishPrompt re-publishes a stored prompt envelope on its OUT subject so
