@@ -27,6 +27,12 @@ const noUserDirectoryReason = "name references are not available on this deploym
 // context: whether the session's trigger owner is trusted cannot be checked.
 const noSessionForNameReason = "name references need a session context to check who opened it"
 
+// noTriggerOwnerForNameReason answers a name reference in a session no
+// trigger opened for a named owner (a conversation a person started, or a
+// delivery whose owner could not be derived): nothing verified says who chose
+// the name being looked up.
+const noTriggerOwnerForNameReason = "name references are not honored in this session: they are honored only in a session a trigger opened for an owner the provider vouches for, and this session has no such owner"
+
 // untrustedTriggerOwnerReason answers a name reference in a session a trigger
 // opened for an owner the provider did not vouch for (for a pull request: an
 // author who is not a member, owner or collaborator of the repository).
@@ -65,10 +71,14 @@ const untrustedTriggerOwnerReason = "name references are not honored in a sessio
 // identify one person, and the resolver does not guess where one name part
 // ends and the next begins.
 //
-// In a session a trigger opened, a name reference is honored only when the
-// provider vouched for the trigger owner (see untrustedTriggerReason): there
-// the name is text the owner chose, and an outside contributor must not be
-// able to choose whose settings apply.
+// A name reference is honored ONLY in a session a trigger opened for an owner
+// the provider vouched for (see untrustedTriggerReason). The name is text
+// somebody chose — for a pull request, the author's profile name — and a
+// verified delivery naming a trusted owner is the only evidence the platform
+// has of who that somebody is. Every other session refuses: one an outside
+// contributor's pull request opened, and equally one a person started in
+// chat, where the name reaches the resolver relayed by the agent with nothing
+// signed behind it.
 //
 // Resolutions stay SubjectProven == false, like the email resolver's: a name
 // match picks a real user, but it does not prove the reference IS that user.
@@ -77,7 +87,7 @@ const untrustedTriggerOwnerReason = "name references are not honored in a sessio
 type nameResolver struct{}
 
 func (nameResolver) Usage() (string, string) {
-	return "name:<full name>", "the one verified platform user whose channel profile carries this full name (first and last); refused when no user or several users match"
+	return "name:<full name>", "the one verified platform user whose channel profile carries this full name (first and last); honored only in a session a trigger opened for an owner the provider vouches for (a pull request by a member, owner or collaborator), and refused when no user or several users match"
 }
 
 func (nameResolver) TryResolve(ctx context.Context, ref string, env Env) (Resolution, bool, error) {
@@ -133,15 +143,21 @@ func (nameResolver) TryResolve(ctx context.Context, ref string, env Env) (Resolu
 	return Resolution{Reason: fmt.Sprintf("no single platform user is recorded under the name %q; a name reference must match exactly one", truncateRef(raw))}, true, nil
 }
 
-// untrustedTriggerReason refuses a name reference in a session an untrusted
-// party opened. In a triggered session the name being looked up is text the
-// trigger owner chose (a pull request author's profile name), so honoring it
-// would let an outside contributor pick whose settings apply. A session with a
-// trigger owner is trusted only when channelsd recorded the provider vouching
-// for that owner (AnnotationTriggerOwnerTrusted, from a verified delivery);
-// anything else — "false", missing, garbage — refuses. A session no trigger
-// opened (no owner annotation) is unaffected. With no session context at all
-// there is nothing to check, so that refuses too.
+// untrustedTriggerReason refuses a name reference unless the session's trigger
+// owner is one the provider vouched for. The name being looked up is text
+// somebody chose (a pull request author's profile name), so honoring it
+// without knowing that somebody is trusted would let an outside contributor
+// pick whose settings apply. The only evidence is what channelsd recorded from
+// a verified delivery: an owner (AnnotationTriggerOwnerSubject) AND the
+// provider vouching for that owner (AnnotationTriggerOwnerTrusted == "true").
+//
+// Everything else refuses, fail-closed:
+//   - no owner annotation: a session a person started in chat, or a delivery
+//     whose owner could not be derived. Nothing verified names who chose the
+//     name; what the agent read about the author itself is relayed, not
+//     signed, and cannot stand in for it.
+//   - an owner with a trust bit of "false", missing, or garbage.
+//   - no session context at all: there is nothing to check.
 func untrustedTriggerReason(ctx context.Context, env Env) (string, error) {
 	if env.SessionAnnotations == nil {
 		return noSessionForNameReason, nil
@@ -151,7 +167,7 @@ func untrustedTriggerReason(ctx context.Context, env Env) (string, error) {
 		return "", err
 	}
 	if annotations[spiceboxv1alpha1.AnnotationTriggerOwnerSubject] == "" {
-		return "", nil
+		return noTriggerOwnerForNameReason, nil
 	}
 	if annotations[spiceboxv1alpha1.AnnotationTriggerOwnerTrusted] == spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue {
 		return "", nil

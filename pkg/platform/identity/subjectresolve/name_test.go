@@ -56,8 +56,16 @@ func annotations(a map[string]string) func(context.Context) (map[string]string, 
 	return func(context.Context) (map[string]string, error) { return a, nil }
 }
 
+// trustedTrigger is the annotation set of a session a trigger opened for an
+// owner the provider vouched for: the only kind of session a name reference
+// is honored in.
+var trustedTrigger = map[string]string{
+	spiceboxv1alpha1.AnnotationTriggerOwnerSubject: "github_user:42#user",
+	spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue,
+}
+
 // nameEnv is the resolver environment of a session with the given annotations
-// (nil: a session no trigger opened) over the given user directory.
+// over the given user directory.
 func nameEnv(sessionAnnotations map[string]string, users func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error)) Env {
 	return Env{SessionAnnotations: annotations(sessionAnnotations), UserIdentities: users}
 }
@@ -105,7 +113,7 @@ func TestResolve_Name(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := Resolve(t.Context(), tc.ref, nameEnv(nil, directory))
+			res, err := Resolve(t.Context(), tc.ref, nameEnv(trustedTrigger, directory))
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantSubject, res.Subject)
 			assert.False(t, res.SubjectProven, "a name match never proves the reference")
@@ -127,9 +135,9 @@ func TestResolve_NameRefusalDoesNotDistinguishNobodyFromSeveral(t *testing.T) {
 		userNamed(t, "sam.ortiz@example.com", "Sam Ortiz", ""),
 		userNamed(t, "sortiz@example.com", "sortiz", "Sam Ortiz"),
 	)
-	several, err := Resolve(t.Context(), "name:Sam Ortiz", nameEnv(nil, directory))
+	several, err := Resolve(t.Context(), "name:Sam Ortiz", nameEnv(trustedTrigger, directory))
 	require.NoError(t, err)
-	nobody, err := Resolve(t.Context(), "name:Robin Hale", nameEnv(nil, directory))
+	nobody, err := Resolve(t.Context(), "name:Robin Hale", nameEnv(trustedTrigger, directory))
 	require.NoError(t, err)
 
 	assert.Equal(t, strings.ReplaceAll(nobody.Reason, "Robin Hale", "Sam Ortiz"), several.Reason)
@@ -155,7 +163,7 @@ func TestResolve_NameMatchOnNonUserSubjectRefuses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := Resolve(t.Context(), "name:Pat Quinlan", nameEnv(nil, fakeUsers(tc.users...)))
+			res, err := Resolve(t.Context(), "name:Pat Quinlan", nameEnv(trustedTrigger, fakeUsers(tc.users...)))
 			require.NoError(t, err)
 			assert.Empty(t, res.Subject)
 			assert.NotEmpty(t, res.Reason)
@@ -165,13 +173,13 @@ func TestResolve_NameMatchOnNonUserSubjectRefuses(t *testing.T) {
 
 func TestResolve_NameSameUserUnderSeveralNamesCountsOnce(t *testing.T) {
 	ui := userNamed(t, "kim.lee@example.com", "Kim Lee", "Kim Lee")
-	res, err := Resolve(t.Context(), "name:Kim Lee", nameEnv(nil, fakeUsers(ui)))
+	res, err := Resolve(t.Context(), "name:Kim Lee", nameEnv(trustedTrigger, fakeUsers(ui)))
 	require.NoError(t, err)
 	assert.Equal(t, mustEmailSubject(t, "kim.lee@example.com"), res.Subject)
 }
 
 func TestResolve_NameWithoutDirectoryIsUnresolved(t *testing.T) {
-	res, err := Resolve(t.Context(), "name:Kim Lee", Env{SessionAnnotations: annotations(nil)})
+	res, err := Resolve(t.Context(), "name:Kim Lee", Env{SessionAnnotations: annotations(trustedTrigger)})
 	require.NoError(t, err)
 	assert.Empty(t, res.Subject)
 	assert.Equal(t, noUserDirectoryReason, res.Reason)
@@ -180,23 +188,25 @@ func TestResolve_NameWithoutDirectoryIsUnresolved(t *testing.T) {
 func TestResolve_NameDirectoryErrorIsReturned(t *testing.T) {
 	boom := errors.New("list failed")
 	_, err := Resolve(t.Context(), "name:Kim Lee", Env{
-		SessionAnnotations: annotations(nil),
+		SessionAnnotations: annotations(trustedTrigger),
 		UserIdentities:     func(context.Context) ([]spiceboxv1alpha1.UserIdentity, error) { return nil, boom },
 	})
 	assert.ErrorIs(t, err, boom)
 }
 
 func TestResolve_NameContainingAtIsNotClaimedAsEmail(t *testing.T) {
-	res, err := Resolve(t.Context(), "name:Kim @ Lee", nameEnv(nil, fakeUsers()))
+	res, err := Resolve(t.Context(), "name:Kim @ Lee", nameEnv(trustedTrigger, fakeUsers()))
 	require.NoError(t, err)
 	assert.Empty(t, res.Subject)
 	assert.Contains(t, res.Reason, "recorded under the name")
 }
 
-// TestResolve_NameGatedOnTriggerOwnerTrust pins that in a session a trigger
-// opened, a name reference resolves only when the provider vouched for the
-// trigger owner: there the name is text the owner chose, so an outside
-// contributor must not be able to pick whose settings apply.
+// TestResolve_NameGatedOnTriggerOwnerTrust pins that a name reference resolves
+// ONLY in a session a trigger opened for an owner the provider vouched for.
+// The name is text somebody chose, and a verified delivery naming a trusted
+// owner is the only evidence of who: a session a person started in chat has no
+// such evidence (the name arrives relayed by the agent), so it refuses exactly
+// like an outside contributor's pull request does.
 func TestResolve_NameGatedOnTriggerOwnerTrust(t *testing.T) {
 	directory := fakeUsers(userNamed(t, "pat@example.com", "pat", "Pat Quinlan"))
 	owner := "github_user:42#user"
@@ -208,12 +218,18 @@ func TestResolve_NameGatedOnTriggerOwnerTrust(t *testing.T) {
 		wantSubject string
 		wantReason  string
 	}{
-		{name: "session no trigger opened: resolves", annotations: map[string]string{},
-			wantSubject: mustEmailSubject(t, "pat@example.com")},
 		{name: "trusted trigger owner: resolves", annotations: map[string]string{
 			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
 			spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue,
 		}, wantSubject: mustEmailSubject(t, "pat@example.com")},
+		{name: "session no trigger opened (nil annotations): refused", annotations: nil,
+			wantReason: noTriggerOwnerForNameReason},
+		{name: "session no trigger opened (unrelated annotations): refused", annotations: map[string]string{
+			"example.com/unrelated": "x",
+		}, wantReason: noTriggerOwnerForNameReason},
+		{name: "trust bit with no trigger owner: refused", annotations: map[string]string{
+			spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue,
+		}, wantReason: noTriggerOwnerForNameReason},
 		{name: "untrusted trigger owner: refused", annotations: map[string]string{
 			spiceboxv1alpha1.AnnotationTriggerOwnerSubject: owner,
 			spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedFalse,

@@ -1,0 +1,60 @@
+# Fixture agent for a review a person ASKS for in conversation, rather than
+# one a pull request webhook opens.
+#
+# What matters here is the pairing: a `fake` conversational input channel (so
+# the session is opened by a user turn and carries no trigger owner) with the
+# same class-visible `notifications` preference the webhook-driven reviewbot
+# fixture declares (so get_preferences can be asked about a NAMED user, the
+# pull request author). That is the shape in which a "name:" user reference
+# must be refused: nothing signed says whose name the agent is relaying.
+apiVersion: v1
+kind: Secret
+metadata: {name: reviewbot-requested-placeholder, namespace: default}
+type: Opaque
+stringData: {api-key: "unused-by-the-test-provider"}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: reviewbot-requested-fake-creds, namespace: default}
+type: Opaque
+stringData: {placeholder: "unused-by-the-fake-channel"}
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata: {name: demo-reviewbot-requested, namespace: default}
+spec:
+  displayName: DemoReviewbotRequested
+  description: "E2E fixture agent. Do not deploy to a real cluster."
+  model:
+    provider: test                 # production operator REFUSES this
+    name: scripted                 # cosmetic; ignored at runtime
+    apiKey: {name: reviewbot-requested-placeholder, key: api-key}
+  systemPrompt:
+    inline: |
+      You are a fixture agent for the agentprimitives e2e harness.
+      DO NOT deploy to a real cluster — your model provider is `test`.
+      You review the pull request a person asks you about and report back.
+  budget: {maxTurns: 50, maxTokens: 100000, maxDuration: "1h"}
+  userPreferences:
+    - name: notifications
+      type: enum
+      default: "on_problems"
+      visibility: class
+      description: "When the reviewer should @-mention the pull request author about a review"
+      enum:
+        - value: always
+          description: "Ping on every review, even a clean pass"
+        - value: on_problems
+          description: "Ping only when the review finds problems (the default)"
+        - value: never
+          description: "Never ping; deliver the review without an @-mention"
+---
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: Channel
+metadata: {name: demo-reviewbot-requested-fake, namespace: default}
+spec:
+  kind: fake
+  role: both
+  agentClass: demo-reviewbot-requested
+  credentialsRef: {secretName: reviewbot-requested-fake-creds}
+  fake: {echo: false}

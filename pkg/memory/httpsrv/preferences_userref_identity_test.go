@@ -49,6 +49,18 @@ func guestIdentityNamed(userID, realName string) *v1alpha1.UserIdentity {
 	}
 }
 
+// trustedTriggerSession builds the session a trigger opened for an owner the
+// provider vouched for (a pull request by a repository member): the only kind
+// of session a "name:" reference is honored in.
+func trustedTriggerSession() *v1alpha1.AgentSession {
+	sess := buildSession(prefsNS, prefsSession, prefsClass)
+	sess.Annotations = map[string]string{
+		v1alpha1.AnnotationTriggerOwnerSubject: "github_user:42#user",
+		v1alpha1.AnnotationTriggerOwnerTrusted: v1alpha1.AnnotationTriggerOwnerTrustedTrue,
+	}
+	return sess
+}
+
 // TestPreferencesGetUserRef_EmailKnownViaUserIdentity_ResolvesToDefaults pins
 // the other half of the existence bar: a subject with a UserIdentity is a real
 // platform user even when they never saved a preference, so the read answers
@@ -131,7 +143,7 @@ func getUserRefRaw(t *testing.T, srvURL, ref string) (int, string) {
 // with the same words.
 func TestPreferencesGetUserRef_NameRefDisclosesNoIdentity(t *testing.T) {
 	class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
-	sess := buildSession(prefsNS, prefsSession, prefsClass)
+	sess := trustedTriggerSession()
 	srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess,
 		userIdentityFor(t, "alice@example.com", "amoreno", "Alice Moreno"),
 		userIdentityFor(t, "jo@example.com", "jo", "Jo Park"),
@@ -174,7 +186,7 @@ func TestPreferencesGetUserRef_NameRef(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
-			sess := buildSession(prefsNS, prefsSession, prefsClass)
+			sess := trustedTriggerSession()
 			srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess,
 				userIdentityFor(t, "alice@example.com", "amoreno", "Alice Moreno"),
 				userIdentityFor(t, "jo@example.com", "jo", "Jo Park"),
@@ -203,29 +215,42 @@ func TestPreferencesGetUserRef_NameRef(t *testing.T) {
 }
 
 // TestPreferencesGetUserRef_NameRefGatedOnTriggerOwnerTrust pins the session
-// wiring of the trust gate end to end: in a session a pull request opened, a
-// name reference reads the matched person's value only when the author was
-// trusted, and is refused (audited unresolved) for an outside contributor.
+// wiring of the trust gate end to end: a name reference reads the matched
+// person's value only in a session a trigger opened for a trusted owner. It is
+// refused (audited unresolved, value not disclosed) for an outside
+// contributor's pull request, and equally in a session a person started in
+// chat — a requested review — where nothing verified says whose name it is.
 func TestPreferencesGetUserRef_NameRefGatedOnTriggerOwnerTrust(t *testing.T) {
+	const owner = "github_user:42#user"
 	cases := []struct {
 		name        string
-		trusted     string
+		annotations map[string]string
 		wantStatus  int
 		wantOutcome string
+		wantReason  string
 	}{
-		{name: "trusted author: 200, value read", trusted: v1alpha1.AnnotationTriggerOwnerTrustedTrue,
-			wantStatus: http.StatusOK, wantOutcome: preferenceaccess.OutcomeOK},
-		{name: "outside contributor: 422, unresolved", trusted: v1alpha1.AnnotationTriggerOwnerTrustedFalse,
-			wantStatus: http.StatusUnprocessableEntity, wantOutcome: preferenceaccess.OutcomeUnresolved},
+		{name: "trusted author: 200, value read", annotations: map[string]string{
+			v1alpha1.AnnotationTriggerOwnerSubject: owner,
+			v1alpha1.AnnotationTriggerOwnerTrusted: v1alpha1.AnnotationTriggerOwnerTrustedTrue,
+		}, wantStatus: http.StatusOK, wantOutcome: preferenceaccess.OutcomeOK},
+		{name: "outside contributor: 422, unresolved", annotations: map[string]string{
+			v1alpha1.AnnotationTriggerOwnerSubject: owner,
+			v1alpha1.AnnotationTriggerOwnerTrusted: v1alpha1.AnnotationTriggerOwnerTrustedFalse,
+		}, wantStatus: http.StatusUnprocessableEntity, wantOutcome: preferenceaccess.OutcomeUnresolved,
+			wantReason: "whose trigger owner the provider does not vouch for"},
+		{name: "session a person started, no trigger owner: 422, unresolved", annotations: nil,
+			wantStatus: http.StatusUnprocessableEntity, wantOutcome: preferenceaccess.OutcomeUnresolved,
+			wantReason: "this session has no such owner"},
+		{name: "trust bit with no trigger owner: 422, unresolved", annotations: map[string]string{
+			v1alpha1.AnnotationTriggerOwnerTrusted: v1alpha1.AnnotationTriggerOwnerTrustedTrue,
+		}, wantStatus: http.StatusUnprocessableEntity, wantOutcome: preferenceaccess.OutcomeUnresolved,
+			wantReason: "this session has no such owner"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			class := buildClass(prefsNS, prefsClass, []v1alpha1.UserPreferenceSchema{classVisiblePreference("en")})
 			sess := buildSession(prefsNS, prefsSession, prefsClass)
-			sess.Annotations = map[string]string{
-				v1alpha1.AnnotationTriggerOwnerSubject: "github_user:42#user",
-				v1alpha1.AnnotationTriggerOwnerTrusted: tc.trusted,
-			}
+			sess.Annotations = tc.annotations
 			srv, mem := newPreferencesServerForUserRef(t, userRefServerOpts{}, class, sess,
 				userIdentityFor(t, "alice@example.com", "amoreno", "Alice Moreno"))
 			putUserPreference(t, mem, mustCanonicalEmail(t, "alice@example.com"), prefsNS, prefsClass, "language", json.RawMessage(`"de"`))
@@ -233,13 +258,16 @@ func TestPreferencesGetUserRef_NameRefGatedOnTriggerOwnerTrust(t *testing.T) {
 			status, body := getUserRefRaw(t, srv.URL, "name:Alice Moreno")
 			assert.Equal(t, tc.wantStatus, status, body)
 			if tc.wantStatus != http.StatusOK {
-				assert.Contains(t, body, "not honored")
+				assert.Contains(t, body, tc.wantReason)
 				assert.NotContains(t, body, `"de"`)
 			}
 
 			entries := listAudit(t, mem)
 			require.Len(t, entries, 1)
 			assert.Equal(t, tc.wantOutcome, entries[0].Outcome)
+			if tc.wantStatus != http.StatusOK {
+				assert.Empty(t, entries[0].ResolvedSubject, "a refused name is never matched against the directory")
+			}
 		})
 	}
 }

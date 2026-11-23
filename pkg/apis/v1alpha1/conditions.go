@@ -1562,8 +1562,10 @@ const AnnotationTriggerOwnerSubject = "agentprimitives.authzed.com/trigger-owner
 // delivery (the kind's TriggerOwnerTrustProvider), never from submitter text.
 // Read fail-closed: a session with a trigger owner and anything other than
 // "true" here is a session an untrusted party opened. Today it gates "name:"
-// user references (pkg/platform/identity/subjectresolve), whose input in such
-// a session is text the trigger owner chose.
+// user references (pkg/platform/identity/subjectresolve), whose input is text
+// the trigger owner chose: they are honored only with an owner AND "true"
+// here, so a session with no trigger owner at all (one a person started in
+// conversation) refuses them too.
 const AnnotationTriggerOwnerTrusted = "agentprimitives.authzed.com/trigger-owner-trusted"
 
 // Values of AnnotationTriggerOwnerTrusted. Both are non-empty so a later

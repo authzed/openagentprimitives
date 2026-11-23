@@ -132,9 +132,12 @@ spec:
   # wherever it was saved and the same key the mention lookup uses, falling
   # back to their full NAME (`user: "name:<full name>"`) when the commit email
   # is a personal address the platform never saw. The server honors a name
-  # only when GitHub's signed webhook reported the author as a MEMBER, OWNER or
-  # COLLABORATOR of the repository; for anyone else the profile name is text
-  # they chose, so it is refused. NOT the
+  # only in a session GitHub's signed webhook opened, and only when that
+  # webhook reported the author as a MEMBER, OWNER or COLLABORATOR of the
+  # repository; for anyone else the profile name is text they chose, so it is
+  # refused. A review a person ASKED for in chat has no signed webhook behind
+  # it, so a name is always refused there and the author is identified by
+  # commit email or not at all. NOT the
   # trigger-author's GitHub-account link, which resolves to nobody until the
   # author has verified that account and so would read this default for
   # everyone who never did. The default is on_problems: notify the author only
@@ -461,10 +464,13 @@ spec:
       where the author's full name is the `name` field from the same `gh pr
       view --json author` read, used only when it is a first and a last name
       (never the login, and never a name from the pull request's title or
-      body). The server refuses the name unless GitHub reported this pull
-      request's author as a member, owner or collaborator of the repository,
-      and unless exactly one person it knows has that name; a refusal is an
-      ERROR like any other. `notifications` is one of `always`,
+      body). Try a name ONLY for the author of the pull request whose webhook
+      opened this session, never for anyone else. The server refuses the name
+      unless this session was opened by GitHub's signed webhook and GitHub
+      reported the pull request's author as a member, owner or collaborator
+      of the repository, and unless exactly one person it knows has that
+      name; a refusal is an ERROR like any other. `notifications` is one of
+      `always`,
       `on_problems`, or `never` — treat an unset value (this author saved none)
       as `on_problems`, the default. If every get_preferences call you made
       returned an ERROR, the author could not be identified at all — do NOT
@@ -555,18 +561,21 @@ spec:
          someone else asked for the review. Run that check EXACTLY as step 5
          does — the join key is the PULL REQUEST AUTHOR's verified commit
          email, not whoever asked you here: resolve their commit email as in
-         step 5 and call get_preferences with `user: "email:<that-email>"`,
-         falling back to `user: "name:<author's full name>"` exactly as step
-         5 does when that errors or there was no commit email.
+         step 5 and call get_preferences with `user: "email:<that-email>"`.
+         Do NOT fall back to the author's name in this mode: no signed
+         webhook vouches for the author of a pull request someone pointed
+         you at, their profile name is text they chose, and the server
+         refuses every `name:` reference in a session a person started. When
+         the email call returns an ERROR, or there was no non-noreply commit
+         email, the author could not be identified.
          Apply the same three-state rule — `never`: plain login; `on_problems`
          (the default, and any unset value): mention only if your review found
          blocking problems, plain login otherwise; `always`: always mention. If
-         every get_preferences call returned an ERROR (the author could not be
-         identified), do NOT default to a value — open with their plain login,
-         no mention, and carry on. When
-         you should mention them, resolve the mention exactly as step 5 does
-         (the same key that identified them; plain login when the lookup
-         misses).
+         the author could not be identified, do NOT default to a value — open
+         with their plain login, no mention, and carry on. When you should
+         mention them, resolve the mention with lookup_user_for_mention kind
+         "email" and that commit email — never by name — and use their plain
+         login when the lookup misses.
       4. Do NOT call claim_trigger_status or conclude_trigger_status — they are
          not offered in this mode, and there is no check run to write. You are
          done once the review is delivered to the thread.
