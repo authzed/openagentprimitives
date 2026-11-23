@@ -1785,7 +1785,7 @@ func (f *InProcessRunnerFactory) buildLoop(sess *spiceboxv1alpha1.AgentSession, 
 		runner.WithAuthoredExamples(runner.AuthoredExamplesOf(class)),
 		runner.WithPlanningNotes(runner.PlanningNotesOf(class)),
 		runner.WithUserProfileActive(profileActive),
-		runner.WithSelfMention(runner.SelfMentionOf(resolvedKind, bindingOrNil)),
+		runner.WithSelfMention(runner.SelfMentionOf(chregistry.Get, bindingOrNil)),
 	}
 	if runner.PlanGateRequirePlan(sess.Status.EffectiveSettings) {
 		composeOpts = append(composeOpts, runner.WithRequirePlan())

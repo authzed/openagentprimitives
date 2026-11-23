@@ -15,26 +15,33 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/slack"
 )
 
-// TestSelfMentionOf: the agent's own token is derived only when the bound kind
-// has a mentionable identity and the binding carries it — and from nothing
-// else, so no capability grant can switch it off.
+// TestSelfMentionOf: the agent's own token is derived only when the input
+// binding's own kind has a mentionable identity and the binding carries it —
+// and from nothing else, so no capability grant can switch it off, and no
+// other channel the session is bound to can stand in for the input's kind.
 func TestSelfMentionOf(t *testing.T) {
 	bot := map[string]string{"bot_user_id": "U0BOT"}
+	// The lookup stands in for the channel-kind registry. It knows exactly two
+	// kinds, so "unregistered" is a real miss rather than a nil argument.
+	kinds := map[string]channelkinds.Kind{"slack": &slack.Kind{}, "fake": fake.Kind{}}
+	kindByName := func(name string) (channelkinds.Kind, bool) {
+		k, ok := kinds[name]
+		return k, ok
+	}
 	cases := []struct {
 		name    string
-		kind    channelkinds.Kind
 		binding *spiceboxv1alpha1.ChannelBinding
 		want    string
 	}{
-		{name: "slack with bot_user_id: the bot's token", kind: &slack.Kind{}, binding: &spiceboxv1alpha1.ChannelBinding{External: bot}, want: "<@U0BOT>"},
-		{name: "slack without bot_user_id: no token", kind: &slack.Kind{}, binding: &spiceboxv1alpha1.ChannelBinding{}, want: ""},
-		{name: "kind with no self identity: no token", kind: fake.Kind{}, binding: &spiceboxv1alpha1.ChannelBinding{External: bot}, want: ""},
-		{name: "not channel-attached: no token", kind: &slack.Kind{}, binding: nil, want: ""},
-		{name: "kind did not resolve: no token", kind: nil, binding: &spiceboxv1alpha1.ChannelBinding{External: bot}, want: ""},
+		{name: "slack input with bot_user_id: the bot's token", binding: &spiceboxv1alpha1.ChannelBinding{Kind: "slack", External: bot}, want: "<@U0BOT>"},
+		{name: "slack input without bot_user_id: no token", binding: &spiceboxv1alpha1.ChannelBinding{Kind: "slack"}, want: ""},
+		{name: "input kind with no self identity: no token", binding: &spiceboxv1alpha1.ChannelBinding{Kind: "fake", External: bot}, want: ""},
+		{name: "not channel-attached: no token", binding: nil, want: ""},
+		{name: "input kind not registered: no token", binding: &spiceboxv1alpha1.ChannelBinding{Kind: "no-such-kind", External: bot}, want: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, runner.SelfMentionOf(tc.kind, tc.binding))
+			assert.Equal(t, tc.want, runner.SelfMentionOf(kindByName, tc.binding))
 		})
 	}
 }

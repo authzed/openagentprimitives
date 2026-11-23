@@ -8,15 +8,25 @@ import (
 
 // SelfMentionOf returns the token that mentions the agent itself on the
 // session's input channel, or "" when there is none to name: the session is
-// not channel-attached, the kind did not resolve, the kind has no mentionable
-// identity of its own (it is not a channelkinds.SelfMentioner), or the binding
-// does not carry what the kind derives the token from.
+// not channel-attached, the binding's kind is not registered, the kind has no
+// mentionable identity of its own (it is not a channelkinds.SelfMentioner), or
+// the binding does not carry what the kind derives the token from.
+//
+// The kind is looked up from the binding's OWN Kind — callers pass the
+// registry's Get — rather than taken as an argument. The kind a runner has
+// already resolved for the session is its OUTPUT channel's when the two are
+// split, and pairing that with the input binding loses the token for a session
+// summoned on one kind and answering on another.
 //
 // It consults no capability. A summoning message opens with this token whether
 // or not the class offers lookup_user_for_mention, so the warning it feeds
 // (WithSelfMention) must not depend on that tool being offered.
-func SelfMentionOf(kind channelkinds.Kind, binding *spiceboxv1alpha1.ChannelBinding) string {
+func SelfMentionOf(kindByName func(name string) (channelkinds.Kind, bool), binding *spiceboxv1alpha1.ChannelBinding) string {
 	if binding == nil {
+		return ""
+	}
+	kind, ok := kindByName(binding.Kind)
+	if !ok {
 		return ""
 	}
 	sm, ok := kind.(channelkinds.SelfMentioner)
