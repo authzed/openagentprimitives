@@ -77,8 +77,17 @@ OAuth themselves.`,
 
 			var bearer string
 			if mint {
+				// Not oauth.Login's default client: that one refuses loopback
+				// and private addresses, which is where a local or desktop
+				// install's MCP server lives. See mintHTTPClient for exactly
+				// what is, and is not, exempted.
+				hc, err := mintHTTPClient(serverURL)
+				if err != nil {
+					return err
+				}
 				tok, err := oauth.Login(cmd.Context(), mcpURL(serverURL), oauth.LoginOpts{
-					Out: cmd.ErrOrStderr(),
+					HTTPClient: hc,
+					Out:        cmd.ErrOrStderr(),
 				})
 				if err != nil {
 					return fmt.Errorf("mint a token via OAuth: %w", err)
