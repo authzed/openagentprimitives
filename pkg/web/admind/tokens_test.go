@@ -3,7 +3,9 @@ package admind_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,6 +209,67 @@ func TestTokensList_GrantReadErrorDegradesRowNotPage(t *testing.T) {
 	assert.Equal(t, accesstoken.RoleRead, byName[tkFullName].Role)
 	assert.Equal(t, "unknown", byName[tkRevokedName].Role, "a grant READ ERROR degrades to unknown, not revoked")
 	assert.False(t, byName[tkRevokedName].Revoked, "a read error is not the same claim as 'no tuples found'")
+}
+
+// concurrencyGrantReader answers every token with a read grant after a short
+// pause, recording the most calls it ever had in flight at once.
+type concurrencyGrantReader struct {
+	mu       sync.Mutex
+	inFlight int
+	maxSeen  int
+	calls    int
+}
+
+func (c *concurrencyGrantReader) ReadAccessTokenGrant(_ context.Context, tokenID string) (spicedb.AccessTokenGrant, bool, error) {
+	c.mu.Lock()
+	c.inFlight++
+	c.calls++
+	c.maxSeen = max(c.maxSeen, c.inFlight)
+	c.mu.Unlock()
+
+	time.Sleep(5 * time.Millisecond)
+
+	c.mu.Lock()
+	c.inFlight--
+	c.mu.Unlock()
+	return spicedb.AccessTokenGrant{TokenID: tokenID, Role: accesstoken.RoleRead, ScopeClasses: []string{"default/" + tokenID}}, true, nil
+}
+
+// TestTokensList_FansOutGrantReadsBoundedAndInOrder: the per-row grant reads
+// run concurrently, never more than the cap at once, and each row still lands
+// in its sorted position carrying its OWN grant.
+func TestTokensList_FansOutGrantReadsBoundedAndInOrder(t *testing.T) {
+	const n = 40
+	const wantCap = 8 // tokenGrantReadConcurrency
+	future := time.Now().Add(24 * time.Hour)
+	objs := make([]client.Object, 0, n)
+	wantNames := make([]string, 0, n)
+	for i := range n {
+		name := fmt.Sprintf("at-%012d", i)
+		wantNames = append(wantNames, name)
+		objs = append(objs, tokenCR(name, "alice", tkFullHash, future))
+	}
+
+	grants := &concurrencyGrantReader{}
+	h, _ := newTokensAdmind(t, tkChecker(), grants, objs...)
+
+	w := do(t, h, http.MethodGet, "/admin/v1/tokens", tkToken, tkAdmin, "")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp tokensListWire
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Tokens, n)
+
+	gotNames := make([]string, 0, n)
+	for _, r := range resp.Tokens {
+		gotNames = append(gotNames, r.Name)
+		assert.Equal(t, []string{"default/" + r.Name}, r.ScopeClasses, "row %s must carry its own grant", r.Name)
+	}
+	assert.Equal(t, wantNames, gotNames, "equal creation times sort by name; the fan-out must not reorder rows")
+
+	assert.Equal(t, n, grants.calls, "one grant read per row")
+	assert.LessOrEqual(t, grants.maxSeen, wantCap, "the fan-out must respect its concurrency cap")
+	assert.Greater(t, grants.maxSeen, 1, "the reads must actually overlap")
 }
 
 func TestTokensList_NonAdminForbidden(t *testing.T) {

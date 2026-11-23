@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -17,6 +18,10 @@ import (
 // maxTokenRevokeBody caps the revoke POST body — it carries nothing but a
 // CR name, so this is generous rather than load-bearing.
 const maxTokenRevokeBody = 4096
+
+// tokenGrantReadConcurrency bounds the tokens list's per-row SpiceDB grant
+// reads — the same cap pkg/web/mcpfront uses for its per-session fan-out.
+const tokenGrantReadConcurrency = 8
 
 // roleUnknown is the role shown for a row admind could not resolve a SpiceDB
 // grant for (a read error, or no AccessTokenGrants reader configured) — NOT
@@ -98,9 +103,25 @@ func (a *Admind) handleTokensList(w http.ResponseWriter, r *http.Request) {
 		return items[i].Name < items[j].Name
 	})
 
-	rows := make([]accessTokenRow, 0, len(items))
+	// Each row costs one SpiceDB grant read, so they are fanned out (bounded)
+	// rather than read one after another. Rows are written by index into a
+	// pre-sized slice: the sorted order above is preserved and no two
+	// goroutines touch the same element. projectAccessToken degrades a failed
+	// read to an "unknown" row and never returns an error, so the group has
+	// nothing to cancel on.
+	rows := make([]accessTokenRow, len(items))
+	var g errgroup.Group
+	g.SetLimit(tokenGrantReadConcurrency)
 	for i := range items {
-		rows = append(rows, a.projectAccessToken(ctx, &items[i]))
+		g.Go(func() error {
+			rows[i] = a.projectAccessToken(ctx, &items[i])
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		a.cfg.Logger.Info("admind: tokens list: grant fan-out failed", "err", err.Error())
+		writeJSONError(w, http.StatusInternalServerError, "read access token grants failed: "+err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, tokensResponse{Tokens: rows})
 }
