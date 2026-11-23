@@ -518,7 +518,7 @@ func (l *Loop) Run(ctx context.Context) error {
 				// bypass is not carried across runs, and hand the model a stray
 				// turn demanding a second bypass. The resting reason is the one
 				// the round ended with, and the audit event is IdleYield unless
-				// the round's own AgentWorkComplete never reached the log — see
+				// the log has no record of how the round ended — see
 				// completedRoundExitEvent.
 				reason = spiceboxv1alpha1.ReasonAgentSessionAgentWorkComplete
 				exitEvent = l.completedRoundExitEvent(ctx, completedAt)

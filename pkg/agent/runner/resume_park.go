@@ -136,47 +136,73 @@ func completedRoundAtRest(prior []memory.Turn) (completedAt int, ok bool) {
 }
 
 // completedRoundExitEvent picks the lifecycle event a completed-round park
-// records when it expires: IdleYield when the round's AgentWorkComplete is
-// already in the signed log, AgentWorkComplete itself when it is not.
+// records when it expires. It is AgentWorkComplete only when the signed log
+// holds no record at all of how the round ended, and IdleYield otherwise.
 //
-// It can be missing because the live loop appends the completion's tool_result
-// turn BEFORE it emits AgentWorkComplete. A runner that died between the two
-// left a transcript completedRoundAtRest accepts and a log with no completion
-// in it, and this exit is the last place that round's completion can still be
-// written. When the event is there, writing it again would record a completion
-// that did not happen.
+// The completion can be missing because the live loop appends the completion's
+// tool_result turn BEFORE it emits AgentWorkComplete. A runner that died
+// between the two left a transcript completedRoundAtRest accepts and a log
+// with no completion in it. This exit writes it then, and it is the only place
+// that does: a resume that a message wakes, or that receives one while parked,
+// drains it and takes its turn without coming here, and that round's
+// completion stays unrecorded.
 //
-// "Already recorded" is an AgentWorkComplete keyed at or after completedAt, the
-// assistant turn that closed the round. The live loop keys it at that turn; an
-// earlier resume that backfilled it keyed it at its own replay base, which is
-// later. Nothing later than that turn belongs to another round, because the
-// transcript has no later assistant turn. An entry written before ordering
-// keys existed cannot be placed at all and counts as recorded: a duplicate
-// cannot be taken back out of an append-only log, a gap can still be explained.
+// It can also be missing because the live loop never meant to write it. A
+// sibling in the completing batch that returned an idle exit — a
+// respond_to_user the share gate denied, an await_user_message that ran out
+// its TTL — makes the live loop close the round as ShareDeniedYield or
+// IdleYield and return before it reaches the completion. The transcript is the
+// same one a crash leaves, every tool_use answered and agent_work_complete
+// successful, so only the log tells the two apart: a yield recorded for the
+// round means the live loop already closed it, its own way, and a completion
+// written here would be one it decided against.
 //
-// A log that cannot be read is treated the same way, and logged.
+// "Recorded for the round" is an event keyed at or after completedAt, the
+// assistant turn that closed it. The live loop keys the round's completion or
+// yield at that turn; an earlier resume's exit keyed its event at its own
+// replay base, which is later. Nothing later than that turn belongs to another
+// round, because the transcript has no later assistant turn. An entry written
+// before ordering keys existed cannot be placed at all and counts as recorded.
+//
+// Every doubt resolves toward IdleYield: a duplicate or a false completion
+// cannot be taken back out of an append-only log, a gap can still be
+// explained. That costs a real gap its backfill when an earlier resume's exit
+// could not check the log (unreadable, or the run was being stopped) and
+// recorded a plain IdleYield, which later exits then find. A log that cannot
+// be read is logged.
 func (l *Loop) completedRoundExitEvent(ctx context.Context, completedAt int) lifecyclecore.Event {
 	if l.LifecycleMemory == nil {
 		return idleYieldEventFor(false) // no signed log wired: nothing to backfill
+	}
+	session := l.SessionKey.Namespace + "/" + l.SessionKey.Name
+	if err := ctx.Err(); err != nil {
+		// The park ended because the run is being stopped, not because the TTL
+		// ran out. The read below would fail on this context and report a log
+		// outage that is not one.
+		slog.Default().Info("resume park: the run was stopped while parked; recording the idle exit without checking for the round's AgentWorkComplete",
+			"session", session, "err", err.Error())
+		return idleYieldEventFor(false)
 	}
 	// A full read, like claimAndRecover's: once per Run, off seqMu, and the
 	// answer has to cover the whole log rather than a lookback-bounded tail.
 	events, err := lifecycle.ReadOrdered(ctx, l.LifecycleMemory, l.lifecycleScope())
 	if err != nil {
 		slog.Default().Info("resume park: read lifecycle log failed; recording the idle exit without checking for the round's AgentWorkComplete",
-			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "err", err.Error())
+			"session", session, "err", err.Error())
 		return idleYieldEventFor(false)
 	}
 	for _, e := range lifecycle.ForIncarnation(events, l.sessionIncarnationUID()) {
-		if _, isCompletion := e.Event.(lifecyclecore.AgentWorkComplete); !isCompletion {
+		switch e.Event.(type) {
+		case lifecyclecore.AgentWorkComplete, lifecyclecore.IdleYield, lifecyclecore.ShareDeniedYield:
+		default:
 			continue
 		}
 		if e.Key.Region == "" || channelevents.UnpackTurn(e.Key.Seq) >= completedAt {
 			return idleYieldEventFor(false)
 		}
 	}
-	slog.Default().Info("resume park: the completed round has no AgentWorkComplete in the lifecycle log; recording it on this exit",
-		"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "completedAt", completedAt)
+	slog.Default().Info("resume park: the lifecycle log has no record of how the completed round ended; recording its AgentWorkComplete on this exit",
+		"session", session, "completedAt", completedAt)
 	return lifecyclecore.AgentWorkComplete{Kubectl: false}
 }
 
