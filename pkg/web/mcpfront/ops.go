@@ -66,8 +66,23 @@ const (
 	maxListSessionsLimit     = 200
 )
 
-// defaultTranscriptLimit is get_transcript's Limit field default.
-const defaultTranscriptLimit = 100
+// defaultTranscriptLimit / maxTranscriptLimit are get_transcript's Limit
+// field default/cap. The cap is enforced in opGetTranscript, not by the
+// InputSchema: tools are registered with the raw AddTool, which does not
+// validate arguments against the schema, so a caller-chosen limit reaches the
+// op verbatim.
+const (
+	defaultTranscriptLimit = 100
+	maxTranscriptLimit     = 500
+)
+
+// defaultSearchLimit / maxSearchLimit are search_memory's Limit field
+// default/cap — enforced in opSearchMemory for the same reason as
+// maxTranscriptLimit.
+const (
+	defaultSearchLimit = 20
+	maxSearchLimit     = 100
+)
 
 // errSessionNotAccessible is the ONE denial text authorizeSessionOp ever
 // returns, for BOTH "no such session" and "it exists but the three-legged
@@ -323,6 +338,9 @@ type coveredSessionRow struct {
 // relation in SpiceDB or a list grant on agentsessions for webd; until then
 // the shortfall is reported rather than silent.
 //
+// A mirror check that ERRORS is returned as an error, never as an empty
+// success: the caller could not tell an outage from "no sessions".
+//
 // A false mirror check returns an EMPTY result with no error and, crucially,
 // never calls LookupReadableSessions or touches K8s at all — the brief's
 // "no lookup/K8s reads" requirement, so a read-role token asking a
@@ -330,10 +348,14 @@ type coveredSessionRow struct {
 func coveredSessions(ctx context.Context, d Deps, act acting, mirrorPerm string) (rows []coveredSessionRow, truncated bool, err error) {
 	mirrorOK, err := d.AccessTokenAuthz().CheckAccessTokenMirror(ctx, act.TokenID, act.Owner, mirrorPerm, true)
 	if err != nil {
-		d.Logger().Info("mcpfront: coveredSessions mirror check errored; returning empty",
+		// Still a denial for the decision log (nothing was enumerated), but
+		// an ERROR to the caller: an empty success here would be
+		// indistinguishable from "this owner has no sessions", and the two
+		// later legs below already report their own failures.
+		d.Logger().Info("mcpfront: coveredSessions mirror check errored",
 			"tokenID", act.TokenID, "permission", mirrorPerm, "err", err.Error())
 		recordDecision(d, act, mirrorPerm, "accesstoken", act.TokenID, false, "token")
-		return nil, false, nil
+		return nil, false, fmt.Errorf("mcpfront: check token mirror: %w", err)
 	}
 	if !mirrorOK {
 		recordDecision(d, act, mirrorPerm, "accesstoken", act.TokenID, false, "token")
@@ -538,6 +560,9 @@ func opGetTranscript(ctx context.Context, d Deps, act acting, in GetTranscriptIn
 	if limit <= 0 {
 		limit = defaultTranscriptLimit
 	}
+	if limit > maxTranscriptLimit {
+		limit = maxTranscriptLimit
+	}
 	offset := in.Offset
 	if offset < 0 {
 		offset = 0
@@ -545,9 +570,14 @@ func opGetTranscript(ctx context.Context, d Deps, act acting, in GetTranscriptIn
 
 	var entries []TranscriptEntry
 	if offset < total {
-		end := offset + limit
-		if end > total {
-			end = total
+		// Compared against the remaining count rather than computed as
+		// offset+limit and clamped afterwards: that sum overflows for a large
+		// caller-supplied limit, wraps negative, slips past an "end > total"
+		// clamp and panics the slice expression — and a panic in a tool
+		// handler takes the whole process down.
+		end := total
+		if limit < total-offset {
+			end = offset + limit
 		}
 		slice := hist.Timeline[offset:end]
 		entries = make([]TranscriptEntry, 0, len(slice))
@@ -606,7 +636,10 @@ func opSearchMemory(ctx context.Context, d Deps, act acting, in SearchMemoryIn) 
 
 	limit := in.Limit
 	if limit <= 0 {
-		limit = 20
+		limit = defaultSearchLimit
+	}
+	if limit > maxSearchLimit {
+		limit = maxSearchLimit
 	}
 
 	mem := httpclient.New(d.OperatorURL(), d.MemoryToken())

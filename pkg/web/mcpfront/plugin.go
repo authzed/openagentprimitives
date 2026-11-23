@@ -19,6 +19,20 @@ import (
 // enough until this surface has its own release story.
 var Version = "dev"
 
+// sessionIdleTimeout closes an /mcp session that has seen no HTTP request for
+// this long. Without it the SDK keeps every initialized session until the
+// client sends DELETE, so a token holder who initializes and walks away —
+// or does so in a loop — grows this process's session map without bound.
+// No tool here keeps cross-request state, so a client whose session expired
+// simply initializes again.
+const sessionIdleTimeout = 10 * time.Minute
+
+// streamableOptions is the /mcp handler's transport configuration, factored
+// out so the idle timeout is asserted by a test rather than by inspection.
+func streamableOptions() *mcp.StreamableHTTPOptions {
+	return &mcp.StreamableHTTPOptions{SessionTimeout: sessionIdleTimeout}
+}
+
 // ui is the /mcp webui plugin. Stateless: the mcp.Server and bearer
 // middleware are built fresh inside Routes().
 type ui struct{}
@@ -39,7 +53,7 @@ func (ui) Routes(deps webui.Deps) []webui.Route {
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "oap", Version: Version}, nil)
 	registerTools(srv, d)
-	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, streamableOptions())
 	authed := newBearerMiddleware(d, time.Now)(handler)
 
 	return []webui.Route{

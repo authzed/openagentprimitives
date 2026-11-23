@@ -2,8 +2,10 @@ package mcpfront
 
 import (
 	"context"
-	"fmt"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -670,4 +673,152 @@ func TestSessionIsEnded(t *testing.T) {
 	assert.False(t, sessionIsEnded(""))
 	assert.True(t, sessionIsEnded(spiceboxv1alpha1.AgentSessionPhaseSucceeded))
 	assert.True(t, sessionIsEnded(spiceboxv1alpha1.AgentSessionPhaseFailed))
+}
+
+// transcriptServer serves n turn entries for demo-ns/demo-session as the
+// operator's memory query endpoint, texts "m0".."m<n-1>".
+func transcriptServer(t *testing.T, n int) *httptest.Server {
+	t.Helper()
+	at := time.Now().UTC().Truncate(time.Second)
+	entries := make([]memory.Entry, 0, n)
+	for i := range n {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		entries = append(entries, opsTurnEntry(t, "demo-ns", "demo-session", i, role, fmt.Sprintf("m%d", i), at.Add(time.Duration(i)*time.Second)))
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		assert.NoError(t, json.NewEncoder(w).Encode(memory.QueryResult{Entries: entries}))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestGetTranscriptBoundsCallerSuppliedPaging covers the arguments a caller
+// controls and the InputSchema does not enforce (raw AddTool validates
+// nothing). The MaxInt rows are the regression: offset+limit used to wrap
+// negative, slip past the end clamp and panic the slice expression.
+func TestGetTranscriptBoundsCallerSuppliedPaging(t *testing.T) {
+	total := maxTranscriptLimit + 5
+	d := newOpsFakeDeps(t, newOpsTestClient(t, sessionFixture("demo-ns", "demo-session", "demo-agent")))
+	d.operatorURL = transcriptServer(t, total).URL
+	d.memoryToken = "webd-token"
+
+	cases := []struct {
+		name          string
+		offset, limit int
+		wantLen       int
+		wantFirst     string
+	}{
+		{name: "offset 1 with limit MaxInt: capped page from entry 1, no panic", offset: 1, limit: math.MaxInt, wantLen: maxTranscriptLimit, wantFirst: "m1"},
+		{name: "offset near the end with limit MaxInt: the remaining tail, no panic", offset: total - 2, limit: math.MaxInt, wantLen: 2, wantFirst: fmt.Sprintf("m%d", total-2)},
+		{name: "offset MaxInt: empty page", offset: math.MaxInt, limit: math.MaxInt, wantLen: 0},
+		{name: "limit over the cap: clamped to maxTranscriptLimit", offset: 0, limit: maxTranscriptLimit + 1, wantLen: maxTranscriptLimit, wantFirst: "m0"},
+		{name: "negative offset: treated as 0", offset: -7, limit: 3, wantLen: 3, wantFirst: "m0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := opGetTranscript(context.Background(), d, opsTestActing(),
+				GetTranscriptIn{Namespace: "demo-ns", Name: "demo-session", Offset: tc.offset, Limit: tc.limit})
+			require.NoError(t, err)
+			assert.Equal(t, total, out.Total)
+			require.Len(t, out.Entries, tc.wantLen)
+			if tc.wantLen > 0 {
+				assert.Equal(t, tc.wantFirst, out.Entries[0].Text)
+			}
+		})
+	}
+}
+
+func TestSearchMemoryClampsLimit(t *testing.T) {
+	cases := []struct {
+		name      string
+		limit     int
+		wantLimit int
+	}{
+		{name: "unset: the default is sent", limit: 0, wantLimit: defaultSearchLimit},
+		{name: "within the cap: sent as asked", limit: maxSearchLimit - 1, wantLimit: maxSearchLimit - 1},
+		{name: "over the cap: clamped to maxSearchLimit", limit: 1_000_000, wantLimit: maxSearchLimit},
+		{name: "MaxInt: clamped to maxSearchLimit", limit: math.MaxInt, wantLimit: maxSearchLimit},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotLimit := -1
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req memory.SearchRequest
+				assert.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+				gotLimit = req.Limit
+				w.Header().Set("Content-Type", "application/json")
+				assert.NoError(t, json.NewEncoder(w).Encode(memory.MergedSearchResult{}))
+			}))
+			defer srv.Close()
+
+			d := newOpsFakeDeps(t, newOpsTestClient(t, sessionFixture("demo-ns", "demo-session", "demo-agent")))
+			d.operatorURL = srv.URL
+			d.memoryToken = "webd-token"
+
+			_, err := opSearchMemory(context.Background(), d, opsTestActing(),
+				SearchMemoryIn{Query: "x", Namespace: "demo-ns", Name: "demo-session", Limit: tc.limit})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantLimit, gotLimit)
+		})
+	}
+}
+
+// TestEnumerationSurfacesMirrorCheckError: an authorization backend that
+// cannot answer is an error to the caller, never a successful empty list —
+// "no sessions" and "could not check" must not read the same.
+func TestEnumerationSurfacesMirrorCheckError(t *testing.T) {
+	mirrorErr := errors.New("spicedb unavailable")
+	newDeps := func(t *testing.T) *fakeOpsDeps {
+		t.Helper()
+		d := newOpsFakeDeps(t, newOpsTestClient(t, sessionFixture("demo-ns", "sess-a1", "class-a")))
+		d.authz.mirrorDecision = func(string) (bool, error) { return false, mirrorErr }
+		d.lookupSessions = spicedb.InteractableSessions{Refs: []spicedb.SessionRef{{Namespace: "demo-ns", Name: "sess-a1"}}}
+		d.authz.coveredClasses = map[string]bool{"demo-ns/class-a": true}
+		return d
+	}
+
+	t.Run("list_sessions: error, no lookup", func(t *testing.T) {
+		d := newDeps(t)
+		out, err := opListSessions(context.Background(), d, opsTestActing(), ListSessionsIn{})
+		require.ErrorIs(t, err, mirrorErr)
+		assert.Empty(t, out.Sessions)
+		assert.Equal(t, 0, d.lookupCalls, "a failed mirror check must never fall through to the lookup")
+	})
+
+	t.Run("search_memory with no session named: error, no search", func(t *testing.T) {
+		d := newDeps(t)
+		_, err := opSearchMemory(context.Background(), d, opsTestActing(), SearchMemoryIn{Query: "x"})
+		require.ErrorIs(t, err, mirrorErr)
+		assert.Equal(t, 0, d.lookupCalls)
+	})
+}
+
+func TestRecoverToolPanicsReturnsToolError(t *testing.T) {
+	d := newOpsFakeDeps(t, newOpsTestClient(t))
+	h := recoverToolPanics(d, "demo_tool", func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var timeline []int
+		return nil, fmt.Errorf("unreachable: %d", timeline[3])
+	})
+
+	var res *mcp.CallToolResult
+	var err error
+	require.NotPanics(t, func() { res, err = h(context.Background(), &mcp.CallToolRequest{}) })
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.IsError)
+	require.Len(t, res.Content, 1)
+	text := res.Content[0].(*mcp.TextContent).Text
+	assert.JSONEq(t, `{"error":"demo_tool: internal error"}`, text, "the panic value must not reach the caller")
+}
+
+func TestStreamableOptionsExpireIdleSessions(t *testing.T) {
+	opts := streamableOptions()
+	require.NotNil(t, opts)
+	assert.Equal(t, sessionIdleTimeout, opts.SessionTimeout)
+	assert.Positive(t, opts.SessionTimeout, "a zero timeout means idle sessions are never closed")
+	assert.False(t, opts.Stateless, "sessions stay stateful; the idle timeout is what bounds them")
 }

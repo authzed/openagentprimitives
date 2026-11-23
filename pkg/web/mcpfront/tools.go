@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -64,13 +65,37 @@ func unauthenticatedErr() *mcp.CallToolResult {
 	return toolErr("unauthenticated: no acting identity on request")
 }
 
+// recoverToolPanics wraps a tool handler so a panic inside it becomes a tool
+// error for that one call instead of ending the process. The SDK runs each
+// handler on its own goroutine with no recover, and this handler shares a
+// process with the web UI and identityd: one bad input must not take all
+// three down. The panic is logged with its stack (it is always a bug to fix)
+// and the caller gets a generic message — the panic value may quote data the
+// caller was never authorized to see.
+func recoverToolPanics(d Deps, name string, h mcp.ToolHandler) mcp.ToolHandler {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.CallToolResult, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				d.Logger().Info("mcpfront: tool handler panicked; returning a tool error",
+					"tool", name, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+				res, err = toolErr("%s: internal error", name), nil
+			}
+		}()
+		return h(ctx, req)
+	}
+}
+
 // registerTools registers the /mcp server's read-role tool set against d.
 // Every handler: resolve the acting identity the bearer middleware bound to
 // THIS request (req.Extra.TokenInfo — never ctx; see acting's doc), decode args, run the op, and translate its result
 // (or its denial) into a CallToolResult. The ops themselves (pkg/web/mcpfront
 // ops.go) own every authorization decision; nothing here second-guesses them.
 func registerTools(srv *mcp.Server, d Deps) {
-	srv.AddTool(&mcp.Tool{
+	add := func(t *mcp.Tool, h mcp.ToolHandler) {
+		srv.AddTool(t, recoverToolPanics(d, t.Name, h))
+	}
+
+	add(&mcp.Tool{
 		Name: "list_sessions",
 		Description: "List agent sessions this token's owner may read, optionally filtered by " +
 			"agent (agentclass name) and/or state (\"running\" or \"ended\"). Each row reports its " +
@@ -92,7 +117,7 @@ func registerTools(srv *mcp.Server, d Deps) {
 		Annotations: readOnly,
 	}, handleListSessions(d))
 
-	srv.AddTool(&mcp.Tool{
+	add(&mcp.Tool{
 		Name:        "get_session",
 		Description: "Get one session's summary (class, phase, start time, channel origin) by namespace and name. Use list_sessions first to find the (namespace, name) pair.",
 		InputSchema: map[string]any{
@@ -111,7 +136,7 @@ func registerTools(srv *mcp.Server, d Deps) {
 	// is NOT implemented here — this tool is pagination-only (offset/limit),
 	// same as every other /mcp read tool in this file. A caller that wants
 	// "what's new" polls get_transcript again with a larger offset.
-	srv.AddTool(&mcp.Tool{
+	add(&mcp.Tool{
 		Name: "get_transcript",
 		Description: "Read a session's conversation transcript (messages and plan cards, in order), " +
 			"paginated with offset/limit. total is the full entry count regardless of the page " +
@@ -122,14 +147,14 @@ func registerTools(srv *mcp.Server, d Deps) {
 				"namespace": map[string]any{"type": "string"},
 				"name":      map[string]any{"type": "string"},
 				"offset":    map[string]any{"type": "integer", "minimum": 0, "default": 0},
-				"limit":     map[string]any{"type": "integer", "minimum": 1, "default": defaultTranscriptLimit, "description": "max entries to return"},
+				"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": maxTranscriptLimit, "default": defaultTranscriptLimit, "description": "max entries to return"},
 			},
 			"required": []any{"namespace", "name"},
 		},
 		Annotations: readOnly,
 	}, handleGetTranscript(d))
 
-	srv.AddTool(&mcp.Tool{
+	add(&mcp.Tool{
 		Name: "search_memory",
 		Description: "Search a session's (or, with no namespace/name given, every session this " +
 			"token's owner may read) stored memory by free text. Combine with list_sessions/" +
@@ -144,14 +169,14 @@ func registerTools(srv *mcp.Server, d Deps) {
 				"query":     map[string]any{"type": "string", "description": "free-text query"},
 				"namespace": map[string]any{"type": "string", "description": "with name, restrict to one session"},
 				"name":      map[string]any{"type": "string"},
-				"limit":     map[string]any{"type": "integer", "minimum": 1, "default": 20},
+				"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchLimit, "default": defaultSearchLimit, "description": "max hits to return"},
 			},
 			"required": []any{"query"},
 		},
 		Annotations: readOnly,
 	}, handleSearchMemory(d))
 
-	srv.AddTool(&mcp.Tool{
+	add(&mcp.Tool{
 		Name:        "list_artifacts",
 		Description: "List the artifacts (generated files/renders) a session has produced, by namespace and name. Use get_artifact to fetch one's content.",
 		InputSchema: map[string]any{
@@ -165,7 +190,7 @@ func registerTools(srv *mcp.Server, d Deps) {
 		Annotations: readOnly,
 	}, handleListArtifacts(d))
 
-	srv.AddTool(&mcp.Tool{
+	add(&mcp.Tool{
 		Name: "get_artifact",
 		Description: "Fetch one artifact's content by namespace, name, and artifactId (from " +
 			"list_artifacts). content is populated only when the artifact's bytes are valid UTF-8 " +

@@ -298,6 +298,15 @@ func (c *tokenCache) rebuildLocked(list spiceboxv1alpha1.AccessTokenList, now ti
 	live := make(map[string]bool, len(list.Items))
 	for i := range list.Items {
 		item := &list.Items[i]
+		// Deleting the CR IS revocation. The object can outlive that delete
+		// for as long as its finalizer cannot remove the SpiceDB tuples, and
+		// in exactly that window the tuples are still intact — so a token
+		// that is being deleted must stop authenticating here, not whenever
+		// the finalizer finally succeeds. Leaving it out of live also prunes
+		// its limiter and last-used state below.
+		if !item.DeletionTimestamp.IsZero() {
+			continue
+		}
 		var lastUsed time.Time
 		if item.Status.LastUsedAt != nil {
 			lastUsed = item.Status.LastUsedAt.Time

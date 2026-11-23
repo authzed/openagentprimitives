@@ -132,6 +132,14 @@ func TestBearerMiddleware(t *testing.T) {
 	expiredVal := mustNewTokenValue(t)
 	expiredCR := accessTokenCR("at-bbbbbbbbbbbb", expiredVal, "owner-canonical", now.Add(-time.Minute))
 
+	// A revoked token whose finalizer has not finished: the CR is still
+	// listed, unexpired, with a matching hash — and must not authenticate.
+	deletingVal := mustNewTokenValue(t)
+	deletingCR := accessTokenCR("at-dddddddddddd", deletingVal, "owner-canonical", now.Add(time.Hour))
+	deletingCR.Finalizers = []string{"test.example/hold"}
+	deletingAt := metav1.NewTime(now.Add(-time.Second))
+	deletingCR.DeletionTimestamp = &deletingAt
+
 	cases := []struct {
 		name       string
 		header     string
@@ -144,6 +152,7 @@ func TestBearerMiddleware(t *testing.T) {
 		{name: "unknown token: 401", header: "Bearer " + mustNewTokenValue(t), objects: []client.Object{goodCR}, wantStatus: http.StatusUnauthorized},
 		{name: "expired CR: 401 even though hash matches", header: "Bearer " + expiredVal, objects: []client.Object{expiredCR}, wantStatus: http.StatusUnauthorized},
 		{name: "deleted CR (revocation race): 401", header: "Bearer " + good, objects: nil, wantStatus: http.StatusUnauthorized},
+		{name: "CR being deleted, finalizer still pending: 401", header: "Bearer " + deletingVal, objects: []client.Object{goodCR, deletingCR}, wantStatus: http.StatusUnauthorized},
 		{name: "valid: 200, acting carries token id and owner", header: "Bearer " + good, objects: []client.Object{goodCR}, wantStatus: http.StatusOK, wantActing: "at-aaaaaaaaaaaa"},
 	}
 	for _, tc := range cases {
