@@ -249,3 +249,22 @@ func TestResolve_NameSessionAnnotationErrorIsReturned(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, boom)
 }
+
+// TestChannelIdentityVouched pins the one bar both the name match and the
+// known-user check apply to a recorded channel identity.
+func TestChannelIdentityVouched(t *testing.T) {
+	cases := []struct {
+		name string
+		ci   spiceboxv1alpha1.ChannelIdentity
+		want bool
+	}{
+		{name: "email recorded: vouched", ci: spiceboxv1alpha1.ChannelIdentity{Kind: "slack", ExternalID: "U1", Email: "pat@example.com"}, want: true},
+		{name: "no email: not vouched", ci: spiceboxv1alpha1.ChannelIdentity{Kind: "slack", ExternalID: "U1", RealName: "Pat Quinlan"}, want: false},
+		{name: "zero value: not vouched", ci: spiceboxv1alpha1.ChannelIdentity{}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, ChannelIdentityVouched(tc.ci))
+		})
+	}
+}

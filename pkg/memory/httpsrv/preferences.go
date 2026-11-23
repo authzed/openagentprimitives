@@ -1083,17 +1083,17 @@ func (h *handler) handlePreferencesFirstPartyCommit(w http.ResponseWriter, r *ht
 }
 
 // userIdentityVouched reports whether a UserIdentity is recorded for the bare
-// canonical subject AND carries at least one channel identity whose email the
-// channel vouched for. NotFound is an answer (false), not a fault.
+// canonical subject AND carries at least one channel identity the channel
+// vouched for — the same bar a name reference matches against
+// (subjectresolve.ChannelIdentityVouched). NotFound is an answer (false), not
+// a fault.
 func (h *handler) userIdentityVouched(ctx context.Context, subject string) (bool, error) {
 	name := useridentity.NameForSubject(identity.CanonicalFromTrusted(subject, "a subject this handler just resolved").Subject())
 	var ui v1alpha1.UserIdentity
 	err := h.prefsReader.Get(ctx, types.NamespacedName{Name: name}, &ui)
 	switch {
 	case err == nil:
-		return slices.ContainsFunc(ui.Status.ChannelIdentities, func(ci v1alpha1.ChannelIdentity) bool {
-			return ci.Email != ""
-		}), nil
+		return slices.ContainsFunc(ui.Status.ChannelIdentities, subjectresolve.ChannelIdentityVouched), nil
 	case apierrors.IsNotFound(err):
 		return false, nil
 	default:

@@ -159,12 +159,25 @@ func untrustedTriggerReason(ctx context.Context, env Env) (string, error) {
 	return untrustedTriggerOwnerReason, nil
 }
 
+// ChannelIdentityVouched reports whether the channel vouched for the account
+// behind a recorded channel identity, which is the bar for acting on what the
+// identity carries: matching a name reference against its names, or treating
+// its user as known. A channel kind records an Email only for an account it
+// vouches for (Slack: a full member of the installed workspace, never a guest,
+// shared-channel stranger or foreign-workspace user), so a non-empty Email is
+// the mark. It is one predicate on purpose: tightening the bar here tightens
+// every consumer at once.
+func ChannelIdentityVouched(ci spiceboxv1alpha1.ChannelIdentity) bool {
+	return ci.Email != ""
+}
+
 // userHasName reports whether a name recorded on one of ui's vouched channel
-// identities normalizes to want. An identity without an Email is one the
-// channel did not vouch for, so its self-set name is not a candidate.
+// identities normalizes to want. An identity the channel did not vouch for
+// (see ChannelIdentityVouched) is skipped: its self-set name is not a
+// candidate.
 func userHasName(ui *spiceboxv1alpha1.UserIdentity, want string) bool {
 	for _, ci := range ui.Status.ChannelIdentities {
-		if ci.Email == "" {
+		if !ChannelIdentityVouched(ci) {
 			continue
 		}
 		if normalizeName(ci.DisplayName) == want || normalizeName(ci.RealName) == want {
