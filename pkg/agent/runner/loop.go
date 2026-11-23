@@ -694,14 +694,31 @@ func (l *Loop) Run(ctx context.Context) error {
 		// registry is cleared unconditionally right after Send returns, on
 		// both the success and error paths, so a stale providerCancel can
 		// never be fired against a completed call.
-		sendCtx, sendCancel := context.WithCancelCause(ctx)
+		interruptCtx, sendCancel := context.WithCancelCause(ctx)
 		l.interrupts.setProvider(sendCancel)
+		// Bound the call by what is left of the session's wall-clock lifetime.
+		// The maxDuration watchdog (Budget.watchDuration) cancels through the
+		// interrupt registry above; sessionExpiration has no watcher, and
+		// Budget.Check runs only between turns, so a call that never returns
+		// would otherwise outlive it. An interrupt or maxDuration cause still
+		// propagates: a child ctx reports its parent's cancel cause.
+		sendCtx, stopExpiryDeadline := interruptCtx, context.CancelFunc(func() {})
+		if remaining, ok := l.Budget.UntilExpiration(); ok {
+			sendCtx, stopExpiryDeadline = context.WithTimeoutCause(interruptCtx, remaining, errSessionExpired)
+		}
 		resp, err := l.Provider.Send(sendCtx, req)
 		l.interrupts.clearProvider()
+		stopExpiryDeadline()
 		sendCancel(nil)
 		if err != nil {
 			if context.Cause(sendCtx) == errMaxDurationExceeded {
 				return l.fail(ctx, budgetFailReason(BudgetReasonDuration), BudgetReasonDuration)
+			}
+			if context.Cause(sendCtx) == errSessionExpired {
+				slog.Default().Info("turn: LLM call cut off at the session's sessionExpiration",
+					"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name,
+					"turn", turnCount+1, "err", err.Error())
+				return l.fail(ctx, budgetFailReason(BudgetReasonExpired), BudgetReasonExpired)
 			}
 			if context.Cause(sendCtx) == errInterruptedByUser {
 				// The user interrupted the LLM call to jump the queue. Not a

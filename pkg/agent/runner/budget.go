@@ -111,6 +111,21 @@ func (b *Budget) Check(turns int32, inputTokens, outputTokens int64) string {
 	return ""
 }
 
+// UntilExpiration reports how long an in-flight call may run before the
+// wall-clock sessionExpiration cap trips. ok is false when no expiration is
+// configured or the session start is not stamped yet, matching Check. A cap
+// already reached yields a value <= 0.
+//
+// Check only runs between turns and watchDuration covers maxDuration alone, so
+// without this a provider call that never returns holds the session past its
+// expiration. The loop bounds each provider call by this window.
+func (b *Budget) UntilExpiration() (remaining time.Duration, ok bool) {
+	if b.cfg.SessionExpiration.Duration <= 0 || b.sessionStartedAt.IsZero() {
+		return 0, false
+	}
+	return b.cfg.SessionExpiration.Duration - b.now().Sub(b.sessionStartedAt), true
+}
+
 // cutOffForBudget is the watchdog's action once maxDuration is reached:
 // cancel the LLM call and the stateless/readonly tools now, give in-flight
 // stateful tools BudgetStatefulDrain to finish, then cancel any still running.

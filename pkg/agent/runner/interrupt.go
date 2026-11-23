@@ -45,6 +45,10 @@ var errInterruptedByUser = errors.New("interrupted by user")
 // call cut off because active run-time reached budget.maxDuration.
 var errMaxDurationExceeded = errors.New("session reached its maxDuration budget")
 
+// errSessionExpired is the cancel cause for an in-flight LLM call cut off
+// because the session reached its wall-clock budget.sessionExpiration.
+var errSessionExpired = errors.New("session reached its sessionExpiration")
+
 // interruptEntry pairs a live in-flight tool with its cancel func, so the
 // registry can decide at fire() time whether cancelling it is truthful
 // (Cancellable AND stateless/readonly) without a caller-supplied snapshot.
