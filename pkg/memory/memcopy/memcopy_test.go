@@ -196,3 +196,30 @@ func TestCopyPrefix_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, 1, "idempotent re-copy must not duplicate")
 }
+
+// TestCopyPrefix_LegacyNULTurn: a turn recorded before the facade refused a
+// NUL escape (sqlite held it) is seeded straight into the backend, past the
+// check. Copying it verbatim would now be refused and fail the restart, so the
+// copy replaces the escape with U+FFFD; a second copy is still a no-op.
+func TestCopyPrefix_LegacyNULTurn(t *testing.T) {
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	backend := inmem.NewBackend()
+	mem := memory.NewLocal(backend)
+	src := memory.Scope{Kind: "AgentSession", ID: "ns/src"}
+	dst := memory.Scope{Kind: "AgentSession", ID: "ns/dst"}
+
+	require.NoError(t, backend.Put(ctx, memory.Entry{
+		Scope: src, Kind: turn.KindName, ID: turn.EntryID(0, "user"),
+		CreatedAt: time.Unix(1, 0).UTC(),
+		Content:   []byte(`{"content":[{"type":"text","text":"a\u0000b"}]}`),
+	}), "seed the legacy turn below the facade's storable check")
+
+	require.NoError(t, memcopy.CopyPrefix(ctx, mem, src, dst, 0), "the copy must not be refused")
+	require.NoError(t, memcopy.CopyPrefix(ctx, mem, src, dst, 0), "a re-copy must stay a no-op")
+
+	got, err := turn.NewAppender(mem, dst).ReadAll(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Content, 1)
+	assert.Equal(t, "a�b", got[0].Content[0].Text)
+}
