@@ -38,7 +38,7 @@ type Minter struct {
 	// --accesstoken-namespace, default "agentprimitives-system").
 	Namespace string
 	// Lifetime is how long a minted token lives (webd flag
-	// --accesstoken-lifetime, default 90*24h).
+	// --accesstoken-lifetime, default 90*24h). Must satisfy ValidateLifetime.
 	Lifetime time.Duration
 	// Clock stands in for time.Now in tests; nil uses the real clock (see now()).
 	Clock func() time.Time
@@ -63,6 +63,31 @@ type Minted struct {
 	Value     string
 	TokenID   string
 	ExpiresAt time.Time
+}
+
+// MaxLifetime is the longest lifetime a minted token may be given. It bounds
+// --accesstoken-lifetime at webd startup and Minter.Lifetime at every mint:
+// a bearer credential that outlives a year is a misconfiguration, not a
+// policy anyone chose.
+const MaxLifetime = 365 * 24 * time.Hour
+
+// compensationTimeout bounds the tuple delete that undoes a grant whose CR
+// create failed. It runs on its own deadline, detached from the request's
+// cancellation — see MintAccessToken.
+const compensationTimeout = 10 * time.Second
+
+// ValidateLifetime reports whether d is a usable token lifetime: positive and
+// no longer than MaxLifetime. Zero or negative would mint tokens that are
+// already expired — a 200 from /oauth/token followed by a 401 on every /mcp
+// call, with nothing pointing at the cause.
+func ValidateLifetime(d time.Duration) error {
+	if d <= 0 {
+		return fmt.Errorf("access token lifetime must be positive, got %s", d)
+	}
+	if d > MaxLifetime {
+		return fmt.Errorf("access token lifetime %s exceeds the maximum %s", d, MaxLifetime)
+	}
+	return nil
 }
 
 // now returns the current time, substituting Clock in tests.
@@ -103,6 +128,11 @@ func (m *Minter) MintAccessToken(ctx context.Context, p MintParams) (Minted, err
 	}
 	if !p.Unfiltered && len(p.ScopeClasses) == 0 {
 		return out, fmt.Errorf("mint access token: scope classes or unfiltered required")
+	}
+	// Checked here as well as at webd startup so a Minter constructed any
+	// other way cannot mint an already-expired or unbounded token.
+	if err := ValidateLifetime(m.Lifetime); err != nil {
+		return out, fmt.Errorf("mint access token: %w", err)
 	}
 
 	value, err := accesstoken.NewTokenValue()
@@ -145,7 +175,14 @@ func (m *Minter) MintAccessToken(ctx context.Context, p MintParams) (Minted, err
 		// unreachable but would clutter SpiceDB; best-effort removal, and
 		// the failure of THAT is surfaced by joining it into the returned
 		// error rather than being swallowed.
-		delErr := m.SpiceDB.DeleteAccessTokenTuples(ctx, tokenID)
+		//
+		// Detached from ctx's cancellation: a client that disconnects
+		// mid-exchange is one of the ways the create fails, and a delete
+		// issued on that same dead context would fail at once and strand the
+		// grant until its expiry trait fires.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), compensationTimeout)
+		defer cancel()
+		delErr := m.SpiceDB.DeleteAccessTokenTuples(cctx, tokenID)
 		return out, errors.Join(
 			fmt.Errorf("mint access token %s: create AccessToken CR: %w", tokenID, err),
 			delErr,

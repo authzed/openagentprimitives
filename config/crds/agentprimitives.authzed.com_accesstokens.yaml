@@ -61,6 +61,15 @@ spec:
           metadata:
             type: object
           spec:
+            description: |-
+              AccessTokenSpec is written once, by the mint path, and never changes:
+              every field is immutable. tokenHash and owner are the credential's
+              identity. expiresAt is mirrored by the SpiceDB tuples' expiration trait at
+              mint, so an edit would only make the two disagree — extending it keeps the
+              bearer authenticating after its grant is gone, shortening it has the
+              controller delete the token early. clientName and clientID are the record
+              of who the token was issued to, shown to the admin deciding whether to
+              revoke it. To change any of them, revoke the token and mint another.
             properties:
               clientID:
                 description: ClientID is the OAuth client the token was issued to.
@@ -96,6 +105,16 @@ spec:
               rule: self.tokenHash == oldSelf.tokenHash
             - message: owner is immutable
               rule: self.owner == oldSelf.owner
+            - message: expiresAt is immutable
+              rule: self.expiresAt == oldSelf.expiresAt
+            - message: 'clientName is immutable: it cannot be added, removed or changed
+                after create'
+              rule: has(self.clientName) == has(oldSelf.clientName) && (!has(self.clientName)
+                || self.clientName == oldSelf.clientName)
+            - message: 'clientID is immutable: it cannot be added, removed or changed
+                after create'
+              rule: has(self.clientID) == has(oldSelf.clientID) && (!has(self.clientID)
+                || self.clientID == oldSelf.clientID)
           status:
             properties:
               conditions:

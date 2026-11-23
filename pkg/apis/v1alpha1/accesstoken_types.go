@@ -28,7 +28,19 @@ type AccessToken struct {
 }
 
 // +kubebuilder:validation:XValidation:rule="self.tokenHash == oldSelf.tokenHash",message="tokenHash is immutable"
+// AccessTokenSpec is written once, by the mint path, and never changes:
+// every field is immutable. tokenHash and owner are the credential's
+// identity. expiresAt is mirrored by the SpiceDB tuples' expiration trait at
+// mint, so an edit would only make the two disagree — extending it keeps the
+// bearer authenticating after its grant is gone, shortening it has the
+// controller delete the token early. clientName and clientID are the record
+// of who the token was issued to, shown to the admin deciding whether to
+// revoke it. To change any of them, revoke the token and mint another.
+//
 // +kubebuilder:validation:XValidation:rule="self.owner == oldSelf.owner",message="owner is immutable"
+// +kubebuilder:validation:XValidation:rule="self.expiresAt == oldSelf.expiresAt",message="expiresAt is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.clientName) == has(oldSelf.clientName) && (!has(self.clientName) || self.clientName == oldSelf.clientName)",message="clientName is immutable: it cannot be added, removed or changed after create"
+// +kubebuilder:validation:XValidation:rule="has(self.clientID) == has(oldSelf.clientID) && (!has(self.clientID) || self.clientID == oldSelf.clientID)",message="clientID is immutable: it cannot be added, removed or changed after create"
 type AccessTokenSpec struct {
 	// TokenHash is hex(sha256(bearer value)). The value itself is never
 	// stored server-side.

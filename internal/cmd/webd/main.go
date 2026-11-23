@@ -320,7 +320,7 @@ func newCommand() *cobra.Command {
 	fs.StringVar(&cfg.admindTokenPath, "admind-token-path", "/var/run/webd/admind-token/token", "path to the admind service token file")
 	fs.StringVar(&cfg.clusterKind, "cluster-kind", "", fmt.Sprintf("REQUIRED cluster kind stamped by `oap install` (one of: %s); selects the install profile, whose AllowsSharedOrigin() decides whether the trusted and sandbox origins may share one host. Empty or unrecognized is a FATAL startup error — no silent default. A Deployment predating this flag must be re-applied via `oap install`.", strings.Join(cloud.RegisteredKeys(), ", ")))
 	fs.StringVar(&cfg.accessTokenNamespace, "accesstoken-namespace", "agentprimitives-system", "namespace the /mcp Minter creates AccessToken CRs in, and the bearer middleware lists them back from")
-	fs.DurationVar(&cfg.accessTokenLifetime, "accesstoken-lifetime", 2160*time.Hour, "how long a token minted by /oauth/token stays valid")
+	fs.DurationVar(&cfg.accessTokenLifetime, "accesstoken-lifetime", 2160*time.Hour, fmt.Sprintf("how long a token minted by /oauth/token stays valid; must be positive and at most %s — anything else is a FATAL startup error", mcpfront.MaxLifetime))
 	cmd.PreRunE = clikit.EnvOverridePreRunE(map[string]string{
 		"trusted-base-url":              "WEBD_TRUSTED_BASE_URL",
 		"sandbox-base-url":              "WEBD_SANDBOX_BASE_URL",
@@ -346,9 +346,26 @@ func newCommand() *cobra.Command {
 	return cmd
 }
 
+// validateConfig rejects flag values that parse but would make webd serve
+// something broken. It runs before anything is constructed, so a bad value is
+// a startup failure naming the flag rather than a symptom found later.
+func validateConfig(cfg *config) error {
+	// Zero is what an empty or mistyped WEBD_ACCESSTOKEN_LIFETIME template
+	// value parses to, and it would mint tokens that are already expired:
+	// /oauth/token answers 200 and every /mcp call then 401s.
+	if err := mcpfront.ValidateLifetime(cfg.accessTokenLifetime); err != nil {
+		return fmt.Errorf("--accesstoken-lifetime/WEBD_ACCESSTOKEN_LIFETIME: %w", err)
+	}
+	return nil
+}
+
 func run(ctx context.Context, cfg *config) error {
 	logger := ctrlzap.New(ctrlzap.UseDevMode(false))
 	ctrl.SetLogger(logger)
+
+	if err := validateConfig(cfg); err != nil {
+		return fmt.Errorf("invalid configuration (fail-closed startup): %w", err)
+	}
 
 	// clusterStrategy resolves the AP_CLUSTER_KIND `oap install` stamped onto
 	// this Deployment, fail-closed: an unset or unrecognized value is fatal —

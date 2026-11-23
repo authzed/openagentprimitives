@@ -36,6 +36,10 @@ type fakeGrantWriter struct {
 	calls     []recordedCall
 	writeErr  error
 	deleteErr error
+	// deleteCtxErr / deleteHadDeadline record the state of the context the
+	// compensating delete was handed, at the moment it was called.
+	deleteCtxErr      error
+	deleteHadDeadline bool
 }
 
 func (f *fakeGrantWriter) WriteAccessTokenGrant(_ context.Context, g spicedb.AccessTokenGrant) error {
@@ -46,7 +50,9 @@ func (f *fakeGrantWriter) WriteAccessTokenGrant(_ context.Context, g spicedb.Acc
 	return f.writeErr
 }
 
-func (f *fakeGrantWriter) DeleteAccessTokenTuples(_ context.Context, tokenID string) error {
+func (f *fakeGrantWriter) DeleteAccessTokenTuples(ctx context.Context, tokenID string) error {
+	f.deleteCtxErr = ctx.Err()
+	_, f.deleteHadDeadline = ctx.Deadline()
 	f.calls = append(f.calls, recordedCall{method: "delete", tokenID: tokenID})
 	if f.order != nil {
 		*f.order = append(*f.order, "delete-tuples")
@@ -195,6 +201,62 @@ func TestMintRejectsEmptyOwnerOrRole(t *testing.T) {
 			_, err := m.MintAccessToken(context.Background(), tc.params)
 			require.Error(t, err)
 			assert.Empty(t, writer.calls, "a rejected mint must never reach SpiceDB")
+		})
+	}
+}
+
+// TestMintCompensationOutlivesCancelledRequest: a client that disconnects
+// mid-exchange cancels the request context, which is one of the ways the CR
+// create fails. The compensating delete must not inherit that cancellation,
+// or it fails at once and the grant is stranded until its expiry.
+func TestMintCompensationOutlivesCancelledRequest(t *testing.T) {
+	writer := &fakeGrantWriter{}
+	ctx, cancel := context.WithCancel(context.Background())
+	c := fake.NewClientBuilder().
+		WithScheme(newMintScheme(t)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, _ client.WithWatch, _ client.Object, _ ...client.CreateOption) error {
+				cancel()
+				return ctx.Err()
+			},
+		}).Build()
+
+	m := &Minter{SpiceDB: writer, K8s: c, Namespace: "agentprimitives-system", Lifetime: time.Hour}
+	_, err := m.MintAccessToken(ctx, MintParams{Owner: testOwner(), Role: accesstoken.RoleRead, Unfiltered: true})
+	require.ErrorIs(t, err, context.Canceled)
+
+	require.Len(t, writer.calls, 2, "write then compensating delete")
+	assert.Equal(t, "delete", writer.calls[1].method)
+	assert.NoError(t, writer.deleteCtxErr, "the compensation must run on a live context")
+	assert.True(t, writer.deleteHadDeadline, "the detached compensation must still be bounded")
+}
+
+func TestMintValidatesLifetime(t *testing.T) {
+	cases := []struct {
+		name     string
+		lifetime time.Duration
+		wantErr  bool
+	}{
+		{name: "zero: rejected (would mint an already-expired token)", lifetime: 0, wantErr: true},
+		{name: "negative: rejected", lifetime: -time.Hour, wantErr: true},
+		{name: "over MaxLifetime: rejected", lifetime: MaxLifetime + time.Second, wantErr: true},
+		{name: "exactly MaxLifetime: minted", lifetime: MaxLifetime},
+		{name: "90 days (the webd default): minted", lifetime: 90 * 24 * time.Hour},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.wantErr, ValidateLifetime(tc.lifetime) != nil, "ValidateLifetime")
+
+			writer := &fakeGrantWriter{}
+			c := fake.NewClientBuilder().WithScheme(newMintScheme(t)).Build()
+			m := &Minter{SpiceDB: writer, K8s: c, Namespace: "ns", Lifetime: tc.lifetime}
+			_, err := m.MintAccessToken(context.Background(), MintParams{Owner: testOwner(), Role: accesstoken.RoleRead, Unfiltered: true})
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Empty(t, writer.calls, "a rejected mint must never reach SpiceDB")
+				return
+			}
+			require.NoError(t, err)
 		})
 	}
 }
