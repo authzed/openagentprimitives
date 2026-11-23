@@ -94,8 +94,9 @@ type Deps struct {
 	//
 	// Nil is FAIL-CLOSED: the route still mounts (it is gated on Consent, not
 	// on Minter), but every exchange 503s "token minting unavailable" rather
-	// than panicking. Task 9 wires the concrete adapter in webd; until then
-	// this stays nil in production.
+	// than panicking. webd supplies the concrete minter whenever SpiceDB is
+	// configured; without SpiceDB there is no Consent either, so the route
+	// is not mounted at all.
 	Minter AccessTokenMinter
 }
 

@@ -266,6 +266,52 @@ func TestConsentPostEmptyScopeRerendersWithFreshPending(t *testing.T) {
 	assert.NotEmpty(t, loc.Query().Get("code"))
 }
 
+// TestConsentPostEmptyScopeRerenderKeepsAccessLevel: the re-render after an
+// approval that named no agent must keep the access level the person chose.
+// Resetting it to the default silently turns the resubmit into a read grant.
+func TestConsentPostEmptyScopeRerenderKeepsAccessLevel(t *testing.T) {
+	radio := func(role string, checked bool) string {
+		if checked {
+			return `name="role" value="` + role + `" checked>`
+		}
+		return `name="role" value="` + role + `">`
+	}
+	roles := []string{"read", "interact", "full"}
+
+	for _, chosen := range roles {
+		t.Run("chosen "+chosen+": only that radio is checked on the re-render", func(t *testing.T) {
+			s := newTestServerWithConsent(t)
+			validClient := mintTestClientID(t, s, "demo tool", []string{"http://127.0.0.1:7777/cb"})
+			pendingID := primePendingAuthorize(t, s, validClient)
+
+			rec := doConsentPost(t, s, url.Values{"pending": {pendingID}, "role": {chosen}})
+			require.Equal(t, http.StatusOK, rec.Code)
+			body := rec.Body.String()
+			for _, role := range roles {
+				assert.Contains(t, body, radio(role, role == chosen))
+			}
+			assert.Equal(t, 1, strings.Count(body, " checked>"), "exactly one access level is pre-selected")
+		})
+	}
+
+	t.Run("first render: read is pre-selected", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeConsentForm(rec, consentView{ClientName: "demo tool", RedirectURI: "http://127.0.0.1:7777/cb"})
+		body := rec.Body.String()
+		assert.Contains(t, body, radio("read", true))
+		assert.Equal(t, 1, strings.Count(body, " checked>"))
+	})
+
+	t.Run("a role outside the enum never selects a radio or reaches the page", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeConsentForm(rec, consentView{ClientName: "demo tool", RedirectURI: "http://127.0.0.1:7777/cb", Role: `full"><script>`})
+		body := rec.Body.String()
+		assert.Contains(t, body, radio("read", true))
+		assert.Equal(t, 1, strings.Count(body, " checked>"))
+		assert.NotContains(t, body, "<script>")
+	})
+}
+
 func TestConsentFormShowsRedirectTarget(t *testing.T) {
 	s := newTestServerWithConsent(t)
 	cases := []struct {

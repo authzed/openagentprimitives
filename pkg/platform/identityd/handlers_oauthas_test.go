@@ -64,10 +64,18 @@ func TestDynamicClientRegistration(t *testing.T) {
 func TestDynamicClientRegistrationRejections(t *testing.T) {
 	cases := []struct {
 		name, body string
+		// wantErr, when set, is the OAuth error code the body must carry.
+		wantErr string
 	}{
 		{name: "no redirect_uris: 400", body: `{"client_name":"x"}`},
-		{name: "non-loopback http redirect: 400", body: `{"client_name":"x","redirect_uris":["http://evil.test/cb"]}`},
+		{name: "non-loopback http redirect: 400", body: `{"client_name":"x","redirect_uris":["http://evil.test/cb"]}`, wantErr: "invalid_redirect_uri"},
 		{name: "malformed JSON: 400", body: `{"client_name":`},
+		{name: "redirect with a fragment: 400", body: `{"client_name":"x","redirect_uris":["https://client.example/cb#frag"]}`, wantErr: "invalid_redirect_uri"},
+		{name: "redirect with an empty fragment: 400", body: `{"client_name":"x","redirect_uris":["https://client.example/cb#"]}`, wantErr: "invalid_redirect_uri"},
+		{name: "redirect with userinfo: 400", body: `{"client_name":"x","redirect_uris":["https://trusted.example@client.example/cb"]}`, wantErr: "invalid_redirect_uri"},
+		{name: "redirect with no host: 400", body: `{"client_name":"x","redirect_uris":["https:///cb"]}`, wantErr: "invalid_redirect_uri"},
+		{name: "opaque redirect: 400", body: `{"client_name":"x","redirect_uris":["https:client.example/cb"]}`, wantErr: "invalid_redirect_uri"},
+		{name: "one bad redirect among good ones: 400", body: `{"client_name":"x","redirect_uris":["http://127.0.0.1:7777/cb","https://client.example/cb#frag"]}`, wantErr: "invalid_redirect_uri"},
 	}
 	s := newTestServerWithConsent(t)
 	for _, tc := range cases {
@@ -77,6 +85,47 @@ func TestDynamicClientRegistrationRejections(t *testing.T) {
 			rec := httptest.NewRecorder()
 			s.Handler().ServeHTTP(rec, req)
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			if tc.wantErr != "" {
+				var body map[string]string
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+				assert.Equal(t, tc.wantErr, body["error"])
+			}
+		})
+	}
+}
+
+func TestValidateRedirectURI(t *testing.T) {
+	cases := []struct {
+		name, uri string
+		wantErr   string // substring; empty means accepted
+	}{
+		{name: "https anywhere: accepted", uri: "https://client.example/cb"},
+		{name: "https with port, path and query: accepted", uri: "https://client.example:8443/oauth/cb?source=cli"},
+		{name: "loopback http IPv4: accepted", uri: "http://127.0.0.1:7777/callback"},
+		{name: "loopback http localhost: accepted", uri: "http://localhost:7777/callback"},
+		{name: "loopback http IPv6: accepted", uri: "http://[::1]:7777/callback"},
+		{name: "fragment: rejected", uri: "https://client.example/cb#x", wantErr: "fragment"},
+		{name: "bare trailing #: rejected", uri: "https://client.example/cb#", wantErr: "fragment"},
+		{name: "fragment on loopback: rejected", uri: "http://127.0.0.1:7777/cb#x", wantErr: "fragment"},
+		{name: "userinfo: rejected", uri: "https://user@client.example/cb", wantErr: "userinfo"},
+		{name: "userinfo with password: rejected", uri: "https://user:pw@client.example/cb", wantErr: "userinfo"},
+		{name: "empty userinfo: rejected", uri: "https://@client.example/cb", wantErr: "userinfo"},
+		{name: "empty host: rejected", uri: "https:///cb", wantErr: "host"},
+		{name: "port but no host: rejected", uri: "https://:8443/cb", wantErr: "host"},
+		{name: "opaque: rejected", uri: "https:client.example/cb", wantErr: "host"},
+		{name: "non-loopback http: rejected", uri: "http://client.example/cb", wantErr: "loopback"},
+		{name: "custom scheme: rejected", uri: "demoapp://callback", wantErr: "scheme"},
+		{name: "relative: rejected", uri: "/cb", wantErr: "host"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRedirectURI(tc.uri)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
 }

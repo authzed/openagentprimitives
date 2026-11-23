@@ -187,6 +187,8 @@ func TestTokenEndpoint(t *testing.T) {
 			require.Equal(t, http.StatusOK, tc.wantCode)
 			assert.True(t, strings.HasPrefix(body["access_token"].(string), accesstoken.TokenPrefix))
 			assert.Equal(t, "Bearer", body["token_type"])
+			assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"), "RFC 6749 §5.1: a token response must not be stored")
+			assert.Equal(t, "no-cache", rec.Header().Get("Pragma"))
 			expiresIn, ok := body["expires_in"].(float64)
 			require.True(t, ok, "expires_in must be numeric")
 			assert.Greater(t, expiresIn, float64(0))

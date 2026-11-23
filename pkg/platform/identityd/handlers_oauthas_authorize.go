@@ -276,7 +276,12 @@ func (s *Server) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
 			OwnerDisplay: identity.DecodeForDisplay(canonical.String()),
 			PendingID:    pendingID,
 			Classes:      classes,
-			Error:        "Choose at least one agent, or \"Everything I can access\".",
+			// Keep the access level they chose: resetting it to the default
+			// would turn "Full, forgot to tick an agent" into a read-only
+			// grant on the resubmit, unnoticed. role passed the enum check
+			// above.
+			Role:  role,
+			Error: "Choose at least one agent, or \"Everything I can access\".",
 		})
 		return
 	}
@@ -331,6 +336,10 @@ type consentView struct {
 	OwnerDisplay string
 	PendingID    string
 	Classes      []ConsentClass
+	// Role is the access level to pre-select: one of the accesstoken.Role*
+	// values. Empty (a first render) or anything unrecognized selects read,
+	// the least-privileged level.
+	Role string
 	// Error, when set, is shown above the form (a re-render after a
 	// submission the handler refused).
 	Error string
@@ -386,6 +395,14 @@ func writeConsentForm(w http.ResponseWriter, v consentView) {
 		errBlock = fmt.Sprintf(consentErrorHTML, html.EscapeString(v.Error))
 	}
 
+	// Only an enum value ever selects a radio; everything else, including a
+	// first render's empty Role, falls back to read.
+	selected := accesstoken.RoleRead
+	switch v.Role {
+	case accesstoken.RoleInteract, accesstoken.RoleFull:
+		selected = v.Role
+	}
+
 	fmt.Fprintf(w, consentFormHTML,
 		html.EscapeString(webui.FaviconHref),
 		html.EscapeString(v.ClientName),
@@ -394,8 +411,20 @@ func writeConsentForm(w http.ResponseWriter, v consentView) {
 		html.EscapeString(notice),
 		errBlock,
 		html.EscapeString(v.PendingID),
+		checkedAttr(selected == accesstoken.RoleRead),
+		checkedAttr(selected == accesstoken.RoleInteract),
+		checkedAttr(selected == accesstoken.RoleFull),
 		rows.String(),
 	)
+}
+
+// checkedAttr is the " checked" attribute for the selected access-level
+// radio, and nothing for the others. A fixed literal, never caller text.
+func checkedAttr(on bool) string {
+	if on {
+		return " checked"
+	}
+	return ""
 }
 
 const consentErrorHTML = `  <p class="error" role="alert">%s</p>
@@ -451,9 +480,9 @@ const consentFormHTML = `<!DOCTYPE html>
     <input type="hidden" name="pending" value="%s">
     <fieldset>
       <legend>Access level</legend>
-      <label><input type="radio" name="role" value="read" checked> Read<span class="desc">View sessions and their history.</span></label>
-      <label><input type="radio" name="role" value="interact"> Interact<span class="desc">Send messages and respond to approvals.</span></label>
-      <label><input type="radio" name="role" value="full"> Full<span class="desc">Everything you can do, including starting new sessions.</span></label>
+      <label><input type="radio" name="role" value="read"%s> Read<span class="desc">View sessions and their history.</span></label>
+      <label><input type="radio" name="role" value="interact"%s> Interact<span class="desc">Send messages and respond to approvals.</span></label>
+      <label><input type="radio" name="role" value="full"%s> Full<span class="desc">Everything you can do, including starting new sessions.</span></label>
     </fieldset>
     <fieldset>
       <legend>Which agents?</legend>

@@ -127,6 +127,11 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// RFC 6749 §5.1: a response carrying a token MUST NOT be stored by the
+	// browser or any intermediary. Set here rather than in writeJSONBody,
+	// which the metadata and registration responses share.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	writeJSONBody(w, http.StatusOK, map[string]any{
 		"access_token": minted.Value,
 		"token_type":   "Bearer",

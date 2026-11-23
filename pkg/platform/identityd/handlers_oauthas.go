@@ -117,11 +117,30 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 // validateRedirectURI allows loopback http (127.0.0.1/::1/localhost, any
-// port) and https anywhere — OAuth 2.1's public-client rule.
+// port) and https anywhere — OAuth 2.1's public-client rule — and refuses the
+// shapes that make a redirect target say something other than what it shows:
+//
+//   - a fragment (RFC 6749 §3.1.2: "MUST NOT include a fragment component").
+//     Checked on the raw string, because url.Parse drops an empty one
+//     ("https://host/cb#") without a trace;
+//   - userinfo ("https://trusted.example@other.example/cb"): the consent
+//     screen names only the host, so the part before the @ would never reach
+//     the person approving;
+//   - no host at all ("https:///cb", or an opaque "https:cb"): there is
+//     nothing to show and nowhere to send the code.
 func validateRedirectURI(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("unparseable redirect_uri")
+	}
+	if strings.Contains(raw, "#") || u.Fragment != "" {
+		return fmt.Errorf("redirect_uri must not include a fragment")
+	}
+	if u.User != nil {
+		return fmt.Errorf("redirect_uri must not include userinfo")
+	}
+	if u.Opaque != "" || u.Hostname() == "" {
+		return fmt.Errorf("redirect_uri must be an absolute URL with a host")
 	}
 	switch u.Scheme {
 	case "https":
