@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -303,6 +304,22 @@ func (t *concludeTriggerStatusTool) Execute(ctx context.Context, args json.RawMe
 		Summary:    summary,
 		DetailsURL: detailsURL,
 	}); err != nil {
+		// The surface declined to let this round replace the answer it already
+		// carries. Not a failed call — retrying would be refused the same way —
+		// so it is reported as what happened, in words the model can repeat to
+		// whoever asked. The trigger IS answered, with the answer that was
+		// kept, and that is what the completion gate is told.
+		var kept *channelkinds.TriggerAnswerKeptError
+		if errors.As(err, &kept) {
+			recordConcluded(ctx, sess, kept.Kept, t.Name())
+			return tool.Result{
+				Content: fmt.Sprintf("not recorded on %s: it already carries `%s`, and a round that ended in `%s` "+
+					"does not replace that. The earlier result stands unchanged. Wherever you report this round, "+
+					"say that it could not finish and that the earlier result was kept.",
+					surface.Surface(), kept.Kept, outcome),
+				Trusted: true,
+			}, nil
+		}
 		return failed(t.Name(), fmt.Sprintf("could not conclude %s: %v", surface.Surface(), err)), nil
 	}
 	// Recorded only now that the answer is actually on the surface. A record

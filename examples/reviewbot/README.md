@@ -418,19 +418,19 @@ This widens who can change a check result, and that is a trust decision to make
 knowingly. Before, a check run changed only when someone pushed a commit. Now
 anyone who can interact with that session — everyone able to post in its thread
 — can ask for a re-review, as often as they like; nothing bounds the number of
-retries. The new result replaces the old one in either direction: a clean
-re-review clears a red check on unchanged code, and one that cannot be completed
-turns a green check into could-not-finish.
+retries. A completed re-review replaces the old result in either direction: a
+clean one clears a red check on unchanged code, and one that finds problems
+turns a green check red.
 
-A re-review that cannot be completed also replaces a RED result, and that
-direction matters most. Could-not-finish is published as a `neutral` check run,
-and GitHub counts `neutral` as passing a required check. So a pull request
-blocked by a problems-found review stops being blocked if someone asks for a
-re-review and it fails — a clone error, an exhausted budget — with the problems
-still there. The findings stay in the thread, and the agent is told to say there
-that the check run changed, but the pull request itself no longer shows them. If
-the check is required for merging, treat access to the review thread as access
-to that gate.
+A re-review that cannot be completed is the exception, and it is one-sided.
+Could-not-finish is published as a `neutral` check run, and GitHub counts
+`neutral` as passing a required check, so it never replaces a RED result: a pull
+request blocked by a problems-found review stays blocked when someone asks for a
+re-review and it fails — a clone error, an exhausted budget — and the agent says
+in the thread that the earlier result stands. It does replace a green result,
+which turns could-not-finish and still passes. Only a re-review that actually
+finishes clean clears a red check, so if the check is required for merging,
+treat access to the review thread as access to that gate.
 
 ## Deferred / known limitations
 

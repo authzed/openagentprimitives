@@ -181,7 +181,37 @@ type TriggerSurface interface {
 	// claim when there is one and opens an already-concluded status when there
 	// is not, so forgetting to Claim cannot strand anything and cannot lose the
 	// conclusion either.
+	//
+	// One refusal is part of the contract rather than a failure: an
+	// implementation may decline to let TriggerOutcomeCouldNotFinish replace an
+	// answer already on the surface, when the replacement would be read as
+	// weaker than what it replaced. It then writes nothing and returns an error
+	// wrapping *TriggerAnswerKeptError, which names the answer that stands.
 	Conclude(ctx context.Context, c TriggerConclusion) error
+}
+
+// TriggerAnswerKeptError is Conclude's report that it deliberately wrote
+// nothing, because the surface already carries an answer that a round which
+// could not finish must not replace.
+//
+// "I could not do the work" says nothing about the work, so it has no business
+// erasing a verdict that did: on a surface where could_not_finish reads as
+// passing, replacing problems_found with it would lift a block nobody
+// re-examined. Which answers are protected is the kind's decision — only it
+// knows how its provider reads each one.
+//
+// An error rather than a second return value because it IS a refusal, and a
+// caller that does not look for it still does the right thing: it reports
+// that the conclusion was not written, with a message that says why. A caller
+// that does look (errors.As) can treat the trigger as answered with Kept.
+type TriggerAnswerKeptError struct {
+	// Kept is the answer still on the surface.
+	Kept TriggerOutcome
+}
+
+func (e *TriggerAnswerKeptError) Error() string {
+	return fmt.Sprintf("it already carries %s, which %s does not replace; the earlier answer was kept",
+		e.Kept, TriggerOutcomeCouldNotFinish)
 }
 
 // TriggerClaim is what Claim observed and did.

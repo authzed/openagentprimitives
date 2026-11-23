@@ -305,6 +305,11 @@ func TestTriggerSurface_ConcludeTargetsTheOpenClaim(t *testing.T) {
 // answer. Claim reports that answer and leaves it alone; Conclude then writes
 // the new one onto the SAME run, in whichever direction it moved, rather than
 // leaving two answers on one commit.
+//
+// The one direction it refuses is the last row. could_not_finish is published
+// as `neutral`, which passes a required check, so letting it replace
+// action_required would unblock a pull request whose problems nobody looked at
+// again. That run is left exactly as it was.
 func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -313,6 +318,9 @@ func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
 		outcome        channelkinds.TriggerOutcome
 		wantConclusion string
 		wantTitle      string
+		// wantKept is the answer Conclude must refuse to replace. Empty for
+		// every row where the new answer is written.
+		wantKept channelkinds.TriggerOutcome
 	}{
 		{
 			name:     "problems_found then clean: the same run turns success",
@@ -334,6 +342,11 @@ func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
 			existing: "success", wantClaimed: channelkinds.TriggerOutcomeClean,
 			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantConclusion: "neutral", wantTitle: "Could not complete",
 		},
+		{
+			name:     "problems_found then could_not_finish: the same run stays action_required",
+			existing: "action_required", wantClaimed: channelkinds.TriggerOutcomeProblemsFound,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantKept: channelkinds.TriggerOutcomeProblemsFound,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -354,6 +367,14 @@ func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
 				Summary:    "Reviewed again at a person's request.",
 				DetailsURL: "https://example.test/thread/2",
 			})
+			if tc.wantKept != "" {
+				var kept *channelkinds.TriggerAnswerKeptError
+				require.ErrorAs(t, err, &kept, "the refusal must be the one a caller can recognize")
+				assert.Equal(t, tc.wantKept, kept.Kept)
+				assert.Empty(t, g.writes(),
+					"run 4242 keeps its blocking conclusion: nothing is patched and no second run is opened")
+				return
+			}
 			require.NoError(t, err)
 
 			writes := g.writes()

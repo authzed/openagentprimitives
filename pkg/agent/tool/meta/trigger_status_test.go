@@ -537,6 +537,57 @@ func TestTriggerStatusTools_RecordTheAnswerTheCompletionGateReads(t *testing.T) 
 	})
 }
 
+// TestConcludeTriggerStatus_ReportsAnAnswerTheSurfaceKept: a surface may
+// decline to let could_not_finish replace the answer it already carries. That
+// is not a failed call, and the model must not read it as one — a retry would
+// be refused identically. It is told what stands so it can say so, nothing new
+// is published, and the completion gate sees the trigger as answered with the
+// answer that was KEPT, not the one that was refused.
+func TestConcludeTriggerStatus_ReportsAnAnswerTheSurfaceKept(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  func(kindName string) meta.TriggerStatusConfig
+		args string
+	}{
+		{
+			name: "model-text mode: told the earlier result stands, and the kept outcome is recorded",
+			cfg:  tsConfig,
+			args: `{"outcome":"could_not_finish","summary":"The clone failed."}`,
+		},
+		{
+			name: "composed mode: told the earlier result stands, and the kept outcome is recorded",
+			cfg:  tsComposedConfig,
+			args: `{"outcome":"could_not_finish"}`,
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k := registerTriggerFake(t, fmt.Sprintf("faketrigger-kept-%d", i))
+			k.concludeErr = fmt.Errorf("fixture: board not changed: %w",
+				&channelkinds.TriggerAnswerKeptError{Kept: channelkinds.TriggerOutcomeProblemsFound})
+			sess := tsStatefulSession(tsClient(t, k.name))
+
+			res, err := meta.NewConcludeTriggerStatus(tc.cfg(k.name)).
+				Execute(context.Background(), json.RawMessage(tc.args), sess)
+			require.NoError(t, err)
+
+			assert.False(t, res.IsError, "a kept answer is an outcome to report, not an error to retry: %s", res.Content)
+			assert.True(t, res.Trusted)
+			assert.Contains(t, res.Content, "not recorded on the fixture status board for")
+			assert.Contains(t, res.Content, "`problems_found`", "the answer that stands is named")
+			assert.Contains(t, res.Content, "`could_not_finish`", "and so is the one that did not replace it")
+			assert.Contains(t, res.Content, "the earlier result was kept",
+				"the model is told what to say where it reports the round")
+			assert.Empty(t, k.concluded, "nothing new reached the surface")
+
+			outcome, done := concludedOutcome(t, sess)
+			assert.True(t, done, "the trigger carries an answer, so the completion gate must not demand another")
+			assert.Equal(t, channelkinds.TriggerOutcomeProblemsFound, outcome,
+				"the recorded answer is the one on the surface, not the one that was refused")
+		})
+	}
+}
+
 // ---------------------------------------------------------------------
 // composed mode
 // ---------------------------------------------------------------------

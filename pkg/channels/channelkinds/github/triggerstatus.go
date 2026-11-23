@@ -238,6 +238,14 @@ func (s *checkRunSurface) Defer(ctx context.Context, title, summary string) erro
 // a missed claim harmless (the verdict still lands) and what lets a caller with
 // no agent at all — an operator closing out a session that died — write an
 // answer for a pull request nothing ever claimed.
+//
+// It overwrites a completed run in place, with one exception: could_not_finish
+// never replaces a completed action_required. That write would turn a blocking
+// result `neutral`, which passes a required check, over problems nobody
+// re-examined — the same hole Defer closes by staying queued. Nothing is
+// written and the refusal names the result that stands. The exception is about
+// the run being overwritten and nothing wider: a new push has a new head and so
+// a different run, where could_not_finish lands as it always did.
 func (s *checkRunSurface) Conclude(ctx context.Context, c channelkinds.TriggerConclusion) error {
 	conclusion, err := conclusionFor(c.Outcome)
 	if err != nil {
@@ -253,6 +261,12 @@ func (s *checkRunSurface) Conclude(ctx context.Context, c channelkinds.TriggerCo
 	token, sha, existing, err := s.locate(ctx)
 	if err != nil {
 		return err
+	}
+	if c.Outcome == channelkinds.TriggerOutcomeCouldNotFinish && existing != nil && existing.Completed() {
+		if kept := outcomeFromConclusion(existing.Conclusion); kept == channelkinds.TriggerOutcomeProblemsFound {
+			return fmt.Errorf("github: check run on %s#%d not changed: %w",
+				s.repo, s.number, &channelkinds.TriggerAnswerKeptError{Kept: kept})
+		}
 	}
 	write := checkruns.Write{
 		Status:      "completed",
