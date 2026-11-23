@@ -10,8 +10,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -300,6 +303,79 @@ func TestAnswerCouldNotFinish_FailedReadIsWorthRetrying(t *testing.T) {
 
 	require.Error(t, err)
 	assert.False(t, triggeranswer.IsUnanswerable(err))
+}
+
+// TestAnswerCouldNotFinish_SecretsReaderDecidesWhetherTheSecretExists: a
+// caller whose Client is a cache holding only some Secrets supplies its own
+// Secret read, and that read, not the cache's NotFound, is what decides
+// between an answer, a retry and a permanent refusal.
+func TestAnswerCouldNotFinish_SecretsReaderDecidesWhetherTheSecretExists(t *testing.T) {
+	present := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: taSecretName, Namespace: taNS},
+		Data:       map[string][]byte{"fixture-key": []byte("present")},
+	}
+	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, taSecretName)
+	cases := []struct {
+		name             string
+		secret           *corev1.Secret
+		err              error
+		wantResult       triggeranswer.Result
+		wantErr          string
+		wantUnanswerable bool
+	}{
+		{
+			name:       "Client has no such Secret but the reader returns it: the answer proceeds",
+			secret:     present,
+			wantResult: triggeranswer.Answered,
+		},
+		{
+			name:    "the reader says it does not exist: unanswerable, provider never touched",
+			err:     notFound,
+			wantErr: "read the credentials Secret", wantUnanswerable: true,
+		},
+		{
+			name:    "the reader fails some other way: worth retrying, provider never touched",
+			err:     errors.New("etcdserver: request timed out"),
+			wantErr: "read the credentials Secret",
+		},
+		{
+			name:    "the reader returns nothing at all: an error worth retrying, not a panic",
+			wantErr: "neither a Secret nor an error",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k := reset(t)
+			var asked []types.NamespacedName
+			rep, err := triggeranswer.Trigger{
+				// The Channel is here and the Secret is not: what a cache that
+				// does not hold this Secret looks like to a reader.
+				Client: cluster(t, true, false),
+				Secrets: func(_ context.Context, nn types.NamespacedName) (*corev1.Secret, error) {
+					asked = append(asked, nn)
+					return tc.secret, tc.err
+				},
+				Namespace:          taNS,
+				Binding:            binding(taKindName),
+				ProviderAPIBaseURL: "https://provider.test",
+			}.AnswerCouldNotFinish(context.Background(), "stopped")
+
+			assert.Equal(t, []types.NamespacedName{{Namespace: taNS, Name: taSecretName}}, asked,
+				"the reader is asked once, for the Channel's own credentials Secret")
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.Equal(t, tc.wantUnanswerable, triggeranswer.IsUnanswerable(err),
+					"only a Secret that really does not exist is unanswerable")
+				assert.Zero(t, k.claims)
+				assert.Empty(t, k.published)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantResult, rep.Result)
+			assert.Len(t, k.published, 1)
+		})
+	}
 }
 
 func TestSummaries_CarryTheReasonTokenAndSayDifferentThings(t *testing.T) {

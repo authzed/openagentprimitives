@@ -51,10 +51,18 @@ import (
 
 // Trigger addresses the trigger that started one session.
 type Trigger struct {
-	// Client reads the input Channel and its credentials Secret. Resolved at
-	// answer time, not captured earlier: a session outlives a credential
-	// rotation.
+	// Client reads the input Channel, and its credentials Secret when Secrets
+	// is unset. Resolved at answer time, not captured earlier: a session
+	// outlives a credential rotation.
 	Client client.Reader
+
+	// Secrets, when set, reads the Channel's credentials Secret instead of
+	// Client. A caller whose Client is a cache that holds only some Secrets
+	// (the operator's holds only the ones it has adopted) must set it: a
+	// Secret such a cache does not hold reads back as NotFound, and NotFound
+	// here settles the answer for good as UnanswerableError. So Secrets must
+	// return NotFound only when the Secret does not exist.
+	Secrets SecretGetter
 
 	// Namespace is the session's namespace, where its Channel lives.
 	Namespace string
@@ -68,6 +76,10 @@ type Trigger struct {
 	// production; a test points it at a stand-in.
 	ProviderAPIBaseURL string
 }
+
+// SecretGetter reads one Secret. A function rather than an interface so an
+// unset one is a plain nil, never a typed-nil pointer behind an interface.
+type SecretGetter func(ctx context.Context, nn types.NamespacedName) (*corev1.Secret, error)
 
 // Result is what AnswerCouldNotFinish did.
 type Result string
@@ -119,6 +131,26 @@ func unanswerableIfNotFound(err error) error {
 	return err
 }
 
+// credentialsSecret reads the Channel's credentials Secret through Secrets
+// when the caller supplied one, and through Client otherwise.
+func (t Trigger) credentialsSecret(ctx context.Context, nn types.NamespacedName) (*corev1.Secret, error) {
+	if t.Secrets != nil {
+		sec, err := t.Secrets(ctx, nn)
+		if err != nil {
+			return nil, err
+		}
+		if sec == nil {
+			return nil, errors.New("the Secret reader returned neither a Secret nor an error")
+		}
+		return sec, nil
+	}
+	var sec corev1.Secret
+	if err := t.Client.Get(ctx, nn, &sec); err != nil {
+		return nil, err
+	}
+	return &sec, nil
+}
+
 // AnswerCouldNotFinish concludes the trigger as could_not_finish with summary,
 // unless it already carries an answer. An error means the trigger was left as
 // it was and is still showing the work in progress; the caller logs it and
@@ -147,8 +179,8 @@ func (t Trigger) AnswerCouldNotFinish(ctx context.Context, summary string) (Repo
 	if secretName == "" {
 		return Report{}, &UnanswerableError{Err: fmt.Errorf("input Channel %s names no credentials Secret", t.Binding.Name)}
 	}
-	var sec corev1.Secret
-	if err := t.Client.Get(ctx, types.NamespacedName{Namespace: t.Namespace, Name: secretName}, &sec); err != nil {
+	sec, err := t.credentialsSecret(ctx, types.NamespacedName{Namespace: t.Namespace, Name: secretName})
+	if err != nil {
 		return Report{}, unanswerableIfNotFound(fmt.Errorf("read the credentials Secret %s for Channel %s: %w", secretName, t.Binding.Name, err))
 	}
 
