@@ -548,23 +548,38 @@ func TestConcludeTriggerStatus_ReportsAnAnswerTheSurfaceKept(t *testing.T) {
 		name string
 		cfg  func(kindName string) meta.TriggerStatusConfig
 		args string
+		kept channelkinds.TriggerAnswerKeptError
+		// wantCarried is how the result must name the answer that stands.
+		wantCarried string
 	}{
 		{
-			name: "model-text mode: told the earlier result stands, and the kept outcome is recorded",
-			cfg:  tsConfig,
-			args: `{"outcome":"could_not_finish","summary":"The clone failed."}`,
+			name:        "model-text mode: told the earlier result stands, and the kept outcome is recorded",
+			cfg:         tsConfig,
+			args:        `{"outcome":"could_not_finish","summary":"The clone failed."}`,
+			kept:        channelkinds.TriggerAnswerKeptError{Kept: channelkinds.TriggerOutcomeProblemsFound},
+			wantCarried: "it already carries `problems_found`, and",
 		},
 		{
-			name: "composed mode: told the earlier result stands, and the kept outcome is recorded",
-			cfg:  tsComposedConfig,
-			args: `{"outcome":"could_not_finish"}`,
+			name:        "composed mode: told the earlier result stands, and the kept outcome is recorded",
+			cfg:         tsComposedConfig,
+			args:        `{"outcome":"could_not_finish"}`,
+			kept:        channelkinds.TriggerAnswerKeptError{Kept: channelkinds.TriggerOutcomeProblemsFound},
+			wantCarried: "it already carries `problems_found`, and",
+		},
+		{
+			name: "a kept answer the outcomes have no word for: the provider's wording is passed on",
+			cfg:  tsConfig,
+			args: `{"outcome":"could_not_finish","summary":"The clone failed."}`,
+			kept: channelkinds.TriggerAnswerKeptError{
+				Kept: channelkinds.TriggerOutcomeCouldNotFinish, Detail: "a blocking `failure` conclusion",
+			},
+			wantCarried: "it already carries `could_not_finish` (a blocking `failure` conclusion), and",
 		},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			k := registerTriggerFake(t, fmt.Sprintf("faketrigger-kept-%d", i))
-			k.concludeErr = fmt.Errorf("fixture: board not changed: %w",
-				&channelkinds.TriggerAnswerKeptError{Kept: channelkinds.TriggerOutcomeProblemsFound})
+			k.concludeErr = fmt.Errorf("fixture: board not changed: %w", &tc.kept)
 			sess := tsStatefulSession(tsClient(t, k.name))
 
 			res, err := meta.NewConcludeTriggerStatus(tc.cfg(k.name)).
@@ -574,15 +589,16 @@ func TestConcludeTriggerStatus_ReportsAnAnswerTheSurfaceKept(t *testing.T) {
 			assert.False(t, res.IsError, "a kept answer is an outcome to report, not an error to retry: %s", res.Content)
 			assert.True(t, res.Trusted)
 			assert.Contains(t, res.Content, "not recorded on the fixture status board for")
-			assert.Contains(t, res.Content, "`problems_found`", "the answer that stands is named")
-			assert.Contains(t, res.Content, "`could_not_finish`", "and so is the one that did not replace it")
+			assert.Contains(t, res.Content, tc.wantCarried, "the answer that stands is named")
+			assert.Contains(t, res.Content, "a round that ended in `could_not_finish`",
+				"and so is the one that did not replace it")
 			assert.Contains(t, res.Content, "the earlier result was kept",
 				"the model is told what to say where it reports the round")
 			assert.Empty(t, k.concluded, "nothing new reached the surface")
 
 			outcome, done := concludedOutcome(t, sess)
 			assert.True(t, done, "the trigger carries an answer, so the completion gate must not demand another")
-			assert.Equal(t, channelkinds.TriggerOutcomeProblemsFound, outcome,
+			assert.Equal(t, tc.kept.Kept, outcome,
 				"the recorded answer is the one on the surface, not the one that was refused")
 		})
 	}

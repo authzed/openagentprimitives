@@ -313,10 +313,10 @@ func (t *concludeTriggerStatusTool) Execute(ctx context.Context, args json.RawMe
 		if errors.As(err, &kept) {
 			recordConcluded(ctx, sess, kept.Kept, t.Name())
 			return tool.Result{
-				Content: fmt.Sprintf("not recorded on %s: it already carries `%s`, and a round that ended in `%s` "+
+				Content: fmt.Sprintf("not recorded on %s: it already carries `%s`%s, and a round that ended in `%s` "+
 					"does not replace that. The earlier result stands unchanged. Wherever you report this round, "+
 					"say that it could not finish and that the earlier result was kept.",
-					surface.Surface(), kept.Kept, outcome),
+					surface.Surface(), kept.Kept, keptDetail(kept), outcome),
 				Trusted: true,
 			}, nil
 		}
@@ -335,6 +335,15 @@ func (t *concludeTriggerStatusTool) Execute(ctx context.Context, args json.RawMe
 		content += " (a composed summary was published; model-supplied text does not reach this surface)"
 	}
 	return tool.Result{Content: content, Trusted: true}, nil
+}
+
+// keptDetail renders the provider's own wording for a kept answer as a
+// parenthetical, or nothing when the kind supplied none.
+func keptDetail(kept *channelkinds.TriggerAnswerKeptError) string {
+	if kept.Detail == "" {
+		return ""
+	}
+	return " (" + kept.Detail + ")"
 }
 
 // composedSummary is the complete set of texts conclude_trigger_status can

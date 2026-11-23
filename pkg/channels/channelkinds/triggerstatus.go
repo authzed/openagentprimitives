@@ -207,11 +207,26 @@ type TriggerSurface interface {
 type TriggerAnswerKeptError struct {
 	// Kept is the answer still on the surface.
 	Kept TriggerOutcome
+
+	// Detail is the provider's own wording for the answer that stands, for a
+	// person reading the refusal. Optional: a kind sets it when Kept alone
+	// would not say why the answer was protected — a provider state the
+	// framework's three outcomes have no word for.
+	Detail string
 }
 
 func (e *TriggerAnswerKeptError) Error() string {
 	return fmt.Sprintf("it already carries %s, which %s does not replace; the earlier answer was kept",
-		e.Kept, TriggerOutcomeCouldNotFinish)
+		e.Carried(), TriggerOutcomeCouldNotFinish)
+}
+
+// Carried names the answer that stands, with the provider's wording appended
+// when the kind supplied one.
+func (e *TriggerAnswerKeptError) Carried() string {
+	if e.Detail == "" {
+		return string(e.Kept)
+	}
+	return fmt.Sprintf("%s (%s)", e.Kept, e.Detail)
 }
 
 // TriggerClaim is what Claim observed and did.

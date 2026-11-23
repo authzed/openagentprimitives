@@ -306,10 +306,11 @@ func TestTriggerSurface_ConcludeTargetsTheOpenClaim(t *testing.T) {
 // the new one onto the SAME run, in whichever direction it moved, rather than
 // leaving two answers on one commit.
 //
-// The one direction it refuses is the last row. could_not_finish is published
-// as `neutral`, which passes a required check, so letting it replace
-// action_required would unblock a pull request whose problems nobody looked at
-// again. That run is left exactly as it was.
+// The one direction it refuses is could_not_finish over a conclusion that
+// blocks a required check. could_not_finish is published as `neutral`, which
+// passes, so letting it replace action_required — or a blocking conclusion this
+// kind never wrote — would unblock a pull request whose problems nobody looked
+// at again. That run is left exactly as it was.
 func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -321,6 +322,9 @@ func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
 		// wantKept is the answer Conclude must refuse to replace. Empty for
 		// every row where the new answer is written.
 		wantKept channelkinds.TriggerOutcome
+		// wantDetail is the provider wording the refusal must carry, for a
+		// kept conclusion the framework's outcomes have no word for.
+		wantDetail string
 	}{
 		{
 			name:     "problems_found then clean: the same run turns success",
@@ -347,6 +351,34 @@ func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
 			existing: "action_required", wantClaimed: channelkinds.TriggerOutcomeProblemsFound,
 			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantKept: channelkinds.TriggerOutcomeProblemsFound,
 		},
+		{
+			name:     "failure from an older build then could_not_finish: the same run stays failure",
+			existing: "failure", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantKept: channelkinds.TriggerOutcomeCouldNotFinish,
+			wantDetail: "a blocking `failure` conclusion",
+		},
+		{
+			name:     "timed_out then could_not_finish: the same run stays timed_out",
+			existing: "timed_out", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantKept: channelkinds.TriggerOutcomeCouldNotFinish,
+			wantDetail: "a blocking `timed_out` conclusion",
+		},
+		{
+			name:     "cancelled by a maintainer then could_not_finish: the same run stays cancelled",
+			existing: "cancelled", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantKept: channelkinds.TriggerOutcomeCouldNotFinish,
+			wantDetail: "a blocking `cancelled` conclusion",
+		},
+		{
+			name:     "could_not_finish then could_not_finish: neutral does not block, so the run is rewritten",
+			existing: "neutral", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantConclusion: "neutral", wantTitle: "Could not complete",
+		},
+		{
+			name:     "failure then clean: a finished review still replaces a blocking conclusion",
+			existing: "failure", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeClean, wantConclusion: "success", wantTitle: "No blocking findings",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -371,6 +403,7 @@ func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
 				var kept *channelkinds.TriggerAnswerKeptError
 				require.ErrorAs(t, err, &kept, "the refusal must be the one a caller can recognize")
 				assert.Equal(t, tc.wantKept, kept.Kept)
+				assert.Equal(t, tc.wantDetail, kept.Detail)
 				assert.Empty(t, g.writes(),
 					"run 4242 keeps its blocking conclusion: nothing is patched and no second run is opened")
 				return
