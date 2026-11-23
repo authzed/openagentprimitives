@@ -100,6 +100,15 @@ type Kind struct{}
 func (Kind) Name() string     { return KindName }
 func (Kind) IDPrefix() string { return IDPrefix }
 
+// SessionReadable: false — platform components only. An entry records the
+// subject a reference RESOLVED to, and for a name reference that subject
+// encodes the matched person's email, which the read itself deliberately
+// withholds from the caller (subjectresolve.Resolution.ConcealSubject). The
+// entries live in the session's own scope, so a readable Kind would hand the
+// agent through query_memory exactly what the response held back. The record
+// is for the humans auditing the agent, not for the agent.
+func (Kind) SessionReadable() bool { return false }
+
 // WriteAuthority: ComponentWritten — only the operator's own preferences GET
 // handler authors this Kind, signed as "system:operator" through its own
 // signing facade (see httpsrv.WithPreferenceAudit and the operator's
