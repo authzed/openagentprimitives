@@ -101,6 +101,32 @@ func TestCheckApplyIdempotent_StablePayloadIsNoOp(t *testing.T) {
 	idempotency.RequireApplyIdempotent(t, ctx, env.Client, want, testFieldManager)
 }
 
+// A payload carrying a status stanza is not a no-op on a custom resource with a
+// status subresource: the apiserver discards the status but still restamps the
+// manager's managedFields time. Nothing a caller applied differs between the
+// two objects, so the report has no diff to show and must say what to look for
+// instead.
+func TestCheckApplyIdempotent_DetectsDiscardedStatusStanza(t *testing.T) {
+	env := testenv.Shared(t)
+	ctx := context.Background()
+
+	want := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "agentprimitives.authzed.com/v1alpha1",
+		"kind":       "AgentSettings",
+		"metadata":   map[string]interface{}{"name": "status-stanza", "namespace": "default"},
+		"spec":       map[string]interface{}{},
+		"status":     map[string]interface{}{},
+	}}
+	err := idempotency.CheckApplyIdempotent(ctx, env.Client, want, testFieldManager)
+	require.Error(t, err, "an applied status stanza must be flagged on every run, not only when the two applies straddle a second")
+	assert.Contains(t, err.Error(), "resourceVersion changed")
+	assert.Contains(t, err.Error(), "status stanza", "with no content diff to print, the report must name the likely cause")
+
+	unstructured.RemoveNestedField(want.Object, "status")
+	require.NoError(t, idempotency.CheckApplyIdempotent(ctx, env.Client, want, testFieldManager),
+		"the same payload without the status stanza is a true no-op")
+}
+
 // stormReconciler patches a fresh wall-clock annotation onto the target
 // ConfigMap on EVERY reconcile — modeling the guardian
 // ObservedSchemaWrittenAt regression, where a controller restamped a value
