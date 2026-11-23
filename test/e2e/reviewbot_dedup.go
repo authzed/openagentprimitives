@@ -842,7 +842,10 @@ func (h *Harness) wireGitHubTransport(t *testing.T) {
 	}
 	if h.githubWebhookHandler == nil {
 		pub := &natsPublisher{nc: h.nc}
-		wh, err := channelwebhook.New(h.K8s, pub.Publish)
+		// The route itself calls GitHub when it reports a deferred delivery
+		// (a stacked PR's queued check run), so it is pointed at the fixture
+		// too: a deferral in a scenario must never reach api.github.com.
+		wh, err := channelwebhook.New(h.K8s, pub.Publish, channelwebhook.WithProviderAPIBaseURL(h.FakeGitHub.URL()))
 		if err != nil {
 			t.Fatalf("wireGitHubTransport: construct webhook handler: %v", err)
 		}

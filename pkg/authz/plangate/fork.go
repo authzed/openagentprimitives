@@ -191,6 +191,7 @@ func PlanForDigest(records []plangateaudit.Content, digest string) (Plan, bool) 
 			maxCount = 1
 		}
 		ph := Phase{
+			Consents:    p.Consents,
 			Permissions: parseHandles(p.Ceiling),
 			Max:         MaxSpec{Count: maxCount},
 			Budget:      BudgetSpec{Calls: p.BudgetCalls},

@@ -49,7 +49,8 @@ func newAgentInstallCmd(g *apcmd.Globals) *cobra.Command {
 			"anything is pulled or installed (see `oap agent verify`); a failed check\n" +
 			"installs nothing and exits non-zero. --values/--set answer the bundle's\n" +
 			"install questions non-interactively; any question still unanswered when\n" +
-			"stdin isn't a TTY is a hard error naming it.",
+			"stdin isn't a TTY is a hard error naming it." +
+			"\n\n" + registryAuthHelp,
 		Args: adoptAwareArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Pure flag parsing with no dependency on the bundle — run it before
@@ -191,7 +192,10 @@ func loadInstallSource(cmd *cobra.Command, source string, verify bool, keyPath s
 		return b, &installSource{kind: installSourceKindFile, digest: dig}, nil
 	}
 
-	opts := oci.Options{PlainHTTP: plainHTTP}
+	opts, err := registryOptions(plainHTTP)
+	if err != nil {
+		return nil, nil, err
+	}
 	pullRef := source
 	if verify {
 		if keyPath == "" {

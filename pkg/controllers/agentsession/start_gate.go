@@ -31,6 +31,10 @@ const startRefusedBody = "This agent only runs for the people on its list, and y
 // whose agent has since been deleted reads. Same plain-words rule.
 const classMissingRestartBody = "This agent no longer exists, so this conversation can't be continued."
 
+// goalRestartBody is what the person who asked to continue a goal session
+// reads. A goal run is bounded by its own approval, so it is never continued.
+const goalRestartBody = "This session ran a goal and can't be continued. The goal will start a new session for its next run."
+
 // startersUnconfirmedDetail is the operator-facing reason a gate could not be
 // evaluated: it names the missing precondition, not the person.
 const startersUnconfirmedDetail = "the class's starter set has not been confirmed in the authorization store, so the start gate cannot be evaluated yet"

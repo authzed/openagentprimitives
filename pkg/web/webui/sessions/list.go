@@ -69,7 +69,10 @@ type sessionRow struct {
 	// every row a condition to serve a value nothing downstream reads.
 	Ended bool `json:"ended"`
 	// StartedAt is status.startedAt, else creationTimestamp; UTC; nil if unset.
-	StartedAt *time.Time `json:"startedAt,omitempty"`
+	StartedAt      *time.Time `json:"startedAt,omitempty"`
+	UID            string     `json:"uid,omitempty"`
+	GoalCreated    bool       `json:"goalCreated,omitempty"`
+	OpeningSummary string     `json:"openingSummary,omitempty"`
 }
 
 // listNotices is every way the list is incomplete. Each field is rendered as
@@ -314,6 +317,10 @@ func buildSessionList(ctx context.Context, d Deps, subject string,
 			rows[i] = &sessionRow{
 				Ns: sess.Namespace, Name: sess.Name, Class: sess.Spec.Class, Title: title,
 				Phase: label, AwaitingHuman: awaitingHuman, Ended: ended, StartedAt: startedAt,
+				UID: string(sess.UID), GoalCreated: sess.Spec.GoalExecution != nil,
+			}
+			if sess.Spec.GoalExecution != nil {
+				rows[i].OpeningSummary = sess.Spec.OpeningSummary
 			}
 			return nil
 		})

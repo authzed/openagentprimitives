@@ -36,6 +36,11 @@ namespaced Skill shadows a ClusterSkill sharing that canonical name.
 | `spec.frontmatter.license` | `string` | License is the skill author's declared license identifier. |
 | `spec.frontmatter.metadata` | `map[string]string` | Metadata is the author's arbitrary key/value frontmatter, carried verbatim and interpreted by nothing here. |
 | `spec.frontmatter.name` \* | `string` | Name is the frontmatter "name" (kebab-case); must match the canonical skill directory basename. |
+| `spec.plugin` | `object` | Plugin is the Claude Code plugin this skill was published inside, when it was discovered at &lt;plugin&gt;/skills/&lt;name&gt;/SKILL.md next to a &lt;plugin&gt;/.claude-plugin/plugin.json. It carries the plugin's name and its agents/*.md, which the skill's instructions may dispatch by name and which a skill staged on its own would otherwise lack. A disk-based consumer that understands plugins (claudeshim) loads the skill as part of a plugin rebuilt from this; every other consumer ignores it. nil for a standalone skill, and for every skill of a source that set disablePluginAgents. See pkg/tools/skills/pluginlayout. |
+| `spec.plugin.agents` | `[]object` | Agents are the plugin's agents/*.md definitions, verbatim. |
+| `spec.plugin.agents[].content` \* | `string` | Content is the file's full text, frontmatter included. |
+| `spec.plugin.agents[].name` \* | `string` | Name is the file stem (agents/&lt;name&gt;.md). |
+| `spec.plugin.name` \* | `string` | Name is the plugin manifest's name. |
 | `spec.repoInstructions` | `object` | RepoInstructions is the repo-root agent-instructions file (AGENTS.md or CLAUDE.md) discovered in the skill's source repo, injected into the agent's system prompt when this skill is linked to an AgentClass. nil for hand-authored skills (no repo) or when the source set disableRepoInstructions. |
 | `spec.repoInstructions.content` \* | `string` | Content is the (possibly truncated) file contents. |
 | `spec.repoInstructions.sourceFile` \* | `string` | SourceFile is the repo-root filename the content came from ("AGENTS.md" or "CLAUDE.md"), shown as provenance in the prompt. |

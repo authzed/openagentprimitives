@@ -71,6 +71,16 @@ func TestComponentsPlainText_ProjectsURLsAndTableRows(t *testing.T) {
 			json: `[{"type":"table","rows":[[{"type":"raw_text","text":"Name"},{"type":"raw_text","text":"Count"}],[{"type":"raw_text","text":"a"},{"type":"raw_text","text":"1"}]]}]`,
 			want: []string{"Name | Count\na | 1"},
 		},
+		{
+			name: "bar chart: title, series, point labels, categories, and axis labels projected",
+			json: `[{"type":"data_visualization","title":"Signups","chart":{"type":"bar","series":[{"name":"Paid","data":[{"label":"Mon","value":1}]}],"axis_config":{"categories":["Mon"],"x_label":"Day","y_label":"Count"}}}]`,
+			want: []string{"Signups\nPaid\nMon\nMon\nDay\nCount"},
+		},
+		{
+			name: "pie chart: segment labels projected",
+			json: `[{"type":"data_visualization","title":"Share","chart":{"type":"pie","segments":[{"label":"Direct","value":1},{"label":"Referral","value":2}]}}]`,
+			want: []string{"Share\nDirect\nReferral"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

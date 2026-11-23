@@ -3164,22 +3164,24 @@ func ensureWebhookTLSWithClient(ctx context.Context, c client.Client) ([]byte, e
 // silently skipped rather than failing install — the patch will succeed once
 // the manifest bundle is applied.
 func patchWebhookVWCBundle(ctx context.Context, c client.Client, caPEM []byte) error {
-	var vwc admissionregistrationv1.ValidatingWebhookConfiguration
-	if err := c.Get(ctx, types.NamespacedName{Name: "spicebox-settings"}, &vwc); err != nil {
-		if apierrors.IsNotFound(err) {
-			// VWC not yet created (Task 6 lands it in a later unit). Skip the
-			// caBundle patch — install must not fail before the manifest bundle
-			// includes the VWC. The patch will succeed on the next oap install
-			// after the manifest is applied.
-			return nil
+	for _, configurationName := range []string{"spicebox-settings", "spicebox-goal-execution"} {
+		var vwc admissionregistrationv1.ValidatingWebhookConfiguration
+		if err := c.Get(ctx, types.NamespacedName{Name: configurationName}, &vwc); err != nil {
+			if apierrors.IsNotFound(err) {
+				// VWC not yet created (Task 6 lands it in a later unit). Skip the
+				// caBundle patch — install must not fail before the manifest bundle
+				// includes the VWC. The patch will succeed on the next oap install
+				// after the manifest is applied.
+				continue
+			}
+			return fmt.Errorf("get ValidatingWebhookConfiguration %s: %w", configurationName, err)
 		}
-		return fmt.Errorf("get ValidatingWebhookConfiguration spicebox-settings: %w", err)
-	}
-	for i := range vwc.Webhooks {
-		vwc.Webhooks[i].ClientConfig.CABundle = caPEM
-	}
-	if err := c.Update(ctx, &vwc); err != nil {
-		return fmt.Errorf("update ValidatingWebhookConfiguration spicebox-settings caBundle: %w", err)
+		for i := range vwc.Webhooks {
+			vwc.Webhooks[i].ClientConfig.CABundle = caPEM
+		}
+		if err := c.Update(ctx, &vwc); err != nil {
+			return fmt.Errorf("update ValidatingWebhookConfiguration %s caBundle: %w", configurationName, err)
+		}
 	}
 	return nil
 }
@@ -3237,6 +3239,7 @@ var webdNATSGrant = apnats.UserGrant{
 		"ap.session.*.*.in.view_message",
 		"ap.session.*.*.in.interrupt_request",
 		"ap.session.*.*.in.interaction_decision",
+		"ap.component.interaction_decision.*.*",
 		"ap.session.*.*.in.resurface_request",
 		"ap.session.*.*.in.app_tool_call",
 		// ui_data_binding is the agent-UI's own data path: pkg/web/webui/agentui's

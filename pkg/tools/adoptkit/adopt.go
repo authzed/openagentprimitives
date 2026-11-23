@@ -98,29 +98,68 @@ func fieldManager(ownerKind string, owner types.NamespacedName) string {
 // the label-filtered cache holds only already-adopted objects, so a cached Get
 // would wrongly return NotFound for a not-yet-adopted one. The SSA Patch uses
 // writer.
+//
+// An object that already carries the adoption label AND this owner's annotation
+// is left alone: the apply would change nothing, and it is not free. Every apply
+// is merged against every field manager on the object, so on a Secret shared by
+// many owners one no-op apply took the API server seconds, paid on every
+// reconcile of every owner.
 func Adopt(ctx context.Context, reader client.Reader, writer client.Client, obj client.Object, owner types.NamespacedName, ownerKind string) error {
+	_, err := adopt(ctx, reader, writer, obj, owner, ownerKind, false)
+	return err
+}
+
+// adopt is Adopt with one more way to skip the write: when ifUnadopted is set,
+// an object that already carries the adoption label, whoever stamped it, is
+// left alone too. It reports whether it wrote.
+func adopt(ctx context.Context, reader client.Reader, writer client.Client, obj client.Object, owner types.NamespacedName, ownerKind string, ifUnadopted bool) (bool, error) {
 	probe := obj.DeepCopyObject().(client.Object)
 	if err := reader.Get(ctx, client.ObjectKeyFromObject(obj), probe); err != nil {
-		return err // NotFound (or other) — do NOT create via the apply below
+		return false, err // NotFound (or other) — do NOT create via the apply below
+	}
+	key, val := OwnerAnnotationKey(ownerKind, owner), owner.Namespace+"/"+owner.Name
+	if _, adopted := probe.GetLabels()[adoptguard.AdoptedLabel]; adopted {
+		if ifUnadopted || probe.GetAnnotations()[key] == val {
+			return false, nil
+		}
 	}
 	adoptguard.WithAdoptedLabel(obj)
 	ann := obj.GetAnnotations()
 	if ann == nil {
 		ann = map[string]string{}
 	}
-	ann[OwnerAnnotationKey(ownerKind, owner)] = owner.Namespace + "/" + owner.Name
+	ann[key] = val
 	obj.SetAnnotations(ann)
-	return writer.Patch(ctx, obj, client.Apply,
+	return true, writer.Patch(ctx, obj, client.Apply,
 		client.FieldOwner(fieldManager(ownerKind, owner)), client.ForceOwnership)
 }
 
 // AdoptSecret adopts a referenced Secret for an owner CR (metadata-only SSA).
 // reader is the LIVE reader for the existence check; writer applies the patch.
 func AdoptSecret(ctx context.Context, reader client.Reader, writer client.Client, objRef, owner types.NamespacedName, ownerKind string) error {
-	return Adopt(ctx, reader, writer, &corev1.Secret{
+	return Adopt(ctx, reader, writer, secretRef(objRef), owner, ownerKind)
+}
+
+// AdoptSecretIfUnadopted adopts a referenced Secret only when nothing has
+// adopted it yet, and reports whether it did.
+//
+// It is for an owner that only needs the Secret READABLE, not recorded as
+// its own. The adoptguard reader asks for the adoption label and nothing else,
+// so a Secret its long-lived owner (an AgentIdentity, a UserIdentity) already
+// adopted is readable as it stands. A short-lived owner that adopts anyway adds
+// one annotation and one field manager per instance to a Secret shared by all
+// of them, which nothing ever reads and which makes every later write to that
+// Secret slower. When it does adopt here, as the first owner, it should
+// release that ownership when it is done with the Secret (PruneOwners).
+func AdoptSecretIfUnadopted(ctx context.Context, reader client.Reader, writer client.Client, objRef, owner types.NamespacedName, ownerKind string) (bool, error) {
+	return adopt(ctx, reader, writer, secretRef(objRef), owner, ownerKind, true)
+}
+
+func secretRef(nn types.NamespacedName) *corev1.Secret {
+	return &corev1.Secret{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-		ObjectMeta: metav1.ObjectMeta{Namespace: objRef.Namespace, Name: objRef.Name},
-	}, owner, ownerKind)
+		ObjectMeta: metav1.ObjectMeta{Namespace: nn.Namespace, Name: nn.Name},
+	}
 }
 
 // AdoptConfigMap adopts a referenced ConfigMap for an owner CR (metadata-only SSA).

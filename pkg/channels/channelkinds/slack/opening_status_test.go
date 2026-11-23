@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	slackapi "github.com/slack-go/slack"
@@ -40,4 +41,16 @@ func TestSlackSender_EditOpeningMessage_UpdatesTheRootMessage(t *testing.T) {
 
 func TestSlackSender_ImplementsOpeningMessageEditor(t *testing.T) {
 	var _ channelkinds.OpeningMessageEditor = (*slackSender)(nil)
+}
+
+func TestOpeningUpdateRetainsInstructionButton(t *testing.T) {
+	c := &fakeSlackClient{}
+	err := newSender(c).EditOpeningMessage(context.Background(), channelkinds.SessionInfo{Namespace: "default", Name: "async"}, channelkinds.OpeningMessageContent{
+		Ref: channelkinds.MessageRef{ChannelID: "C_OUT", TS: "summary"}, OpeningText: "<@USER> literal summary", Instructions: "exact instructions",
+	})
+	require.NoError(t, err)
+	var blocks slackapi.Blocks
+	require.NoError(t, json.Unmarshal([]byte(msgOptionBlocksJSON(t, c.updateCalls[0].opts)), &blocks))
+	require.True(t, hasActionBlockWithID(blocks.BlockSet, sessionInstructionsActionID))
+	require.Equal(t, "plain_text", blocks.BlockSet[0].(*slackapi.SectionBlock).Text.Type)
 }

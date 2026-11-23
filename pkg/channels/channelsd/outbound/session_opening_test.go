@@ -3,6 +3,7 @@ package outbound
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -14,11 +15,41 @@ import (
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkey"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
+	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/memory/inmem"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/interactionhistory"
 )
 
 const demoOpening = "Picked up pull request demo-org/demo-repo#2."
+
+func TestRelay_GenericSummaryCarriesInspectableInstructions(t *testing.T) {
+	for _, threaded := range []bool{false, true} {
+		t.Run(fmt.Sprint(threaded), func(t *testing.T) {
+			nc := connectNATS(t)
+			external := map[string]string{"channel_id": "C_OUT"}
+			if threaded {
+				external["thread_ts"] = "existing"
+			}
+			sess := webhookSession("async", "", external)
+			sess.Spec.OpeningSummary = "Session created to review the nightly report"
+			sess.Spec.Prompt.Inline = "  exact original instructions\n<@not-a-mention> "
+			cli := fakeClientWith(t, sess)
+			sndr := &threadRootSender{}
+			startRelay(t, nc, cli, &fixedResolver{s: sndr})
+			publishOut(t, nc, "default", "async", "plan_update", planUpdate(t, "async"))
+			require.True(t, waitUntil(t, 2*time.Second, func() bool { return sndr.count() >= 2 }))
+			envs, _ := sndr.snapshot()
+			var payload channelevents.OutboundUserMessagePayload
+			require.NoError(t, json.Unmarshal(envs[0].Payload, &payload))
+			require.NotNil(t, payload.Opening)
+			require.Equal(t, sess.Spec.OpeningSummary, payload.Opening.Summary)
+			require.Equal(t, sess.Spec.Prompt.Inline, payload.Opening.Instructions)
+		})
+	}
+}
 
 // threadRootSender is slack's first-send shape: the very first Send lands in a
 // channel with no thread yet and reports the root it created; every later Send
@@ -277,4 +308,58 @@ func TestRelay_SessionOpening_SendFailureDegradesAndRetries(t *testing.T) {
 	require.NoError(t, cli.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "opening-fails"}, &after))
 	assert.Equal(t, demoOpening, after.Annotations[spiceboxv1alpha1.AnnotationSessionOpening],
 		"an unposted opening must survive for the next envelope to retry")
+}
+
+// TestRelay_SessionOpening_ExpiredPromptDoesNotOpenTheThread: an approval card
+// whose deadline passed in transit is dropped, and a dropped envelope must not
+// be what opens the thread. Posting the opening line for it would root the
+// conversation on a prompt that never arrives.
+//
+// The history record is the signal that the relay finished with the expired
+// card: it is written after the point where the opening used to be posted, in
+// the same handler call, so once it exists the opening either went out or is
+// not going to.
+func TestRelay_SessionOpening_ExpiredPromptDoesNotOpenTheThread(t *testing.T) {
+	nc := connectNATS(t)
+	sess := webhookSession("expired-first", demoOpening, map[string]string{"channel_id": "C_OUT"})
+	cli := fakeClientWith(t, sess)
+
+	sndr := &threadRootSender{root: map[string]string{"thread_ts": "5555.6666", "channel_id": "C_OUT"}}
+	mem := memory.NewLocal(inmem.NewBackend())
+	startRelay(t, nc, cli, &fixedResolver{s: sndr, subS: sndr}, func(r *Relay) { r.Mem = mem })
+
+	deadline := time.Now().Add(-time.Minute)
+	publishOut(t, nc, "default", "expired-first", "interaction_request",
+		buildEnv(t, "expired-first", channelevents.KindInteractionRequest, channelevents.InteractionRequestPayload{
+			Category:   categories.PlanPhase,
+			RequestRef: "expired",
+			Lead:       "Approve this phase?",
+			Audience: channelevents.InteractionAudience{
+				Scope:     channelevents.AudienceApprovers,
+				Approvers: []channelevents.ExternalIdentity{{Kind: "fake", ExternalID: "U0X"}},
+			},
+			ExpiresAt: &deadline,
+		}))
+
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	require.True(t, waitUntil(t, 5*time.Second, func() bool {
+		res, err := mem.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: "default/expired-first"},
+			Kinds: []string{interactionhistory.KindName}})
+		return err == nil && len(res.Entries) >= 2
+	}), "the dropped request and its expired outcome must be recorded")
+
+	assert.Zero(t, sndr.count(), "nothing is sent for an expired card: not the card, and not the opening line")
+	var got spiceboxv1alpha1.AgentSession
+	require.NoError(t, cli.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "expired-first"}, &got))
+	assert.Empty(t, got.Spec.OutputChannel.External["thread_ts"], "no thread was rooted")
+	assert.Empty(t, got.Annotations[spiceboxv1alpha1.AnnotationSessionOpeningSent], "the opening is still owed")
+
+	// The next real output opens the thread as usual.
+	publishOut(t, nc, "default", "expired-first", "plan_update", planUpdate(t, "expired-first"))
+	require.True(t, waitUntil(t, 2*time.Second, func() bool { return sndr.count() >= 2 }),
+		"the opening line and the agent's plan are both sent")
+	envs, _ := sndr.snapshot()
+	require.Len(t, envs, 2)
+	assert.Equal(t, channelevents.KindUserMessage, envs[0].Kind, "the opening line roots the thread")
+	assert.Equal(t, channelevents.KindPlanUpdate, envs[1].Kind)
 }

@@ -1,0 +1,212 @@
+{
+  "name": "goals-event-webhook-owner-refused",
+  "description": "A production signed webhook may start a session and supply event evidence, but neither its configured session owner nor model arguments can create primary-human goal consent. Two identical plan requests for a finite unattended event watch are refused before any monitoring authority or extra allowance is created. Positive signed native intake, consent, dispatch, taints and delivery are exercised by the production API and SQL bridge tests.",
+  "agentDir": "testdata/goals-event-webhook-owner-refused",
+  "agentClass": "eventgoal",
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "Pull request demo-org/demo-repo#4 was opened",
+        "toolOffered": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "schedule",
+                  "label": "Schedule reminder",
+                  "status": "pending",
+                  "phase": "schedule"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "schedule",
+                  "label": "Schedule reminder",
+                  "why": "The user requested a private reminder",
+                  "reminders": [
+                    {
+                      "resource": "agent_goal_domain:foreign-domain",
+                      "id": "goal-foreign",
+                      "revision": 2,
+                      "requestID": "private-reminder",
+                      "terms": {
+                        "dueAt": "2030-01-01T12:00:00Z",
+                        "expiresAt": "2030-01-08T12:10:00Z",
+                        "bounds": {
+                          "durationSeconds": 180,
+                          "turns": 10,
+                          "tokens": 10000,
+                          "approvalSeconds": 90
+                        },
+                        "allowedOperations": [
+                          "respond_to_user"
+                        ],
+                        "evidence": [
+                          "Delivered private reminder"
+                        ],
+                        "actionApproval": "standing_private",
+                        "event": {
+                          "source": {
+                            "kind": "native",
+                            "namespace": "default",
+                            "id": "default/source",
+                            "uid": "claimed-source"
+                          },
+                          "predicate": {
+                            "kind": "trip.changed",
+                            "subject": "trip-1"
+                          },
+                          "maxRuns": 2,
+                          "runWindowSeconds": 600,
+                          "timezone": "America/New_York",
+                          "quietHours": [
+                            {
+                              "start": "22:00",
+                              "end": "08:00"
+                            }
+                          ],
+                          "burst": "skip_pending"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "prepare plan reminder"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "schedule",
+                  "label": "Schedule reminder",
+                  "status": "pending",
+                  "phase": "schedule"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "schedule",
+                  "label": "Schedule reminder",
+                  "why": "The user requested a private reminder",
+                  "reminders": [
+                    {
+                      "resource": "agent_goal_domain:foreign-domain",
+                      "id": "goal-foreign",
+                      "revision": 2,
+                      "requestID": "private-reminder",
+                      "terms": {
+                        "dueAt": "2030-01-01T12:00:00Z",
+                        "expiresAt": "2030-01-08T12:10:00Z",
+                        "bounds": {
+                          "durationSeconds": 180,
+                          "turns": 10,
+                          "tokens": 10000,
+                          "approvalSeconds": 90
+                        },
+                        "allowedOperations": [
+                          "respond_to_user"
+                        ],
+                        "evidence": [
+                          "Delivered private reminder"
+                        ],
+                        "actionApproval": "standing_private",
+                        "event": {
+                          "source": {
+                            "kind": "native",
+                            "namespace": "default",
+                            "id": "default/source",
+                            "uid": "claimed-source"
+                          },
+                          "predicate": {
+                            "kind": "trip.changed",
+                            "subject": "trip-1"
+                          },
+                          "maxRuns": 2,
+                          "runWindowSeconds": 600,
+                          "timezone": "America/New_York",
+                          "quietHours": [
+                            {
+                              "start": "22:00",
+                              "end": "08:00"
+                            }
+                          ],
+                          "burst": "skip_pending"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "prepare plan reminder"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "The reminder was refused; no execution was authorized."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "reminder request refused"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "toolsCalled": [
+      "update_plan"
+    ],
+    "approvalPrompts": 0,
+    "agentReplyContains": [
+      "no execution was authorized"
+    ]
+  },
+  "trigger": {
+    "channel": "eventgoal-gh",
+    "payload": "pull_request_opened.json",
+    "event": "pull_request",
+    "channelKey": "pr:demo-org/demo-repo#4"
+  }
+}

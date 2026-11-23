@@ -188,7 +188,8 @@ func flattenBlocks(blocks []slackapi.Block) string {
 // label. Projecting only the title (as this case once did) let an agent, or an
 // injected prompt, route blockable content into chart labels and slip it past
 // the egress leakage gate, which measures ComponentsPlainText -> flattenBlocks.
-// Numeric values carry no text and are skipped.
+// Numeric values carry no text and are skipped. The strings come from
+// vizLabels, the same walk the broadcast guard uses.
 func flattenDataViz(dv *slackapi.DataVisualizationBlock) string {
 	var parts []string
 	add := func(s string) {
@@ -196,31 +197,12 @@ func flattenDataViz(dv *slackapi.DataVisualizationBlock) string {
 			parts = append(parts, s)
 		}
 	}
-	addSeries := func(series []slackapi.DataVisualizationDataSeries, axis slackapi.DataVisualizationAxisConfig) {
-		for _, s := range series {
-			add(s.Name)
-			for _, p := range s.Data {
-				add(p.Label)
-			}
-		}
-		for _, cat := range axis.Categories {
-			add(cat)
-		}
-		add(axis.XLabel)
-		add(axis.YLabel)
-	}
 	add(dv.Title)
-	switch c := dv.Chart.(type) {
-	case *slackapi.DataVisualizationPieChart:
-		for _, seg := range c.Segments {
-			add(seg.Label)
-		}
-	case *slackapi.DataVisualizationBarChart:
-		addSeries(c.Series, c.AxisConfig)
-	case *slackapi.DataVisualizationAreaChart:
-		addSeries(c.Series, c.AxisConfig)
-	case *slackapi.DataVisualizationLineChart:
-		addSeries(c.Series, c.AxisConfig)
+	// A missing or unrecognized chart has no labels to project; validation
+	// rejects it before anything is sent.
+	labels, _ := vizLabels(dv.Chart)
+	for _, l := range labels {
+		add(l.value)
 	}
 	return strings.Join(parts, "\n")
 }

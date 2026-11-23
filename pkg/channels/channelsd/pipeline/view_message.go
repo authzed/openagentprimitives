@@ -52,8 +52,8 @@ func (p *Pipeline) HandleViewMessage(ctx context.Context, env channelevents.Enve
 		return viewMessageFail(fmt.Errorf("view_message: decode payload: %w", err))
 	}
 
-	// No idempotency key → deliver directly.
-	if pl.RequestID == "" || p.viewDedup == nil {
+	// Attestation always reauthorizes; ordinary messages deduplicate by request ID.
+	if pl.AttestOnly || pl.RequestID == "" || p.viewDedup == nil {
 		return p.deliverViewMessage(ctx, env, pl)
 	}
 
@@ -136,6 +136,29 @@ func (p *Pipeline) deliverViewMessage(ctx context.Context, env channelevents.Env
 	externalID := pl.Author.ExternalID
 	if externalID == "" {
 		externalID = identity.RawExternalID(pl.Author.Email)
+	}
+
+	if pl.AttestOnly {
+		canonical, err := principal.Canonical()
+		if err != nil {
+			return fail(err)
+		}
+		if p.Authz == nil {
+			return fail(fmt.Errorf("view_message: attestation requires authorization"))
+		}
+		allowed, err := p.Authz.CheckInteract(ctx, ns, name, canonical, true)
+		if err != nil {
+			return fail(fmt.Errorf("view_message: attestation interact check: %w", err))
+		}
+		if !allowed {
+			return channelkinds.DecisionToWire(channelkinds.InboundDecision{Outcome: channelkinds.OutcomeDeniedByPermission}), nil
+		}
+		if err := p.recordGoalActor(ctx, &sess, channelkinds.InboundEvent{ExternalIDs: channelkinds.ExternalIdentity{
+			Kind: pl.Author.Kind, ExternalID: externalID, Email: pl.Author.Email, TeamScope: pl.Author.TeamScope,
+		}}); err != nil {
+			return fail(err)
+		}
+		return channelkinds.DecisionToWire(channelkinds.InboundDecision{Outcome: channelkinds.OutcomeRouted, RequesterCanonicalID: canonical.String()}), nil
 	}
 
 	dec, err := p.Deliver(ctx, channelkinds.InboundEvent{

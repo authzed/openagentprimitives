@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
 	"github.com/authzed/openagentprimitives/pkg/controllers/conditions"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 )
 
 // HandleInteractionRequest is the category-generic inbound park handler. The
@@ -52,6 +55,20 @@ func (p *Pipeline) HandleInteractionRequest(ctx context.Context, env channeleven
 	if !ok {
 		return fmt.Errorf("interaction request: unknown category %q (session %s/%s, requestRef %q)",
 			pl.Category, env.Session.Namespace, env.Session.Name, pl.RequestRef)
+	}
+
+	// A request already past its deadline is neither parked nor re-emitted. Its
+	// producer has stopped waiting, so a pending entry would mark the session as
+	// awaiting a decision nobody can make, and the outbound relay would drop the
+	// re-emitted card anyway (promptExpiredInTransit). This covers the IN leg
+	// lagging, and a runner re-publishing outstanding requests after a restart.
+	// An entry an earlier, still-live copy of this request already parked is not
+	// cleared here; that is the producer's timeout report's job.
+	if pl.ExpiredAt(p.nowOrWallClock()) {
+		log.FromContext(ctx).Info("interaction request: expired before channelsd received it; not parking or delivering",
+			"session", env.Session.Namespace+"/"+env.Session.Name, "category", pl.Category,
+			"requestRef", pl.RequestRef, "expiresAt", pl.ExpiresAt.UTC().Format(time.RFC3339))
+		return nil
 	}
 
 	// Only parking categories get a durable entry; a non-parking category
@@ -214,10 +231,58 @@ func (p *Pipeline) HandleInteractionApplied(ctx context.Context, env channeleven
 		return fmt.Errorf("decode interaction applied payload (session %s/%s): %w",
 			env.Session.Namespace, env.Session.Name, err)
 	}
+	unlock := p.lockInteraction(env.Session.Namespace, env.Session.Name, pl.RequestRef)
+	defer unlock()
 	var sess spiceboxv1alpha1.AgentSession
 	key := client.ObjectKey{Namespace: env.Session.Namespace, Name: env.Session.Name}
 	if err := p.K8s.Get(ctx, key, &sess); err != nil {
 		return fmt.Errorf("get session %s (requestRef %q): %w", key, pl.RequestRef, err)
+	}
+
+	// Timeout reports enter through IN only. Publish the retained winner after
+	// serialization with human decisions; never send a competing live verdict.
+	if pl.Outcome == channelevents.OutcomeExpired {
+		cached := false
+		if cat, ok := channelinteractions.Get(pl.Category); ok && cat.Resurface == channelinteractions.ResurfaceCached && p.Mem != nil {
+			record, found, err := parkedprompt.Find(ctx, p.Mem, promptScope(key.Namespace, key.Name), pl.RequestRef)
+			if err != nil {
+				return err
+			}
+			cached = found
+			if found {
+				if !record.Resolved {
+					frozen := pl
+					frozen.AgentSessionRef = env.Session
+					record, err = p.retainResolution(ctx, frozen)
+					if err != nil {
+						return err
+					}
+				}
+				if len(record.Resolution) > 0 {
+					var canonical channelevents.Envelope
+					if err := json.Unmarshal(record.Resolution, &canonical); err != nil {
+						return err
+					}
+					var winner channelevents.InteractionAppliedPayload
+					if err := json.Unmarshal(canonical.Payload, &winner); err != nil {
+						return err
+					}
+					if winner.Outcome != channelevents.OutcomeExpired {
+						return nil
+					}
+					if record.ResolutionPending {
+						if err := p.deliverInteractionResolution(ctx, record); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		if !cached {
+			if err := channelevents.PublishOut(p.NATS.Publish, key.Namespace, key.Name, env.Kind, pl); err != nil {
+				return err
+			}
+		}
 	}
 	matchedIdx := -1
 	for i, e := range sess.Status.PendingInteractions {

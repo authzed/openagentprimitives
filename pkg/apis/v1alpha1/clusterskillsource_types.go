@@ -43,6 +43,13 @@ type ClusterSkillSourceSpec struct {
 	// the skills it materializes. Default (false) = enabled.
 	// +optional
 	DisableRepoInstructions bool `json:"disableRepoInstructions,omitempty"`
+
+	// DisablePluginAgents, when true, materializes every skill this source
+	// discovers as standalone, even one published inside a Claude Code plugin:
+	// no spec.plugin, so the plugin's agents are never captured from outside
+	// spec.subpath and never staged. Default (false) = enabled.
+	// +optional
+	DisablePluginAgents bool `json:"disablePluginAgents,omitempty"`
 }
 
 type ClusterSkillSourceAuth struct {

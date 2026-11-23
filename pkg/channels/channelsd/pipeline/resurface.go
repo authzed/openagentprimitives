@@ -175,10 +175,10 @@ func parkedHere(cat channelinteractions.Category, st spiceboxv1alpha1.AgentSessi
 // hang this path exists to prevent.
 func promptExpired(env channelevents.Envelope, now time.Time) bool {
 	var pl channelevents.InteractionRequestPayload
-	if err := json.Unmarshal(env.Payload, &pl); err != nil || pl.ExpiresAt == nil {
+	if err := json.Unmarshal(env.Payload, &pl); err != nil {
 		return false
 	}
-	return pl.ExpiresAt.Before(now)
+	return pl.ExpiredAt(now)
 }
 
 // republishPrompt re-publishes a stored prompt envelope on its OUT subject so

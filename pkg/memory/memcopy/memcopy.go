@@ -20,11 +20,22 @@
 // BEFORE anything else (e.g. a forked session's runner) can write a divergent
 // turn at the same deterministic ID — see
 // pkg/controllers/agentsession/restart.go.
+//
+// One exception to "verbatim": a string escape a durable backend cannot hold
+// (\u0000, an unpaired surrogate) is replaced with \ufffd, the same
+// replacement turn.Appender.Append makes before a turn is first recorded. Such
+// an entry can only come from before the facade refused them — sqlite held
+// it — and copying it verbatim would now be refused, failing the restart. The
+// replacement is deterministic, so a re-copy is still a no-op. Rewriting is
+// possible because the copy is a NEW record: the restart reconciler writes
+// through the operator's signing facade, which signs it afresh for the child
+// scope rather than carrying the parent's signature over.
 package memcopy
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -62,12 +73,17 @@ func CopyPrefix(ctx context.Context, m memory.Memory, src, dst memory.Scope, cut
 		if !keep {
 			continue
 		}
+		content, replaced := memory.StorableJSON(e.Content)
+		if replaced > 0 {
+			slog.Info("memcopy.CopyPrefix: replaced characters the store cannot hold with U+FFFD in a copied entry",
+				"src", src.ID, "dst", dst.ID, "kind", e.Kind, "entry", e.ID, "replaced", replaced)
+		}
 		copyEntry := memory.Entry{
 			Scope:      dst,
 			Kind:       e.Kind,
 			ID:         e.ID,
 			CreatedAt:  e.CreatedAt,
-			Content:    append([]byte(nil), e.Content...),
+			Content:    append([]byte(nil), content...),
 			Links:      append([]memory.Link(nil), e.Links...),
 			Provenance: copyProvenance(e.Provenance),
 		}

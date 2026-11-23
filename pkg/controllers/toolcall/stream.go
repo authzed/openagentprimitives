@@ -196,10 +196,15 @@ func (r *Reconciler) watchStreamCompletion(
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		var fresh spiceboxv1alpha1.ToolCall
 		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(tc), &fresh); err != nil {
+			if errors.IsNotFound(err) {
+				// Deleted, or already terminal and retired out of the cache:
+				// either way there is nothing left for this watcher to finish.
+				return
+			}
 			logger.Error(err, "stream watcher: get toolcall")
 			return
 		}
-		if terminalCondition(&fresh) != "" {
+		if fresh.TerminalCondition() != "" {
 			return // already finalized (e.g., delete-while-running)
 		}
 		exitCode := result.ExitCode

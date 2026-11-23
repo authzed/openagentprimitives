@@ -126,6 +126,29 @@ type ArchiveSweep struct{ baseEvent }
 // that already reached Succeeded/Failed).
 type Expired struct{ baseEvent }
 
+// RunDurationExceeded fails a session whose recorded active run-time
+// (status.runDuration) has passed the maxDuration its runner reports enforcing
+// (status.enforcedMaxDuration) by more than the operator's grace. The runner
+// enforces maxDuration itself, at turn boundaries and by cancelling in-flight
+// LLM and tool calls when the cap is reached, so this fires only when the
+// runner has stopped doing so: wedged somewhere that cancellation cannot reach.
+// Emitted by the operator's run-duration backstop. Like Expired it is not
+// phase-guarded; the terminal-sticky guard protects finished sessions.
+type RunDurationExceeded struct{ baseEvent }
+
+// GoalRunConcluded finishes a goal execution session whose run the goal
+// dispatcher has retained: the run ended and every runner pod succeeded, but
+// the runner's last word was an Idle yield, so nothing else would move the
+// session off Idle. Unlike ArchiveSweep it does NOT set Archived: a goal run is
+// finished, not parked, and must never be woken back into a new turn.
+type GoalRunConcluded struct{ baseEvent }
+
+// GoalRunFailed ends a goal execution session whose run the goal dispatcher
+// has retained as failed: the runner exited without a reported result (or was
+// stopped), and the session is kept only for inspection. Terminal, so it is
+// anchored and its pods are reaped, and never woken into a new turn.
+type GoalRunFailed struct{ baseEvent }
+
 // Sleep scales an Idle channel session's compute to zero: the operator reaps all
 // its pods but keeps the AgentSession Idle and wakeable. Only Idle sleeps; the
 // fold is a no-op on any other phase (a stale sweep). Analogous to ArchiveSweep.

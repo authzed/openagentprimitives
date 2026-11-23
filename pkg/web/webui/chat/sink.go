@@ -288,6 +288,8 @@ type sessionStartupMsg struct {
 // rather than emit a malformed frame.
 func toFrame(msg any) (wsFrame, bool) {
 	switch m := msg.(type) {
+	case browser.MsgSessionOpening:
+		return wsFrame{Type: "session_opening", Session: m.Session, Payload: m}, true
 	case browser.MsgUserMessage:
 		return wsFrame{Type: "user_message", Session: m.Session, Payload: m}, true
 	case browser.MsgUserEcho:

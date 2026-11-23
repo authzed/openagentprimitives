@@ -1272,7 +1272,7 @@ describe("SessionShell — the session-list poll", () => {
     // paint, so a mount-time fetch would be a second, redundant lookup.
     expect(calls.filter((u) => u.includes("/sessions/api/sessions"))).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     expect(calls.filter((u) => u.includes("/sessions/api/sessions"))).toHaveLength(1);
     // The refreshed list replaced the rows: beta is gone, alpha's phase moved.
@@ -1284,6 +1284,22 @@ describe("SessionShell — the session-list poll", () => {
     expect(
       within(screen.getByTestId("session-shell-content-region")).getByRole("heading", { name: "Fleet Console" }),
     ).toBeInTheDocument();
+  });
+
+  it("alerts when a goal creates a session while another session is open", async () => {
+    sessionStorage.clear();
+    vi.useFakeTimers();
+    stubListFetch(async () => ({ ok: true, json: async () => ({
+      sessions: [...shellGolden.sessions, { ns: "demo-ns", name: "new-goal", uid: "new-uid", class: "demo-agent", title: "Demo Agent", phase: "Starting", awaitingHuman: false, ended: false, goalCreated: true, openingSummary: "Your stretch reminder started." }],
+      notices: shellGolden.notices, startableClasses: shellGolden.startableClasses,
+    }) }));
+    render(<SessionShell {...shellGolden} />);
+    expect(screen.queryByLabelText("New goal sessions")).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(screen.getByLabelText("New goal sessions")).toHaveTextContent("Your stretch reminder started.");
+    expect(screen.getByRole("link", { name: "Open session" })).toHaveAttribute("href", "/sessions?session=demo-ns%2Fnew-goal");
+    expect(screen.getByTestId("session-shell-session-row-demo-ns/alpha")).toHaveAttribute("aria-current", "page");
+    sessionStorage.clear();
   });
 
   it("keeps the rows on screen and logs when the refresh answers non-2xx", async () => {
@@ -1549,9 +1565,28 @@ describe("SessionShell — starting a session", () => {
     // The empty dashboard must explain how access actually arrives, in copy
     // that names no CRD kind, no permission and no Kubernetes object.
     expect(explanation.textContent ?? "").toMatch(/added to a session/i);
+    expect(explanation).toHaveTextContent(/install at least one agent/i);
     expect(explanation.textContent ?? "").not.toMatch(
       /AgentSession|AgentClass|SpiceDB|kubectl|interact|namespace|CRD/i,
     );
+  });
+
+  it("explains a New chat request with no available agents and lets the viewer dismiss it", async () => {
+    const restore = withSearch("?new=1");
+    try {
+      const user = userEvent.setup();
+      const props = startProps({ startableClasses: [], canStartSessions: true });
+      const { rerender } = render(<SessionShell {...props} />);
+      const dialog = screen.getByRole("dialog");
+      expect(dialog).toHaveTextContent("No agents available");
+      expect(dialog).toHaveTextContent(/install at least one agent/i);
+      expect(screen.queryByTestId("session-shell-new-session-class")).toBeNull();
+      await user.click(within(dialog).getByRole("button", { name: "Got it", exact: true }));
+      rerender(<SessionShell {...props} />);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      restore();
+    }
   });
 
   // The two facts are independent, and the control needs BOTH. A viewer with

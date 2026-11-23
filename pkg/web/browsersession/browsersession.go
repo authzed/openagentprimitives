@@ -99,9 +99,11 @@ type Params struct {
 }
 
 // Created is everything the caller needs to keep working with the session it
-// just started. The three object pointers are the objects as the API server
-// returned them, so UIDs and resourceVersions are populated.
+// just started. The class and created objects are returned with their
+// API-server UIDs and resourceVersions populated.
 type Created struct {
+	// Class is the live class used to authorize and shape this creation.
+	Class     *spiceboxv1alpha1.AgentClass
 	Session   *spiceboxv1alpha1.AgentSession
 	Channel   *spiceboxv1alpha1.Channel
 	Creds     *corev1.Secret
@@ -329,6 +331,7 @@ func Create(ctx context.Context, d Deps, p Params) (_ Created, retErr error) {
 	}
 
 	return Created{
+		Class:     &ac,
 		Session:   sess,
 		Channel:   ch,
 		Creds:     creds,

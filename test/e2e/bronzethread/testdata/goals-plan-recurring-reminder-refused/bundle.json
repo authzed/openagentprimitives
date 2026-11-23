@@ -1,0 +1,119 @@
+{
+  "name": "goals-plan-recurring-reminder-refused",
+  "description": "A recurring private reminder with quiet hours is included in a plan and reaches the production preparation callback. Foreign goal ownership is refused before any series consent or execution authority can be created. Positive recurring signed consent, durable materialization, activation and cancellation are covered by production API tests.",
+  "agentDir": "testdata/agent-goaldemo",
+  "agentClass": "goaldemo",
+  "userTurns": [
+    "Include recurring private reminders in my plan"
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "recurring private reminders",
+        "toolOffered": "update_plan"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "update_plan",
+            "args": {
+              "name": "main",
+              "items": [
+                {
+                  "id": "schedule",
+                  "label": "Schedule reminder",
+                  "status": "pending",
+                  "phase": "schedule"
+                }
+              ],
+              "phases": [
+                {
+                  "id": "schedule",
+                  "label": "Schedule reminder",
+                  "why": "The user requested a private reminder",
+                  "reminders": [
+                    {
+                      "resource": "agent_goal_domain:foreign-domain",
+                      "id": "goal-foreign",
+                      "revision": 2,
+                      "requestID": "private-reminder",
+                      "terms": {
+                        "dueAt": "2030-01-01T12:00:00Z",
+                        "expiresAt": "2030-01-08T12:10:00Z",
+                        "bounds": {
+                          "durationSeconds": 180,
+                          "turns": 10,
+                          "tokens": 10000,
+                          "approvalSeconds": 90
+                        },
+                        "allowedOperations": [
+                          "respond_to_user"
+                        ],
+                        "evidence": [
+                          "Delivered private reminder"
+                        ],
+                        "schedule": {
+                          "kind": "daily",
+                          "timezone": "America/New_York",
+                          "maxRuns": 5,
+                          "runWindowSeconds": 600,
+                          "quietHours": [
+                            {
+                              "start": "22:00",
+                              "end": "08:00"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "update_plan",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "prepare plan reminder"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "respond_to_user",
+            "args": {
+              "text": "The reminder was refused; no execution was authorized."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "reminder request refused"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "toolsCalled": [
+      "update_plan"
+    ],
+    "approvalPrompts": 0,
+    "agentReplyContains": [
+      "no execution was authorized"
+    ]
+  }
+}

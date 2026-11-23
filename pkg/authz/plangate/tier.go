@@ -65,6 +65,10 @@ type TierInput struct {
 	// created those grants already happened, and re-pricing a phase for reach it
 	// demonstrably has is the fatigue the gradient exists to avoid.
 	UngrantedSlots int
+
+	// PendingConsents are exact requests included in the phase's human
+	// approval. Readonly permissions never waive those decisions.
+	PendingConsents int
 }
 
 // severityTier maps the worst StateImpact in a phase onto a tier.
@@ -121,7 +125,7 @@ func ComputeTier(in TierInput) Tier {
 	// resource, which no amount of readonly-ness makes free. Without this the
 	// cheapest possible phase (all-readonly, inside the budget) would acquire an
 	// instance grant with nobody asked.
-	if in.UngrantedSlots > 0 {
+	if in.UngrantedSlots > 0 || in.PendingConsents > 0 {
 		return Tier1
 	}
 

@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	slackapi "github.com/slack-go/slack"
@@ -17,6 +18,25 @@ import (
 	memapproval "github.com/authzed/openagentprimitives/pkg/memory/kinds/approval"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
+
+func TestIncludedRequestDetailsRemainExactAndInert(t *testing.T) {
+	instructions := strings.Repeat("<@U_ALICE> & exact instructions ", 180)
+	raw, err := json.Marshal([]map[string]string{{"requestRef": "reminder", "instructions": instructions}})
+	require.NoError(t, err)
+	blocks, err := renderRawInteractionDetailsModal(raw, "plan", "ns/session")
+	require.NoError(t, err)
+	require.Greater(t, len(blocks), 1)
+	var shown strings.Builder
+	for _, block := range blocks {
+		section := block.(*slackapi.SectionBlock)
+		assert.Equal(t, "plain_text", section.Text.Type, "Slack cannot activate mentions or links in exact instructions")
+		assert.LessOrEqual(t, len([]rune(section.Text.Text)), 2800)
+		shown.WriteString(section.Text.Text)
+	}
+	var restored []map[string]string
+	require.NoError(t, json.Unmarshal([]byte(shown.String()), &restored))
+	assert.Equal(t, instructions, restored[0]["instructions"], "details must not truncate the approved request")
+}
 
 // toolApprovalDetailsJSON marshals a ToolApprovalDetails for use as an
 // InteractionRequestPayload.Details / memapproval.Request.Details blob.

@@ -60,7 +60,7 @@ publisher's recorded chain head cannot be decoded — that head is what makes
 tail truncation detectable at all, so an undecodable one leaves the tail
 unverified. Unsigned entries (pre-provenance or written by an unsigned
 writer) are reported as a warning and do NOT, on their own, fail
-verification.`,
+verification. Requires administrative access to export the complete audit evidence.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAuditVerify(cmd, g, args[0], asJSON)
@@ -79,7 +79,7 @@ func runAuditVerify(cmd *cobra.Command, g *apcmd.Globals, sessionName string, as
 	if err != nil {
 		return err
 	}
-	conn, err := memclient.Connect(ctx, b, sessionName, "")
+	conn, err := memclient.ConnectAudit(ctx, b, sessionName)
 	if err != nil {
 		return err
 	}
@@ -93,10 +93,9 @@ func runAuditVerify(cmd *cobra.Command, g *apcmd.Globals, sessionName string, as
 	}
 	keys := buildKeySet(ctx, b, &sess, errOut)
 
-	// Every append-only entry in the scope. Empty Kinds = all kinds; we
-	// filter to append-only locally (kinds/all blank-import makes
-	// KindAppendOnly authoritative here).
-	res, err := conn.Client.Query(ctx, memory.Query{Scope: conn.Scope, Limit: auditReadLimit})
+	// Administrative export includes platform-only links that a session read
+	// would omit. Still filter locally to keep the verifier authoritative.
+	res, err := conn.Client.QueryAudit(ctx, conn.Scope)
 	if err != nil {
 		return fmt.Errorf("query memory: %w", err)
 	}
@@ -155,6 +154,9 @@ var errAuditTruncated = errors.New("audit verification failed: the session holds
 // the reader has no flag to raise, so the only honest answer is to say the
 // verification could not be performed.
 func requireCompleteAuditRead(res memory.QueryResult) error {
+	if res.Partial || len(res.DroppedPredicates) != 0 {
+		return fmt.Errorf("audit verification failed: incomplete audit export")
+	}
 	if !res.Truncated {
 		return nil
 	}

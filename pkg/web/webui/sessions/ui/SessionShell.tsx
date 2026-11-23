@@ -11,10 +11,11 @@ import { ChatView } from "../../chat/ui/ChatView";
 import { SessionSocketProvider, useSessionFrames } from "../../chat/ui/SessionSocket";
 import type { InteractionRequestPayload, UserMessagePayload } from "../../chat/ui/types";
 import { Chrome, type ApprovalNotice, type ChromeSelection, type SiblingView } from "./Chrome";
-import { EmptyDashboardExplanation, NewSessionDialog, StartReplacementButton } from "./NewSessionDialog";
+import { EmptyDashboardExplanation, NewSessionDialog, NoAgentsDialog, StartReplacementButton } from "./NewSessionDialog";
 import { SessionInfoPanel } from "./SessionInfoPanel";
 import { SessionList } from "./SessionList";
 import { StartupLine } from "./StartupLine";
+import { GoalSessionAlerts } from "./GoalSessionAlerts";
 import { formatTabTitle } from "./tabTitle";
 import { useAwayNotifications } from "./useAwayNotifications";
 import { useTabActivity } from "./useTabActivity";
@@ -26,11 +27,11 @@ export type { ShellBootstrapProps } from "./types";
 // The cost per interval per open tab is one SpiceDB LookupResources plus a
 // bounded (listGetConcurrency) fan-out of AgentSession Gets — the exact work
 // the page's own first paint already did — so it is a real, repeating server
-// cost, not a free refresh. Thirty seconds is chosen against what the list
-// actually shows: a phase change and a new "waiting for you" marker, neither
-// of which the viewer is watching frame-by-frame. A session the viewer is
-// LOOKING at updates on its own live channel, not from here.
-const SESSION_LIST_POLL_MS = 30_000;
+// cost, not a free refresh. Visible tabs poll every ten seconds so a newly
+// created goal session's short approval window is not missed. Hidden tabs
+// retain the thirty-second cadence; returning to the tab refreshes immediately.
+const SESSION_LIST_POLL_MS = 10_000;
+const BACKGROUND_SESSION_LIST_POLL_MS = 30_000;
 
 // crossSessionApprovalNotices turns the listed sessions' own awaiting-a-human
 // flags into approval-surface lines for sessions the viewer is NOT currently
@@ -483,10 +484,25 @@ export function SessionShell(props: ShellBootstrapProps) {
 
   useEffect(() => {
     const controller = listAbort.current!;
-    const timer = setInterval(() => void refreshList(controller.signal), SESSION_LIST_POLL_MS);
+    let lastRefresh = Date.now();
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "visible" && Date.now() - lastRefresh < BACKGROUND_SESSION_LIST_POLL_MS) return;
+      lastRefresh = Date.now();
+      void refreshList(controller.signal);
+    }, SESSION_LIST_POLL_MS);
+    const refreshOnReturn = () => {
+      if (document.visibilityState === "visible") {
+        lastRefresh = Date.now();
+        void refreshList(controller.signal);
+      }
+    };
+    window.addEventListener("focus", refreshOnReturn);
+    document.addEventListener("visibilitychange", refreshOnReturn);
     return () => {
       controller.abort();
       clearInterval(timer);
+      window.removeEventListener("focus", refreshOnReturn);
+      document.removeEventListener("visibilitychange", refreshOnReturn);
     };
   }, [refreshList]);
 
@@ -772,6 +788,8 @@ export function SessionShell(props: ShellBootstrapProps) {
         />
       }
     >
+      <GoalSessionAlerts key={props.subject} sessions={sessions} selected={selected} subject={props.subject} notify={notify} />
+      {props.canStartSessions && (props.startableClasses?.length ?? 0) === 0 && startRequest.open && <NoAgentsDialog />}
       {selected ? (
         <SelectedContent
           selected={selected}

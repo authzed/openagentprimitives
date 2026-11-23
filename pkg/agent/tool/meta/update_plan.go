@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -100,11 +101,14 @@ func (*updatePlanTool) Description() string {
 		"Every permission needs a `why`; it is shown to the approver verbatim as your justification. " +
 		"A phase runs ONCE by default: set `max` only when a step genuinely repeats, and say why in `max.why`. " +
 		"Use `requires` when a phase must not start before another has run. Set each item's `phase` to group it " +
-		"under the stage it belongs to."
+		"under the stage it belongs to. For an existing active goal, attach `reminders` to its phase " +
+		"using the request_goal_execution argument shape (resource, id, revision, requestID, terms). " +
+		"The plan approval authorizes those exact bounded reminders; do not also call request_goal_execution. " +
+		"Use stable requestIDs on repeated full-plan updates. Each future session still requires its own fresh action plan."
 }
 
 func (*updatePlanTool) InputSchema() json.RawMessage {
-	return json.RawMessage(`{
+	schema := json.RawMessage(`{
 		"type":"object",
 		"additionalProperties":false,
 		"properties":{
@@ -197,6 +201,24 @@ func (*updatePlanTool) InputSchema() json.RawMessage {
 		},
 		"required":["name","items"]
 	}`)
+	var parsed map[string]any
+	if err := json.Unmarshal(schema, &parsed); err != nil {
+		panic(err)
+	}
+	var reminder map[string]any
+	if err := json.Unmarshal((&goalTool{op: "request_execution"}).InputSchema(), &reminder); err != nil {
+		panic(err)
+	}
+	props := parsed["properties"].(map[string]any)
+	phaseProps := props["phases"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	phaseProps["reminders"] = map[string]any{"type": "array", "maxItems": 8, "items": reminder}
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(parsed); err != nil {
+		panic(err)
+	}
+	return encoded.Bytes()
 }
 
 // Plan-shape limits. Deliberately expansive: they exist to stop a runaway or
@@ -236,6 +258,7 @@ type updatePlanArgPhase struct {
 	Budget      *updatePlanArgBudget    `json:"budget,omitempty"`
 	Permissions []updatePlanArgPerm     `json:"permissions,omitempty"`
 	Slots       []updatePlanArgSlot     `json:"slots,omitempty"`
+	Reminders   []plans.ReminderRequest `json:"reminders,omitempty"`
 }
 
 type updatePlanArgRequires struct {
@@ -299,6 +322,9 @@ func validatePhases(phases []updatePlanArgPhase) error {
 			return fmt.Errorf("phase %q declares %d permissions, over the maxPermissionsPerPhase limit of %d; re-plan with fewer",
 				p.ID, len(p.Permissions), defaultMaxPermsPerPhase)
 		}
+		if len(p.Reminders) > 8 {
+			return fmt.Errorf("phase %q has too many reminders (maximum 8)", p.ID)
+		}
 		if len(p.Slots) > defaultMaxSlotsPerPhase {
 			return fmt.Errorf("phase %q declares %d slots, over the maxSlotsPerPhase limit of %d; re-plan with fewer",
 				p.ID, len(p.Slots), defaultMaxSlotsPerPhase)
@@ -340,7 +366,7 @@ func toPlanPhases(in []updatePlanArgPhase) []plans.Phase {
 	}
 	out := make([]plans.Phase, 0, len(in))
 	for _, p := range in {
-		ph := plans.Phase{ID: p.ID, Label: p.Label, Why: p.Why}
+		ph := plans.Phase{ID: p.ID, Label: p.Label, Why: p.Why, Reminders: p.Reminders}
 		for _, r := range p.Requires {
 			ph.Requires = append(ph.Requires, plans.PhaseRequirement{Phase: r.Phase, Why: r.Why})
 		}
@@ -389,6 +415,11 @@ func (t *updatePlanTool) Execute(ctx context.Context, raw json.RawMessage, sess 
 		})
 	}
 
+	for _, phase := range a.Phases {
+		if len(phase.Reminders) > 0 && t.cfg.OnPhasesDeclared == nil {
+			return tool.Result{Content: "update_plan: reminders require an enforcing plan approval gate", IsError: true, Trusted: true}, nil
+		}
+	}
 	store := plans.From(sess)
 	res, err := store.Update(ctx, a.Name, plans.ParentRef{Plan: a.ParentPlan, Item: a.ParentItem},
 		plans.Content{Items: items, Phases: toPlanPhases(a.Phases)})

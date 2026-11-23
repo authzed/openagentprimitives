@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
@@ -62,7 +64,7 @@ func TestInstall_AgentClassApply_IsIdempotentViaHarness(t *testing.T) {
 	// metadata/spec fields only — no resourceVersion/uid/managedFields/status
 	// (the live-object bookkeeping a caller constructing a fresh "want" for
 	// apply would never have in the first place).
-	want := &v1alpha1.AgentClass{
+	typed := &v1alpha1.AgentClass{
 		TypeMeta: metav1.TypeMeta{APIVersion: "agentprimitives.authzed.com/v1alpha1", Kind: "AgentClass"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        got.Name,
@@ -72,6 +74,16 @@ func TestInstall_AgentClassApply_IsIdempotentViaHarness(t *testing.T) {
 		},
 		Spec: got.Spec,
 	}
+	// Applied as unstructured with status removed, as install does. The typed
+	// struct would serialize an empty status stanza, which the apiserver
+	// discards but still counts as a change — not a payload install ever sends.
+	// The null creationTimestamp the conversion adds goes too: it is harmless
+	// to the apply, but install's payload does not carry one either.
+	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(typed)
+	require.NoError(t, err, "convert the desired AgentClass to unstructured")
+	unstructured.RemoveNestedField(content, "status")
+	unstructured.RemoveNestedField(content, "metadata", "creationTimestamp")
+	want := &unstructured.Unstructured{Object: content}
 
 	idempotency.RequireApplyIdempotent(t, ctx, env.Client, want, install.FieldManager)
 }

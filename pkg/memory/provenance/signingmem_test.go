@@ -31,6 +31,24 @@ func (f *flakyMemory) Put(ctx context.Context, e memory.Entry) (memory.Entry, er
 	return f.Memory.Put(ctx, e)
 }
 
+// Reject missing timestamps before signing or advancing the chain.
+func TestSigningMemory_ZeroTimestampDoesNotConsumeChainPosition(t *testing.T) {
+	registerKinds(t)
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	inner := memory.NewLocal(inmem.NewBackend())
+	signed := provenance.NewSigningMemory(inner, provenance.NewSigner(testKey(9), "system:channelsd"))
+	entry := auditEntry("ta-zero", `{"n":1}`)
+	entry.CreatedAt = time.Time{}
+	_, err := signed.Put(ctx, entry)
+	require.ErrorContains(t, err, "zero CreatedAt")
+	result, err := inner.Query(ctx, memory.Query{Scope: entry.Scope, Kinds: []string{entry.Kind}})
+	require.NoError(t, err)
+	assert.Empty(t, result.Entries)
+	stored, err := signed.Put(ctx, auditEntry("ta-next", `{"n":2}`))
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), stored.Provenance.Seq)
+}
+
 // TestSigningMemory_RejectedPutDoesNotForkChain is the regression for the
 // audit-chain corruption seen by `oap audit verify` (gap "missing seq 1" +
 // "prevHash mismatch"). When an append-only Put is rejected, the signer had

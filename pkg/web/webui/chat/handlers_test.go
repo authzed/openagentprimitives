@@ -1115,8 +1115,12 @@ func TestChatPlaneAddressesTheNamespaceItWasGiven(t *testing.T) {
 	const shared = "shared-name"
 	at := time.Now().UTC().Truncate(time.Second)
 	transcripts := map[string][]memory.Entry{
-		"/memory/turn/demo-ns/" + shared:  {turnTestEntry(t, shared, 0, "assistant", "first namespace", at)},
-		"/memory/turn/other-ns/" + shared: {turnTestEntry(t, shared, 0, "assistant", "second namespace", at)},
+		"/memory/turn/demo-ns/" + shared:                 {turnTestEntry(t, shared, 0, "assistant", "first namespace", at)},
+		"/memory/reply_delivery/demo-ns/" + shared:       {},
+		"/memory/interaction_history/demo-ns/" + shared:  {},
+		"/memory/turn/other-ns/" + shared:                {turnTestEntry(t, shared, 0, "assistant", "second namespace", at)},
+		"/memory/reply_delivery/other-ns/" + shared:      {},
+		"/memory/interaction_history/other-ns/" + shared: {},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		entries, ok := transcripts[r.URL.Path]

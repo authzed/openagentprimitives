@@ -315,3 +315,17 @@ func TestEval_ByModel_SingleBucketMatchesLegacyTotal(t *testing.T) {
 	assert.Equal(t, legacyStamped.AmountMicroUSD, bucketedStamped.AmountMicroUSD,
 		"session total with one bucket == that bucket's amount")
 }
+
+func TestQuietAccountingStillStampsToolLowerBound(t *testing.T) {
+	var stamped v1.EstimatedSessionCost
+	reporter := New(Deps{Quiet: true, Stamp: func(_ context.Context, c v1.EstimatedSessionCost) (v1.EstimatedSessionCost, error) {
+		stamped = c
+		return c, nil
+	}})
+	result := reporter.Eval(context.Background(), pipeline.Input{Point: pipeline.SessionEnd, End: &pipeline.SessionEndInfo{Model: "unknown", Reason: "completed", ByTool: []pipeline.ToolUsage{{Tool: "inner-tool", CostMicroUSD: 1200, CostReported: true}}}})
+	require.Empty(t, result.Notices)
+	require.Equal(t, int64(1200), stamped.AmountMicroUSD)
+	require.Equal(t, "USD", stamped.Currency)
+	require.False(t, stamped.PricingKnown)
+	require.Len(t, stamped.ByTool, 1)
+}

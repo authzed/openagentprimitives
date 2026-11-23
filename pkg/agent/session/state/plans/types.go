@@ -6,6 +6,7 @@ package plans
 import (
 	"time"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 )
 
@@ -104,10 +105,16 @@ type Plan struct {
 // Requires edges at freeze time and to group items for display. Authorization
 // never keys on it — an agent that could name its own phases could transplant
 // an approval between plans.
+type ReminderRequest struct {
+	Resource string `json:"resource"`
+	goals.ExecutionRequest
+}
+
 type Phase struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	Why   string `json:"why"`
+	Reminders []ReminderRequest `json:"reminders,omitempty"`
+	ID        string            `json:"id"`
+	Label     string            `json:"label"`
+	Why       string            `json:"why"`
 
 	// Requires gates selection on prior ENTRY of each named phase — never on
 	// an agent's assertion that it finished something.

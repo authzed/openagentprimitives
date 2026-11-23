@@ -4964,6 +4964,25 @@ spec:
                   after archive); ForkedFrom is set on explicit user-triggered
                   restart.
                 type: string
+              goalExecution:
+                description: GoalExecution binds an operator-created root session
+                  to a durable claim.
+                properties:
+                  consentDigest:
+                    type: string
+                  goalID:
+                    type: string
+                  goalRevision:
+                    format: int64
+                    type: integer
+                  occurrenceID:
+                    type: string
+                required:
+                - consentDigest
+                - goalID
+                - goalRevision
+                - occurrenceID
+                type: object
               inputChannel:
                 description: |-
                   InputChannel records the channel-driven origin — the Channel
@@ -5034,6 +5053,13 @@ spec:
                 - name
                 - natsSubjectPrefix
                 type: object
+              openingSummary:
+                description: |-
+                  OpeningSummary optionally replaces the initial instruction bubble with a
+                  readable summary and a control to inspect the exact inline instructions.
+                  Intended for asynchronously created sessions. Render as plain text.
+                maxLength: 2000
+                type: string
               outputChannel:
                 description: |-
                   OutputChannel records the Channel the session's outbound
@@ -5160,6 +5186,9 @@ spec:
                 or changed after create'
               rule: has(self.forkedFrom) == has(oldSelf.forkedFrom) && (!has(self.forkedFrom)
                 || self.forkedFrom == oldSelf.forkedFrom)
+            - message: openingSummary requires inline instructions
+              rule: '!has(self.openingSummary) || size(self.openingSummary) == 0 ||
+                (has(self.prompt.inline) && size(self.prompt.inline) > 0)'
           status:
             properties:
               activeWidgets:
@@ -6827,6 +6856,17 @@ spec:
                 - reportSessionCost
                 - requireSubagentDigestPins
                 type: object
+              enforcedMaxDuration:
+                description: |-
+                  EnforcedMaxDuration is the budget.maxDuration the CURRENT runner pod is
+                  enforcing, written alongside runDuration. The runner reads its budget
+                  from status.effectiveSettings once at pod start, while the operator
+                  re-resolves effectiveSettings every reconcile, so the two diverge after a
+                  class or session budget edit. The operator's run-duration backstop
+                  compares runDuration against THIS value, the cap the runner actually
+                  holds, so a lowered class cap cannot fail a healthy session mid-run.
+                  Absent when the runner enforces no maxDuration.
+                type: string
               estimatedCost:
                 description: |-
                   EstimatedCost is the best-effort end-of-session USD cost estimate.
@@ -7771,7 +7811,8 @@ spec:
                         reason:
                           description: |-
                             Reason is the kubelet's terminal container Waiting reason, e.g.
-                            "CrashLoopBackOff" or "ImagePullBackOff".
+                            "CrashLoopBackOff" or "ImagePullBackOff", or "NotReadyDeadlineExceeded"
+                            for a pod that stayed not-Ready past the operator's deadline without one.
                           type: string
                       required:
                       - reason
@@ -11746,6 +11787,42 @@ spec:
                       reviewed is the one value the field cannot hold. Same shape as
                       ChannelMetaagentSpec.Enabled in this file.
                     type: boolean
+                  skipStacked:
+                    description: |-
+                      SkipStacked defers pull requests that are STACKED on another branch —
+                      whose base is not the repository's default branch, which is how a PR
+                      that depends on an earlier, still-open PR is opened. Nil means false,
+                      so a Channel written before this field existed keeps reviewing into
+                      every base branch; `oap channel create` writes `true` for a new one.
+
+                      When true, such a PR is not reviewed while it is stacked (opening it,
+                      pushing to it, or marking it ready all wait), and each deferred delivery
+                      leaves a queued check run on the PR saying what it is waiting for. It is
+                      reviewed when its base is changed to the default branch — an "edited"
+                      delivery, admitted without being listed in Events whenever Events lists
+                      any review action (opened, reopened, ready_for_review, synchronize). A
+                      retarget that arrives while the PR is a draft is dropped like any draft,
+                      so ready_for_review is admitted the same way when drafts are skipped. A
+                      renamed default branch moves every open PR and is indistinguishable from
+                      a retarget, so it re-reviews each, most finding their head commit
+                      already concluded.
+
+                      GitHub changes the base itself only when the PR it was stacked on
+                      merges AND that PR's branch is deleted, so pair this with the
+                      repository's "Automatically delete head branches" setting (or a
+                      stacking tool that retargets); otherwise, and when the lower PR is
+                      closed without merging, change the PR's base to the default branch by
+                      hand to start its review. Reviewing every PR of a ten-deep stack at
+                      once re-reviews each change in every PR above it, and starts a burst of
+                      sessions the cluster may not have room for.
+
+                      Leave it off for repositories that genuinely review into a non-default
+                      branch (release branches, long-lived integration branches): the check
+                      cannot tell those from a stack, and with it on they would never be
+                      reviewed. The same goes for the old default branch after the default is
+                      switched to a different branch: PRs still open against it are deferred
+                      until their base is changed.
+                    type: boolean
                 required:
                 - appSlug
                 type: object
@@ -13742,6 +13819,51 @@ spec:
                 required:
                 - name
                 type: object
+              plugin:
+                description: |-
+                  Plugin is the Claude Code plugin this skill was published inside, when
+                  it was discovered at <plugin>/skills/<name>/SKILL.md next to a
+                  <plugin>/.claude-plugin/plugin.json. It carries the plugin's name and
+                  its agents/*.md, which the skill's instructions may dispatch by name and
+                  which a skill staged on its own would otherwise lack. A disk-based
+                  consumer that understands plugins (claudeshim) loads the skill as part
+                  of a plugin rebuilt from this; every other consumer ignores it. nil for a
+                  standalone skill, and for every skill of a source that set
+                  disablePluginAgents. See pkg/tools/skills/pluginlayout.
+                properties:
+                  agents:
+                    description: Agents are the plugin's agents/*.md definitions,
+                      verbatim.
+                    items:
+                      description: SkillPluginAgent is one agent definition file of
+                        a plugin.
+                      properties:
+                        content:
+                          description: Content is the file's full text, frontmatter
+                            included.
+                          type: string
+                        name:
+                          description: Name is the file stem (agents/<name>.md).
+                          maxLength: 64
+                          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]*$
+                          type: string
+                      required:
+                      - content
+                      - name
+                      type: object
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  name:
+                    description: Name is the plugin manifest's name.
+                    maxLength: 64
+                    pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+                    type: string
+                required:
+                - name
+                type: object
               repoInstructions:
                 description: |-
                   RepoInstructions is the repo-root agent-instructions file (AGENTS.md or
@@ -14009,6 +14131,13 @@ spec:
                 - namespace
                 - secretRef
                 type: object
+              disablePluginAgents:
+                description: |-
+                  DisablePluginAgents, when true, materializes every skill this source
+                  discovers as standalone, even one published inside a Claude Code plugin:
+                  no spec.plugin, so the plugin's agents are never captured from outside
+                  spec.subpath and never staged. Default (false) = enabled.
+                type: boolean
               disableRepoInstructions:
                 description: |-
                   DisableRepoInstructions, when true, stops this source from discovering and
@@ -18448,6 +18577,51 @@ spec:
                 required:
                 - name
                 type: object
+              plugin:
+                description: |-
+                  Plugin is the Claude Code plugin this skill was published inside, when
+                  it was discovered at <plugin>/skills/<name>/SKILL.md next to a
+                  <plugin>/.claude-plugin/plugin.json. It carries the plugin's name and
+                  its agents/*.md, which the skill's instructions may dispatch by name and
+                  which a skill staged on its own would otherwise lack. A disk-based
+                  consumer that understands plugins (claudeshim) loads the skill as part
+                  of a plugin rebuilt from this; every other consumer ignores it. nil for a
+                  standalone skill, and for every skill of a source that set
+                  disablePluginAgents. See pkg/tools/skills/pluginlayout.
+                properties:
+                  agents:
+                    description: Agents are the plugin's agents/*.md definitions,
+                      verbatim.
+                    items:
+                      description: SkillPluginAgent is one agent definition file of
+                        a plugin.
+                      properties:
+                        content:
+                          description: Content is the file's full text, frontmatter
+                            included.
+                          type: string
+                        name:
+                          description: Name is the file stem (agents/<name>.md).
+                          maxLength: 64
+                          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]*$
+                          type: string
+                      required:
+                      - content
+                      - name
+                      type: object
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  name:
+                    description: Name is the plugin manifest's name.
+                    maxLength: 64
+                    pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+                    type: string
+                required:
+                - name
+                type: object
               repoInstructions:
                 description: |-
                   RepoInstructions is the repo-root agent-instructions file (AGENTS.md or
@@ -18709,6 +18883,13 @@ spec:
                 - agentIdentity
                 - credential
                 type: object
+              disablePluginAgents:
+                description: |-
+                  DisablePluginAgents, when true, materializes every skill this source
+                  discovers as standalone, even one published inside a Claude Code plugin:
+                  no spec.plugin, so the plugin's agents are never captured from outside
+                  spec.subpath and never staged. Default (false) = enabled.
+                type: boolean
               disableRepoInstructions:
                 description: |-
                   DisableRepoInstructions, when true, stops this source from discovering and
@@ -24414,6 +24595,11 @@ spec:
                   deterministic hash of this value (see pkg/platform/identity/useridentity).
                 minLength: 1
                 type: string
+              suspended:
+                description: |-
+                  Suspended prevents future goal execution and stops active goal sessions.
+                  This field is controlled by the cluster administrator.
+                type: boolean
             required:
             - subject
             type: object
@@ -31768,6 +31954,41 @@ spec:
       app.kubernetes.io/name: spicebox-webd
   policyTypes:
   - Ingress
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: spicebox-goal-execution
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    caBundle: ""
+    service:
+      name: spicebox-webhook
+      namespace: agentprimitives-system
+      path: /validate-goal-execution
+      port: 443
+  failurePolicy: Fail
+  matchConditions:
+  - expression: (object != null && has(object.spec.goalExecution)) || (oldObject !=
+      null && has(oldObject.spec.goalExecution)) || (request.operation == 'CREATE'
+      && object != null && object.metadata.name.matches('^goal-[0-9a-f]{32}$'))
+    name: goal-session
+  name: goalexecution.agentprimitives.authzed.com
+  rules:
+  - apiGroups:
+    - agentprimitives.authzed.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - agentsessions
+    - agentsessions/status
+    scope: Namespaced
+  sideEffects: None
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration

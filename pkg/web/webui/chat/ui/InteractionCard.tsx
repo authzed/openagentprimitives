@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button, cn } from "@ap/design";
 import { CardExcerpt } from "./cardParts";
+import { compactConsentReview, ConsentReview } from "./consentReview";
 import type {
   InteractionAction,
   InteractionAppliedInner,
@@ -330,6 +331,8 @@ export function InteractionCard(props: {
   footer?: React.ReactNode;
 }) {
   const { request, applied, onDecision, footer } = props;
+  const consentReview = compactConsentReview(request);
+  const displayFields = consentReview?.parentFields ?? request.fields;
   // A card that asks about reach whose effects leave the session and cannot be
   // undone gets the strongest treatment on the surface. Derived from the tone
   // the publisher already set on the line, so this stays category-agnostic —
@@ -388,9 +391,9 @@ export function InteractionCard(props: {
 
       {footer}
 
-      {request.fields && request.fields.length > 0 && (
+      {displayFields && displayFields.length > 0 && (
         <div className="flex flex-col gap-2.5">
-          {request.fields.map((f, i) => {
+          {displayFields.map((f, i) => {
             // Structure wins when the publisher sent it. A plan-gate What is a
             // list of phases, each with its permissions and the resources it
             // reaches, and printing that as one newline-joined paragraph made
@@ -475,7 +478,28 @@ export function InteractionCard(props: {
 
       {/* UNTRUSTED — rendered as literal text inside <pre><code>, never as
           markup. See the file-top SECURITY CONTRACT note and cardParts.tsx. */}
-      <CardExcerpt excerpt={request.excerpt} />
+      {consentReview ? (
+        <>
+          <ConsentReview review={consentReview} />
+          <details className="text-xs leading-snug">
+            <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+              View goal outcomes and evidence
+            </summary>
+            <CardExcerpt excerpt={request.excerpt} />
+          </details>
+        </>
+      ) : <CardExcerpt excerpt={request.excerpt} />}
+
+      {!!request.consents?.length && (
+        <details className="text-xs leading-snug">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+            View exact requests included in this approval
+          </summary>
+          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words">
+            {JSON.stringify(request.details, null, 2)}
+          </pre>
+        </details>
+      )}
 
       {resolved ? (
         <div className={cn("text-xs", applied.outcome === "denied" ? "text-destructive" : "text-muted-foreground")}>

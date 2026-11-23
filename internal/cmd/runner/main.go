@@ -32,6 +32,7 @@ import (
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/derivevalidator"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
@@ -67,6 +68,7 @@ import (
 	// Registers the "openingsummary" state kind, which the enrichment tool
 	// writes and the runner reads to keep a triggered session's pinned
 	// opening message current.
+	goalmodel "github.com/authzed/openagentprimitives/pkg/agent/goals"
 	_ "github.com/authzed/openagentprimitives/pkg/agent/session/state/openingsummary"
 	"github.com/authzed/openagentprimitives/pkg/agent/session/state/plans"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
@@ -137,6 +139,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/label"
 	lifecyclekind "github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/systemprompt"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/toolsession"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/turn"
@@ -252,7 +255,7 @@ func main() {
 	deplogs.Silence()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
+	installLogging(logger.Handler())
 
 	// run() owns its own context + manual SIGTERM/SIGINT handling (see below),
 	// so the root command uses Execute() rather than ExecuteContext() — the
@@ -324,6 +327,26 @@ func newCommand() *cobra.Command {
 	return cmd
 }
 
+// installLogging makes h the destination for both slog's default logger and
+// controller-runtime's global logger. Without the second half, every
+// log.FromContext call in runner-side code (respond_to_user's fallback-notice
+// failures, the dispatch loop, authz slot promotion) on a context that carries
+// no logger of its own is discarded.
+func installLogging(h slog.Handler) {
+	slog.SetDefault(slog.New(h))
+	ctrl.SetLogger(logr.FromSlogHandler(h))
+}
+
+// newRootContext returns run()'s cancellable root context, carrying a logr view
+// of h. log.FromContext prefers a context's own logger over the global one
+// installLogging sets, so this is defence in depth: nothing in this binary is
+// known to claim controller-runtime's first-write-wins global ahead of main,
+// but the lines routed here are error reports, and a context-carried logger
+// keeps them reaching stderr even if a dependency someday does.
+func newRootContext(h slog.Handler) (context.Context, context.CancelFunc) {
+	return context.WithCancel(logf.IntoContext(context.Background(), logr.FromSlogHandler(h)))
+}
+
 func run(cfg *config) error {
 	hostname := cfg.hostname
 	ns := cfg.agentSessionNamespace
@@ -381,7 +404,7 @@ func run(cfg *config) error {
 	// SIGTERM handling. The signal-consuming goroutine is started below, once
 	// the signing memory + session scope exist, so it can record an explicit
 	// Stopped lifecycle transition before cancelling the loop.
-	rootCtx, cancel := context.WithCancel(context.Background())
+	rootCtx, cancel := newRootContext(slog.Default().Handler())
 	defer cancel()
 
 	// loopRef is stored once the runner Loop is fully constructed (below). The
@@ -1395,59 +1418,68 @@ func run(cfg *config) error {
 		// Resolve the probe URL for this sidecar entry.
 		probeURL, ready := sidecarProbeURL(rt, os.Getenv)
 
-		if !ready {
-			if rt.AwaitingSecret {
-				// Secret not yet produced; sidecar pod doesn't exist yet. Skip
-				// silently — this is the normal AwaitingSecret steady state, not
-				// a boot failure.
-				slog.Info("sidecar toolbox awaiting secret; skipping this pass",
-					"sidecar", rt.Name)
-				continue
-			}
-			if rt.RunMode == "separate-pod" {
-				// Pod exists (AwaitingSecret==false) but IP not yet reflected in
-				// status. Poll the AgentSession until it appears.
-				slog.Info("separate-pod sidecar IP not yet reflected; polling",
-					"sidecar", rt.Name, "timeout", sidecarPodIPTimeout)
-				deadline := time.Now().Add(sidecarPodIPTimeout)
-				for time.Now().Before(deadline) {
-					select {
-					case <-rootCtx.Done():
-						return rootCtx.Err()
-					case <-time.After(sidecarPodIPPollInterval):
-					}
-					var refreshed spiceboxv1alpha1.AgentSession
-					if rerr := c.Get(rootCtx, sessKey, &refreshed); rerr != nil {
-						return fmt.Errorf("poll AgentSession for sidecar %q IP: %w", rt.Name, rerr)
-					}
-					for _, rrt := range refreshed.Status.ResolvedSidecarToolboxes {
-						if rrt.Name == rt.Name {
-							rt = rrt
-							break
-						}
-					}
-					probeURL, ready = sidecarProbeURL(rt, os.Getenv)
-					if ready {
+		// sidecarBootDecision owns the per-sidecar branch; it is re-evaluated on
+		// each refreshed snapshot while polling.
+		action := sidecarBootDecision(rt, ready)
+		if action == sidecarBootPoll {
+			// Pod exists (AwaitingSecret==false) but IP not yet reflected in
+			// status. Poll the AgentSession until it appears, or until the
+			// operator records the pod as terminally failed.
+			slog.Info("separate-pod sidecar IP not yet reflected; polling",
+				"sidecar", rt.Name, "timeout", sidecarPodIPTimeout)
+			deadline := time.Now().Add(sidecarPodIPTimeout)
+			for action == sidecarBootPoll && time.Now().Before(deadline) {
+				select {
+				case <-rootCtx.Done():
+					return rootCtx.Err()
+				case <-time.After(sidecarPodIPPollInterval):
+				}
+				var refreshed spiceboxv1alpha1.AgentSession
+				if rerr := c.Get(rootCtx, sessKey, &refreshed); rerr != nil {
+					return fmt.Errorf("poll AgentSession for sidecar %q IP: %w", rt.Name, rerr)
+				}
+				for _, rrt := range refreshed.Status.ResolvedSidecarToolboxes {
+					if rrt.Name == rt.Name {
+						rt = rrt
 						break
 					}
 				}
-				if !ready {
-					// Sidecar pod created (not AwaitingSecret) but never became
-					// Ready within the timeout — treat as boot failure.
-					if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed,
-						fmt.Sprintf("separate-pod sidecar %q: SidecarPodIP not reflected after %s", rt.Name, sidecarPodIPTimeout)); werr != nil {
-						return werr
-					}
-					return nil
-				}
-			} else {
-				// In-pod sidecar: MCP_PORT_* env missing — always a boot error.
+				probeURL, ready = sidecarProbeURL(rt, os.Getenv)
+				action = sidecarBootDecision(rt, ready)
+			}
+			if action == sidecarBootPoll {
+				// Sidecar pod created (not AwaitingSecret) but never became
+				// Ready within the timeout — treat as boot failure.
 				if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed,
-					fmt.Sprintf("runner: missing MCP_PORT env for in-pod sidecar %q", rt.Name)); werr != nil {
+					fmt.Sprintf("separate-pod sidecar %q: SidecarPodIP not reflected after %s", rt.Name, sidecarPodIPTimeout)); werr != nil {
 					return werr
 				}
 				return nil
 			}
+		}
+		switch action {
+		case sidecarBootSkip:
+			if rt.AwaitingSecret {
+				// Secret not yet produced; sidecar pod doesn't exist yet. This is
+				// the normal AwaitingSecret steady state, not a boot failure.
+				slog.Info("sidecar toolbox awaiting secret; skipping this pass",
+					"sidecar", rt.Name)
+			} else {
+				// The operator recorded this sidecar's pod as terminally failed.
+				// Boot without it: the tool refresher tells the agent at the top
+				// of the first turn (and the user, once per failure), and picks
+				// the sidecar up if its pod ever recovers.
+				slog.Info("separate-pod sidecar terminally failed; booting without it",
+					"sidecar", rt.Name, "reason", rt.PodFailure.Reason)
+			}
+			continue
+		case sidecarBootFail:
+			// In-pod sidecar: MCP_PORT_* env missing — always a boot error.
+			if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed,
+				fmt.Sprintf("runner: missing MCP_PORT env for in-pod sidecar %q", rt.Name)); werr != nil {
+				return werr
+			}
+			return nil
 		}
 
 		// Probe + synthesize this sidecar's tools via the single shared core
@@ -1584,6 +1616,9 @@ func run(cfg *config) error {
 	}
 
 	env := capability.RunnerEnv{
+		GoalsCaller: func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+			return memHTTP.Goals(ctx, ns, name, req)
+		},
 		NATSPublish:      pubFn,
 		EnvelopeSigner:   envSigner,
 		NATSRequest:      natsRequestFn,
@@ -1722,7 +1757,17 @@ func run(cfg *config) error {
 			if l == nil {
 				return nil, fmt.Errorf("plan gate is not ready for this session")
 			}
-			return l.FreezeAndRecordPhases(ctx, runner.AuthoredPhasesFrom(phases))
+			authored, err := runner.PreparePlanReminders(ctx, phases, func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+				return memHTTP.Goals(ctx, ns, name, req)
+			}, sess.Spec.GoalExecution == nil && sess.Spec.Parent == nil)
+			if err != nil {
+				return nil, err
+			}
+			notices, err := l.FreezeAndRecordPhases(ctx, authored)
+			if err != nil {
+				return notices, err
+			}
+			return notices, l.RequestPlanReminderApproval(ctx)
 		},
 		ActivePlan: func(ctx context.Context) (plangate.Plan, bool) {
 			if l := loopRef.Load(); l != nil {
@@ -1948,6 +1993,21 @@ func run(cfg *config) error {
 		Logger:       logr.FromSlogHandler(slog.Default().Handler()),
 	})
 	mergedTools := assembled.Tools
+	if sess.Spec.GoalExecution != nil {
+		authority, err := memHTTP.Goals(rootCtx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
+		if err != nil {
+			return fmt.Errorf("read goal execution terms: %w", err)
+		}
+		if authority.ExecutionTerms == nil {
+			return fmt.Errorf("goal execution terms unavailable")
+		}
+		mergedTools = meta.BoundedGoalToolsForTerms(mergedTools, sess.Spec.GoalExecution.ConsentDigest, *authority.ExecutionTerms, func(ctx context.Context) error {
+			_, err := memHTTP.Goals(ctx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
+			return err
+		}, func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+			return memHTTP.Goals(ctx, ns, name, req)
+		})
+	}
 
 	// toolLookupFn late-binds now that mergedTools is final, so a
 	// request_credential_update call mid-session resolves against the complete
@@ -2207,6 +2267,7 @@ func run(cfg *config) error {
 		Model:              sess.Status.EffectiveSettings.Model.Name,
 		Routing:            routingToLLM(sess.Status.EffectiveSettings.ModelRouting),
 		ReportSessionCost:  sess.Status.EffectiveSettings.ReportSessionCost,
+		RecordSessionCost:  sess.Spec.GoalExecution != nil,
 		ModelInputPerMTok:  sess.Status.EffectiveSettings.ModelInputPerMTok,
 		ModelOutputPerMTok: sess.Status.EffectiveSettings.ModelOutputPerMTok,
 		UserID:             string(sess.UID),
@@ -2250,8 +2311,21 @@ func run(cfg *config) error {
 		PlanGateResourceDisplays:   runner.ResourceDisplaysOf(&class),
 		ResourceStandings:          runner.ResourceStandingsOf(&class),
 		PlanGateMaxCardHandles:     runner.PlanGateMaxCardHandles(sess.Status.EffectiveSettings),
-		PlanGateMaxAutoApprove:     runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings),
-		PlanGateRequirePlan:        runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
+		PlanGateMaxAutoApprove: func() int {
+			if sess.Spec.GoalExecution != nil {
+				return 0
+			}
+			return runner.PlanGateMaxAutoApprove(sess.Status.EffectiveSettings)
+		}(),
+		PlanGateRequirePlan: runner.PlanGateRequirePlan(sess.Status.EffectiveSettings),
+		PlanApprovalDeriver: func() func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error) {
+			if sess.Spec.GoalExecution == nil {
+				return nil
+			}
+			return runner.GoalPlanApprovalDeriver(func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
+				return memHTTP.Goals(ctx, ns, name, req)
+			})
+		}(),
 
 		// Live CR pointers, so the loop can dispatch autofill and
 		// per-user-message binding. Nil disables those paths, as a defence
@@ -2747,41 +2821,9 @@ func run(cfg *config) error {
 			return natsRT.conn.Publish(subject, body)
 		}
 		loop.TimeoutAppliedPublish = func(_ context.Context, envNS, envName string, env channelevents.Envelope) error {
-			prefix := channelevents.SubjectPrefix(envNS, envName)
-			// IN: channelsd's Handle*Applied handler clears the pending queue +
-			// condition for this kind. OUT: the outbound relay hands it to the
-			// channel sender to edit the pending prompt to "expired" (a no-op
-			// when no channel is bound); the runner's own applied subscriber
-			// ignores it because the orchestrator already forgot this request.
-			//
-			// Sign is called once per subject (not once for the shared body):
-			// the signature is bound to the exact subject it travels on, so the
-			// IN and OUT copies each need their own signature over their own
-			// digest, computed and marshalled independently.
-			inSubj := channelevents.SubjectIn(prefix, env.Kind)
-			if err := envSigner.Sign(inSubj, &env); err != nil {
-				return fmt.Errorf("sign envelope: %w", err)
-			}
-			inBody, err := json.Marshal(env)
-			if err != nil {
-				return fmt.Errorf("marshal timeout applied envelope: %w", err)
-			}
-			if err := natsRT.conn.Publish(inSubj, inBody); err != nil {
-				return fmt.Errorf("publish timeout applied on IN: %w", err)
-			}
-			outSubj := channelevents.SubjectOut(prefix, env.Kind)
-			if err := envSigner.Sign(outSubj, &env); err != nil {
-				return fmt.Errorf("sign envelope: %w", err)
-			}
-			outBody, err := json.Marshal(env)
-			if err != nil {
-				return fmt.Errorf("marshal timeout applied envelope: %w", err)
-			}
-			if err := natsRT.conn.Publish(outSubj, outBody); err != nil {
-				return fmt.Errorf("publish timeout applied on OUT: %w", err)
-			}
-			return nil
+			return runner.PublishTimeoutApplied(natsRT.conn.Publish, envSigner.Sign, envNS, envName, env)
 		}
+
 		// tool_approval, info_leakage, and content_inspection all resume via the
 		// generic subscribeInteractionApplied bridge.
 		go subscribeInteractionApplied(rootCtx, natsRT, loop.Approval, ns, name)

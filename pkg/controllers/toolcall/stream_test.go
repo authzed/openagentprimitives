@@ -125,7 +125,7 @@ func TestReconcileStreaming_RunningWithoutARegisteredStream(t *testing.T) {
 	t.Run("registry has no stream (operator restart): Failed=True/OperatorRestart, FinishedAt set", func(t *testing.T) {
 		got := reconcileRunningStream(t, runningStreamingToolCall(t, "tc-orphan"), gateway.NewRegistry())
 
-		require.Equal(t, spiceboxv1alpha1.ToolCallConditionFailed, terminalCondition(got),
+		require.Equal(t, spiceboxv1alpha1.ToolCallConditionFailed, got.TerminalCondition(),
 			"an orphaned streaming ToolCall must finalize, not stay Running forever")
 		var failed metav1.Condition
 		for _, c := range got.Status.Conditions {
@@ -148,7 +148,7 @@ func TestReconcileStreaming_RunningWithoutARegisteredStream(t *testing.T) {
 
 		got := reconcileRunningStream(t, runningStreamingToolCall(t, "tc-live"), reg)
 
-		assert.Empty(t, terminalCondition(got),
+		assert.Empty(t, got.TerminalCondition(),
 			"a live stream must never be failed out from under its own watcher goroutine")
 		assert.True(t, hasTrueCondition(got, spiceboxv1alpha1.ToolCallConditionRunning),
 			"the watcher goroutine still owns finalization")

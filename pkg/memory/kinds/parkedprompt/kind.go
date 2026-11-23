@@ -52,6 +52,10 @@ type Content struct {
 	// per-entry Delete: the read path filters these out, and scope-level GC
 	// reclaims them with the rest of the session.
 	Resolved bool `json:"resolved,omitempty"`
+	// Resolution is a channelsd-owned delivery outbox. Callback and credential
+	// URLs are excluded. A resolved card never reruns its decision handler.
+	Resolution        []byte `json:"resolution,omitempty"`
+	ResolutionPending bool   `json:"resolutionPending,omitempty"`
 }
 
 type Kind struct{}
@@ -72,7 +76,7 @@ func (Kind) WriteAuthority() memory.WriteAuthority { return memory.ComponentWrit
 func (Kind) Retention() memory.Retention { return memory.Retention{EssentialWhileLive: true} }
 
 func (Kind) ContentSchema() reflect.Type                    { return reflect.TypeOf(Content{}) }
-func (Kind) IndexedFields() []string                        { return nil }
+func (Kind) IndexedFields() []string                        { return []string{"resolutionPending"} }
 func (Kind) NewScopeHooks(_ memory.Scope) memory.ScopeHooks { return hooks{} }
 
 type hooks struct{}

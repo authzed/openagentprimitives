@@ -46,6 +46,7 @@ func PhaseAuthorityRecord(p Plan, index int, standing map[string]string) plangat
 		// and carried anyway, because this is the projection of what the phase
 		// may do and the key is precisely that.
 		PhaseKey:    ph.AuthorityKey(),
+		Consents:    ph.Consents,
 		MaxCount:    ph.Max.Count,
 		BudgetCalls: ph.Budget.Calls,
 		Requires:    requiresIndices(ph),

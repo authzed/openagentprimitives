@@ -58,6 +58,10 @@ func baseSpec() v1.SkillSpec {
 			Content:    "repo instructions",
 			Truncated:  false,
 		},
+		Plugin: &v1.SkillPlugin{
+			Name:   "demo-plugin",
+			Agents: []v1.SkillPluginAgent{{Name: "demo-agent", Content: "agent prompt"}},
+		},
 	}
 }
 
@@ -114,6 +118,15 @@ func TestEqual_DetectsEveryFieldDifference(t *testing.T) {
 		{name: "RepoInstructions.Content differs: not equal", mutate: func(s *v1.SkillSpec) { s.RepoInstructions.Content = "other" }},
 		{name: "RepoInstructions.Truncated differs: not equal", mutate: func(s *v1.SkillSpec) { s.RepoInstructions.Truncated = true }},
 		{name: "RepoInstructions becomes nil: not equal", mutate: func(s *v1.SkillSpec) { s.RepoInstructions = nil }},
+
+		{name: "Plugin.Name differs: not equal", mutate: func(s *v1.SkillSpec) { s.Plugin.Name = "other" }},
+		{name: "Plugin agent content differs: not equal", mutate: func(s *v1.SkillSpec) {
+			s.Plugin.Agents = []v1.SkillPluginAgent{{Name: "demo-agent", Content: "edited prompt"}}
+		}},
+		{name: "Plugin gains an agent: not equal", mutate: func(s *v1.SkillSpec) {
+			s.Plugin.Agents = append(s.Plugin.Agents, v1.SkillPluginAgent{Name: "other-agent", Content: "x"})
+		}},
+		{name: "Plugin becomes nil: not equal", mutate: func(s *v1.SkillSpec) { s.Plugin = nil }},
 	}
 
 	for _, tc := range cases {
@@ -141,6 +154,7 @@ func TestEqual_PointerFieldNilHandling(t *testing.T) {
 		{name: "Source", strip: func(s *v1.SkillSpec) { s.Source = nil }},
 		{name: "Bundle", strip: func(s *v1.SkillSpec) { s.Bundle = nil }},
 		{name: "RepoInstructions", strip: func(s *v1.SkillSpec) { s.RepoInstructions = nil }},
+		{name: "Plugin", strip: func(s *v1.SkillSpec) { s.Plugin = nil }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+" nil on both sides: equal", func(t *testing.T) {
@@ -158,13 +172,24 @@ func TestEqual_PointerFieldNilHandling(t *testing.T) {
 		})
 	}
 
-	t.Run("all three pointer fields nil on both sides: equal", func(t *testing.T) {
+	t.Run("all pointer fields nil on both sides: equal", func(t *testing.T) {
 		a, b := baseSpec(), baseSpec()
 		for _, s := range []*v1.SkillSpec{&a, &b} {
-			s.Source, s.Bundle, s.RepoInstructions = nil, nil, nil
+			s.Source, s.Bundle, s.RepoInstructions, s.Plugin = nil, nil, nil, nil
 		}
 		assert.True(t, skillspec.Equal(a, b))
 	})
+}
+
+// TestEqual_PluginWithNoAgents_NilAndEmptyAreEquivalent: a plugin whose
+// agents/ is empty round-trips through the API server as a nil slice
+// (omitempty), so treating nil and empty as different would rewrite the CR
+// on every reconcile.
+func TestEqual_PluginWithNoAgents_NilAndEmptyAreEquivalent(t *testing.T) {
+	a, b := baseSpec(), baseSpec()
+	a.Plugin.Agents = nil
+	b.Plugin.Agents = []v1.SkillPluginAgent{}
+	assert.True(t, skillspec.Equal(a, b))
 }
 
 // TestEqual_EmptyMetadataAndNilMetadataAreEquivalent documents the one place a

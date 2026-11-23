@@ -21,13 +21,13 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/x/externalurl"
 )
 
-// runnerContainerName is the name of the agent-runner container inside the
+// RunnerContainerName is the name of the agent-runner container inside the
 // runner Pod. The pod is NOT single-container: in-pod SidecarToolboxes are
 // appended as siblings, running images taken verbatim from a user-supplied CR.
 // Every read of pod status that means "the runner" — readiness, restart count,
 // crash detail — must select on this name rather than scanning the pod, or a
 // third party's container speaks for the agent.
-const runnerContainerName = "runner"
+const RunnerContainerName = "runner"
 
 // PodSpecOpts is the input to BuildRunnerPod.
 type PodSpecOpts struct {
@@ -139,7 +139,7 @@ func BuildRunnerPod(o PodSpecOpts) (*corev1.Pod, error) {
 			SecurityContext:  podspec.HardenedPodSecurityContext(),
 			ImagePullSecrets: cosidecar.PullSecretRefs(o.ImagePullSecret),
 			Containers: []corev1.Container{{
-				Name: runnerContainerName,
+				Name: RunnerContainerName,
 				// Image is set once, below, after the harness block resolves
 				// o.HarnessImage vs o.Image — not here, to avoid two
 				// assignments to the same field.
@@ -274,7 +274,7 @@ func BuildRunnerPod(o PodSpecOpts) (*corev1.Pod, error) {
 	}
 	runnerIdx := -1
 	for i := range pod.Spec.Containers {
-		if pod.Spec.Containers[i].Name == runnerContainerName {
+		if pod.Spec.Containers[i].Name == RunnerContainerName {
 			runnerIdx = i
 			break
 		}

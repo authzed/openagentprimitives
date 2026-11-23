@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -180,11 +181,18 @@ func TestToolCall_TimeoutMarksTimeout(t *testing.T) {
 
 // --- helpers ---
 
-func startManagerWithExec(t *testing.T, env *testenv.Env, binder *fake.Binder, store artifactstore.Store) {
+// startManagerWithExec returns the manager's cached client, for tests that
+// assert on what the operator's cache holds rather than what the API server does.
+func startManagerWithExec(t *testing.T, env *testenv.Env, binder *fake.Binder, store artifactstore.Store) client.Client {
 	t.Helper()
 	mgr, err := ctrl.NewManager(env.Cfg, ctrl.Options{
 		Scheme:  env.Scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
+		// The operator's production cache shape, so every test here runs
+		// against a cache that drops ToolCalls once they are retired.
+		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
+			&spiceboxv1alpha1.ToolCall{}: {Label: toolcall.CacheSelector()},
+		}},
 		Controller: ctrlconfig.Controller{
 			SkipNameValidation: ptr.To(true),
 		},
@@ -225,6 +233,7 @@ func startManagerWithExec(t *testing.T, env *testenv.Env, binder *fake.Binder, s
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() { _ = mgr.Start(ctx) }()
+	return mgr.GetClient()
 }
 
 // createReadyClassAndSession creates a SpiceboxClass with "echo" and "cat" tools (with toolspecs),
@@ -486,6 +495,53 @@ func TestToolCall_DeleteWhileNotRunningCleansUp(t *testing.T) {
 		var got spiceboxv1alpha1.ToolCall
 		err := env.Client.Get(context.Background(), client.ObjectKeyFromObject(tc), &got)
 		return err != nil
+	})
+}
+
+func TestToolCall_TerminalCallIsRetired(t *testing.T) {
+	env := testenv.Shared(t)
+	fakeExec := fake.New()
+	store := blobstore.NewMem()
+	cached := startManagerWithExec(t, env, fakeExec, store)
+
+	createReadyClassAndSession(t, env.Client, "cls-ret", "sess-ret")
+	fakeExec.Program("default/sess-ret-pod:sandbox", fake.Response{ExitCode: 0})
+
+	tc := &spiceboxv1alpha1.ToolCall{
+		ObjectMeta: metav1.ObjectMeta{Name: "tc-ret", Namespace: "default"},
+		Spec: spiceboxv1alpha1.ToolCallSpec{
+			Session: "sess-ret", Tool: "echo",
+			Timeout: metav1.Duration{Duration: 5 * time.Second},
+		},
+	}
+	mustCreate(t, env.Client, tc)
+
+	// env.Client reads the API server directly, so a retired call is still
+	// visible here even though the manager's cache has dropped it.
+	var got spiceboxv1alpha1.ToolCall
+	eventually(t, 10*time.Second, func() bool {
+		if err := env.Client.Get(context.Background(), client.ObjectKeyFromObject(tc), &got); err != nil {
+			return false
+		}
+		return got.Labels[spiceboxv1alpha1.LabelToolCallRetired] == "true"
+	})
+	assert.True(t, hasTrueCondition(&got, spiceboxv1alpha1.ToolCallConditionSucceeded),
+		"retired only after it reached a terminal condition")
+	assert.NotContains(t, got.Finalizers, spiceboxv1alpha1.FinalizerToolCall,
+		"finalizer removed in the retire write, or a cascade delete would strand the call Terminating")
+
+	// The point of retiring: the operator's cache lets go of the call. A
+	// selector that kept retired calls would leave every assertion above green.
+	eventually(t, 10*time.Second, func() bool {
+		var inCache spiceboxv1alpha1.ToolCall
+		return apierrors.IsNotFound(cached.Get(context.Background(), client.ObjectKeyFromObject(tc), &inCache))
+	})
+
+	// The object is out of the controller's view now; deleting it must not
+	// depend on a reconcile that will never come.
+	require.NoError(t, env.Client.Delete(context.Background(), tc), "delete retired ToolCall")
+	eventually(t, 10*time.Second, func() bool {
+		return apierrors.IsNotFound(env.Client.Get(context.Background(), client.ObjectKeyFromObject(tc), &got))
 	})
 }
 

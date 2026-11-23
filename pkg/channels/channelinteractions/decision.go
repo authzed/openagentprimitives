@@ -51,8 +51,9 @@ func (o Outcome) Validate() error {
 type DecisionHandler func(ctx context.Context, d Decision) (Outcome, error)
 
 var (
-	bindMu   sync.RWMutex
-	handlers = map[string]DecisionHandler{}
+	bindMu     sync.RWMutex
+	handlers   = map[string]DecisionHandler{}
+	validators = map[string]DecisionValidator{}
 )
 
 // Bind attaches the decision handler for a registered category. Unknown
@@ -86,4 +87,29 @@ func ResetBindings() {
 	bindMu.Lock()
 	defer bindMu.Unlock()
 	handlers = map[string]DecisionHandler{}
+	validators = map[string]DecisionValidator{}
+}
+
+// DecisionValidator preflights an included consent without recording a decision
+// or granting authority. Every composable category must bind one.
+type DecisionValidator func(context.Context, Decision) error
+
+func BindValidator(category string, validator DecisionValidator) {
+	cat, ok := Get(category)
+	if !ok || !cat.PlanConsent || validator == nil {
+		panic("invalid plan consent validator")
+	}
+	bindMu.Lock()
+	defer bindMu.Unlock()
+	if _, dup := validators[category]; dup {
+		panic("duplicate plan consent validator")
+	}
+	validators[category] = validator
+}
+
+func ValidatorFor(category string) (DecisionValidator, bool) {
+	bindMu.RLock()
+	defer bindMu.RUnlock()
+	validator, ok := validators[category]
+	return validator, ok
 }

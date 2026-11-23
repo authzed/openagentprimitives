@@ -448,7 +448,7 @@ func postNoticeReturningTS(
 	_, ts, err := cli.PostMessageContext(ctx, channelID, append(opts, extra...)...)
 	if err != nil && isUnsupportedBlocksErr(err) {
 		log.FromContext(ctx).Info("slack: notice container rejected; falling back to plain blocks",
-			"category", n.Category(), "err", err.Error())
+			"category", n.Category(), "err", err.Error(), "slackDetail", blocksRejectionDetail(err))
 		fb, ferr := noticeMsgOptions(n, sess, requestRef, true)
 		if ferr != nil {
 			return "", ferr

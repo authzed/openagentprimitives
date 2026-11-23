@@ -26,6 +26,7 @@ crash-looping the operator.
 | `spec.auth` | `object` | Auth references the credential used to clone a private repo. |
 | `spec.auth.agentIdentity` \* | `string` | AgentIdentity is the AgentIdentity CR (same namespace) holding the credential. |
 | `spec.auth.credential` \* | `string` | Credential is the AgentCredential name on that identity (e.g. a github_pat). |
+| `spec.disablePluginAgents` | `boolean` | DisablePluginAgents, when true, materializes every skill this source discovers as standalone, even one published inside a Claude Code plugin: no spec.plugin, so the plugin's agents are never captured from outside spec.subpath and never staged. Default (false) = enabled. |
 | `spec.disableRepoInstructions` | `boolean` | DisableRepoInstructions, when true, stops this source from discovering and attaching the repo-root agent-instructions file (AGENTS.md/CLAUDE.md) to the skills it materializes. Default (false) = enabled. |
 | `spec.ref` | `string` | Ref is the branch, tag, or commit SHA to fetch. Empty = default branch (a rolling source — warned downstream). |
 | `spec.repoURL` \* | `string` | RepoURL is the git repo to clone (e.g. "https://github.com/org/repo"). |

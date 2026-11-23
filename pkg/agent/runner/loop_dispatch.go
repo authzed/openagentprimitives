@@ -192,6 +192,12 @@ func (l *Loop) executeToolRaw(ctx context.Context, t tool.Tool, name string, arg
 			Trusted: true,
 		}
 	}
+	// Both dispatch paths (gated and ungated meta) execute through here, so
+	// cleaning once covers every consumer downstream: the Post hooks and their
+	// audit records, the LLM tool_result, and the session's turn record. A
+	// secret-output value passes through untouched and an error result keeps
+	// its text — see cleanToolOutput.
+	res = l.cleanToolOutput(name, res)
 	// A user-initiated Interrupt fired while this call was in flight: override
 	// whatever Execute returned (success, its own error content, or the
 	// dispatch-failed wrapper above — any of the three, depending on how the

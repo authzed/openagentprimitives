@@ -334,6 +334,63 @@ func notePendingPrompt(ctx context.Context, mem memory.Memory, ns, name string, 
 	}
 }
 
+// promptExpiredInTransit reports whether env is an interaction request whose
+// deadline has passed by now, and returns the decoded request when it has. Any
+// other kind, or a payload that will not decode, is delivered: dropping on a
+// decode failure would be the silent hang the relay exists to prevent.
+func promptExpiredInTransit(env channelevents.Envelope, now time.Time) (channelevents.InteractionRequestPayload, bool) {
+	var pl channelevents.InteractionRequestPayload
+	if env.Kind != channelevents.KindInteractionRequest {
+		return pl, false
+	}
+	if err := json.Unmarshal(env.Payload, &pl); err != nil {
+		return pl, false
+	}
+	return pl, pl.ExpiredAt(now)
+}
+
+// noteExpiredInTransit records a dropped request in interaction history
+// together with an expired outcome for it, so the destination's timeline shows
+// that the agent asked and the request lapsed before reaching anyone.
+//
+// Both halves are written, never the request alone. The web timeline pairs a
+// request with its outcome by (source, category, requestRef) and does not read
+// ExpiresAt, so a request recorded without an outcome replays as a live card.
+// A click on that card would reach the decision pipe with no parked-prompt
+// record, which is the one case its deadline check cannot see. The producer's
+// own timeout report, when it arrives, is recorded as a second outcome for
+// the same key, which the timeline already tolerates.
+//
+// Failures are logged, not returned: the card is dropped either way, and a
+// missing history entry costs the timeline a line, not a decision.
+func noteExpiredInTransit(ctx context.Context, logger logr.Logger, mem memory.Memory, destination memory.Scope, sourceUID string, env channelevents.Envelope, pl channelevents.InteractionRequestPayload) {
+	if mem == nil {
+		return
+	}
+	if err := noteInteractionHistory(ctx, mem, destination, sourceUID, env); err != nil {
+		logger.Info("outbound relay: interaction history write for expired request failed",
+			"requestRef", pl.RequestRef, "destinationSession", destination.ID, "err", err.Error())
+		return
+	}
+	expired, err := channelevents.BuildEnvelope(env.Session.Namespace, env.Session.Name, channelevents.KindInteractionApplied,
+		channelevents.InteractionAppliedPayload{
+			AgentSessionRef: env.Session,
+			Category:        pl.Category,
+			RequestRef:      pl.RequestRef,
+			Outcome:         channelevents.OutcomeExpired,
+			Reason:          "expired before delivery",
+		})
+	if err != nil {
+		logger.Info("outbound relay: build expired outcome for history failed; the timeline will show the request unresolved until a timeout report arrives",
+			"requestRef", pl.RequestRef, "err", err.Error())
+		return
+	}
+	if err := noteInteractionHistory(ctx, mem, destination, sourceUID, expired); err != nil {
+		logger.Info("outbound relay: interaction history write for expired outcome failed; the timeline will show the request unresolved until a timeout report arrives",
+			"requestRef", pl.RequestRef, "destinationSession", destination.ID, "err", err.Error())
+	}
+}
+
 func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 	logger := log.FromContext(ctx).WithValues("subject", msg.Subject)
 
@@ -556,6 +613,35 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 		bindingChain = target.Chain
 	} else if outBinding == nil {
 		logger.Info("outbound relay: drop, session not channel-attached")
+		return
+	}
+
+	// A prompt whose deadline passed while it sat in the relay's queue is not
+	// delivered: the runner has already stopped waiting, and its timeout report
+	// rides IN, so it can reach channelsd before this card does and find nothing
+	// to retire. Delivered anyway, the card would arrive armed — a Slack
+	// approver card is an ephemeral a later expiry cannot edit — and noted as
+	// live, for a request nobody can act on. Re-surfacing applies the same rule
+	// to a parked prompt.
+	//
+	// The drop is still recorded in the destination's interaction history, with
+	// the same audience and chain stamps a delivered card gets below, so the
+	// timeline shows the request and that it expired. See noteExpiredInTransit.
+	//
+	// Checked here, as soon as the destination is known and ahead of everything
+	// that touches it: the record needs the resolved binding, its owner and the
+	// chain, and nothing else. Any later and a card that is about to be dropped
+	// would first cost a channel-id recovery lookup and could post the session's
+	// opening line, rooting a thread on a prompt that never arrives.
+	if pl, expired := promptExpiredInTransit(env, time.Now()); expired {
+		logger.Info("outbound relay: drop, interaction request expired before delivery",
+			"requestRef", pl.RequestRef, "category", pl.Category,
+			"expiresAt", pl.ExpiresAt.UTC().Format(time.RFC3339))
+		recorded := restampAudienceKinds(env, outBinding.Kind, registry.DeliversToHuman, logger)
+		recorded = stampAskingChain(recorded, bindingChain, logger)
+		noteExpiredInTransit(ctx, logger, r.Mem,
+			memory.Scope{Kind: "session", ID: bindingOwner.Namespace + "/" + bindingOwner.Name},
+			string(sess.UID), recorded, pl)
 		return
 	}
 
@@ -805,6 +891,9 @@ func (r *Relay) handle(ctx context.Context, msg *nats.Msg) {
 	default:
 		sender, err = r.Senders.SenderFor(ctx, &sess)
 	}
+	if historyErr := noteInteractionHistory(ctx, r.Mem, memory.Scope{Kind: "session", ID: bindingOwner.Namespace + "/" + bindingOwner.Name}, string(sess.UID), env); historyErr != nil {
+		logger.Info("outbound relay: interaction history write failed; delivering live", "requestSession", ns+"/"+name, "destinationSession", bindingOwner.Namespace+"/"+bindingOwner.Name, "error", historyErr)
+	}
 	if err != nil {
 		logger.Info("outbound relay: drop, sender resolution errored", "err", err.Error())
 		return
@@ -940,6 +1029,11 @@ func (r *Relay) surfaceDeliveryFailure(
 // text's mere presence can no longer be that signal.
 func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess *spiceboxv1alpha1.AgentSession) {
 	opening := sess.Annotations[spiceboxv1alpha1.AnnotationSessionOpening]
+	var presentation *channelevents.SessionOpening
+	if sess.Spec.OpeningSummary != "" && sess.Spec.Prompt.Inline != "" {
+		opening = sess.Spec.OpeningSummary
+		presentation = &channelevents.SessionOpening{Summary: opening, Instructions: sess.Spec.Prompt.Inline}
+	}
 	if opening == "" {
 		return
 	}
@@ -947,7 +1041,7 @@ func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess
 	// already posted by a kind that never reports a root back: the anchor
 	// question is settled either way.
 	if sess.Spec.OutputChannel == nil ||
-		sess.Spec.OutputChannel.External["thread_ts"] != "" ||
+		(presentation == nil && sess.Spec.OutputChannel.External["thread_ts"] != "") ||
 		sess.Annotations[spiceboxv1alpha1.AnnotationSessionOpeningSent] != "" {
 		return
 	}
@@ -965,7 +1059,7 @@ func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess
 	}
 	env, err := channelevents.BuildEnvelope(sess.Namespace, sess.Name,
 		channelevents.KindUserMessage,
-		channelevents.OutboundUserMessagePayload{Text: opening})
+		channelevents.OutboundUserMessagePayload{Text: opening, Opening: presentation})
 	if err != nil {
 		logger.Info("outbound relay: session opening skipped, envelope build failed",
 			"session", sessRef, "err", err.Error())
@@ -989,7 +1083,7 @@ func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess
 	// signal via patchOutputChannel below; a kind that does not would otherwise
 	// have no record that this already happened, and would re-post the line
 	// ahead of every subsequent envelope for the session's life.
-	if err := r.markSessionOpeningSent(ctx, sess); err != nil {
+	if err := r.markSessionOpeningSent(ctx, sess, res.OpeningMessage); err != nil {
 		logger.Info("outbound relay: marking the session opening as sent failed; it may be posted again",
 			"session", sessRef, "err", err.Error())
 	}
@@ -1009,12 +1103,15 @@ func (r *Relay) openOutboundThread(ctx context.Context, logger logr.Logger, sess
 // edit to the session must merge rather than 409. The in-memory copy is
 // updated to match so the caller's remaining work sees the same object the
 // server holds.
-func (r *Relay) markSessionOpeningSent(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) error {
+func (r *Relay) markSessionOpeningSent(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, ref *channelkinds.MessageRef) error {
+	annotations := map[string]string{spiceboxv1alpha1.AnnotationSessionOpeningSent: "true"}
+	if ref != nil {
+		annotations[spiceboxv1alpha1.AnnotationSessionOpeningMessageChannel] = ref.ChannelID
+		annotations[spiceboxv1alpha1.AnnotationSessionOpeningMessageID] = ref.TS
+	}
 	patchBytes, err := json.Marshal(map[string]any{
 		"metadata": map[string]any{
-			"annotations": map[string]any{
-				spiceboxv1alpha1.AnnotationSessionOpeningSent: "true",
-			},
+			"annotations": annotations,
 		},
 	})
 	if err != nil {
@@ -1031,7 +1128,9 @@ func (r *Relay) markSessionOpeningSent(ctx context.Context, sess *spiceboxv1alph
 	if sess.Annotations == nil {
 		sess.Annotations = map[string]string{}
 	}
-	sess.Annotations[spiceboxv1alpha1.AnnotationSessionOpeningSent] = "true"
+	for key, value := range annotations {
+		sess.Annotations[key] = value
+	}
 	return nil
 }
 

@@ -17,6 +17,7 @@ import (
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelfeatures"
+	"github.com/authzed/openagentprimitives/pkg/channels/delivery"
 	"github.com/authzed/openagentprimitives/pkg/channels/notice"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
@@ -450,7 +451,10 @@ type ScopeRefresher interface {
 // the AgentSession's PendingRequesters entry; other sub-channels
 // leave it empty.
 type SubChannelSendResult struct {
-	RequestRef string
+	// OpeningMessage identifies a summary message independently of the thread
+	// routing anchor, so pinned updates never overwrite an existing thread root.
+	OpeningMessage *MessageRef
+	RequestRef     string
 
 	// External, when non-empty, is patched back onto the AgentSession's
 	// OutputChannel.External + OutputChannel.Key by channelsd's outbound
@@ -468,6 +472,13 @@ type SubChannelSendResult struct {
 // future ones are negotiated via Kind.SubChannelSender.
 type Sender interface {
 	Send(ctx context.Context, sess SessionInfo, env channelevents.Envelope) (SubChannelSendResult, error)
+}
+
+// DeliveryReceiverProvider is an optional durable-acceptance seam. Kinds whose
+// only delivery path is best-effort leave it unimplemented; consumers fail
+// closed rather than treating Sender.Send success as a transport receipt.
+type DeliveryReceiverProvider interface {
+	NewDeliveryReceiver(memory.Memory) delivery.Receiver
 }
 
 // Deps is what internal/cmd/channelsd hands every kind impl. Listener uses Inbound
@@ -853,6 +864,9 @@ type OpeningMessageContent struct {
 	Badge       spiceboxv1alpha1.OpeningBadge
 	Body        string
 	Link        string
+	// Instructions enables inspection of the exact initial prompt when the
+	// opening is a summary. Editors must retain its inspection control.
+	Instructions string
 }
 
 // OpeningMessageEditor is an OPTIONAL capability a Kind's Sender may
@@ -862,6 +876,23 @@ type OpeningMessageContent struct {
 // behavior the kind already has.
 type OpeningMessageEditor interface {
 	EditOpeningMessage(ctx context.Context, sess SessionInfo, content OpeningMessageContent) error
+}
+
+// SessionFinalizer is an OPTIONAL capability a Kind's Sender may implement to
+// take down every "still working" indicator it rendered for a session that has
+// ENDED — the in-progress items of a live plan card, any cached status
+// caption. The runner normally does this itself on its way out, but a session
+// the operator ends without it (a boot failure, a crashed or evicted runner)
+// never says goodbye, and a transport left showing an hourglass on a dead
+// session tells the reader it is still busy. channelsd's session watcher
+// type-asserts the resolved Sender on a terminal phase; a kind without the
+// capability is skipped.
+//
+// Must be idempotent and must leave already-settled indicators alone: it is
+// called for successful sessions too, and for any it can find state for.
+// failed selects the wording ("hit an error" vs "interrupted").
+type SessionFinalizer interface {
+	FinalizeSession(ctx context.Context, sess SessionInfo, failed bool) error
 }
 
 // SessionRelationLinker is an optional Kind capability: declare the subject-set

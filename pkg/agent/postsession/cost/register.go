@@ -17,11 +17,12 @@ func init() {
 		Name:  "session_cost",
 		Order: orderSessionCost,
 		Build: func(l *runner.Loop) []pipeline.Hook {
-			if !l.ReportSessionCost || l.Provider == nil {
+			if (!l.ReportSessionCost && !l.RecordSessionCost) || l.Provider == nil {
 				return nil
 			}
 			return []pipeline.Hook{New(Deps{
 				Pricing: catalogFirstPricing(l),
+				Quiet:   !l.ReportSessionCost,
 				Stamp:   l.StampEstimatedCost,
 			})}
 		},

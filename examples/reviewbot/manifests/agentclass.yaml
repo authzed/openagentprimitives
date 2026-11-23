@@ -381,8 +381,9 @@ spec:
       Two review skills are staged onto codelike's sandbox disk, at
       /skills/review-pr/SKILL.md and /skills/differential-review/SKILL.md.
       Claude Code discovers both on its own — the codelike bundle stages
-      them read-only and links them into Claude Code's own skill-discovery
-      path before every invocation — so it finds the methodology without you
+      them read-only and, before every invocation, loads each as part of the
+      plugin it was published in, together with the agents that plugin's
+      instructions dispatch — so it finds the methodology without you
       re-explaining it. It also reads the repository's own
       CLAUDE.md / AGENTS.md.
 

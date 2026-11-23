@@ -26,11 +26,13 @@ import (
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelinteractions/categories"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkey"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/watchdog"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/inmem"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/interactionhistory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
@@ -2014,10 +2016,13 @@ func TestNotePendingPromptDoesNotResurrectAResolvedPrompt(t *testing.T) {
 // Stream-delta cost tests — head-of-line blocking of the primary path
 // -----------------------------------------------------------------------------
 
-// slowGetClient charges a fixed delay to every Get, standing in for client-go's
-// default rate limiter on the uncached clients webd and channelsd hand the relay
-// (5 QPS / burst 10 when no QPS override is set). It also counts the Gets so a
-// failure message can say what the wall-clock was spent on.
+// slowGetClient charges a fixed delay to every Get, standing in for a saturated
+// client-side rate limiter on the uncached clients webd and channelsd hand the
+// relay. It is a worst-case model, not the configured budget: in-cluster those
+// clients get kube.DefaultQPS/DefaultBurst, and the per-Get delay here is what
+// a Get costs once that budget is exhausted (or under client-go's own 5 QPS /
+// burst 10, which applied before kube.RestConfig set a default). It also counts
+// the Gets so a failure message can say what the wall-clock was spent on.
 type slowGetClient struct {
 	client.Client
 	delay time.Duration
@@ -2243,4 +2248,143 @@ func (r *fixedResolver) lastSubChannelRef() (spiceboxv1alpha1.NamespacedRef, boo
 		return spiceboxv1alpha1.NamespacedRef{}, false
 	}
 	return r.subChannelRefs[len(r.subChannelRefs)-1], true
+}
+
+// An interaction request whose deadline passed while it waited in the relay is
+// dropped, not delivered: the runner already stopped waiting, so the card
+// would arrive armed for a request nobody can act on. A live request published
+// right behind it still goes out — and because the relay handles one
+// subscription in order, its arrival proves the expired one was processed.
+func TestRelay_DropsInteractionRequestExpiredInTransit(t *testing.T) {
+	nc := connectNATS(t)
+	cli := fakeClientWith(t, defaultSession())
+	subCap := &captureSender{}
+	startRelay(t, nc, cli, &fixedResolver{s: &captureSender{}, subS: subCap})
+
+	request := func(ref string, expiresIn time.Duration) channelevents.Envelope {
+		deadline := time.Now().Add(expiresIn)
+		return buildEnv(t, "foo", channelevents.KindInteractionRequest, channelevents.InteractionRequestPayload{
+			Category:   "test_category",
+			RequestRef: ref,
+			Lead:       "Approve this?",
+			Audience: channelevents.InteractionAudience{
+				Scope:     channelevents.AudienceApprovers,
+				Approvers: []channelevents.ExternalIdentity{{Kind: "fake", ExternalID: "U0X"}},
+			},
+			ExpiresAt: &deadline,
+		})
+	}
+	publishOut(t, nc, "default", "foo", "interaction_request", request("expired", -time.Minute))
+	publishOut(t, nc, "default", "foo", "interaction_request", request("live", time.Hour))
+
+	require.Eventually(t, func() bool { return subCap.count() >= 1 }, 5*time.Second, 20*time.Millisecond,
+		"the live request is delivered")
+	got := subCap.envelopes()
+	require.Len(t, got, 1, "only the live request is delivered")
+	var pl channelevents.InteractionRequestPayload
+	require.NoError(t, json.Unmarshal(got[0].Payload, &pl))
+	assert.Equal(t, "live", pl.RequestRef)
+}
+
+// A dropped request is still recorded in the destination's interaction history,
+// and always with an expired outcome beside it. The web timeline pairs a
+// request with its outcome and never reads ExpiresAt, so a request recorded on
+// its own would replay as a live, clickable card for a request nobody is
+// waiting on any more.
+func TestRelay_ExpiredInTransitIsRecordedWithItsExpiredOutcome(t *testing.T) {
+	nc := connectNATS(t)
+	cli := fakeClientWith(t, defaultSession())
+	subCap := &captureSender{}
+	mem := memory.NewLocal(inmem.NewBackend())
+	startRelay(t, nc, cli, &fixedResolver{s: &captureSender{}, subS: subCap}, func(r *Relay) { r.Mem = mem })
+
+	request := func(ref string, expiresIn time.Duration) channelevents.Envelope {
+		deadline := time.Now().Add(expiresIn)
+		return buildEnv(t, "foo", channelevents.KindInteractionRequest, channelevents.InteractionRequestPayload{
+			Category:   categories.PlanPhase,
+			RequestRef: ref,
+			Lead:       "Approve this phase?",
+			Audience: channelevents.InteractionAudience{
+				Scope:     channelevents.AudienceApprovers,
+				Approvers: []channelevents.ExternalIdentity{{Kind: "fake", ExternalID: "U0X"}},
+			},
+			ExpiresAt: &deadline,
+		})
+	}
+	publishOut(t, nc, "default", "foo", "interaction_request", request("expired", -time.Minute))
+	publishOut(t, nc, "default", "foo", "interaction_request", request("live", time.Hour))
+	require.Eventually(t, func() bool { return subCap.count() >= 1 }, 5*time.Second, 20*time.Millisecond,
+		"the live request is delivered, which proves the expired one was handled first")
+	require.Len(t, subCap.envelopes(), 1, "the expired request is still not delivered")
+
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	res, err := mem.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: "default/foo"},
+		Kinds: []string{interactionhistory.KindName}})
+	require.NoError(t, err)
+	var requested, expired bool
+	for _, e := range res.Entries {
+		var c interactionhistory.Content
+		require.NoError(t, json.Unmarshal(e.Content, &c))
+		if c.Request != nil && c.Request.RequestRef == "expired" {
+			requested = true
+		}
+		if c.Applied != nil && c.Applied.RequestRef == "expired" {
+			expired = true
+			assert.Equal(t, channelevents.OutcomeExpired, c.Applied.Outcome)
+			assert.Equal(t, categories.PlanPhase, c.Applied.Category)
+			assert.Equal(t, c.Source, c.Applied.AgentSessionRef,
+				"the timeline rejects an outcome whose session differs from its record's source")
+		}
+	}
+	assert.True(t, requested, "the dropped request is in the destination's history")
+	assert.True(t, expired, "and so is an expired outcome for it, so it never replays as live")
+}
+
+// promptExpiredInTransit takes now as a parameter, so the exact-deadline
+// boundary is pinned here with a fixed clock rather than through the relay,
+// whose call site reads the wall clock. The kind filter and the
+// deliver-on-decode-failure rule are pinned here too: dropping anything other
+// than an expired request would be a silent loss.
+func TestPromptExpiredInTransit(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	request := func(t *testing.T, expiresAt *time.Time) channelevents.Envelope {
+		t.Helper()
+		return buildEnv(t, "foo", channelevents.KindInteractionRequest, channelevents.InteractionRequestPayload{
+			Category:   "test_category",
+			RequestRef: "req-1",
+			Lead:       "Approve this?",
+			Audience:   channelevents.InteractionAudience{Scope: channelevents.AudienceParticipants},
+			ExpiresAt:  expiresAt,
+		})
+	}
+	at := func(d time.Duration) *time.Time { ts := now.Add(d); return &ts }
+	cases := []struct {
+		name string
+		env  func(t *testing.T) channelevents.Envelope
+		want bool
+	}{
+		{name: "request past its deadline: dropped", env: func(t *testing.T) channelevents.Envelope { return request(t, at(-time.Second)) }, want: true},
+		{name: "request exactly at its deadline: dropped", env: func(t *testing.T) channelevents.Envelope { return request(t, at(0)) }, want: true},
+		{name: "request before its deadline: delivered", env: func(t *testing.T) channelevents.Envelope { return request(t, at(time.Second)) }, want: false},
+		{name: "request with no deadline: delivered", env: func(t *testing.T) channelevents.Envelope { return request(t, nil) }, want: false},
+		{name: "non-request kind with a past expiresAt in its payload: delivered", env: func(t *testing.T) channelevents.Envelope {
+			env := request(t, at(-time.Hour))
+			env.Kind = channelevents.KindInteractionApplied
+			return env
+		}, want: false},
+		{name: "request whose payload will not decode: delivered", env: func(t *testing.T) channelevents.Envelope {
+			env := request(t, at(-time.Hour))
+			env.Payload = json.RawMessage(`{"expiresAt": 5}`)
+			return env
+		}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pl, got := promptExpiredInTransit(tc.env(t), now)
+			assert.Equal(t, tc.want, got)
+			if tc.want {
+				assert.Equal(t, "req-1", pl.RequestRef, "a dropped request comes back decoded, for the drop log and history")
+			}
+		})
+	}
 }

@@ -5,8 +5,29 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 )
+
+func TestReadyPodAfterServiceRecovery(t *testing.T) {
+	ready := corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{
+		{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+	}}
+	now := metav1.Now()
+	pods := []corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "evicted"}, Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Evicted"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "completed"}, Status: corev1.PodStatus{Phase: corev1.PodSucceeded}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "terminating", DeletionTimestamp: &now}, Status: ready},
+		{ObjectMeta: metav1.ObjectMeta{Name: "starting"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "serving"}, Status: ready},
+	}
+	got := readyPod(pods)
+	require.NotNil(t, got)
+	assert.Equal(t, "serving", got.Name)
+	assert.Nil(t, readyPod(pods[:4]), "unavailable replicas must not receive forwards")
+	assert.Nil(t, readyPod(nil))
+}
 
 func TestPortForwarderConstruction(t *testing.T) {
 	cases := []struct {

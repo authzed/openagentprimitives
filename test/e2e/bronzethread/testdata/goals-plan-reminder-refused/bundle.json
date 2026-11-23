@@ -1,0 +1,38 @@
+{
+  "name": "goals-plan-reminder-refused",
+  "description": "An agent includes a reminder in update_plan. The production-shaped freeze callback must prepare its signed consent through the operator, rather than silently dropping the new phase field. A foreign goal domain is refused before any approval or execution authority is created. Positive signed consent, dispatcher launch, and revocation are separately covered by the production API tests.",
+  "agentDir": "testdata/agent-goaldemo",
+  "agentClass": "goaldemo",
+  "userTurns": ["Include a private reminder in my plan"],
+  "llm": [
+    {
+      "expect": {"userTextContains": "private reminder", "toolOffered": "update_plan"},
+      "reply": [{"toolUse": {"name": "update_plan", "args": {
+        "name": "main",
+        "items": [{"id": "schedule", "label": "Schedule reminder", "status": "pending", "phase": "schedule"}],
+        "phases": [{"id": "schedule", "label": "Schedule reminder", "why": "The user requested a private reminder", "reminders": [{
+          "resource": "agent_goal_domain:foreign-domain",
+          "id": "goal-foreign", "revision": 2, "requestID": "private-reminder",
+          "terms": {
+            "dueAt": "2030-01-01T12:00:00Z", "expiresAt": "2030-01-01T12:10:00Z",
+            "bounds": {"durationSeconds": 180, "turns": 10, "tokens": 10000, "approvalSeconds": 90},
+            "allowedOperations": ["respond_to_user"], "evidence": ["Delivered private reminder"]
+          }
+        }]}]
+      }}}]
+    },
+    {
+      "expect": {"lastToolResult": "update_plan", "lastToolResultIsError": true, "lastToolResultContains": "prepare plan reminder"},
+      "reply": [{"toolUse": {"name": "respond_to_user", "args": {"text": "The reminder was refused; no execution was authorized."}}}]
+    },
+    {
+      "expect": {"lastToolResult": "respond_to_user"},
+      "reply": [{"toolUse": {"name": "agent_work_complete", "args": {"summary": "reminder request refused"}}}]
+    }
+  ],
+  "assert": {
+    "toolsCalled": ["update_plan"],
+    "approvalPrompts": 0,
+    "agentReplyContains": ["no execution was authorized"]
+  }
+}
