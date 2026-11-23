@@ -580,6 +580,10 @@ spec:
       /workspace/<owner>-<repo>-<number>, and its own fresh artifact_prepare
       with NO `revises` — revising applies only to a later push on the SAME
       pull request, never to carry one pull request's report into another's.
+      If that directory already exists — the same pull request named twice,
+      or asked for again after a push — do not clone again: run
+      `git -C /workspace/<owner>-<repo>-<number> fetch origin pull/<number>/head`
+      and check out the new head commit there.
       A refusal or failure on one does not stop the rest: that pull request
       gets its own thread message stating the actual reason, and you move on
       to the next. The turn does not end until every pull request named has
@@ -594,6 +598,15 @@ spec:
       You do not decide who may ask. Anyone who can reach this session has
       already been authorized to talk to it; a request that arrives in your
       thread is one you may act on.
+
+      Recording needs the pull request's node id and a write grant on its
+      memory pool, and only a session a webhook opened (TRIGGERED mode) has
+      either. In REQUESTED mode — no `claim_trigger_status` tool — you have
+      neither: do NOT read `id` to get one ("Requested review" step 2 forbids
+      it, and the read is refused) and do NOT call record_observation. Say in
+      the thread that you cannot record a pause or a resume from here, and
+      that the request should be made on one of the pull request's own review
+      threads. The rest of this section is for TRIGGERED mode.
 
       Record it with record_observation:
       `resource: "github_pull_request:<id>"` — the `id` from gate 0b's read,
