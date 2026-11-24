@@ -468,10 +468,17 @@ func run(rootCtx context.Context, cfg *config) error {
 		return fmt.Errorf("rest config: %w", err)
 	}
 	scm := makeScheme()
-	cli, err := client.New(restCfg, client.Options{Scheme: scm})
+	directCli, err := client.New(restCfg, client.Options{Scheme: scm})
 	if err != nil {
 		return fmt.Errorf("k8s client: %w", err)
 	}
+	// Every component below writes through cli, which records each write to a
+	// kind the outbound relay reads from its cache — so the relay and the
+	// senders never act on a cached copy older than channelsd's own write (a
+	// thread anchor stamped by the inbound pipeline, say). Reads through cli
+	// are direct, as before. See trackingClient; nothing below should hold
+	// directCli.
+	cli := newTrackingClient(directCli, newWriteTracker())
 	// Typed clientset for externalurl.Provider — see the doc on
 	// externalurl.NewProviderFor. We avoid controller-runtime's
 	// cached client here to keep the configmaps RBAC name-scoped.
@@ -813,7 +820,8 @@ func run(rootCtx context.Context, cfg *config) error {
 	// delta, its AgentClass) on one serialized goroutine. Serve those reads from
 	// an informer cache so the relay's throughput is not the API server's
 	// round-trip time, rate-limited — see relayClient. The sender resolver shares
-	// it for the same per-delta AgentClass read.
+	// it for the same per-delta AgentClass read, and hands it to every Sender.
+	// Everything else keeps cli: direct reads, tracked writes.
 	relayCache, err := newRelayCache(rootCtx, restCfg, scm, 2*time.Minute)
 	if err != nil {
 		return err
