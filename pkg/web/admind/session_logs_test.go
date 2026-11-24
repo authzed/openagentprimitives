@@ -245,3 +245,28 @@ func TestAdmindSessionLogs_RequiresViewSessions(t *testing.T) {
 	w := do(t, a.Handler(), http.MethodGet, "/admin/v1/sessions/default/s1/logs", "test-token", "user:bm9wZQ", "")
 	assert.Equal(t, http.StatusForbidden, w.Code, "session logs are gated on view_sessions")
 }
+
+// TestAdmindSessionLogs_SenderMentionBlockIsNotRendered: the sender's mention
+// token is addressing metadata the pipeline attaches for the agent, not part
+// of what the person wrote, so the log shows the turn exactly as it would
+// without one — no "[sender_mention]" placeholder in the summary and no extra
+// structured block.
+func TestAdmindSessionLogs_SenderMentionBlockIsNotRendered(t *testing.T) {
+	a := newTestAdmind(t, fake.NewClientBuilder().WithScheme(newScheme(t)).Build())
+	base := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+	putTurn(t, a, "default/s5", 0, "user", base,
+		memory.ContentBlock{Type: "text", Text: "<@U0BOT> can you check the build?"},
+		memory.ContentBlock{Type: memory.BlockTypeSenderMention, Text: "<@U1>"})
+
+	w := do(t, a.Handler(), http.MethodGet, "/admin/v1/sessions/default/s5/logs", "test-token", "user:YWRtaW4", "")
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var body sessionLogsBody
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Len(t, body.Entries, 1)
+	entry := body.Entries[0]
+	assert.Equal(t, "<@U0BOT> can you check the build?", entry.Content, "summary is the message text alone")
+	require.Len(t, entry.Blocks, 1, "only the text block is structured")
+	assert.Equal(t, "text", entry.Blocks[0].Type)
+	assert.Equal(t, "<@U0BOT> can you check the build?", entry.Blocks[0].Text)
+}
