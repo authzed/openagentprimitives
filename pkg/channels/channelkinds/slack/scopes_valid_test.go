@@ -267,10 +267,11 @@ func TestRefreshScopesValidRecomputesAfterACapabilityEdit(t *testing.T) {
 }
 
 // TestRefreshScopesValidThrottlesTheAgentClassRead pins the cost of riding the
-// 5s tick. channelsd's client is uncached and takes client-go's DefaultQPS of
-// 5, so one AgentClass GET per Channel per tick is N/5 QPS — at 25 Channels the
-// scope refresh alone saturates the limiter and inbound message handling queues
-// behind it.
+// 5s tick. channelsd's client is uncached and rate-limited client-side
+// (kube.DefaultQPS in-cluster), so one AgentClass GET per Channel per tick is
+// N/5 QPS drawn from the budget inbound message handling and the outbound
+// relay also spend — a cost that grows with the Channel count, spent
+// re-confirming a value that rarely changes.
 func TestRefreshScopesValidThrottlesTheAgentClassRead(t *testing.T) {
 	class := newAgentClassWithCaps("demo-agent", "demo-ns", nil)
 	ch := newSlackChannel("demo-channel", "demo-ns", "demo-agent")

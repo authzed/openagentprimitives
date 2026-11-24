@@ -3,6 +3,7 @@ package channelevents
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -335,4 +336,26 @@ func TestInteractionItemTierTonesAndHintRoundTrip(t *testing.T) {
 	assert.NotEqual(t, ToneReadwrite, ToneExternal, "the three tiers must be distinct values")
 	assert.Equal(t, Tone("readonly"), ToneReadonly)
 	assert.Equal(t, Tone("readwrite"), ToneReadwrite)
+}
+
+func TestInteractionRequestPayload_ExpiredAt(t *testing.T) {
+	now := time.Now()
+	at := func(d time.Duration) *time.Time { ts := now.Add(d); return &ts }
+	cases := []struct {
+		name      string
+		expiresAt *time.Time
+		want      bool
+	}{
+		{name: "no deadline: never expired", expiresAt: nil, want: false},
+		{name: "deadline ahead: live", expiresAt: at(time.Second), want: false},
+		{name: "exactly at deadline: expired", expiresAt: at(0), want: true},
+		{name: "deadline passed: expired", expiresAt: at(-time.Second), want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validInteractionRequest()
+			p.ExpiresAt = tc.expiresAt
+			assert.Equal(t, tc.want, p.ExpiredAt(now))
+		})
+	}
 }

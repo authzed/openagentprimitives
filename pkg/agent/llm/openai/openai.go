@@ -19,7 +19,6 @@ import (
 	"os"
 
 	oa "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm/models"
@@ -43,11 +42,9 @@ func New(apiKey string) *Provider {
 	if apiKey == "" {
 		panic("openai.New: apiKey must be non-empty")
 	}
-	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if base := os.Getenv(envBaseURL); base != "" {
-		opts = append(opts, option.WithBaseURL(base))
-	}
-	return &Provider{client: oa.NewClient(opts...)}
+	// openaicompat.NewClient leaves the SDK default endpoint in place for an
+	// empty base URL, and attaches the shared bounded HTTP client.
+	return &Provider{client: openaicompat.NewClient(apiKey, os.Getenv(envBaseURL), nil)}
 }
 
 func (*Provider) Name() string { return "openai" }

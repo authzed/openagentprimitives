@@ -102,6 +102,37 @@ func TestPostgres_PutGetWithContent(t *testing.T) {
 	assert.JSONEq(t, string(content), string(got.Content))
 }
 
+// TestPostgres_DataExceptionIsInvalidEntry drives the backend directly —
+// below the facade's checkStorable — with each value Postgres itself refuses,
+// and requires the refusal to come back as ErrInvalidEntry. That tag is what
+// turns a doomed write into a 400 instead of a 500 retried eight times.
+func TestPostgres_DataExceptionIsInvalidEntry(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+	scope := memory.Scope{Kind: "session", ID: "ns/a"}
+	cases := []struct {
+		name  string
+		entry memory.Entry
+	}{
+		{
+			name:  "NUL escape in jsonb content (22P05): ErrInvalidEntry",
+			entry: memory.Entry{Scope: scope, Kind: "alpha", ID: "a-1", Content: json.RawMessage(`{"text":"a\u0000b"}`)},
+		},
+		{
+			name:  "NUL in a text[] tag (22021): ErrInvalidEntry",
+			entry: memory.Entry{Scope: scope, Kind: "alpha", ID: "a-2", Tags: []string{"a\x00b"}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.entry.CreatedAt = time.Now().UTC().Truncate(time.Microsecond)
+			err := b.Put(ctx, tc.entry)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, memory.ErrInvalidEntry, "got: %v", err)
+		})
+	}
+}
+
 func TestPostgres_PutGetWithLinks(t *testing.T) {
 	b := newTestBackend(t)
 	ctx := context.Background()

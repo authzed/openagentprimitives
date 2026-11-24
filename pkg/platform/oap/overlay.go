@@ -80,6 +80,50 @@ func normalize(v any) any {
 	}
 }
 
+// filterList cuts the list at cur[field] down to the elements whose
+// discriminator appears in the answer list, keeping the CR's own order. An
+// answer naming no element fails closed: a typo'd selection must not silently
+// install an agent missing the thing the operator chose. Filtering an
+// already-filtered list by the same answer is a no-op, so a re-install applies
+// byte-identical spec.
+func filterList(cur map[string]any, field string, value any) error {
+	keep, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("filter marker %q[?] requires a list answer, got %T", field, value)
+	}
+	listRaw, ok := cur[field].([]any)
+	if !ok {
+		return fmt.Errorf("path element %q is not a list", field)
+	}
+	disc := discriminatorFor(field)
+	present := make(map[string]bool, len(listRaw))
+	for _, item := range listRaw {
+		if mm, ok := item.(map[string]any); ok {
+			if s, _ := mm[disc].(string); s != "" {
+				present[s] = true
+			}
+		}
+	}
+	wanted := make(map[string]bool, len(keep))
+	for _, k := range keep {
+		s, _ := k.(string)
+		if !present[s] {
+			return fmt.Errorf("no %s element with %s=%q", field, disc, s)
+		}
+		wanted[s] = true
+	}
+	filtered := make([]any, 0, len(keep))
+	for _, item := range listRaw {
+		if mm, ok := item.(map[string]any); ok {
+			if s, _ := mm[disc].(string); wanted[s] {
+				filtered = append(filtered, item)
+			}
+		}
+	}
+	cur[field] = filtered
+	return nil
+}
+
 // setAtPath walks node along path and sets value at the final segment.
 func setAtPath(node map[string]any, path []Segment, value any) error {
 	cur := node
@@ -110,6 +154,12 @@ func setAtPath(node map[string]any, path []Segment, value any) error {
 			}
 			cur[seg.Field] = merged
 			return nil
+		}
+		if seg.Filter {
+			if !last {
+				return fmt.Errorf("filter marker %q[?] must be the final path segment", seg.Field)
+			}
+			return filterList(cur, seg.Field, value)
 		}
 		if seg.Selector == "" {
 			if last {

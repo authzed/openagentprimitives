@@ -24,6 +24,7 @@ to its native mechanism or ignores it.
 | [`openrouter`](./openrouter/)     | OpenRouter adapter over the same Chat Completions wire, plus routing config and reported cost.                                       |
 | [`openaicompat`](./openaicompat/) | The Chat Completions wire translation shared by `openai` and `openrouter`.                                                           |
 | [`fake`](./fake/)                 | Scripted provider for tests.                                                                                                         |
+| [`llmhttp`](./llmhttp/)           | The bounded HTTP client every provider SDK is built on: connect/header timeouts, HTTP/2 pings, and a stream-idle abort.              |
 
 ## Constraints
 
@@ -35,6 +36,17 @@ to its native mechanism or ignores it.
   flags have one table. `pkg/x/llmpricing` projects from it; do not start a
   parallel map.
 - **`fake` is not init-registered.** Tests wire it directly.
+- **Build SDK clients through `anthropic/sdkclient.New` or
+  `openaicompat.NewClient`**, never the bare SDK constructor, and never with an
+  `option.WithHTTPClient` override. Both attach `llmhttp.Client()`; an SDK's
+  default client has no timeouts, so a stream that goes silent blocks the caller
+  forever. `sdkclient` is separate from `anthropic` so a helper that only needs
+  a client does not register the provider in its binary.
+- **`llmhttp`'s bounds are per attempt.** The SDKs retry a connect or
+  response-header timeout twice by default, so a provider that never answers
+  holds a call for up to three header timeouts plus backoff (about 9 minutes at
+  the defaults). A stream-idle abort (5 minutes of silence once the response has
+  started) is not retried by the SDK.
 
 ## See also
 

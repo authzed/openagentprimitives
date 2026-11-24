@@ -1,0 +1,73 @@
+# examples/messagingbot/oap.yaml
+#
+# The .oap manifest for messagingbot: a brand-designer agent that turns a brief
+# into an on-brand HTML artifact, grounded in YOUR design-system and messaging
+# repositories (read-only), and revised from annotations a reviewer leaves on
+# the rendered page. The CRs it installs live under manifests/; the logo under
+# assets/.
+#
+#   oap agent lint    examples/messagingbot
+#   oap agent install examples/messagingbot --namespace default
+oapFormatVersion: "1"
+agent:
+  version: "1.0.0"
+  logo: assets/logo.svg
+compat:
+  minApVersion: "0.9.0"
+  crdApiVersion: agentprimitives.authzed.com/v1alpha1
+# requires.secrets and requires.skills are INHERITED, not declared here:
+# requires.secrets is derived from the bundled AgentIdentity's github-token
+# credential (manifests/agentidentity.yaml), collected by the githubToken
+# question below; requires.skills is derived from AgentClass spec.skills — the
+# full menu of candidate skills, before the skills question below narrows it.
+# Authoring either here is refused by `oap agent lint`.
+questions:
+  - name: githubToken
+    type: secret
+    prompt: "Read-only GitHub token (Contents: Read on your brand repos)"
+    description: >-
+      A fine-grained PAT with Contents: Read-only on the repositories that hold
+      your design system and messaging, and no write permission of any kind. It
+      authenticates the gh tool and the skill clones. Public repositories (the
+      skills source) are readable with any token.
+    secret:
+      createSecret: { name: messagingbot-github, key: token }
+      orExisting: true
+
+  # The brand repositories. Bound into the AgentClass's generic config plane
+  # (spec.config.readableRepos), which the gh toolspec constraint reads as
+  # config.readableRepos to refuse any repository not listed. The `[]` append
+  # marker UNIONS this answer onto the shipped entry (anthropics/skills, where
+  # the selectable skills' supporting files live), so that entry survives.
+  # Empty is allowed: messagingbot then designs from the selected skills alone
+  # (theme-factory's themes, frontend-design's direction) with no brand system.
+  - name: brandRepos
+    type: resourceList
+    prompt: "Which repositories hold your design system and messaging? (owner/repo, lowercase)"
+    description: >-
+      messagingbot may read ONLY these repositories (plus anthropics/skills, for
+      skill supporting files), and only with GET requests. List the repo with
+      your colour/type tokens and components, and the one with your voice and
+      positioning — they may be the same repo. Leave empty to design without a
+      brand system.
+    required: false
+    binding:
+      - target: "AgentClass/messagingbot#spec.config.readableRepos[]"
+
+  # The skill menu. The AgentClass declares every candidate skill in
+  # spec.skills; the `[?]` filter marker keeps only the ones picked here, in the
+  # AgentClass's own order. A name that is not in spec.skills fails the install
+  # rather than being silently dropped.
+  - name: skills
+    type: resourceList
+    prompt: "Which design skills should messagingbot load?"
+    description: >-
+      frontend-design gives it a deliberate visual direction instead of
+      templated defaults. theme-factory gives it ten preset palettes and font
+      pairings (or a generated one) for when there is no brand system to read.
+      Both are from github.com/anthropics/skills, pinned to a commit.
+    enum: [frontend-design, theme-factory]
+    default: [frontend-design, theme-factory]
+    required: false
+    binding:
+      - target: "AgentClass/messagingbot#spec.skills[?]"

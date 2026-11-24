@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
@@ -53,6 +55,20 @@ func (p *Pipeline) HandleInteractionRequest(ctx context.Context, env channeleven
 	if !ok {
 		return fmt.Errorf("interaction request: unknown category %q (session %s/%s, requestRef %q)",
 			pl.Category, env.Session.Namespace, env.Session.Name, pl.RequestRef)
+	}
+
+	// A request already past its deadline is neither parked nor re-emitted. Its
+	// producer has stopped waiting, so a pending entry would mark the session as
+	// awaiting a decision nobody can make, and the outbound relay would drop the
+	// re-emitted card anyway (promptExpiredInTransit). This covers the IN leg
+	// lagging, and a runner re-publishing outstanding requests after a restart.
+	// An entry an earlier, still-live copy of this request already parked is not
+	// cleared here; that is the producer's timeout report's job.
+	if pl.ExpiredAt(p.nowOrWallClock()) {
+		log.FromContext(ctx).Info("interaction request: expired before channelsd received it; not parking or delivering",
+			"session", env.Session.Namespace+"/"+env.Session.Name, "category", pl.Category,
+			"requestRef", pl.RequestRef, "expiresAt", pl.ExpiresAt.UTC().Format(time.RFC3339))
+		return nil
 	}
 
 	// Only parking categories get a durable entry; a non-parking category
@@ -236,16 +252,8 @@ func (p *Pipeline) HandleInteractionApplied(ctx context.Context, env channeleven
 			if found {
 				if !record.Resolved {
 					frozen := pl
-					frozen.AgentSessionRef, frozen.ResponseRef, frozen.MintedURL = env.Session, "", ""
-					canonical, err := channelevents.BuildEnvelope(key.Namespace, key.Name, env.Kind, frozen)
-					if err != nil {
-						return err
-					}
-					raw, err := json.Marshal(canonical)
-					if err != nil {
-						return err
-					}
-					record, err = parkedprompt.ResolveWithOutcome(ctx, p.Mem, promptScope(key.Namespace, key.Name), pl.RequestRef, raw)
+					frozen.AgentSessionRef = env.Session
+					record, err = p.retainResolution(ctx, frozen)
 					if err != nil {
 						return err
 					}
