@@ -121,8 +121,13 @@ func deliverTrigger(t *testing.T, h *e2e.Harness, dir string, b bt.Bundle, ch *s
 
 	sessions := h.EventuallySessions(t, b.Trigger.ChannelKey, 1, 60*time.Second)
 	require.Len(t, sessions, 1)
-	h.WaitForSessionPhase(sessions[0].Namespace, sessions[0].Name,
-		spiceboxv1alpha1.AgentSessionPhaseIdle, 90*time.Second)
+	// A round ends Idle, unless the bundle's point is that it ends some other
+	// way (a runner-side failure ends Failed and never idles).
+	endPhase := wantSessionPhaseFor(b)
+	if endPhase == "" {
+		endPhase = spiceboxv1alpha1.AgentSessionPhaseIdle
+	}
+	h.WaitForSessionPhase(sessions[0].Namespace, sessions[0].Name, endPhase, 90*time.Second)
 }
 
 // checkTriggerStatus asserts on what the run left on the triggering resource,
@@ -142,6 +147,21 @@ func checkTriggerStatus(t *testing.T, h *e2e.Harness, b bt.Bundle) {
 
 	owner, repo := ownerRepoFromChannelKey(t, b.Trigger.ChannelKey)
 	run := h.FakeGitHub.CheckRunIn(owner, repo, b.Trigger.HeadSHA, b.Trigger.StatusName)
+	// A run the AGENT concluded is final by the time the round ends. One the
+	// operator answers for a failed session lands on a later reconcile, after
+	// the Failed phase this driver waited on, so give it a bounded settle.
+	//
+	// The settle ends on the first read showing the wanted status, and the
+	// call counts below are read right after it. They therefore say how the
+	// run REACHED that status (which run was patched, how many times), not
+	// that nothing touches the provider afterwards.
+	if ts.Status != "" {
+		deadline := time.Now().Add(30 * time.Second)
+		for (run == nil || run.Status != ts.Status) && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+			run = h.FakeGitHub.CheckRunIn(owner, repo, b.Trigger.HeadSHA, b.Trigger.StatusName)
+		}
+	}
 	require.NotNil(t, run,
 		"nothing was published for %s/%s@%s under name %q — the review answered nobody",
 		owner, repo, b.Trigger.HeadSHA, b.Trigger.StatusName)
