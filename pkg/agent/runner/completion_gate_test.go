@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -338,6 +339,51 @@ func TestCompletionGateRefusesEverySettleExit(t *testing.T) {
 			assert.Contains(t, f.bypasses[0].Reason, "degraded review",
 				"the agent's stated reason is the whole point of the bypass and must be recorded verbatim")
 		})
+	}
+}
+
+// TestResumeOntoABypassedCompletionParksWithoutReRefusing: a round that closed
+// through a BYPASSED agent_work_complete (a non-error result; the requirement is
+// still unmet) must stay closed across a resume.
+//
+// The live loop never re-checks the gate after the terminal tool allowed the
+// settle — the terminal branch parks directly, and the yield exit skips the
+// gate when the terminal tool ran (gateAlreadyRan). The resume park matches
+// that: re-running the gate there would refuse the same unmet requirement
+// again, because a bypass is not carried across runs, and hand the model a
+// stray turn demanding a second bypass from the user.
+func TestResumeOntoABypassedCompletionParksWithoutReRefusing(t *testing.T) {
+	f := newGateFixture(t, []string{"artifact-delivered"},
+		[]*spiceboxv1alpha1.ArtifactRender{readyRender("ar-report-1")}, nil)
+	ctx := memory.WithSystemApproval(context.Background(), "test")
+	for _, turn := range []memory.Turn{
+		{Index: 0, Role: "user", Content: []memory.ContentBlock{{Type: "text", Text: "write the report"}}},
+		{Index: 1, Role: "assistant", Content: []memory.ContentBlock{{
+			Type:    "tool_use",
+			ToolUse: &memory.ToolUseBlock{ID: "tu_done", Name: "agent_work_complete", Input: []byte(`{"summary":"degraded","bypass_reason":"the render never came back"}`)},
+		}}},
+		{Index: 2, Role: "user", Content: []memory.ContentBlock{{
+			Type:       "tool_result",
+			ToolResult: &memory.ToolResultBlock{ToolUseID: "tu_done", Content: "session complete (requirement bypassed)"},
+		}}},
+	} {
+		require.NoError(t, f.store.Append(ctx, turn), "seed turn %d", turn.Index)
+	}
+
+	f.run(t)
+
+	assert.Empty(t, f.provider.Requests(),
+		"the completion's own gate already allowed this settle; the resume must not hand the model a second refusal")
+	assert.Empty(t, f.bypasses, "no second bypass may be demanded or recorded")
+	assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseIdle, f.phase(t), "the resume parks Idle")
+
+	var got spiceboxv1alpha1.AgentSession
+	require.NoError(t, f.client.Get(context.Background(),
+		client.ObjectKey{Namespace: gateNS, Name: gateName}, &got), "Get session")
+	idle := apimeta.FindStatusCondition(got.Status.Conditions, spiceboxv1alpha1.AgentSessionConditionIdle)
+	if assert.NotNil(t, idle, "the park must set the Idle condition") {
+		assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionAgentWorkComplete, idle.Reason,
+			"the session rests for the reason its round ended: work complete")
 	}
 }
 
