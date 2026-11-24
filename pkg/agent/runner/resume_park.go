@@ -10,8 +10,11 @@ import (
 	"log/slog"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
+	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
 )
 
 // awaitUserMessageToolName is the meta tool the agent calls to park. The loop
@@ -64,7 +67,7 @@ func resumedWithNothingToDo(hadInitialPrompt, completedRound bool, replayed int,
 	if last.Role == "assistant" {
 		return resumeAssistantLast
 	}
-	if completedRound && len(messages) == replayed && onlyToolResults(last) {
+	if completedRound && len(messages) == replayed && isToolResultRelay(last) {
 		return resumeCompletedRound
 	}
 	return resumeHasWork
@@ -72,10 +75,12 @@ func resumedWithNothingToDo(hadInitialPrompt, completedRound bool, replayed int,
 
 // completedRoundAtRest reports whether the durable transcript ends with a
 // round the agent closed through agent_work_complete, every step of which
-// actually ran.
+// actually ran. When it does, completedAt is the memory Index of the assistant
+// turn that closed it — what completedRoundExitEvent matches the lifecycle log
+// against.
 //
-// Deliberately stricter than transcriptAtRest/endsTurn, which also drive turn
-// attribution and must keep their own answers:
+// Deliberately stricter than resumedWithNothingToDo's assistant-last check,
+// which only has to see who spoke last:
 //
 //   - EVERY tool_use in the last assistant turn has a RECORDED result in prior.
 //     A runner that died between appending the assistant turn and recording
@@ -83,14 +88,15 @@ func resumedWithNothingToDo(hadInitialPrompt, completedRound bool, replayed int,
 //     recorded" answers for it (repairOrphanToolUses), but those are not
 //     evidence anything ran, and parking there would silently drop the
 //     reply, the goal report, the completion itself.
-//   - agent_work_complete's own recorded result is not an error: a refused
-//     completion left the round open. A sibling's error does not reopen it —
-//     the live loop parks on a successful completion whatever its siblings
-//     returned.
+//   - An agent_work_complete in that turn has a recorded result that is not an
+//     error: a refused completion left the round open. One success is enough.
+//     A sibling's error does not reopen the round, and neither does a second
+//     agent_work_complete in the same batch that failed — the live loop parks
+//     on a successful completion whatever else the batch returned.
 //   - Nothing but tool results was placed after that assistant turn. Any other
 //     user turn (an inbound already drained, an authorless notice) is
 //     something the model has not answered yet.
-func completedRoundAtRest(prior []memory.Turn) bool {
+func completedRoundAtRest(prior []memory.Turn) (completedAt int, ok bool) {
 	last := -1
 	for i, t := range prior {
 		if t.Role == "assistant" && (last < 0 || t.Index > prior[last].Index) {
@@ -98,7 +104,7 @@ func completedRoundAtRest(prior []memory.Turn) bool {
 		}
 	}
 	if last < 0 || prior[last].Refused {
-		return false
+		return 0, false
 	}
 	a := prior[last]
 	results := map[string]*memory.ToolResultBlock{}
@@ -108,7 +114,7 @@ func completedRoundAtRest(prior []memory.Turn) bool {
 		}
 		for _, b := range t.Content {
 			if b.Type != "tool_result" || b.ToolResult == nil {
-				return false
+				return 0, false
 			}
 			results[b.ToolResult.ToolUseID] = b.ToolResult
 		}
@@ -118,31 +124,86 @@ func completedRoundAtRest(prior []memory.Turn) bool {
 		if b.Type != "tool_use" || b.ToolUse == nil {
 			continue
 		}
-		r, ok := results[b.ToolUse.ID]
-		if !ok {
-			return false
+		r, recorded := results[b.ToolUse.ID]
+		if !recorded {
+			return 0, false
 		}
-		if b.ToolUse.Name == "agent_work_complete" {
-			if r.IsError {
-				return false
-			}
+		if b.ToolUse.Name == "agent_work_complete" && !r.IsError {
 			completed = true
 		}
 	}
-	return completed
+	return a.Index, completed
 }
 
-// onlyToolResults reports whether m carries tool results and nothing else.
-func onlyToolResults(m llm.Message) bool {
-	if len(m.Content) == 0 {
-		return false
+// completedRoundExitEvent picks the lifecycle event a completed-round park
+// records when it expires. It is AgentWorkComplete only when the signed log
+// holds no record at all of how the round ended, and IdleYield otherwise.
+//
+// The completion can be missing because the live loop appends the completion's
+// tool_result turn BEFORE it emits AgentWorkComplete. A runner that died
+// between the two left a transcript completedRoundAtRest accepts and a log
+// with no completion in it. This exit writes it then, and it is the only place
+// that does: a resume that a message wakes, or that receives one while parked,
+// drains it and takes its turn without coming here, and that round's
+// completion stays unrecorded.
+//
+// It can also be missing because the live loop never meant to write it. A
+// sibling in the completing batch that returned an idle exit — a
+// respond_to_user the share gate denied, an await_user_message that ran out
+// its TTL — makes the live loop close the round as ShareDeniedYield or
+// IdleYield and return before it reaches the completion. The transcript is the
+// same one a crash leaves, every tool_use answered and agent_work_complete
+// successful, so only the log tells the two apart: a yield recorded for the
+// round means the live loop already closed it, its own way, and a completion
+// written here would be one it decided against.
+//
+// "Recorded for the round" is an event keyed at or after completedAt, the
+// assistant turn that closed it. The live loop keys the round's completion or
+// yield at that turn; an earlier resume's exit keyed its event at its own
+// replay base, which is later. Nothing later than that turn belongs to another
+// round, because the transcript has no later assistant turn. An entry written
+// before ordering keys existed cannot be placed at all and counts as recorded.
+//
+// Every doubt resolves toward IdleYield: a duplicate or a false completion
+// cannot be taken back out of an append-only log, a gap can still be
+// explained. That costs a real gap its backfill when an earlier resume's exit
+// could not check the log (unreadable, or the run was being stopped) and
+// recorded a plain IdleYield, which later exits then find. A log that cannot
+// be read is logged.
+func (l *Loop) completedRoundExitEvent(ctx context.Context, completedAt int) lifecyclecore.Event {
+	if l.LifecycleMemory == nil {
+		return idleYieldEventFor(false) // no signed log wired: nothing to backfill
 	}
-	for _, b := range m.Content {
-		if b.Type != "tool_result" {
-			return false
+	session := l.SessionKey.Namespace + "/" + l.SessionKey.Name
+	if err := ctx.Err(); err != nil {
+		// The park ended because the run is being stopped, not because the TTL
+		// ran out. The read below would fail on this context and report a log
+		// outage that is not one.
+		slog.Default().Info("resume park: the run was stopped while parked; recording the idle exit without checking for the round's AgentWorkComplete",
+			"session", session, "err", err.Error())
+		return idleYieldEventFor(false)
+	}
+	// A full read, like claimAndRecover's: once per Run, off seqMu, and the
+	// answer has to cover the whole log rather than a lookback-bounded tail.
+	events, err := lifecycle.ReadOrdered(ctx, l.LifecycleMemory, l.lifecycleScope())
+	if err != nil {
+		slog.Default().Info("resume park: read lifecycle log failed; recording the idle exit without checking for the round's AgentWorkComplete",
+			"session", session, "err", err.Error())
+		return idleYieldEventFor(false)
+	}
+	for _, e := range lifecycle.ForIncarnation(events, l.sessionIncarnationUID()) {
+		switch e.Event.(type) {
+		case lifecyclecore.AgentWorkComplete, lifecyclecore.IdleYield, lifecyclecore.ShareDeniedYield:
+		default:
+			continue
+		}
+		if e.Key.Region == "" || channelevents.UnpackTurn(e.Key.Seq) >= completedAt {
+			return idleYieldEventFor(false)
 		}
 	}
-	return true
+	slog.Default().Info("resume park: the lifecycle log has no record of how the completed round ended; recording its AgentWorkComplete on this exit",
+		"session", session, "completedAt", completedAt)
+	return lifecyclecore.AgentWorkComplete{Kubectl: false}
 }
 
 // parkUntilInbound blocks in the SAME wait the agent's own await_user_message

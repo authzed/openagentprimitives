@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,12 +13,15 @@ import (
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
 	llmfake "github.com/authzed/openagentprimitives/pkg/agent/llm/fake"
+	lifecyclecore "github.com/authzed/openagentprimitives/pkg/agent/session/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/meta"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz/engine"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/inmem"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/lifecycle"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
 
@@ -183,8 +187,7 @@ func completedRound(completeIsError bool) []memory.Turn {
 	}
 }
 
-// runResume runs a resume over prior and returns Run's error and the model
-// calls it made.
+// runResume runs a resume on l and returns Run's error.
 func runResume(t *testing.T, l *Loop) error {
 	t.Helper()
 	ctx := memory.WithSystemApproval(context.Background(), "test")
@@ -229,6 +232,39 @@ func TestResumeOntoACompletedRound(t *testing.T) {
 				}
 			},
 			park: true,
+		},
+		{
+			// The empty-summary call fails without submitting; the other submits
+			// and is Terminal, which is all the live loop looks at.
+			name: "two completions in one batch, one errored and one successful: parks (one success closes the round)",
+			prior: func() []memory.Turn {
+				return []memory.Turn{
+					userText(0, "post the digest"),
+					{Index: 1, Role: "assistant", Content: []memory.ContentBlock{
+						toolUse("toolu_bad", "agent_work_complete"), toolUse("toolu_done", "agent_work_complete"),
+					}},
+					{Index: 2, Role: "user", Content: []memory.ContentBlock{
+						toolResult("toolu_bad", "agent_work_complete: `summary` is required", true),
+						toolResult("toolu_done", "session complete", false),
+					}},
+				}
+			},
+			park: true,
+		},
+		{
+			name: "two completions in one batch, both errored: takes a turn (nothing closed the round)",
+			prior: func() []memory.Turn {
+				return []memory.Turn{
+					userText(0, "post the digest"),
+					{Index: 1, Role: "assistant", Content: []memory.ContentBlock{
+						toolUse("toolu_bad", "agent_work_complete"), toolUse("toolu_worse", "agent_work_complete"),
+					}},
+					{Index: 2, Role: "user", Content: []memory.ContentBlock{
+						toolResult("toolu_bad", "agent_work_complete: `summary` is required", true),
+						toolResult("toolu_worse", "completion refused: a requirement is not met", true),
+					}},
+				}
+			},
 		},
 		{
 			name:  "refused completion: takes a turn (the round is still open)",
@@ -293,6 +329,271 @@ func TestResumeOntoACompletedRound(t *testing.T) {
 			}
 		})
 	}
+}
+
+// appendLifecycleEventAt appends ev to key's lifecycle log the way the runner's
+// sequencer keys a loop-side event: runner region, at the end of turn.
+func appendLifecycleEventAt(t *testing.T, mem *memory.Local, key memory.NamespacedName, ev lifecyclecore.Event, turn int) {
+	t.Helper()
+	scope := memory.Scope{Kind: "session", ID: key.Namespace + "/" + key.Name}
+	orderKey := lifecycle.OrderKey{
+		Seq:    channelevents.PackSeq(turn, channelevents.SeqBlockEnd),
+		Region: string(lifecyclecore.RegionRunner),
+	}
+	require.NoError(t, lifecycle.Append(memory.WithSystemApproval(context.Background(), "test"), mem, scope, ev, time.Now().UTC(), orderKey),
+		"append lifecycle event")
+}
+
+// countLifecycleEvents reports how many AgentWorkComplete, IdleYield and
+// ShareDeniedYield events key's lifecycle log holds.
+func countLifecycleEvents(t *testing.T, mem *memory.Local, key memory.NamespacedName) (completions, idleYields, shareDeniedYields int) {
+	t.Helper()
+	scope := memory.Scope{Kind: "session", ID: key.Namespace + "/" + key.Name}
+	events, err := lifecycle.Events(memory.WithSystemApproval(context.Background(), "test"), mem, scope)
+	require.NoError(t, err, "read lifecycle log")
+	for _, ev := range events {
+		switch ev.(type) {
+		case lifecyclecore.AgentWorkComplete:
+			completions++
+		case lifecyclecore.IdleYield:
+			idleYields++
+		case lifecyclecore.ShareDeniedYield:
+			shareDeniedYields++
+		}
+	}
+	return completions, idleYields, shareDeniedYields
+}
+
+// completedRoundWithSibling is completedRound with a second tool call in the
+// completing batch: the agent called sibling alongside a successful
+// agent_work_complete, and both results are recorded.
+func completedRoundWithSibling(sibling, siblingResult string, siblingIsError bool) []memory.Turn {
+	return []memory.Turn{
+		userText(0, "post the digest"),
+		{Index: 1, Role: "assistant", Content: []memory.ContentBlock{
+			toolUse("toolu_sibling", sibling),
+			toolUse("toolu_done", "agent_work_complete"),
+		}},
+		{Index: 2, Role: "user", Content: []memory.ContentBlock{
+			toolResult("toolu_sibling", siblingResult, siblingIsError),
+			toolResult("toolu_done", "session complete", false),
+		}},
+	}
+}
+
+// The live loop appends the completion's tool_result turn BEFORE it signs
+// AgentWorkComplete. A runner that died between the two left a transcript the
+// resume parks on and a lifecycle log with no completion in it, so the park's
+// exit writes it — exactly once, however many times the session is woken with
+// nothing.
+//
+// The same transcript is also what the live loop leaves when it closed the
+// round WITHOUT a completion: a sibling in the completing batch returned an
+// idle exit (a share-denied respond_to_user, an await_user_message that ran
+// out its TTL), so the loop recorded a yield and returned first. The log tells
+// the two apart, and the exit must never sign a completion for a round whose
+// yield is already there.
+func TestCompletedRoundParkExitRecordsAMissingCompletionOnce(t *testing.T) {
+	// Two rounds, each closed by agent_work_complete: assistant turns 1 and 4.
+	twoRounds := func() []memory.Turn {
+		return append(completedRound(false),
+			userText(3, "and last week's?"),
+			memory.Turn{Index: 4, Role: "assistant", Content: []memory.ContentBlock{toolUse("toolu_done2", "agent_work_complete")}},
+			memory.Turn{Index: 5, Role: "user", Content: []memory.ContentBlock{toolResult("toolu_done2", "session complete", false)}},
+		)
+	}
+	cases := []struct {
+		name string
+		// prior is the transcript; recordedAt lists the assistant turns whose
+		// AgentWorkComplete the earlier run did sign.
+		prior      func() []memory.Turn
+		recordedAt []int
+		unstamped  bool
+		// yield, when set, is the event the earlier run closed a round with
+		// instead; yieldAt is the turn it is keyed at, -1 for no ordering key.
+		yield           lifecyclecore.Event
+		yieldAt         int
+		resumes         int
+		wantCompletions int
+		wantIdleYields  int
+		wantShareDenied int
+	}{
+		{
+			name:            "completion never signed: the exit records AgentWorkComplete, no IdleYield",
+			prior:           func() []memory.Turn { return completedRound(false) },
+			resumes:         1,
+			wantCompletions: 1,
+		},
+		{
+			name:            "completion already signed: the exit records IdleYield, no second AgentWorkComplete",
+			prior:           func() []memory.Turn { return completedRound(false) },
+			recordedAt:      []int{1},
+			resumes:         1,
+			wantCompletions: 1,
+			wantIdleYields:  1,
+		},
+		{
+			name:            "completion never signed, resumed twice: recorded by the first exit only",
+			prior:           func() []memory.Turn { return completedRound(false) },
+			resumes:         2,
+			wantCompletions: 1,
+			wantIdleYields:  1,
+		},
+		{
+			name:            "only an earlier round's completion signed: the last round's is still recorded",
+			prior:           twoRounds,
+			recordedAt:      []int{1},
+			resumes:         1,
+			wantCompletions: 2,
+		},
+		{
+			name:            "both rounds' completions signed: IdleYield only",
+			prior:           twoRounds,
+			recordedAt:      []int{1, 4},
+			resumes:         1,
+			wantCompletions: 2,
+			wantIdleYields:  1,
+		},
+		{
+			name:            "a completion with no ordering key cannot be placed: counted as recorded, IdleYield only",
+			prior:           func() []memory.Turn { return completedRound(false) },
+			unstamped:       true,
+			resumes:         1,
+			wantCompletions: 1,
+			wantIdleYields:  1,
+		},
+		{
+			name: "share-denied reply beside the completion, round closed as ShareDeniedYield: IdleYield, no AgentWorkComplete",
+			prior: func() []memory.Turn {
+				return completedRoundWithSibling("respond_to_user", "share denied: the reply was not delivered", true)
+			},
+			yield:           lifecyclecore.ShareDeniedYield{},
+			yieldAt:         1,
+			resumes:         1,
+			wantIdleYields:  1,
+			wantShareDenied: 1,
+		},
+		{
+			name: "await that ran out its TTL beside the completion, round closed as IdleYield: IdleYield, no AgentWorkComplete",
+			prior: func() []memory.Turn {
+				return completedRoundWithSibling("await_user_message", "idle ttl expired", false)
+			},
+			yield:          lifecyclecore.IdleYield{},
+			yieldAt:        1,
+			resumes:        1,
+			wantIdleYields: 2,
+		},
+		{
+			name: "round closed as a yield, resumed twice: no AgentWorkComplete on either exit",
+			prior: func() []memory.Turn {
+				return completedRoundWithSibling("respond_to_user", "share denied: the reply was not delivered", true)
+			},
+			yield:           lifecyclecore.ShareDeniedYield{},
+			yieldAt:         1,
+			resumes:         2,
+			wantIdleYields:  2,
+			wantShareDenied: 1,
+		},
+		{
+			name:           "an earlier resume's exit recorded IdleYield after the round: counted as recorded, no AgentWorkComplete",
+			prior:          func() []memory.Turn { return completedRound(false) },
+			yield:          lifecyclecore.IdleYield{},
+			yieldAt:        3,
+			resumes:        1,
+			wantIdleYields: 2,
+		},
+		{
+			name:           "a yield with no ordering key cannot be placed: counted as recorded, no AgentWorkComplete",
+			prior:          func() []memory.Turn { return completedRound(false) },
+			yield:          lifecyclecore.IdleYield{},
+			yieldAt:        -1,
+			resumes:        1,
+			wantIdleYields: 2,
+		},
+		{
+			name:            "only an earlier round's yield in the log: the last round's completion is still recorded",
+			prior:           twoRounds,
+			yield:           lifecyclecore.IdleYield{},
+			yieldAt:         1,
+			resumes:         1,
+			wantCompletions: 1,
+			wantIdleYields:  1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lifeMem := buildLifecycleMemory()
+			var key memory.NamespacedName
+			for resume := range tc.resumes {
+				// A fresh Loop per resume, as a respawned runner is; the
+				// lifecycle log is what survives between them.
+				l, provider := newResumeLoop(t, tc.prior())
+				l.ChannelAttached = true
+				l.LifecycleMemory = lifeMem
+				key = l.SessionKey
+				if resume == 0 {
+					for _, turn := range tc.recordedAt {
+						appendLifecycleEventAt(t, lifeMem, key, lifecyclecore.AgentWorkComplete{}, turn)
+					}
+					if tc.unstamped {
+						appendLifecycleEvent(t, lifeMem, key, lifecyclecore.AgentWorkComplete{})
+					}
+					switch {
+					case tc.yield == nil:
+					case tc.yieldAt < 0:
+						appendLifecycleEvent(t, lifeMem, key, tc.yield)
+					default:
+						appendLifecycleEventAt(t, lifeMem, key, tc.yield, tc.yieldAt)
+					}
+				}
+
+				require.NoError(t, runResume(t, l), "Run")
+				require.Zero(t, len(provider.Requests()), "precondition: this resume parks rather than turning")
+				require.True(t, l.Status.LocalIdle(), "precondition: the park expired into an idle exit")
+			}
+
+			completions, idleYields, shareDenied := countLifecycleEvents(t, lifeMem, key)
+			assert.Equal(t, tc.wantCompletions, completions, "AgentWorkComplete events in the lifecycle log")
+			assert.Equal(t, tc.wantIdleYields, idleYields, "IdleYield events in the lifecycle log")
+			assert.Equal(t, tc.wantShareDenied, shareDenied, "ShareDeniedYield events in the lifecycle log")
+		})
+	}
+}
+
+// queryCountingMemory counts the reads made through it.
+type queryCountingMemory struct {
+	memory.Memory
+	queries atomic.Int32
+}
+
+func (m *queryCountingMemory) Query(ctx context.Context, q memory.Query) (memory.QueryResult, error) {
+	m.queries.Add(1)
+	return m.Memory.Query(ctx, q)
+}
+
+// A park that ends because the run is being stopped (SIGTERM, supersede) hands
+// the exit a cancelled context. Reading the lifecycle log on it fails against a
+// real backend and logs a log outage that is not one, so the exit records the
+// plain IdleYield without reading — and without a completion, since it could
+// not check for one.
+func TestCompletedRoundParkExitDoesNotReadTheLogOnACancelledContext(t *testing.T) {
+	l, _ := newResumeLoop(t, completedRound(false))
+	l.ChannelAttached = true
+	lifeMem := &queryCountingMemory{Memory: buildLifecycleMemory()}
+	l.LifecycleMemory = lifeMem
+
+	ctx, cancel := context.WithCancel(memory.WithSystemApproval(context.Background(), "test"))
+	cancel()
+
+	assert.Equal(t, lifecyclecore.IdleYield{}, l.completedRoundExitEvent(ctx, 1),
+		"an exit that could not check the log must not record a completion")
+	assert.Zero(t, lifeMem.queries.Load(), "the lifecycle log must not be read on a cancelled context")
+
+	// The same loop on a live context does read, and finds the gap.
+	assert.Equal(t, lifecyclecore.AgentWorkComplete{Kubectl: false},
+		l.completedRoundExitEvent(memory.WithSystemApproval(context.Background(), "test"), 1),
+		"precondition: with a live context this log has a completion to backfill")
+	assert.Positive(t, lifeMem.queries.Load(), "precondition: the live-context exit reads the log")
 }
 
 // A kubectl session (not channel-attached) does not park after
