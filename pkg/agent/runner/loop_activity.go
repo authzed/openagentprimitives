@@ -163,7 +163,7 @@ func (l *Loop) flushRunDuration(ctx context.Context) {
 		return
 	}
 	besteffort.Log(slog.Default().Info, "flush run duration",
-		l.Status.PatchRunDuration(ctx, l.RunClock.Elapsed()),
+		l.Status.PatchRunDuration(ctx, l.RunClock.Elapsed(), l.Budget.MaxDuration()),
 		"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name)
 }
 

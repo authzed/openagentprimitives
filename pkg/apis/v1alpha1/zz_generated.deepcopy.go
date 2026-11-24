@@ -835,6 +835,11 @@ func (in *AgentSessionStatus) DeepCopyInto(out *AgentSessionStatus) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.EnforcedMaxDuration != nil {
+		in, out := &in.EnforcedMaxDuration, &out.EnforcedMaxDuration
+		*out = new(v1.Duration)
+		**out = **in
+	}
 	if in.LastWakeAt != nil {
 		in, out := &in.LastWakeAt, &out.LastWakeAt
 		*out = (*in).DeepCopy()

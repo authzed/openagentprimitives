@@ -510,7 +510,7 @@ func groupRunApprovalDeadlineLapsed(ctx context.Context, awaitErr error) bool {
 }
 
 // publishTimeoutApplied notifies channelsd that a host-driven approval
-// (tool_call / leakage_share / content_inspection) reached its per-kind deadline
+// (every parking kind in the switch below) reached its per-kind deadline
 // with no decision. It builds the matching "applied" envelope with a
 // deny/timeout outcome and hands it to l.TimeoutAppliedPublish on IN.
 // Channelsd retains the winning outcome before publishing it on OUT. Deny-only: a
@@ -525,7 +525,7 @@ func (h *runnerHost) publishTimeoutApplied(ctx context.Context, reqID, kind stri
 		appliedKind channelevents.Kind
 		payload     any
 	)
-	// All three host-driven approval kinds ride the unified Interaction model:
+	// Every host-driven approval kind rides the unified Interaction model:
 	// an expired deadline publishes interaction_applied(expired) so
 	// HandleInteractionApplied clears the durable pending entry and the generic
 	// surface edits the prompt to "expired".
@@ -549,6 +549,13 @@ func (h *runnerHost) publishTimeoutApplied(ctx context.Context, reqID, kind stri
 		// tells it the deadline passed. Deny-only: a lapsed deadline never
 		// commits a preference.
 		category = categories.UserPreferenceConfirm
+	case categories.PlanPhase, categories.PlanAmendment:
+		// Both park (Category.Park) and carry an ExpiresAt, so a lapsed plan
+		// gate strands channelsd's pending queue + AwaitingDecision surface the
+		// same way. That used to be recoverable only by a click on the expired
+		// card, which the outbound relay now never delivers once its deadline
+		// passes in transit. Deny-only: a lapsed deadline never clears a phase.
+		category = kind
 	default:
 		return
 	}

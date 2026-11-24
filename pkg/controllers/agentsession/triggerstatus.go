@@ -13,8 +13,12 @@ import (
 	chregistry "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
 )
 
-// concludeTriggerStatusOnBootFailure answers the trigger that started sess,
-// when sess died before anything inside it could.
+// concludeTriggerStatusOnOperatorFailure answers the trigger that started
+// sess, when the operator is failing sess and nothing inside it can: either it
+// died before its runner came up (markBootFailed), or its runner is wedged
+// past its run-time budget and the operator is ending it (reconcileRunDuration).
+// summary is the prose published on the trigger's surface; see
+// bootFailureSummary and operatorStoppedSummary.
 //
 // # Why the reconciler and not the agent
 //
@@ -43,8 +47,8 @@ import (
 // than reporting it, and a session wedged mid-transition by a provider outage
 // would be strictly worse. Every give-up path logs, because the visible symptom
 // (a pull request showing nothing) is otherwise untraceable.
-func (r *Reconciler) concludeTriggerStatusOnBootFailure(
-	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, reason string,
+func (r *Reconciler) concludeTriggerStatusOnOperatorFailure(
+	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, reason, summary string,
 ) {
 	logger := log.FromContext(ctx)
 	sessRef := sess.Namespace + "/" + sess.Name
@@ -94,20 +98,20 @@ func (r *Reconciler) concludeTriggerStatusOnBootFailure(
 		return
 	}
 	if claim.Concluded {
-		logger.Info("trigger status: this trigger already carries an answer; the boot failure did not overwrite it",
+		logger.Info("trigger status: this trigger already carries an answer; the operator-side failure did not overwrite it",
 			"session", sessRef, "surface", surface.Surface(), "outcome", string(claim.Outcome))
 		return
 	}
 
 	if err := surface.Conclude(ctx, channelkinds.TriggerConclusion{
 		Outcome: channelkinds.TriggerOutcomeCouldNotFinish,
-		Summary: bootFailureSummary(reason),
+		Summary: summary,
 	}); err != nil {
 		logger.Info("trigger status: could not answer this session's trigger; it keeps showing the work as in progress",
 			"session", sessRef, "surface", surface.Surface(), "err", err.Error())
 		return
 	}
-	logger.Info("trigger status: answered on behalf of a session that never started",
+	logger.Info("trigger status: answered on behalf of a session the operator failed",
 		"session", sessRef, "surface", surface.Surface(), "reason", reason)
 }
 
@@ -123,5 +127,15 @@ func (r *Reconciler) concludeTriggerStatusOnBootFailure(
 func bootFailureSummary(reason string) string {
 	return fmt.Sprintf(
 		"This agent could not start, so no work was done and none is coming for this commit. "+
+			"The operator's record of why is `%s`.", reason)
+}
+
+// operatorStoppedSummary is bootFailureSummary's counterpart for a session that
+// DID start and was ended by the operator mid-run (its run-time budget ran out
+// while its runner could not end it). Same rule: the stable reason token,
+// never the operator-facing message.
+func operatorStoppedSummary(reason string) string {
+	return fmt.Sprintf(
+		"This agent was stopped before it finished, so its work for this commit is incomplete and no result is coming. "+
 			"The operator's record of why is `%s`.", reason)
 }

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -115,6 +117,16 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 			if err := p.deliverInteractionResolution(ctx, *rec); err != nil {
 				return err
 			}
+		}
+		// An expiry is nobody's decision: say so, rather than letting the
+		// surface render a nil decider as "resolved by someone else".
+		expired, err := resolvedAsExpired(*rec)
+		if err != nil {
+			logger.Info("interaction decision: undecodable retained resolution; reporting as already resolved", "err", err.Error())
+		}
+		if expired {
+			logger.Info("interaction decision: durably resolved as expired; rejecting as expired")
+			return p.publishDecisionRejected(ctx, env.Session, pl, "expired", expiredDecisionReason, nil, "")
 		}
 		logger.Info("interaction decision: durably already resolved (parked-prompt tombstone); spectator")
 		return p.publishDecisionRejected(ctx, env.Session, pl, "already_resolved", "already resolved", nil, "")
@@ -244,6 +256,26 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 		return fmt.Errorf("interaction decision: category %q has unknown decider policy %q", pl.Category, cat.Deciders)
 	}
 
+	// Deadline: a click past the request's own ExpiresAt decides nothing. The
+	// tombstone above is not enough on its own, because the expiry and the
+	// prompt reach channelsd on different subjects: the runner reports its
+	// timeout on IN, while the prompt rides the OUT relay, and when the relay
+	// lags the expiry lands first, finds no record to tombstone, and the prompt
+	// is then noted as live. The card stays armed — a Slack approver card is an
+	// ephemeral, which a timeout cannot edit — and a click on it ran the handler
+	// for a request the runner had already abandoned, so the approval did
+	// nothing while reporting "approved". The deadline is the one witness that
+	// does not depend on that ordering.
+	//
+	// Checked only after standing, so a clicker who could not have decided the
+	// request learns nothing about its state and writes nothing.
+	if req != nil && req.ExpiredAt(p.nowOrWallClock()) {
+		logger.Info("interaction decision: request is past its deadline; rejecting as expired",
+			"expiresAt", req.ExpiresAt.UTC().Format(time.RFC3339))
+		p.retireExpiredRequest(ctx, logger, ns, name, pl)
+		return p.publishDecisionRejected(ctx, env.Session, pl, "expired", expiredDecisionReason, nil, "")
+	}
+
 	handler, bound := channelinteractions.HandlerFor(pl.Category)
 	if !bound {
 		return fmt.Errorf("interaction decision: category %q has no bound decision handler (session %s)", pl.Category, ref)
@@ -303,17 +335,7 @@ func (p *Pipeline) HandleInteractionDecision(ctx context.Context, env channeleve
 		ResponseRef:     pl.ResponseRef,
 	}
 	if cat.Resurface == channelinteractions.ResurfaceCached && rec != nil && p.Mem != nil {
-		frozen := applied
-		frozen.ResponseRef, frozen.MintedURL = "", ""
-		resolution, err := channelevents.BuildEnvelope(ns, name, channelevents.KindInteractionApplied, frozen)
-		if err != nil {
-			return err
-		}
-		raw, err := json.Marshal(resolution)
-		if err != nil {
-			return err
-		}
-		retained, err := parkedprompt.ResolveWithOutcome(ctx, p.Mem, promptScope(ns, name), pl.RequestRef, raw)
+		retained, err := p.retainResolution(ctx, applied)
 		if err != nil {
 			return err
 		}
@@ -373,6 +395,41 @@ func (p *Pipeline) admitGoalRunChannelDecision(ctx context.Context, ns, name str
 		return fmt.Errorf("bounded goal decisions require component-only ingress")
 	}
 	return nil
+}
+
+// expiredDecisionReason is what a clicker is told when their click lands after
+// the request's deadline. Action- and category-neutral: it is shown for a Deny
+// as much as an Approve, and for requests no agent can simply re-raise.
+const expiredDecisionReason = "this request expired before it was decided, so this action was not applied"
+
+// retireExpiredRequest resolves a request whose deadline passed before anyone
+// decided it, exactly as the runner's own timeout report would: the expiry is
+// frozen as the prompt's canonical outcome and delivered, so other viewers'
+// cards are retired and a timeout report arriving later finds the outcome
+// already published rather than a bare tombstone that suppresses it. The
+// session's PendingInteractions entry is dropped too, for producers that never
+// send a timeout report of their own.
+//
+// Every step is logged, not returned: the clicker's rejection must still go
+// out, and an unretired request is left for the runner's timeout to resolve.
+func (p *Pipeline) retireExpiredRequest(ctx context.Context, logger logr.Logger, ns, name string, pl channelevents.InteractionDecisionPayload) {
+	if p.Mem != nil {
+		retained, err := p.retainResolution(ctx, channelevents.InteractionAppliedPayload{
+			AgentSessionRef: channelevents.SessionRef{Namespace: ns, Name: name},
+			Category:        pl.Category,
+			RequestRef:      pl.RequestRef,
+			Outcome:         channelevents.OutcomeExpired,
+			Reason:          "timeout",
+		})
+		if err != nil {
+			logger.Info("interaction decision: retain expired outcome failed", "err", err.Error())
+		} else if err := p.deliverInteractionResolution(ctx, retained); err != nil {
+			logger.Info("interaction decision: deliver expired outcome failed", "err", err.Error())
+		}
+	}
+	if err := p.clearPendingInteraction(ctx, ns, name, pl.RequestRef); err != nil {
+		logger.Info("interaction decision: clear pending-interaction entry for expired request failed", "err", err.Error())
+	}
 }
 
 // requestCategoryWitness returns the category a request was RAISED under, and

@@ -114,3 +114,53 @@ func TestBudget_Check(t *testing.T) {
 		})
 	}
 }
+
+func TestBudget_UntilExpiration(t *testing.T) {
+	// sessionStart offsets are wall-clock against time.Now, so assert with a
+	// tolerance rather than exactly.
+	const slack = 5 * time.Second
+	expiration := func(d time.Duration) spiceboxv1alpha1.BudgetConfig {
+		return spiceboxv1alpha1.BudgetConfig{SessionExpiration: metav1.Duration{Duration: d}}
+	}
+	cases := []struct {
+		name         string
+		cfg          spiceboxv1alpha1.BudgetConfig
+		sessionStart time.Time
+		wantOK       bool
+		want         time.Duration
+	}{
+		{
+			name:         "no sessionExpiration: ok=false, call unbounded by it",
+			cfg:          cfg(50, 1000, 2*time.Hour),
+			sessionStart: time.Now().Add(-time.Hour),
+			wantOK:       false,
+		},
+		{
+			name:         "sessionExpiration set: remaining = cap - wall-clock since start",
+			cfg:          expiration(time.Hour),
+			sessionStart: time.Now().Add(-50 * time.Minute),
+			wantOK:       true, want: 10 * time.Minute,
+		},
+		{
+			name:         "sessionExpiration already passed: remaining <= 0",
+			cfg:          expiration(time.Hour),
+			sessionStart: time.Now().Add(-2 * time.Hour),
+			wantOK:       true, want: -time.Hour,
+		},
+		{
+			name:   "sessionExpiration ignored before sessionStart is stamped: ok=false",
+			cfg:    expiration(time.Hour),
+			wantOK: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// A nil run clock: the expiration window never depends on it.
+			got, ok := runner.NewBudget(tc.cfg, nil, tc.sessionStart).UntilExpiration()
+			assert.Equal(t, tc.wantOK, ok)
+			if tc.wantOK {
+				assert.InDelta(t, tc.want, got, float64(slack))
+			}
+		})
+	}
+}

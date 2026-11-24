@@ -3,6 +3,7 @@ package runner
 
 import (
 	"context"
+	"time"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
 	"github.com/authzed/openagentprimitives/pkg/memory"
@@ -31,6 +32,13 @@ func (l *Loop) HeldInbox(ctx context.Context) ([]memory.Turn, error) {
 // dispatch-fan-out state, not part of Loop's public API).
 func (l *Loop) FireInterrupt() {
 	l.interrupts.fire()
+}
+
+// SetBudgetStatefulDrainForTest shortens how long stateful tools may drain
+// after maxDuration is reached, so a test can observe both the drain and the
+// cut-off without waiting minutes.
+func (l *Loop) SetBudgetStatefulDrainForTest(d time.Duration) {
+	l.budgetStatefulDrain = d
 }
 
 // MaxNativeBytesPerRequest is the exported test alias for the hydration
