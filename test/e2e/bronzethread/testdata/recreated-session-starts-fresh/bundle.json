@@ -1,0 +1,67 @@
+{
+  "name": "recreated-session-starts-fresh",
+  "description": "A person messages a conversation whose session was deleted. The second message must start a FRESH session that answers it, with none of the deleted session's conversation in its context.\n\nA session's name is derived from (channel, key), and its memory scope is keyed by that name, not the CR's UID. The transcript outlives the CR on purpose: turns are append-only, signed audit evidence. So the second message used to mint a session under the SAME name, onto the deleted one's transcript. The runner read that as a resume: turn 0 already existed, so spec.prompt was never placed. A predecessor ending on the agent's reply parked without a word; one ending on a tool result — as this one does, on agent_work_complete's — ran the OLD conversation again. Either way the person's message was lost, and the deleted session's tool output — never re-authorized for whoever was asking now — became the new session's context. channelsd now mints the successor under the next free name instead (pipeline.freshSessionName).\n\nWhat this pins, step by step. Step 4 is the second session's FIRST model call: userTextContains proves the new message was placed as its opening prompt rather than parked on, and requestNotContains proves nothing the first session read is in its context at all — not merely absent from the latest tool result. Step 5 asserts on the TOOL RESULT the second session's own call returned, not on the reply text, since a scripted reply says the same words either way. If the name is ever reused again, step 4 is answering the old conversation: its latest user text is the FIRST message and Acme Payroll is in its context, so both of its checks fail.",
+
+  "agentDir": "../testdata/agent-centerdot-companies",
+  "agentClass": "centerdot-companies",
+
+  "toolOutputSequence": {
+    "list_companies": [
+      { "results": [{ "id": "co-7731", "name": "Acme Payroll", "ownerId": "owner-1", "note": "board-only: acquisition target" }] },
+      { "results": [{ "id": "co-1002", "name": "Globex", "ownerId": "owner-1" }] }
+    ]
+  },
+  "toolOutputs": {
+    "list_contacts_for_company": { "results": [] }
+  },
+
+  "userTurns": [
+    "list the companies",
+    { "text": "list the companies again", "deleteSessionFirst": true }
+  ],
+
+  "llm": [
+    {
+      "expect": { "userTextContains": "list the companies" },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list-first", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultContains": "Acme Payroll",
+        "lastToolResultIsError": false
+      },
+      "reply": [{ "text": "found Acme Payroll" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "listed companies" } } }]
+    },
+    {
+      "expect": {
+        "userTextContains": "list the companies again",
+        "requestNotContains": "Acme Payroll"
+      },
+      "reply": [{ "toolUse": { "name": "centerdot_list_companies", "args": { "operation_id": "op-list-second", "_reason": "user asked for the company list", "args": {} } } }]
+    },
+    {
+      "expect": {
+        "lastToolResult": "centerdot_list_companies",
+        "lastToolResultContains": "Globex",
+        "lastToolResultNotContains": "Acme Payroll",
+        "lastToolResultIsError": false,
+        "requestNotContains": "acquisition target"
+      },
+      "reply": [{ "text": "found Globex" }]
+    },
+    {
+      "expect": { "lastToolResult": "respond_to_user" },
+      "reply": [{ "toolUse": { "name": "agent_work_complete", "args": { "summary": "listed companies" } } }]
+    }
+  ],
+
+  "assert": {
+    "agentReplyContains": ["found Acme Payroll", "found Globex"],
+    "agentReplyNotContains": ["", "Acme Payroll"]
+  }
+}

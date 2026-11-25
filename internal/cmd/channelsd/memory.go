@@ -179,6 +179,19 @@ func (m *memoryClient) ReadAll(ctx context.Context, ns, name string) ([]pipeline
 	return out, nil
 }
 
+// ScopeHasEntries reports whether the (ns, name) session scope holds any entry
+// of any kind. No Kinds filter and a limit of one: the question is occupancy,
+// not content. channelsd's system bearer is not a session token, so the
+// operator's per-kind read door does not filter platform-only entries out of
+// the answer.
+func (m *memoryClient) ScopeHasEntries(ctx context.Context, ns, name string) (bool, error) {
+	res, err := m.signed.Query(ctx, memory.Query{Scope: memory.Scope{Kind: "session", ID: ns + "/" + name}, Limit: 1})
+	if err != nil {
+		return false, fmt.Errorf("memory scope probe: %w", err)
+	}
+	return len(res.Entries) > 0, nil
+}
+
 // Healthz checks that the operator memory server is up.
 func (m *memoryClient) Healthz(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.baseURL+"/healthz", nil)

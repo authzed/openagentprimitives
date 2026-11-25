@@ -15,8 +15,11 @@ import (
 const overlayCutDeadlineSeconds = 900 // 15m
 
 // OverlayCutJobName is the deterministic Job name for cutting a WorkspaceSource
-// base into the dst (session workspace) PVC.
-func OverlayCutJobName(dst PVCRef) string { return "ws-overlay-" + dst.Name }
+// base into the dst (session workspace) PVC. dst is "<session>-workspace", so
+// the raw name is the session name plus 21 bytes — over a Job's 63 for any
+// session name past 42 — and is bounded the same way as the snapshot and
+// restore Jobs' (see boundedJobName); a name that already fits is unchanged.
+func OverlayCutJobName(dst PVCRef) string { return boundedJobName("ws-overlay-" + dst.Name) }
 
 // BuildOverlayCutJob constructs the one-shot Job that reflink-copies the
 // materialized checkout at <base>/<checkoutSubdir> into the dst PVC's root —
