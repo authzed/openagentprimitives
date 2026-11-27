@@ -1,0 +1,70 @@
+# Who can reach what on the demo drive, seeded into SpiceDB.
+#
+# A bundle cannot carry a SpiceDBBootstrap, so apply this after
+# `oap agent install`, replacing the two placeholders with the Slack email
+# addresses of the demo users:
+#
+#   sed -e "s/{{ALICE_EMAIL}}/$ALICE_EMAIL/g" -e "s/{{BOB_EMAIL}}/$BOB_EMAIL/g" \
+#     cluster/spicedb-bootstrap.yaml | kubectl apply -n default -f -
+#
+# canonicalize: true turns an email into the same subject id OAP derives from
+# a Slack user. Resource ids are drive paths after OAP's spicedb_escape
+# transform ("." becomes "=2E"). cluster/permission-model.zed.yaml validates
+# this model with the same tuples.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SpiceDBBootstrap
+metadata:
+  name: shared-drive-seed
+spec:
+  relationships:
+    # Alice is in eng; Bob is in finance.
+    - resource: { type: group, id: eng }
+      relation: member
+      subject: { type: user, id: "{{ALICE_EMAIL}}", canonicalize: true }
+    - resource: { type: group, id: finance }
+      relation: member
+      subject: { type: user, id: "{{BOB_EMAIL}}", canonicalize: true }
+
+    # Everyone can list the top of the drive. Each team edits its own folder.
+    # Nobody is granted /shared/hr.
+    - resource: { type: folder, id: "/shared" }
+      relation: viewer_group
+      subject: { type: group, id: eng }
+    - resource: { type: folder, id: "/shared" }
+      relation: viewer_group
+      subject: { type: group, id: finance }
+    - resource: { type: folder, id: "/shared/eng" }
+      relation: editor_group
+      subject: { type: group, id: eng }
+    - resource: { type: folder, id: "/shared/eng/drafts" }
+      relation: editor_group
+      subject: { type: group, id: eng }
+    - resource: { type: folder, id: "/shared/finance" }
+      relation: editor_group
+      subject: { type: group, id: finance }
+
+    # Each file's folder.
+    - resource: { type: file, id: "/shared/eng/q3-budget-update-template=2Emd" }
+      relation: parent
+      subject: { type: folder, id: "/shared/eng" }
+    - resource: { type: file, id: "/shared/eng/roadmap=2Emd" }
+      relation: parent
+      subject: { type: folder, id: "/shared/eng" }
+    - resource: { type: file, id: "/shared/finance/payroll=2Ecsv" }
+      relation: parent
+      subject: { type: folder, id: "/shared/finance" }
+    - resource: { type: file, id: "/shared/finance/eng-budget-q3=2Ecsv" }
+      relation: parent
+      subject: { type: folder, id: "/shared/finance" }
+    - resource: { type: file, id: "/shared/finance/vendor-contracts=2Emd" }
+      relation: parent
+      subject: { type: folder, id: "/shared/finance" }
+    - resource: { type: file, id: "/shared/hr/handbook=2Emd" }
+      relation: parent
+      subject: { type: folder, id: "/shared/hr" }
+
+    # Bob owns the eng budget lines and may approve sharing them. payroll.csv
+    # has no approver, so nobody can approve an agent reading it.
+    - resource: { type: file, id: "/shared/finance/eng-budget-q3=2Ecsv" }
+      relation: approver
+      subject: { type: user, id: "{{BOB_EMAIL}}", canonicalize: true }

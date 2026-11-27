@@ -1,0 +1,31 @@
+# examples/mcp-shared-drive/oap.yaml
+#
+# The OAP half of the MCP shared-drive demo: an agent that works on a shared
+# drive through the unmodified MCP filesystem server, with every tool call
+# checked per person and per file. README.md walks through the before and the
+# after.
+#
+#   oap agent lint    examples/mcp-shared-drive
+#   oap agent install examples/mcp-shared-drive --namespace default --build-missing
+#
+# agent.name / displayName / description come from the bundled AgentClass.
+# The SpiceDB relationships (cluster/spicedb-bootstrap.yaml) are applied
+# separately: a bundle cannot carry a SpiceDBBootstrap.
+oapFormatVersion: "1"
+agent:
+  version: "0.1.0"
+compat:
+  minApVersion: "0.9.0"
+  crdApiVersion: agentprimitives.authzed.com/v1alpha1
+requires:
+  images:
+    # Built from server/ and loaded into kind by `oap agent install`.
+    - ref: oap-examples/shared-drive-fs:dev
+      build:
+        dockerfile: server/Dockerfile
+        context: server
+  channels:
+    - kind: slack
+      role: both
+      name: shared-drive-slack
+      purpose: "Alice and Bob talk to the agent; approval requests reach the file's owner."

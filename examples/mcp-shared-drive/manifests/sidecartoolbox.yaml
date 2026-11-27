@@ -1,0 +1,146 @@
+# The demo drive's MCP server, run beside the agent as a sidecar: the
+# unmodified @modelcontextprotocol/server-filesystem behind a
+# stdio-to-Streamable-HTTP bridge (see server/). The server has one credential
+# and no idea who is asking. The checks below run in OAP before a call reaches
+# it, as the person who sent the message.
+#
+# Each tool that touches the drive names one resource from its `path`:
+# listings and reads check the folder or file itself; writes check the folder
+# the file goes into, because a new draft is not in SpiceDB yet. Tools that
+# take several paths or walk a whole tree (read_multiple_files, move_file,
+# copy_file, directory_tree, search_files, ...) are left off the allowlist:
+# they cannot be checked one resource at a time.
+#
+# There are no path constraints: a path is checked as the exact ID it names.
+# Only the folders and files seeded in cluster/spicedb-bootstrap.yaml have
+# relationships, so a path with "..", "//", a trailing slash or no leading
+# /shared names an ID nothing is related to, and the check refuses it. Writes
+# check the parent folder, so for a target like /shared/eng/drafts/. it is the
+# server that refuses. This relies on the seed holding only canonical paths,
+# the drive having no symlinks, and no allowlisted tool moving, renaming or
+# linking files.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: SidecarToolbox
+metadata:
+  name: shared-drive-fs
+spec:
+  name: drive
+  version: "1"
+  intent: "Read and write files on the company shared drive mounted at /shared."
+  source:
+    image: oap-examples/shared-drive-fs:dev
+  sandbox:
+    class: shared-drive-sandbox
+  transport:
+    port: 8080
+    path: /mcp
+    healthcheck:
+      path: /healthz
+      timeoutSeconds: 30
+  upstreamAuth:
+    provider: none
+
+  tools:
+    - name: list_allowed_directories
+      intent: "Show the top of the drive."
+      args:
+        allowedFields: []
+      permission:
+        stateImpact: stateless
+
+    - name: list_directory
+      intent: "List one folder."
+      args:
+        allowedFields: [path]
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: folder
+          resourceIDExpr: args.path
+          resourceIDTransforms: [spicedb_escape]
+          permission: read
+          enforceMode: always
+
+    - name: read_text_file
+      intent: "Read one file."
+      args:
+        allowedFields: [path, head, tail]
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: file
+          resourceIDExpr: args.path
+          resourceIDTransforms: [spicedb_escape]
+          permission: read
+          enforceMode: always
+
+    - name: get_file_info
+      intent: "Show one file's size and dates."
+      args:
+        allowedFields: [path]
+      permission:
+        stateImpact: readonly
+        check:
+          resourceType: file
+          resourceIDExpr: args.path
+          resourceIDTransforms: [spicedb_escape]
+          permission: read
+          enforceMode: always
+
+    - name: write_file
+      intent: "Create or overwrite a file in a folder."
+      args:
+        allowedFields: [path, content]
+      permission:
+        stateImpact: readwrite
+        check:
+          resourceType: folder
+          resourceIDExpr: 'args.path.substring(0, args.path.lastIndexOf("/"))'
+          resourceIDTransforms: [spicedb_escape]
+          permission: write
+          enforceMode: always
+
+    - name: create_directory
+      intent: "Create a folder inside a folder."
+      args:
+        allowedFields: [path]
+      permission:
+        stateImpact: readwrite
+        check:
+          resourceType: folder
+          resourceIDExpr: 'args.path.substring(0, args.path.lastIndexOf("/"))'
+          resourceIDTransforms: [spicedb_escape]
+          permission: write
+          enforceMode: always
+
+  # The same model cluster/permission-model.zed.yaml validates. Folders do not
+  # inherit from their parent. Nobody holds `approve` on a folder or on
+  # payroll.csv, so refusals there are final; Bob holds it on
+  # eng-budget-q3.csv. Because the AgentClass slots `file`, OAP's composer
+  # rewrites file's `read` to `slot_grant_read->interact + owner`: an approval
+  # adds the grant, and direct access flows through `owner`.
+  spicedbSchema:
+    resources:
+      - name: folder
+        standing: required
+        approverPermission: approve
+        display: {name: "a folder on the shared drive"}
+        relations:
+          - {name: viewer_group, subjectType: group}
+          - {name: editor_group, subjectType: group}
+          - {name: approver, subjectType: user}
+        permissions:
+          - {name: read, expr: "viewer_group->membership + editor_group->membership", title: "List this folder"}
+          - {name: write, expr: "editor_group->membership", title: "Create files in this folder"}
+          - {name: approve, expr: "approver", title: "Approve an agent's access to this folder"}
+      - name: file
+        standing: required
+        approverPermission: approve
+        display: {name: "a file on the shared drive"}
+        relations:
+          - {name: parent, subjectType: folder}
+          - {name: approver, subjectType: user}
+        permissions:
+          - {name: owner, expr: "parent->read", title: "Read this file through its folder"}
+          - {name: read, expr: "owner", title: "Read this file"}
+          - {name: approve, expr: "approver", title: "Approve an agent reading this file"}

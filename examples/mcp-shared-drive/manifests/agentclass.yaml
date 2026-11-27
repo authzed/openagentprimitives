@@ -1,0 +1,43 @@
+# The "after": the same model, system prompt and MCP server as
+# before/agent.py, run by OAP. Every tool call is checked in SpiceDB as the
+# person who sent the latest message, before it reaches the server.
+apiVersion: agentprimitives.authzed.com/v1alpha1
+kind: AgentClass
+metadata:
+  name: shared-drive-agent
+spec:
+  displayName: Shared Drive Assistant
+  description: |
+    Reads and writes files on the company shared drive for whoever is asking,
+    with each file it touches checked against what that person may reach.
+  model:
+    provider: anthropic
+    name: claude-opus-4-8
+  systemPrompt:
+    configMapRef:
+      name: shared-drive-system-prompt
+      key: system.md
+  # One shared credential to the server; the decisions below are per person.
+  identityMode: agent
+  authz:
+    toolCalls:
+      subject: currentRequester
+      mode: enforcing
+    slots:
+      # A file owner's approval writes a read grant for that one file to the
+      # approved session. The check runs as the person asking and passes for
+      # anyone who can use that session (its starter and anyone admitted to
+      # the thread), from any of their sessions, until the grant expires
+      # (24h) or the session is deleted. multi: a session may be granted
+      # several files without a pin.
+      - resourceType: file
+        description: "A file on the shared drive"
+        permission: read
+        occupancy: multi
+  sidecarToolboxes:
+    - name: drive        # tools reach the model as drive_<tool>
+      ref: shared-drive-fs
+  budget:
+    maxTurns: 30
+    maxTokens: 300000
+    maxDuration: 10m
