@@ -67,7 +67,7 @@ func (s *Server) groupQualifies(ctx context.Context, class *v1.AgentClass, ch *v
 	if !enabled {
 		return fmt.Errorf("%w: group goals are not enabled for this agent", domain.ErrDenied)
 	}
-	if mode := class.Spec.IdentityMode; mode != "" && mode != "agent" {
+	if mode := class.Spec.IdentityMode; mode != "" && mode != v1.IdentityModeAgent {
 		return fmt.Errorf("%w: group goals act as the agent, but this agent's identityMode is %q; group goals need identityMode agent", domain.ErrDenied, mode)
 	}
 	if err := runsOwnedByManagers(class); err != nil {
