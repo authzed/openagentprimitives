@@ -4,16 +4,19 @@
 // writer owns. WriteOwned sends only the diff — scalars/queues via a
 // resourceVersion-free merge patch (an unincluded field is left untouched), and
 // conditions, where a merge patch would replace the co-owned array wholesale, via
-// a fresh reload + Update under conflict retry.
+// a fresh reload + patch under conflict retry. A write that changes both goes
+// out as one request, so the two can never land apart.
 package agentstatus
 
 import (
 	"context"
 	"fmt"
 
+	jsonpatch "github.com/evanphx/json-patch/v5"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -40,6 +43,14 @@ import (
 //     effectiveSettings.reportSessionCost) silently dropped it on the round-trip
 //     and the apiserver rejected the whole write. Patching only the conditions
 //     diff keeps a condition write robust to that skew.
+//   - A write that changes BOTH lands as ONE patch: the non-condition diff rides
+//     in the same optimistic-locked request as the conditions, so the two land
+//     together or not at all. They used to go out as two requests, and the
+//     second could lose every conflict retry after the first had already landed
+//     — leaving, for example, a session with no pending interaction but its
+//     pending condition still True, which nothing re-derives. On error from a
+//     both-changed write, nothing was persisted and the caller may redo its
+//     whole read-modify-write.
 //
 // owner selects the writer's condition types (operator = non-approval,
 // channelsd = approval).
@@ -56,19 +67,33 @@ func WriteOwned(ctx context.Context, c client.Client, sess, original *spiceboxv1
 	// the patch base so they never appear in this patch — they are handled below.
 	base := original.DeepCopy()
 	base.Status.Conditions = sess.Status.Conditions
-	if !equality.Semantic.DeepEqual(base.Status, sess.Status) {
+	nonConditionChanged := !equality.Semantic.DeepEqual(base.Status, sess.Status)
+
+	set, removed := diffOwnedConditions(original, sess, owner)
+	if len(set) == 0 && len(removed) == 0 {
+		if !nonConditionChanged {
+			return nil
+		}
 		if err := c.Status().Patch(ctx, sess.DeepCopy(), client.MergeFrom(base)); err != nil {
 			return fmt.Errorf("merge-patch AgentSession status %s/%s: %w", sess.Namespace, sess.Name, err)
 		}
+		return nil
+	}
+
+	// The non-condition diff is a pure function of (original, sess), so compute
+	// it once; each attempt below folds it into that attempt's conditions patch.
+	var nonConditionPatch []byte
+	if nonConditionChanged {
+		data, err := client.MergeFrom(base).Data(sess)
+		if err != nil {
+			return fmt.Errorf("compute AgentSession status diff %s/%s: %w", sess.Namespace, sess.Name, err)
+		}
+		nonConditionPatch = data
 	}
 
 	// Owned condition changes: fresh reload + conditions-only patch so a co-owned
 	// array is never clobbered by a stale snapshot, and no other status field is
-	// touched.
-	set, removed := diffOwnedConditions(original, sess, owner)
-	if len(set) == 0 && len(removed) == 0 {
-		return nil
-	}
+	// touched beyond the caller's own diff.
 	key := client.ObjectKeyFromObject(sess)
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var fresh spiceboxv1alpha1.AgentSession
@@ -84,10 +109,25 @@ func WriteOwned(ctx context.Context, c client.Client, sess, original *spiceboxv1
 		}
 		// Patch only the conditions diff, carrying the reloaded resourceVersion
 		// (optimistic lock) so a concurrent writer's change 409s and RetryOnConflict
-		// re-reads. Crucially, the patch body never includes any other status field,
-		// so operator-owned fields (effectiveSettings, progress, …) are neither
-		// re-serialized nor re-validated against this writer's possibly-stale types.
-		return c.Status().Patch(ctx, &fresh, client.MergeFromWithOptions(prior, client.MergeFromWithOptimisticLock{}))
+		// re-reads. Crucially, the patch body never includes any other status field
+		// the caller did not change, so operator-owned fields (effectiveSettings,
+		// progress, …) are neither re-serialized nor re-validated against this
+		// writer's possibly-stale types.
+		conditionPatch := client.MergeFromWithOptions(prior, client.MergeFromWithOptimisticLock{})
+		if nonConditionPatch == nil {
+			return c.Status().Patch(ctx, &fresh, conditionPatch)
+		}
+		conditionData, err := conditionPatch.Data(&fresh)
+		if err != nil {
+			return fmt.Errorf("compute AgentSession conditions diff %s/%s: %w", sess.Namespace, sess.Name, err)
+		}
+		// The two diffs touch disjoint fields (conditions were neutralized out of
+		// the non-condition one), so composing them is a plain union.
+		combined, err := jsonpatch.MergeMergePatches(nonConditionPatch, conditionData)
+		if err != nil {
+			return fmt.Errorf("combine AgentSession status patches %s/%s: %w", sess.Namespace, sess.Name, err)
+		}
+		return c.Status().Patch(ctx, &fresh, client.RawPatch(types.MergePatchType, combined))
 	})
 }
 

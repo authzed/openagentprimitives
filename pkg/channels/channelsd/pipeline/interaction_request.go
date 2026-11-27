@@ -7,6 +7,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -221,7 +223,8 @@ func agentDisplayNameFromFields(pl channelevents.InteractionRequestPayload) stri
 // timeout Applied (Outcome=expired) arrives on IN from the runner's gate-side
 // timeout watcher. Timeout-only: the normal decision path clears its own entry
 // inside HandleInteractionDecision, so this finds no matching RequestID and
-// no-ops there. Writes no condition, matching HandleInteractionRequest.
+// no-ops there. The entry and its category's observable condition are cleared
+// together (see clearPendingInteraction).
 func (p *Pipeline) HandleInteractionApplied(ctx context.Context, env channelevents.Envelope) error {
 	if env.Kind != channelevents.KindInteractionApplied {
 		return fmt.Errorf("HandleInteractionApplied: unexpected kind %q", env.Kind)
@@ -284,64 +287,62 @@ func (p *Pipeline) HandleInteractionApplied(ctx context.Context, env channeleven
 			}
 		}
 	}
-	matchedIdx := -1
-	for i, e := range sess.Status.PendingInteractions {
-		if e.RequestID == pl.RequestRef {
-			matchedIdx = i
-			break
-		}
-	}
-	if matchedIdx < 0 {
-		// Already cleared by HandleInteractionDecision (normal decision path) —
-		// nothing to do.
-		return nil
-	}
-	resolvedCategory := sess.Status.PendingInteractions[matchedIdx].Category
-	cp := sess.DeepCopy()
-	cp.Status.PendingInteractions = append(
-		cp.Status.PendingInteractions[:matchedIdx],
-		cp.Status.PendingInteractions[matchedIdx+1:]...,
-	)
-	recomputePendingCondition(cp, resolvedCategory)
-	if err := applyApprovalStatus(ctx, p.K8s, cp, &sess); err != nil {
-		return fmt.Errorf("apply agentsession pending-interaction status (requestRef %q): %w", pl.RequestRef, err)
+	// Re-read rather than reuse sess: the publishes above took time, and the
+	// clear must be redone from a fresh read if it collides with another writer.
+	// A request the normal decision path already cleared is a no-op here.
+	if err := p.clearPendingInteraction(ctx, key.Namespace, key.Name, pl.RequestRef); err != nil {
+		return fmt.Errorf("apply agentsession pending-interaction status (session %s, requestRef %q): %w", key, pl.RequestRef, err)
 	}
 	// Resolved (timeout path) — never re-surface this prompt.
 	p.clearPendingPrompt(ctx, env.Session.Namespace, env.Session.Name, pl.RequestRef)
 	return nil
 }
 
+// clearPendingInteractionBackoff bounds how long a resolved interaction's
+// status clear keeps retrying a write conflict: six attempts over ~1.5s. It is
+// deliberately more patient than WriteOwned's own quick retries. Nothing
+// re-delivers a resolution, so a clear that gives up leaves the session showing
+// a decision as pending that nobody can make any more — and a resolution lands
+// exactly when the runner and the operator are busiest writing the same object.
+var clearPendingInteractionBackoff = wait.Backoff{Steps: 6, Duration: 50 * time.Millisecond, Factor: 2, Jitter: 0.1}
+
 // clearPendingInteraction removes the resolved entry from PendingInteractions
-// via WriteOwned. Called from the normal decision path
-// (HandleInteractionDecision, interaction_decision.go) after Applied has
-// published so a resolved interaction never leaks a stranded durable entry.
+// and recomputes its category's observable condition from the entries that
+// remain, in ONE write (see agentstatus.WriteOwned) — so a session is never
+// left with the condition True and no entry behind it. A conflict redoes the
+// whole read-modify-write from a fresh read. Called from the normal decision
+// path (HandleInteractionDecision, interaction_decision.go) after Applied has
+// published, and from the timeout path (HandleInteractionApplied), so a
+// resolved interaction never leaks a stranded durable entry.
 // Idempotent: a matched-index-not-found is a no-op — the category never
 // parked (a non-parking category like identity_choice/permission_request has
 // no PendingInteractions entry at all), or the entry was already cleared
 // (e.g. by HandleInteractionApplied's timeout path racing this one). Safe to
 // call for every category unconditionally.
 func (p *Pipeline) clearPendingInteraction(ctx context.Context, ns, name, requestID string) error {
-	var sess spiceboxv1alpha1.AgentSession
 	key := client.ObjectKey{Namespace: ns, Name: name}
-	if err := p.K8s.Get(ctx, key, &sess); err != nil {
-		return fmt.Errorf("get session %s: %w", key, err)
-	}
-	matchedIdx := -1
-	for i, e := range sess.Status.PendingInteractions {
-		if e.RequestID == requestID {
-			matchedIdx = i
-			break
+	return retry.RetryOnConflict(clearPendingInteractionBackoff, func() error {
+		var sess spiceboxv1alpha1.AgentSession
+		if err := p.K8s.Get(ctx, key, &sess); err != nil {
+			return fmt.Errorf("get session %s: %w", key, err)
 		}
-	}
-	if matchedIdx < 0 {
-		return nil
-	}
-	resolvedCategory := sess.Status.PendingInteractions[matchedIdx].Category
-	cp := sess.DeepCopy()
-	cp.Status.PendingInteractions = append(
-		cp.Status.PendingInteractions[:matchedIdx],
-		cp.Status.PendingInteractions[matchedIdx+1:]...,
-	)
-	recomputePendingCondition(cp, resolvedCategory)
-	return applyApprovalStatus(ctx, p.K8s, cp, &sess)
+		matchedIdx := -1
+		for i, e := range sess.Status.PendingInteractions {
+			if e.RequestID == requestID {
+				matchedIdx = i
+				break
+			}
+		}
+		if matchedIdx < 0 {
+			return nil
+		}
+		resolvedCategory := sess.Status.PendingInteractions[matchedIdx].Category
+		cp := sess.DeepCopy()
+		cp.Status.PendingInteractions = append(
+			cp.Status.PendingInteractions[:matchedIdx],
+			cp.Status.PendingInteractions[matchedIdx+1:]...,
+		)
+		recomputePendingCondition(cp, resolvedCategory)
+		return applyApprovalStatus(ctx, p.K8s, cp, &sess)
+	})
 }

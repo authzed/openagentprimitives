@@ -2,13 +2,17 @@ package agentstatus
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -130,4 +134,113 @@ func TestWriteOwned_ConditionWrite_DoesNotResendOperatorOwnedFields(t *testing.T
 	require.NotNil(t, got.Status.EffectiveSettings, "operator-owned effectiveSettings must be preserved")
 	assert.True(t, got.Status.EffectiveSettings.ReportSessionCost,
 		"operator-owned effectiveSettings.reportSessionCost must be preserved by a condition write")
+}
+
+// TestWriteOwned_EntryAndConditionLandTogether pins the invariant behind a
+// resolved approval: the pending entry and the condition that mirrors it are
+// one write, so a conflict can delay both but never split them.
+//
+// They used to be two requests — a resourceVersion-free patch removing the
+// entry, then an optimistic-locked patch clearing the condition. When the
+// second lost every conflict retry the first had already landed, and the
+// session was left with no pending interaction and ToolApprovalPending still
+// True. Nothing re-derives that condition, so it stayed that way.
+func TestWriteOwned_EntryAndConditionLandTogether(t *testing.T) {
+	const cond = spiceboxv1alpha1.AgentSessionConditionToolApprovalPending
+
+	cases := []struct {
+		name string
+		// conflicts is how many optimistic-locked status patches are refused
+		// before one is let through; -1 refuses every one.
+		conflicts   int
+		wantErr     bool
+		wantPending int
+		wantCond    metav1.ConditionStatus
+	}{
+		{
+			name:        "no conflict: entry removed and condition False in a single request",
+			conflicts:   0,
+			wantPending: 0,
+			wantCond:    metav1.ConditionFalse,
+		},
+		{
+			name:        "conflicts then success: entry removed and condition False",
+			conflicts:   3,
+			wantPending: 0,
+			wantCond:    metav1.ConditionFalse,
+		},
+		{
+			name:        "every retry conflicts: error, and the entry is still there behind the True condition",
+			conflicts:   -1,
+			wantErr:     true,
+			wantPending: 1,
+			wantCond:    metav1.ConditionTrue,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			seeded := &spiceboxv1alpha1.AgentSession{
+				ObjectMeta: metav1.ObjectMeta{Name: "sess", Namespace: "default"},
+				Status: spiceboxv1alpha1.AgentSessionStatus{
+					PendingInteractions: []spiceboxv1alpha1.PendingInteraction{{
+						RequestID: "req-1", RequestRef: "req-1", Category: "tool_approval",
+						RequestedAt: metav1.Now(),
+					}},
+					Conditions: []metav1.Condition{{
+						Type: cond, Status: metav1.ConditionTrue, Reason: "AwaitingApproval",
+						LastTransitionTime: metav1.Now(),
+					}},
+				},
+			}
+			remaining := tc.conflicts
+			landed := 0
+			c := fake.NewClientBuilder().
+				WithScheme(writeOwnedScheme(t)).
+				WithStatusSubresource(&spiceboxv1alpha1.AgentSession{}).
+				WithObjects(seeded).
+				WithInterceptorFuncs(interceptor.Funcs{
+					SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+						data, derr := patch.Data(obj)
+						require.NoError(t, derr, "compute patch bytes")
+						// Only an optimistic-locked patch can conflict; a
+						// resourceVersion-free one always lands.
+						if strings.Contains(string(data), `"resourceVersion"`) && remaining != 0 {
+							if remaining > 0 {
+								remaining--
+							}
+							return apierrors.NewConflict(schema.GroupResource{Resource: "agentsessions"}, obj.GetName(),
+								errors.New("the object has been modified"))
+						}
+						landed++
+						return cl.Status().Patch(ctx, obj, patch, opts...)
+					},
+				}).
+				Build()
+
+			var original spiceboxv1alpha1.AgentSession
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(seeded), &original), "Get before write")
+			sess := original.DeepCopy()
+			sess.Status.PendingInteractions = nil
+			meta.SetStatusCondition(&sess.Status.Conditions, metav1.Condition{
+				Type: cond, Status: metav1.ConditionFalse, Reason: "AllResolved",
+			})
+
+			err := WriteOwned(context.Background(), c, sess, &original, spiceboxv1alpha1.OwnerApprovals)
+			if tc.wantErr {
+				require.Error(t, err, "WriteOwned must report a write that never landed")
+				assert.True(t, apierrors.IsConflict(err), "the conflict must stay recognizable so a caller can redo its read-modify-write")
+				assert.Zero(t, landed, "nothing may land when the condition half cannot")
+			} else {
+				require.NoError(t, err, "WriteOwned")
+				assert.Equal(t, 1, landed, "entry and condition must go out as one request")
+			}
+
+			var got spiceboxv1alpha1.AgentSession
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(seeded), &got), "Get after write")
+			assert.Len(t, got.Status.PendingInteractions, tc.wantPending, "pending entries")
+			gotCond := meta.FindStatusCondition(got.Status.Conditions, cond)
+			require.NotNil(t, gotCond, "condition present")
+			assert.Equal(t, tc.wantCond, gotCond.Status, "condition must agree with the pending entries")
+		})
+	}
 }
