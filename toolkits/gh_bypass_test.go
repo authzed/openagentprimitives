@@ -97,7 +97,15 @@ func TestGhToolkit_apiFailsClosedWhenTheEndpointNamesNoRepo(t *testing.T) {
 	assert.Equal(t, "aHR0cHM6Ly9naXRodWIuY29tL2RlbW8tb3JnL2RlbW8tcmVwbw", got,
 		"the base64url-encoded github_repo_url id is the object the grant is written on")
 
-	for _, endpoint := range []string{"user", "graphql", "search/issues", "repos", "repos/only-owner"} {
+	// gh strips one leading slash before it builds the request, and GitHub's REST
+	// docs print the slashed form, so it has to resolve to the SAME object. Read
+	// as naming no repository, a fork request spelled `/repos/o/r/forks` was
+	// refused with no approval anyone could have granted.
+	got, err = authz.ResolveResourceID(*p.Check, map[string]any{"endpoint": "/repos/demo-org/demo-repo/forks"})
+	require.NoError(t, err, "a leading slash must not hide the repository")
+	assert.Equal(t, "aHR0cHM6Ly9naXRodWIuY29tL2RlbW8tb3JnL2RlbW8tcmVwbw", got)
+
+	for _, endpoint := range []string{"user", "/user", "graphql", "search/issues", "repos", "repos/only-owner", "/repos/only-owner", "//repos/demo-org/demo-repo"} {
 		got, err := authz.ResolveResourceID(*p.Check, map[string]any{"endpoint": endpoint})
 		assert.True(t, got == "" || err != nil,
 			"endpoint %q names no repository; it must not resolve to an authorizable id, got %q",
@@ -156,6 +164,12 @@ func TestGhToolkit_apiChargesReadsAsReads(t *testing.T) {
 			// run one chain without moving a sentinel's grant. See e1bc38836 and
 			// the apiFailsClosed test.
 			impact: authz.Readonly, id: "aHR0cHM6Ly9naXRodWIuY29tL2RlbW8tb3JnL2RlbW8tcmVwbw"},
+		{name: "GET a repo endpoint with a leading slash: the same read on the same repo",
+			args:   map[string]any{"endpoint": "/repos/demo-org/demo-repo/pulls"},
+			impact: authz.Readonly, id: "aHR0cHM6Ly9naXRodWIuY29tL2RlbW8tb3JnL2RlbW8tcmVwbw"},
+		{name: "gh api /user: the slashed spelling keys on the self sentinel too",
+			args:   map[string]any{"endpoint": "/user"},
+			impact: authz.Readonly, id: "self"},
 		{name: "gh api user: readonly on the self sentinel, not on any repo",
 			args:   map[string]any{"endpoint": "user"},
 			impact: authz.Readonly, id: "self"},
@@ -184,6 +198,7 @@ func TestGhToolkit_apiFallsBackToWriteForEverythingElse(t *testing.T) {
 	for _, args := range []map[string]any{
 		{"endpoint": "repos/demo-org/demo-repo/pulls", "method": "POST"},
 		{"endpoint": "repos/demo-org/demo-repo", "method": "DELETE"},
+		{"endpoint": "/repos/demo-org/demo-repo/forks", "method": "POST"},
 		{"endpoint": "graphql"},
 		{"endpoint": "user", "method": "PATCH"},
 		{"endpoint": "orgs/demo-org/members"},
