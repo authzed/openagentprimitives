@@ -236,6 +236,7 @@ const (
 	FinalizerPublicEndpoint   = "publicendpoint.agentprimitives.authzed.com/finalizer"
 	FinalizerUserIdentity     = "useridentity.agentprimitives.authzed.com/finalizer"
 	FinalizerWorkshop         = "workshop.agentprimitives.authzed.com/finalizer"
+	FinalizerAccessToken      = "accesstoken.agentprimitives.authzed.com/finalizer"
 	// FinalizerSubagentRequest is added ONLY to an `attended`-mode
 	// SubagentRequest, giving the controller a chance to notify a live
 	// attended child's watching parent (a fixed inbound line + a forced wake)
