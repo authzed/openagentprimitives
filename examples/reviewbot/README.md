@@ -407,6 +407,31 @@ included — at the next reconcile.
    outcome is `could_not_finish`, the reason is always posted to the Slack
    thread as well — the thread, not the check run, is where it is visible.
 
+A check run can be re-answered without a new push: reply in the thread where
+that pull request's reviews are delivered and ask for a re-review. That thread
+belongs to the session the webhook opened, so the re-review runs with the
+trigger-status tools and its conclusion replaces the one on the head commit. A
+review asked for anywhere else (a fresh thread, a direct message) is a separate
+session with no check-run access, and is delivered to its thread only.
+
+This widens who can change a check result, and that is a trust decision to make
+knowingly. Before, a check run changed only when someone pushed a commit. Now
+anyone who can interact with that session — everyone able to post in its thread
+— can ask for a re-review, as often as they like; nothing bounds the number of
+retries. A completed re-review replaces the old result in either direction: a
+clean one clears a red check on unchanged code, and one that finds problems
+turns a green check red.
+
+A re-review that cannot be completed is the exception, and it is one-sided.
+Could-not-finish is published as a `neutral` check run, and GitHub counts
+`neutral` as passing a required check, so it never replaces a RED result: a pull
+request blocked by a problems-found review stays blocked when someone asks for a
+re-review and it fails — a clone error, an exhausted budget — and the agent says
+in the thread that the earlier result stands. It does replace a green result,
+which turns could-not-finish and still passes. Only a re-review that actually
+finishes clean clears a red check, so if the check is required for merging,
+treat access to the review thread as access to that gate.
+
 ## Deferred / known limitations
 
 - **The `oap-toolchain-claude` image is unbuilt and its `sizeBytes` is
@@ -437,6 +462,27 @@ included — at the next reconcile.
   feeds into. **Any future bundle should do the same** for every
   `SpiceboxClass`, `SpiceboxToolspec` (and any other cluster-scoped kind) it
   declares, rather than reusing a generic name another example might also use.
+- **A re-review asked for in the thread has four known gaps**, none of which a
+  review started by a push has:
+  - The check run keeps showing the previous result for as long as the re-review
+    runs, and keeps it if the session dies first. It is not moved back to in
+    progress, so a pull request can be merged on a green result that a re-review
+    in flight is about to turn red.
+  - Nothing holds a re-review to its conclusion. The session already recorded an
+    outcome for the earlier review, so the `trigger-status-concluded`
+    requirement is met before the re-review starts; if the agent skips the
+    conclude step, or the call fails, the turn still finishes and the previous
+    result stays. Any fix must still let a re-review that finds a newer head
+    commit finish without concluding.
+  - It can end a stacked pull request's deferral early. If a pull request was
+    reviewed, then retargeted onto another pull request's branch and pushed, the
+    deferral leaves a queued check run on the new head; a re-review adopts and
+    completes that run before the pull request lands on the default branch.
+    Whether a person's request should override a deferral is undecided.
+  - A commit pushed in the moment between the re-review's last head check and
+    its conclusion receives the conclusion without having been reviewed, because
+    the conclusion is written to whatever the head is at that instant. A review
+    started by a push has the same race.
 - **No webhook replay dedup.** GitHub retries a failed delivery, and a retry
   whose publish succeeded but whose HTTP response was lost is reprocessed. This
   produces a repeated turn in the same session (bounded by the

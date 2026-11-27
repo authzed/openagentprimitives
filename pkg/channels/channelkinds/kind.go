@@ -1158,6 +1158,15 @@ type InboundEvent struct {
 	// Channel's own listener.
 	Via string
 
+	// SenderMention is the channel-native mention token for the person who
+	// sent this message (Slack's "<@U…>"), rendered by the listener that
+	// received it. The pipeline stores it on the turn beside the message text
+	// so the agent can address the sender without a directory lookup — and
+	// without guessing one from the text, which on Slack opens with the
+	// agent's OWN mention. Empty when the kind has no mention syntax or the
+	// sender is unknown; the turn then simply carries no token.
+	SenderMention string
+
 	// Attachments lists files the user attached, as kind-opaque references.
 	// The listener populates this unconditionally whenever the transport
 	// reports files — no capability check, no Channel spec lookup. Whether any
@@ -1267,6 +1276,7 @@ type ExternalIdentity struct {
 	Email       identity.Email     // optional
 	TeamScope   identity.TeamScope // for fallback canonical_id; e.g., team_id
 	DisplayName string             // optional; channel-native display/real name
+	RealName    string             // optional; the user's full name, when the kind records one apart from DisplayName
 	// OrgMembership is the kind-attributed org standing of this user; empty
 	// when the kind does not attribute membership.
 	OrgMembership OrgMembership

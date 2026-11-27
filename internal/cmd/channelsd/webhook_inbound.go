@@ -84,16 +84,14 @@ func webhookInboundHandler(ctx context.Context, cli client.Client, pl channelkin
 	var external map[string]string
 	if k, ok := chregistry.Get(ch.Spec.Kind); ok {
 		recv := k.WebhookReceiver(channelkinds.Deps{})
-		if op, ok := recv.(channelkinds.TriggerOwnerProvider); ok {
-			subject, has, oerr := op.TriggerOwnerSubject(&ch, p.DeliveryEvent, p.RawDelivery)
-			switch {
-			case oerr != nil:
-				logger.Info("webhook inbound: trigger owner derivation failed; session starts without a trigger-owner grant",
-					"ns", p.ChannelNamespace, "name", p.ChannelName, "key", p.ChannelKey, "err", oerr.Error())
-			case has:
-				preTurn = map[string]string{spiceboxv1alpha1.AnnotationTriggerOwnerSubject: subject}
-			}
+		owner, oerr := channelkinds.TriggerOwnerAnnotations(recv, &ch, p.DeliveryEvent, p.RawDelivery)
+		if oerr != nil {
+			// An owner-derivation failure leaves no owner (no extra grant); a
+			// trust-derivation failure leaves the owner marked untrusted.
+			logger.Info("webhook inbound: trigger owner derivation failed; session starts without a trigger-owner grant or with the owner untrusted",
+				"ns", p.ChannelNamespace, "name", p.ChannelName, "key", p.ChannelKey, "err", oerr.Error())
 		}
+		preTurn = owner
 		if op, ok := recv.(channelkinds.TriggerOriginURLProvider); ok {
 			u, has, oerr := op.TriggerOriginURL(&ch, p.DeliveryEvent, p.RawDelivery)
 			switch {

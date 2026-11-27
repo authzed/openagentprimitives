@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -268,6 +269,13 @@ func (l *Loop) Run(ctx context.Context) error {
 			// eligible session on the Allow path); keep the verbatim prompt.
 		}
 		if place {
+			if l.StarterMention != "" {
+				// Every later message gets its sender's token from channelsd;
+				// turn 0 is placed here, so it gets the starter's.
+				content = append(slices.Clip(content), memory.ContentBlock{
+					Type: memory.BlockTypeSenderMention, Text: l.StarterMention,
+				})
+			}
 			t := memory.Turn{
 				Index: 0, Role: "user",
 				Content:   content,

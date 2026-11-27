@@ -55,6 +55,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/artifactstore"
 	blobstore "github.com/authzed/openagentprimitives/pkg/platform/artifactstore/blob"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity/useridentity"
 	"github.com/authzed/openagentprimitives/pkg/tools/sandboxkinds/pod"
 	"github.com/authzed/openagentprimitives/test/e2e"
 )
@@ -367,6 +368,7 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	// point a session — and so a get_preferences call — can exist.
 	seedRelationships(t, h, b)
 	seedUserPreferences(t, h, b)
+	seedUserIdentities(t, h, b)
 
 	startAutoApprover(t, h, b)
 	setGoalAudience(t, h, b)
@@ -1020,6 +1022,39 @@ func seedRelationships(t *testing.T, h *e2e.Harness, b bt.Bundle) {
 			sid = canonUser(t, sid)
 		}
 		e2e.WriteRel(t, h, rt, rid, r.Relation, st, sid, "")
+	}
+}
+
+// seedUserIdentities records each bundle-declared platform user the way
+// channelsd does when a full member of a chat workspace messages an agent: a
+// UserIdentity under the email's canonical subject, and a channel identity
+// on its status carrying that email as vouched and the person's full name.
+// The status write goes through the status subresource, as channelsd's own
+// merge patch does.
+func seedUserIdentities(t *testing.T, h *e2e.Harness, b bt.Bundle) {
+	t.Helper()
+	ctx := context.Background()
+	for i, u := range b.SeedUserIdentities {
+		c, err := identity.EmailReference(identity.Email(u.Email)).Canonical()
+		require.NoError(t, err, "seedUserIdentities[%d]: canonicalizing %q", i, u.Email)
+		subject := c.Subject()
+		ui := &spiceboxv1alpha1.UserIdentity{
+			ObjectMeta: metav1.ObjectMeta{Name: useridentity.NameForSubject(subject)},
+			Spec:       spiceboxv1alpha1.UserIdentitySpec{Subject: subject.String(), DisplayName: u.RealName},
+		}
+		require.NoError(t, h.K8s.Create(ctx, ui), "seedUserIdentities[%d]: create UserIdentity", i)
+		// UserIdentity is cluster-scoped: remove it so a later bundle on the
+		// same harness starts from the directory it declares, not this one's.
+		t.Cleanup(func() {
+			if err := client.IgnoreNotFound(h.K8s.Delete(context.Background(), ui)); err != nil {
+				t.Logf("seedUserIdentities: delete UserIdentity %s: %v", ui.Name, err)
+			}
+		})
+		ui.Status.ChannelIdentities = []spiceboxv1alpha1.ChannelIdentity{{
+			Kind: "slack", Domain: "T-bronze", ExternalID: fmt.Sprintf("U-SEED-%d", i),
+			DisplayName: u.RealName, RealName: u.RealName, Email: u.Email,
+		}}
+		require.NoError(t, h.K8s.Status().Update(ctx, ui), "seedUserIdentities[%d]: record channel identity", i)
 	}
 }
 

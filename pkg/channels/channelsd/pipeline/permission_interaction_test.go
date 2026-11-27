@@ -482,8 +482,8 @@ func TestDecidePermissionApproveResubmitsStashedMessage(t *testing.T) {
 	assert.Equal(t, sess.Name, appended.name, "resubmit memory append: name")
 	assert.Equal(t, "user", appended.turn.Role, "resubmitted turn attributed to the user")
 	assert.Equal(t, "user:"+wantCanonical.String(), string(appended.turn.Author), "resubmitted turn's author is the requester's canonical subject")
-	require.Len(t, appended.turn.Content, 1, "resubmitted turn has one content block")
-	assert.Equal(t, "let me in", appended.turn.Content[0].Text, "resubmit replays the stashed MessageText verbatim")
+	require.NotEmpty(t, appended.turn.Content, "resubmitted turn has content")
+	assert.Equal(t, MemContent{Type: "text", Text: "let me in"}, appended.turn.Content[0], "resubmit replays the stashed MessageText verbatim")
 
 	env := findEnvelopeBySubjectSuffix(t, nats, ".in."+string(channelevents.KindUserMessage))
 	assert.Equal(t, channelevents.KindUserMessage, env.Kind, "resubmit publishes a wakeup user-message envelope")

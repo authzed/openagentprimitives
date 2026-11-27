@@ -3,23 +3,25 @@ kind: ClusterRole
 metadata:
   name: spicebox-channelsd
 # Minimized to the verbs channelsd's code actually uses. channelsd is a NATS
-# consumer with NO k8s informers, so every `watch` was dead and is dropped;
+# consumer; its only informers back the outbound relay's read cache
+# (channels, agentclasses, agentsessions: list+watch), so every other `watch`
+# is dead and dropped;
 # agentsession status is written via agentstatus.WriteOwned (a merge Patch for
 # scalars + an Update for conditions); secrets are read by name (no cluster-wide
 # list/watch). Guarded by TestRBACSufficiency.
 rules:
   - apiGroups: ["agentprimitives.authzed.com"]
     resources: ["channels"]
-    verbs: ["get","list"]
+    verbs: ["get","list","watch"]
   - apiGroups: ["agentprimitives.authzed.com"]
     resources: ["channels/status"]
     verbs: ["patch"]
   - apiGroups: ["agentprimitives.authzed.com"]
     resources: ["agentclasses"]
-    verbs: ["get"]
+    verbs: ["get","list","watch"]
   - apiGroups: ["agentprimitives.authzed.com"]
     resources: ["agentsessions"]
-    verbs: ["get","list","create","patch"]
+    verbs: ["get","list","watch","create","patch"]
   - apiGroups: ["agentprimitives.authzed.com"]
     resources: ["agentsessions/status"]
     verbs: ["patch","update"]

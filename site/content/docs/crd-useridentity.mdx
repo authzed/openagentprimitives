@@ -2,7 +2,7 @@ export const meta = {
   title: 'UserIdentity',
   section: 'Reference',
   group: 'CRD reference',
-  order: 3300,
+  order: 3310,
   description: 'UserIdentity is a human\'s credential catalog: the credentials one person has linked, keyed by their canonical SpiceDB subject, used by…',
 }
 
@@ -64,6 +64,7 @@ Status is controller-owned (observed state).
 | `status.channelIdentities[].email` | `string` | Email is the trusted email the channel vouched for, when known. |
 | `status.channelIdentities[].externalID` \* | `string` | ExternalID is the channel-native user id, e.g. a Slack user_id. |
 | `status.channelIdentities[].kind` \* | `string` | Kind is the channel kind, e.g. "slack". |
+| `status.channelIdentities[].realName` | `string` | RealName is the user's full name as the channel records it (Slack's profile.real_name), when known. DisplayName is often a handle ("jdoe"); this is what a "name:" user reference matches against. |
 | `status.conditions` | `[]object` | Conditions carries Valid and Refresh; the reason constants are shared with AgentIdentity. |
 | `status.conditions[].lastTransitionTime` \* | `string (date-time)` | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` \* | `string` | message is a human readable message indicating details about the transition. This may be an empty string. |

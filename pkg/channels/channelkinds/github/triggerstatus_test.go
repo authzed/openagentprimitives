@@ -300,6 +300,132 @@ func TestTriggerSurface_ConcludeTargetsTheOpenClaim(t *testing.T) {
 	}
 }
 
+// TestTriggerSurface_ConcludeOverwritesACompletedRun is the re-review case: a
+// person asked for the work to be redone on a commit that already carries an
+// answer. Claim reports that answer and leaves it alone; Conclude then writes
+// the new one onto the SAME run, in whichever direction it moved, rather than
+// leaving two answers on one commit.
+//
+// The one direction it refuses is could_not_finish over a conclusion that
+// blocks a required check. could_not_finish is published as `neutral`, which
+// passes, so letting it replace action_required — or a blocking conclusion this
+// kind never wrote — would unblock a pull request whose problems nobody looked
+// at again. That run is left exactly as it was.
+func TestTriggerSurface_ConcludeOverwritesACompletedRun(t *testing.T) {
+	cases := []struct {
+		name           string
+		existing       string
+		wantClaimed    channelkinds.TriggerOutcome
+		outcome        channelkinds.TriggerOutcome
+		wantConclusion string
+		wantTitle      string
+		// wantKept is the answer Conclude must refuse to replace. Empty for
+		// every row where the new answer is written.
+		wantKept channelkinds.TriggerOutcome
+		// wantDetail is the provider wording the refusal must carry, for a
+		// kept conclusion the framework's outcomes have no word for.
+		wantDetail string
+	}{
+		{
+			name:     "problems_found then clean: the same run turns success",
+			existing: "action_required", wantClaimed: channelkinds.TriggerOutcomeProblemsFound,
+			outcome: channelkinds.TriggerOutcomeClean, wantConclusion: "success", wantTitle: "No blocking findings",
+		},
+		{
+			name:     "clean then problems_found: the same run turns action_required",
+			existing: "success", wantClaimed: channelkinds.TriggerOutcomeClean,
+			outcome: channelkinds.TriggerOutcomeProblemsFound, wantConclusion: "action_required", wantTitle: "Findings need attention",
+		},
+		{
+			name:     "could_not_finish then clean: the same run turns success",
+			existing: "neutral", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeClean, wantConclusion: "success", wantTitle: "No blocking findings",
+		},
+		{
+			name:     "clean then could_not_finish: the same run turns neutral",
+			existing: "success", wantClaimed: channelkinds.TriggerOutcomeClean,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantConclusion: "neutral", wantTitle: "Could not complete",
+		},
+		{
+			name:     "problems_found then could_not_finish: the same run stays action_required",
+			existing: "action_required", wantClaimed: channelkinds.TriggerOutcomeProblemsFound,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantKept: channelkinds.TriggerOutcomeProblemsFound,
+		},
+		{
+			name:     "failure from an older build then could_not_finish: the same run stays failure",
+			existing: "failure", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantKept: channelkinds.TriggerOutcomeCouldNotFinish,
+			wantDetail: "a blocking `failure` conclusion",
+		},
+		{
+			name:     "timed_out then could_not_finish: the same run stays timed_out",
+			existing: "timed_out", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantKept: channelkinds.TriggerOutcomeCouldNotFinish,
+			wantDetail: "a blocking `timed_out` conclusion",
+		},
+		{
+			name:     "cancelled by a maintainer then could_not_finish: the same run stays cancelled",
+			existing: "cancelled", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantKept: channelkinds.TriggerOutcomeCouldNotFinish,
+			wantDetail: "a blocking `cancelled` conclusion",
+		},
+		{
+			name:     "could_not_finish then could_not_finish: neutral does not block, so the run is rewritten",
+			existing: "neutral", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeCouldNotFinish, wantConclusion: "neutral", wantTitle: "Could not complete",
+		},
+		{
+			name:     "failure then clean: a finished review still replaces a blocking conclusion",
+			existing: "failure", wantClaimed: channelkinds.TriggerOutcomeCouldNotFinish,
+			outcome: channelkinds.TriggerOutcomeClean, wantConclusion: "success", wantTitle: "No blocking findings",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newFakeGitHub(t)
+			g.existing = []map[string]any{{
+				"id": 4242, "name": fxAppSlug, "status": "completed", "conclusion": tc.existing,
+			}}
+			surface := newSurface(t, g)
+
+			claim, err := surface.Claim(context.Background())
+			require.NoError(t, err)
+			require.True(t, claim.Concluded, "the commit already carries an answer")
+			assert.Equal(t, tc.wantClaimed, claim.Outcome)
+			require.Empty(t, g.writes(), "claiming an answered commit writes nothing")
+
+			err = surface.Conclude(context.Background(), channelkinds.TriggerConclusion{
+				Outcome:    tc.outcome,
+				Summary:    "Reviewed again at a person's request.",
+				DetailsURL: "https://example.test/thread/2",
+			})
+			if tc.wantKept != "" {
+				var kept *channelkinds.TriggerAnswerKeptError
+				require.ErrorAs(t, err, &kept, "the refusal must be the one a caller can recognize")
+				assert.Equal(t, tc.wantKept, kept.Kept)
+				assert.Equal(t, tc.wantDetail, kept.Detail)
+				assert.Empty(t, g.writes(),
+					"run 4242 keeps its blocking conclusion: nothing is patched and no second run is opened")
+				return
+			}
+			require.NoError(t, err)
+
+			writes := g.writes()
+			require.Len(t, writes, 1, "the new answer updates the existing run; it does not open a second")
+			assert.Equal(t, http.MethodPatch, writes[0].Method)
+			assert.Equal(t, "/repos/"+fxOwner+"/"+fxRepo+"/check-runs/4242", writes[0].Path,
+				"the run that carried the old answer is the one rewritten")
+			assert.Equal(t, "completed", writes[0].Body["status"])
+			assert.Equal(t, tc.wantConclusion, writes[0].Body["conclusion"])
+			assert.Equal(t, "https://example.test/thread/2", writes[0].Body["details_url"])
+			output, _ := writes[0].Body["output"].(map[string]any)
+			require.NotNil(t, output)
+			assert.Equal(t, tc.wantTitle, output["title"])
+			assert.Equal(t, "Reviewed again at a person's request.", output["summary"])
+		})
+	}
+}
+
 // TestTriggerSurface_ConcludeWithNoClaimStillWritesTheAnswer is what makes
 // claiming optional and stops a missed claim from losing a verdict: with
 // nothing open, concluding opens a run that is already completed.

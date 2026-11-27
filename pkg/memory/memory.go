@@ -68,7 +68,7 @@ type Turn struct {
 // can persist its native shape and reload it without translation.
 type ContentBlock struct {
 	// Type selects which of the fields below is populated: "text", "tool_use",
-	// "tool_result" or "attachment".
+	// "tool_result", "attachment" or BlockTypeSenderMention.
 	Type string `json:"type"`
 	// Text is the block's prose; set only when Type == "text".
 	Text string `json:"text,omitempty"`
@@ -82,6 +82,13 @@ type ContentBlock struct {
 	// AttachmentBlock.TextRef).
 	Attachment *AttachmentBlock `json:"attachment,omitempty"`
 }
+
+// BlockTypeSenderMention marks a block whose Text is the channel-native
+// mention token of the person who sent the turn (Slack's "<@U…>"). The
+// receiving channel kind mints it, never the sender, so it is kept apart from
+// the message text: transcript readers that show only "text" blocks never
+// display it, and the runner renders it to the model as a labelled line.
+const BlockTypeSenderMention = "sender_mention"
 
 type ToolUseBlock struct {
 	// ID correlates this call with the ToolResultBlock answering it.

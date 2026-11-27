@@ -11,8 +11,10 @@ package outbound
 
 import (
 	"context"
+	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -71,30 +73,36 @@ func (r *Relay) noteDeliveryOutcome(ctx context.Context, ns string, binding *spi
 	}
 
 	logger := log.FromContext(ctx)
-	var live spiceboxv1alpha1.Channel
-	if err := r.K8s.Get(ctx, client.ObjectKey{Namespace: ns, Name: binding.Name}, &live); err != nil {
-		logger.Info("outbound relay: Deliverable condition not recorded, Channel read failed",
-			"channel", key, "err", err.Error())
-		return
-	}
-	if !known {
-		if cur := conditions.Find(live.Status.Conditions, spiceboxv1alpha1.ChannelConditionDeliverable); cur != nil &&
-			(deliverableOutcome{ok: cur.Status == metav1.ConditionTrue, message: cur.Message}) == desired {
-			r.rememberDeliveryOutcome(key, desired)
-			return
+	// The Channel may come from a cache (channelsd's relay client serves it
+	// from an informer), and a merge patch replaces status.conditions whole —
+	// so a patch computed from a copy that predates another writer's condition
+	// would erase that condition. The optimistic lock makes the API server
+	// refuse such a patch instead, and the retry re-reads: a conflict is what
+	// tells the relay client its cached copy is stale, so the second read is
+	// served live.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var live spiceboxv1alpha1.Channel
+		if err := r.K8s.Get(ctx, client.ObjectKey{Namespace: ns, Name: binding.Name}, &live); err != nil {
+			return fmt.Errorf("read Channel: %w", err)
 		}
-	}
-
-	updated := live.DeepCopy()
-	if desired.ok {
-		conditions.SetTrue(updated, &updated.Status.Conditions,
-			spiceboxv1alpha1.ChannelConditionDeliverable, spiceboxv1alpha1.ReasonChannelDeliverySucceeded)
-	} else {
-		conditions.SetFalse(updated, &updated.Status.Conditions,
-			spiceboxv1alpha1.ChannelConditionDeliverable, spiceboxv1alpha1.ReasonChannelDeliveryFailed, desired.message)
-	}
-	if err := r.K8s.Status().Patch(ctx, updated, client.MergeFrom(&live)); err != nil {
-		logger.Info("outbound relay: patch Deliverable condition failed",
+		if !known {
+			if cur := conditions.Find(live.Status.Conditions, spiceboxv1alpha1.ChannelConditionDeliverable); cur != nil &&
+				(deliverableOutcome{ok: cur.Status == metav1.ConditionTrue, message: cur.Message}) == desired {
+				return nil
+			}
+		}
+		updated := live.DeepCopy()
+		if desired.ok {
+			conditions.SetTrue(updated, &updated.Status.Conditions,
+				spiceboxv1alpha1.ChannelConditionDeliverable, spiceboxv1alpha1.ReasonChannelDeliverySucceeded)
+		} else {
+			conditions.SetFalse(updated, &updated.Status.Conditions,
+				spiceboxv1alpha1.ChannelConditionDeliverable, spiceboxv1alpha1.ReasonChannelDeliveryFailed, desired.message)
+		}
+		return r.K8s.Status().Patch(ctx, updated, client.MergeFromWithOptions(&live, client.MergeFromWithOptimisticLock{}))
+	})
+	if err != nil {
+		logger.Info("outbound relay: Deliverable condition not recorded",
 			"channel", key, "err", err.Error())
 		return
 	}
