@@ -348,7 +348,14 @@ func (s *Service) Update(ctx context.Context, a Actor, r Change) (Goal, error) {
 	}
 	// A group change that only takes authority away carries no session data
 	// into the goal, so it neither merges nor checks the session's sources.
-	if !a.Domain.GroupOwned() || !RelinquishesAuthority(r.Action) {
+	//
+	// A manager change merges none either. It is committed in place, at the
+	// goal's current revision, so merged sources would change what an approval
+	// in force was given over without anyone approving them — and it changes
+	// who manages the goal, not what the goal says. Adding a manager is still
+	// authorized as a write (authorizeChange), which checks the session's
+	// sources against the group's audience.
+	if !a.Domain.GroupOwned() || !(RelinquishesAuthority(r.Action) || IsManagerAction(r.Action)) {
 		sources, err := s.Auth.Sources(ctx, a)
 		if err != nil {
 			return Goal{}, err

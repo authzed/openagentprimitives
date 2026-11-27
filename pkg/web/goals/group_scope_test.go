@@ -514,6 +514,39 @@ func TestGroupManagers(t *testing.T) {
 		assert.Equal(t, []string{"alice", "bob"}, r.Goal.Managers)
 		assert.True(t, f.auth.managerTuple(g.ID, "bob"))
 	})
+	t.Run("a manager change carries no session source into the goal: sources and revision unchanged", func(t *testing.T) {
+		f := newGroupFixture(t)
+		g := f.createAsAlice(t)
+		f.auth.members["bob"] = true
+		groupTestAudience = []string{"alice", "bob"}
+		f.taint(t, "document", "notes", "view")
+		status, r, body := f.as(t, "r1", managerChange("add-bob", g, "add_manager", "bob"))
+		require.Equal(t, 200, status, body)
+		assert.Equal(t, []string{"alice", "bob"}, r.Goal.Managers)
+		assert.Empty(t, r.Goal.Sources, "what the session read is not merged into the goal")
+		assert.Equal(t, g.Revision, r.Goal.Revision, "a manager change is made in place")
+
+		stored, err := f.s.Service.Store.Get(operatorCtx(), g.Domain, g.ID)
+		require.NoError(t, err)
+		assert.Empty(t, stored.Sources)
+
+		status, r, body = f.as(t, "r1", managerChange("remove-bob", *r.Goal, "remove_manager", "bob"))
+		require.Equal(t, 200, status, body)
+		assert.Empty(t, r.Goal.Sources)
+	})
+	t.Run("adding a manager from a session that read what the group cannot: refused", func(t *testing.T) {
+		f := newGroupFixture(t)
+		g := f.createAsAlice(t)
+		f.auth.members["bob"] = true
+		groupTestAudience = []string{"alice", "dave"}
+		f.auth.unreadable["document:secret:dave"] = true
+		f.taint(t, "document", "secret", "view")
+		status, _, body := f.as(t, "r1", managerChange("add-bob", g, "add_manager", "bob"))
+		assert.Equal(t, http.StatusForbidden, status, body)
+		stored, err := f.s.Service.Store.Get(operatorCtx(), g.Domain, g.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"alice"}, stored.Managers, "granting authority is a write, checked like any other")
+	})
 	t.Run("adding a non-member: refused", func(t *testing.T) {
 		f := newGroupFixture(t)
 		g := f.createAsAlice(t)
