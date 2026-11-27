@@ -13,6 +13,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
+	"github.com/authzed/openagentprimitives/pkg/platform/manifests/overlay"
 )
 
 // MemoryTokenLinks names existing Secrets to link per component instead of
@@ -72,7 +73,11 @@ type RenderConfig struct {
 	// output and listed under `components:` in the order given — the same
 	// directories `oap install --overlay` accepts.
 	Overlays []string
-	Strat    cloud.Strategy
+	// overlaySet is Overlays loaded and validated against what this render
+	// emits. runRender fills it; WriteOverlay loads it itself when a caller
+	// has not.
+	overlaySet *overlay.Set
+	Strat      cloud.Strategy
 }
 
 // externalSpiceDB reports whether the user runs their own SpiceDB.
@@ -151,9 +156,11 @@ func runRender(ctx context.Context, out io.Writer, g *apcmd.Globals, cfg RenderC
 	// The same checks `oap install --overlay` runs, but against what this
 	// render emits: a patch for a component render leaves out would otherwise
 	// pass here and fail opaquely in the final kustomize build.
-	if _, err := loadOverlays(out, func() ([][]byte, error) { return renderOverlayBase(cfg) }, cfg.Overlays); err != nil {
+	overlays, err := loadOverlays(out, func() ([][]byte, error) { return renderOverlayBase(cfg) }, cfg.Overlays)
+	if err != nil {
 		return fmt.Errorf("%w (render emits the core install, channelsd and NATS, plus Postgres unless --external-postgres)", err)
 	}
+	cfg.overlaySet = overlays
 
 	// Registry digest resolution is the ONLY remote call render makes, and it is
 	// read-only. Skipped entirely under --no-digest-pin or a local (no-registry)

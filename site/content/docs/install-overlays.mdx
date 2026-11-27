@@ -88,3 +88,7 @@ mirrors are applied after the overlays and take precedence on the fields they se
 unchanged. It runs the same checks, against the resources the render emits: the core install, channelsd, NATS and
 the dependency components enabled by flags. Render does not emit Neo4j or Graphiti, and leaves Postgres out with
 `--external-postgres`, so an overlay that patches one of those is refused unless the render includes it.
+
+The render's own patches apply after your overlays. One of them makes every workload wait for the Secrets the
+bootstrap Job creates or you provide, and it covers references your overlays add: an optional reference to one of
+those Secrets is rendered as required.

@@ -9,9 +9,11 @@ import (
 
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
+	"sigs.k8s.io/yaml"
 
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
+	"github.com/authzed/openagentprimitives/pkg/platform/manifests/overlay"
 )
 
 // processBaseBytes applies the render's image substitution and memory-token
@@ -209,8 +211,16 @@ func WriteOverlay(cfg RenderConfig) error {
 	}
 
 	// Every workload waits for the Secrets the bootstrap Job mints (or the user
-	// provides) instead of starting without them: see requiredSecretsPatch.
-	required, requiredEmitted, err := requiredSecretsPatch(cfg, append([][]byte{install, channelsd, nats}, components...)...)
+	// provides) instead of starting without them: see requiredSecretsPatch. The
+	// patch is derived from the workloads as the user's overlays leave them,
+	// because that is what kustomize applies it to: an overlay can add an
+	// optional reference the patch must cover, or remove one it must no longer
+	// restate.
+	workloads, err := withUserOverlays(cfg, append([][]byte{install, channelsd, nats}, components...))
+	if err != nil {
+		return err
+	}
+	required, requiredEmitted, err := requiredSecretsPatch(cfg, workloads...)
 	if err != nil {
 		return fmt.Errorf("render required-secrets patch: %w", err)
 	}
@@ -358,4 +368,43 @@ func writeUserOverlays(cfg RenderConfig) error {
 		}
 	}
 	return nil
+}
+
+// withUserOverlays returns bundles as cfg's --overlay Components leave them,
+// document by document, for the passes that must see what the final build
+// sees. With no overlays it returns bundles untouched.
+func withUserOverlays(cfg RenderConfig, bundles [][]byte) ([][]byte, error) {
+	if len(cfg.Overlays) == 0 {
+		return bundles, nil
+	}
+	set := cfg.overlaySet
+	if set == nil {
+		base, err := renderOverlayBase(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if set, err = overlay.Load(base, cfg.Overlays); err != nil {
+			return nil, err
+		}
+	}
+	out := make([][]byte, 0, len(bundles))
+	for _, bundle := range bundles {
+		docs, err := manifests.Split(bundle)
+		if err != nil {
+			return nil, fmt.Errorf("parse bundle: %w", err)
+		}
+		rendered := make([][]byte, 0, len(docs))
+		for _, d := range docs {
+			if err := set.Apply(d); err != nil {
+				return nil, err
+			}
+			y, err := yaml.Marshal(d.Object)
+			if err != nil {
+				return nil, fmt.Errorf("marshal %s %s: %w", d.GetKind(), d.GetName(), err)
+			}
+			rendered = append(rendered, y)
+		}
+		out = append(out, bytes.Join(rendered, []byte("---\n")))
+	}
+	return out, nil
 }

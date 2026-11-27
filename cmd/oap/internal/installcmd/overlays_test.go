@@ -38,6 +38,27 @@ func memoryOverlayDir(t *testing.T, deployment, container, limit string) string 
 	return dir
 }
 
+// operatorEnvOverlayDir writes an overlay that strategic-merges env (indented
+// YAML list items) into the operator container.
+func operatorEnvOverlayDir(t *testing.T, env string) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(
+		"apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\npatches:\n  - path: patch.yaml\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "patch.yaml"), []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicebox-operator
+  namespace: agentprimitives-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: operator
+          env:`+env), 0o644))
+	return dir
+}
+
 func containerMemoryLimit(t *testing.T, obj map[string]any, container string) string {
 	t.Helper()
 	cs, _, err := unstructured.NestedSlice(obj, "spec", "template", "spec", "containers")
@@ -156,6 +177,57 @@ func TestRender_Overlays(t *testing.T) {
 		assert.NoDirExists(t, out)
 
 		require.NoError(t, runRender(context.Background(), io.Discard, offline, gke(out, pg), false))
+	})
+
+	// The required-secrets patch is applied after the overlays, so it has to be
+	// derived from the workloads as the overlays leave them.
+	operatorEnv := func(t *testing.T, out, name string) (map[string]any, bool) {
+		t.Helper()
+		built, err := buildOverlay(out)
+		require.NoError(t, err)
+		d := requireDocInYAML(t, built, "Deployment", "spicebox-operator")
+		cs, _, err := unstructured.NestedSlice(d.Object, "spec", "template", "spec", "containers")
+		require.NoError(t, err)
+		for _, c := range cs {
+			envs, _ := c.(map[string]any)["env"].([]any)
+			for _, e := range envs {
+				if e.(map[string]any)["name"] == name {
+					return e.(map[string]any), true
+				}
+			}
+		}
+		return nil, false
+	}
+
+	t.Run("overlay adds an optional reference to a minted Secret: made required, --validate passes", func(t *testing.T) {
+		out := t.TempDir()
+		ov := operatorEnvOverlayDir(t, `
+            - name: EXTRA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: spicebox-spicedb-token
+                  key: token
+                  optional: true
+`)
+		require.NoError(t, runRender(context.Background(), io.Discard, offline, gke(out, ov), true))
+		env, ok := operatorEnv(t, out, "EXTRA_TOKEN")
+		require.True(t, ok, "the overlay's env var is in the built output")
+		ref, _, err := unstructured.NestedMap(env, "valueFrom", "secretKeyRef")
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"name": "spicebox-spicedb-token", "key": "token", "optional": false}, ref)
+	})
+
+	t.Run("overlay removes a reference the patch would restate: not restated, env stays removed", func(t *testing.T) {
+		out := t.TempDir()
+		ov := operatorEnvOverlayDir(t, `
+            - name: POSTGRES_URI
+              $patch: delete
+`)
+		require.NoError(t, runRender(context.Background(), io.Discard, offline, gke(out, ov), true))
+		_, ok := operatorEnv(t, out, "POSTGRES_URI")
+		assert.False(t, ok, "a restated reference would come back as an env var with no Secret name or key")
+		_, ok = operatorEnv(t, out, "SPICEDB_TOKEN")
+		assert.True(t, ok, "the operator's other env vars are untouched")
 	})
 
 	t.Run("render and install produce the same overlaid fields", func(t *testing.T) {
