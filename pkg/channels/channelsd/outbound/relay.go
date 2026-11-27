@@ -71,9 +71,8 @@ type Relay struct {
 	// consumer that already KNOWS, from process-local state, that it can never
 	// deliver: webd's chat Registry serves only its own live-session table, so a
 	// rate-limited round-trip to learn that a Slack- or CLI-driven session is not
-	// one of them buys nothing — and spends it on the single goroutine nats.go
-	// serializes this subscription's callbacks on, directly in front of the chat
-	// user's own reply.
+	// one of them buys nothing — and spends one of the relay's bounded
+	// concurrency slots on it, ahead of the chat user's own reply.
 	//
 	// nil ⇒ accept everything: channelsd (which relays for every session in the
 	// cluster), `oap agent chat`, and the e2e harness.

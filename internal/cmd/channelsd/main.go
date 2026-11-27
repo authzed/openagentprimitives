@@ -817,9 +817,10 @@ func run(rootCtx context.Context, cfg *config) error {
 	// ApplyEvent / OnTurnActivity, which both re-arms the silence window and
 	// gates stale/post-yield captions.
 	// The outbound relay reads every session's AgentSession (and, per stream
-	// delta, its AgentClass) on one serialized goroutine. Serve those reads from
-	// an informer cache so the relay's throughput is not the API server's
-	// round-trip time, rate-limited — see relayClient. The sender resolver shares
+	// delta, its AgentClass), each read holding one of the relay's bounded
+	// concurrency slots. Serve those reads from an informer cache so the relay's
+	// throughput is not the API server's round-trip time, rate-limited — see
+	// relayClient. The sender resolver shares
 	// it for the same per-delta AgentClass read, and hands it to every Sender.
 	// Everything else keeps cli: direct reads, tracked writes.
 	relayCache, err := newRelayCache(rootCtx, restCfg, scm, 2*time.Minute)
