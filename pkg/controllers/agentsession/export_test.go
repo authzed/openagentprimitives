@@ -120,3 +120,9 @@ const SidecarReadyDeadlineForTest = sidecarReadyDeadline
 func (r *Reconciler) EnsureDetectorPodForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, spec cosidecar.Spec, pod *corev1.Pod) error {
 	return r.ensureDetectorPod(ctx, sess, spec, pod)
 }
+
+// ReconcileSleepForTest exposes the unexported reconcileSleep so
+// agentsession_test can drive the idle-sleep reap directly. Test-only.
+func (r *Reconciler) ReconcileSleepForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alpha1.AgentClass) (bool, time.Duration, error) {
+	return r.reconcileSleep(ctx, sess, class)
+}

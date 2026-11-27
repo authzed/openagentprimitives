@@ -36,6 +36,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
@@ -55,6 +56,13 @@ import (
 // bundle/detector gates the tests exercise).
 func fakeReconciler(t *testing.T, clock func() time.Time, objs ...client.Object) (*agentsession.Reconciler, client.Client) {
 	t.Helper()
+	return fakeReconcilerWithFuncs(t, clock, interceptor.Funcs{}, objs...)
+}
+
+// fakeReconcilerWithFuncs is fakeReconciler with funcs intercepting the fake
+// client's calls, for a test that fails one write.
+func fakeReconcilerWithFuncs(t *testing.T, clock func() time.Time, funcs interceptor.Funcs, objs ...client.Object) (*agentsession.Reconciler, client.Client) {
+	t.Helper()
 	scheme := testfixtures.NewScheme(t, rbacv1.AddToScheme, networkingv1.AddToScheme)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -67,6 +75,7 @@ func fakeReconciler(t *testing.T, clock func() time.Time, objs ...client.Object)
 		// the deduced converter handles it. A fake-client limitation only — the
 		// same applies work against a real apiserver (netpol_envtest_test.go).
 		WithTypeConverters(managedfields.NewDeducedTypeConverter()).
+		WithInterceptorFuncs(funcs).
 		Build()
 	r := &agentsession.Reconciler{
 		Client:    c,

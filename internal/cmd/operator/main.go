@@ -11,10 +11,12 @@ import (
 	"github.com/google/uuid"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	runtimedebug "runtime/debug"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -102,6 +104,8 @@ import (
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/onepassword" // register onepassword relsync.Kind for the relationshipsource controller (relsync.Get); also reachable transitively via the relsource/imports blank import above, but this is the explicit wiring site for THIS aspect, not an accident of that one
 	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/slack"       // register slack kind for channel-controller validation
 	"github.com/authzed/openagentprimitives/pkg/cli/clikit"
+	sessionadmission "github.com/authzed/openagentprimitives/pkg/controllers/admission"
+	"github.com/authzed/openagentprimitives/pkg/controllers/admission/admitter"
 	agentclassctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentclass"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentidentity"
 	agentsessionctrl "github.com/authzed/openagentprimitives/pkg/controllers/agentsession"
@@ -757,6 +761,13 @@ type config struct {
 	idleStorageReclaimAfter       time.Duration
 	failedSandboxReapGrace        time.Duration
 	capacityHoldTimeout           time.Duration
+	// sessionAdmission gates every booting AgentSession's pods on the
+	// admitter's whole-set, fair-share decision; false admits at once.
+	sessionAdmission bool
+	// admissionMinWarm is how long an idle session keeps its admission (and
+	// warm pods) before the admitter may reclaim it early for a session of its
+	// AgentClass waiting in line.
+	admissionMinWarm              time.Duration
 	oauthRefreshThreshold         time.Duration
 	workspaceStorageClass         string
 	workspaceSize                 string
@@ -882,6 +893,10 @@ func newCommand() *cobra.Command {
 		"How long a Failed session's sandbox pods (bundle SpiceboxSessions + runner pod) are kept for debugging before teardown. The AgentSession itself is kept either way. Set to 0 (or negative) to disable reaping entirely (keep everything, for debugging).")
 	fs.DurationVar(&cfg.capacityHoldTimeout, "capacity-hold-timeout", time.Hour,
 		"How long a booting AgentSession whose sandbox/detector pods are Pending on a cluster capacity shortfall (Insufficient cpu/memory, too many pods) is HELD — queued with a notice in its channel, resuming by itself once the scheduler places the pod — instead of failing at the ordinary readiness deadline. Measured from provisioning start. Pods that can never fit, or are blocked by a taint or volume affinity, still fail at the ordinary deadline. Set to a negative value to disable holding.")
+	fs.BoolVar(&cfg.sessionAdmission, "session-admission", true,
+		"Admit each booting AgentSession's whole pod set against node capacity before any of its pods is created, in join order with fair share between AgentClasses; sessions that do not fit wait in line. Set to false to admit every session at once (pods then queue in the scheduler as before).")
+	fs.DurationVar(&cfg.admissionMinWarm, "admission-min-warm", 5*time.Minute,
+		"Minimum time an idle AgentSession keeps its admission (and warm pods) before the admitter may put it to sleep early, ahead of its sleepAfter grace, to make room for a session of the same AgentClass waiting in line. A held (SessionHold) session is never reclaimed. Only applies with --session-admission.")
 	fs.DurationVar(&cfg.oauthRefreshThreshold, "oauth-refresh-threshold", 5*time.Minute,
 		"Default refresh threshold for type=oauth AgentIdentity credentials. AgentIdentities with spec.refreshThreshold override this per-identity.")
 	fs.StringVar(&cfg.workspaceStorageClass, "workspace-storage-class", "",
@@ -2668,6 +2683,7 @@ func run(cfg *config) {
 		DefaultSessionSleepAfter:       cfg.defaultSessionSleepAfter,
 		FailedSandboxReapGrace:         cfg.failedSandboxReapGrace,
 		CapacityHoldTimeout:            cfg.capacityHoldTimeout,
+		AdmissionEnabled:               cfg.sessionAdmission,
 		DefaultSessionStorageRetention: cfg.sessionStorageRetention,
 		SessionGCAfter:                 cfg.sessionGCAfter,
 		NodePinnedStorageReclaimGrace:  cfg.nodePinnedStorageReclaimGrace,
@@ -2747,6 +2763,35 @@ func run(cfg *config) {
 		os.Exit(1)
 	}
 	log.Info("registered controller", "name", "AgentSession", "operatorURL", operatorURL)
+
+	// The admitter decides which booting sessions the reconciler above may
+	// create pods for. Leader-only (the controller-runtime default), so one
+	// operator admits against the free space at a time. Capacity is declared
+	// as the interface and assigned a concrete value, never a typed-nil
+	// pointer (see the repo conventions on nil interfaces).
+	//
+	// The capacity snapshot reads nodes and pods from the cached client while
+	// sessions are listed through the APIReader. Only the session list must
+	// see the admitter's own last writes (a lagging cache would show an
+	// admitted session still waiting and admit a second into its space);
+	// node and pod state the admitter never writes, so a cache a moment
+	// behind costs at most one pass's accuracy, and an uncached list of every
+	// pod on each pass would be a full apiserver read per wake.
+	var admissionCapacity sessionadmission.CapacitySource = sessionadmission.KubeCapacitySource{Reader: mgr.GetClient()}
+	if err := (&admitter.Reconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		// The same namespace set the manager cache is scoped to, so the
+		// uncached session list stays inside the RBAC a watch set grants.
+		Namespaces: slices.Sorted(maps.Keys(cacheNamespaces(cfg.watchNamespaces, operatorNamespace(cfg.podNamespace)))),
+		Capacity:   admissionCapacity,
+		Enabled:    cfg.sessionAdmission,
+		MinWarm:    cfg.admissionMinWarm,
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to register admission controller")
+		os.Exit(1)
+	}
+	log.Info("registered controller", "name", "Admission", "enabled", cfg.sessionAdmission)
 
 	// Workshop provisions/tears down a builder session's isolated namespace,
 	// exact RBAC, SpiceDB tuple and bearer token (spec §1.2/§1.3). spiceDBClient

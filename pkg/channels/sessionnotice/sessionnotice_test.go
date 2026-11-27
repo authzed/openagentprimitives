@@ -175,3 +175,34 @@ func TestDerive_HealthySessionIsSilent(t *testing.T) {
 	assert.Empty(t, sessionnotice.Derive(sess(spiceboxv1alpha1.AgentSessionPhaseRunning)))
 	assert.Empty(t, sessionnotice.Derive(nil), "a nil session is not a panic")
 }
+
+func TestCapacityHoldPosition(t *testing.T) {
+	const holdMsg = "The cluster is out of room right now; this will start on its own once capacity frees up (gives up at 17:23 UTC)."
+	hold := cond(spiceboxv1alpha1.AgentSessionConditionCapacityHold, metav1.ConditionTrue,
+		spiceboxv1alpha1.ReasonCapacityHoldWaiting, holdMsg)
+
+	cases := []struct {
+		name      string
+		admission *spiceboxv1alpha1.AdmissionStatus
+		want      string
+	}{
+		{name: "position 3 of 5: hold text plus ordinal sentence naming the class",
+			admission: &spiceboxv1alpha1.AdmissionStatus{Position: 3, LineLength: 5},
+			want:      holdMsg + " You're 3rd in line for demo-agent."},
+		{name: "no admission status: hold text unchanged",
+			want: holdMsg},
+		{name: "position 0: hold text unchanged",
+			admission: &spiceboxv1alpha1.AdmissionStatus{Position: 0, LineLength: 5},
+			want:      holdMsg},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := sess(spiceboxv1alpha1.AgentSessionPhasePending, hold)
+			s.Spec.Class = "demo-agent"
+			s.Status.Admission = tc.admission
+			got, held := sessionnotice.CapacityHold(s)
+			require.True(t, held)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

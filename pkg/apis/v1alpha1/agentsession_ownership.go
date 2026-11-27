@@ -48,9 +48,11 @@ var operatorOwnedStatusFields = map[string]bool{
 	// Stamped by the operator when it acts on a UI-serve request, exactly as
 	// lastWakeAt is for a conversation wake. Separate fields because the two
 	// requests must not consume each other — see AnnotationUIServeRequestedAt.
-	"lastUIServeAt":          true,
-	"lastIdleAt":             true,
-	"sleptAt":                true,
+	"lastUIServeAt": true,
+	"lastIdleAt":    true,
+	"sleptAt":       true,
+	// admission is the admitter's view of a waiting session's place in line.
+	"admission":              true,
 	"awaitingUserInputSince": true,
 	// parentExchange is written by the RUNNER of a delegated child (the
 	// ask_parent meta tool, and the loop's two answer-arrived clears), like
