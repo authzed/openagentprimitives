@@ -42,6 +42,7 @@ import (
 	imagepin "github.com/authzed/openagentprimitives/pkg/authz/pinning/kinds/image"
 	"github.com/authzed/openagentprimitives/pkg/authz/revocation"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/channels/triggeranswer"
 	"github.com/authzed/openagentprimitives/pkg/controllers/agentsession/cosidecar"
 	"github.com/authzed/openagentprimitives/pkg/controllers/conditions"
 	apreconcile "github.com/authzed/openagentprimitives/pkg/controllers/internal/reconcile"
@@ -204,11 +205,11 @@ const mcpAgentIdentityRequeueAfter = 5 * time.Second
 const detectorReadyDeadline = 5 * time.Minute
 
 // sidecarTerminalRequeue is the reflection interval for a separate-pod sidecar
-// wedged in a terminal state while the runner is live. The session is
-// deliberately NOT failed then (the agent is told instead), which would
-// otherwise hold the 2s not-ready cadence for the rest of the session's life.
-// The pod is owned and watched, so a real recovery still wakes the reconciler
-// immediately; this only bounds the idle polling in between.
+// wedged in a terminal state once the runner has started. The session is
+// deliberately NOT failed then (the agent is told instead), and the sidecar does
+// not gate the rest of the reconcile, so this only re-checks the pod at a
+// relaxed cadence. The pod is owned and watched, so a real recovery still wakes
+// the reconciler immediately.
 const sidecarTerminalRequeue = 30 * time.Second
 
 // bundleReadyDeadline bounds how long a session may sit in
@@ -642,6 +643,13 @@ type Reconciler struct {
 	// stranding CPU, while the AgentSession itself stays for inspection. 0 or
 	// negative disables reaping. From --failed-sandbox-reap-grace (1m).
 	FailedSandboxReapGrace time.Duration
+
+	// TriggerStatusAPIBaseURL returns the provider API host the operator
+	// answers a failed session's trigger through (see reconcileFailedTrigger).
+	// Nil, or "", means each kind's real default, which is what production
+	// uses. A getter because the e2e harness stands its fixture provider up
+	// after the manager starts; mirrors the runner's TriggerStatusAPIBaseURL.
+	TriggerStatusAPIBaseURL func() string
 
 	// CapacityHoldTimeout is how long a session whose bundle/detector pods are
 	// Pending on a cluster capacity shortfall is HELD — waiting for room rather
@@ -1396,6 +1404,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
+	// Answer the trigger of a Failed session that nobody answered — whichever
+	// party wrote Failed (the runner's own budget/halt paths, the retry TTL, a
+	// pod failure). Above the reap short-circuit, which every later reconcile
+	// of a terminal session stops at. A transient provider failure asks for a
+	// retry, which is NOT returned here: the reap, session GC and storage
+	// reclaim below must still run in this pass, so the delay is folded into
+	// the terminal block's requeue instead. See failedtrigger.go.
+	triggerRetry := r.reconcileFailedTrigger(ctx, &sess)
+
 	// Reap a terminal session's pods once eligible: Succeeded immediately, Failed
 	// after the configured grace so a crash stays debuggable. Otherwise the
 	// bundle SpiceboxSessions, runner pod and detector/cosidecar pods sit Running
@@ -1448,6 +1465,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if gcAfter > 0 && (reclaimAfter == 0 || gcAfter < reclaimAfter) {
 			reclaimAfter = gcAfter
 		}
+		// And the failed-trigger retry, for the same reason: every branch
+		// below already threads reclaimAfter into its requeue, including the
+		// reap itself, which would otherwise return no requeue and lose it.
+		if triggerRetry > 0 && (reclaimAfter == 0 || triggerRetry < reclaimAfter) {
+			reclaimAfter = triggerRetry
+		}
 		switch action, remaining := terminalReapAction(sess.Status.Phase, sess.Status.FinishedAt, sess.CreationTimestamp, r.FailedSandboxReapGrace, r.now()); action {
 		case reapActionRequeue:
 			if reclaimAfter > 0 && reclaimAfter < remaining {
@@ -1481,6 +1504,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			requeue = goalSettleRequeue(&sess, 0)
 		}
 		return ctrl.Result{RequeueAfter: requeue}, r.applyStatus(ctx, &sess)
+	}
+
+	// maxDuration backstop: a Running session whose runner-reported run-time is
+	// well past the cap that runner holds has a runner that stopped enforcing it.
+	// Fail it so the terminal path reaps the runner. Here, above the class and
+	// settings gates, because its inputs are all on the session's own status and
+	// a wedged runner must not stay Running just because its class went
+	// Valid=False. reconcileHold has not run yet this pass, so the held-session
+	// guard is reconcileRunDuration's own activeHoldFor lookup. See maxduration.go.
+	if failed, err := r.reconcileRunDuration(ctx, &sess); err != nil {
+		return ctrl.Result{}, err
+	} else if failed {
+		// Phase → Failed; the status watch re-reconciles into the reap path.
+		return ctrl.Result{}, nil
 	}
 
 	// 1. Resolve AgentClass + gate on Valid=True.
@@ -2474,20 +2511,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	resolvedSidecars := make([]spiceboxv1alpha1.ResolvedSidecarToolbox, 0, len(ac.Spec.SidecarToolboxes))
 	anyAwaitingSecret := false
-	// sidecarSecretRequeue, when nonzero, is the requeue interval while a
-	// separate-pod sidecar still awaits its secret-output. It does NOT hold the
-	// runner — it only re-triggers this reconcile so the sidecar pod is created
-	// once the runner has produced the gating secret.
-	var sidecarSecretRequeue time.Duration
+	// sidecarRequeue, when nonzero, is the requeue interval the reconcile ends
+	// with on behalf of a separate-pod sidecar that does NOT hold the runner: one
+	// still awaiting its secret-output (re-triggered so the sidecar pod is
+	// created once the runner has produced the gating secret), or one that has
+	// terminally failed (re-checked at a relaxed cadence).
+	var sidecarRequeue time.Duration
 	// sidecarPodNotReady marks a satisfied separate-pod sidecar whose pod exists
-	// but has not reported a Ready PodIP yet, so the reconcile requeues to
-	// reflect the IP on a later pass. NOT a boot failure.
+	// and is still starting (no Ready PodIP yet, no terminal failure), or whose
+	// stale pod was just deleted for a token rotation, so the reconcile requeues
+	// to reflect the IP on a later pass. NOT a boot failure.
 	sidecarPodNotReady := false
 	// sidecarTerminalFailure marks a separate-pod sidecar wedged unrecoverably
-	// while the runner is already live, so the runner surfaces the failure rather
-	// than the session failing. It only slows the requeue — a pod that will not
-	// recover does not deserve a 2s poll for the rest of the session — and the
-	// pod stays watched, so a genuine recovery is still picked up promptly.
+	// after the runner has started, so the runner surfaces the failure rather
+	// than the session failing. Such a sidecar must not gate anything — waiting
+	// on a pod that will not recover would strand the session — so it only sets
+	// a relaxed requeue, and the pod stays watched, so a genuine recovery is
+	// still picked up promptly.
 	sidecarTerminalFailure := false
 	// pendingObservedPins collects per-sidecar ObservedPin records built while the
 	// original tb.Spec is still available, before the by-digest rewrite. They are
@@ -2740,12 +2780,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 						"session", sess.Namespace+"/"+sess.Name,
 						"sidecar", rt.Ref, "pod", rt.SidecarPodName)
 				} else if podIP == "" {
-					// Pod created but not Ready yet; requeue and reflect the
-					// PodIP on a later pass. Not a boot failure.
-					sidecarPodNotReady = true
-					log.FromContext(ctx).Info("sidecar pod not Ready yet; awaiting PodIP",
-						"session", sess.Namespace+"/"+sess.Name,
-						"sidecar", rt.Ref, "pod", rt.SidecarPodName)
+					// Pod created but not Ready yet. A failed pod — terminally
+					// wedged, or not-Ready past sidecarReadyDeadline — was recorded
+					// above and is not waited on, so only a pod that is still
+					// starting holds here: requeue and reflect the PodIP on a later
+					// pass. Not a boot failure.
+					if podState.Failure == nil {
+						sidecarPodNotReady = true
+						log.FromContext(ctx).Info("sidecar pod not Ready yet; awaiting PodIP",
+							"session", sess.Namespace+"/"+sess.Name,
+							"sidecar", rt.Ref, "pod", rt.SidecarPodName)
+					}
 				} else {
 					rt.SidecarPodIP = podIP
 				}
@@ -2838,21 +2883,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if uerr := r.applyStatus(ctx, &sess); uerr != nil {
 			return ctrl.Result{}, uerr
 		}
-		sidecarSecretRequeue = 5 * time.Second
+		sidecarRequeue = 5 * time.Second
 	}
-	// A satisfied separate-pod sidecar whose pod exists but is not Ready, or whose
+	// A separate-pod sidecar that terminally failed after the runner started
+	// must NOT hold the reconcile either. Its failure is already on the status
+	// snapshot for the runner to surface, and the pod will not recover on its
+	// own, so returning here would park the session for good: a pending wake
+	// (handled below) would never be consumed, and because a pending wake also
+	// suppresses the idle sweep, the session would never sleep or archive
+	// either. FALL THROUGH, so the wake is consumed and the runner is (re)created;
+	// just re-check the pod at a relaxed cadence. The shorter AwaitingSecret
+	// interval set above wins when both apply.
+	if sidecarTerminalFailure && sidecarRequeue == 0 {
+		sidecarRequeue = sidecarTerminalRequeue
+	}
+	// A satisfied separate-pod sidecar whose pod is still starting, or whose
 	// stale pod was just deleted for a token rotation: persist the snapshot
 	// assigned above (SidecarPodName plus the NEW SecretTokenHash) and requeue.
 	// The next pass reflects the PodIP once Ready or recreates the replacement,
-	// and the persisted hash keeps the rotation from being re-detected. The runner
-	// pod may still be created meanwhile — it tolerates an unresolved
-	// SidecarPodIP.
-	if sidecarPodNotReady {
-		requeue := 2 * time.Second
-		if sidecarTerminalFailure {
-			requeue = sidecarTerminalRequeue
-		}
-		return ctrl.Result{RequeueAfter: requeue}, r.applyStatus(ctx, &sess)
+	// and the persisted hash keeps the rotation from being re-detected. This
+	// holds the runner (and every step below) until the pod is Ready or is
+	// classified as terminally failed above. It does NOT hold a pending wake:
+	// consuming the wake (whose pass ends early anyway) only moves the session
+	// from Idle to Pending, and the next pass waits here.
+	if sidecarPodNotReady && !shouldWake(&sess) {
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, r.applyStatus(ctx, &sess)
 	}
 
 	// 4e. Content-guard detector pods: for each enabled inspector implementing
@@ -3356,9 +3411,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	sess.Status.ObservedGeneration = sess.Generation
 	// RequeueAfter is nonzero only while a secret-gated sidecar awaits its secret,
-	// so the sidecar pod is created as soon as the runner produces it. The runner
-	// is already Running by now, so this blocks nothing.
-	return ctrl.Result{RequeueAfter: sidecarSecretRequeue}, r.applyStatus(ctx, &sess)
+	// so the sidecar pod is created as soon as the runner produces it, or while a
+	// sidecar sits terminally failed. Neither holds the runner — the sidecar step
+	// does not return early for them — so this only schedules the next look.
+	return ctrl.Result{RequeueAfter: sidecarRequeue}, r.applyStatus(ctx, &sess)
 }
 
 func (r *Reconciler) finalize(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (ctrl.Result, error) {
@@ -3743,12 +3799,13 @@ func (r *Reconciler) markBootFailed(ctx context.Context, sess *spiceboxv1alpha1.
 		if err := r.applyEvent(ctx, sess, lifecyclecore.ProvablyUnschedulable{}); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Answer the trigger that started this session — but ONLY when no runner
-		// ever came up. podAlreadyStarted is exactly the "is there a live agent to
-		// tell" question the sidecar-pod branch above already turns on: once there
-		// is one, reporting is the agent's, and an agent that ran and finished
-		// without answering is the `trigger-status-concluded` completion
-		// requirement's business, not this one's.
+		// Answer the trigger that started this session IMMEDIATELY — but only
+		// when no runner ever came up, because "could not start" is the wording
+		// only this path knows is right. podAlreadyStarted is exactly the "is
+		// there a live agent to tell" question the sidecar-pod branch above
+		// already turns on. A session that did have a runner is not left
+		// unanswered: the Failed-session backstop (failedtrigger.go) answers it
+		// on the next reconcile, keeping any verdict its agent already posted.
 		//
 		// Inside the not-yet-terminal guard, so this is the pass that MOVES the
 		// session into Failed: a persistently failing session re-reconciles every
@@ -3756,7 +3813,7 @@ func (r *Reconciler) markBootFailed(ctx context.Context, sess *spiceboxv1alpha1.
 		// forever. After applyEvent, so a transition that could not be recorded
 		// does not publish a verdict for a session that is not failing yet.
 		if !hadLiveRunner {
-			r.concludeTriggerStatusOnBootFailure(ctx, sess, reason)
+			r.concludeTriggerStatusOnOperatorFailure(ctx, sess, reason, triggeranswer.CouldNotStartSummary(reason))
 		}
 	}
 	sess.Status.FailureReason = reason

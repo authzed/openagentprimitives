@@ -48,6 +48,7 @@ import (
 // (a SetupWithManager call removed, a controller added without a log).
 func TestOperatorRegistersExpectedControllers(t *testing.T) {
 	expectedControllerNames := map[string]bool{
+		"AccessToken":                true,
 		"SpiceboxClass":              true,
 		"SpiceboxSession":            true,
 		"SpiceboxToolchain":          true,

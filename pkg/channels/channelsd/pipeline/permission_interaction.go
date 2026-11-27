@@ -131,6 +131,10 @@ func (p *Pipeline) decidePermission(ctx context.Context, d channelinteractions.D
 			},
 			ChannelKey:  pr.ChannelKey,
 			MessageText: pr.MessageText,
+			// The listener's own token went with the event that was held;
+			// the stash keeps the requester's kind and external id, which is
+			// everything the kind derives the token from.
+			SenderMention: senderMentionFor(pr.Kind, pr.ExternalID),
 		}
 		if err := p.ResubmitAuthorized(ctx, cp, ev); err != nil {
 			// The approve already succeeded (interact granted, PendingRequester

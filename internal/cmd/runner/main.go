@@ -32,6 +32,7 @@ import (
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/authzed/openagentprimitives/pkg/agent/derivevalidator"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
@@ -254,7 +255,7 @@ func main() {
 	deplogs.Silence()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
+	installLogging(logger.Handler())
 
 	// run() owns its own context + manual SIGTERM/SIGINT handling (see below),
 	// so the root command uses Execute() rather than ExecuteContext() — the
@@ -326,6 +327,26 @@ func newCommand() *cobra.Command {
 	return cmd
 }
 
+// installLogging makes h the destination for both slog's default logger and
+// controller-runtime's global logger. Without the second half, every
+// log.FromContext call in runner-side code (respond_to_user's fallback-notice
+// failures, the dispatch loop, authz slot promotion) on a context that carries
+// no logger of its own is discarded.
+func installLogging(h slog.Handler) {
+	slog.SetDefault(slog.New(h))
+	ctrl.SetLogger(logr.FromSlogHandler(h))
+}
+
+// newRootContext returns run()'s cancellable root context, carrying a logr view
+// of h. log.FromContext prefers a context's own logger over the global one
+// installLogging sets, so this is defence in depth: nothing in this binary is
+// known to claim controller-runtime's first-write-wins global ahead of main,
+// but the lines routed here are error reports, and a context-carried logger
+// keeps them reaching stderr even if a dependency someday does.
+func newRootContext(h slog.Handler) (context.Context, context.CancelFunc) {
+	return context.WithCancel(logf.IntoContext(context.Background(), logr.FromSlogHandler(h)))
+}
+
 func run(cfg *config) error {
 	hostname := cfg.hostname
 	ns := cfg.agentSessionNamespace
@@ -383,7 +404,7 @@ func run(cfg *config) error {
 	// SIGTERM handling. The signal-consuming goroutine is started below, once
 	// the signing memory + session scope exist, so it can record an explicit
 	// Stopped lifecycle transition before cancelling the loop.
-	rootCtx, cancel := context.WithCancel(context.Background())
+	rootCtx, cancel := newRootContext(slog.Default().Handler())
 	defer cancel()
 
 	// loopRef is stored once the runner Loop is fully constructed (below). The
@@ -1397,59 +1418,68 @@ func run(cfg *config) error {
 		// Resolve the probe URL for this sidecar entry.
 		probeURL, ready := sidecarProbeURL(rt, os.Getenv)
 
-		if !ready {
-			if rt.AwaitingSecret {
-				// Secret not yet produced; sidecar pod doesn't exist yet. Skip
-				// silently — this is the normal AwaitingSecret steady state, not
-				// a boot failure.
-				slog.Info("sidecar toolbox awaiting secret; skipping this pass",
-					"sidecar", rt.Name)
-				continue
-			}
-			if rt.RunMode == "separate-pod" {
-				// Pod exists (AwaitingSecret==false) but IP not yet reflected in
-				// status. Poll the AgentSession until it appears.
-				slog.Info("separate-pod sidecar IP not yet reflected; polling",
-					"sidecar", rt.Name, "timeout", sidecarPodIPTimeout)
-				deadline := time.Now().Add(sidecarPodIPTimeout)
-				for time.Now().Before(deadline) {
-					select {
-					case <-rootCtx.Done():
-						return rootCtx.Err()
-					case <-time.After(sidecarPodIPPollInterval):
-					}
-					var refreshed spiceboxv1alpha1.AgentSession
-					if rerr := c.Get(rootCtx, sessKey, &refreshed); rerr != nil {
-						return fmt.Errorf("poll AgentSession for sidecar %q IP: %w", rt.Name, rerr)
-					}
-					for _, rrt := range refreshed.Status.ResolvedSidecarToolboxes {
-						if rrt.Name == rt.Name {
-							rt = rrt
-							break
-						}
-					}
-					probeURL, ready = sidecarProbeURL(rt, os.Getenv)
-					if ready {
+		// sidecarBootDecision owns the per-sidecar branch; it is re-evaluated on
+		// each refreshed snapshot while polling.
+		action := sidecarBootDecision(rt, ready)
+		if action == sidecarBootPoll {
+			// Pod exists (AwaitingSecret==false) but IP not yet reflected in
+			// status. Poll the AgentSession until it appears, or until the
+			// operator records the pod as terminally failed.
+			slog.Info("separate-pod sidecar IP not yet reflected; polling",
+				"sidecar", rt.Name, "timeout", sidecarPodIPTimeout)
+			deadline := time.Now().Add(sidecarPodIPTimeout)
+			for action == sidecarBootPoll && time.Now().Before(deadline) {
+				select {
+				case <-rootCtx.Done():
+					return rootCtx.Err()
+				case <-time.After(sidecarPodIPPollInterval):
+				}
+				var refreshed spiceboxv1alpha1.AgentSession
+				if rerr := c.Get(rootCtx, sessKey, &refreshed); rerr != nil {
+					return fmt.Errorf("poll AgentSession for sidecar %q IP: %w", rt.Name, rerr)
+				}
+				for _, rrt := range refreshed.Status.ResolvedSidecarToolboxes {
+					if rrt.Name == rt.Name {
+						rt = rrt
 						break
 					}
 				}
-				if !ready {
-					// Sidecar pod created (not AwaitingSecret) but never became
-					// Ready within the timeout — treat as boot failure.
-					if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed,
-						fmt.Sprintf("separate-pod sidecar %q: SidecarPodIP not reflected after %s", rt.Name, sidecarPodIPTimeout)); werr != nil {
-						return werr
-					}
-					return nil
-				}
-			} else {
-				// In-pod sidecar: MCP_PORT_* env missing — always a boot error.
+				probeURL, ready = sidecarProbeURL(rt, os.Getenv)
+				action = sidecarBootDecision(rt, ready)
+			}
+			if action == sidecarBootPoll {
+				// Sidecar pod created (not AwaitingSecret) but never became
+				// Ready within the timeout — treat as boot failure.
 				if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed,
-					fmt.Sprintf("runner: missing MCP_PORT env for in-pod sidecar %q", rt.Name)); werr != nil {
+					fmt.Sprintf("separate-pod sidecar %q: SidecarPodIP not reflected after %s", rt.Name, sidecarPodIPTimeout)); werr != nil {
 					return werr
 				}
 				return nil
 			}
+		}
+		switch action {
+		case sidecarBootSkip:
+			if rt.AwaitingSecret {
+				// Secret not yet produced; sidecar pod doesn't exist yet. This is
+				// the normal AwaitingSecret steady state, not a boot failure.
+				slog.Info("sidecar toolbox awaiting secret; skipping this pass",
+					"sidecar", rt.Name)
+			} else {
+				// The operator recorded this sidecar's pod as terminally failed.
+				// Boot without it: the tool refresher tells the agent at the top
+				// of the first turn (and the user, once per failure), and picks
+				// the sidecar up if its pod ever recovers.
+				slog.Info("separate-pod sidecar terminally failed; booting without it",
+					"sidecar", rt.Name, "reason", rt.PodFailure.Reason)
+			}
+			continue
+		case sidecarBootFail:
+			// In-pod sidecar: MCP_PORT_* env missing — always a boot error.
+			if werr := failSession(spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed,
+				fmt.Sprintf("runner: missing MCP_PORT env for in-pod sidecar %q", rt.Name)); werr != nil {
+				return werr
+			}
+			return nil
 		}
 
 		// Probe + synthesize this sidecar's tools via the single shared core
@@ -2093,6 +2123,10 @@ func run(cfg *config) error {
 	composeOpts = append(composeOpts, runner.WithAuthoredExamples(runner.AuthoredExamplesOf(&class)))
 	composeOpts = append(composeOpts, runner.WithPlanningNotes(runner.PlanningNotesOf(&class)))
 	composeOpts = append(composeOpts, runner.WithUserProfileActive(profileActive))
+	// Not a capability section: a summoning message opens with the agent's own
+	// token whether or not the class offers lookup_user_for_mention, so the
+	// warning about it cannot ride with that tool.
+	composeOpts = append(composeOpts, runner.WithSelfMention(runner.SelfMentionOf(chregistry.Get, bindingOrNil)))
 	composeOpts = append(composeOpts, runner.WithFineGrainedInfoLeakage(runner.FineGrainedInfoLeakageActive(&class)))
 	if runner.PlanGateRequirePlan(sess.Status.EffectiveSettings) {
 		composeOpts = append(composeOpts, runner.WithRequirePlan())
@@ -2518,6 +2552,7 @@ func run(cfg *config) error {
 	// short-circuit through the IsError path instead.
 	loop.Approval = approval.New()
 	loop.StartedByCanonical = spiceboxv1alpha1.ResolveStartedByCanonical(&sess)
+	loop.StarterMention = sess.Annotations[spiceboxv1alpha1.AnnotationStarterMention]
 	if sess.Spec.InputChannel != nil {
 		loop.ChannelKind = sess.Spec.InputChannel.Kind
 	}

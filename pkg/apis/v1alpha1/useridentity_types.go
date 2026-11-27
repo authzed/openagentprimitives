@@ -129,6 +129,11 @@ type ChannelIdentity struct {
 	// DisplayName is the channel-native display/real name, when known.
 	// +optional
 	DisplayName string `json:"displayName,omitempty"`
+	// RealName is the user's full name as the channel records it (Slack's
+	// profile.real_name), when known. DisplayName is often a handle
+	// ("jdoe"); this is what a "name:" user reference matches against.
+	// +optional
+	RealName string `json:"realName,omitempty"`
 	// Email is the trusted email the channel vouched for, when known.
 	// +optional
 	Email string `json:"email,omitempty"`

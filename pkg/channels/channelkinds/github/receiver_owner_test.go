@@ -66,3 +66,44 @@ func TestTriggerOwnerSubject_UndecodableBodyErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, ok)
 }
+
+// TestTriggerOwnerTrusted_FromAuthorAssociation pins which signed
+// author_association values mark a pull request author as trusted: members,
+// owners and collaborators. Every other value, a missing one included, is an
+// outside party — fail closed on anything GitHub adds later.
+func TestTriggerOwnerTrusted_FromAuthorAssociation(t *testing.T) {
+	cases := []struct {
+		name        string
+		association string
+		want        bool
+	}{
+		{name: "MEMBER: trusted", association: `"MEMBER"`, want: true},
+		{name: "OWNER: trusted", association: `"OWNER"`, want: true},
+		{name: "COLLABORATOR: trusted", association: `"COLLABORATOR"`, want: true},
+		{name: "CONTRIBUTOR: untrusted", association: `"CONTRIBUTOR"`},
+		{name: "FIRST_TIME_CONTRIBUTOR: untrusted", association: `"FIRST_TIME_CONTRIBUTOR"`},
+		{name: "NONE: untrusted", association: `"NONE"`},
+		{name: "lowercase member: untrusted, no normalization", association: `"member"`},
+		{name: "unknown future value: untrusted", association: `"MANNEQUIN"`},
+		{name: "missing: untrusted", association: `null`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"action":"opened","number":7,"pull_request":{"author_association":` + tc.association +
+				`,"user":{"login":"demo-user","id":42}},"repository":{"full_name":"demo-org/platform"}}`
+			got, err := receiver{}.TriggerOwnerTrusted(testChannel(t), "pull_request", []byte(body))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestTriggerOwnerTrusted_NonPullRequestAndUndecodable(t *testing.T) {
+	got, err := receiver{}.TriggerOwnerTrusted(testChannel(t), "ping", []byte(`{"zen":"x"}`))
+	require.NoError(t, err)
+	assert.False(t, got, "a non-pull_request event names no owner to trust")
+
+	got, err = receiver{}.TriggerOwnerTrusted(testChannel(t), "pull_request", []byte("not json"))
+	require.Error(t, err)
+	assert.False(t, got)
+}

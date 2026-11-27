@@ -99,7 +99,8 @@ type RepoInstructions struct {
 // kind-agnostic artifact_prepare/await/history workflow block), and each
 // registered modality's own guidance for the resolved model's capabilities.
 // Capability-owned sections (WithPromptSections) follow the same rule and
-// render last, before the divider.
+// render last, before the divider, preceded by the agent's own mention token
+// when the channel gives it one (WithSelfMention).
 //
 // The user-provided system prompt from AgentClass.spec.systemPrompt follows
 // after a divider. Tools are partitioned by Kind so the model can tell
@@ -450,7 +451,11 @@ func ComposeSystem(userPrompt string, tools []tool.Tool, skills []SkillMetadata,
 		b.WriteString("\n\n" + blk)
 	}
 
-	for _, s := range cfg.sections {
+	sections := cfg.sections
+	if cfg.selfMention != "" {
+		sections = append([]capability.PromptSection{selfMentionSection(cfg.selfMention)}, sections...)
+	}
+	for _, s := range sections {
 		// Both newlines belong to the heading: the modality blocks above end
 		// with no trailing newline, so a single one would run the first
 		// section straight on from the last kind-owned block.
@@ -538,6 +543,11 @@ type composeConfig struct {
 	// before the divider that introduces the class's own prompt. Set via
 	// WithPromptSections.
 	sections []capability.PromptSection
+
+	// selfMention is the agent's own mention token on the input channel, ""
+	// when it has none. Rendered as a section ahead of the capability ones.
+	// Set via WithSelfMention.
+	selfMention string
 }
 
 // WithFineGrainedInfoLeakage appends the provenance-preservation rules for the

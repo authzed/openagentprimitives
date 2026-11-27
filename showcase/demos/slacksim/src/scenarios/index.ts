@@ -16,6 +16,7 @@ import { threadAdoption } from "./thread-adoption";
 import { hubspotCompanies } from "./hubspot-companies";
 import { reviewbotDemo } from "./reviewbot-demo";
 import { pmAgentDemo } from "./pm-agent-demo";
+import { messagingbotDesign } from "./messagingbot-design";
 
 // The registry of built-in slacksim stories. The capture engine and the dev
 // server resolve a story by name (?scenario=<name>). A story is a scenario plus
@@ -38,6 +39,7 @@ export const STORIES: Record<string, () => Story> = {
   "hubspot-companies": hubspotCompanies,
   "reviewbot-demo": reviewbotDemo,
   "pm-agent-demo": pmAgentDemo,
+  "messagingbot-design": messagingbotDesign,
 };
 
 export const DEFAULT_SCENARIO = "reviewbot-pr";

@@ -42,8 +42,10 @@ const noteVersion = 1
 // Store is one session's record of the answer its trigger carries.
 //
 // A single outcome, not a set: a trigger has exactly one status surface and
-// that surface holds exactly one answer at a time. A second conclusion replaces
-// the first on the provider, so it replaces it here too.
+// that surface holds exactly one answer at a time. Whatever the provider ends
+// up carrying after a second conclusion is what is recorded here — the new
+// answer when it replaced the first, the first when the surface kept it
+// (channelkinds.TriggerAnswerKeptError).
 type Store struct {
 	mu      sync.RWMutex
 	outcome channelkinds.TriggerOutcome

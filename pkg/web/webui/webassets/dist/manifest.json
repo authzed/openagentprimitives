@@ -1,7 +1,7 @@
 {
   "identity-link": {
     "scripts": [
-      "/assets/identity-link.JImMyzqG.js"
+      "/assets/identity-link.Cqt8HeTh.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -9,7 +9,7 @@
   },
   "identity-link-form": {
     "scripts": [
-      "/assets/identity-link-form.D6e_2oHD.js"
+      "/assets/identity-link-form.Bt6Oh6DG.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -17,7 +17,7 @@
   },
   "identity-portal": {
     "scripts": [
-      "/assets/identity-portal.BtFdB3Xy.js"
+      "/assets/identity-portal.BmIBoDGT.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -25,7 +25,7 @@
   },
   "identity-verify-warn": {
     "scripts": [
-      "/assets/identity-verify-warn.Pee3Z_hw.js"
+      "/assets/identity-verify-warn.DJjQYt4N.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -33,7 +33,7 @@
   },
   "admin": {
     "scripts": [
-      "/assets/admin.ifEX1HDY.js"
+      "/assets/admin.xnVw5-kD.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -41,7 +41,7 @@
   },
   "settings": {
     "scripts": [
-      "/assets/settings.C-u7qeKo.js"
+      "/assets/settings.ClPnuJ6x.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -55,7 +55,7 @@
   },
   "artifact-view": {
     "scripts": [
-      "/assets/artifact-view.DBDGWNcW.js"
+      "/assets/artifact-view.C90C9ZSo.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -63,7 +63,7 @@
   },
   "chat-embed": {
     "scripts": [
-      "/assets/chat-embed.CbCxa8na.js"
+      "/assets/chat-embed.C1Ultd-q.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -71,7 +71,7 @@
   },
   "health": {
     "scripts": [
-      "/assets/health.D1Kg8wjv.js"
+      "/assets/health.BG167nsz.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -79,7 +79,7 @@
   },
   "sessions": {
     "scripts": [
-      "/assets/sessions.CLvEgkS_.js"
+      "/assets/sessions._salrtBh.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -87,7 +87,7 @@
   },
   "session-view": {
     "scripts": [
-      "/assets/session-view.CIiFS6-J.js"
+      "/assets/session-view.BxYaTRG9.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"
@@ -95,13 +95,13 @@
   },
   "mcpui-host": {
     "scripts": [
-      "/assets/mcpui-host.BAp6ucs9.js"
+      "/assets/mcpui-host.DlHsd75q.js"
     ],
     "css": []
   },
   "system": {
     "scripts": [
-      "/assets/system.BdDHhljP.js"
+      "/assets/system.pkKmFdsb.js"
     ],
     "css": [
       "/assets/mount.DMl_YDZA.css"

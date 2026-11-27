@@ -312,6 +312,15 @@ var eventRoundTripCases = []struct {
 		},
 	},
 	{
+		name:  "RunDurationExceeded round-trips",
+		event: lc.RunDurationExceeded{},
+		check: func(t *testing.T, got lc.Event) {
+			t.Helper()
+			_, ok := got.(lc.RunDurationExceeded)
+			require.True(t, ok)
+		},
+	},
+	{
 		name:  "GoalRunConcluded round-trips",
 		event: lc.GoalRunConcluded{},
 		check: func(t *testing.T, got lc.Event) {

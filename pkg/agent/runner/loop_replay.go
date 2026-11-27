@@ -252,6 +252,15 @@ const emptyContentPlaceholderText = "[content omitted: unsupported block type]"
 func contentBlocksFromMemory(in []memory.ContentBlock) []llm.ContentBlock {
 	out := make([]llm.ContentBlock, 0, len(in))
 	for _, b := range in {
+		if b.Type == memory.BlockTypeSenderMention {
+			// Stored as a bare token so the wording lives here, beside the
+			// system prompt's account of the agent's own token, not in every
+			// channel kind that mints one.
+			if b.Text != "" {
+				out = append(out, llm.ContentBlock{Type: "text", Text: senderMentionText(b.Text)})
+			}
+			continue
+		}
 		if !llmRenderableBlockTypes[b.Type] {
 			continue
 		}
@@ -283,6 +292,15 @@ func contentBlocksFromMemory(in []memory.ContentBlock) []llm.ContentBlock {
 		out = append(out, llm.ContentBlock{Type: "text", Text: emptyContentPlaceholderText})
 	}
 	return out
+}
+
+// senderMentionText is how a turn's memory.BlockTypeSenderMention reaches the
+// model: the token that @-mentions the person who sent that message. Without
+// it the only mention a summoning message carries is the agent's own, and a
+// model asked to address the sender copies that one.
+func senderMentionText(token string) string {
+	return "[Sender of this message, as a mention token: " + token +
+		" — paste it into respond_to_user text to @-mention them.]"
 }
 
 func cloneJSON(b []byte) []byte {

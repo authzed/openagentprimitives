@@ -453,6 +453,37 @@ func (receiver) TriggerOwnerSubject(ch *spiceboxv1alpha1.Channel, event string, 
 
 var _ channelkinds.TriggerOwnerProvider = receiver{}
 
+// trustedAuthorAssociations are the pull request author associations that
+// mark the author as someone the repository already trusts: an organization
+// member, the repository owner, or an invited collaborator. Anything else —
+// CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, NONE, a missing or a future value — is
+// an outside party.
+var trustedAuthorAssociations = map[string]bool{
+	"MEMBER":       true,
+	"OWNER":        true,
+	"COLLABORATOR": true,
+}
+
+// TriggerOwnerTrusted reports whether the pull request's author is trusted by
+// the base repository, from GitHub's signed author_association, satisfying
+// channelkinds.TriggerOwnerTrustProvider. Unlike reviewAllowed's fork gate,
+// COLLABORATOR counts here: this bit does not decide whether a review runs,
+// only whether text the author chose (their profile name) may be used to look
+// up whose settings apply. A non-pull_request event names no owner and so is
+// untrusted.
+func (receiver) TriggerOwnerTrusted(_ *spiceboxv1alpha1.Channel, event string, body []byte) (bool, error) {
+	if event != "pull_request" {
+		return false, nil
+	}
+	var ev prEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		return false, fmt.Errorf("github: decode pull_request payload for trigger owner trust: %w", err)
+	}
+	return trustedAuthorAssociations[ev.PullRequest.AuthorAssociation], nil
+}
+
+var _ channelkinds.TriggerOwnerTrustProvider = receiver{}
+
 // TriggerOriginURL returns the pull request's own html_url from a verified
 // pull_request delivery, satisfying channelkinds.TriggerOriginURLProvider. The
 // URL is host-correct — it is whatever host the delivery came from, so a GitHub

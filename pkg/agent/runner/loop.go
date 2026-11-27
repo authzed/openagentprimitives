@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,6 +58,10 @@ func (l *Loop) Run(ctx context.Context) error {
 		return l.fail(ctx, spiceboxv1alpha1.ReasonAgentSessionMemoryDown, fmt.Sprintf("read memory: %v", err))
 	}
 	messages, nextIndex, hadInitialPrompt := replay(prior, l.SessionKey.Namespace+"/"+l.SessionKey.Name)
+	// How much of the conversation came from the durable transcript, before
+	// anything this Run adds (a drained inbox turn, a bound slot). The resume
+	// park below compares against it: see resumedWithNothingToDo.
+	replayed := len(messages)
 	// Seed the emit-time memory index from the durable replay base so a resumed
 	// Run's first loop-side activity signal (start-of-turn active) sorts after
 	// prior turns rather than from 0. Advanced per turn below.
@@ -264,6 +269,13 @@ func (l *Loop) Run(ctx context.Context) error {
 			// eligible session on the Allow path); keep the verbatim prompt.
 		}
 		if place {
+			if l.StarterMention != "" {
+				// Every later message gets its sender's token from channelsd;
+				// turn 0 is placed here, so it gets the starter's.
+				content = append(slices.Clip(content), memory.ContentBlock{
+					Type: memory.BlockTypeSenderMention, Text: l.StarterMention,
+				})
+			}
 			t := memory.Turn{
 				Index: 0, Role: "user",
 				Content:   content,
@@ -413,6 +425,18 @@ func (l *Loop) Run(ctx context.Context) error {
 		defer flushCancel()
 		go l.runDurationFlusher(flushCtx, runDurationFlushInterval)
 	}
+	// maxDuration as a deadline on in-flight work: Budget.Check only runs at turn
+	// boundaries, so without this an LLM call or tool call that straddles the cap
+	// runs on until it returns. When active run-time reaches the cap the watchdog
+	// cancels the LLM call and every stateless/readonly tool at once, lets
+	// stateful tools drain for BudgetStatefulDrain, then cancels what is left;
+	// the Send error path and the post-dispatch Check below then fail the session
+	// as MaxDurationExceeded.
+	budgetWatchCtx, budgetWatchCancel := context.WithCancel(ctx)
+	defer budgetWatchCancel()
+	go l.Budget.watchDuration(budgetWatchCtx, func() {
+		l.cutOffForBudget(budgetWatchCtx)
+	})
 
 	// Session-context the meta tools see. agent_work_complete writes here via
 	// SubmitResult; the runner reads it after the loop ends.
@@ -458,7 +482,9 @@ func (l *Loop) Run(ctx context.Context) error {
 	// assistant message, which providers reject outright ("This model does not
 	// support assistant message prefill. The conversation must end with a user
 	// message."), and the runner exits into AwaitingRetry where every retry
-	// reproduces it — for a turn with nothing to respond to.
+	// reproduces it — for a turn with nothing to respond to. A round closed by a
+	// successful agent_work_complete ends instead with that tool's result, which
+	// the live loop never showed the model; resuming onto it is just as empty.
 	//
 	// Reachable because a wake can arrive with no message attached: channelsd
 	// wakes a session only when it has something to deliver, but a wake requested
@@ -469,9 +495,16 @@ func (l *Loop) Run(ctx context.Context) error {
 	// wait, off the same InboundCh, under the same idle TTL, reusing the one
 	// mechanism that governs how long a runner lives. Once something DOES arrive,
 	// fall through and drain it into the turn below.
-	if resumedWithNothingToDo(hadInitialPrompt, messages) {
+	// Only a channel-attached, non-delegated session parks on a completed round:
+	// that is the one case where the live loop parks Idle after
+	// agent_work_complete. A kubectl session or a delegated child ends that
+	// round Succeeded instead, so a resume there takes its turn as before and
+	// reaches the terminal write through the loop.
+	completedAt, roundAtRest := completedRoundAtRest(prior)
+	completedRound := l.ChannelAttached && !l.DelegatedChild && roundAtRest
+	if shape := resumedWithNothingToDo(hadInitialPrompt, completedRound, replayed, messages); shape != resumeHasWork {
 		slog.Default().Info("resume with an empty inbox: parking without a turn (nothing to respond to)",
-			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "messages", len(messages))
+			"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name, "messages", len(messages), "shape", string(shape))
 		if !l.parkUntilInbound(ctx, sess) {
 			// The wait ended without new input — the idle TTL elapsed, or the
 			// context was cancelled. Both mean this runner is done, and it must
@@ -482,7 +515,34 @@ func (l *Loop) Run(ctx context.Context) error {
 			// `return nil` instead leaves the session at Pending forever,
 			// reporting busy for a runner that had finished, and drops any message
 			// that raced the park.
-			if l.ChannelAttached {
+			if !l.ChannelAttached {
+				// Nothing can deliver a message here, so there is no
+				// idle-and-wakeable state to record — the run is simply over,
+				// with no terminal write to gate. parkUntilInbound already
+				// declines to wait at all for such a session; this is the belt to
+				// that braces.
+				return nil
+			}
+			// The two shapes leave through one idle exit and differ only in what
+			// it records, and in whether the completion gate gets a say first.
+			reason := spiceboxv1alpha1.ReasonAgentSessionAwaitingUserMsg
+			exitEvent := idleYieldEventFor(false)
+			settled := true
+			if shape == resumeCompletedRound {
+				// The round closed through agent_work_complete, whose own gate
+				// already allowed this settle — met, or bypassed with a reason
+				// the user was told. The live loop never re-checks after it (the
+				// terminal branch parks directly; the yield exit skips the gate
+				// when the terminal tool ran: gateAlreadyRan). Re-checking here
+				// would refuse a bypassed completion all over again, since the
+				// bypass is not carried across runs, and hand the model a stray
+				// turn demanding a second bypass. The resting reason is the one
+				// the round ended with, and the audit event is IdleYield unless
+				// the log has no record of how the round ended — see
+				// completedRoundExitEvent.
+				reason = spiceboxv1alpha1.ReasonAgentSessionAgentWorkComplete
+				exitEvent = l.completedRoundExitEvent(ctx, completedAt)
+			} else if refusal, blocked := l.completionSettleRefusal(ctx, sess); blocked {
 				// Completion gate, resume-park exit. A settle is a settle even
 				// when no turn ran: a round that ended earlier still owing
 				// something reaches its resting phase HERE, and the model is not
@@ -490,22 +550,15 @@ func (l *Loop) Run(ctx context.Context) error {
 				// exiting — waking the agent to finish or to say why is exactly
 				// what is owed — and costs a turn only when something is
 				// genuinely outstanding.
-				if refusal, blocked := l.completionSettleRefusal(ctx, sess); blocked {
-					l.noteCompletionSettleBlocked(ctx, "resume park expiry")
-					messages = append(messages, refusalTurn(refusal))
-				} else {
-					l.emitLifecycleSignal(ctx, lifecycle.SigSessionIdle, map[string]string{"reason": "idle"})
-					l.emitLifecycleEvent(ctx, idleYieldEventFor(false))
-					l.fireSessionEnd(ctx, "idle")
-					return l.idleWithWakeRecheck(ctx, spiceboxv1alpha1.ReasonAgentSessionAwaitingUserMsg)
-				}
-			} else {
-				// Not channel-attached: nothing can deliver a message here, so
-				// there is no idle-and-wakeable state to record — the run is simply
-				// over, with no terminal write to gate. parkUntilInbound already
-				// declines to wait at all for such a session; this is the belt to
-				// that braces.
-				return nil
+				l.noteCompletionSettleBlocked(ctx, "resume park expiry")
+				messages = append(messages, refusalTurn(refusal))
+				settled = false
+			}
+			if settled {
+				l.emitLifecycleSignal(ctx, lifecycle.SigSessionIdle, map[string]string{"reason": "idle"})
+				l.emitLifecycleEvent(ctx, exitEvent)
+				l.fireSessionEnd(ctx, "idle")
+				return l.idleWithWakeRecheck(ctx, reason)
 			}
 		}
 		if placed, drained, derr := l.drainInbox(ctx, nextIndex); derr != nil {
@@ -682,12 +735,32 @@ func (l *Loop) Run(ctx context.Context) error {
 		// registry is cleared unconditionally right after Send returns, on
 		// both the success and error paths, so a stale providerCancel can
 		// never be fired against a completed call.
-		sendCtx, sendCancel := context.WithCancelCause(ctx)
+		interruptCtx, sendCancel := context.WithCancelCause(ctx)
 		l.interrupts.setProvider(sendCancel)
+		// Bound the call by what is left of the session's wall-clock lifetime.
+		// The maxDuration watchdog (Budget.watchDuration) cancels through the
+		// interrupt registry above; sessionExpiration has no watcher, and
+		// Budget.Check runs only between turns, so a call that never returns
+		// would otherwise outlive it. An interrupt or maxDuration cause still
+		// propagates: a child ctx reports its parent's cancel cause.
+		sendCtx, stopExpiryDeadline := interruptCtx, context.CancelFunc(func() {})
+		if remaining, ok := l.Budget.UntilExpiration(); ok {
+			sendCtx, stopExpiryDeadline = context.WithTimeoutCause(interruptCtx, remaining, errSessionExpired)
+		}
 		resp, err := l.Provider.Send(sendCtx, req)
 		l.interrupts.clearProvider()
+		stopExpiryDeadline()
 		sendCancel(nil)
 		if err != nil {
+			if context.Cause(sendCtx) == errMaxDurationExceeded {
+				return l.fail(ctx, budgetFailReason(BudgetReasonDuration), BudgetReasonDuration)
+			}
+			if context.Cause(sendCtx) == errSessionExpired {
+				slog.Default().Info("turn: LLM call cut off at the session's sessionExpiration",
+					"session", l.SessionKey.Namespace+"/"+l.SessionKey.Name,
+					"turn", turnCount+1, "err", err.Error())
+				return l.fail(ctx, budgetFailReason(BudgetReasonExpired), BudgetReasonExpired)
+			}
 			if context.Cause(sendCtx) == errInterruptedByUser {
 				// The user interrupted the LLM call to jump the queue. Not a
 				// provider failure — drain the held queue and continue.

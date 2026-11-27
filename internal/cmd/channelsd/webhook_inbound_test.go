@@ -128,6 +128,44 @@ func TestWebhookInboundHandler_DerivesTriggerOwnerAnnotation(t *testing.T) {
 	assert.Equal(t, "github_user:4172237#user",
 		pipe.observed().PreTurnAnnotations[spiceboxv1alpha1.AnnotationTriggerOwnerSubject],
 		"the PR author's account, derived from the verified delivery, must reach the session as a pre-turn annotation")
+	assert.Equal(t, spiceboxv1alpha1.AnnotationTriggerOwnerTrustedFalse,
+		pipe.observed().PreTurnAnnotations[spiceboxv1alpha1.AnnotationTriggerOwnerTrusted],
+		"a delivery with no author_association marks the owner untrusted")
+}
+
+// TestWebhookInboundHandler_DerivesTriggerOwnerTrust pins that the trust bit
+// beside the owner comes from the verified delivery's author_association, so
+// the subject resolver can tell a session a trusted author opened from one an
+// outside contributor did.
+func TestWebhookInboundHandler_DerivesTriggerOwnerTrust(t *testing.T) {
+	cases := []struct {
+		name        string
+		association string
+		want        string
+	}{
+		{name: "MEMBER: trusted", association: "MEMBER", want: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue},
+		{name: "COLLABORATOR: trusted", association: "COLLABORATOR", want: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue},
+		{name: "CONTRIBUTOR: untrusted", association: "CONTRIBUTOR", want: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedFalse},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := fake.NewClientBuilder().WithScheme(attachScheme(t)).WithObjects(webhookTestChannel()).Build()
+			pipe := &fakeWebhookPipeline{dec: channelkinds.InboundDecision{Outcome: channelkinds.OutcomeRouted}}
+			logger, _ := captureLogger()
+			payload := webhookTestPayload()
+			payload.DeliveryEvent = "pull_request"
+			payload.RawDelivery = []byte(`{"action":"opened","number":42,` +
+				`"pull_request":{"author_association":"` + tc.association + `","user":{"login":"demo-user","id":4172237}},` +
+				`"repository":{"full_name":"demo-org/platform"}}`)
+			raw, err := json.Marshal(payload)
+			require.NoError(t, err)
+
+			webhookInboundHandler(context.Background(), cli, pipe, logger, &nats.Msg{Data: raw})
+
+			require.True(t, pipe.Called())
+			assert.Equal(t, tc.want, pipe.observed().PreTurnAnnotations[spiceboxv1alpha1.AnnotationTriggerOwnerTrusted])
+		})
+	}
 }
 
 // A delivery the provider cannot derive an owner from — or one whose
@@ -160,6 +198,8 @@ func TestWebhookInboundHandler_OwnerDerivationFailure_StillDispatches(t *testing
 
 			require.True(t, pipe.Called(), "the session must still start; the owner grant is additive, not a gate")
 			assert.NotContains(t, pipe.observed().PreTurnAnnotations, spiceboxv1alpha1.AnnotationTriggerOwnerSubject)
+			assert.NotContains(t, pipe.observed().PreTurnAnnotations, spiceboxv1alpha1.AnnotationTriggerOwnerTrusted,
+				"no owner, no trust bit")
 			if tc.wantLog != "" {
 				assert.Contains(t, read(), tc.wantLog)
 			}

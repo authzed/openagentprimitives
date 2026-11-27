@@ -3,18 +3,42 @@ package agentsession
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
-	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
-	chregistry "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/registry"
+	"github.com/authzed/openagentprimitives/pkg/channels/triggeranswer"
+	"github.com/authzed/openagentprimitives/pkg/tools/adoptkit"
 )
 
-// concludeTriggerStatusOnBootFailure answers the trigger that started sess,
-// when sess died before anything inside it could.
+// triggerAnswerTimeout bounds one answer's provider round trips (a token mint,
+// a head-commit read, a check-run read and write), so a slow provider cannot
+// hold a reconcile worker. It is the bound for the two immediate answers, each
+// of which runs once, in the reconcile that writes Failed. The backstop, which
+// retries, runs under the tighter failedTriggerAnswerTimeout.
+const triggerAnswerTimeout = 30 * time.Second
+
+// channelOwnerKind is the owner kind the Channel controller adopts a
+// credentials Secret under. An answer that has to adopt one adopts it under
+// the same kind and the same Channel, so both write the same thing.
+const channelOwnerKind = "Channel"
+
+// concludeTriggerStatusOnOperatorFailure answers the trigger that started
+// sess, at the moment the operator itself fails sess and nothing inside it
+// can: either it died before its runner came up (markBootFailed), or its
+// runner is wedged past its run-time budget and the operator is ending it
+// (reconcileRunDuration). summary is the prose published on the trigger's
+// surface; see triggeranswer.CouldNotStartSummary and
+// triggeranswer.StoppedSummary.
+//
+// These two answer immediately, in the reconcile that writes Failed, with the
+// wording only they know is right. Every other Failed session — the runner's
+// own failures, the retry TTL — is answered by reconcileFailedTrigger, which
+// also re-checks these two on the next pass and finds them AlreadyAnswered.
 //
 // # Why the reconciler and not the agent
 //
@@ -29,99 +53,71 @@ import (
 // Channel's credentials is what materializeSidecarSecret already does in this
 // same reconcile, so this needs no RBAC the operator does not hold.
 //
-// # Read before write
-//
-// Conclude is last-write-wins. Claim is asked FIRST, and a trigger that already
-// carries an answer is left exactly as it is: a framework cleanup that wrote
-// unconditionally would replace a real review's verdict with "could not
-// finish", turning a delivered result into a failure notice on the pull
-// request. When Claim itself fails, whether there is a verdict is UNKNOWN, so
-// nothing is written for the same reason.
-//
 // Best-effort throughout, and never silent. Nothing here may fail the reconcile
 // that is marking the session Failed — reaching the terminal state matters more
-// than reporting it, and a session wedged mid-transition by a provider outage
-// would be strictly worse. Every give-up path logs, because the visible symptom
-// (a pull request showing nothing) is otherwise untraceable.
-func (r *Reconciler) concludeTriggerStatusOnBootFailure(
-	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, reason string,
+// than reporting it. A give-up here is retried by reconcileFailedTrigger.
+func (r *Reconciler) concludeTriggerStatusOnOperatorFailure(
+	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, reason, summary string,
 ) {
-	logger := log.FromContext(ctx)
-	sessRef := sess.Namespace + "/" + sess.Name
-
-	b := sess.Spec.InputChannel
-	if b == nil {
-		return // kubectl-driven: no channel event started this, so nothing is owed
-	}
-	// THE shared lookup, the same one the runner's capability and the two
-	// trigger-status tools resolve through. A kind whose trigger is just a
-	// message reports nothing here and is untouched.
-	reporter, ok := chregistry.TriggerStatusReporterFor(b.Kind)
-	if !ok {
-		return
-	}
-
-	var ch spiceboxv1alpha1.Channel
-	if err := r.Client.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: b.Name}, &ch); err != nil {
-		logger.Info("trigger status: could not read the input Channel, so the trigger keeps showing this session as in progress",
-			"session", sessRef, "channel", b.Name, "err", err.Error())
-		return
-	}
-	var sec corev1.Secret
-	if err := r.Client.Get(ctx, types.NamespacedName{Namespace: sess.Namespace, Name: ch.Spec.CredentialsRef.SecretName}, &sec); err != nil {
-		logger.Info("trigger status: could not read the input Channel's credentials, so the trigger keeps showing this session as in progress",
-			"session", sessRef, "channel", b.Name, "err", err.Error())
-		return
-	}
-
-	// No ProviderAPIBaseURL override: the operator talks to the real provider,
-	// and the tests below drive a registered fixture kind that ignores it.
-	surface, err := reporter.TriggerSurface(&ch, b, channelkinds.WebhookSecrets{Data: sec.Data},
-		channelkinds.TriggerStatusOptions{})
-	if err != nil {
-		logger.Info("trigger status: this session's trigger could not be addressed",
-			"session", sessRef, "kind", b.Kind, "err", err.Error())
-		return
-	}
-	if surface == nil {
-		return // the kind's "this binding carries no trigger" answer
-	}
-
-	claim, err := surface.Claim(ctx)
-	if err != nil {
-		logger.Info("trigger status: could not read the trigger before answering it, so it was left alone",
-			"session", sessRef, "surface", surface.Surface(), "err", err.Error())
-		return
-	}
-	if claim.Concluded {
-		logger.Info("trigger status: this trigger already carries an answer; the boot failure did not overwrite it",
-			"session", sessRef, "surface", surface.Surface(), "outcome", string(claim.Outcome))
-		return
-	}
-
-	if err := surface.Conclude(ctx, channelkinds.TriggerConclusion{
-		Outcome: channelkinds.TriggerOutcomeCouldNotFinish,
-		Summary: bootFailureSummary(reason),
-	}); err != nil {
-		logger.Info("trigger status: could not answer this session's trigger; it keeps showing the work as in progress",
-			"session", sessRef, "surface", surface.Surface(), "err", err.Error())
-		return
-	}
-	logger.Info("trigger status: answered on behalf of a session that never started",
-		"session", sessRef, "surface", surface.Surface(), "reason", reason)
+	rep, err := r.answerTrigger(ctx, sess, summary, triggerAnswerTimeout)
+	triggeranswer.Log(log.FromContext(ctx), sess.Namespace+"/"+sess.Name, reason, rep, err)
 }
 
-// bootFailureSummary is the prose published on the trigger's own surface.
+// answerTrigger is the operator's one route to triggeranswer: the session's
+// input binding, the operator's own client, a live read of the credentials
+// Secret, the provider override, and bound, the deadline over the whole
+// answer.
+func (r *Reconciler) answerTrigger(
+	ctx context.Context, sess *spiceboxv1alpha1.AgentSession, summary string, bound time.Duration,
+) (triggeranswer.Report, error) {
+	var apiBase string
+	if r.TriggerStatusAPIBaseURL != nil {
+		apiBase = r.TriggerStatusAPIBaseURL()
+	}
+	actx, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
+	return triggeranswer.Trigger{
+		Client:             r.Client,
+		Secrets:            r.triggerCredentialsSecret(sess),
+		Namespace:          sess.Namespace,
+		Binding:            sess.Spec.InputChannel,
+		ProviderAPIBaseURL: apiBase,
+	}.AnswerCouldNotFinish(actx, summary)
+}
+
+// triggerCredentialsSecret is how an answer reads the input Channel's
+// credentials Secret: live, never through r.Client.
 //
-// It carries the framework's failure REASON — the stable token that is also on
-// status.failureReason — and deliberately not the accompanying operator
-// message. That message is written for whoever runs the agent: it names pods,
-// secrets and kubectl commands, and this sentence is published to a pull
-// request whose readers are not that person and did not choose to trust the
-// agent. The reason is what an operator greps for; the first sentence is what
-// everyone else actually needs to know.
-func bootFailureSummary(reason string) string {
-	return fmt.Sprintf(
-		"This agent could not start, so no work was done and none is coming for this commit. "+
-			"The operator's record of why is `%s`.", reason)
+// r.Client's Secret cache is label-filtered and holds only adopted Secrets, so
+// a Secret that exists but is not adopted yet reads back from it as NotFound.
+// One recreated during a key rotation is in that state until the Channel
+// controller next reconciles, and a session that failed in the meantime would
+// be settled for good as unanswerable, with a message saying the Secret does
+// not exist. So existence is asked of the API server, and the Secret is
+// adopted first when nothing has adopted it, since the guarded reader refuses
+// an unadopted one. It is adopted for the Channel that references it, which is
+// exactly what the Channel controller's own next reconcile applies: no
+// per-session owner is added to a Secret every session of the Channel shares.
+//
+// NotFound from here means the Secret is really gone. Any other failure,
+// adoption included, is returned as it is and retried.
+func (r *Reconciler) triggerCredentialsSecret(sess *spiceboxv1alpha1.AgentSession) triggeranswer.SecretGetter {
+	return func(ctx context.Context, nn types.NamespacedName) (*corev1.Secret, error) {
+		if r.SecretReader == nil || sess.Spec.InputChannel == nil {
+			return r.getSecret(ctx, nn)
+		}
+		channel := types.NamespacedName{Namespace: sess.Namespace, Name: sess.Spec.InputChannel.Name}
+		adopted, err := adoptkit.AdoptSecretIfUnadopted(ctx, r.SecretReader.Reader, r.Client, nn, channel, channelOwnerKind)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("adopt it for Channel %s before reading it: %w", channel.Name, err)
+		}
+		if adopted {
+			log.FromContext(ctx).Info("trigger status: adopted the input Channel's credentials Secret, which nothing had adopted yet, to answer a failed session's trigger",
+				"session", sess.Namespace+"/"+sess.Name, "channel", channel.Name, "secret", nn.Name)
+		}
+		return r.SecretReader.Get(ctx, nn)
+	}
 }

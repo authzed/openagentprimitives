@@ -191,7 +191,7 @@ type MemTurn struct {
 
 // MemContent is one content block within a MemTurn.
 type MemContent struct {
-	// Block discriminator: "text" or "attachment".
+	// Block discriminator: "text", "attachment" or memory.BlockTypeSenderMention.
 	Type string `json:"type"`
 	// Block body; set for Type "text".
 	Text string `json:"text,omitempty"`
@@ -1603,6 +1603,11 @@ func (p *Pipeline) Deliver(ctx context.Context, ev channelkinds.InboundEvent) (c
 	if sessionOpening != "" {
 		sess.Annotations[spiceboxv1alpha1.AnnotationSessionOpening] = sessionOpening
 	}
+	// The first message's sender token, on the Create for the same reason:
+	// turn 0 is placed from spec.prompt by the runner, not appended here.
+	if ev.SenderMention != "" {
+		sess.Annotations[spiceboxv1alpha1.AnnotationStarterMention] = ev.SenderMention
+	}
 	// The acting subject for a session with no human in it, on the Create for
 	// the same reason as the two above: the runner resolves the subject it
 	// authorizes tool calls as from the object the operator spawned it off.
@@ -2746,6 +2751,24 @@ func renderMention(kind, externalID string) string {
 		}
 	}
 	return externalID
+}
+
+// senderMentionFor returns the token that mentions externalID on the named
+// channel kind, for an inbound rebuilt from a stored identity rather than
+// received from a listener (which stamps InboundEvent.SenderMention itself).
+// "" when the kind is not registered or has no such token — unlike
+// renderMention there is no bare-id fallback, because the result is handed to
+// the agent as something that pings a person, and a bare id does not.
+func senderMentionFor(kind, externalID string) string {
+	k, ok := chregistry.Get(kind)
+	if !ok {
+		return ""
+	}
+	sm, ok := k.(channelkinds.SenderMentioner)
+	if !ok {
+		return ""
+	}
+	return sm.SenderMention(externalID)
 }
 
 // archivedSessionNotYoursNotice builds the notice for someone trying to revive

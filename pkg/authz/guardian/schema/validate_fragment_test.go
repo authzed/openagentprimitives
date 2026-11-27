@@ -48,7 +48,14 @@ func TestReservedDefinitionNames_MatchesScaffold(t *testing.T) {
 		"platform":          {},
 		"cluster":           {},
 		"externaltoken":     {},
-		"agentidentity":     {},
+		// accesstoken is the OAuth-minted inbound credential (contrast
+		// externaltoken, the outbound credential a session uses). Reservation
+		// matters: a fragment that redeclared it could widen scope_class past the
+		// agents the token is authorized for, or narrow the permission ladder's
+		// role-relation matching, silently changing token authorization for every
+		// session downstream.
+		"accesstoken":   {},
+		"agentidentity": {},
 		// agentclass joined the scaffold with the browser start gate. Being
 		// reserved is the point: an MCPServer fragment that redeclared it would
 		// silently replace the definition the start gate resolves through, and

@@ -98,6 +98,43 @@ func TestInterruptRegistry_DeregisterStopsCancel(t *testing.T) {
 	cancelA(nil) // avoid ctx leak
 }
 
+func TestInterruptRegistry_CancelForBudget(t *testing.T) {
+	var reg interruptRegistry
+
+	roCtx, roCancel := context.WithCancelCause(context.Background())
+	rwCtx, rwCancel := context.WithCancelCause(context.Background())
+	provCtx, provCancel := context.WithCancelCause(context.Background())
+	reg.registerTool("tu_ro", ro("read_file"), roCancel)
+	reg.registerTool("tu_rw", rw("terraform_apply"), rwCancel)
+	reg.setProvider(provCancel)
+
+	assert.Empty(t, reg.cancelRemainingForBudget(), "the drain cut-off is a no-op before the budget is spent")
+	assert.NoError(t, rwCtx.Err())
+
+	draining := reg.cancelForBudget(errMaxDurationExceeded)
+
+	assert.ErrorIs(t, context.Cause(roCtx), errMaxDurationExceeded, "readonly tool cancelled at the cap")
+	assert.ErrorIs(t, context.Cause(provCtx), errMaxDurationExceeded, "provider call cancelled at the cap")
+	assert.NoError(t, rwCtx.Err(), "stateful tool is left to drain, not cut mid-mutation")
+	assert.Equal(t, []string{"terraform_apply"}, draining, "the draining stateful tools are named for the log")
+	assert.False(t, reg.takeRequested(), "a budget cancel is not a user interrupt")
+
+	// Registrations after the budget is spent are cancelled on arrival,
+	// stateful ones included: a call that has not started has nothing to drain.
+	lateTool, lateToolCancel := context.WithCancelCause(context.Background())
+	lateProv, lateProvCancel := context.WithCancelCause(context.Background())
+	reg.registerTool("tu_late", rw("git_push"), lateToolCancel)
+	reg.setProvider(lateProvCancel)
+	assert.ErrorIs(t, context.Cause(lateTool), errMaxDurationExceeded, "late stateful tool cancelled on register")
+	assert.ErrorIs(t, context.Cause(lateProv), errMaxDurationExceeded, "late provider call cancelled on set")
+
+	// Once the drain window runs out, whatever is still in flight is cut.
+	reg.deregisterTool("tu_ro")
+	reg.deregisterTool("tu_late")
+	assert.Equal(t, []string{"terraform_apply"}, reg.cancelRemainingForBudget())
+	assert.ErrorIs(t, context.Cause(rwCtx), errMaxDurationExceeded, "stateful tool cancelled after the drain")
+}
+
 // regTool registers t under id in l's live interrupt registry and returns
 // its cancel func, mirroring what the dispatch fan-out does in loop_dispatch.go.
 func regTool(l *Loop, id string, t tool.Tool) context.CancelCauseFunc {

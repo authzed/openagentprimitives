@@ -5,6 +5,7 @@ package agentsession
 
 import (
 	"context"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -56,11 +57,62 @@ func (r *Reconciler) MarkBootFailedForTest(ctx context.Context, sess *spiceboxv1
 	return r.markBootFailed(ctx, sess, reason, msg)
 }
 
+// ReconcileRunDurationForTest exposes the maxDuration backstop to
+// agentsession_test, so the trigger-status answer it makes for a session the
+// operator ends can be driven against the fixture reporter kind. Test-only.
+func (r *Reconciler) ReconcileRunDurationForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (bool, error) {
+	return r.reconcileRunDuration(ctx, sess)
+}
+
+// ReconcileFailedTriggerForTest exposes the failed-session trigger backstop.
+func (r *Reconciler) ReconcileFailedTriggerForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) time.Duration {
+	return r.reconcileFailedTrigger(ctx, sess)
+}
+
+// FailedTriggerAnswerWindowForTest is the backstop's answer window.
+const FailedTriggerAnswerWindowForTest = failedTriggerAnswerWindow
+
+// FailedTriggerAnswerTimeoutForTest and TriggerAnswerTimeoutForTest are the
+// bounds on one backstop attempt and on one immediate answer.
+const (
+	FailedTriggerAnswerTimeoutForTest = failedTriggerAnswerTimeout
+	TriggerAnswerTimeoutForTest       = triggerAnswerTimeout
+)
+
+// ReconcileExpirationForTest is ReconcileRunDurationForTest's counterpart for
+// the wall-clock lifetime sweep. Test-only.
+func (r *Reconciler) ReconcileExpirationForTest(ctx context.Context, sess *spiceboxv1alpha1.AgentSession) (bool, error) {
+	transitioned, _, err := r.reconcileExpiration(ctx, sess)
+	return transitioned, err
+}
+
 // SidecarPodFailureForTest exposes the unexported sidecarPodFailure classifier
 // to agentsession_test. Test-only.
 func SidecarPodFailureForTest(pod *corev1.Pod) *spiceboxv1alpha1.SidecarPodFailure {
 	return sidecarPodFailure(pod)
 }
+
+// SidecarPodReadyDeadlineFailureForTest exposes the unexported not-Ready
+// deadline classifier, and the deadline it measures against, to
+// agentsession_test. Test-only.
+func SidecarPodReadyDeadlineFailureForTest(pod *corev1.Pod, now time.Time) *spiceboxv1alpha1.SidecarPodFailure {
+	return sidecarPodReadyDeadlineFailure(pod, now, sidecarReadyDeadline)
+}
+
+// SidecarPodRestartingFailureForTest exposes the unexported between-restarts
+// crash-loop classifier. Test-only.
+func SidecarPodRestartingFailureForTest(pod *corev1.Pod) *spiceboxv1alpha1.SidecarPodFailure {
+	return sidecarPodRestartingFailure(pod)
+}
+
+// SidecarReadyDeadlineForForTest exposes the unexported per-pod deadline
+// selection (capacity hold vs. sidecarReadyDeadline). Test-only.
+func (r *Reconciler) SidecarReadyDeadlineForForTest(sess *spiceboxv1alpha1.AgentSession, pod *corev1.Pod) time.Duration {
+	return r.sidecarReadyDeadlineFor(sess, pod)
+}
+
+// SidecarReadyDeadlineForTest is sidecarReadyDeadline. Test-only.
+const SidecarReadyDeadlineForTest = sidecarReadyDeadline
 
 // EnsureDetectorPodForTest exposes the unexported ensureDetectorPod so
 // agentsession_test can assert the write ORDER (deny-all-egress policy before

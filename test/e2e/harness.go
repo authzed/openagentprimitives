@@ -1240,12 +1240,16 @@ func (h *Harness) startManager(t *testing.T, env *testenv.Env, spdbCli *spicedb.
 	}
 	t.Cleanup(h.runnerFactory.Shutdown)
 	if err := (&agentsessionctrl.Reconciler{
-		Client:          mgr.GetClient(),
-		APIReader:       mgr.GetAPIReader(),
-		SecretReader:    secretReader,
-		ConfigMapReader: configMapReader,
-		Tokens:          tokensReg,
-		Memory:          h.memStore,
+		Client: mgr.GetClient(),
+		// The operator answers a failed session's trigger through the same
+		// fixture provider the runner's trigger-status tools are pointed at
+		// (wireGitHubTransport sets it once FakeGitHub is up); "" until then.
+		TriggerStatusAPIBaseURL: func() string { return h.runnerFactory.TriggerStatusAPIBaseURL },
+		APIReader:               mgr.GetAPIReader(),
+		SecretReader:            secretReader,
+		ConfigMapReader:         configMapReader,
+		Tokens:                  tokensReg,
+		Memory:                  h.memStore,
 		// TokenGranter/TokenChecker: nil unless Options.WithTokenAuthz — see the
 		// var block above. Mirrors internal/cmd/operator/main.go's
 		// TokenGranter: spiceDBClient, TokenChecker: spiceDBClient wiring.
@@ -1522,7 +1526,11 @@ func (h *Harness) RestartOperator(t *testing.T) {
 	}
 
 	if err := (&agentsessionctrl.Reconciler{
-		Client:                     mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// The operator answers a failed session's trigger through the same
+		// fixture provider the runner's trigger-status tools are pointed at
+		// (wireGitHubTransport sets it once FakeGitHub is up); "" until then.
+		TriggerStatusAPIBaseURL:    func() string { return h.runnerFactory.TriggerStatusAPIBaseURL },
 		APIReader:                  mgr.GetAPIReader(),
 		SecretReader:               h.secretReader,
 		ConfigMapReader:            h.configMapReader,

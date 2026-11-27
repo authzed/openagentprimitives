@@ -222,6 +222,63 @@ type TriggerOwnerProvider interface {
 	TriggerOwnerSubject(ch *spiceboxv1alpha1.Channel, event string, body []byte) (subject string, ok bool, err error)
 }
 
+// TriggerOwnerTrustProvider is an OPTIONAL WebhookReceiver capability beside
+// TriggerOwnerProvider — discovered the same way, with the same (ch, event,
+// body) shape — that reports whether the provider vouches for the trigger
+// owner's relationship to the resource the trigger fired on (github: a pull
+// request author_association of MEMBER, OWNER or COLLABORATOR). The answer
+// lands on the session as spiceboxv1alpha1.AnnotationTriggerOwnerTrusted.
+//
+// Implementations MUST derive it only from provider-STRUCTURAL fields of a
+// verified delivery, and MUST answer false for a missing or unrecognized
+// value. A receiver that names an owner but does not implement this interface
+// leaves its sessions untrusted: consumers read the annotation fail-closed.
+type TriggerOwnerTrustProvider interface {
+	TriggerOwnerTrusted(ch *spiceboxv1alpha1.Channel, event string, body []byte) (bool, error)
+}
+
+// TriggerOwnerAnnotations derives the pre-turn annotations that name a
+// verified delivery's trigger owner — AnnotationTriggerOwnerSubject and, beside
+// it, AnnotationTriggerOwnerTrusted — through recv's optional
+// TriggerOwnerProvider / TriggerOwnerTrustProvider capabilities. It is the one
+// derivation every webhook inbound consumer shares, so the owner and the trust
+// bit can never be stamped by one consumer and forgotten by another.
+//
+// Returns nil when recv names no owner for this delivery. The trust bit is
+// written only alongside an owner, and is "false" unless the receiver
+// affirmatively vouches. A non-nil error is the caller's to log; the map
+// returned with it is still safe to stamp (an owner-derivation error yields
+// nil; a trust-derivation error yields the owner marked untrusted).
+func TriggerOwnerAnnotations(recv WebhookReceiver, ch *spiceboxv1alpha1.Channel, event string, body []byte) (map[string]string, error) {
+	op, ok := recv.(TriggerOwnerProvider)
+	if !ok {
+		return nil, nil
+	}
+	subject, has, err := op.TriggerOwnerSubject(ch, event, body)
+	if err != nil {
+		return nil, fmt.Errorf("derive trigger owner: %w", err)
+	}
+	if !has {
+		return nil, nil
+	}
+	out := map[string]string{
+		spiceboxv1alpha1.AnnotationTriggerOwnerSubject: subject,
+		spiceboxv1alpha1.AnnotationTriggerOwnerTrusted: spiceboxv1alpha1.AnnotationTriggerOwnerTrustedFalse,
+	}
+	tp, ok := recv.(TriggerOwnerTrustProvider)
+	if !ok {
+		return out, nil
+	}
+	trusted, err := tp.TriggerOwnerTrusted(ch, event, body)
+	if err != nil {
+		return out, fmt.Errorf("derive trigger owner trust: %w", err)
+	}
+	if trusted {
+		out[spiceboxv1alpha1.AnnotationTriggerOwnerTrusted] = spiceboxv1alpha1.AnnotationTriggerOwnerTrustedTrue
+	}
+	return out, nil
+}
+
 // TriggerOriginURLProvider is an OPTIONAL WebhookReceiver capability — the same
 // type-assertion shape as TriggerOwnerProvider — that derives a human-facing
 // origin URL from a VERIFIED delivery (a pull request's html_url), so the

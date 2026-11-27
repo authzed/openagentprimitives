@@ -13,7 +13,7 @@ import (
 )
 
 // TestLookupUserByNameNearMiss covers the third pass of the name path:
-// when neither exact pass (display_name, real_name) matches, the lookup
+// when the exact pass (display_name or real_name) matches nobody, the lookup
 // returns a MentionNearMissError carrying ranked candidates — users whose
 // surname (last token) matches, or whose full name is within edit
 // distance — for the agent to judge. Each candidate carries its

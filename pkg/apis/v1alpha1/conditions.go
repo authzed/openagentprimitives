@@ -236,6 +236,7 @@ const (
 	FinalizerPublicEndpoint   = "publicendpoint.agentprimitives.authzed.com/finalizer"
 	FinalizerUserIdentity     = "useridentity.agentprimitives.authzed.com/finalizer"
 	FinalizerWorkshop         = "workshop.agentprimitives.authzed.com/finalizer"
+	FinalizerAccessToken      = "accesstoken.agentprimitives.authzed.com/finalizer"
 	// FinalizerSubagentRequest is added ONLY to an `attended`-mode
 	// SubagentRequest, giving the controller a chance to notify a live
 	// attended child's watching parent (a fixed inbound line + a forced wake)
@@ -989,6 +990,34 @@ const (
 	ReasonAgentSessionStorageReclaimed    = "RetentionElapsed"
 )
 
+// AgentSessionConditionTriggerAnswered records that the operator has settled
+// what a Failed session owes the event that started it (a pull request's check
+// run, say), so the failed-trigger backstop asks the provider once rather than
+// on every reconcile of a dead session. Set once, True, by the operator only;
+// its reason says how it was settled. Present only on sessions whose input
+// kind reports a trigger status at all.
+const (
+	AgentSessionConditionTriggerAnswered = "TriggerAnswered"
+	// ReasonTriggerAnswered: the trigger now reads could_not_finish.
+	ReasonTriggerAnswered = "Answered"
+	// ReasonTriggerAlreadyAnswered: the trigger already carried an answer
+	// (the agent's verdict, or an earlier operator answer), which was kept.
+	ReasonTriggerAlreadyAnswered = "AlreadyAnswered"
+	// ReasonTriggerNotOwed: nothing is owed — the kind reports no trigger for
+	// this binding, the failure is one that deliberately publishes nothing
+	// (lifetime expiry of an Idle session), or a continuation took it over.
+	ReasonTriggerNotOwed = "NotOwed"
+	// ReasonTriggerAnswerWindowElapsed: the session failed too long ago to
+	// answer safely (the pull request may have moved on), or every attempt in
+	// the window failed. Nothing was written to the trigger.
+	ReasonTriggerAnswerWindowElapsed = "AnswerWindowElapsed"
+	// ReasonTriggerUnanswerable: the trigger could not be addressed at all —
+	// the session's input Channel or its credentials Secret is gone or
+	// unusable — so retrying could not help. Nothing was written to the
+	// trigger; the condition message names what was missing.
+	ReasonTriggerUnanswerable = "Unanswerable"
+)
+
 // Reasons for the AgentSession.Idle condition's per-cause subdivision.
 const (
 	ReasonAgentSessionAgentWorkComplete = "AgentWorkComplete" // agent_work_complete tool was called
@@ -1512,6 +1541,18 @@ const AnnotationForkedFromThread = "agentprimitives.authzed.com/forked-from-thre
 // person's own message, and on a trigger whose kind cannot describe itself.
 const AnnotationSessionOpening = "agentprimitives.authzed.com/session-opening"
 
+// AnnotationStarterMention carries the channel-native mention token of the
+// person whose message created this session (Slack's "<@U…>"), minted by the
+// listener that received it.
+//
+// Every LATER message carries its sender's token on its own memory turn, but
+// the first one becomes spec.prompt and is placed as turn 0 by the runner, so
+// its token has to ride on the object instead. Stamped on the Create by the
+// channelsd pipeline — the runner is spawned off the object's existence, so a
+// later patch could lose the race to turn 0. Absent when the kind supplied no
+// token.
+const AnnotationStarterMention = "agentprimitives.authzed.com/starter-mention"
+
 // AnnotationSessionOpeningSent marks that the AnnotationSessionOpening line has
 // already been posted, independently of the text itself (which is retained,
 // not cleared, for the pinned-status renderer).
@@ -1551,6 +1592,30 @@ const AnnotationSessionOpeningMessageID = "agentprimitives.authzed.com/session-o
 // session links the composed schema actually admits, fail-closed: a value
 // naming any other type is logged and not written.
 const AnnotationTriggerOwnerSubject = "agentprimitives.authzed.com/trigger-owner-subject"
+
+// AnnotationTriggerOwnerTrusted records whether the provider vouched that the
+// trigger owner named by AnnotationTriggerOwnerSubject stands in a trusted
+// relationship to the resource the trigger fired on — for a GitHub pull
+// request, an author_association of MEMBER, OWNER or COLLABORATOR. Value is
+// AnnotationTriggerOwnerTrustedTrue or AnnotationTriggerOwnerTrustedFalse.
+//
+// Written alongside the owner subject by channelsd from the same VERIFIED
+// delivery (the kind's TriggerOwnerTrustProvider), never from submitter text.
+// Read fail-closed: a session with a trigger owner and anything other than
+// "true" here is a session an untrusted party opened. Today it gates "name:"
+// user references (pkg/platform/identity/subjectresolve), whose input is text
+// the trigger owner chose: they are honored only with an owner AND "true"
+// here, so a session with no trigger owner at all (one a person started in
+// conversation) refuses them too.
+const AnnotationTriggerOwnerTrusted = "agentprimitives.authzed.com/trigger-owner-trusted"
+
+// Values of AnnotationTriggerOwnerTrusted. Both are non-empty so a later
+// delivery's stamp overwrites an earlier one (pre-turn stamping skips empty
+// values).
+const (
+	AnnotationTriggerOwnerTrustedTrue  = "true"
+	AnnotationTriggerOwnerTrustedFalse = "false"
+)
 
 // PassthroughLinkSigningKeySecret names the Secret in the system
 // namespace whose "key" data holds the HMAC signing key for

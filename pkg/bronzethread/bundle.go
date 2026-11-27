@@ -65,6 +65,17 @@ type Bundle struct {
 	// recursion into one) has to state the durable edge directly.
 	SeedRelationships []SeedRelationship `json:"seedRelationships,omitempty"`
 
+	// SeedUserIdentities pre-seeds platform users a channel has already seen,
+	// before the run starts: a UserIdentity for each email's canonical subject
+	// carrying one channel identity with that email VOUCHED and the given full
+	// name — the record channelsd writes when a full member of a chat
+	// workspace messages an agent.
+	//
+	// For the directory a "name:" user reference matches against, which a
+	// triggered bundle has no other way to populate: nobody in the run talks
+	// through a chat channel before the trigger fires.
+	SeedUserIdentities []SeedUserIdentity `json:"seedUserIdentities,omitempty"`
+
 	// ExtraManifests are per-scenario overrides. NOTE these REPLACE the object
 	// rather than patching it, so an override must restate the whole spec — a
 	// partial one silently drops required fields and the class fails Valid.
@@ -381,6 +392,14 @@ func (b Bundle) validateSeeds() error {
 		}
 		if len(s.Value) == 0 {
 			return fmt.Errorf("seedUserPreferences[%d] has no value", i)
+		}
+	}
+	for i, u := range b.SeedUserIdentities {
+		if u.Email == "" {
+			return fmt.Errorf("seedUserIdentities[%d] has no email", i)
+		}
+		if u.RealName == "" {
+			return fmt.Errorf("seedUserIdentities[%d] has no realName", i)
 		}
 	}
 	for i, r := range b.SeedRelationships {
@@ -977,6 +996,17 @@ type SeedUserPreference struct {
 	// Value is the saved value, matching the key's declared type — the same
 	// shape set_preference's own `value` argument takes.
 	Value json.RawMessage `json:"value"`
+}
+
+// SeedUserIdentity is one platform user recorded before the run — see
+// Bundle.SeedUserIdentities.
+type SeedUserIdentity struct {
+	// Email is the address the channel vouched for; the UserIdentity's
+	// subject is its canonical id, the same one a SeedUserPreference naming
+	// "email:<address>" lands on.
+	Email string `json:"email"`
+	// RealName is the full name the channel recorded for the person.
+	RealName string `json:"realName"`
 }
 
 // SeedRelationship is one SpiceDB relationship written before the run

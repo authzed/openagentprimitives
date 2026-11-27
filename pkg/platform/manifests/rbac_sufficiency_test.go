@@ -350,6 +350,16 @@ func operatorComponent() component {
 
 	required := reqs(apGroup, map[string][]string{
 		"agentsessions": {"get", "list", "watch", "create", "update", "patch", "delete"},
+		// AccessToken reconciler (pkg/controllers/accesstoken): get is
+		// LoadInto's per-reconcile read, list;watch back the For informer —
+		// and admind's tokens list (pkg/web/admind/tokens.go), hosted in this
+		// same operator binary — update is EnsureFinalizer/RemoveFinalizer's
+		// plain metadata writes, delete is the expiry self-delete plus
+		// admind's authorized revoke. No create (minting is webd's
+		// pkg/web/mcpfront.Minter) and no main-resource patch (the only patch
+		// targets accesstokens/status; see the sufficiency row below) —
+		// minimized out of the marker, so minimality guards both trims.
+		"accesstokens": {"get", "list", "watch", "update", "delete"},
 		// agentclasses/agentidentities/channels/mcpservers/sidecartoolboxes/
 		// spicebox{classes,toolkits,toolspecs} carry create+patch beyond the
 		// reconcilers' own get;list;watch(;update;patch) needs — admind's
@@ -493,6 +503,11 @@ func operatorComponent() component {
 	// subagentrequests above: "update", not "patch".
 	required = append(required, req{
 		group: apGroup, resource: "relationshipsources", subresource: "status", verb: "update"})
+	// AccessToken reconciler writes Ready/observedGeneration via
+	// Status().Patch (MergeFrom) — sufficiency-only, like every other status
+	// row here (grantedKeys skips */status for minimality).
+	required = append(required, req{
+		group: apGroup, resource: "accesstokens", subresource: "status", verb: "patch"})
 	required = append(required, reqs("", map[string][]string{
 		"secrets": {"get", "list", "watch", "create", "update", "patch"},
 		// patch: admind's oap-install endpoint SSA-applies a bundle-created
@@ -711,6 +726,11 @@ func operatorComponent() component {
 			{group: rbacv1.GroupName, resource: "clusterrolebindings", verb: "get"},
 			g("spiceboxclasses", "update"),
 			g("agentsessiongrants", "delete"),
+			// AccessToken minting is webd's alone (pkg/web/mcpfront.Minter);
+			// the operator only reconciles/expires/revokes. create re-appearing
+			// on the operator role would let the cleanup half mint
+			// authentication records, inverting the mint-vs-finalize split.
+			g("accesstokens", "create"),
 			core("configmaps", "deletecollection"),
 			// WorkspaceSource least-privilege: the reconciler never deletes a
 			// WorkspaceSource (author-owned). Guard the trim so a re-broadened
@@ -824,6 +844,20 @@ func webdComponent() component {
 			{resource: "secrets", verb: "delete", namespace: "agentprimitives-system"},
 			g("sessionuseridentities", "get"),
 			{group: apGroup, resource: "sessionuseridentities", subresource: "status", verb: "update"},
+			// The OAuth-minted /mcp surface (pkg/web/mcpfront): create is
+			// /oauth/token's mint (Minter.MintAccessToken creates the
+			// AccessToken CR), list is the bearer middleware's hash-lookup
+			// relist (tokenCache.relist), get is touchLastUsed's
+			// read-before-status-patch. No watch — webd's client is direct
+			// (client.New, uncached; no informer) — and no delete: revocation
+			// is admind's authorized route in the OPERATOR binary plus the
+			// AccessToken finalizer, never the browser-facing pod (pinned
+			// denied in forbidden below).
+			g("accesstokens", "create"), g("accesstokens", "get"), g("accesstokens", "list"),
+			// touchLastUsed records status.lastUsedAt via a MergeFrom status
+			// patch — sufficiency-only, like every status row (grantedKeys
+			// skips */status for minimality).
+			{group: apGroup, resource: "accesstokens", subresource: "status", verb: "patch"},
 			g("mcpservers", "get"), g("mcpservers", "list"),
 			g("clusteridentityproviders", "get"),
 			// list: webd reads AgentClasses cluster-wide (agent picker / icon
@@ -911,6 +945,12 @@ func webdComponent() component {
 			// A tenant namespace no webd Role covers is the discriminator.
 			{resource: "secrets", verb: "get", namespace: "some-tenant-namespace"},
 			{resource: "secrets", verb: "update", namespace: "some-tenant-namespace"},
+			// A browser-facing pod must never destroy token records:
+			// revocation flows through admind (operator binary, authorized
+			// per request) and the AccessToken finalizer. delete appearing on
+			// webd's role would let a webd compromise erase the audit-visible
+			// authentication record for a still-granted SpiceDB tuple set.
+			g("accesstokens", "delete"),
 		},
 	}
 }

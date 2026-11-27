@@ -2,7 +2,7 @@ export const meta = {
   title: 'AgentSession',
   section: 'Reference',
   group: 'CRD reference',
-  order: 3030,
+  order: 3040,
   description: 'AgentSession is one running instance of an AgentClass: a conversation with its own runner Pod, budget, channel bindings and lifecycle phase.',
 }
 
@@ -276,6 +276,7 @@ Status is controller-owned (observed state).
 | `status.effectiveSettings.toolGuard.namespace.rules[].rateLimit.maxCalls` | `integer (int32)` | MaxCalls caps calls in the sliding Window; both must be set together. _(min 1)_ |
 | `status.effectiveSettings.toolGuard.namespace.rules[].rateLimit.maxCallsPerTurn` | `integer (int32)` | MaxCallsPerTurn caps calls within a single agent turn; 0 is unlimited. _(min 1)_ |
 | `status.effectiveSettings.toolGuard.namespace.rules[].rateLimit.window` | `string` | Window is the sliding-window span for MaxCalls; both must be set together. |
+| `status.enforcedMaxDuration` | `string` | EnforcedMaxDuration is the budget.maxDuration the CURRENT runner pod is enforcing, written alongside runDuration. The runner reads its budget from status.effectiveSettings once at pod start, while the operator re-resolves effectiveSettings every reconcile, so the two diverge after a class or session budget edit. The operator's run-duration backstop compares runDuration against THIS value, the cap the runner actually holds, so a lowered class cap cannot fail a healthy session mid-run. Absent when the runner enforces no maxDuration. |
 | `status.estimatedCost` | `object` | EstimatedCost is the best-effort end-of-session USD cost estimate. Runner-owned; written at SessionEnd when reportSessionCost is on. |
 | `status.estimatedCost.amountMicroUSD` | `integer (int64)` | AmountMicroUSD is the SESSION total in micro-USD (1e-6 USD), accumulated across every pod that served the session: the sum of PerPod amounts. When PricingKnown is false, at least one served MODEL (in some pod) had no rate, so this is a LOWER BOUND on spend (the components that could be priced), not the full session cost — it is no longer necessarily 0, because provider-reported tool cost is always priced. |
 | `status.estimatedCost.asOf` | `string (date-time)` | AsOf is when the estimate was computed. |
@@ -401,7 +402,7 @@ Status is controller-owned (observed state).
 | `status.resolvedSidecarToolboxes[].podFailure` | `object` | PodFailure records a TERMINAL container state on a separate sidecar pod (CrashLoopBackOff, ImagePullBackOff) — one the pod will not recover from on its own. Nil while the pod is healthy or still starting; cleared once it goes Ready. OPERATOR-owned, deliberately separate from the runner-owned SidecarReachability: reachability answers "the runner probed a running server and it did/didn't answer", PodFailure answers "the pod never got far enough to be probed." A crash-looping sidecar never receives a PodIP, so the prober never runs and reachability would stay silently empty — exactly the silent degradation this field exists to end. |
 | `status.resolvedSidecarToolboxes[].podFailure.exitCode` | `integer (int32)` | ExitCode is the container's last terminated exit code. Nil when the container never ran (e.g. the image could not be pulled). |
 | `status.resolvedSidecarToolboxes[].podFailure.message` | `string` | Message is the most actionable text available: the container's last terminated message when present — the crashing container's log tail, thanks to the pod's FallbackToLogsOnError policy — otherwise the kubelet's waiting message. Preferring the log tail is what makes the field worth surfacing; the waiting message alone is content-free for a crash loop ("back-off Ns restarting failed container=…"). |
-| `status.resolvedSidecarToolboxes[].podFailure.reason` \* | `string` | Reason is the kubelet's terminal container Waiting reason, e.g. "CrashLoopBackOff" or "ImagePullBackOff". |
+| `status.resolvedSidecarToolboxes[].podFailure.reason` \* | `string` | Reason is the kubelet's terminal container Waiting reason, e.g. "CrashLoopBackOff" or "ImagePullBackOff", or "NotReadyDeadlineExceeded" for a pod that stayed not-Ready past the operator's deadline without one. |
 | `status.resolvedSidecarToolboxes[].port` \* | `integer (int32)` | Port is the runner-side loopback port (operator-allocated). Reachable at 127.0.0.1:&lt;Port&gt;. |
 | `status.resolvedSidecarToolboxes[].ref` \* | `string` | Ref is the SidecarToolbox CR name (the `ref` field from AgentClassSidecarToolboxRef). |
 | `status.resolvedSidecarToolboxes[].runMode` | `string` | RunMode is "in-pod" (default, container in the agent pod) or "separate-pod" (secret-gated: its own per-session pod). |

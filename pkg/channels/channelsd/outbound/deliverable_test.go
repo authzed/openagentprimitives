@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
@@ -274,4 +275,60 @@ func TestNoteDeliveryOutcome_ConcurrentOutcomesLeaveMemoMatchingLiveCondition(t 
 	r.delivMu.Unlock()
 	assert.Equal(t, live.Status == metav1.ConditionTrue, memo.ok,
 		"the memo agrees with the live condition, so the next differing outcome is still written")
+}
+
+// TestRelay_DeliverableWrite_StaleReadKeepsOtherWritersCondition: channelsd
+// serves the relay's Channel reads from an informer cache, so the copy the
+// Deliverable write starts from can predate another writer's condition. A merge
+// patch replaces status.conditions whole; computed from that stale copy it
+// would erase the other condition. The write must instead notice it is stale,
+// re-read, and land with both conditions intact.
+func TestRelay_DeliverableWrite_StaleReadKeepsOtherWritersCondition(t *testing.T) {
+	ctx := context.Background()
+	key := client.ObjectKey{Namespace: "default", Name: "c1"}
+	api := fakeClientWithChannelStatus(t, deliverableChannel())
+
+	// What a lagging cache still holds: the Channel before the listener
+	// recorded ScopesValid.
+	var stale spiceboxv1alpha1.Channel
+	require.NoError(t, api.Get(ctx, key, &stale), "snapshot the Channel before the other writer")
+
+	var cur spiceboxv1alpha1.Channel
+	require.NoError(t, api.Get(ctx, key, &cur))
+	base := cur.DeepCopy()
+	cur.Status.Conditions = append(cur.Status.Conditions, metav1.Condition{
+		Type:               spiceboxv1alpha1.ChannelConditionScopesValid,
+		Status:             metav1.ConditionFalse,
+		Reason:             spiceboxv1alpha1.ReasonChannelMissingScopes,
+		LastTransitionTime: metav1.Now(),
+	})
+	require.NoError(t, api.Status().Patch(ctx, &cur, client.MergeFrom(base)), "the other writer's condition")
+
+	// The first read is served stale; a conflict sends later ones to the API
+	// server, as the relay client's write tracking does.
+	staleReads := 1
+	cli := interceptor.NewClient(api.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, k client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if ch, ok := obj.(*spiceboxv1alpha1.Channel); ok && staleReads > 0 {
+				staleReads--
+				stale.DeepCopyInto(ch)
+				return nil
+			}
+			return c.Get(ctx, k, obj, opts...)
+		},
+	})
+
+	r := &Relay{K8s: cli, RecordDeliverability: true}
+	r.noteDeliveryOutcome(ctx, "default", &spiceboxv1alpha1.ChannelBinding{Name: "c1"}, errSendFailed)
+
+	var got spiceboxv1alpha1.Channel
+	require.NoError(t, api.Get(ctx, key, &got), "Get Channel after the Deliverable write")
+	types := make([]string, 0, len(got.Status.Conditions))
+	for _, c := range got.Status.Conditions {
+		types = append(types, c.Type)
+	}
+	assert.ElementsMatch(t,
+		[]string{spiceboxv1alpha1.ChannelConditionScopesValid, spiceboxv1alpha1.ChannelConditionDeliverable}, types,
+		"the Deliverable write must add its condition without erasing the one written after its stale read")
+	assert.Zero(t, staleReads, "the stale read was actually served, so the conflict path ran")
 }

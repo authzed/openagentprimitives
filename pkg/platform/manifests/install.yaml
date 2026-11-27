@@ -42,6 +42,196 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
+  name: accesstokens.agentprimitives.authzed.com
+spec:
+  group: agentprimitives.authzed.com
+  names:
+    categories:
+    - authzed
+    - spicebox
+    kind: AccessToken
+    listKind: AccessTokenList
+    plural: accesstokens
+    shortNames:
+    - atok
+    singular: accesstoken
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.owner
+      name: Owner
+      type: string
+    - jsonPath: .spec.clientName
+      name: Client
+      type: string
+    - jsonPath: .spec.expiresAt
+      name: Expires
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AccessToken is the AUTHENTICATION record for one inbound delegated
+          credential minted at OAuth consent: hash → token identity, plus display
+          metadata and expiry. It deliberately carries NO role and NO scope — the
+          authorization truth lives entirely in SpiceDB on accesstoken:<name>
+          (see pkg/authz/spicedb/schema/schema.zed). Deleting this object is
+          revocation: the finalizer removes the SpiceDB tuples.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AccessTokenSpec is written once, by the mint path, and never changes:
+              every field is immutable. tokenHash and owner are the credential's
+              identity. expiresAt is mirrored by the SpiceDB tuples' expiration trait at
+              mint, so an edit would only make the two disagree — extending it keeps the
+              bearer authenticating after its grant is gone, shortening it has the
+              controller delete the token early. clientName and clientID are the record
+              of who the token was issued to, shown to the admin deciding whether to
+              revoke it. To change any of them, revoke the token and mint another.
+            properties:
+              clientID:
+                description: ClientID is the OAuth client the token was issued to.
+                type: string
+              clientName:
+                description: ClientName is the DCR-supplied display name, sanitized
+                  at mint.
+                type: string
+              expiresAt:
+                description: |-
+                  ExpiresAt is when the token stops authenticating. The SpiceDB tuples
+                  carry the same instant via the expiration trait; this copy gates the
+                  authentication (hash-lookup) step without a SpiceDB round trip.
+                format: date-time
+                type: string
+              owner:
+                description: Owner is the canonical user id the token acts as.
+                minLength: 1
+                type: string
+              tokenHash:
+                description: |-
+                  TokenHash is hex(sha256(bearer value)). The value itself is never
+                  stored server-side.
+                pattern: ^[0-9a-f]{64}$
+                type: string
+            required:
+            - expiresAt
+            - owner
+            - tokenHash
+            type: object
+            x-kubernetes-validations:
+            - message: tokenHash is immutable
+              rule: self.tokenHash == oldSelf.tokenHash
+            - message: owner is immutable
+              rule: self.owner == oldSelf.owner
+            - message: expiresAt is immutable
+              rule: self.expiresAt == oldSelf.expiresAt
+            - message: 'clientName is immutable: it cannot be added, removed or changed
+                after create'
+              rule: has(self.clientName) == has(oldSelf.clientName) && (!has(self.clientName)
+                || self.clientName == oldSelf.clientName)
+            - message: 'clientID is immutable: it cannot be added, removed or changed
+                after create'
+              rule: has(self.clientID) == has(oldSelf.clientID) && (!has(self.clientID)
+                || self.clientID == oldSelf.clientID)
+          status:
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastUsedAt:
+                description: |-
+                  LastUsedAt is observation, controller-owned, updated on meaningful
+                  change only (not every request).
+                format: date-time
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
   name: agentclasses.agentprimitives.authzed.com
 spec:
   group: agentprimitives.authzed.com
@@ -6685,6 +6875,17 @@ spec:
                 - reportSessionCost
                 - requireSubagentDigestPins
                 type: object
+              enforcedMaxDuration:
+                description: |-
+                  EnforcedMaxDuration is the budget.maxDuration the CURRENT runner pod is
+                  enforcing, written alongside runDuration. The runner reads its budget
+                  from status.effectiveSettings once at pod start, while the operator
+                  re-resolves effectiveSettings every reconcile, so the two diverge after a
+                  class or session budget edit. The operator's run-duration backstop
+                  compares runDuration against THIS value, the cap the runner actually
+                  holds, so a lowered class cap cannot fail a healthy session mid-run.
+                  Absent when the runner enforces no maxDuration.
+                type: string
               estimatedCost:
                 description: |-
                   EstimatedCost is the best-effort end-of-session USD cost estimate.
@@ -7629,7 +7830,8 @@ spec:
                         reason:
                           description: |-
                             Reason is the kubelet's terminal container Waiting reason, e.g.
-                            "CrashLoopBackOff" or "ImagePullBackOff".
+                            "CrashLoopBackOff" or "ImagePullBackOff", or "NotReadyDeadlineExceeded"
+                            for a pod that stayed not-Ready past the operator's deadline without one.
                           type: string
                       required:
                       - reason
@@ -24463,6 +24665,12 @@ spec:
                     kind:
                       description: Kind is the channel kind, e.g. "slack".
                       type: string
+                    realName:
+                      description: |-
+                        RealName is the user's full name as the channel records it (Slack's
+                        profile.real_name), when known. DisplayName is often a handle
+                        ("jdoe"); this is what a "name:" user reference matches against.
+                      type: string
                   required:
                   - domain
                   - externalID
@@ -26001,32 +26209,34 @@ rules:
 - apiGroups:
   - agentprimitives.authzed.com
   resources:
-  - agentclasses
-  - agentidentities
-  - agentsessions
-  - agentuis
-  - channels
-  - clusterskills
-  - mcpservers
-  - sidecartoolboxes
-  - skills
-  - spiceboxsessions
-  - spiceboxtoolkits
-  - spiceboxtoolspecs
-  - subagentrequests
-  - toolcalls
-  - workshops
+  - accesstokens
   verbs:
-  - create
   - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
   - agentprimitives.authzed.com
   resources:
+  - accesstokens/finalizers
+  - agentsessions/finalizers
+  - artifactrenders/finalizers
+  - credentialupdaterequests/finalizers
+  - publicendpoints/finalizers
+  - sidecartoolboxes/finalizers
+  - spiceboxsessions/finalizers
+  - spicedbbootstraps/finalizers
+  - toolcalls/finalizers
+  - useridentities/finalizers
+  - workshops/finalizers
+  - workspacesources/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - accesstokens/status
   - agentclasses/status
   - agentidentities/status
   - agentsessiongrants/status
@@ -26067,6 +26277,32 @@ rules:
 - apiGroups:
   - agentprimitives.authzed.com
   resources:
+  - agentclasses
+  - agentidentities
+  - agentsessions
+  - agentuis
+  - channels
+  - clusterskills
+  - mcpservers
+  - sidecartoolboxes
+  - skills
+  - spiceboxsessions
+  - spiceboxtoolkits
+  - spiceboxtoolspecs
+  - subagentrequests
+  - toolcalls
+  - workshops
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
   - agentsessiongrants
   verbs:
   - create
@@ -26074,22 +26310,6 @@ rules:
   - list
   - update
   - watch
-- apiGroups:
-  - agentprimitives.authzed.com
-  resources:
-  - agentsessions/finalizers
-  - artifactrenders/finalizers
-  - credentialupdaterequests/finalizers
-  - publicendpoints/finalizers
-  - sidecartoolboxes/finalizers
-  - spiceboxsessions/finalizers
-  - spicedbbootstraps/finalizers
-  - toolcalls/finalizers
-  - useridentities/finalizers
-  - workshops/finalizers
-  - workspacesources/finalizers
-  verbs:
-  - update
 - apiGroups:
   - agentprimitives.authzed.com
   resources:
@@ -26396,6 +26616,21 @@ rules:
   - agentidentities
   verbs:
   - get
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - accesstokens
+  verbs:
+  - create
+  - get
+  - list
+- apiGroups:
+  - agentprimitives.authzed.com
+  resources:
+  - accesstokens/status
+  verbs:
+  - update
+  - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

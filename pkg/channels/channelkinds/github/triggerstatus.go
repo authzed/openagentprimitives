@@ -238,6 +238,15 @@ func (s *checkRunSurface) Defer(ctx context.Context, title, summary string) erro
 // a missed claim harmless (the verdict still lands) and what lets a caller with
 // no agent at all — an operator closing out a session that died — write an
 // answer for a pull request nothing ever claimed.
+//
+// It overwrites a completed run in place, with one exception: could_not_finish
+// never replaces a completed run whose conclusion blocks a required check
+// (blocksRequiredCheck). That write would turn a blocking result `neutral`,
+// which passes a required check, over problems nobody re-examined — the same
+// hole Defer closes by staying queued. Nothing is written and the refusal names
+// the result that stands. The exception is about the run being overwritten and
+// nothing wider: a new push has a new head and so a different run, where
+// could_not_finish lands as it always did.
 func (s *checkRunSurface) Conclude(ctx context.Context, c channelkinds.TriggerConclusion) error {
 	conclusion, err := conclusionFor(c.Outcome)
 	if err != nil {
@@ -253,6 +262,16 @@ func (s *checkRunSurface) Conclude(ctx context.Context, c channelkinds.TriggerCo
 	token, sha, existing, err := s.locate(ctx)
 	if err != nil {
 		return err
+	}
+	if c.Outcome == channelkinds.TriggerOutcomeCouldNotFinish && existing != nil && existing.Completed() &&
+		blocksRequiredCheck(existing.Conclusion) {
+		kept := &channelkinds.TriggerAnswerKeptError{Kept: outcomeFromConclusion(existing.Conclusion)}
+		// A blocking conclusion this kind does not write reads back as
+		// could_not_finish, which alone would not say why it was protected.
+		if kept.Kept != channelkinds.TriggerOutcomeProblemsFound {
+			kept.Detail = fmt.Sprintf("a blocking `%s` conclusion", existing.Conclusion)
+		}
+		return fmt.Errorf("github: check run on %s#%d not changed: %w", s.repo, s.number, kept)
 	}
 	write := checkruns.Write{
 		Status:      "completed",
@@ -415,6 +434,22 @@ func outcomeFromConclusion(conclusion string) channelkinds.TriggerOutcome {
 		return channelkinds.TriggerOutcomeProblemsFound
 	default:
 		return channelkinds.TriggerOutcomeCouldNotFinish
+	}
+}
+
+// blocksRequiredCheck reports whether a completed check run with this
+// conclusion holds a required status check closed. GitHub lets a required
+// check pass on `success`, `neutral` and `skipped` and on nothing else, so
+// everything else blocks — including conclusions this kind never writes: a
+// `failure` from an older build, a `timed_out`, a run a maintainer cancelled.
+// Listing the passing ones is the fail-closed direction: a conclusion GitHub
+// adds later is treated as blocking until someone decides otherwise.
+func blocksRequiredCheck(conclusion string) bool {
+	switch conclusion {
+	case "success", "neutral", "skipped":
+		return false
+	default:
+		return true
 	}
 }
 

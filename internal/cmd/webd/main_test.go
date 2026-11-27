@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz/spicedb"
@@ -576,7 +578,9 @@ func TestBuildArtifactViewDepsFailsClosed(t *testing.T) {
 		func() string { return "https://sandbox.example.com" },
 		logr.Logger{}, // zero-value: nil-sink no-op; tests need not configure a real logger
 		"", "",        // admindURL, admindToken: unconfigured; adminui plugin fails closed
-		[]string{"default"}, // startNamespaces: the flag's own default
+		[]string{"default"},      // startNamespaces: the flag's own default
+		"agentprimitives-system", // accessTokenNamespace: unused on this fail-closed path
+		2160*time.Hour,           // accessTokenLifetime: unused on this fail-closed path
 	)
 	assert.Nil(t, av, "viewer must fail closed when SpiceDB is unconfigured")
 }
@@ -1393,4 +1397,55 @@ func TestRegisteredPageAppsResolveInBuiltManifest(t *testing.T) {
 	// UI fail closed — exactly how the pkg/web/webui version of it became vacuous.
 	require.NotEmpty(t, seen, "no Page route resolved at all; the deps fixture above no longer satisfies any UI")
 	t.Logf("checked %d page apps: %v", len(seen), seen)
+}
+
+// TestConsentClassLookupsGetEachClassOnce pins ConsentClasses' apiserver cost:
+// one Get per interactable session plus one per DISTINCT class — never a class
+// Get per session — and a deterministic, sorted, display-named result in
+// which an unreadable session or class degrades rather than failing.
+func TestConsentClassLookupsGetEachClassOnce(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, spiceboxv1alpha1.AddToScheme(scheme))
+	session := func(name, class string) *spiceboxv1alpha1.AgentSession {
+		return &spiceboxv1alpha1.AgentSession{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "demo-ns", Name: name},
+			Spec:       spiceboxv1alpha1.AgentSessionSpec{Class: class},
+		}
+	}
+	classA := &spiceboxv1alpha1.AgentClass{ObjectMeta: metav1.ObjectMeta{Namespace: "demo-ns", Name: "class-a"}}
+	classA.Spec.DisplayName = "Class A"
+
+	var sessionGets, classGets atomic.Int32
+	k := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(session("s1", "class-a"), session("s2", "class-a"), session("s3", "class-b"), classA).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				switch obj.(type) {
+				case *spiceboxv1alpha1.AgentSession:
+					sessionGets.Add(1)
+				case *spiceboxv1alpha1.AgentClass:
+					classGets.Add(1)
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+
+	refs := []spicedb.SessionRef{
+		{Namespace: "demo-ns", Name: "s1"},
+		{Namespace: "demo-ns", Name: "s2"},
+		{Namespace: "demo-ns", Name: "s3"},
+		{Namespace: "demo-ns", Name: "gone"},
+	}
+	ids := sessionClassIDs(context.Background(), k, refs, logr.Discard())
+	assert.Equal(t, map[string]struct{}{"demo-ns/class-a": {}, "demo-ns/class-b": {}}, ids,
+		"distinct classes only; an unreadable session is skipped")
+
+	got := consentClassesFor(context.Background(), k, []string{"demo-ns/class-a", "demo-ns/class-b"}, logr.Discard())
+	assert.Equal(t, []identityd.ConsentClass{
+		{ID: "demo-ns/class-a", DisplayName: "Class A"},
+		{ID: "demo-ns/class-b", DisplayName: "class-b"},
+	}, got, "sorted input order kept; an unreadable class falls back to its name")
+
+	assert.Equal(t, int32(len(refs)), sessionGets.Load(), "one Get per session")
+	assert.Equal(t, int32(2), classGets.Load(), "one Get per distinct class, not per session")
 }

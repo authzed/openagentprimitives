@@ -12,6 +12,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,6 +56,13 @@ type operatorTriggerKind struct {
 	// claims and published are what the reconciler actually did to the surface.
 	claims    int
 	published []channelkinds.TriggerConclusion
+	// sawDeadline records whether the last Claim ran under a deadline, and
+	// deadline what it was.
+	sawDeadline bool
+	deadline    time.Time
+	// hang makes Claim block until its context ends, like a provider that
+	// accepts the connection and never answers.
+	hang bool
 }
 
 func (*operatorTriggerKind) Name() string { return tsKindName }
@@ -96,10 +104,15 @@ func (*operatorTriggerSurface) Surface() string {
 	return "the fixture check run on demo-org/platform#42"
 }
 
-func (s *operatorTriggerSurface) Claim(context.Context) (channelkinds.TriggerClaim, error) {
+func (s *operatorTriggerSurface) Claim(ctx context.Context) (channelkinds.TriggerClaim, error) {
 	s.kind.mu.Lock()
 	defer s.kind.mu.Unlock()
 	s.kind.claims++
+	s.kind.deadline, s.kind.sawDeadline = ctx.Deadline()
+	if s.kind.hang {
+		<-ctx.Done()
+		return channelkinds.TriggerClaim{}, ctx.Err()
+	}
 	if s.kind.claimErr != nil {
 		return channelkinds.TriggerClaim{}, s.kind.claimErr
 	}
@@ -113,6 +126,9 @@ func (s *operatorTriggerSurface) Conclude(_ context.Context, c channelkinds.Trig
 	s.kind.mu.Lock()
 	defer s.kind.mu.Unlock()
 	s.kind.published = append(s.kind.published, c)
+	// Like the real provider: once concluded, a later Claim reads the answer
+	// back, which is what makes a second answerer see AlreadyAnswered.
+	s.kind.standing = &channelkinds.TriggerClaim{Ref: "fixture run 1", Concluded: true, Outcome: c.Outcome}
 	return nil
 }
 
@@ -139,6 +155,9 @@ func resetTriggerKind(t *testing.T) *operatorTriggerKind {
 	triggerKind.claimErr = nil
 	triggerKind.claims = 0
 	triggerKind.published = nil
+	triggerKind.sawDeadline = false
+	triggerKind.deadline = time.Time{}
+	triggerKind.hang = false
 	return triggerKind
 }
 
@@ -334,4 +353,57 @@ func TestBootFailure_AProviderThatCannotBeReadIsNotOverwritten(t *testing.T) {
 	assert.Empty(t, published, "an unreadable surface may already hold a real verdict")
 	assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, sess.Status.Phase)
 	assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionSidecarBootFailed, sess.Status.FailureReason)
+}
+
+// TestOperatorFailure_AnswersTheTriggerOfASessionItEnds: a Running session the
+// operator fails because its runner blew through its run-time budget has a
+// runner that is not going to answer either. The pull request must hear that
+// the work stopped, not that the agent never started.
+func TestOperatorFailure_AnswersTheTriggerOfASessionItEnds(t *testing.T) {
+	k := resetTriggerKind(t)
+	sess := bootFailedSession(tsKindName)
+	sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseRunning
+	sess.Status.RunDuration = &metav1.Duration{Duration: 31 * time.Hour}
+	sess.Status.EnforcedMaxDuration = &metav1.Duration{Duration: 2 * time.Hour}
+	r := triggerReconciler(t, sess)
+
+	failed, err := r.ReconcileRunDurationForTest(context.Background(), sess)
+	require.NoError(t, err)
+	require.True(t, failed, "the operator must fail this session")
+
+	claims, published := k.snapshot()
+	assert.Equal(t, 1, claims, "the surface is READ before it is written")
+	require.Len(t, published, 1, "the pull request must be told the work stopped")
+	assert.Equal(t, channelkinds.TriggerOutcomeCouldNotFinish, published[0].Outcome)
+	assert.Contains(t, published[0].Summary, spiceboxv1alpha1.ReasonAgentSessionBudget)
+	assert.NotContains(t, published[0].Summary, "could not start",
+		"this session started; the boot-failure wording would be false")
+}
+
+// TestExpiration_LeavesTheTriggerOfAnIdleSessionAlone: the lifetime sweep only
+// reaches Idle sessions, and a session goes Idle after agent_work_complete
+// whether or not it concluded its trigger. Telling the pull request the work is
+// incomplete could contradict a review the agent already posted, so expiring
+// one fails the session and publishes nothing, exactly as the Idle → Succeeded
+// archive sweep does.
+func TestExpiration_LeavesTheTriggerOfAnIdleSessionAlone(t *testing.T) {
+	k := resetTriggerKind(t)
+	sess := bootFailedSession(tsKindName)
+	sess.Status.Phase = spiceboxv1alpha1.AgentSessionPhaseIdle
+	started := metav1.NewTime(time.Now().Add(-48 * time.Hour))
+	sess.Status.StartedAt = &started
+	sess.Status.EffectiveSettings = &spiceboxv1alpha1.EffectiveSettings{
+		Budget: spiceboxv1alpha1.BudgetConfig{SessionExpiration: metav1.Duration{Duration: time.Hour}},
+	}
+	r := triggerReconciler(t, sess)
+
+	failed, err := r.ReconcileExpirationForTest(context.Background(), sess)
+	require.NoError(t, err)
+	require.True(t, failed, "the lifetime cap still fails the session")
+	assert.Equal(t, spiceboxv1alpha1.AgentSessionPhaseFailed, sess.Status.Phase)
+	assert.Equal(t, spiceboxv1alpha1.ReasonAgentSessionExpired, sess.Status.FailureReason)
+
+	claims, published := k.snapshot()
+	assert.Zero(t, claims, "the trigger is not even read: nothing will be written to it")
+	assert.Empty(t, published, "an expired Idle session must not tell the pull request its work is incomplete")
 }

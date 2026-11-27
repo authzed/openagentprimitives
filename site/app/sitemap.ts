@@ -6,6 +6,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const slugs = await guideSlugs();
   return [
     { url: `${SITE_URL}/`, priority: 1 },
+    { url: `${SITE_URL}/stories/claude-design` },
     ...slugs.map((slug) => ({ url: `${SITE_URL}/docs/${slug}` })),
   ];
 }

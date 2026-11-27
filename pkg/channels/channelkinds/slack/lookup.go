@@ -155,18 +155,20 @@ func (k *Kind) lookupByName(ctx context.Context, cli slackClient, name string) (
 		return "", "", err
 	}
 	want := strings.ToLower(strings.TrimSpace(name))
-	// First pass: match on display_name (case-insensitive, exact).
-	matches := pickMatches(users, want, func(u slackapi.User) string {
-		return strings.ToLower(strings.TrimSpace(u.Profile.DisplayName))
+	// Exact pass: every active human whose display_name OR real_name is the
+	// requested name (case-insensitive). The two fields are matched together,
+	// not display_name first: both are self-set, and a display-name match
+	// that hid a real-name match would let one account take a mention meant
+	// for another (a guest whose display name is a member's full name). When
+	// the name lands on more than one account, the standing rules below
+	// decide — a lone full member wins, anything else goes back as
+	// candidates.
+	matches := pickMatches(users, want, func(u slackapi.User) bool {
+		return strings.ToLower(strings.TrimSpace(u.Profile.DisplayName)) == want ||
+			strings.ToLower(strings.TrimSpace(u.Profile.RealName)) == want
 	})
 	if len(matches) == 0 {
-		// Second pass: real_name fallback.
-		matches = pickMatches(users, want, func(u slackapi.User) string {
-			return strings.ToLower(strings.TrimSpace(u.Profile.RealName))
-		})
-	}
-	if len(matches) == 0 {
-		// Third pass: no exact match among active accounts — offer
+		// Near-miss pass: no exact match among active accounts — offer
 		// near-miss candidates for the agent to judge (lookup_nearmiss.go).
 		if cands := nearMissCandidates(users, want); len(cands) > 0 {
 			return "", "", &channelkinds.MentionNearMissError{Candidates: cands}
@@ -191,13 +193,13 @@ func (k *Kind) lookupByName(ctx context.Context, cli slackClient, name string) (
 	return "", "", &channelkinds.MentionNearMissError{Exact: true, Candidates: rankedCandidates(matches)}
 }
 
-// pickMatches returns the subset of ACTIVE, human users whose extracted
-// key equals want. Deactivated (Deleted) and bot accounts are excluded: a
-// name lookup exists to ping a person, and a former employee's deactivated
-// account — or a bot that happens to share a display name — is never the
-// intended target. Guests are kept (they are real, active people) but the
-// caller deprioritizes them; see rankedCandidates.
-func pickMatches(users []slackapi.User, want string, key func(slackapi.User) string) []slackapi.User {
+// pickMatches returns the subset of ACTIVE, human users that match reports
+// as carrying the wanted name. Deactivated (Deleted) and bot accounts are
+// excluded: a name lookup exists to ping a person, and a former employee's
+// deactivated account — or a bot that happens to share a display name — is
+// never the intended target. Guests are kept (they are real, active people)
+// but the caller deprioritizes them; see rankedCandidates.
+func pickMatches(users []slackapi.User, want string, match func(slackapi.User) bool) []slackapi.User {
 	if want == "" {
 		return nil
 	}
@@ -206,7 +208,7 @@ func pickMatches(users []slackapi.User, want string, key func(slackapi.User) str
 		if u.Deleted || u.IsBot {
 			continue
 		}
-		if key(u) == want {
+		if match(u) {
 			out = append(out, u)
 		}
 	}
