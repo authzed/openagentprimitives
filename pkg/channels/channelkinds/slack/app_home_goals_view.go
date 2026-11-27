@@ -202,7 +202,7 @@ func goalRowBlocks(row channelkinds.GoalSummary) []slackapi.Block {
 	if row.CanPause && !paused {
 		buttons = append(buttons, goalButton(goals.ActPause, row.Resource, "Pause", ""))
 	}
-	if row.CanManage && paused {
+	if row.CanResume && paused {
 		buttons = append(buttons, goalButton(goals.ActResume, row.Resource, "Resume", slackapi.StylePrimary))
 	}
 	if row.CanRenew {

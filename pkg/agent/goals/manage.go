@@ -84,6 +84,10 @@ type GoalSummary struct {
 	CanPause         bool `json:"canPause,omitempty"`
 	CanManage        bool `json:"canManage,omitempty"`
 	CanRenew         bool `json:"canRenew,omitempty"`
+	// CanResume: the viewer may manage this paused goal and there is still
+	// something to resume it under — a standing plan to approve and a run
+	// left in its last approved terms.
+	CanResume bool `json:"canResume,omitempty"`
 	// RenewalPending: a renewal of the approval in force awaits a manager.
 	RenewalPending bool `json:"renewalPending,omitempty"`
 }

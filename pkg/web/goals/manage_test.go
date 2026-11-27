@@ -13,8 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	core "github.com/authzed/openagentprimitives/pkg/agent/goals"
+	"github.com/authzed/openagentprimitives/pkg/agent/sessionschedule"
+	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelsd/pipeline"
 	"github.com/authzed/openagentprimitives/pkg/memory"
+	"github.com/authzed/openagentprimitives/pkg/memory/goals/sqlstore"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 )
@@ -602,4 +605,154 @@ func TestManageRenewNeverRecreatesAGoneRunScopedRenewalRequest(t *testing.T) {
 	after := m.current(t)
 	assert.Equal(t, g.PendingRenewal.Digest, after.Execution.Digest)
 	assert.Equal(t, m.carol, after.Execution.Decision.Owner)
+}
+
+// newManageFlowTerms is newManageFlow over an approved goal with the given
+// terms (nil: one run, due within the hour).
+func newManageFlowTerms(t *testing.T, terms func(*core.ExecutionTerms)) *manageFlow {
+	t.Helper()
+	c := newGroupConsentFlowTerms(t, nil, terms)
+	out, err := c.click(t, "alice@example.com")
+	require.NoError(t, err)
+	require.Equal(t, channelevents.OutcomeApproved, out.Result)
+	c.goal = c.current(t)
+	c.f.s.Consent = c.publisher
+	return &manageFlow{groupConsentFlow: c, dave: canonOf(t, "dave@example.com"), erin: canonOf(t, "erin@example.com")}
+}
+
+// onceTerms asks for a schedule of a single run, within the hour: a schedule
+// that has no run after its first.
+func onceTerms(x *core.ExecutionTerms) {
+	due := time.Now().UTC().Truncate(time.Second).Add(time.Hour)
+	x.DueAt, x.ExpiresAt = due, due.Add(time.Hour)
+	x.Schedule = &sessionschedule.Spec{Kind: "once", Timezone: "UTC", MaxRuns: 1, RunWindowSeconds: 3600}
+}
+
+// row is the goal's list row as viewer sees it.
+func (m *manageFlow) row(t *testing.T, viewer string) core.GoalSummary {
+	t.Helper()
+	for _, g := range m.list(t, viewer).Goals {
+		if g.Resource == GoalResourceType+":"+m.goal.ID {
+			return g
+		}
+	}
+	require.FailNow(t, "the goal is not listed for "+viewer)
+	return core.GoalSummary{}
+}
+
+// A paused goal is resumed only toward an approval that can be offered: one
+// with no run left stays paused rather than ending up active with no approval
+// and nothing to ask for.
+func TestManageResumeNeedsARunLeftToApprove(t *testing.T) {
+	cases := []struct {
+		name  string
+		terms func(*core.ExecutionTerms)
+		// at is when the manager resumes, from the goal's last approved terms.
+		at        func(core.ExecutionTerms) time.Time
+		status    int
+		state     core.State
+		canResume bool
+	}{
+		{name: "a one-time run not yet due: resumed", at: func(x core.ExecutionTerms) time.Time { return x.DueAt.Add(-time.Minute) },
+			status: http.StatusOK, state: core.Active, canResume: true},
+		{name: "a one-time run whose due time passed: refused, still paused, Resume not offered", at: func(x core.ExecutionTerms) time.Time { return x.DueAt.Add(time.Minute) },
+			status: http.StatusBadRequest, state: core.Paused},
+		{name: "a schedule with a run left: resumed", terms: dailyTerms, at: func(x core.ExecutionTerms) time.Time { return x.DueAt.Add(36 * time.Hour) },
+			status: http.StatusOK, state: core.Active, canResume: true},
+		{name: "a schedule with no run left: refused, still paused, Resume not offered", terms: onceTerms, at: func(x core.ExecutionTerms) time.Time { return x.DueAt.Add(time.Minute) },
+			status: http.StatusBadRequest, state: core.Paused},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newManageFlowTerms(t, tc.terms)
+			status, _, body := m.act(t, m.bob, core.ActPause)
+			require.Equal(t, http.StatusOK, status, body)
+			paused := m.current(t)
+			now := tc.at(*paused.LastApprovedTerms)
+			m.f.s.Service.Now = func() time.Time { return now }
+
+			row := m.row(t, m.carol)
+			assert.True(t, row.CanManage)
+			assert.Equal(t, tc.canResume, row.CanResume)
+
+			status, res, body := m.act(t, m.carol, core.ActResume)
+			assert.Equal(t, tc.status, status, body)
+			g := m.current(t)
+			assert.Equal(t, tc.state, g.State)
+			if tc.status == http.StatusOK {
+				assert.NotNil(t, res.Approval, "the re-approval is offered")
+				return
+			}
+			assert.Contains(t, body, "cannot be offered again")
+			assert.Equal(t, paused.Revision, g.Revision, "nothing was committed")
+			assert.True(t, m.row(t, m.carol).CanManage, "a manager can still remove it")
+		})
+	}
+}
+
+// planlessStore reads every goal as one approved with manual action approval:
+// with no standing plan in any of its terms.
+type planlessStore struct{ *sqlstore.Store }
+
+func planless(g core.Goal) core.Goal {
+	strip := func(c *core.ExecutionConsent) *core.ExecutionConsent {
+		if c == nil {
+			return nil
+		}
+		cp := *c
+		cp.Terms.ActionApproval, cp.Terms.StandingPlan = "manual", nil
+		return &cp
+	}
+	g.Execution, g.PendingRenewal, g.PriorExecution = strip(g.Execution), strip(g.PendingRenewal), strip(g.PriorExecution)
+	if g.LastApprovedTerms != nil {
+		terms := *g.LastApprovedTerms
+		terms.ActionApproval, terms.StandingPlan = "manual", nil
+		g.LastApprovedTerms = &terms
+	}
+	return g
+}
+
+func (p planlessStore) GetInDomains(ctx context.Context, ids []string, id string) (core.Goal, error) {
+	g, err := p.Store.GetInDomains(ctx, ids, id)
+	return planless(g), err
+}
+
+func (p planlessStore) ListDomains(ctx context.Context, ids []string, r core.ListRequest) (core.Page, error) {
+	page, err := p.Store.ListDomains(ctx, ids, r)
+	for i := range page.Goals {
+		page.Goals[i] = planless(page.Goals[i])
+	}
+	return page, err
+}
+
+// A management surface approves by showing a standing plan. A goal with none
+// is offered neither Resume nor Renew, and a plan read for either says so
+// rather than reporting the goal as gone.
+func TestManageGoalWithNoStandingPlanIsNotOfferedAnApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name, action string
+		paused       bool
+	}{
+		{name: "active: Renew not offered, its plan read refused as invalid", action: core.ActRenew},
+		{name: "paused: Resume not offered, its plan read refused as invalid", action: core.ActResume, paused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newManageFlow(t)
+			if tc.paused {
+				status, _, body := m.act(t, m.bob, core.ActPause)
+				require.Equal(t, http.StatusOK, status, body)
+			}
+			require.True(t, m.row(t, m.carol).CanRenew || m.row(t, m.carol).CanResume, "offered while the goal has a standing plan")
+
+			m.f.s.Service.Store = planlessStore{m.store}
+			row := m.row(t, m.carol)
+			assert.True(t, row.CanManage)
+			assert.False(t, row.CanRenew)
+			assert.False(t, row.CanResume)
+
+			status, _, body := m.plan(t, m.carol, tc.action)
+			assert.Equal(t, http.StatusBadRequest, status, body)
+			assert.Contains(t, body, "no standing plan to approve")
+		})
+	}
 }

@@ -296,9 +296,14 @@ func TestAppHomeGoals_ButtonsFollowPermissions(t *testing.T) {
 			want: []string{homeGoalViewPlan, goals.ActPause, goals.ActRemove},
 		},
 		{
-			name: "manager of a paused goal: View plan, Resume, Remove",
-			row:  channelkinds.GoalSummary{State: string(goals.Paused), CanPause: true, CanManage: true},
+			name: "manager of a paused goal that can be resumed: View plan, Resume, Remove",
+			row:  channelkinds.GoalSummary{State: string(goals.Paused), CanPause: true, CanManage: true, CanResume: true},
 			want: []string{homeGoalViewPlan, goals.ActResume, goals.ActRemove},
+		},
+		{
+			name: "manager of a paused goal with nothing left to resume: View plan, Remove (no Resume)",
+			row:  channelkinds.GoalSummary{State: string(goals.Paused), CanPause: true, CanManage: true},
+			want: []string{homeGoalViewPlan, goals.ActRemove},
 		},
 		{
 			name: "manager who can renew: Renew shown",

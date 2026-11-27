@@ -274,8 +274,29 @@ func (s *Server) summarize(ctx context.Context, viewer identity.CanonicalUserID,
 	row.RenewalPending = domain.RenewalPending(g) && g.PendingRenewal.Decision == nil
 	scheduled := g.Execution != nil && g.Execution.Terms.Schedule != nil
 	row.CanRenew = row.CanManage && g.State == domain.Active &&
-		(row.RenewalPending || (inForce && scheduled) || (!inForce && g.LastApprovedTerms != nil))
+		(row.RenewalPending || (inForce && scheduled) || (!inForce && g.LastApprovedTerms != nil)) &&
+		approvable(g, domain.ActRenew, now)
+	row.CanResume = row.CanManage && g.State == domain.Paused && approvable(g, domain.ActResume, now)
 	return row, nil
+}
+
+// approvable reports whether action (resume or renew) on g could be approved
+// from a management surface at now: what it would approve has a standing plan
+// to show, and terms that would be asked for again can still be offered (a
+// one-time run not yet due, a schedule with a run left). A surface offers the
+// action only then. It is advisory: the act re-checks everything.
+func approvable(g domain.Goal, action string, now time.Time) bool {
+	target, err := selectApproval(g, action, now)
+	if err != nil || target.terms.StandingPlan == nil {
+		return false
+	}
+	switch target.source {
+	case approveLastTerms:
+		_, err = freshLastApproved(target.terms, now)
+	case approveRenewal:
+		_, err = domain.RenewedTerms(target.terms, now)
+	}
+	return err == nil
 }
 
 // managerInGroup reports whether any of g's managers — listed on the goal
@@ -372,7 +393,9 @@ func (s *Server) standingPlanFor(ctx context.Context, viewer identity.CanonicalU
 			return nil, "", "", err
 		}
 		if target.terms.StandingPlan == nil {
-			return nil, "", "", fmt.Errorf("%w: goal %s has no standing plan to approve", domain.ErrNotFound, g.ID)
+			// The goal exists and the viewer can see it: ErrInvalid, so a
+			// surface does not report it as gone.
+			return nil, "", "", fmt.Errorf("%w: goal %s has no standing plan to approve from a management surface; ask the agent in its conversation to request approval", domain.ErrInvalid, g.ID)
 		}
 		binding, err := approvalBinding(target.terms)
 		if err != nil {
@@ -571,13 +594,18 @@ func (s *Server) manageChange(ctx context.Context, a domain.Actor, g domain.Goal
 
 // resumeInModal resumes paused goal g and re-approves the terms it last ran
 // under, with a fresh window, as a's decision. The re-approval is checked
-// first (manager, the plan shown, start gate, every pin), so a manager whose
-// approval could not be recorded does not leave the goal half-resumed.
+// first (manager, the plan shown, that the terms can be offered again, start
+// gate, every pin), so a manager whose approval could not be recorded does
+// not leave the goal half-resumed. A paused goal with no run left to approve
+// (a one-time run whose time has passed, a schedule that has ended) is
+// refused and stays paused: resumed, it would be active with no approval and
+// nothing to ask for.
 func (s *Server) resumeInModal(ctx context.Context, a domain.Actor, g domain.Goal, shown string) (*memory.Entry, error) {
 	if err := s.AuthorizeGoalManager(ctx, a, g); err != nil {
 		return nil, err
 	}
-	target, err := selectApproval(g, domain.ActResume, s.serviceNow())
+	now := s.serviceNow()
+	target, err := selectApproval(g, domain.ActResume, now)
 	if err != nil {
 		return nil, err
 	}
@@ -585,6 +613,9 @@ func (s *Server) resumeInModal(ctx context.Context, a domain.Actor, g domain.Goa
 		return nil, err
 	}
 	if g.State == domain.Paused {
+		if _, err := reofferedTerms(g, now); err != nil {
+			return nil, err
+		}
 		if err := s.ValidateGroupExecution(ctx, g, *g.LastApprovedTerms, a.User); err != nil {
 			return nil, err
 		}
@@ -685,9 +716,9 @@ func (s *Server) approveLastTerms(ctx context.Context, a domain.Actor, g domain.
 			return nil, err
 		}
 	}
-	terms, err := freshLastApproved(*g.LastApprovedTerms, now)
+	terms, err := reofferedTerms(g, now)
 	if err != nil {
-		return nil, fmt.Errorf("goal %s: its last approved terms cannot be offered again: %w", g.ID, err)
+		return nil, err
 	}
 	id, err := manageRequestID("approve", g, terms)
 	if err != nil {
@@ -698,6 +729,22 @@ func (s *Server) approveLastTerms(ctx context.Context, a domain.Actor, g domain.
 		return nil, err
 	}
 	return s.requireDecidable(ctx, requested)
+}
+
+// reofferedTerms is what re-approving g's last approved terms asks for at now:
+// those terms with a fresh window (freshLastApproved). It is ErrInvalid when
+// they cannot be offered again — a one-time run whose time has passed, a
+// schedule with no run left. Resume checks it before it commits and the
+// re-approval uses it, so the two cannot disagree.
+func reofferedTerms(g domain.Goal, now time.Time) (domain.ExecutionTerms, error) {
+	if g.LastApprovedTerms == nil {
+		return domain.ExecutionTerms{}, fmt.Errorf("%w: goal %s has never been approved; ask the agent in its conversation to request approval", domain.ErrInvalid, g.ID)
+	}
+	terms, err := freshLastApproved(*g.LastApprovedTerms, now)
+	if err != nil {
+		return domain.ExecutionTerms{}, fmt.Errorf("goal %s: its last approved terms cannot be offered again: %w", g.ID, err)
+	}
+	return terms, nil
 }
 
 // decidableRequest returns the operator-signed request for the consent in
@@ -731,6 +778,9 @@ func (s *Server) decidableRequest(ctx context.Context, view domain.Goal) (*memor
 	if err != nil {
 		return nil, false, err
 	}
+	// The wall clock, not serviceNow: a card's expiry is stamped from the
+	// wall clock when its request is written (ConsentPublisher) and checked
+	// against it when its decision is verified, so this must agree with those.
 	if request.ExpiresAt == nil || !time.Now().Before(*request.ExpiresAt) {
 		return nil, false, nil
 	}

@@ -97,7 +97,7 @@ func (l *slackListener) handleHomeGoalClick(ctx context.Context, cb slackapi.Int
 		plan, err := l.goals.StandingPlan(ctx, viewer, ns, resource, "")
 		if err != nil {
 			logger.Info("app_home: goal StandingPlan failed", "namespace", ns, "err", err.Error())
-			l.republishHomeTabWithNotice(ctx, cb.User.ID, goalPlanNotice(err))
+			l.republishHomeTabWithNotice(ctx, cb.User.ID, goalPlanNotice("", err))
 			return true, nil
 		}
 		l.openGoalModal(ctx, cb, logger, buildGoalPlanModal(plan))
@@ -114,7 +114,7 @@ func (l *slackListener) handleHomeGoalClick(ctx context.Context, cb slackapi.Int
 		plan, err := l.goals.StandingPlan(ctx, viewer, ns, resource, action)
 		if err != nil {
 			logger.Info("app_home: goal StandingPlan for confirmation failed", "namespace", ns, "err", err.Error())
-			l.republishHomeTabWithNotice(ctx, cb.User.ID, goalPlanNotice(err))
+			l.republishHomeTabWithNotice(ctx, cb.User.ID, goalPlanNotice(action, err))
 			return true, nil
 		}
 		approval := action != goals.ActRemove
@@ -231,9 +231,24 @@ func goalActFailureNotice(action string, err error) string {
 		return fmt.Sprintf(":warning: Only a manager of this goal can %s it.", verb)
 	case errors.Is(err, goals.ErrNotFound):
 		return ":warning: That goal no longer exists, or you can no longer see it."
+	case errors.Is(err, goals.ErrInvalid) && isGoalApproval(action):
+		return goalNothingToApproveNotice(verb)
 	default:
 		return fmt.Sprintf(":warning: Couldn't %s this goal — please try again. If it keeps failing, check with your workspace admin.", verb)
 	}
+}
+
+// isGoalApproval reports whether action is one whose click approves a plan.
+func isGoalApproval(action string) bool {
+	return action == goals.ActResume || action == goals.ActRenew
+}
+
+// goalNothingToApproveNotice tells a manager an approval was refused because
+// the goal has nothing to approve from here (no standing plan, no run left,
+// or it is no longer in the state the button was shown for): trying again
+// will not help, asking the agent for a new approval will.
+func goalNothingToApproveNotice(verb string) string {
+	return fmt.Sprintf(":warning: Couldn't %s this goal: it has nothing to approve from here right now. Ask the agent in its channel to request a new approval.", verb)
 }
 
 func goalActSuccessNotice(action string) string {
@@ -249,12 +264,15 @@ func goalActSuccessNotice(action string) string {
 	}
 }
 
-func goalPlanNotice(err error) string {
+// goalPlanNotice says why the plan read for action ("" for View plan) failed.
+func goalPlanNotice(action string, err error) string {
 	switch {
 	case errors.Is(err, goals.ErrDenied):
 		return ":warning: You can't see this goal's plan."
 	case errors.Is(err, goals.ErrNotFound):
 		return ":warning: That goal no longer exists, or you can no longer see it."
+	case errors.Is(err, goals.ErrInvalid) && isGoalApproval(action):
+		return goalNothingToApproveNotice(goalVerb[action])
 	default:
 		return ":warning: Couldn't load this goal's standing plan — please try again."
 	}
