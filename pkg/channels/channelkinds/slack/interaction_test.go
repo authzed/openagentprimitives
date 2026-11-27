@@ -775,6 +775,62 @@ func TestDecisionAppliedEditsPromptAndPublicNote(t *testing.T) {
 	assert.False(t, ok, "delivery record dropped once the interaction resolved")
 }
 
+// TestDecisionAppliedClickRemovesPromptWhenPublicNoteTakesTheCard verifies a
+// clicked decision does not leave the clicker reading one resolved card twice.
+// The public note sits in the same thread as their prompt, so once the note
+// carries the card the prompt is deleted through the response_url; with no
+// note to carry it, the prompt is edited in place and stays.
+func TestDecisionAppliedClickRemovesPromptWhenPublicNoteTakesTheCard(t *testing.T) {
+	cases := []struct {
+		name        string
+		note        deliveryRef
+		wantBody    string
+		wantNotBody string
+		wantUpdated []string
+	}{
+		{
+			name:        "public note recorded: note becomes the card, prompt is deleted",
+			note:        deliveryRef{ChannelID: "CHAN", TS: "2.2"},
+			wantBody:    `"delete_original":true`,
+			wantNotBody: `"replace_original"`,
+			wantUpdated: []string{"CHAN:2.2"},
+		},
+		{
+			name:        "no public note: prompt is edited in place into the card",
+			note:        deliveryRef{},
+			wantBody:    `"replace_original":true`,
+			wantNotBody: `"delete_original"`,
+			wantUpdated: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bodies, srv := newResponseURLServer(t)
+			defer srv.Close()
+
+			fc := &fakeSlackClient{}
+			s := &interactionSender{client: fc, httpClient: responseURLClient(srv), delivery: newInteractionDeliveryStore()}
+			s.delivery.record("r1", deliveryRef{ChannelID: "CHAN", TS: "1.1"}, tc.note)
+
+			p := channelevents.InteractionAppliedPayload{
+				Category: "permission_request", RequestRef: "r1",
+				Outcome: channelevents.OutcomeApproved, OutcomeText: "approved",
+				ResponseRef: testResponseURL,
+			}
+			_, err := s.Send(context.Background(), channelkinds.SessionInfo{Namespace: "default", Name: "s1"},
+				interactionEnvelope(t, channelevents.KindInteractionApplied, p))
+			require.NoError(t, err, "Send")
+
+			got := bodies.values()
+			require.Len(t, got, 1, "want one response_url POST")
+			assert.Contains(t, got[0], tc.wantBody)
+			assert.NotContains(t, got[0], tc.wantNotBody)
+			assert.ElementsMatch(t, tc.wantUpdated, fc.updatedRefs,
+				"the recorded prompt ref is never edited when the response_url POST succeeds")
+		})
+	}
+}
+
 // TestDecisionAppliedResponseURLFailureStillEditsNoteAndDrops verifies the
 // finding this task closes: a decision-kind Applied whose ResponseRef POST
 // fails (expired/5xx response_url) must NOT early-return — the interaction
