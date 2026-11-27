@@ -2,14 +2,21 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
@@ -165,6 +172,67 @@ func TestHandleInteractionApplied_ClearsOnTimeout(t *testing.T) {
 	var got spiceboxv1alpha1.AgentSession
 	require.NoError(t, cli.Get(context.Background(), sessKey, &got))
 	assert.Empty(t, got.Status.PendingInteractions, "timeout applied clears the entry")
+}
+
+// TestHandleInteractionApplied_ConflictNeverStrandsPendingCondition: a timed-out
+// approval whose status clear collides with other writers must still end with
+// the entry gone AND its observable condition False. The clear used to be two
+// writes; when the condition write lost all of WriteOwned's conflict retries
+// the entry removal had already landed, a retry found no entry and no-op'd, and
+// the session showed ContentInspectionApprovalPending=True with nothing pending
+// for good. Here the first five optimistic-locked writes conflict — exactly
+// enough to exhaust WriteOwned — and the handler has to redo the clear.
+func TestHandleInteractionApplied_ConflictNeverStrandsPendingCondition(t *testing.T) {
+	registerContentInspectionCategory(t)
+	const cond = spiceboxv1alpha1.AgentSessionConditionContentInspectionApprovalPending
+	sessKey := sessKeyForFixture()
+
+	var conflictsLeft atomic.Int32
+	cli := interceptor.NewClient(
+		newFakeK8sClientWithExistingSession(t, "U_ALICE").(client.WithWatch),
+		interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				data, derr := patch.Data(obj)
+				require.NoError(t, derr, "compute patch bytes")
+				// Only an optimistic-locked patch can conflict.
+				if strings.Contains(string(data), `"resourceVersion"`) && conflictsLeft.Add(-1) >= 0 {
+					return apierrors.NewConflict(schema.GroupResource{Resource: "agentsessions"}, obj.GetName(),
+						errors.New("the object has been modified"))
+				}
+				return c.Status().Patch(ctx, obj, patch, opts...)
+			},
+		})
+	p := newTestPipeline(t, cli, &fakeAuthz{}, &fakeNATS{})
+
+	// Park through the production handler so the entry and its True condition
+	// are exactly what a real request leaves behind.
+	parkEnv, err := channelevents.BuildEnvelope(sessKey.Namespace, sessKey.Name,
+		channelevents.KindInteractionRequest, ciInteractionRequest("req-1"))
+	require.NoError(t, err)
+	require.NoError(t, p.HandleInteractionRequest(context.Background(), parkEnv), "park the request")
+	var parked spiceboxv1alpha1.AgentSession
+	require.NoError(t, cli.Get(context.Background(), sessKey, &parked))
+	require.Len(t, parked.Status.PendingInteractions, 1, "request parked")
+	require.True(t, meta.IsStatusConditionTrue(parked.Status.Conditions, cond), "pending condition True while parked")
+
+	conflictsLeft.Store(int32(retry.DefaultRetry.Steps))
+
+	env, err := channelevents.BuildEnvelope(sessKey.Namespace, sessKey.Name,
+		channelevents.KindInteractionApplied, channelevents.InteractionAppliedPayload{
+			AgentSessionRef: channelevents.SessionRef{Namespace: sessKey.Namespace, Name: sessKey.Name},
+			Category:        "content_inspection",
+			RequestRef:      "req-1",
+			Outcome:         channelevents.OutcomeExpired,
+		})
+	require.NoError(t, err)
+	require.NoError(t, p.HandleInteractionApplied(context.Background(), env),
+		"a clear that collides must be redone, not abandoned")
+
+	var got spiceboxv1alpha1.AgentSession
+	require.NoError(t, cli.Get(context.Background(), sessKey, &got))
+	assert.Empty(t, got.Status.PendingInteractions, "timeout applied clears the entry")
+	assert.False(t, meta.IsStatusConditionTrue(got.Status.Conditions, cond),
+		"the pending condition must not outlive the last pending entry")
 }
 
 // TestHandleInteractionDecision_ClearsDurablePendingInteraction: a resolved

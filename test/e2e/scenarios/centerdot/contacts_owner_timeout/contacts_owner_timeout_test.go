@@ -146,14 +146,16 @@ func TestCenterdot_ContactsApprovalTimeout_ClearsPendingGrant(t *testing.T) {
 	//
 	// Deliberately left as AnyResult() rather than tightened to
 	// ResultContains("SYSTEM_TIMEOUT") (contrast contacts_owner_deny, which
-	// tightens on SYSTEM_DECISION_DENIED): this exact scenario is the
-	// documented contention-flaky member of the centerdot family (see
-	// memory/reference_e2e_contacts_owner_timeout_flake.md) and
-	// approval_outcome.go's approvalFailureContent has a third branch,
-	// SYSTEM_APPROVAL_ERROR, for when Orchestrator.Await's underlying publish
-	// itself fails — plausible under the exact machine contention this family
-	// already flakes on. Pinning the rule to SYSTEM_TIMEOUT would turn that
-	// legitimate (if rare) variance into a hard ScriptedLLM.Send failure
+	// tightens on SYSTEM_DECISION_DENIED): approval_outcome.go's
+	// approvalFailureContent has a third branch, SYSTEM_APPROVAL_ERROR, for
+	// when Orchestrator.Await's underlying publish itself fails — plausible
+	// under machine contention. (This scenario's own long-standing
+	// intermittent failure was a different thing, and a product defect rather
+	// than contention: the cleanup poll below never converging because the
+	// pending entry and its condition were cleared in two writes and a
+	// conflict could land only the first. They are one write now.) Pinning the
+	// rule to SYSTEM_TIMEOUT would turn that legitimate (if rare) variance
+	// into a hard ScriptedLLM.Send failure
 	// instead of the graceful-deny content the test doesn't actually care
 	// about the wording of. The security property this scenario exists to
 	// prove — the gated tool never ran — is instead pinned by the sentinel
