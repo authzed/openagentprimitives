@@ -36,6 +36,7 @@ deploy/oap/
   webhook-cert.yaml        # cert-manager Issuer + Certificate for the webhook cert
   patches/
     cluster-kind.yaml      # AP_CLUSTER_KIND stamped on operator + webd
+    required-secrets.yaml  # every workload waits for the Secrets the Job mints (or you provide)
     sync-waves.yaml        # Argo CD sync-wave on the namespace
     webhook-ca-inject.yaml # cert-manager ca-injector annotation on the webhooks
   components/postgres/     # Postgres — omitted with --external-postgres
@@ -69,12 +70,23 @@ targets.
 Agent Primitives' secrets are **app-internal** — none are API keys you supply.
 The overlay includes a **pre-start bootstrap Job** (named
 `spicebox-bootstrap-secrets-<hash>`, running the operator image's
-`bootstrap-secrets` entrypoint) that mints them idempotently before the operator
-and data-plane start, so every component mounts its Secret cleanly at first boot.
-Nothing secret lands in git, and nothing is ever rotated. The Job's name carries
-a hash of its pod template, so an operator-image upgrade produces a new Job
-object (the controller prunes the old one) rather than failing against the
-immutable pod template of the existing Job.
+`bootstrap-secrets` entrypoint) that mints them idempotently. Nothing secret
+lands in git, and nothing is ever rotated.
+
+No workload starts without them. The base bundle marks many of these Secret
+references `optional`, because `oap install` creates the Secrets after the
+workloads and then rolls the operator; a GitOps apply has no such step, and
+the operator reads its tokens only once, at startup. So
+`patches/required-secrets.yaml` makes every reference to a Secret the Job
+mints, or that you provide, required: the kubelet holds each pod until its
+Secrets exist.
+
+Both Jobs in the overlay, this one and the SpiceDB database Job
+(`spicebox-spicedb-createdb-<hash>`), carry a hash of their pod template in
+their name. A Job's pod template is immutable, so an upgrade that changes one
+produces a new Job object rather than a sync that fails against the existing
+one. Enable pruning on the Argo CD `Application` or Flux `Kustomization` so
+the superseded Job is removed; both Jobs are safe to run again.
 
 The Job mints: the three memory tokens, the admind token, the passthrough signing
 key, the NATS identity/TLS/client credentials, and — unless you bring your own
@@ -92,6 +104,10 @@ provide `spicebox-webhook-tls` + the webhook `caBundle` yourself.
   plaintext), and the Job does **not** mint `spicebox-spicedb-token`: you provide
   it (e.g. via the External Secrets Operator or a sealed secret) and apply the
   schema to your instance.
+- **A Secret you provide is waited for.** Each workload that references a
+  Secret you opted to provide (an external SpiceDB or Postgres token, a linked
+  memory token) stays pending until that Secret exists with the key it reads
+  (`token`; `uri` for `spicebox-postgres-token`).
 - **External Postgres:** pass `--external-postgres` to drop the bundled Postgres;
   you provide `spicebox-postgres-token`. It requires `--external-spicedb-endpoint`,
   because the bundled SpiceDB keeps its datastore in the bundled Postgres.
@@ -115,9 +131,11 @@ oap render --cluster-kind gke --output-dir deploy/oap --validate
 
 `--validate` builds the overlay in-process and checks that it will sync: every
 non-optional Secret reference has a creator (shipped, Job-minted, or linked),
-the SpiceDB endpoint ConfigMap is present (and, when it names the in-cluster
-Service, a `SpiceDBCluster` ships to serve it), `AP_CLUSTER_KIND` is stamped, and
-every first-party image reference is pinned. It
+no workload references a Job-minted or provide-yourself Secret as `optional`
+(its pod could start without it), the SpiceDB endpoint ConfigMap is present
+(and, when it names the in-cluster Service, a `SpiceDBCluster` ships to serve
+it), `AP_CLUSTER_KIND` is stamped, and every first-party image reference is
+pinned. It
 prints the app-internal secrets you still need to provide. It cannot verify that
 a *linked* or externally-provided Secret actually exists in the cluster — that is
 a cluster-state fact `oap check` reports after the sync.
@@ -152,16 +170,23 @@ NetworkPolicy blocks its apiserver egress).
 
 No wave waits on a later one, so the sync cannot deadlock. The `SpiceDBCluster`
 carries `SkipDryRunOnMissingResource=true` because its CRD is applied in the
-same sync.
+same sync. The required Secret references described under Flux below apply
+here too; with the waves they are already satisfied when wave 0 starts, unless
+you provide a Secret yourself and it is not there yet.
 
 **Flux** has no waves: it applies the Kustomization in one pass. The same order
-emerges by retry. The bootstrap Job retries (its `backoffLimit`) until its
-namespace and ServiceAccount exist, and the workloads sit in
-`CreateContainerConfigError` until the Secrets they mount appear. The SpiceDB
-database Job carries no deadline in the overlay: its pod waits for the Postgres
-token, then polls Postgres for several minutes before creating the database,
-and only then spends its `backoffLimit`. The operator retries SpiceDB until it
-serves.
+emerges by waiting and retry. The bootstrap Job retries (its `backoffLimit`)
+until its namespace and ServiceAccount exist. Every pod that reads one of the
+Secrets it mints, the operator included, is held by the kubelet until they
+exist, because `patches/required-secrets.yaml` makes those references required
+(as it does for a Secret you provide yourself): a pod waiting
+on a Secret volume shows `ContainerCreating` with `FailedMount` events, and one
+waiting on a Secret-backed environment variable shows
+`CreateContainerConfigError`. Both clear on their own once the Job has minted
+the Secrets; no restart is needed. The SpiceDB database Job carries no deadline
+in the overlay: its pod waits for the Postgres token, then polls Postgres for
+several minutes before creating the database, and only then spends its
+`backoffLimit`. The operator retries SpiceDB until it serves.
 Set `wait: true` and a `timeout` of several minutes on the Flux `Kustomization`
 so the first reconcile is not reported failed while this settles.
 

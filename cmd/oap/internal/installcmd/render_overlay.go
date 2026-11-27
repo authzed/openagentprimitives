@@ -200,11 +200,24 @@ func WriteOverlay(cfg RenderConfig) error {
 
 	// Dependencies (postgres) become kustomize Components, pulled in via
 	// `components:` unless the user runs that dependency externally.
-	if err := writeDependencyComponents(cfg); err != nil {
+	components, err := writeDependencyComponents(cfg)
+	if err != nil {
 		return err
 	}
 
-	k, err := renderKustomization(cfg)
+	// Every workload waits for the Secrets the bootstrap Job mints (or the user
+	// provides) instead of starting without them: see requiredSecretsPatch.
+	required, requiredEmitted, err := requiredSecretsPatch(cfg, append([][]byte{install, channelsd, nats}, components...)...)
+	if err != nil {
+		return fmt.Errorf("render required-secrets patch: %w", err)
+	}
+	if requiredEmitted {
+		if err := os.WriteFile(filepath.Join(cfg.OutputDir, requiredSecretsPatchFile), required, 0o644); err != nil {
+			return err
+		}
+	}
+
+	k, err := renderKustomization(cfg, requiredEmitted)
 	if err != nil {
 		return err
 	}
@@ -237,7 +250,8 @@ func clusterKindPatch(key string) []byte {
 // renderKustomization builds the overlay kustomization.yaml bytes
 // deterministically. Components and additional patches are appended by later
 // render stages; order is fixed so re-renders are byte-identical.
-func renderKustomization(cfg RenderConfig) ([]byte, error) {
+// requiredSecrets says whether WriteOverlay emitted requiredSecretsPatchFile.
+func renderKustomization(cfg RenderConfig, requiredSecrets bool) ([]byte, error) {
 	resources := "resources:\n  - base/install.yaml\n  - base/channelsd.yaml\n  - base/nats.yaml\n  - " + bootstrapJobFile + "\n  - " + spicedbResourceFile + "\n"
 	if cfg.Routing.trustedHostname != "" {
 		resources += "  - " + routingResourceFile + "\n"
@@ -251,6 +265,9 @@ func renderKustomization(cfg RenderConfig) ([]byte, error) {
 		resources += "  - " + cloudNetworkResourceFile + "\n"
 	}
 	patches := "patches:\n  - path: " + clusterKindPatchFile + "\n  - path: " + syncWavePatchFile + "\n"
+	if requiredSecrets {
+		patches += "  - path: " + requiredSecretsPatchFile + "\n"
+	}
 	if !cfg.ExternalWebhookTLS {
 		patches += "  - path: " + webhookCAInjectPatchFile + "\n"
 		removals, err := webhookCABundleRemovals()

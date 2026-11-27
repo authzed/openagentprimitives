@@ -10,6 +10,7 @@ resources:
 patches:
   - path: patches/cluster-kind.yaml
   - path: patches/sync-waves.yaml
+  - path: patches/required-secrets.yaml
   - path: patches/webhook-ca-inject.yaml
   - target:
       kind: ValidatingWebhookConfiguration

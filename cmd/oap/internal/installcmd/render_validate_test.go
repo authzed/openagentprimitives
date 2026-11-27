@@ -110,6 +110,13 @@ func TestRenderValidate_FailsOnMissingOrUnpinned(t *testing.T) {
 			noPin: true, wantErr: "projected-orphan",
 		},
 		{
+			name: "optional reference to a Secret the bootstrap Job mints: the pod could start without it",
+			docs: map[string]string{"cm.yaml": spicedbEndpointDoc, "dep.yaml": podDeployment(
+				"      containers:\n        - name: c\n          image: busybox\n" +
+					"      volumes:\n        - name: v\n          secret:\n            secretName: spicebox-channelsd-memory-token\n            optional: true\n")},
+			noPin: true, wantErr: `"spicebox-channelsd-memory-token" as optional`,
+		},
+		{
 			name: "one pinned and one unpinned ref to the same image: mutable tag",
 			docs: map[string]string{"cm.yaml": spicedbEndpointDoc, "dep.yaml": podDeployment(
 				"      containers:\n        - name: a\n          image: reg.example.com/spicebox-operator:dev@sha256:" + strings.Repeat("a", 64) + "\n" +

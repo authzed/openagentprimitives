@@ -52,21 +52,23 @@ func enabledComponentNames(cfg RenderConfig) []string {
 // writeDependencyComponents writes a kustomize Component directory per enabled
 // dependency, with the storage class injected into each stateful doc (a no-op
 // for non-PVC/StatefulSet kinds). Creates components/ only when at least one
-// dependency is enabled.
-func writeDependencyComponents(cfg RenderConfig) error {
+// dependency is enabled. It returns each component's documents as written, for
+// the passes that look across every workload in the overlay.
+func writeDependencyComponents(cfg RenderConfig) ([][]byte, error) {
+	var written [][]byte
 	for _, d := range dependencyComponents {
 		if !d.enabled(cfg) {
 			continue
 		}
 		docs, err := d.load()
 		if err != nil {
-			return fmt.Errorf("load %s component: %w", d.name, err)
+			return nil, fmt.Errorf("load %s component: %w", d.name, err)
 		}
 		if cfg.StorageClass != "" {
 			for i := range docs {
 				m, err := manifests.InjectStorageClass(docs[i], cfg.StorageClass)
 				if err != nil {
-					return fmt.Errorf("inject storageClassName=%q into %s: %w", cfg.StorageClass, d.name, err)
+					return nil, fmt.Errorf("inject storageClassName=%q into %s: %w", cfg.StorageClass, d.name, err)
 				}
 				docs[i] = m
 			}
@@ -74,24 +76,26 @@ func writeDependencyComponents(cfg RenderConfig) error {
 		for i := range docs {
 			m, err := annotateDoc(docs[i], map[string]string{argoSyncWaveAnnotation: d.syncWave})
 			if err != nil {
-				return fmt.Errorf("annotate %s: %w", d.name, err)
+				return nil, fmt.Errorf("annotate %s: %w", d.name, err)
 			}
 			docs[i] = m
 		}
 		compDir := filepath.Join(cfg.OutputDir, "components", d.name)
 		if err := os.MkdirAll(compDir, 0o755); err != nil {
-			return err
+			return nil, err
 		}
-		if err := os.WriteFile(filepath.Join(compDir, d.name+".yaml"), bytes.Join(docs, []byte("---\n")), 0o644); err != nil {
-			return err
+		joined := bytes.Join(docs, []byte("---\n"))
+		written = append(written, joined)
+		if err := os.WriteFile(filepath.Join(compDir, d.name+".yaml"), joined, 0o644); err != nil {
+			return nil, err
 		}
 		comp := "apiVersion: kustomize.config.k8s.io/v1alpha1\n" +
 			"kind: Component\n" +
 			"resources:\n" +
 			"  - " + d.name + ".yaml\n"
 		if err := os.WriteFile(filepath.Join(compDir, "kustomization.yaml"), []byte(comp), 0o644); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return written, nil
 }

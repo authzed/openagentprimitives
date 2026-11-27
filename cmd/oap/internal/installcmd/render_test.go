@@ -445,7 +445,7 @@ func TestRender_SpiceDBProvisioning(t *testing.T) {
 
 			cluster := findDoc(docs, "SpiceDBCluster", "spicebox-spicedb")
 			assert.Equal(t, tc.wantCluster, cluster != nil, "SpiceDBCluster shipped")
-			assert.Equal(t, tc.wantCluster, findDoc(docs, "Job", "spicebox-spicedb-createdb") != nil, "createdb Job shipped with the bundled SpiceDB")
+			assert.Equal(t, tc.wantCluster, findDoc(docs, "Job", createDBJobBaseName) != nil, "createdb Job shipped with the bundled SpiceDB")
 			if cluster != nil {
 				engine, _, _ := unstructured.NestedString(cluster.Object, "spec", "config", "datastoreEngine")
 				assert.Equal(t, "postgres", engine)
@@ -608,11 +608,163 @@ func TestRender_CloudNetworkResourcesMatchInstall(t *testing.T) {
 // expire before Postgres exists, and a GitOps controller does not recreate an
 // unchanged failed Job.
 func TestRender_CreateDBJobHasNoDeadline(t *testing.T) {
-	job := findDoc(buildDocs(t, gkeConfig()), "Job", "spicebox-spicedb-createdb")
+	job := findDoc(buildDocs(t, gkeConfig()), "Job", createDBJobBaseName)
 	require.NotNil(t, job, "createdb Job shipped with the bundled SpiceDB")
 	_, found, err := unstructured.NestedFieldNoCopy(job.Object, "spec", "activeDeadlineSeconds")
 	require.NoError(t, err)
 	assert.False(t, found, "no activeDeadlineSeconds on the rendered createdb Job")
+}
+
+// TestRender_CreateDBJobNameIsTheOneInstallPolls: the overlay's createdb Job
+// carries the template-hashed name, and for the same template it is the name
+// `oap install` applies and waits on — so a cluster moved between the two paths
+// meets a Job it recognizes instead of an immutable-template rejection.
+func TestRender_CreateDBJobNameIsTheOneInstallPolls(t *testing.T) {
+	installName, _, err := buildSpiceDBDatabaseJob(installCreateDBDeadlineSeconds, nil)
+	require.NoError(t, err)
+
+	var names []string
+	for _, d := range buildDocs(t, gkeConfig()) {
+		if d.GetKind() == "Job" && strings.HasPrefix(d.GetName(), createDBJobBaseName) {
+			names = append(names, d.GetName())
+		}
+	}
+	assert.Equal(t, []string{installName}, names)
+}
+
+// TestRender_WorkloadsWaitForAwaitedSecrets: nothing in the built overlay may
+// reference optionally a Secret the bootstrap Job mints or the user provides.
+// The operator reads its memory tokens once at startup, so on a single-pass
+// apply (Flux) an optional reference let it start before the Job had minted
+// them and never register them — channelsd, authzd and webd then crash-looped
+// until the operator was restarted.
+func TestRender_WorkloadsWaitForAwaitedSecrets(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  RenderConfig
+		// wantOperatorTokens are the Secrets the operator's three memory-token
+		// volumes must name, each required.
+		wantOperatorTokens []string
+	}{
+		{
+			name:               "default: the Job-minted names, required",
+			cfg:                gkeConfig(),
+			wantOperatorTokens: bootstrap.MemoryTokenSecretNames,
+		},
+		{
+			name: "external SpiceDB and Postgres: the tokens the user provides are required too",
+			cfg: func() RenderConfig {
+				c := gkeConfig()
+				c.ExternalSpiceDBEndpoint = "spicedb.example.com:443"
+				c.ExternalPostgres = true
+				return c
+			}(),
+			wantOperatorTokens: bootstrap.MemoryTokenSecretNames,
+		},
+		{
+			name: "linked memory tokens: the linked names, required",
+			cfg: func() RenderConfig {
+				c := gkeConfig()
+				c.MemoryToken = MemoryTokenLinks{Channelsd: "my-channelsd-token", Webd: "my-webd-token", Authzd: "my-authzd-token"}
+				return c
+			}(),
+			wantOperatorTokens: []string{"my-channelsd-token", "my-webd-token", "my-authzd-token"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docs := buildDocs(t, tc.cfg)
+			awaited := awaitedSecretNames(tc.cfg)
+
+			for _, ref := range secretRefsWhere(docs, func(r secretRef) bool { return r.optional && awaited[r.secret] }) {
+				assert.Failf(t, "optional reference to an awaited Secret", "%s/%s -> %s", ref.workloadKind, ref.workload, ref.secret)
+			}
+
+			operator := findDoc(docs, "Deployment", cloud.OperatorDeploymentName)
+			require.NotNil(t, operator)
+			var tokens []string
+			for _, ref := range podSecretRefs(operator) {
+				if strings.HasSuffix(ref.volume, "-memory-token") {
+					assert.False(t, ref.optional, "operator volume %s must be required", ref.volume)
+					tokens = append(tokens, ref.secret)
+				}
+			}
+			assert.ElementsMatch(t, tc.wantOperatorTokens, tokens)
+
+			// The patch only touches awaited Secrets: one nothing in the
+			// overlay provisions stays optional, or its workload would never
+			// start.
+			var stillOptional bool
+			for _, ref := range podSecretRefs(findDoc(docs, "Deployment", webdDeploymentName)) {
+				if ref.secret == "spicebox-slack-oauth" {
+					stillOptional = ref.optional
+				}
+			}
+			assert.True(t, stillOptional, "webd's reference to the user-optional spicebox-slack-oauth stays optional")
+		})
+	}
+}
+
+// TestRequiredSecretsPatch covers the references the patch can and cannot
+// address. One it cannot is a render error, never a reference silently left
+// optional.
+func TestRequiredSecretsPatch(t *testing.T) {
+	const minted = bootstrap.ChannelsdMemoryTokenSecret
+	workload := func(apiVersion, kind, podSpec string) string {
+		return "apiVersion: " + apiVersion + "\nkind: " + kind + "\nmetadata:\n  name: widget\n  namespace: agentprimitives-system\n" +
+			"spec:\n  template:\n    spec:\n" + podSpec
+	}
+	cases := []struct {
+		name        string
+		doc         string
+		wantPatch   []string // substrings of the emitted patch; empty → nothing emitted
+		wantErrPart string
+	}{
+		{
+			name: "optional secret volume and env secretKeyRef, in a container and an initContainer: all addressed by merge key",
+			doc: workload("apps/v1", "Deployment",
+				"      initContainers:\n        - name: init\n          env:\n            - name: A\n              valueFrom:\n                secretKeyRef:\n                  name: "+minted+"\n                  key: token\n                  optional: true\n"+
+					"      containers:\n        - name: c\n          env:\n            - name: B\n              valueFrom:\n                secretKeyRef:\n                  name: "+minted+"\n                  key: token\n                  optional: true\n"+
+					"      volumes:\n        - name: v\n          secret:\n            secretName: "+minted+"\n            optional: true\n"),
+			wantPatch: []string{"kind: Deployment", "name: widget", "initContainers:", "- name: A", "- name: B", "name: c", "- name: v", "optional: false"},
+		},
+		{
+			name: "already-required reference: nothing to patch",
+			doc: workload("apps/v1", "Deployment",
+				"      containers:\n        - name: c\n      volumes:\n        - name: v\n          secret:\n            secretName: "+minted+"\n"),
+		},
+		{
+			name: "optional reference to a Secret the overlay does not provision: left optional",
+			doc: workload("apps/v1", "Deployment",
+				"      containers:\n        - name: c\n      volumes:\n        - name: v\n          secret:\n            secretName: user-optional\n            optional: true\n"),
+		},
+		{
+			name: "optional envFrom to a minted Secret: refused, it has no merge key",
+			doc: workload("apps/v1", "Deployment",
+				"      containers:\n        - name: c\n          envFrom:\n            - secretRef:\n                name: "+minted+"\n                optional: true\n"),
+			wantErrPart: "envFrom or a projected volume",
+		},
+		{
+			name: "optional reference in a kind kustomize cannot merge by name: refused",
+			doc: workload("example.com/v1", "Widget",
+				"      containers:\n        - name: c\n      volumes:\n        - name: v\n          secret:\n            secretName: "+minted+"\n            optional: true\n"),
+			wantErrPart: "cannot patch a Widget",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			patch, emitted, err := requiredSecretsPatch(gkeConfig(), []byte(tc.doc))
+			if tc.wantErrPart != "" {
+				require.ErrorContains(t, err, tc.wantErrPart)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, len(tc.wantPatch) > 0, emitted)
+			for _, want := range tc.wantPatch {
+				assert.Contains(t, string(patch), want)
+			}
+		})
+	}
 }
 
 // TestValidateRenderFlags_RefusesLinkToAnotherComponentsDefault: a link equal

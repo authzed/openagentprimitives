@@ -60,7 +60,7 @@ func runRenderValidate(ctx context.Context, out io.Writer, cfg RenderConfig, dir
 	}
 	external := externalSecretNames(cfg)
 	provideExternally := map[string]bool{}
-	for _, ref := range nonOptionalSecretRefs(docs) {
+	for _, ref := range secretRefsWhere(docs, func(r secretRef) bool { return !r.optional }) {
 		switch {
 		case satisfied[ref.secret]:
 			// satisfied
@@ -71,7 +71,16 @@ func runRenderValidate(ctx context.Context, out io.Writer, cfg RenderConfig, dir
 		}
 	}
 
-	// 2. AP_CLUSTER_KIND is stamped on the operator and webd (both fail closed
+	// 2. No workload references an awaited Secret optionally. Such a pod can
+	// start before the bootstrap Job has minted the Secret (or the user has
+	// provided it) and, reading it once at startup, never pick it up — the
+	// overlay's required-secrets patch exists to prevent exactly that.
+	awaited := awaitedSecretNames(cfg)
+	for _, ref := range secretRefsWhere(docs, func(r secretRef) bool { return r.optional && awaited[r.secret] }) {
+		problems = append(problems, fmt.Sprintf("%s/%s references Secret %q as optional: its pod can start before the Secret exists and never read it (the overlay's %s must make it required)", ref.workloadKind, ref.workload, ref.secret, requiredSecretsPatchFile))
+	}
+
+	// 3. AP_CLUSTER_KIND is stamped on the operator and webd (both fail closed
 	// without it).
 	for _, dep := range []string{cloud.OperatorDeploymentName, webdDeploymentName} {
 		if !deploymentHasEnv(docs, dep, cloud.ClusterKindEnvVar) {
@@ -79,13 +88,13 @@ func runRenderValidate(ctx context.Context, out io.Writer, cfg RenderConfig, dir
 		}
 	}
 
-	// 3. SpiceDB is reachable: the endpoint ConfigMap every client reads is
+	// 4. SpiceDB is reachable: the endpoint ConfigMap every client reads is
 	// present, and when it names the in-cluster Service, the SpiceDBCluster that
 	// serves it ships too. Without these the overlay syncs green and nothing can
 	// authorize.
 	problems = append(problems, spicedbProblems(docs)...)
 
-	// 4. First-party images are pinned (no mutable :dev), unless --no-digest-pin.
+	// 5. First-party images are pinned (no mutable :dev), unless --no-digest-pin.
 	if !cfg.NoDigestPin {
 		for _, img := range firstPartyMutableImages(built) {
 			problems = append(problems, fmt.Sprintf("image %q uses a mutable tag; GitOps wants an immutable digest (render with a registry, or pass --no-digest-pin to accept this)", img))
@@ -149,54 +158,75 @@ func shippedSecretNames(docs []*unstructured.Unstructured) map[string]bool {
 	return out
 }
 
+// secretRef is one reference to a Secret from a workload's pod template.
 type secretRef struct {
 	workloadKind string
 	workload     string
 	secret       string
+	// optional is the reference's own `optional: true`; unset means required,
+	// as the kubelet reads it.
+	optional bool
+	// Where the reference sits, for requiredSecretsPatch: an env
+	// valueFrom.secretKeyRef (containerList is "containers" or
+	// "initContainers"), or a `secret:` volume. All empty for an envFrom or a
+	// projected-volume source, which carry no strategic-merge key.
+	containerList, container, env string
+	volume                        string
 }
 
-// nonOptionalSecretRefs collects every required (optional!=true) Secret reference
-// from pod templates in docs: env valueFrom.secretKeyRef, envFrom secretRef,
-// volume secrets and projected-volume secret sources, across containers and
-// initContainers. A missing optional field defaults to required, matching the
-// kubelet.
-func nonOptionalSecretRefs(docs []*unstructured.Unstructured) []secretRef {
+// podSecretRefs collects every Secret reference in d's pod template: env
+// valueFrom.secretKeyRef, envFrom secretRef, volume secrets and
+// projected-volume secret sources, across containers and initContainers.
+func podSecretRefs(d *unstructured.Unstructured) []secretRef {
+	spec, found, _ := unstructured.NestedMap(d.Object, "spec", "template", "spec")
+	if !found {
+		return nil
+	}
+	var refs []secretRef
+	add := func(ref map[string]any, nameKey string, at secretRef) {
+		if name, ok, _ := unstructured.NestedString(ref, nameKey); ok {
+			at.workloadKind, at.workload, at.secret, at.optional = d.GetKind(), d.GetName(), name, optionalTrue(ref)
+			refs = append(refs, at)
+		}
+	}
+	for _, cf := range []string{"containers", "initContainers"} {
+		for _, cm := range mapsAt(spec, cf) {
+			container, _, _ := unstructured.NestedString(cm, "name")
+			for _, em := range mapsAt(cm, "env") {
+				if skr, found, _ := unstructured.NestedMap(em, "valueFrom", "secretKeyRef"); found {
+					env, _, _ := unstructured.NestedString(em, "name")
+					add(skr, "name", secretRef{containerList: cf, container: container, env: env})
+				}
+			}
+			for _, efm := range mapsAt(cm, "envFrom") {
+				if sr, found, _ := unstructured.NestedMap(efm, "secretRef"); found {
+					add(sr, "name", secretRef{})
+				}
+			}
+		}
+	}
+	for _, vm := range mapsAt(spec, "volumes") {
+		if sec, found, _ := unstructured.NestedMap(vm, "secret"); found {
+			volume, _, _ := unstructured.NestedString(vm, "name")
+			add(sec, "secretName", secretRef{volume: volume})
+		}
+		for _, src := range mapsAt(vm, "projected", "sources") {
+			if sec, found, _ := unstructured.NestedMap(src, "secret"); found {
+				add(sec, "name", secretRef{})
+			}
+		}
+	}
+	return refs
+}
+
+// secretRefsWhere returns the references across docs' pod templates that keep
+// reports true for.
+func secretRefsWhere(docs []*unstructured.Unstructured, keep func(secretRef) bool) []secretRef {
 	var refs []secretRef
 	for _, d := range docs {
-		spec, found, _ := unstructured.NestedMap(d.Object, "spec", "template", "spec")
-		if !found {
-			continue
-		}
-		add := func(ref map[string]any, nameKey string) {
-			if optionalTrue(ref) {
-				return
-			}
-			if name, ok, _ := unstructured.NestedString(ref, nameKey); ok {
-				refs = append(refs, secretRef{d.GetKind(), d.GetName(), name})
-			}
-		}
-		for _, cf := range []string{"containers", "initContainers"} {
-			for _, cm := range mapsAt(spec, cf) {
-				for _, em := range mapsAt(cm, "env") {
-					if skr, found, _ := unstructured.NestedMap(em, "valueFrom", "secretKeyRef"); found {
-						add(skr, "name")
-					}
-				}
-				for _, efm := range mapsAt(cm, "envFrom") {
-					if sr, found, _ := unstructured.NestedMap(efm, "secretRef"); found {
-						add(sr, "name")
-					}
-				}
-			}
-		}
-		for _, vm := range mapsAt(spec, "volumes") {
-			if sec, found, _ := unstructured.NestedMap(vm, "secret"); found {
-				add(sec, "secretName")
-			}
-			for _, src := range mapsAt(vm, "projected", "sources") {
-				if sec, found, _ := unstructured.NestedMap(src, "secret"); found {
-					add(sec, "name")
-				}
+		for _, ref := range podSecretRefs(d) {
+			if keep(ref) {
+				refs = append(refs, ref)
 			}
 		}
 	}
