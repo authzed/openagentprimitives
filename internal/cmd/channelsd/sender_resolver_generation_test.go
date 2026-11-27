@@ -240,3 +240,32 @@ func TestSubChannelSenderForRebuildsAnAgentUISenderWhoseWiringChangedMidBuild(t 
 	assert.Same(t, minter, built[1].AgentUIMinter,
 		"the rebuild must carry the minter that arrived mid-build")
 }
+
+// Sessions on one Channel resolve concurrently once the relay handles sessions
+// in parallel. Two builds that both missed the cache must end up sharing ONE
+// Sender: a Sender carries per-instance state (a plan card's ts, an expiry
+// ticker's cancel), and the instance the second write used to replace kept
+// that state where nothing would ever find it again.
+func TestSenderForConcurrentMissesShareOneSender(t *testing.T) {
+	k := registerHookKind(t, "hookkind-concurrent-miss")
+	r, sess := newHookKindResolver(t, k.name)
+
+	// The first build pauses mid-construction while a second resolve — another
+	// session's envelope on the same Channel — misses the cache, builds, and
+	// stores its own Sender.
+	var second channelkinds.Sender
+	k.onBuild = func() {
+		var err error
+		second, err = r.SenderFor(context.Background(), sess)
+		require.NoError(t, err, "the racing resolve must succeed")
+	}
+	first, err := r.SenderFor(context.Background(), sess)
+	require.NoError(t, err, "the paused resolve must succeed")
+
+	require.Len(t, k.builtDeps(), 2, "both resolves missed the cache, or this test is not exercising the race")
+	assert.True(t, first == second,
+		"the resolve that finished second must adopt the stored Sender rather than return (and orphan) its own")
+	cached, err := r.SenderFor(context.Background(), sess)
+	require.NoError(t, err)
+	assert.True(t, cached == second, "and the cache holds that same Sender")
+}

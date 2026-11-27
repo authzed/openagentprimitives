@@ -210,14 +210,24 @@ func (r *senderResolver) invalidateSendersLocked() {
 // superseded snapshot always implies a changed generation here, while a Set*
 // landing between the two merely costs one extra rebuild of a Sender that was
 // in fact current.
-func (r *senderResolver) cacheSenderIfCurrent(key string, sender channelkinds.Sender, gen uint64) bool {
+//
+// First stored wins. Two sessions on one Channel can miss the cache together
+// (the relay handles sessions concurrently), and Senders carry per-instance
+// state — a plan card's ts, an expiry ticker's cancel — so the loser must adopt
+// the instance already stored rather than replace it: overwriting orphaned the
+// first instance along with whatever its first Send had set up. The returned
+// Sender is the one to use.
+func (r *senderResolver) cacheSenderIfCurrent(key string, sender channelkinds.Sender, gen uint64) (channelkinds.Sender, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.wiringGen != gen {
-		return false
+		return sender, false
+	}
+	if existing, ok := r.cache[key]; ok {
+		return existing, true
 	}
 	r.cache[key] = sender
-	return true
+	return sender, true
 }
 
 // resolveDeps loads the Channel and Secret for the given AgentSession and
@@ -300,7 +310,8 @@ func (r *senderResolver) SenderFor(ctx context.Context, sess *spiceboxv1alpha1.A
 		return nil, err
 	}
 	sender := k.NewSender(deps)
-	if !r.cacheSenderIfCurrent(key, sender, gen) {
+	sender, cached := r.cacheSenderIfCurrent(key, sender, gen)
+	if !cached {
 		// The Sender is still returned: this envelope goes out with the
 		// wiring it was built from, which is a missing button at worst.
 		// Dropping it would trade that for a missing message.
@@ -338,7 +349,8 @@ func (r *senderResolver) SubChannelSenderFor(ctx context.Context, sess *spicebox
 	sender := k.SubChannelSender(name, deps)
 	// sender may be nil when the kind doesn't implement the sub-channel;
 	// we still cache the nil so we don't re-hit k8s on every envelope.
-	if !r.cacheSenderIfCurrent(key, sender, gen) {
+	sender, cached := r.cacheSenderIfCurrent(key, sender, gen)
+	if !cached {
 		ctrllog.FromContext(ctx).Info(
 			"sub-channel sender resolution: wiring changed while this Sender was being built; "+
 				"delivering from it but not caching it, so the next lookup rebuilds",
@@ -389,8 +401,14 @@ func (r *senderResolver) StreamDeltaSinkFor(ctx context.Context, sess *spiceboxv
 	}
 	sink := r.buildSink(deps)
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	// First stored wins, as for Senders (cacheSenderIfCurrent): a sink holds
+	// the in-progress bubble per thread, and an orphaned one would keep
+	// flushing its bubble while the next delta started a second.
+	if existing, ok := r.sinkCache[key]; ok {
+		return existing, nil
+	}
 	r.sinkCache[key] = sink
-	r.mu.Unlock()
 	return sink, nil
 }
 

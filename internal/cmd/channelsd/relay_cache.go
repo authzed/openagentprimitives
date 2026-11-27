@@ -423,10 +423,11 @@ func (w trackingSubResourceClient) Patch(ctx context.Context, obj client.Object,
 // everything else — every write, every other read — from the trackingClient it
 // embeds.
 //
-// The relay handles every session's outbound traffic on ONE goroutine, and
-// used to spend at least one API-server round trip per envelope. Under a burst
-// of busy sessions that round trip, rate-limited client side, was the whole
-// throughput ceiling.
+// The relay handles every session's outbound traffic, a bounded number of
+// sessions at a time, and used to spend at least one API-server round trip per
+// envelope. Under a burst of busy sessions that round trip, rate-limited client
+// side, was the whole throughput ceiling. Reads arrive from several goroutines
+// at once; the writeTracker is what they share, and it is locked.
 //
 // Read-your-writes: the relay's very next envelope for a session must see what
 // channelsd just wrote to it — the opening-sent marker, or it posts the opening
