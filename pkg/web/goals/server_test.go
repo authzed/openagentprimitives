@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,4 +272,25 @@ func TestRestoringRegistry(t *testing.T) {
 	w := httptest.NewRecorder()
 	f.s.ServeHTTP(w, r)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// A conflict is answered 409 with its own message. The runner rebuilds the
+// sentinel from that message (httpclient.GoalConflict), so a second reply
+// after a hand-off must still name itself however it was wrapped on the way.
+func TestFailAnswersAConflictWithItsOwnMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		handedOff bool
+	}{
+		{name: "a second reply after a hand-off: 409 naming the hand-off", err: fmt.Errorf("prepare reply for run: %w", core.ErrReplyHandedOff), handedOff: true},
+		{name: "a run that is no longer current: 409 that does not", err: fmt.Errorf("prepare reply for run: %w", core.ErrConflict)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			(&Server{}).fail(w, httptest.NewRequest(http.MethodPost, "/goals/team/run", nil), tc.err)
+			assert.Equal(t, http.StatusConflict, w.Code)
+			assert.Equal(t, tc.handedOff, strings.Contains(w.Body.String(), core.ErrReplyHandedOff.Error()), w.Body.String())
+		})
+	}
 }

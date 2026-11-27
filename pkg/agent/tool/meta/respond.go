@@ -416,7 +416,10 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 		}
 		accepted, err := t.cfg.AcceptReply(ctx, payload)
 		switch {
-		case errors.Is(err, goals.ErrConflict):
+		case errors.Is(err, goals.ErrReplyHandedOff):
+			// Only this conflict means a reply went out. Any other one (the
+			// run is no longer current, its approval is no longer bound) sent
+			// nothing, and falls to the unconfirmed text below.
 			return tool.Result{Trusted: true, IsError: true, Content: "A reply for this run was already handed off for posting; a goal run sends one reply. Do not send another."}, nil
 		case errors.Is(err, ErrGoalReplyPublishFailed):
 			return tool.Result{Trusted: true, IsError: true, Content: "This run's reply was handed off earlier but could not be published, so nothing was posted; the run records it as publish_failed. Do not resend."}, nil

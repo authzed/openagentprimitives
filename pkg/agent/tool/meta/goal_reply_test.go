@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -250,6 +251,20 @@ func TestGoalReplyHandOffRecovery(t *testing.T) {
 		assert.Contains(t, result.Content, "nothing was posted")
 		assert.Equal(t, []string{s.op}, s.publishFailure)
 		assert.Equal(t, goals.ReplyPublishFailed, s.state)
+	})
+	t.Run("a conflict that is not a hand-off: reported as unconfirmed, never as already handed off", func(t *testing.T) {
+		publishes := 0
+		cfg := RespondConfig{ChannelKind: "slack", Capabilities: []string{"text"},
+			AcceptReply: GoalReplyAcceptor(func(context.Context, goals.Request) (goals.Response, error) {
+				return goals.Response{}, fmt.Errorf("%w: the run is no longer current", goals.ErrConflict)
+			}),
+			NATSPublish: func(context.Context, string, []byte) error { publishes++; return nil },
+		}
+		result := runRespond(t, cfg, "call", "Standup summary")
+		require.True(t, result.IsError)
+		assert.Contains(t, result.Content, "Goal reply acceptance is unconfirmed")
+		assert.NotContains(t, result.Content, "handed off")
+		assert.Zero(t, publishes, "nothing is published for a refused reply")
 	})
 	t.Run("a different reply after a hand-off: refused as already handed off", func(t *testing.T) {
 		s := &handOffServer{t: t}

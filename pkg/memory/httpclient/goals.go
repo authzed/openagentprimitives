@@ -19,6 +19,24 @@ func (c *Client) Goals(ctx context.Context, ns, name string, req webgoals.Reques
 	return out, err
 }
 
+// GoalConflict rebuilds the goal sentinel a 409 from the goal server stands
+// for, wrapping err; any other err is returned as it is. The server answers
+// every goals.ErrConflict with 409 and the refusal's own message, so a
+// conflict that wraps a narrower sentinel still carries that sentinel's text:
+// a second reply after a hand-off comes back as goals.ErrReplyHandedOff, and
+// every other conflict (a run no longer current, a consent no longer bound, a
+// stale revision) as plain goals.ErrConflict.
+func GoalConflict(err error) error {
+	var se *statusError
+	if !errors.As(err, &se) || se.code != http.StatusConflict {
+		return err
+	}
+	if strings.Contains(se.msg, webgoals.ErrReplyHandedOff.Error()) {
+		return fmt.Errorf("%w: %v", webgoals.ErrReplyHandedOff, err)
+	}
+	return fmt.Errorf("%w: %v", webgoals.ErrConflict, err)
+}
+
 func (c *Client) CommitGoalConsent(ctx context.Context, entry memory.Entry) error {
 	return c.do(ctx, http.MethodPost, "/goals/decision", entry, nil)
 }

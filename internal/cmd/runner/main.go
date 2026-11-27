@@ -1625,13 +1625,11 @@ func run(cfg *config) error {
 				req.TurnRef = l.TurnRef()
 			}
 			resp, err := memHTTP.Goals(ctx, ns, name, req)
-			if code, ok := httpclient.StatusCode(err); ok && code == http.StatusConflict {
-				// The goal server answers ErrConflict with 409. Rebuild it so a
-				// tool can tell "this run already did that" from a transport
-				// failure (respond_to_user's one-reply-per-run refusal).
-				err = fmt.Errorf("%w: %v", goalmodel.ErrConflict, err)
-			}
-			return resp, err
+			// The goal server answers ErrConflict with 409. Rebuild it so a
+			// tool can tell a domain refusal from a transport failure, and
+			// respond_to_user's one-reply-per-run refusal (ErrReplyHandedOff)
+			// from every other conflict.
+			return resp, httpclient.GoalConflict(err)
 		},
 		NATSPublish:      pubFn,
 		EnvelopeSigner:   envSigner,
