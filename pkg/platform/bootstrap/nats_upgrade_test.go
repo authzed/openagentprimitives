@@ -1,4 +1,4 @@
-package installcmd
+package bootstrap
 
 import (
 	"context"
@@ -15,7 +15,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/authzed/openagentprimitives/cmd/oap/internal/kube"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	apnats "github.com/authzed/openagentprimitives/pkg/platform/nats"
 	"github.com/authzed/openagentprimitives/pkg/platform/nats/natstest"
@@ -24,17 +23,17 @@ import (
 const natsSystemNS = "agentprimitives-system"
 
 // seededCluster returns a fake cluster with the NATS identity and TLS Secrets
-// already written — the state ensureNATSClientCredsWithClient requires.
+// already written — the state EnsureNATSClientCreds requires.
 func seededCluster(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
-	c := fake.NewClientBuilder().WithScheme(kube.Scheme).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithObjects(objs...).Build()
 	ctx := context.Background()
-	require.NoError(t, ensureNATSIdentityWithClient(ctx, c), "seed identity")
-	require.NoError(t, ensureNATSTLSWithClient(ctx, c), "seed tls")
+	require.NoError(t, EnsureNATSIdentity(ctx, c), "seed identity")
+	require.NoError(t, EnsureNATSTLS(ctx, c), "seed tls")
 	return c
 }
 
-// storedIdentity reads back the account keys ensureNATSIdentityWithClient
+// storedIdentity reads back the account keys EnsureNATSIdentity
 // wrote, so a test can mint an "older release's" credential signed by the same
 // account the installer will compare against.
 func storedIdentity(t *testing.T, c client.Client) *apnats.Identity {
@@ -49,7 +48,7 @@ func storedIdentity(t *testing.T, c client.Client) *apnats.Identity {
 	}
 }
 
-// currentNATSCA is the CA ensureNATSTLSWithClient just wrote — what a healthy
+// currentNATSCA is the CA EnsureNATSTLS just wrote — what a healthy
 // creds Secret carries, so a test can isolate grant drift from CA drift.
 func currentNATSCA(t *testing.T, c client.Client) []byte {
 	t.Helper()
@@ -75,8 +74,8 @@ func natsCreds(t *testing.T, c client.Client, name string) string {
 // Derived by subtraction from the live grant rather than transcribed, so it
 // stays a faithful "one release behind" as the real grant grows.
 func webdGrantBeforeWebhookInbound() apnats.UserGrant {
-	old := apnats.UserGrant{Name: webdNATSGrant.Name, SubAllow: webdNATSGrant.SubAllow}
-	for _, s := range webdNATSGrant.PubAllow {
+	old := apnats.UserGrant{Name: WebdNATSGrant.Name, SubAllow: WebdNATSGrant.SubAllow}
+	for _, s := range WebdNATSGrant.PubAllow {
 		if s == channelevents.WebhookInboundSubject {
 			continue
 		}
@@ -128,7 +127,7 @@ func restartedAt(t *testing.T, c client.Client, name string) string {
 // TestEnsureNATSClientCreds_ReMintsAGrantThatGainedASubject is the upgrade
 // this blocker is about.
 //
-// A cluster installed before ap.channel.webhook_inbound joined webdNATSGrant
+// A cluster installed before ap.channel.webhook_inbound joined WebdNATSGrant
 // carries a webd JWT without it. `oap install` used to see the Secret, return
 // early, and leave the stale JWT in place forever — and the resulting failure
 // is invisible: nats-server reports a publish permission violation
@@ -166,7 +165,7 @@ func TestEnsureNATSClientCreds_ReMintsAGrantThatGainedASubject(t *testing.T) {
 		"precondition: the pre-upgrade credential must NOT permit the webhook-inbound publish, or this test proves nothing")
 
 	var narrated []string
-	require.NoError(t, ensureNATSClientCredsWithClient(ctx, c, func(f string, a ...any) {
+	require.NoError(t, EnsureNATSClientCreds(ctx, c, func(f string, a ...any) {
 		narrated = append(narrated, fmt.Sprintf(f, a...))
 	}), "the upgrade run must succeed")
 
@@ -201,12 +200,12 @@ func TestEnsureNATSClientCreds_LeavesAnUpToDateCredentialAlone(t *testing.T) {
 	ctx := context.Background()
 	c := seededCluster(t, webdDeployment("spicebox-webd-nats-creds"))
 
-	require.NoError(t, ensureNATSClientCredsWithClient(ctx, c, nil), "first install")
+	require.NoError(t, EnsureNATSClientCreds(ctx, c, nil), "first install")
 	before := natsCreds(t, c, "spicebox-webd-nats-creds")
 	require.NotEmpty(t, before)
 
 	var narrated []string
-	require.NoError(t, ensureNATSClientCredsWithClient(ctx, c, func(f string, a ...any) {
+	require.NoError(t, EnsureNATSClientCreds(ctx, c, func(f string, a ...any) {
 		narrated = append(narrated, fmt.Sprintf(f, a...))
 	}), "second install")
 
@@ -224,7 +223,7 @@ func TestEnsureNATSClientCreds_RefreshesAStaleCA(t *testing.T) {
 	ctx := context.Background()
 	c := seededCluster(t, webdDeployment("spicebox-cli-nats-creds"))
 
-	require.NoError(t, ensureNATSClientCredsWithClient(ctx, c, nil), "first install")
+	require.NoError(t, EnsureNATSClientCreds(ctx, c, nil), "first install")
 	creds := natsCreds(t, c, "spicebox-cli-nats-creds")
 
 	var sec corev1.Secret
@@ -233,7 +232,7 @@ func TestEnsureNATSClientCreds_RefreshesAStaleCA(t *testing.T) {
 	sec.Data["ca.crt"] = []byte("a CA from a previous NATS install")
 	require.NoError(t, c.Update(ctx, &sec))
 
-	require.NoError(t, ensureNATSClientCredsWithClient(ctx, c, nil), "second install")
+	require.NoError(t, EnsureNATSClientCreds(ctx, c, nil), "second install")
 
 	require.NoError(t, c.Get(ctx, key, &sec))
 	var tls corev1.Secret

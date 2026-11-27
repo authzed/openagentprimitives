@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // fakeProvisioner is a named no-op Provisioner used to exercise the registry in
@@ -13,6 +14,8 @@ import (
 type fakeProvisioner struct{ name string }
 
 func (fakeProvisioner) Provision(context.Context, Params) error { return nil }
+
+func (fakeProvisioner) Manifests() []*unstructured.Unstructured { return nil }
 
 // resetRegistry clears the package-global registry so each test starts clean.
 // The real registry is populated by this package's init() (the no-op default)

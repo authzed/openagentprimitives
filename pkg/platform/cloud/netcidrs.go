@@ -14,7 +14,7 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// dnsEgressPodSelector is shared by ApplyDNSEgressPolicy and the bundled static
+// dnsEgressPodSelector is shared by DNSEgressPolicy and the bundled static
 // config/networkpolicy/allow-dns.yaml (kept in sync by hand): every pod in the
 // namespace gets DNS egress EXCEPT extractord, whose whole security story is
 // deny-all egress including DNS (config/networkpolicy/extractord.yaml). It
@@ -34,7 +34,7 @@ func dnsEgressPodSelector() metav1.LabelSelector {
 	}
 }
 
-// ApplyDNSEgressPolicy creates an additive allow-dns-cloud NetworkPolicy in the
+// DNSEgressPolicy builds the additive allow-dns-cloud NetworkPolicy in the
 // agentprimitives-system namespace, permitting egress to the given CIDRs on
 // UDP+TCP 53. It supplements the bundled cloud-agnostic allow-dns policy (scoped
 // to kube-system) for clouds resolving DNS outside kube-system — e.g. GKE
@@ -42,22 +42,18 @@ func dnsEgressPodSelector() metav1.LabelSelector {
 // it, default-deny egress silently drops the lookup and every in-cluster
 // service-name connect hangs.
 //
-// cidrs comes from the cloud Strategy's DNSEgressCIDRs(); nil/empty is a no-op.
-func ApplyDNSEgressPolicy(ctx context.Context, cl Clients, cidrs []string) error {
+// cidrs comes from the cloud Strategy's DNSEgressCIDRs(); nil/empty returns nil
+// (no policy is needed). It is the one definition both `oap install`
+// (ApplyDNSEgressPolicy) and `oap render` (written into the overlay) emit.
+func DNSEgressPolicy(cidrs []string) *networkingv1.NetworkPolicy {
 	if len(cidrs) == 0 {
 		return nil
-	}
-	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(cidrs))
-	for _, cidr := range cidrs {
-		peers = append(peers, networkingv1.NetworkPolicyPeer{
-			IPBlock: &networkingv1.IPBlock{CIDR: cidr},
-		})
 	}
 	port53 := func(proto corev1.Protocol) networkingv1.NetworkPolicyPort {
 		p := intstr.FromInt32(53)
 		return networkingv1.NetworkPolicyPort{Protocol: ptr.To(proto), Port: &p}
 	}
-	np := &networkingv1.NetworkPolicy{
+	return &networkingv1.NetworkPolicy{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "networking.k8s.io/v1",
 			Kind:       "NetworkPolicy",
@@ -70,7 +66,7 @@ func ApplyDNSEgressPolicy(ctx context.Context, cl Clients, cidrs []string) error
 			PodSelector: dnsEgressPodSelector(),
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
 			Egress: []networkingv1.NetworkPolicyEgressRule{{
-				To: peers,
+				To: ipBlockPeers(cidrs),
 				Ports: []networkingv1.NetworkPolicyPort{
 					port53(corev1.ProtocolUDP),
 					port53(corev1.ProtocolTCP),
@@ -78,21 +74,14 @@ func ApplyDNSEgressPolicy(ctx context.Context, cl Clients, cidrs []string) error
 			}},
 		},
 	}
-	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(np)
-	if err != nil {
-		return fmt.Errorf("convert allow-dns-cloud NetworkPolicy: %w", err)
-	}
-	// The typed→unstructured converter emits a null creationTimestamp and an
-	// empty status that some apiservers reject on apply; drop both.
-	unstructured.RemoveNestedField(obj, "metadata", "creationTimestamp")
-	unstructured.RemoveNestedField(obj, "status")
-	if err := applyNetworkPolicy(ctx, cl.Dynamic, &unstructured.Unstructured{Object: obj}); err != nil {
-		return fmt.Errorf("apply allow-dns-cloud NetworkPolicy: %w", err)
-	}
-	return nil
 }
 
-// ApplyGatewayBackendIngressPolicy creates an additive allow-webd-gateway
+// ApplyDNSEgressPolicy applies DNSEgressPolicy(cidrs); nil/empty is a no-op.
+func ApplyDNSEgressPolicy(ctx context.Context, cl Clients, cidrs []string) error {
+	return applyPolicy(ctx, cl, DNSEgressPolicy(cidrs))
+}
+
+// GatewayBackendIngressPolicy builds the additive allow-webd-gateway
 // NetworkPolicy permitting the cloud managed Gateway's load-balancer source
 // ranges to reach webd's port 8080. Without it, the namespace-wide
 // default-deny ingress drops the L7 health-check probes — which arrive from
@@ -103,22 +92,17 @@ func ApplyDNSEgressPolicy(ctx context.Context, cl Clients, cidrs []string) error
 // NetworkPolicy) and fatal on GKE / any enforcing CNI.
 //
 // cidrs is a caller-supplied CIDR slice — the per-cloud value comes from the
-// cloud Strategy's GatewayBackendIngressCIDRs(). A nil/empty slice is a no-op.
+// cloud Strategy's GatewayBackendIngressCIDRs(). A nil/empty slice returns nil.
 // Clouds whose Gateway backend traffic originates from in-cluster Envoy proxy
 // pods rather than a fixed range should use a pod/namespace-selector allow
-// instead; pass nil/empty here in that case.
-func ApplyGatewayBackendIngressPolicy(ctx context.Context, cl Clients, cidrs []string) error {
+// instead; pass nil/empty here in that case. Shared by `oap install` and
+// `oap render`.
+func GatewayBackendIngressPolicy(cidrs []string) *networkingv1.NetworkPolicy {
 	if len(cidrs) == 0 {
 		return nil
 	}
-	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(cidrs))
-	for _, cidr := range cidrs {
-		peers = append(peers, networkingv1.NetworkPolicyPeer{
-			IPBlock: &networkingv1.IPBlock{CIDR: cidr},
-		})
-	}
 	port := intstr.FromInt32(WebdServicePort)
-	np := &networkingv1.NetworkPolicy{
+	return &networkingv1.NetworkPolicy{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "networking.k8s.io/v1",
 			Kind:       "NetworkPolicy",
@@ -133,23 +117,46 @@ func ApplyGatewayBackendIngressPolicy(ctx context.Context, cl Clients, cidrs []s
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
-				From: peers,
+				From: ipBlockPeers(cidrs),
 				Ports: []networkingv1.NetworkPolicyPort{
 					{Protocol: ptr.To(corev1.ProtocolTCP), Port: &port},
 				},
 			}},
 		},
 	}
+}
+
+// ApplyGatewayBackendIngressPolicy applies GatewayBackendIngressPolicy(cidrs);
+// nil/empty is a no-op.
+func ApplyGatewayBackendIngressPolicy(ctx context.Context, cl Clients, cidrs []string) error {
+	return applyPolicy(ctx, cl, GatewayBackendIngressPolicy(cidrs))
+}
+
+func ipBlockPeers(cidrs []string) []networkingv1.NetworkPolicyPeer {
+	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		peers = append(peers, networkingv1.NetworkPolicyPeer{
+			IPBlock: &networkingv1.IPBlock{CIDR: cidr},
+		})
+	}
+	return peers
+}
+
+// applyPolicy converts np to unstructured and applies it; nil is a no-op.
+func applyPolicy(ctx context.Context, cl Clients, np *networkingv1.NetworkPolicy) error {
+	if np == nil {
+		return nil
+	}
 	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(np)
 	if err != nil {
-		return fmt.Errorf("convert allow-webd-gateway NetworkPolicy: %w", err)
+		return fmt.Errorf("convert %s NetworkPolicy: %w", np.Name, err)
 	}
-	// The typed→unstructured converter emits a null creationTimestamp and an empty
-	// status that some apiservers reject on apply; drop both.
+	// The typed→unstructured converter emits a null creationTimestamp and an
+	// empty status that some apiservers reject on apply; drop both.
 	unstructured.RemoveNestedField(obj, "metadata", "creationTimestamp")
 	unstructured.RemoveNestedField(obj, "status")
 	if err := applyNetworkPolicy(ctx, cl.Dynamic, &unstructured.Unstructured{Object: obj}); err != nil {
-		return fmt.Errorf("apply allow-webd-gateway NetworkPolicy: %w", err)
+		return fmt.Errorf("apply %s NetworkPolicy: %w", np.Name, err)
 	}
 	return nil
 }

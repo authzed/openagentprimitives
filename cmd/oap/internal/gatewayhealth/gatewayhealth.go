@@ -28,6 +28,8 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/kube"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 )
@@ -53,6 +55,11 @@ type Provisioner interface {
 	// provisioner is registered as the default, so callers never get nil from
 	// For and need no nil check.
 	Provision(ctx context.Context, p Params) error
+	// Manifests returns the objects Provision applies, as a pure function (no
+	// cluster call), so `oap render` can write the same backend-health config
+	// into a GitOps overlay that `oap install` applies imperatively. nil means
+	// the cloud needs none.
+	Manifests() []*unstructured.Unstructured
 }
 
 // noopProvisioner is the default: non-GKE external Gateways are Envoy Gateways,
@@ -62,6 +69,8 @@ type Provisioner interface {
 type noopProvisioner struct{}
 
 func (noopProvisioner) Provision(context.Context, Params) error { return nil }
+
+func (noopProvisioner) Manifests() []*unstructured.Unstructured { return nil }
 
 func init() { Register(noopProvisioner{}) }
 

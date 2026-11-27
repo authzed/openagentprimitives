@@ -1,0 +1,31 @@
+# bootstrap: lets the GitOps pre-start bootstrap Job reach the kube apiserver.
+#
+# `oap render` emits a Job (app.kubernetes.io/name: spicebox-bootstrap) that
+# mints the internal Secrets before the operator starts. default-deny selects
+# its pod like every other, so without this egress it cannot reach the
+# apiserver on an enforcing CNI: it exhausts its backoffLimit, and because its
+# name is content-addressed a re-sync never recreates it.
+#
+# It gets its own policy rather than a row in egress-external: the Job talks to
+# the apiserver and nothing else, so it needs none of the internal data-store
+# ports that policy opens. The apiserver's address is cluster-specific and may
+# sit inside the RFC1918 Service CIDR, so the destination is unrestricted on
+# the apiserver ports only (same reasoning as egress-external's rule 2). DNS is
+# supplied by allow-dns. No ingress: nothing dials the Job.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bootstrap
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spicebox-bootstrap
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }

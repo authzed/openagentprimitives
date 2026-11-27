@@ -1,0 +1,21 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: spicebox-webhook-selfsign
+  namespace: agentprimitives-system
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: spicebox-webhook-tls
+  namespace: agentprimitives-system
+spec:
+  secretName: spicebox-webhook-tls
+  dnsNames:
+    - spicebox-webhook.agentprimitives-system.svc
+    - spicebox-webhook.agentprimitives-system.svc.cluster.local
+  issuerRef:
+    name: spicebox-webhook-selfsign
+    kind: Issuer

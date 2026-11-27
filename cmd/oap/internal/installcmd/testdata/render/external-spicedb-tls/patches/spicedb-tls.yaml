@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicebox-operator
+  namespace: agentprimitives-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: operator
+          env:
+            - name: SPICEDB_INSECURE
+              value: "false"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentprimitives-authzd
+  namespace: agentprimitives-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: authzd
+          env:
+            - name: SPICEDB_INSECURE
+              value: "false"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicebox-webd
+  namespace: agentprimitives-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: webd
+          env:
+            - name: SPICEDB_INSECURE
+              value: "false"
