@@ -1,6 +1,6 @@
 // pkg/channels/channelkinds/slack/lookup_nearmiss.go
 //
-// Third pass of the name lookup: when neither exact pass matched, collect
+// Last pass of the name lookup: when the exact pass matched nobody, collect
 // near-miss candidates for the agent to judge. A user qualifies when their
 // surname (last name token) matches the requested surname — nicknames vary
 // the given name (Frederick→Freddie), rarely the surname — or when their full
@@ -26,7 +26,7 @@ const nearMissMaxCandidates = 5
 // nearMissCandidates scans the workspace snapshot for near-miss matches
 // of want (already lowercased/trimmed by lookupByName). Deleted and bot
 // accounts are excluded — a wrong mention pings someone, so the fuzzy
-// pass is stricter about who it offers than the exact passes need to be.
+// pass is stricter about who it offers than the exact pass needs to be.
 // Results are ranked closest-first (ties by user ID for determinism) and
 // capped at nearMissMaxCandidates.
 func nearMissCandidates(users []slackapi.User, want string) []channelkinds.MentionCandidate {

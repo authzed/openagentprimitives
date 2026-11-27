@@ -1592,6 +1592,30 @@ const AnnotationSessionOpeningMessageID = "agentprimitives.authzed.com/session-o
 // naming any other type is logged and not written.
 const AnnotationTriggerOwnerSubject = "agentprimitives.authzed.com/trigger-owner-subject"
 
+// AnnotationTriggerOwnerTrusted records whether the provider vouched that the
+// trigger owner named by AnnotationTriggerOwnerSubject stands in a trusted
+// relationship to the resource the trigger fired on — for a GitHub pull
+// request, an author_association of MEMBER, OWNER or COLLABORATOR. Value is
+// AnnotationTriggerOwnerTrustedTrue or AnnotationTriggerOwnerTrustedFalse.
+//
+// Written alongside the owner subject by channelsd from the same VERIFIED
+// delivery (the kind's TriggerOwnerTrustProvider), never from submitter text.
+// Read fail-closed: a session with a trigger owner and anything other than
+// "true" here is a session an untrusted party opened. Today it gates "name:"
+// user references (pkg/platform/identity/subjectresolve), whose input is text
+// the trigger owner chose: they are honored only with an owner AND "true"
+// here, so a session with no trigger owner at all (one a person started in
+// conversation) refuses them too.
+const AnnotationTriggerOwnerTrusted = "agentprimitives.authzed.com/trigger-owner-trusted"
+
+// Values of AnnotationTriggerOwnerTrusted. Both are non-empty so a later
+// delivery's stamp overwrites an earlier one (pre-turn stamping skips empty
+// values).
+const (
+	AnnotationTriggerOwnerTrustedTrue  = "true"
+	AnnotationTriggerOwnerTrustedFalse = "false"
+)
+
 // PassthroughLinkSigningKeySecret names the Secret in the system
 // namespace whose "key" data holds the HMAC signing key for
 // passthrough deep-links. Generated once by `oap install`; mounted by

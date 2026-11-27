@@ -1,0 +1,95 @@
+{
+  "name": "reviewbot-requested-review-name-refused",
+  "description": "A person asks the agent, in conversation, to review a pull request. No signed webhook opened this session, so it carries no trigger owner and nothing verified says who the pull request's author is: the author's full name reaches the agent as profile text the author chose, and could be anyone's. The platform knows exactly one person by that name (a chat workspace member whose vouched email is robin.hale@example.com, with a saved notifications preference of `always`, seeded so a broken gate would visibly read it).\n\nThe agent asks for that person's preference by name (`name:Robin Hale`). The TOOL RESULT is an ERROR saying name references are not honored in a session with no vouched trigger owner, and it does not carry the saved value. Asserted on the tool result, not the reply: a scripted transcript says the same words whether the read was refused or answered.\n\nThe second read is the control that makes the first one mean something. The same person asked for by their vouched EMAIL in the same session answers `always` from the user layer, so the refusal above is the name gate and not a directory, seed or preference that was never there.\n\nThe agent treats the refusal as the class contract says, like `never`: plain login, no mention.",
+  "agentDir": "testdata/agent-reviewbot-requested",
+  "agentClass": "demo-reviewbot-requested",
+  "seedUserIdentities": [
+    {
+      "email": "robin.hale@example.com",
+      "realName": "Robin Hale"
+    }
+  ],
+  "seedUserPreferences": [
+    {
+      "subject": "email:robin.hale@example.com",
+      "key": "notifications",
+      "value": "always"
+    }
+  ],
+  "userTurns": [
+    "please review https://github.com/demo-org/demo-repo/pull/4"
+  ],
+  "llm": [
+    {
+      "expect": {
+        "userTextContains": "demo-org/demo-repo/pull/4",
+        "toolOffered": "get_preferences"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "get_preferences",
+            "args": {
+              "user": "name:Robin Hale"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "get_preferences",
+        "lastToolResultIsError": true,
+        "lastToolResultContains": "name references are not honored in this session",
+        "lastToolResultNotContains": "always"
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "get_preferences",
+            "args": {
+              "user": "email:robin.hale@example.com"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "get_preferences",
+        "lastToolResultIsError": false,
+        "lastToolResultContains": "\"value\": \"always\",\n        \"source\": \"user\""
+      },
+      "reply": [
+        {
+          "text": "Reviewed PR #4 \"Update README.md\" (demo-org/demo-repo) for demo-contributor.\n\nDocumentation-only change (+3/-1 lines in README.md); no code, config, or tests touched. Safe to merge as-is."
+        }
+      ]
+    },
+    {
+      "expect": {
+        "lastToolResult": "respond_to_user",
+        "lastToolResultIsError": false
+      },
+      "reply": [
+        {
+          "toolUse": {
+            "name": "agent_work_complete",
+            "args": {
+              "summary": "Reviewed demo-org/demo-repo#4 on request. The author could not be identified by name (name lookups are refused in a requested review), so delivered with their plain login and no mention."
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assert": {
+    "agentReplyContains": [
+      "for demo-contributor"
+    ],
+    "approvalPrompts": 0,
+    "toolsCalled": [
+      "get_preferences"
+    ]
+  }
+}

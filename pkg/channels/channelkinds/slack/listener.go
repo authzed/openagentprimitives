@@ -1969,6 +1969,7 @@ func (l *slackListener) resolveIdentity(ctx context.Context, userID string) chan
 			id.Email = identity.Email(cached.Email)
 			id.TeamScope = identity.TeamScope(cached.TeamID)
 			id.DisplayName = cached.DisplayName
+			id.RealName = cached.RealName
 			if cached.Membership == channelkinds.OrgMembershipMember {
 				id.OrgMembership = channelkinds.OrgMembershipMember
 			}
@@ -1998,9 +1999,10 @@ func (l *slackListener) resolveIdentity(ctx context.Context, userID string) chan
 	id.Email = identity.Email(trustedEmail)
 	id.TeamScope = identity.TeamScope(user.TeamID)
 	id.DisplayName = preferredDisplayName(user)
+	id.RealName = strings.TrimSpace(user.Profile.RealName)
 	id.OrgMembership = membership
 	if l.idents != nil {
-		l.idents.Put(userInfo{UserID: userID, Email: trustedEmail, TeamID: user.TeamID, DisplayName: id.DisplayName, Membership: membership})
+		l.idents.Put(userInfo{UserID: userID, Email: trustedEmail, TeamID: user.TeamID, DisplayName: id.DisplayName, RealName: id.RealName, Membership: membership})
 	}
 	return id
 }

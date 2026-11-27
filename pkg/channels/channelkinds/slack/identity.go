@@ -35,6 +35,7 @@ type userInfo struct {
 	Email       string
 	TeamID      string
 	DisplayName string
+	RealName    string
 	// Membership is the org standing derived from the same users.info
 	// response the rest of the entry came from. Empty (an entry cached by
 	// a path that never classified the user) is treated as guest on read.

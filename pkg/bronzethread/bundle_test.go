@@ -269,6 +269,22 @@ func TestBundle_Validate(t *testing.T) {
 			wantErr: "seedRelationships[0] has no subject",
 		},
 		{
+			name: "a user identity seed with no email: refused",
+			doctor: func(b bt.Bundle) bt.Bundle {
+				b.SeedUserIdentities = []bt.SeedUserIdentity{{RealName: "Robin Hale"}}
+				return b
+			},
+			wantErr: "seedUserIdentities[0] has no email",
+		},
+		{
+			name: "a user identity seed with no real name: refused",
+			doctor: func(b bt.Bundle) bt.Bundle {
+				b.SeedUserIdentities = []bt.SeedUserIdentity{{Email: "robin@example.com"}}
+				return b
+			},
+			wantErr: "seedUserIdentities[0] has no realName",
+		},
+		{
 			name:    "the zero bundle: refused",
 			doctor:  func(bt.Bundle) bt.Bundle { return bt.Bundle{} },
 			wantErr: "bundle needs a name",
