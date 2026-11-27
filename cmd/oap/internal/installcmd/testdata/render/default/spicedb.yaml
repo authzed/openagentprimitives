@@ -9,7 +9,7 @@ metadata:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: spicebox-spicedb-createdb
+  name: spicebox-spicedb-createdb-e20e57f691
   namespace: agentprimitives-system
 spec:
   backoffLimit: 6

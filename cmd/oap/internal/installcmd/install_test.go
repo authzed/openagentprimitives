@@ -33,7 +33,7 @@ import (
 // The bundle is zero-value: buildCoreComponents only stores bundle.Typed in
 // closures and never invokes it during component construction.
 func TestBuildCoreComponentsDependsOn(t *testing.T) {
-	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault) /*not local*/, ExternalSpiceDB{} /*not external*/)
+	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault) /*not local*/, ExternalSpiceDB{} /*not external*/, nil)
 
 	byName := make(map[string]int, len(comps))
 	for i, c := range comps {
@@ -102,7 +102,7 @@ func componentByName(comps []initpipeline.Component) map[string]initpipeline.Com
 // Postgres-backed SpiceDBCluster CR, and the one-shot SpiceDBDatabase Job that
 // creates the 'spicedb' database ahead of the operator's own migration Job.
 func TestBuildCoreComponents_RemoteAddsOperatorAndDatabase(t *testing.T) {
-	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault) /*not local*/, ExternalSpiceDB{} /*not external*/)
+	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault) /*not local*/, ExternalSpiceDB{} /*not external*/, nil)
 	by := componentByName(comps)
 
 	require.Contains(t, by, "SpiceDBOperator")
@@ -126,7 +126,7 @@ func TestBuildCoreComponents_RemoteAddsOperatorAndDatabase(t *testing.T) {
 // use the in-memory SpiceDB datastore and skip the SpiceDBDatabase Job (no
 // Postgres database to create).
 func TestBuildCoreComponents_LocalMemoryNoDatabase(t *testing.T) {
-	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyLocal), ExternalSpiceDB{} /*not external*/)
+	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyLocal), ExternalSpiceDB{} /*not external*/, nil)
 	by := componentByName(comps)
 
 	require.Contains(t, by, "SpiceDBOperator")
@@ -144,7 +144,7 @@ func TestBuildCoreComponents_LocalMemoryNoDatabase(t *testing.T) {
 // of the SpiceDB/SpiceDBOperator/SpiceDBDatabase components, and no remaining
 // component still DependsOn the now-absent "SpiceDB".
 func TestBuildCoreComponents_ExternalOmitsSpiceDBDeploy(t *testing.T) {
-	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{Endpoint: "spicedb.example.net:443"})
+	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{Endpoint: "spicedb.example.net:443"}, nil)
 	by := componentByName(comps)
 	assert.NotContains(t, by, "SpiceDB", "external SpiceDB: we deploy nothing")
 	assert.NotContains(t, by, "SpiceDBOperator")
@@ -193,17 +193,17 @@ func buildCoreComponentsChannelsdArgs(t *testing.T, comps []initpipeline.Compone
 // install, both of which keep channelsd's plaintext cobra-flag default.
 func TestBuildCoreComponents_ExternalTLSFlipsChannelsdInsecureFlag(t *testing.T) {
 	t.Run("external + TLS: flag present", func(t *testing.T) {
-		comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{Endpoint: "spicedb.example.net:443"})
+		comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{Endpoint: "spicedb.example.net:443"}, nil)
 		assert.Contains(t, buildCoreComponentsChannelsdArgs(t, comps), channelsdInsecureFlag)
 	})
 
 	t.Run("external + --external-spicedb-insecure: flag absent", func(t *testing.T) {
-		comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{Endpoint: "spicedb.example.net:50051", Insecure: true})
+		comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{Endpoint: "spicedb.example.net:50051", Insecure: true}, nil)
 		assert.NotContains(t, buildCoreComponentsChannelsdArgs(t, comps), channelsdInsecureFlag)
 	})
 
 	t.Run("not external: flag absent", func(t *testing.T) {
-		comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{})
+		comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{}, nil)
 		assert.NotContains(t, buildCoreComponentsChannelsdArgs(t, comps), channelsdInsecureFlag)
 	})
 }

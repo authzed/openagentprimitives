@@ -1080,7 +1080,7 @@ func RunInstall(ctx, recheckCtx context.Context, cfg InstallConfig) error {
 	// Declining leaves the cluster untouched (nothing has been applied yet). On
 	// --yes / --defaults / a non-TTY this never prompts — it only adds the
 	// summary lines, so automation is not blocked.
-	comps := buildCoreComponents(bundle, tags, statefulDec.ClassName, strat, ext)
+	comps := buildCoreComponents(bundle, tags, statefulDec.ClassName, strat, ext, mirrorMap)
 	proceed, err := confirmPlan(comps, r, rep, os.Stdin, out, r.assumeYes, isInteractive())
 	if err != nil {
 		return err
@@ -2363,8 +2363,10 @@ const graphitiDeadline = 2 * time.Minute
 // --spicedb-insecure default to false (see appendChannelsdInsecureFlag) — the
 // operator/authzd/webd Deployments are flipped separately in RunInstall, on
 // baseDocs, via flipSpiceDBInsecureForExternalTLS, since they ship in the base
-// bundle and carry no Manifests here.
-func buildCoreComponents(bundle *kube.Bundle, tags manifests.Tags, statefulClass string, strat cloud.Strategy, ext ExternalSpiceDB) []initpipeline.Component {
+// bundle and carry no Manifests here. mirrorMap is the air-gapped image rewrite
+// (nil for none); the SpiceDBDatabase Job resolves it at build time because its
+// name is a hash of the template that is applied.
+func buildCoreComponents(bundle *kube.Bundle, tags manifests.Tags, statefulClass string, strat cloud.Strategy, ext ExternalSpiceDB, mirrorMap map[string]string) []initpipeline.Component {
 	typed := bundle.Typed
 	const ns = "agentprimitives-system"
 	const spicedbOperatorNS = "spicedb-operator"
@@ -2436,20 +2438,28 @@ func buildCoreComponents(bundle *kube.Bundle, tags manifests.Tags, statefulClass
 
 		if mode == SpiceDBPostgres {
 			spicedbDeps = append(spicedbDeps, "SpiceDBDatabase")
+			// Built once: the Job's name is a hash of its template, and the
+			// apply, the wait and the prune must all agree on it. A build error
+			// surfaces from Manifests, before anything waits on the name.
+			dbJobName, dbJobDoc, dbJobErr := buildSpiceDBDatabaseJob(installCreateDBDeadlineSeconds, mirrorMap)
 			comps = append(comps, initpipeline.Component{
 				Name:        "SpiceDBDatabase",
 				DisplayName: "SpiceDB database (Postgres)",
 				DependsOn:   []string{"postgres"},
 				Manifests: func() ([][]byte, error) {
-					doc, err := buildSpiceDBDatabaseJob(installCreateDBDeadlineSeconds)
-					if err != nil {
-						return nil, err
+					if dbJobErr != nil {
+						return nil, dbJobErr
 					}
-					return [][]byte{doc}, nil
+					return [][]byte{dbJobDoc}, nil
 				},
 				Wait: &initpipeline.WaitSpec{
-					Poll: jobSucceeded(typed, ns, "spicebox-spicedb-createdb"),
+					Poll: jobSucceeded(typed, ns, dbJobName),
 					ETA:  dataPlaneETA,
+				},
+				// Runs once every component is Ready, so the database exists
+				// before the Jobs that used to create it are removed.
+				Verify: func(ctx context.Context) error {
+					return pruneSupersededCreateDBJobs(ctx, typed, ns, dbJobName)
 				},
 			})
 		}

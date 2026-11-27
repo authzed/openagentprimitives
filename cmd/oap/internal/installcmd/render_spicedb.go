@@ -49,7 +49,7 @@ func renderSpiceDBResources(cfg RenderConfig) ([]byte, error) {
 	// first-boot-only seed that is fatal against a non-empty datastore.
 	// No activeDeadlineSeconds: this Job lands in the same apply as Postgres
 	// (see buildSpiceDBDatabaseJob).
-	db, err := buildSpiceDBDatabaseJob(0)
+	_, db, err := buildSpiceDBDatabaseJob(0, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build spicedb database job: %w", err)
 	}

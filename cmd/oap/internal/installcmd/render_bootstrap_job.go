@@ -2,8 +2,6 @@ package installcmd
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -50,12 +48,10 @@ func bootstrapJobArgs(cfg RenderConfig) []string {
 // entrypoint args, security context, resources), and
 // bootstrap.MintSetFingerprint — the last so an upgrade that adds a Secret or
 // widens a NATS grant re-runs the Job even under an unchanged (mutable) image
-// tag. A Job's spec.template is immutable once applied, so a GitOps re-sync
-// after any template change would try to patch it and be rejected (Argo/Flux
-// SyncFailed). A content-addressed name instead makes a changed template a NEW
-// object the controller prunes-and-creates, while a byte-identical re-render
-// hashes the same → same name → a no-op apply (preserving SSA idempotency). The
-// template is substituted the same way the emitted manifest is, so the hash
+// tag. The name is content-addressed (contentAddressedName) because a Job's
+// spec.template is immutable: a changed template is a NEW object the GitOps
+// controller prunes-and-creates, and a byte-identical re-render keeps its name.
+// The template is substituted the same way the emitted manifest is, so the hash
 // tracks exactly what will be written.
 func bootstrapJobName(cfg RenderConfig) (string, error) {
 	tmpl, err := marshalClean(buildBootstrapJob(cfg, "").Spec.Template)
@@ -66,11 +62,7 @@ func bootstrapJobName(cfg RenderConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	h := sha256.New()
-	h.Write(tmpl)
-	h.Write([]byte{0})
-	h.Write([]byte(bootstrap.MintSetFingerprint()))
-	return bootstrapJobBaseName + "-" + hex.EncodeToString(h.Sum(nil))[:10], nil
+	return contentAddressedName(bootstrapJobBaseName, tmpl, []byte(bootstrap.MintSetFingerprint())), nil
 }
 
 // renderBootstrapJob builds the Job that mints the internal Secrets a
