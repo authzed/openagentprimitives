@@ -921,13 +921,15 @@ func channelsdComponent() component {
 	return component{
 		name: "channelsd", saUser: sa,
 		clusterRoles: []string{"spicebox-channelsd"},
-		// channelsd is a NATS consumer with NO informers — it Gets/Lists via the
-		// client and Patches status. These are the verbs its code actually uses.
+		// channelsd is a NATS consumer that Gets/Lists via the client and
+		// Patches status. Its only informers back the outbound relay's read
+		// cache (internal/cmd/channelsd/relay_cache.go), hence list+watch on
+		// exactly those three kinds. These are the verbs its code actually uses.
 		required: []req{
-			g("channels", "get"), g("channels", "list"),
+			g("channels", "get"), g("channels", "list"), g("channels", "watch"),
 			{group: apGroup, resource: "channels", subresource: "status", verb: "patch"},
-			g("agentclasses", "get"),
-			g("agentsessions", "get"), g("agentsessions", "list"), g("agentsessions", "create"), g("agentsessions", "patch"),
+			g("agentclasses", "get"), g("agentclasses", "list"), g("agentclasses", "watch"),
+			g("agentsessions", "get"), g("agentsessions", "list"), g("agentsessions", "watch"), g("agentsessions", "create"), g("agentsessions", "patch"),
 			{group: apGroup, resource: "agentsessions", subresource: "status", verb: "patch"},
 			// liveInteractiveToolCall lists ToolCalls (label-filtered) to route
 			// inbound messages to a live interactive tool's stdin.
