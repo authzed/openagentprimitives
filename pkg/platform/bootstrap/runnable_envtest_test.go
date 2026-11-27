@@ -27,7 +27,7 @@ func TestMintAllInternalSecretsEnvtest_MintsOnceIdempotent(t *testing.T) {
 		require.NoError(t, err, "create namespace")
 	}
 
-	require.NoError(t, bootstrap.MintAllInternalSecrets(ctx, env.Client, env.Client, bootstrap.MintOptions{}))
+	require.NoError(t, bootstrap.MintAllInternalSecrets(ctx, env.Client, env.Client, bootstrap.MintOptions{}, nil))
 
 	want := append(append([]string{}, bootstrap.MemoryTokenSecretNames...),
 		bootstrap.AdmindTokenSecretName, v1alpha1.PassthroughLinkSigningKeySecret,
@@ -40,7 +40,7 @@ func TestMintAllInternalSecretsEnvtest_MintsOnceIdempotent(t *testing.T) {
 	// Second run is idempotent — no rotation of the spicedb token.
 	var sp1 corev1.Secret
 	require.NoError(t, env.Client.Get(ctx, types.NamespacedName{Namespace: bootstrap.TokenSecretNamespace, Name: "spicebox-spicedb-token"}, &sp1))
-	require.NoError(t, bootstrap.MintAllInternalSecrets(ctx, env.Client, env.Client, bootstrap.MintOptions{}))
+	require.NoError(t, bootstrap.MintAllInternalSecrets(ctx, env.Client, env.Client, bootstrap.MintOptions{}, nil))
 	var sp2 corev1.Secret
 	require.NoError(t, env.Client.Get(ctx, types.NamespacedName{Namespace: bootstrap.TokenSecretNamespace, Name: "spicebox-spicedb-token"}, &sp2))
 	assert.Equal(t, string(sp1.Data["token"]), string(sp2.Data["token"]), "spicedb token not rotated on re-run")
@@ -54,7 +54,7 @@ func TestMintAllInternalSecretsEnvtest_SkipsExternal(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, bootstrap.MintAllInternalSecrets(ctx, env.Client, env.Client, bootstrap.MintOptions{SkipSpiceDBToken: true, SkipPostgresToken: true}))
+	require.NoError(t, bootstrap.MintAllInternalSecrets(ctx, env.Client, env.Client, bootstrap.MintOptions{SkipSpiceDBToken: true, SkipPostgresToken: true}, nil))
 
 	var sp corev1.Secret
 	err := env.Client.Get(ctx, types.NamespacedName{Namespace: bootstrap.TokenSecretNamespace, Name: "spicebox-spicedb-token"}, &sp)

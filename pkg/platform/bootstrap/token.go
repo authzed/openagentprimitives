@@ -27,13 +27,21 @@ const (
 	TokenSecretKey = "token"
 )
 
+// The per-component memory-token Secret names. webd's is the READ-ONLY one;
+// channelsd's and authzd's are write-capable.
+const (
+	ChannelsdMemoryTokenSecret = "spicebox-channelsd-memory-token"
+	WebdMemoryTokenSecret      = "spicebox-webd-memory-token"
+	AuthzdMemoryTokenSecret    = "agentprimitives-authzd-memory-token"
+)
+
 // MemoryTokenSecretNames is the canonical set of per-component memory-token
-// Secrets the bundle requires. Kept in sync with install.go's
-// operatorMemoryTokenSecrets and secret_bootstrap_test.go's installTimeSecrets.
+// Secrets the bundle requires — the one list oap install, oap init, the
+// bootstrap Job and oap render all range over.
 var MemoryTokenSecretNames = []string{
-	"spicebox-channelsd-memory-token",
-	"spicebox-webd-memory-token",
-	"agentprimitives-authzd-memory-token",
+	ChannelsdMemoryTokenSecret,
+	WebdMemoryTokenSecret,
+	AuthzdMemoryTokenSecret,
 }
 
 // EnsureTokenSecret creates a `token`-keyed random-bearer Secret if absent, and

@@ -2964,7 +2964,12 @@ func run(cfg *config) {
 	// wiring. Claims nothing DELIBERATELY — the bootstrap surface's
 	// relations are arbitrary and operator-supplied, so it can own none of
 	// them: see pkg/authz/spicedb/relsource and pkg/authz/spicedb/writer.go.
-	var schemaIO guardianschema.SchemaIO = spicedb.SchemaIOFor(spiceDBClient)
+	//
+	// serialSchemaIO is shared with the leader-only bootstrap seed below, so the
+	// seed's read-then-write cannot interleave with a guardian composition write
+	// (bootstrap.SerializedSchemaIO).
+	serialSchemaIO := bootstrap.NewSerializedSchemaIO(spicedb.SchemaIOFor(spiceDBClient))
+	var schemaIO guardianschema.SchemaIO = serialSchemaIO
 	guardianReconciler := guardianctrl.NewReconciler(mgr.GetClient(), schemaIO, spiceDBClient.Writer(spicedb.BootstrapSource))
 	// Reader wires SpiceDBBootstrap drift detection's read-back. spiceDBClient
 	// is the same guaranteed-non-nil *spicedb.Client as above — assigned
@@ -3168,16 +3173,17 @@ func run(cfg *config) {
 		log.Info("admind token not present; admin API disabled", "path", admindTokenFile)
 	}
 
-	// Leader-only bootstrap: apply the SpiceDB base schema so a bare GitOps apply
-	// (Argo/Flux, no `oap install`) has its schema seeded. The internal Secrets
-	// are minted earlier, by the pre-start bootstrap Job (MintAllInternalSecrets),
-	// not here — schema is the one step that needs SpiceDB already running. A plain
-	// RunnableFunc does not implement LeaderElectionRunnable, so controller-runtime
-	// runs it only on the leader. spiceDBClient is a real, non-nil *spicedb.Client
-	// by this point (construction failure exits above), so SchemaIOFor cannot
-	// produce a typed-nil interface.
+	// Leader-only bootstrap: seed the SpiceDB base schema when the datastore has
+	// none, so a bare GitOps apply (Argo/Flux, no `oap install`) is not left
+	// schema-less. A populated schema is the guardian's and is never touched
+	// here, and an unreachable SpiceDB is retried rather than returned (an error
+	// would stop the manager). The internal Secrets are minted earlier, by the
+	// pre-start bootstrap Job. A plain RunnableFunc does not implement
+	// LeaderElectionRunnable, so controller-runtime runs it only on the leader.
+	// serialSchemaIO wraps the real, non-nil *spicedb.Client (construction
+	// failure exits above) and is the same instance the guardian writes through.
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		return bootstrap.RunBootstrap(ctx, spicedb.SchemaIOFor(spiceDBClient), spicedbschema.Schema)
+		return bootstrap.RunBootstrap(ctx, log.WithName("bootstrap"), serialSchemaIO, spicedbschema.Schema)
 	})); err != nil {
 		log.Error(err, "registering bootstrap runnable")
 		os.Exit(1)

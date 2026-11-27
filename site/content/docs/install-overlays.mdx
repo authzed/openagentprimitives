@@ -86,5 +86,5 @@ mirrors are applied after the overlays and take precedence on the fields they se
 [`oap render`](/docs/gitops) accepts the same `--overlay` flags. It copies each overlay into the output's
 `overlays/` directory and lists it under `components:`, so an overlay written for direct installs carries over
 unchanged. It runs the same checks, against the resources the render emits: the core install, channelsd, NATS and
-the dependency components enabled by flags. Render does not emit Neo4j or Graphiti, and emits Postgres only with
-`--with-postgres`, so an overlay that patches one of those is refused unless the render includes it.
+the dependency components enabled by flags. Render does not emit Neo4j or Graphiti, and leaves Postgres out with
+`--external-postgres`, so an overlay that patches one of those is refused unless the render includes it.

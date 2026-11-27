@@ -115,7 +115,7 @@ var WebdNATSGrant = apnats.UserGrant{
 // already exist. Idempotent: a re-run must not rotate the identity.
 func EnsureNATSIdentity(ctx context.Context, c client.Client) error {
 	var existing corev1.Secret
-	err := c.Get(ctx, types.NamespacedName{Namespace: TokenSecretNamespace, Name: "spicebox-nats-identity"}, &existing)
+	err := c.Get(ctx, types.NamespacedName{Namespace: TokenSecretNamespace, Name: natsIdentitySecretName}, &existing)
 	if err == nil {
 		return nil
 	}
@@ -139,7 +139,7 @@ resolver_preload: {
 `, id.OperatorJWT, id.AccountPublicKey, id.AccountJWT)
 
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "spicebox-nats-identity", Namespace: TokenSecretNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: natsIdentitySecretName, Namespace: TokenSecretNamespace},
 		Type:       corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
 			"operator-jwt":               []byte(id.OperatorJWT),
@@ -160,7 +160,7 @@ resolver_preload: {
 // exist. Idempotent: a re-run must not rotate the TLS material.
 func EnsureNATSTLS(ctx context.Context, c client.Client) error {
 	var existing corev1.Secret
-	err := c.Get(ctx, types.NamespacedName{Namespace: TokenSecretNamespace, Name: "spicebox-nats-tls"}, &existing)
+	err := c.Get(ctx, types.NamespacedName{Namespace: TokenSecretNamespace, Name: natsTLSSecretName}, &existing)
 	if err == nil {
 		return nil
 	}
@@ -179,7 +179,7 @@ func EnsureNATSTLS(ctx context.Context, c client.Client) error {
 	}
 
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "spicebox-nats-tls", Namespace: TokenSecretNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: natsTLSSecretName, Namespace: TokenSecretNamespace},
 		Type:       corev1.SecretTypeOpaque,
 		Data:       map[string][]byte{"ca.crt": m.CACertPEM, "tls.crt": m.ServerCertPEM, "tls.key": m.ServerKeyPEM},
 	}
@@ -228,11 +228,11 @@ func EnsureNATSClientCreds(ctx context.Context, c client.Client, logf func(strin
 		logf = func(string, ...any) {}
 	}
 	var identitySec corev1.Secret
-	if err := c.Get(ctx, types.NamespacedName{Namespace: TokenSecretNamespace, Name: "spicebox-nats-identity"}, &identitySec); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: TokenSecretNamespace, Name: natsIdentitySecretName}, &identitySec); err != nil {
 		return fmt.Errorf("get nats identity secret (run EnsureNATSIdentity first): %w", err)
 	}
 	var tlsSec corev1.Secret
-	if err := c.Get(ctx, types.NamespacedName{Namespace: TokenSecretNamespace, Name: "spicebox-nats-tls"}, &tlsSec); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: TokenSecretNamespace, Name: natsTLSSecretName}, &tlsSec); err != nil {
 		return fmt.Errorf("get nats tls secret (run EnsureNATSTLS first): %w", err)
 	}
 	caCrt := tlsSec.Data["ca.crt"]
@@ -310,6 +310,7 @@ func ensureNATSCredsSecret(ctx context.Context, c client.Client, cred natsClient
 		if err := c.Create(ctx, sec); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("create %s secret: %w", cred.secretName, err)
 		}
+		logf("minted %s", cred.secretName)
 		return nil
 
 	default:

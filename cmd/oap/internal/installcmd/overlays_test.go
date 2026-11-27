@@ -108,7 +108,7 @@ func TestRender_Overlays(t *testing.T) {
 		assert.FileExists(t, filepath.Join(out, rel, "kustomization.yaml"))
 		k, err := os.ReadFile(filepath.Join(out, "kustomization.yaml"))
 		require.NoError(t, err)
-		assert.Contains(t, string(k), "components:\n  - "+rel+"\n")
+		assert.Contains(t, string(k), "components:\n  - components/postgres\n  - "+rel+"\n", "user overlays follow oap's own components")
 
 		built, err := buildOverlay(out)
 		require.NoError(t, err)
@@ -145,15 +145,17 @@ func TestRender_Overlays(t *testing.T) {
 	t.Run("overlay for a component render does not emit: refused up front, naming the flag", func(t *testing.T) {
 		out := filepath.Join(t.TempDir(), "deploy")
 		pg := memoryOverlayDir(t, "spicebox-postgres", "postgres", "2Gi")
-		err := runRender(context.Background(), io.Discard, offline, gke(out, pg), false)
+		// Postgres is left out only alongside an external SpiceDB.
+		cfg := gke(out, pg)
+		cfg.ExternalPostgres = true
+		cfg.ExternalSpiceDBEndpoint = "spicedb.example.com:50051"
+		err := runRender(context.Background(), io.Discard, offline, cfg, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "spicebox-postgres")
-		assert.Contains(t, err.Error(), "--with-postgres")
+		assert.Contains(t, err.Error(), "--external-postgres")
 		assert.NoDirExists(t, out)
 
-		cfg := gke(out, pg)
-		cfg.WithPostgres = true
-		require.NoError(t, runRender(context.Background(), io.Discard, offline, cfg, false))
+		require.NoError(t, runRender(context.Background(), io.Discard, offline, gke(out, pg), false))
 	})
 
 	t.Run("render and install produce the same overlaid fields", func(t *testing.T) {
@@ -162,11 +164,11 @@ func TestRender_Overlays(t *testing.T) {
 		require.NoError(t, runRender(context.Background(), io.Discard, offline, gke(out, ov), false))
 		built, err := buildOverlay(out)
 		require.NoError(t, err)
-		rendered := findDoc(t, built, "Deployment", "spicebox-operator")
+		rendered := requireDocInYAML(t, built, "Deployment", "spicebox-operator")
 
 		set, err := loadOverlays(io.Discard, overlay.Base, []string{ov})
 		require.NoError(t, err)
-		installed := findDoc(t, manifests.Install, "Deployment", "spicebox-operator")
+		installed := requireDocInYAML(t, manifests.Install, "Deployment", "spicebox-operator")
 		require.NoError(t, set.Apply(installed))
 
 		resources := func(d *unstructured.Unstructured) any {
@@ -190,7 +192,9 @@ func TestRender_Overlays(t *testing.T) {
 	})
 }
 
-func findDoc(t *testing.T, yaml []byte, kind, name string) *unstructured.Unstructured {
+// requireDocInYAML parses yaml and returns the document with exactly this kind
+// and name, failing the test when there is none.
+func requireDocInYAML(t *testing.T, yaml []byte, kind, name string) *unstructured.Unstructured {
 	t.Helper()
 	docs, err := manifests.Split(yaml)
 	require.NoError(t, err)

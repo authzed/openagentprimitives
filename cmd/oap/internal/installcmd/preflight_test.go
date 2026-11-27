@@ -155,7 +155,7 @@ func TestPreflight(t *testing.T) {
 }
 
 func TestConfirmPlanProceedSemantics(t *testing.T) {
-	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault) /*not local*/, ExternalSpiceDB{} /*not external*/)
+	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault) /*not local*/, ExternalSpiceDB{} /*not external*/, nil)
 
 	cases := []struct {
 		name        string
@@ -246,7 +246,7 @@ func (b blockingReader) Read([]byte) (int, error) {
 // one combination that would otherwise ask. It must neither print the prompt nor
 // touch stdin (driven here by a reader that errors the test if read).
 func TestConfirmPlanPreconfirmedSkipsPrompt(t *testing.T) {
-	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{})
+	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault), ExternalSpiceDB{}, nil)
 
 	var buf bytes.Buffer
 	rep := newReporter(t, &buf)
@@ -261,7 +261,7 @@ func TestConfirmPlanPreconfirmedSkipsPrompt(t *testing.T) {
 // plain-language description (the Name→friendly mapping is complete for the real
 // buildCoreComponents output).
 func TestConfirmPlanFriendlyNames(t *testing.T) {
-	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault) /*not local*/, ExternalSpiceDB{} /*not external*/)
+	comps := buildCoreComponents(&kube.Bundle{}, manifests.Tags{}, "", cloud.MustFor(cloud.KeyDefault) /*not local*/, ExternalSpiceDB{} /*not external*/, nil)
 
 	var buf bytes.Buffer
 	rep := newReporter(t, &buf)

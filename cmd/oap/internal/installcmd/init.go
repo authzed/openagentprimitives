@@ -1077,7 +1077,7 @@ func runInitDirectoryScreenOffer(ctx context.Context, in io.Reader, out io.Write
 
 // ensureChannelsdMemoryToken creates the spicebox-channelsd-memory-token Secret.
 func ensureChannelsdMemoryToken(ctx context.Context, restCfg *rest.Config) error {
-	return ensureMemoryTokenSecret(ctx, restCfg, "spicebox-channelsd-memory-token")
+	return ensureMemoryTokenSecret(ctx, restCfg, bootstrap.ChannelsdMemoryTokenSecret)
 }
 
 // ensureWebdMemoryToken creates the spicebox-webd-memory-token Secret — webd's
@@ -1086,7 +1086,7 @@ func ensureChannelsdMemoryToken(ctx context.Context, restCfg *rest.Config) error
 // browser-facing service must not hold a credential that can write the audit
 // log or register publisher keys.
 func ensureWebdMemoryToken(ctx context.Context, restCfg *rest.Config) error {
-	return ensureMemoryTokenSecret(ctx, restCfg, "spicebox-webd-memory-token")
+	return ensureMemoryTokenSecret(ctx, restCfg, bootstrap.WebdMemoryTokenSecret)
 }
 
 // ensureAuthzdMemoryToken creates the agentprimitives-authzd-memory-token
@@ -1097,7 +1097,7 @@ func ensureWebdMemoryToken(ctx context.Context, restCfg *rest.Config) error {
 // channelsd/webd token bootstrap; the name keeps the deployment's existing
 // (non-spicebox-prefixed) reference.
 func ensureAuthzdMemoryToken(ctx context.Context, restCfg *rest.Config) error {
-	return ensureMemoryTokenSecret(ctx, restCfg, "agentprimitives-authzd-memory-token")
+	return ensureMemoryTokenSecret(ctx, restCfg, bootstrap.AuthzdMemoryTokenSecret)
 }
 
 // ensureMemoryTokenSecret creates a `token`-keyed random-bearer Secret named

@@ -11,6 +11,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/apcmd"
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/kube"
@@ -22,7 +29,7 @@ import (
 
 func TestWriteOverlay_DeterministicAndBuildable(t *testing.T) {
 	dir1, dir2 := t.TempDir(), t.TempDir()
-	base := RenderConfig{ClusterKind: cloud.KeyLocal, Strat: cloud.MustFor(cloud.KeyLocal)}
+	base := RenderConfig{ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE)}
 
 	cfg := base
 	cfg.OutputDir = dir1
@@ -118,11 +125,11 @@ func TestValidateRenderFlags_RoutingRequiresGatewayClass(t *testing.T) {
 	assert.Contains(t, err.Error(), "gateway-class")
 }
 
-func TestRender_WithPostgresComponentInjectsStorageClass(t *testing.T) {
+func TestRender_PostgresComponentInjectsStorageClass(t *testing.T) {
 	dir := t.TempDir()
 	cfg := RenderConfig{
 		OutputDir: dir, ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE),
-		WithPostgres: true, StorageClass: "fast-ssd",
+		StorageClass: "fast-ssd",
 	}
 	require.NoError(t, WriteOverlay(cfg))
 	assert.FileExists(t, filepath.Join(dir, "components", "postgres", "kustomization.yaml"))
@@ -163,13 +170,13 @@ func TestRender_EmitsBootstrapJob(t *testing.T) {
 	assert.Contains(t, s, "kind: Job")
 	assert.Contains(t, s, "spicebox-bootstrap-secrets")
 	assert.Contains(t, s, "bootstrap-secrets", "runs the operator bootstrap-secrets entrypoint")
-	assert.Contains(t, s, "serviceAccountName: spicebox-operator", "reuses the operator SA's RBAC")
+	assert.Contains(t, s, "serviceAccountName: spicebox-bootstrap", "runs as its own SA, not the operator's")
 	assert.NotContains(t, s, "--skip-spicedb-token", "mints the bundled spicedb token by default")
 }
 
 func TestRender_BootstrapJobSkipsExternalTokens(t *testing.T) {
 	dir := t.TempDir()
-	cfg := RenderConfig{OutputDir: dir, ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE), ExternalSpiceDB: true, ExternalPostgres: true}
+	cfg := RenderConfig{OutputDir: dir, ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE), ExternalSpiceDBEndpoint: "spicedb.example.com:50051", ExternalPostgres: true}
 	require.NoError(t, WriteOverlay(cfg))
 
 	out, err := buildOverlay(dir)
@@ -180,12 +187,12 @@ func TestRender_BootstrapJobSkipsExternalTokens(t *testing.T) {
 }
 
 func TestRenderValidate_ExternalSpiceDBStillValidates(t *testing.T) {
-	// With --external-spicedb the Job does not mint spicedb-token, but the token's
+	// With --external-spicedb-endpoint the Job does not mint spicedb-token, but the token's
 	// k8s refs are optional (the app requires the value at runtime, not the kubelet
 	// at mount), so --validate must still pass — the externalized instance does not
 	// make the overlay structurally incomplete.
 	dir := t.TempDir()
-	cfg := RenderConfig{OutputDir: dir, ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE), NoDigestPin: true, ExternalSpiceDB: true}
+	cfg := RenderConfig{OutputDir: dir, ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE), NoDigestPin: true, ExternalSpiceDBEndpoint: "spicedb.example.com:50051"}
 	require.NoError(t, WriteOverlay(cfg))
 
 	var buf bytes.Buffer
@@ -218,11 +225,12 @@ func TestRender_ExternalWebhookTLSSkipsCertManager(t *testing.T) {
 	assert.NotContains(t, string(out), "cert-manager.io/inject-ca-from", "no CA-injector annotation when the user provides webhook-tls")
 }
 
-func TestRender_NoComponentsByDefault(t *testing.T) {
+func TestRender_ExternalPostgresDropsThePostgresComponent(t *testing.T) {
 	dir := t.TempDir()
-	cfg := RenderConfig{OutputDir: dir, ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE)}
+	cfg := RenderConfig{OutputDir: dir, ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE),
+		ExternalSpiceDBEndpoint: "spicedb.example.com:50051", ExternalPostgres: true}
 	require.NoError(t, WriteOverlay(cfg))
-	assert.NoDirExists(t, filepath.Join(dir, "components"), "no --with-* flag → no components dir")
+	assert.NoDirExists(t, filepath.Join(dir, "components"), "external postgres → no components dir")
 }
 
 func TestRender_LinksExistingMemoryTokenSecret(t *testing.T) {
@@ -284,10 +292,10 @@ func TestRenderCmd_NoGraphitiOrNeo4jFlags(t *testing.T) {
 	// "every internal Secret is provisioned, nothing external by default"
 	// property. Rather than ship flags that emit a non-functional bundle (and a
 	// --validate that hard-fails with no remedy), they are omitted until a
-	// follow-up adds the external-secret story. Keep --with-postgres (its token IS
-	// Job-minted, so it works end to end).
+	// follow-up adds the external-secret story. Postgres is not a flag at all: it
+	// is always bundled (the bundled SpiceDB's datastore) unless --external-postgres.
 	flags := NewRenderCmd(&apcmd.Globals{}).Flags()
-	assert.NotNil(t, flags.Lookup("with-postgres"), "postgres is Job-provisionable and stays")
+	assert.Nil(t, flags.Lookup("with-postgres"), "postgres is always bundled, not opt-in")
 	assert.Nil(t, flags.Lookup("with-graphiti"), "with-graphiti must not be offered (non-functional bundle)")
 	assert.Nil(t, flags.Lookup("with-neo4j"), "with-neo4j must not be offered (non-functional bundle)")
 }
@@ -318,7 +326,7 @@ func TestBootstrapJobName_TracksImageAndArgs(t *testing.T) {
 	assert.NotEqual(t, n1, nb, "a bumped operator image digest must yield a new Job object")
 
 	skipped := base
-	skipped.ExternalSpiceDB = true
+	skipped.ExternalSpiceDBEndpoint = "spicedb.example.com:50051"
 	ns, err := bootstrapJobName(skipped)
 	require.NoError(t, err)
 	assert.NotEqual(t, n1, ns, "changed args (--skip-spicedb-token) must yield a new Job object")
@@ -334,4 +342,508 @@ func TestValidateRenderFlags_RefusesMemoryDatastoreKind(t *testing.T) {
 
 	// A persistent-datastore kind is accepted.
 	require.NoError(t, validateRenderFlags(RenderConfig{ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE)}))
+}
+
+// buildDocs renders cfg into a temp dir and returns the built overlay's docs.
+func buildDocs(t *testing.T, cfg RenderConfig) []*unstructured.Unstructured {
+	t.Helper()
+	cfg.OutputDir = t.TempDir()
+	require.NoError(t, WriteOverlay(cfg))
+	out, err := buildOverlay(cfg.OutputDir)
+	require.NoError(t, err, "overlay must kustomize build")
+	docs, err := manifests.Split(out)
+	require.NoError(t, err, "split built overlay")
+	return docs
+}
+
+func findDoc(docs []*unstructured.Unstructured, kind, name string) *unstructured.Unstructured {
+	for _, d := range docs {
+		if d.GetKind() == kind && (d.GetName() == name || strings.HasPrefix(d.GetName(), name)) {
+			return d
+		}
+	}
+	return nil
+}
+
+func gkeConfig() RenderConfig {
+	return RenderConfig{ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE)}
+}
+
+func TestRender_BootstrapJobPodIsAllowedApiserverEgress(t *testing.T) {
+	docs := buildDocs(t, gkeConfig())
+	job := findDoc(docs, "Job", bootstrapJobBaseName)
+	require.NotNil(t, job, "bootstrap Job present")
+	podLabels, _, _ := unstructured.NestedStringMap(job.Object, "spec", "template", "metadata", "labels")
+	require.NotEmpty(t, podLabels, "the Job pod is labelled so a NetworkPolicy can select it")
+	assert.NotEqual(t, "spicebox-operator", podLabels["app.kubernetes.io/name"], "must not join the operator Services' endpoints")
+
+	var allowed bool
+	for _, d := range docs {
+		if d.GetKind() != "NetworkPolicy" {
+			continue
+		}
+		var np networkingv1.NetworkPolicy
+		require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(d.Object, &np))
+		sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
+		require.NoError(t, err)
+		if len(np.Spec.PodSelector.MatchLabels)+len(np.Spec.PodSelector.MatchExpressions) == 0 || !sel.Matches(labels.Set(podLabels)) {
+			continue // default-deny's empty selector grants nothing
+		}
+		for _, rule := range np.Spec.Egress {
+			for _, p := range rule.Ports {
+				if p.Port != nil && p.Port.IntValue() == 443 {
+					allowed = true
+				}
+			}
+		}
+	}
+	assert.True(t, allowed, "some NetworkPolicy selecting the Job pod allows egress to the apiserver on 443")
+}
+
+func TestRender_SpiceDBProvisioning(t *testing.T) {
+	cases := []struct {
+		name         string
+		cfg          RenderConfig
+		wantEndpoint string
+		wantCluster  bool
+		wantTLSFlip  bool
+	}{
+		{
+			name:         "default: bundled SpiceDBCluster, in-cluster endpoint, plaintext",
+			cfg:          gkeConfig(),
+			wantEndpoint: inClusterSpiceDBEndpoint,
+			wantCluster:  true,
+		},
+		{
+			name: "external TLS: no SpiceDBCluster, user endpoint, clients flipped to TLS",
+			cfg: func() RenderConfig {
+				c := gkeConfig()
+				c.ExternalSpiceDBEndpoint = "spicedb.example.com:443"
+				return c
+			}(),
+			wantEndpoint: "spicedb.example.com:443",
+			wantTLSFlip:  true,
+		},
+		{
+			name: "external insecure: no SpiceDBCluster, user endpoint, plaintext kept",
+			cfg: func() RenderConfig {
+				c := gkeConfig()
+				c.ExternalSpiceDBEndpoint = "spicedb.internal:50051"
+				c.ExternalSpiceDBInsecure = true
+				return c
+			}(),
+			wantEndpoint: "spicedb.internal:50051",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docs := buildDocs(t, tc.cfg)
+			cm := findDoc(docs, "ConfigMap", "spicebox-spicedb-config")
+			require.NotNil(t, cm, "endpoint ConfigMap always ships")
+			ep, _, _ := unstructured.NestedString(cm.Object, "data", "endpoint")
+			assert.Equal(t, tc.wantEndpoint, ep)
+
+			cluster := findDoc(docs, "SpiceDBCluster", "spicebox-spicedb")
+			assert.Equal(t, tc.wantCluster, cluster != nil, "SpiceDBCluster shipped")
+			assert.Equal(t, tc.wantCluster, findDoc(docs, "Job", createDBJobBaseName) != nil, "createdb Job shipped with the bundled SpiceDB")
+			if cluster != nil {
+				engine, _, _ := unstructured.NestedString(cluster.Object, "spec", "config", "datastoreEngine")
+				assert.Equal(t, "postgres", engine)
+				_, bootstrapFiles, _ := unstructured.NestedFieldNoCopy(cluster.Object, "spec", "config", "datastoreBootstrapFiles")
+				assert.False(t, bootstrapFiles, "never a first-boot-only schema seed on a persistent datastore")
+			}
+
+			for _, dep := range []string{operatorDeploymentName, authzdDeploymentName, webdDeploymentName} {
+				d := findDoc(docs, "Deployment", dep)
+				require.NotNil(t, d, dep)
+				assert.Equal(t, tc.wantTLSFlip, deploymentEnvValue(t, d, "SPICEDB_INSECURE") == "false", "%s SPICEDB_INSECURE=false", dep)
+			}
+			ch := findDoc(docs, "Deployment", "spicebox-channelsd")
+			require.NotNil(t, ch)
+			containers, _, _ := unstructured.NestedSlice(ch.Object, "spec", "template", "spec", "containers")
+			args, _ := stringSlice(containers[0].(map[string]any)["args"])
+			assert.Equal(t, tc.wantTLSFlip, containsString(args, channelsdInsecureFlag), "channelsd %s", channelsdInsecureFlag)
+		})
+	}
+}
+
+func TestValidateRenderFlags_ExternalCombinations(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*RenderConfig)
+		wantErr string
+	}{
+		{"external postgres alone: refused, bundled SpiceDB needs it", func(c *RenderConfig) { c.ExternalPostgres = true }, "--external-spicedb-endpoint"},
+		{"insecure without an endpoint: refused", func(c *RenderConfig) { c.ExternalSpiceDBInsecure = true }, "--external-spicedb-endpoint"},
+		{"external spicedb alone: accepted (bundled postgres still serves memory)", func(c *RenderConfig) { c.ExternalSpiceDBEndpoint = "s:50051" }, ""},
+		{"both external: accepted", func(c *RenderConfig) { c.ExternalSpiceDBEndpoint = "s:50051"; c.ExternalPostgres = true }, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := gkeConfig()
+			tc.mutate(&c)
+			err := validateRenderFlags(c)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestRender_BootstrapJobSkipsPostgresTokenOnlyWhenExternal(t *testing.T) {
+	assert.NotContains(t, bootstrapJobArgs(gkeConfig()), "--skip-postgres-token", "bundled Postgres always ships, so its token is minted")
+	c := gkeConfig()
+	c.ExternalSpiceDBEndpoint, c.ExternalPostgres = "s:50051", true
+	assert.Contains(t, bootstrapJobArgs(c), "--skip-postgres-token")
+	assert.NotContains(t, jobMintedSecretNames(c), "spicebox-postgres-token", "--validate agrees with the Job")
+}
+
+func TestRender_WebhookCABundleLeftToTheInjector(t *testing.T) {
+	docs := buildDocs(t, gkeConfig())
+	for _, name := range webhookVWCNames {
+		vwc := findDoc(docs, "ValidatingWebhookConfiguration", name)
+		require.NotNil(t, vwc, name)
+		assert.Contains(t, vwc.GetAnnotations(), "cert-manager.io/inject-ca-from", "%s annotated for the ca-injector", name)
+		hooks, _, _ := unstructured.NestedSlice(vwc.Object, "webhooks")
+		require.NotEmpty(t, hooks)
+		for i, h := range hooks {
+			_, has, _ := unstructured.NestedFieldNoCopy(h.(map[string]any), "clientConfig", "caBundle")
+			assert.False(t, has, "%s webhook %d must not carry a caBundle the GitOps controller would reset", name, i)
+		}
+	}
+}
+
+func TestRender_SyncWavesOrderTheColdStart(t *testing.T) {
+	docs := buildDocs(t, gkeConfig())
+	wave := func(kind, name string) string {
+		d := findDoc(docs, kind, name)
+		require.NotNil(t, d, "%s/%s", kind, name)
+		return d.GetAnnotations()[argoSyncWaveAnnotation]
+	}
+	assert.Equal(t, "-3", wave("Namespace", bootstrap.TokenSecretNamespace))
+	assert.Equal(t, "-3", wave("ServiceAccount", bootstrapIdentity))
+	assert.Equal(t, "-3", wave("Role", bootstrapIdentity))
+	assert.Equal(t, "-3", wave("RoleBinding", bootstrapIdentity))
+	assert.Equal(t, "-2", wave("Job", bootstrapJobBaseName))
+	assert.Equal(t, "-1", wave("Deployment", "spicebox-postgres"))
+	assert.Equal(t, "-1", wave("Service", "spicebox-postgres"))
+	assert.Equal(t, "", wave("Deployment", operatorDeploymentName), "everything else stays in wave 0")
+	assert.Equal(t, "", wave("SpiceDBCluster", "spicebox-spicedb"))
+}
+
+func TestBootstrapJobName_TracksTheMintSet(t *testing.T) {
+	cfg := gkeConfig()
+	before, err := bootstrapJobName(cfg)
+	require.NoError(t, err)
+
+	orig := bootstrap.MemoryTokenSecretNames
+	t.Cleanup(func() { bootstrap.MemoryTokenSecretNames = orig })
+	bootstrap.MemoryTokenSecretNames = append(append([]string{}, orig...), "spicebox-newcomponent-memory-token")
+	after, err := bootstrapJobName(cfg)
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after, "a new Secret in the mint set re-runs the Job even with the same image ref")
+}
+
+// TestRender_CloudNetworkResourcesMatchInstall pins that the overlay carries
+// the per-cloud network objects `oap install` layers on the bundled
+// default-deny, built from the same definitions: DNS egress outside kube-system
+// on every render for a cloud that needs it, and the LB health-check ingress +
+// probe path only alongside the emitted Gateway. (local/desktop are refused by
+// validateRenderFlags, so default stands in for a kind needing none.)
+func TestRender_CloudNetworkResourcesMatchInstall(t *testing.T) {
+	withRouting := func(c RenderConfig) RenderConfig {
+		c.Routing.trustedHostname = "webd.example.com"
+		c.Routing.gatewayClass = "example-class"
+		return c
+	}
+	forKind := func(key string) RenderConfig { return RenderConfig{ClusterKind: key, Strat: cloud.MustFor(key)} }
+	cases := []struct {
+		name                         string
+		cfg                          RenderConfig
+		wantDNS, wantGateway, wantHC bool
+	}{
+		{"gke with routing: dns + gateway ingress + health check", withRouting(forKind(cloud.KeyGKE)), true, true, true},
+		{"gke without routing: dns only", forKind(cloud.KeyGKE), true, false, false},
+		{"eks with routing: none", withRouting(forKind(cloud.KeyEKS)), false, false, false},
+		{"default without routing: none", forKind(cloud.KeyDefault), false, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docs := buildDocs(t, tc.cfg)
+
+			dns := findDoc(docs, "NetworkPolicy", "allow-dns-cloud")
+			assert.Equal(t, tc.wantDNS, dns != nil, "allow-dns-cloud presence")
+			if dns != nil {
+				var np networkingv1.NetworkPolicy
+				require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(dns.Object, &np))
+				assert.Equal(t, cloud.DNSEgressPolicy(tc.cfg.Strat.DNSEgressCIDRs()).Spec, np.Spec, "same spec oap install applies")
+				require.Len(t, np.Spec.Egress, 1)
+				assert.Equal(t, "169.254.0.0/16", np.Spec.Egress[0].To[0].IPBlock.CIDR)
+				assert.Len(t, np.Spec.Egress[0].Ports, 2, "UDP and TCP 53")
+			}
+
+			gw := findDoc(docs, "NetworkPolicy", "allow-webd-gateway")
+			assert.Equal(t, tc.wantGateway, gw != nil, "allow-webd-gateway presence")
+			if gw != nil {
+				var np networkingv1.NetworkPolicy
+				require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(gw.Object, &np))
+				assert.Equal(t, cloud.GatewayBackendIngressPolicy(tc.cfg.Strat.GatewayBackendIngressCIDRs()).Spec, np.Spec, "same spec oap install applies")
+			}
+
+			hc := findDoc(docs, "HealthCheckPolicy", cloud.WebdGatewayName)
+			assert.Equal(t, tc.wantHC, hc != nil, "HealthCheckPolicy presence")
+			if hc != nil {
+				path, _, _ := unstructured.NestedString(hc.Object, "spec", "default", "config", "httpHealthCheck", "requestPath")
+				assert.Equal(t, "/healthz", path)
+			}
+		})
+	}
+}
+
+// TestRender_CreateDBJobHasNoDeadline: the overlay's createdb Job is applied in
+// the same pass as Postgres, so a deadline running from Job creation could
+// expire before Postgres exists, and a GitOps controller does not recreate an
+// unchanged failed Job.
+func TestRender_CreateDBJobHasNoDeadline(t *testing.T) {
+	job := findDoc(buildDocs(t, gkeConfig()), "Job", createDBJobBaseName)
+	require.NotNil(t, job, "createdb Job shipped with the bundled SpiceDB")
+	_, found, err := unstructured.NestedFieldNoCopy(job.Object, "spec", "activeDeadlineSeconds")
+	require.NoError(t, err)
+	assert.False(t, found, "no activeDeadlineSeconds on the rendered createdb Job")
+}
+
+// TestRender_CreateDBJobNameIsTheOneInstallPolls: the overlay's createdb Job
+// carries the template-hashed name, and for the same template it is the name
+// `oap install` applies and waits on — so a cluster moved between the two paths
+// meets a Job it recognizes instead of an immutable-template rejection.
+func TestRender_CreateDBJobNameIsTheOneInstallPolls(t *testing.T) {
+	installName, _, err := buildSpiceDBDatabaseJob(installCreateDBDeadlineSeconds, nil)
+	require.NoError(t, err)
+
+	var names []string
+	for _, d := range buildDocs(t, gkeConfig()) {
+		if d.GetKind() == "Job" && strings.HasPrefix(d.GetName(), createDBJobBaseName) {
+			names = append(names, d.GetName())
+		}
+	}
+	assert.Equal(t, []string{installName}, names)
+}
+
+// TestRender_WorkloadsWaitForAwaitedSecrets: nothing in the built overlay may
+// reference optionally a Secret the bootstrap Job mints or the user provides.
+// The operator reads its memory tokens once at startup, so on a single-pass
+// apply (Flux) an optional reference let it start before the Job had minted
+// them and never register them — channelsd, authzd and webd then crash-looped
+// until the operator was restarted.
+func TestRender_WorkloadsWaitForAwaitedSecrets(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  RenderConfig
+		// wantOperatorTokens are the Secrets the operator's three memory-token
+		// volumes must name, each required.
+		wantOperatorTokens []string
+	}{
+		{
+			name:               "default: the Job-minted names, required",
+			cfg:                gkeConfig(),
+			wantOperatorTokens: bootstrap.MemoryTokenSecretNames,
+		},
+		{
+			name: "external SpiceDB and Postgres: the tokens the user provides are required too",
+			cfg: func() RenderConfig {
+				c := gkeConfig()
+				c.ExternalSpiceDBEndpoint = "spicedb.example.com:443"
+				c.ExternalPostgres = true
+				return c
+			}(),
+			wantOperatorTokens: bootstrap.MemoryTokenSecretNames,
+		},
+		{
+			name: "linked memory tokens: the linked names, required",
+			cfg: func() RenderConfig {
+				c := gkeConfig()
+				c.MemoryToken = MemoryTokenLinks{Channelsd: "my-channelsd-token", Webd: "my-webd-token", Authzd: "my-authzd-token"}
+				return c
+			}(),
+			wantOperatorTokens: []string{"my-channelsd-token", "my-webd-token", "my-authzd-token"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docs := buildDocs(t, tc.cfg)
+			awaited := awaitedSecretNames(tc.cfg)
+
+			for _, ref := range secretRefsWhere(docs, func(r secretRef) bool { return r.optional && awaited[r.secret] }) {
+				assert.Failf(t, "optional reference to an awaited Secret", "%s/%s -> %s", ref.workloadKind, ref.workload, ref.secret)
+			}
+
+			operator := findDoc(docs, "Deployment", cloud.OperatorDeploymentName)
+			require.NotNil(t, operator)
+			var tokens []string
+			for _, ref := range podSecretRefs(operator) {
+				if strings.HasSuffix(ref.volume, "-memory-token") {
+					assert.False(t, ref.optional, "operator volume %s must be required", ref.volume)
+					tokens = append(tokens, ref.secret)
+				}
+			}
+			assert.ElementsMatch(t, tc.wantOperatorTokens, tokens)
+
+			// The patch only touches awaited Secrets: one nothing in the
+			// overlay provisions stays optional, or its workload would never
+			// start.
+			var stillOptional bool
+			for _, ref := range podSecretRefs(findDoc(docs, "Deployment", webdDeploymentName)) {
+				if ref.secret == "spicebox-slack-oauth" {
+					stillOptional = ref.optional
+				}
+			}
+			assert.True(t, stillOptional, "webd's reference to the user-optional spicebox-slack-oauth stays optional")
+		})
+	}
+}
+
+// TestRequiredSecretsPatch covers the references the patch can and cannot
+// address. One it cannot is a render error, never a reference silently left
+// optional.
+func TestRequiredSecretsPatch(t *testing.T) {
+	const minted = bootstrap.ChannelsdMemoryTokenSecret
+	workload := func(apiVersion, kind, podSpec string) string {
+		return "apiVersion: " + apiVersion + "\nkind: " + kind + "\nmetadata:\n  name: widget\n  namespace: agentprimitives-system\n" +
+			"spec:\n  template:\n    spec:\n" + podSpec
+	}
+	cases := []struct {
+		name        string
+		doc         string
+		wantPatch   []string // substrings of the emitted patch; empty → nothing emitted
+		wantErrPart string
+	}{
+		{
+			name: "optional secret volume and env secretKeyRef, in a container and an initContainer: all addressed by merge key",
+			doc: workload("apps/v1", "Deployment",
+				"      initContainers:\n        - name: init\n          env:\n            - name: A\n              valueFrom:\n                secretKeyRef:\n                  name: "+minted+"\n                  key: token\n                  optional: true\n"+
+					"      containers:\n        - name: c\n          env:\n            - name: B\n              valueFrom:\n                secretKeyRef:\n                  name: "+minted+"\n                  key: token\n                  optional: true\n"+
+					"      volumes:\n        - name: v\n          secret:\n            secretName: "+minted+"\n            optional: true\n"),
+			wantPatch: []string{"kind: Deployment", "name: widget", "initContainers:", "- name: A", "- name: B", "name: c", "- name: v", "optional: false"},
+		},
+		{
+			name: "already-required reference: nothing to patch",
+			doc: workload("apps/v1", "Deployment",
+				"      containers:\n        - name: c\n      volumes:\n        - name: v\n          secret:\n            secretName: "+minted+"\n"),
+		},
+		{
+			name: "optional reference to a Secret the overlay does not provision: left optional",
+			doc: workload("apps/v1", "Deployment",
+				"      containers:\n        - name: c\n      volumes:\n        - name: v\n          secret:\n            secretName: user-optional\n            optional: true\n"),
+		},
+		{
+			name: "optional envFrom to a minted Secret: refused, it has no merge key",
+			doc: workload("apps/v1", "Deployment",
+				"      containers:\n        - name: c\n          envFrom:\n            - secretRef:\n                name: "+minted+"\n                optional: true\n"),
+			wantErrPart: "envFrom or a projected volume",
+		},
+		{
+			name: "optional reference in a kind kustomize cannot merge by name: refused",
+			doc: workload("example.com/v1", "Widget",
+				"      containers:\n        - name: c\n      volumes:\n        - name: v\n          secret:\n            secretName: "+minted+"\n            optional: true\n"),
+			wantErrPart: "cannot patch a Widget",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			patch, emitted, err := requiredSecretsPatch(gkeConfig(), []byte(tc.doc))
+			if tc.wantErrPart != "" {
+				require.ErrorContains(t, err, tc.wantErrPart)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, len(tc.wantPatch) > 0, emitted)
+			for _, want := range tc.wantPatch {
+				assert.Contains(t, string(patch), want)
+			}
+		})
+	}
+}
+
+// TestValidateRenderFlags_RefusesLinkToAnotherComponentsDefault: a link equal
+// to a DIFFERENT component's default name cannot be rewritten unambiguously.
+// The first case is the reproduction: authzd linked away and webd pointed at
+// authzd's default passed the effective-name check, and the chained rewrite
+// then landed webd on authzd's write-capable Secret.
+func TestValidateRenderFlags_RefusesLinkToAnotherComponentsDefault(t *testing.T) {
+	cases := []struct {
+		name  string
+		links MemoryTokenLinks
+	}{
+		{"webd -> authzd default with authzd linked away: refused", MemoryTokenLinks{Authzd: "x", Webd: bootstrap.AuthzdMemoryTokenSecret}},
+		{"channelsd -> webd default: refused", MemoryTokenLinks{Channelsd: bootstrap.WebdMemoryTokenSecret}},
+		{"authzd -> channelsd default: refused", MemoryTokenLinks{Authzd: bootstrap.ChannelsdMemoryTokenSecret}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := gkeConfig()
+			c.MemoryToken = tc.links
+			assert.ErrorContains(t, validateRenderFlags(c), "default Secret")
+		})
+	}
+
+	c := gkeConfig()
+	c.MemoryToken = MemoryTokenLinks{Webd: bootstrap.WebdMemoryTokenSecret}
+	assert.NoError(t, validateRenderFlags(c), "a link equal to the component's OWN default is a no-op, not ambiguous")
+}
+
+// TestApplyMemoryTokenLinks_EachLinkOnlyOnItsOwnReferences: the rewrite is one
+// pass, so a linked name is never rewritten again by another link.
+func TestApplyMemoryTokenLinks_EachLinkOnlyOnItsOwnReferences(t *testing.T) {
+	base := []byte("channelsd: " + bootstrap.ChannelsdMemoryTokenSecret + "\n" +
+		"webd: " + bootstrap.WebdMemoryTokenSecret + "\n" +
+		"authzd: " + bootstrap.AuthzdMemoryTokenSecret + "\n")
+	cases := []struct {
+		name  string
+		links MemoryTokenLinks
+		want  string
+	}{
+		{"none linked: unchanged", MemoryTokenLinks{}, string(base)},
+		{"all linked", MemoryTokenLinks{Channelsd: "ch", Webd: "wd", Authzd: "az"}, "channelsd: ch\nwebd: wd\nauthzd: az\n"},
+		{"webd linked only", MemoryTokenLinks{Webd: "wd"}, "channelsd: " + bootstrap.ChannelsdMemoryTokenSecret + "\nwebd: wd\nauthzd: " + bootstrap.AuthzdMemoryTokenSecret + "\n"},
+		{
+			// Refused by validateRenderFlags; still must not chain if reached.
+			"webd -> authzd default, authzd -> x: webd keeps authzd's default, not x",
+			MemoryTokenLinks{Webd: bootstrap.AuthzdMemoryTokenSecret, Authzd: "x"},
+			"channelsd: " + bootstrap.ChannelsdMemoryTokenSecret + "\nwebd: " + bootstrap.AuthzdMemoryTokenSecret + "\nauthzd: x\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, string(applyMemoryTokenLinks(base, tc.links)))
+		})
+	}
+}
+
+// TestRender_BootstrapJobPodIsHardened: the Job runs the operator image and must
+// pass the same admission the operator does (Pod Security "restricted", or an
+// equivalent policy), or the cold start stalls at its wave.
+func TestRender_BootstrapJobPodIsHardened(t *testing.T) {
+	doc := findDoc(buildDocs(t, gkeConfig()), "Job", bootstrapJobBaseName)
+	require.NotNil(t, doc, "bootstrap Job present")
+	var job batchv1.Job
+	require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(doc.Object, &job))
+
+	pod := job.Spec.Template.Spec
+	require.NotNil(t, pod.SecurityContext)
+	assert.Equal(t, ptr(true), pod.SecurityContext.RunAsNonRoot)
+	require.NotNil(t, pod.SecurityContext.SeccompProfile)
+	assert.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, pod.SecurityContext.SeccompProfile.Type)
+
+	require.Len(t, pod.Containers, 1)
+	c := pod.Containers[0]
+	require.NotNil(t, c.SecurityContext)
+	assert.Equal(t, ptr(false), c.SecurityContext.AllowPrivilegeEscalation)
+	assert.Equal(t, ptr(true), c.SecurityContext.ReadOnlyRootFilesystem)
+	require.NotNil(t, c.SecurityContext.Capabilities)
+	assert.Equal(t, []corev1.Capability{"ALL"}, c.SecurityContext.Capabilities.Drop)
+	assert.False(t, c.Resources.Requests.Memory().IsZero(), "memory request set")
+	assert.False(t, c.Resources.Limits.Memory().IsZero(), "memory limit set")
 }

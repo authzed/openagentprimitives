@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -25,7 +26,7 @@ func getSecret(t *testing.T, c client.Client, name string) *corev1.Secret {
 
 func TestMintAllInternalSecrets_MintsTheTokenSet(t *testing.T) {
 	c := newFakeClient()
-	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{}))
+	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{}, nil))
 
 	for _, n := range MemoryTokenSecretNames {
 		s := getSecret(t, c, n)
@@ -47,7 +48,7 @@ func TestMintAllInternalSecrets_MintsTheTokenSet(t *testing.T) {
 
 func TestMintAllInternalSecrets_SkipsExternalTokens(t *testing.T) {
 	c := newFakeClient()
-	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{SkipSpiceDBToken: true, SkipPostgresToken: true}))
+	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{SkipSpiceDBToken: true, SkipPostgresToken: true}, nil))
 
 	// External instances: those two tokens are the user's to provide.
 	var sp corev1.Secret
@@ -61,11 +62,32 @@ func TestMintAllInternalSecrets_SkipsExternalTokens(t *testing.T) {
 
 func TestMintAllInternalSecrets_Idempotent(t *testing.T) {
 	c := newFakeClient()
-	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{}))
+	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{}, nil))
 	before := getSecret(t, c, spiceDBTokenSecretName).Data["token"]
-	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{}))
+	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{}, nil))
 	after := getSecret(t, c, spiceDBTokenSecretName).Data["token"]
 	assert.Equal(t, string(before), string(after), "second run does not rotate the spicedb token")
+}
+
+func TestMintAllInternalSecrets_LogsEachSecret(t *testing.T) {
+	c := newFakeClient()
+	var lines []string
+	logf := func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }
+
+	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{}, logf))
+	first := strings.Join(lines, "\n")
+	for _, n := range append(append([]string{}, MemoryTokenSecretNames...),
+		AdmindTokenSecretName, v1alpha1.PassthroughLinkSigningKeySecret,
+		"spicebox-nats-identity", "spicebox-nats-tls", "spicebox-webd-nats-creds",
+		postgresTokenSecretName, spiceDBTokenSecretName) {
+		assert.Regexp(t, `(?m)(minted|generated) `+n+`( Secret)?$`, first, "first run reports minting %s", n)
+	}
+
+	lines = nil
+	require.NoError(t, MintAllInternalSecrets(context.Background(), c, c, MintOptions{}, logf))
+	second := strings.Join(lines, "\n")
+	assert.NotRegexp(t, `(?m)(minted|generated|re-minting|regenerated|restarting) `, second, "second run mints nothing")
+	assert.Contains(t, second, MemoryTokenSecretNames[0]+" exists, left as is")
 }
 
 func TestEnsurePostgresToken_IdempotentNoRotate(t *testing.T) {

@@ -17,8 +17,7 @@ and `oap check` to verify a synced cluster.
 
 ```bash
 oap render --cluster-kind gke --output-dir deploy/oap \
-  --image-registry <your-registry> \
-  --with-postgres
+  --image-registry <your-registry>
 ```
 
 `oap render` never mutates a cluster. Its only remote call is read-only image
@@ -32,16 +31,30 @@ deploy/oap/
     install.yaml           # the core bundle (operator, webd, authzd, spicedb-operator, CRDs)
     channelsd.yaml         # channelsd (applied separately by oap install; included here)
     nats.yaml              # nats
+  bootstrap-job.yaml       # the Secret-minting Job + its ServiceAccount/Role/RoleBinding
+  spicedb.yaml             # SpiceDBCluster + its database Job + the endpoint ConfigMap
+  webhook-cert.yaml        # cert-manager Issuer + Certificate for the webhook cert
   patches/
     cluster-kind.yaml      # AP_CLUSTER_KIND stamped on operator + webd
-  components/              # postgres — only when --with-postgres is set
+    required-secrets.yaml  # every workload waits for the Secrets the Job mints (or you provide)
+    sync-waves.yaml        # Argo CD sync-wave on the namespace
+    webhook-ca-inject.yaml # cert-manager ca-injector annotation on the webhooks
+  components/postgres/     # Postgres — omitted with --external-postgres
   routing.yaml             # Gateway + HTTPRoute(s) — only when --trusted-hostname is set
+  cloud-network.yaml       # the cluster kind's DNS egress and, with routing, its load-balancer
+                           # health-check ingress + probe — only for kinds that need them (gke)
 ```
 
-Only `--with-postgres` is offered today: its token is minted by the overlay, so
-the component works end to end. The Graphiti/Neo4j memory backends need a
-user-supplied LLM API key the overlay cannot mint, so their GitOps support is a
-follow-up; use `oap install` for them in the meantime.
+Like `oap install`, the overlay ships **Postgres and SpiceDB**: a
+`SpiceDBCluster` served by the bundled spicedb-operator, keeping its datastore in
+a `spicedb` database in the bundled Postgres (created by a one-shot Job), and the
+`spicebox-spicedb-config` ConfigMap every component reads the SpiceDB endpoint
+from. The operator seeds the base schema the first time SpiceDB comes up empty
+and never overwrites a populated one.
+
+The Graphiti/Neo4j memory backends need a user-supplied LLM API key the overlay
+cannot mint, so their GitOps support is a follow-up; use `oap install` for them
+in the meantime.
 
 The output is a pure function of the flags: re-rendering identical inputs is
 byte-identical, so Argo CD shows no phantom drift. Commit the directory and
@@ -57,12 +70,23 @@ targets.
 Agent Primitives' secrets are **app-internal** — none are API keys you supply.
 The overlay includes a **pre-start bootstrap Job** (named
 `spicebox-bootstrap-secrets-<hash>`, running the operator image's
-`bootstrap-secrets` entrypoint) that mints them idempotently before the operator
-and data-plane start, so every component mounts its Secret cleanly at first boot.
-Nothing secret lands in git, and nothing is ever rotated. The Job's name carries
-a hash of its pod template, so an operator-image upgrade produces a new Job
-object (the controller prunes the old one) rather than failing against the
-immutable pod template of the existing Job.
+`bootstrap-secrets` entrypoint) that mints them idempotently. Nothing secret
+lands in git, and nothing is ever rotated.
+
+No workload starts without them. The base bundle marks many of these Secret
+references `optional`, because `oap install` creates the Secrets after the
+workloads and then rolls the operator; a GitOps apply has no such step, and
+the operator reads its tokens only once, at startup. So
+`patches/required-secrets.yaml` makes every reference to a Secret the Job
+mints, or that you provide, required: the kubelet holds each pod until its
+Secrets exist.
+
+Both Jobs in the overlay, this one and the SpiceDB database Job
+(`spicebox-spicedb-createdb-<hash>`), carry a hash of their pod template in
+their name. A Job's pod template is immutable, so an upgrade that changes one
+produces a new Job object rather than a sync that fails against the existing
+one. Enable pruning on the Argo CD `Application` or Flux `Kustomization` so
+the superseded Job is removed; both Jobs are safe to run again.
 
 The Job mints: the three memory tokens, the admind token, the passthrough signing
 key, the NATS identity/TLS/client credentials, and — unless you bring your own
@@ -74,9 +98,19 @@ annotation on the webhook configuration). This makes **cert-manager a dependency
 of the rendered bundle. On a cluster without it, pass `--external-webhook-tls` and
 provide `spicebox-webhook-tls` + the webhook `caBundle` yourself.
 
-- **External SpiceDB / Postgres:** pass `--external-spicedb` / `--external-postgres`
-  so the Job does **not** mint that token; you provide it (e.g. via the External
-  Secrets Operator or a sealed secret).
+- **External SpiceDB:** pass `--external-spicedb-endpoint <host:port>`. The
+  overlay then ships no `SpiceDBCluster`, points the endpoint ConfigMap at your
+  instance, switches every client to TLS (add `--external-spicedb-insecure` for
+  plaintext), and the Job does **not** mint `spicebox-spicedb-token`: you provide
+  it (e.g. via the External Secrets Operator or a sealed secret) and apply the
+  schema to your instance.
+- **A Secret you provide is waited for.** Each workload that references a
+  Secret you opted to provide (an external SpiceDB or Postgres token, a linked
+  memory token) stays pending until that Secret exists with the key it reads
+  (`token`; `uri` for `spicebox-postgres-token`).
+- **External Postgres:** pass `--external-postgres` to drop the bundled Postgres;
+  you provide `spicebox-postgres-token`. It requires `--external-spicedb-endpoint`,
+  because the bundled SpiceDB keeps its datastore in the bundled Postgres.
 - **Link an existing memory token:** use the per-component
   `--channelsd-/--webd-/--authzd-memory-token-secret` flags (one Secret each). The
   webd token **must name a different Secret** than the channelsd/authzd tokens:
@@ -86,8 +120,8 @@ provide `spicebox-webhook-tls` + the webhook `caBundle` yourself.
 - **Nothing else to provide by default:** every internal Secret is provisioned by
   the overlay (the Job + the cert-manager webhook Certificate). `oap render
   --validate` reports nothing to provide unless you opted an instance external via
-  `--external-spicedb`, `--external-postgres`, or `--external-webhook-tls` — then
-  it lists exactly those.
+  `--external-spicedb-endpoint`, `--external-postgres`, or `--external-webhook-tls`
+  — then it lists exactly those.
 
 ## Validate before you commit
 
@@ -96,8 +130,12 @@ oap render --cluster-kind gke --output-dir deploy/oap --validate
 ```
 
 `--validate` builds the overlay in-process and checks that it will sync: every
-non-optional Secret reference has a creator (shipped, operator-minted, or
-linked), `AP_CLUSTER_KIND` is stamped, and first-party images are pinned. It
+non-optional Secret reference has a creator (shipped, Job-minted, or linked),
+no workload references a Job-minted or provide-yourself Secret as `optional`
+(its pod could start without it), the SpiceDB endpoint ConfigMap is present
+(and, when it names the in-cluster Service, a `SpiceDBCluster` ships to serve
+it), `AP_CLUSTER_KIND` is stamped, and every first-party image reference is
+pinned. It
 prints the app-internal secrets you still need to provide. It cannot verify that
 a *linked* or externally-provided Secret actually exists in the cluster — that is
 a cluster-state fact `oap check` reports after the sync.
@@ -120,22 +158,60 @@ oap check
 
 `oap check` is provenance-agnostic — it verifies live cluster state by name, so
 it works identically whether the cluster came up via `oap install` or a GitOps
-sync. It includes a check that the memory-token Secrets are present; their
-absence is the signal that the bootstrap Job never minted them (wrong image, its
-backoff was exhausted, or the operator ServiceAccount is missing Secret RBAC).
+sync. It includes a check that each component's memory-token Secret is present
+— the one its Deployment actually references, so a linked Secret is checked too.
+Their absence is the signal that the bootstrap Job never minted them (wrong
+image, its backoff was exhausted, its Role is missing Secret RBAC, or a
+NetworkPolicy blocks its apiserver egress).
 
-## First-sync notes
+## First-sync ordering
 
-- The **bootstrap Job mints every internal Secret before the operator and
-  data-plane start** — there is no first-sync operator mint-and-roll step. The
-  Job and the workloads are applied together; the Job retries (its
-  `backoffLimit`) until the namespace and operator ServiceAccount it depends on
-  exist, and the operator crash-loops until the Secrets it mounts at startup
-  appear. Both are designed-for, self-healing cold-start states, not drift.
-- During that window the workloads whose token mounts are required sit in
-  `CreateContainerConfigError` — expected, and cleared the moment the Job
-  completes. No pod-template annotation is written, so after the Job finishes the
-  bundle is at rest and Argo CD / Flux report `Synced` with no phantom drift.
-- The one roll that can happen later is unrelated to first sync: if the webd
-  NATS publish-grant drifts, the operator re-mints the client credentials and
-  rolls the mounting Deployments once to remount them.
+**Argo CD** follows the sync-waves the overlay carries:
+
+| Wave | What                                                                     | Why                                                       |
+| ---- | ------------------------------------------------------------------------ | --------------------------------------------------------- |
+| -3   | the `agentprimitives-system` namespace; the Job's ServiceAccount and Role | the Job's prerequisites                                   |
+| -2   | the bootstrap Job                                                        | mints every internal Secret; Argo waits for it to finish  |
+| -1   | Postgres                                                                 | needs the Job's token; SpiceDB migrates into it           |
+| 0    | everything else, SpiceDB and the operator included                       |                                                           |
+
+No wave waits on a later one, so the sync cannot deadlock. The `SpiceDBCluster`
+carries `SkipDryRunOnMissingResource=true` because its CRD is applied in the
+same sync. The required Secret references described under Flux below apply
+here too; with the waves they are already satisfied when wave 0 starts, unless
+you provide a Secret yourself and it is not there yet.
+
+**Flux** has no waves: it applies the Kustomization in one pass. The same order
+emerges by waiting and retry. The bootstrap Job retries (its `backoffLimit`)
+until its namespace and ServiceAccount exist. Every pod that reads one of the
+Secrets it mints, the operator included, is held by the kubelet until they
+exist, because `patches/required-secrets.yaml` makes those references required
+(as it does for a Secret you provide yourself): a pod waiting
+on a Secret volume shows `ContainerCreating` with `FailedMount` events, and one
+waiting on a Secret-backed environment variable shows
+`CreateContainerConfigError`. Both clear on their own once the Job has minted
+the Secrets; no restart is needed. The SpiceDB database Job carries no deadline
+in the overlay: its pod waits for the Postgres token, then polls Postgres for
+several minutes before creating the database, and only then spends its
+`backoffLimit`. The operator retries SpiceDB until it serves.
+Set `wait: true` and a `timeout` of several minutes on the Flux `Kustomization`
+so the first reconcile is not reported failed while this settles.
+
+Either way:
+
+- The Job runs as its own `spicebox-bootstrap` ServiceAccount, with a namespaced
+  Role limited to Secrets and to rolling Deployments in `agentprimitives-system`.
+  A NetworkPolicy (`bootstrap`) allows its pod apiserver egress and nothing else.
+- The Job's name carries a hash of its image, its arguments and the set of
+  Secrets and NATS grants it mints, so an upgrade that changes any of them
+  produces a new Job that runs again. A Job that **exhausted its backoff** keeps
+  its name and will not be recreated by a re-sync: delete it (or change an
+  input) to run it again. `kubectl logs job/<name>` lists every Secret it
+  minted, left as is, or repaired.
+- No pod-template annotation is written at first sync, so once everything is up
+  the bundle is at rest and Argo CD / Flux report `Synced` with no phantom drift.
+- The one roll that can happen later: when an upgrade widens a NATS grant, the
+  re-run Job re-mints that client credential and rolls the Deployments that
+  mount it, once.
+- The webhook `caBundle` is left out of the rendered manifests, so the
+  cert-manager ca-injector owns it and Argo CD self-heal / Flux do not reset it.

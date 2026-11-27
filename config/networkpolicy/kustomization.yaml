@@ -9,6 +9,7 @@ resources:
   - spicedb-egress.yaml
   - operator.yaml
   - egress-external.yaml
+  - bootstrap.yaml
   - extractord.yaml
   - postgres.yaml
   - graphiti.yaml

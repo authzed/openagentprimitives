@@ -172,3 +172,21 @@ func TestApplyGatewayBackendIngressPolicy_Idempotent(t *testing.T) {
 	require.NoError(t, ApplyGatewayBackendIngressPolicy(context.Background(), cl, cidrs))
 	require.NoError(t, ApplyGatewayBackendIngressPolicy(context.Background(), cl, cidrs))
 }
+
+// TestPolicyBuilders_NilWhenNoCIDRs pins the builders' no-op contract: both
+// `oap install` (Apply*) and `oap render` (written into the overlay) rely on a
+// nil policy meaning "this cloud needs nothing", so neither emits an empty
+// ipBlock list.
+func TestPolicyBuilders_NilWhenNoCIDRs(t *testing.T) {
+	assert.Nil(t, DNSEgressPolicy(nil))
+	assert.Nil(t, DNSEgressPolicy([]string{}))
+	assert.Nil(t, GatewayBackendIngressPolicy(nil))
+	assert.Nil(t, GatewayBackendIngressPolicy([]string{}))
+
+	dns := DNSEgressPolicy([]string{"169.254.0.0/16"})
+	require.NotNil(t, dns)
+	assert.Equal(t, "allow-dns-cloud", dns.Name)
+	gw := GatewayBackendIngressPolicy([]string{"35.191.0.0/16"})
+	require.NotNil(t, gw)
+	assert.Equal(t, "allow-webd-gateway", gw.Name)
+}

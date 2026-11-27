@@ -36,6 +36,8 @@ func goldenOverlayFiles(t *testing.T, dir string) map[string]string {
 			rel == "routing.yaml" ||
 			rel == "bootstrap-job.yaml" ||
 			rel == "webhook-cert.yaml" ||
+			rel == "spicedb.yaml" ||
+			rel == cloudNetworkResourceFile ||
 			strings.HasPrefix(rel, "patches/") ||
 			(strings.HasPrefix(rel, "components/") && filepath.Base(rel) == "kustomization.yaml")
 		if !keep {
@@ -59,9 +61,11 @@ func TestRenderGoldens(t *testing.T) {
 		name string
 		cfg  RenderConfig
 	}{
-		{"local", RenderConfig{ClusterKind: cloud.KeyLocal, Strat: cloud.MustFor(cloud.KeyLocal)}},
-		{"gke-postgres-routing", func() RenderConfig {
-			c := RenderConfig{ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE), WithPostgres: true}
+		{"default", RenderConfig{ClusterKind: cloud.KeyDefault, Strat: cloud.MustFor(cloud.KeyDefault)}},
+		{"external-spicedb-tls", RenderConfig{ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE),
+			ExternalSpiceDBEndpoint: "spicedb.example.com:443", ExternalPostgres: true}},
+		{"gke-routing", func() RenderConfig {
+			c := RenderConfig{ClusterKind: cloud.KeyGKE, Strat: cloud.MustFor(cloud.KeyGKE)}
 			c.Routing.trustedHostname = "webd.example.com"
 			c.Routing.sandboxHostname = "sandbox.example.com"
 			c.Routing.gatewayClass = "eg"

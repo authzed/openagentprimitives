@@ -10,7 +10,6 @@ import (
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 
-	"github.com/authzed/openagentprimitives/pkg/platform/bootstrap"
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
 )
@@ -52,18 +51,23 @@ func processBundle(load func() ([][]byte, error), cfg RenderConfig, storageClass
 // applyMemoryTokenLinks rewrites each linked component's default memory-token
 // Secret name to the user-supplied existing name, across the whole base (every
 // reference). An unset link leaves the default name (the operator mints it).
-// Index-aligned with bootstrap.MemoryTokenSecretNames: [channelsd, webd, authzd].
+//
+// The rewrite is a single pass (strings.Replacer does not re-scan replaced
+// text), so one link's output is never rewritten again by another: chained
+// replaces let a link equal to another component's default name be rewritten a
+// second time, landing webd on authzd's write-capable Secret.
+// validateRenderFlags refuses such a link outright as well.
 func applyMemoryTokenLinks(base []byte, links MemoryTokenLinks) []byte {
-	repl := func(b []byte, def, linked string) []byte {
-		if linked == "" {
-			return b
+	var oldnew []string
+	for _, l := range links.byComponent() {
+		if l.linked != "" {
+			oldnew = append(oldnew, l.def, l.linked)
 		}
-		return bytes.ReplaceAll(b, []byte(def), []byte(linked))
 	}
-	base = repl(base, bootstrap.MemoryTokenSecretNames[0], links.Channelsd)
-	base = repl(base, bootstrap.MemoryTokenSecretNames[1], links.Webd)
-	base = repl(base, bootstrap.MemoryTokenSecretNames[2], links.Authzd)
-	return base
+	if len(oldnew) == 0 {
+		return base
+	}
+	return []byte(strings.NewReplacer(oldnew...).Replace(string(base)))
 }
 
 // clusterKindPatchFile is the overlay patch that stamps AP_CLUSTER_KIND onto the
@@ -139,6 +143,39 @@ func WriteOverlay(cfg RenderConfig) error {
 		}
 	}
 
+	// Cloud-specific network objects oap install layers on the base default-deny
+	// (DNS egress, and with routing the LB health-check ingress + probe path).
+	cloudNet, emitted, err := renderCloudNetworkResources(cfg)
+	if err != nil {
+		return fmt.Errorf("render cloud network resources: %w", err)
+	}
+	if emitted {
+		if err := os.WriteFile(filepath.Join(cfg.OutputDir, cloudNetworkResourceFile), cloudNet, 0o644); err != nil {
+			return err
+		}
+	}
+
+	// Argo sync-waves: the base Namespace joins the bootstrap-prerequisites wave
+	// (the Job and its RBAC carry their own waves).
+	if err := os.WriteFile(filepath.Join(cfg.OutputDir, syncWavePatchFile), syncWavePatch(), 0o644); err != nil {
+		return err
+	}
+
+	// SpiceDB: the database Job + SpiceDBCluster + endpoint ConfigMap oap install
+	// creates imperatively, or just the ConfigMap for an external instance.
+	spicedbDocs, err := renderSpiceDBResources(cfg)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(cfg.OutputDir, spicedbResourceFile), spicedbDocs, 0o644); err != nil {
+		return err
+	}
+	if tls, emitted := spicedbTLSPatch(cfg); emitted {
+		if err := os.WriteFile(filepath.Join(cfg.OutputDir, spicedbTLSPatchFile), tls, 0o644); err != nil {
+			return err
+		}
+	}
+
 	// Pre-start Job that mints the internal Secrets (always emitted — a GitOps
 	// apply has no `oap install` to mint them).
 	job, err := renderBootstrapJob(cfg)
@@ -161,16 +198,29 @@ func WriteOverlay(cfg RenderConfig) error {
 		}
 	}
 
-	// Optional dependencies (postgres/graphiti/neo4j) become kustomize Components,
-	// pulled in via `components:` only when their --with-* flag is set.
-	if err := writeDependencyComponents(cfg); err != nil {
+	// Dependencies (postgres) become kustomize Components, pulled in via
+	// `components:` unless the user runs that dependency externally.
+	components, err := writeDependencyComponents(cfg)
+	if err != nil {
 		return err
 	}
 	if err := writeUserOverlays(cfg); err != nil {
 		return err
 	}
 
-	k, err := renderKustomization(cfg)
+	// Every workload waits for the Secrets the bootstrap Job mints (or the user
+	// provides) instead of starting without them: see requiredSecretsPatch.
+	required, requiredEmitted, err := requiredSecretsPatch(cfg, append([][]byte{install, channelsd, nats}, components...)...)
+	if err != nil {
+		return fmt.Errorf("render required-secrets patch: %w", err)
+	}
+	if requiredEmitted {
+		if err := os.WriteFile(filepath.Join(cfg.OutputDir, requiredSecretsPatchFile), required, 0o644); err != nil {
+			return err
+		}
+	}
+
+	k, err := renderKustomization(cfg, requiredEmitted)
 	if err != nil {
 		return err
 	}
@@ -203,17 +253,34 @@ func clusterKindPatch(key string) []byte {
 // renderKustomization builds the overlay kustomization.yaml bytes
 // deterministically. Components and additional patches are appended by later
 // render stages; order is fixed so re-renders are byte-identical.
-func renderKustomization(cfg RenderConfig) ([]byte, error) {
-	resources := "resources:\n  - base/install.yaml\n  - base/channelsd.yaml\n  - base/nats.yaml\n  - " + bootstrapJobFile + "\n"
+// requiredSecrets says whether WriteOverlay emitted requiredSecretsPatchFile.
+func renderKustomization(cfg RenderConfig, requiredSecrets bool) ([]byte, error) {
+	resources := "resources:\n  - base/install.yaml\n  - base/channelsd.yaml\n  - base/nats.yaml\n  - " + bootstrapJobFile + "\n  - " + spicedbResourceFile + "\n"
 	if cfg.Routing.trustedHostname != "" {
 		resources += "  - " + routingResourceFile + "\n"
 	}
 	if !cfg.ExternalWebhookTLS {
 		resources += "  - " + webhookCertResourceFile + "\n"
 	}
-	patches := "patches:\n  - path: " + clusterKindPatchFile + "\n"
+	if _, emitted, err := renderCloudNetworkResources(cfg); err != nil {
+		return nil, err
+	} else if emitted {
+		resources += "  - " + cloudNetworkResourceFile + "\n"
+	}
+	patches := "patches:\n  - path: " + clusterKindPatchFile + "\n  - path: " + syncWavePatchFile + "\n"
+	if requiredSecrets {
+		patches += "  - path: " + requiredSecretsPatchFile + "\n"
+	}
 	if !cfg.ExternalWebhookTLS {
 		patches += "  - path: " + webhookCAInjectPatchFile + "\n"
+		removals, err := webhookCABundleRemovals()
+		if err != nil {
+			return nil, err
+		}
+		patches += removals
+	}
+	if _, emitted := spicedbTLSPatch(cfg); emitted {
+		patches += "  - path: " + spicedbTLSPatchFile + "\n" + spicedbTLSChannelsdPatch()
 	}
 	k := "apiVersion: kustomize.config.k8s.io/v1beta1\n" +
 		"kind: Kustomization\n" +

@@ -10,7 +10,7 @@ spec:
         - name: operator
           env:
             - name: AP_CLUSTER_KIND
-              value: local
+              value: default
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -24,4 +24,4 @@ spec:
         - name: webd
           env:
             - name: AP_CLUSTER_KIND
-              value: local
+              value: default

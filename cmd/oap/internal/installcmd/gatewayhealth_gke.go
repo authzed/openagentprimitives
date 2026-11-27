@@ -33,16 +33,12 @@ type gkeGatewayHealth struct{}
 
 func init() { gatewayhealth.Register(gkeGatewayHealth{}, cloud.KeyGKE) }
 
-// Provision applies the GKE HealthCheckPolicy that targets the webd Service and
+// Manifests returns the GKE HealthCheckPolicy that targets the webd Service and
 // points the backend health check at /healthz. Built as an unstructured object
-// (the CRD has no typed Go struct) and applied idempotently via kube.Apply,
-// which resolves the GVR from apiVersion/kind (networking.gke.io/v1
-// HealthCheckPolicy → namespaced healthcheckpolicies) and does a server-side
-// apply with create/update fallback.
-func (gkeGatewayHealth) Provision(ctx context.Context, p gatewayhealth.Params) error {
-	p.Reporter.Step("provision GKE backend health check (HealthCheckPolicy → /healthz)")
-
-	obj := &unstructured.Unstructured{Object: map[string]any{
+// (the CRD has no typed Go struct). Shared by Provision (`oap install`) and
+// `oap render`, so both emit one definition.
+func (gkeGatewayHealth) Manifests() []*unstructured.Unstructured {
+	return []*unstructured.Unstructured{{Object: map[string]any{
 		"apiVersion": "networking.gke.io/v1",
 		"kind":       "HealthCheckPolicy",
 		"metadata": map[string]any{
@@ -64,11 +60,19 @@ func (gkeGatewayHealth) Provision(ctx context.Context, p gatewayhealth.Params) e
 				"name":  cloud.WebdGatewayName,
 			},
 		},
-	}}
+	}}}
+}
 
-	if err := kube.Apply(ctx, p.Bundle.Dynamic, obj, "ap-install"); err != nil {
-		return fmt.Errorf("apply HealthCheckPolicy %s/%s: %w", cloud.WebdServiceNamespace, cloud.WebdGatewayName, err)
+// Provision applies Manifests idempotently via kube.Apply, which resolves the
+// GVR from apiVersion/kind (networking.gke.io/v1 HealthCheckPolicy → namespaced
+// healthcheckpolicies) and does a server-side apply with create/update fallback.
+func (g gkeGatewayHealth) Provision(ctx context.Context, p gatewayhealth.Params) error {
+	p.Reporter.Step("provision GKE backend health check (HealthCheckPolicy → /healthz)")
+	for _, obj := range g.Manifests() {
+		if err := kube.Apply(ctx, p.Bundle.Dynamic, obj, "ap-install"); err != nil {
+			return fmt.Errorf("apply %s %s/%s: %w", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+		}
+		p.Reporter.Info("  %s %s/%s health-checks webd at /healthz", obj.GetKind(), obj.GetNamespace(), obj.GetName())
 	}
-	p.Reporter.Info("  HealthCheckPolicy %s/%s health-checks webd at /healthz", cloud.WebdServiceNamespace, cloud.WebdGatewayName)
 	return nil
 }

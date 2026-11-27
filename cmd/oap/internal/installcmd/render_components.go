@@ -15,20 +15,26 @@ type dependencyComponent struct {
 	name    string
 	enabled func(RenderConfig) bool
 	load    func() ([][]byte, error)
+	// syncWave is the Argo sync-wave every resource in the component joins
+	// (render_syncwaves.go). Stamped onto each doc, not via the component's
+	// commonAnnotations: a Component's transformers run over the PARENT's whole
+	// resource set, which would move every resource into this wave.
+	syncWave string
 }
 
 // dependencyComponents is the fixed, ordered set of optional dependencies. Order
 // is fixed so the emitted `components:` list (and the on-disk layout) is
 // deterministic across renders.
 //
-// Postgres only, by design: its token is Job-minted, so --with-postgres renders
-// a bundle that works end to end. Graphiti/Neo4j are omitted until a follow-up
+// Postgres only, by design: its token is Job-minted, so it works end to end. It
+// is on unless --external-postgres, as in oap install, because the bundled
+// SpiceDB keeps its datastore in it. Graphiti/Neo4j are omitted until a follow-up
 // adds the external-LLM-key story — graphiti needs a user-supplied
 // spicebox-graphiti-config (OpenAI key) the overlay cannot mint, which render's
 // "nothing external by default" contract has no place for yet. (The install path
 // still supports them; see install.go / manifests.Graphiti/Neo4j.)
 var dependencyComponents = []dependencyComponent{
-	{"postgres", func(c RenderConfig) bool { return c.WithPostgres }, manifests.Postgres},
+	{"postgres", func(c RenderConfig) bool { return !c.ExternalPostgres }, manifests.Postgres, syncWavePostgres},
 }
 
 // enabledComponentNames returns the enabled dependency names in fixed order. Used
@@ -46,41 +52,52 @@ func enabledComponentNames(cfg RenderConfig) []string {
 // writeDependencyComponents writes a kustomize Component directory per enabled
 // dependency, with the storage class injected into each stateful doc (a no-op
 // for non-PVC/StatefulSet kinds). Creates components/ only when at least one
-// dependency is enabled.
-func writeDependencyComponents(cfg RenderConfig) error {
+// dependency is enabled. It returns each component's documents as written, for
+// the passes that look across every workload in the overlay.
+func writeDependencyComponents(cfg RenderConfig) ([][]byte, error) {
+	var written [][]byte
 	for _, d := range dependencyComponents {
 		if !d.enabled(cfg) {
 			continue
 		}
 		docs, err := d.load()
 		if err != nil {
-			return fmt.Errorf("load %s component: %w", d.name, err)
+			return nil, fmt.Errorf("load %s component: %w", d.name, err)
 		}
 		if cfg.StorageClass != "" {
 			for i := range docs {
 				m, err := manifests.InjectStorageClass(docs[i], cfg.StorageClass)
 				if err != nil {
-					return fmt.Errorf("inject storageClassName=%q into %s: %w", cfg.StorageClass, d.name, err)
+					return nil, fmt.Errorf("inject storageClassName=%q into %s: %w", cfg.StorageClass, d.name, err)
 				}
 				docs[i] = m
 			}
 		}
+		for i := range docs {
+			m, err := annotateDoc(docs[i], map[string]string{argoSyncWaveAnnotation: d.syncWave})
+			if err != nil {
+				return nil, fmt.Errorf("annotate %s: %w", d.name, err)
+			}
+			docs[i] = m
+		}
 		compDir := filepath.Join(cfg.OutputDir, "components", d.name)
 		if err := os.MkdirAll(compDir, 0o755); err != nil {
-			return err
+			return nil, err
 		}
-		if err := os.WriteFile(filepath.Join(compDir, d.name+".yaml"), bytes.Join(docs, []byte("---\n")), 0o644); err != nil {
-			return err
+		joined := bytes.Join(docs, []byte("---\n"))
+		written = append(written, joined)
+		if err := os.WriteFile(filepath.Join(compDir, d.name+".yaml"), joined, 0o644); err != nil {
+			return nil, err
 		}
 		comp := "apiVersion: kustomize.config.k8s.io/v1alpha1\n" +
 			"kind: Component\n" +
 			"resources:\n" +
 			"  - " + d.name + ".yaml\n"
 		if err := os.WriteFile(filepath.Join(compDir, "kustomization.yaml"), []byte(comp), 0o644); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return written, nil
 }
 
 // renderOverlayBase returns the bundled manifests a render with cfg emits — the

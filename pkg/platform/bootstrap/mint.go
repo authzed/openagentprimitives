@@ -14,12 +14,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz/adoptguard"
 )
 
 const (
 	spiceDBTokenSecretName  = "spicebox-spicedb-token"
 	postgresTokenSecretName = "spicebox-postgres-token"
+	natsIdentitySecretName  = "spicebox-nats-identity"
+	natsTLSSecretName       = "spicebox-nats-tls"
 )
 
 // MintOptions tunes which optional, instance-coupled Secrets MintAllInternalSecrets
@@ -36,35 +39,44 @@ type MintOptions struct {
 // pre-start bootstrap Job runs, so every consumer mounts its Secret cleanly at
 // first boot. reader must be a live/uncached reader; writer the controller client.
 //
-// NOTE: the NATS Secrets (identity/tls/creds) are minted by MintNATSSecrets,
-// added in a follow-up commit; this covers the token-shaped ones.
-func MintAllInternalSecrets(ctx context.Context, reader client.Reader, writer client.Client, opts MintOptions) error {
+// It mints the memory tokens, the admind token, the passthrough-link key, the
+// NATS identity/TLS/client creds, and — unless the matching MintOptions skip is
+// set — the Postgres token and the SpiceDB token with its datastore URI.
+//
+// logf receives one line per Secret: minted, left as is, or repaired/re-minted
+// (a NATS re-mint also names each Deployment it rolls). nil discards.
+func MintAllInternalSecrets(ctx context.Context, reader client.Reader, writer client.Client, opts MintOptions, logf func(string, ...any)) error {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	for _, name := range append(append([]string{}, MemoryTokenSecretNames...), AdmindTokenSecretName) {
-		if _, err := EnsureTokenSecret(ctx, reader, writer, TokenSecretNamespace, name); err != nil {
+		created, err := EnsureTokenSecret(ctx, reader, writer, TokenSecretNamespace, name)
+		if err != nil {
 			return err
 		}
+		logMinted(logf, name, created)
 	}
-	if _, err := EnsurePassthroughLinkKey(ctx, reader, writer, nil); err != nil {
+	if _, err := EnsurePassthroughLinkKey(ctx, reader, writer, logf); err != nil {
 		return err
 	}
 	// NATS identity → TLS → client creds (creds require the first two). Always
 	// bundled; never gated by the external flags.
-	if err := EnsureNATSIdentity(ctx, writer); err != nil {
+	if err := ensureLogged(ctx, reader, natsIdentitySecretName, logf, func() error { return EnsureNATSIdentity(ctx, writer) }); err != nil {
 		return err
 	}
-	if err := EnsureNATSTLS(ctx, writer); err != nil {
+	if err := ensureLogged(ctx, reader, natsTLSSecretName, logf, func() error { return EnsureNATSTLS(ctx, writer) }); err != nil {
 		return err
 	}
-	if err := EnsureNATSClientCreds(ctx, writer, nil); err != nil {
+	if err := EnsureNATSClientCreds(ctx, writer, logf); err != nil {
 		return err
 	}
 	if !opts.SkipPostgresToken {
-		if err := EnsurePostgresToken(ctx, reader, writer); err != nil {
+		if err := ensureLogged(ctx, reader, postgresTokenSecretName, logf, func() error { return EnsurePostgresToken(ctx, reader, writer) }); err != nil {
 			return err
 		}
 	}
 	if !opts.SkipSpiceDBToken {
-		if err := EnsureSpiceDBToken(ctx, reader, writer); err != nil {
+		if err := ensureLogged(ctx, reader, spiceDBTokenSecretName, logf, func() error { return EnsureSpiceDBToken(ctx, reader, writer) }); err != nil {
 			return err
 		}
 		// The /spicedb datastore URI is derived from the postgres password, so it
@@ -73,8 +85,52 @@ func MintAllInternalSecrets(ctx context.Context, reader client.Reader, writer cl
 			if err := EnsureSpiceDBDatastoreURI(ctx, reader, writer); err != nil {
 				return err
 			}
+			logf("ensured datastore_uri on %s", spiceDBTokenSecretName)
 		}
 	}
+	return nil
+}
+
+// MintedSecretNames is every Secret MintAllInternalSecrets(opts) creates, in
+// mint order. It is the one list the mint-set fingerprint and `oap render
+// --validate` derive from; TestMintedSecretNames_MatchesWhatMintAllCreates
+// keeps it equal to what MintAllInternalSecrets actually creates.
+func MintedSecretNames(opts MintOptions) []string {
+	names := append(append([]string{}, MemoryTokenSecretNames...),
+		AdmindTokenSecretName, v1alpha1.PassthroughLinkSigningKeySecret,
+		natsIdentitySecretName, natsTLSSecretName)
+	for _, c := range natsClientCreds() {
+		names = append(names, c.secretName)
+	}
+	if !opts.SkipPostgresToken {
+		names = append(names, postgresTokenSecretName)
+	}
+	if !opts.SkipSpiceDBToken {
+		names = append(names, spiceDBTokenSecretName)
+	}
+	return names
+}
+
+func logMinted(logf func(string, ...any), name string, created bool) {
+	if created {
+		logf("minted %s", name)
+	} else {
+		logf("%s exists, left as is", name)
+	}
+}
+
+// ensureLogged runs an Ensure* step that reports only an error, and logs whether
+// it minted the named Secret by checking for it first.
+func ensureLogged(ctx context.Context, reader client.Reader, name string, logf func(string, ...any), ensure func() error) error {
+	var existing corev1.Secret
+	getErr := reader.Get(ctx, types.NamespacedName{Namespace: TokenSecretNamespace, Name: name}, &existing)
+	if getErr != nil && !apierrors.IsNotFound(getErr) {
+		return fmt.Errorf("get %s secret: %w", name, getErr)
+	}
+	if err := ensure(); err != nil {
+		return err
+	}
+	logMinted(logf, name, apierrors.IsNotFound(getErr))
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -24,6 +25,23 @@ type MemoryTokenLinks struct {
 	Authzd    string
 }
 
+// memoryTokenLink is one component's memory-token Secret: the default name the
+// bootstrap Job mints, the user's link (empty = mint), and the flag that sets it.
+type memoryTokenLink struct {
+	flag, def, linked string
+}
+
+// byComponent lists the three links with their default names, in the order of
+// bootstrap.MemoryTokenSecretNames. The rewrite and the validation both range
+// over it, so they cannot disagree about which default belongs to which flag.
+func (l MemoryTokenLinks) byComponent() []memoryTokenLink {
+	return []memoryTokenLink{
+		{"--channelsd-memory-token-secret", bootstrap.ChannelsdMemoryTokenSecret, l.Channelsd},
+		{"--webd-memory-token-secret", bootstrap.WebdMemoryTokenSecret, l.Webd},
+		{"--authzd-memory-token-secret", bootstrap.AuthzdMemoryTokenSecret, l.Authzd},
+	}
+}
+
 // RenderConfig is the full input to `oap render`. It is populated from flags and
 // is the sole input to WriteOverlay (which must be a pure function of it).
 type RenderConfig struct {
@@ -32,13 +50,19 @@ type RenderConfig struct {
 	Tags         manifests.Tags
 	StorageClass string
 	Routing      WebdRoutingOpts
-	WithPostgres bool
 	MemoryToken  MemoryTokenLinks
 	NoDigestPin  bool
-	// ExternalSpiceDB/ExternalPostgres: the user points at an EXTERNAL instance and
-	// provides its token Secret themselves, so the bootstrap Job must NOT mint that
-	// token (it would fight the external instance).
-	ExternalSpiceDB  bool
+	// ExternalSpiceDBEndpoint, when set, points every component at a SpiceDB the
+	// user runs: the overlay ships no SpiceDBCluster, the endpoint ConfigMap
+	// carries this address, and the user provides spicebox-spicedb-token (the
+	// bootstrap Job must NOT mint it — it would fight the external instance).
+	// ExternalSpiceDBInsecure keeps plaintext gRPC to it; otherwise every client
+	// is flipped to TLS.
+	ExternalSpiceDBEndpoint string
+	ExternalSpiceDBInsecure bool
+	// ExternalPostgres: the overlay ships no Postgres and the user provides
+	// spicebox-postgres-token. Requires an external SpiceDB, because the bundled
+	// SpiceDB keeps its datastore in the bundled Postgres.
 	ExternalPostgres bool
 	// ExternalWebhookTLS: do not emit the cert-manager Issuer/Certificate for the
 	// operator webhook serving cert; you provide spicebox-webhook-tls + the VWC
@@ -51,6 +75,9 @@ type RenderConfig struct {
 	Strat    cloud.Strategy
 }
 
+// externalSpiceDB reports whether the user runs their own SpiceDB.
+func (c RenderConfig) externalSpiceDB() bool { return c.ExternalSpiceDBEndpoint != "" }
+
 func NewRenderCmd(g *apcmd.Globals) *cobra.Command {
 	cfg := RenderConfig{OutputDir: "deploy/oap"}
 	var validate bool
@@ -61,8 +88,9 @@ func NewRenderCmd(g *apcmd.Globals) *cobra.Command {
 			"Unlike `oap install`, render never mutates a cluster (its only remote call is read-only image-digest " +
 			"resolution, skipped with --no-digest-pin). Commit the output directory and point your GitOps controller " +
 			"at it. The overlay provisions every internal Secret: a pre-start Job mints the tokens/NATS material " +
-			"before the operator starts, and a cert-manager Certificate populates the webhook cert (so cert-manager " +
-			"is a dependency). Use --external-spicedb/--external-postgres/--external-webhook-tls to provide any of " +
+			"before the operator starts, a SpiceDBCluster backed by the bundled Postgres serves authorization, and a " +
+			"cert-manager Certificate populates the webhook cert (so cert-manager is a dependency). Use " +
+			"--external-spicedb-endpoint/--external-postgres/--external-webhook-tls to provide any of " +
 			"those yourself, or link an existing memory token with the per-component --*-memory-token-secret flags. " +
 			"Verify a synced cluster with `oap check`.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -73,10 +101,10 @@ func NewRenderCmd(g *apcmd.Globals) *cobra.Command {
 	cmd.Flags().StringVar(&cfg.ClusterKind, "cluster-kind", "", clusterKindFlagUsage)
 	cmd.Flags().StringVar(&cfg.Tags.Registry, "image-registry", "", "Rewrite first-party images to <registry>/<name>")
 	cmd.Flags().StringVar(&cfg.StorageClass, "storage-class", "", "StorageClass for stateful PVCs/StatefulSets")
-	cmd.Flags().BoolVar(&cfg.WithPostgres, "with-postgres", false, "Include the Postgres dependency component")
 	cmd.Flags().BoolVar(&cfg.NoDigestPin, "no-digest-pin", false, "Emit mutable tags instead of pinning digests (skips registry digest resolution)")
-	cmd.Flags().BoolVar(&cfg.ExternalSpiceDB, "external-spicedb", false, "You run an external SpiceDB and provide spicebox-spicedb-token yourself; the bootstrap Job will not mint it")
-	cmd.Flags().BoolVar(&cfg.ExternalPostgres, "external-postgres", false, "You run an external Postgres and provide spicebox-postgres-token yourself; the bootstrap Job will not mint it")
+	cmd.Flags().StringVar(&cfg.ExternalSpiceDBEndpoint, "external-spicedb-endpoint", "", "gRPC host:port of a SpiceDB you run; the overlay ships no SpiceDB and you provide spicebox-spicedb-token yourself (the bootstrap Job will not mint it)")
+	cmd.Flags().BoolVar(&cfg.ExternalSpiceDBInsecure, "external-spicedb-insecure", false, "Reach --external-spicedb-endpoint over plaintext gRPC instead of TLS")
+	cmd.Flags().BoolVar(&cfg.ExternalPostgres, "external-postgres", false, "You run an external Postgres and provide spicebox-postgres-token yourself; the overlay ships no Postgres and the bootstrap Job will not mint the token. Requires --external-spicedb-endpoint")
 	cmd.Flags().BoolVar(&cfg.ExternalWebhookTLS, "external-webhook-tls", false, "Do not emit cert-manager resources for the operator webhook cert; you provide spicebox-webhook-tls + the VWC caBundle yourself (clusters without cert-manager)")
 	// Per-component only, by design: there is deliberately no "one Secret for all
 	// three" flag — webd's token must differ from channelsd/authzd (it is
@@ -124,7 +152,7 @@ func runRender(ctx context.Context, out io.Writer, g *apcmd.Globals, cfg RenderC
 	// render emits: a patch for a component render leaves out would otherwise
 	// pass here and fail opaquely in the final kustomize build.
 	if _, err := loadOverlays(out, func() ([][]byte, error) { return renderOverlayBase(cfg) }, cfg.Overlays); err != nil {
-		return fmt.Errorf("%w (render emits the core install, channelsd and NATS, plus only the dependency components enabled by flags, such as --with-postgres)", err)
+		return fmt.Errorf("%w (render emits the core install, channelsd and NATS, plus Postgres unless --external-postgres)", err)
 	}
 
 	// Registry digest resolution is the ONLY remote call render makes, and it is
@@ -169,6 +197,12 @@ func validateRenderFlags(cfg RenderConfig) error {
 	if cfg.Strat != nil && spicedbModeFor(cfg.Strat.InstallProfile().SpiceDBDatastore()).bootstrapsSchemaAtStartup() {
 		return fmt.Errorf("cluster kind %q uses an in-memory SpiceDB datastore whose schema is bootstrapped at startup, which is fatal against the durable, multi-replica cluster a GitOps render targets; render a persistent-datastore kind (the operator applies the schema there)", cfg.Strat.Key())
 	}
+	if cfg.ExternalPostgres && !cfg.externalSpiceDB() {
+		return fmt.Errorf("--external-postgres requires --external-spicedb-endpoint: the bundled SpiceDB keeps its datastore in the bundled Postgres, so it cannot run without it")
+	}
+	if cfg.ExternalSpiceDBInsecure && !cfg.externalSpiceDB() {
+		return fmt.Errorf("--external-spicedb-insecure requires --external-spicedb-endpoint")
+	}
 	if cfg.Routing.trustedHostname == "" && cfg.Routing.sandboxHostname != "" {
 		return fmt.Errorf("--sandbox-hostname requires --trusted-hostname")
 	}
@@ -184,15 +218,26 @@ func validateRenderFlags(cfg RenderConfig) error {
 	// mints the defaults regardless of links: `--webd-memory-token-secret` pointed
 	// at channelsd's default name (channelsd left to mint) is the same leak as
 	// linking both to one Secret, and must be refused just the same.
-	eff := func(link string, i int) string {
+	// A link naming ANOTHER component's default Secret is refused outright: the
+	// Job still mints that default for its own component, and the overlay's name
+	// rewrite cannot tell the two apart, so the reference would be ambiguous.
+	links := cfg.MemoryToken.byComponent()
+	for _, l := range links {
+		for _, other := range links {
+			if l.linked != "" && other.def != l.def && l.linked == other.def {
+				return fmt.Errorf("%s=%q names the %s default Secret; link a Secret of its own (or leave it unset to have one minted)", l.flag, l.linked, strings.TrimSuffix(strings.TrimPrefix(other.flag, "--"), "-memory-token-secret"))
+			}
+		}
+	}
+	eff := func(link, def string) string {
 		if link != "" {
 			return link
 		}
-		return bootstrap.MemoryTokenSecretNames[i]
+		return def
 	}
-	webd := eff(cfg.MemoryToken.Webd, 1)
-	if webd == eff(cfg.MemoryToken.Channelsd, 0) || webd == eff(cfg.MemoryToken.Authzd, 2) {
-		return fmt.Errorf("webd's memory token (--webd-memory-token-secret, or its operator-minted default %q) must resolve to a different Secret than the channelsd/authzd memory tokens: webd is browser-facing and must not hold a write-capable memory credential", bootstrap.MemoryTokenSecretNames[1])
+	webd := eff(cfg.MemoryToken.Webd, bootstrap.WebdMemoryTokenSecret)
+	if webd == eff(cfg.MemoryToken.Channelsd, bootstrap.ChannelsdMemoryTokenSecret) || webd == eff(cfg.MemoryToken.Authzd, bootstrap.AuthzdMemoryTokenSecret) {
+		return fmt.Errorf("webd's memory token (--webd-memory-token-secret, or its operator-minted default %q) must resolve to a different Secret than the channelsd/authzd memory tokens: webd is browser-facing and must not hold a write-capable memory credential", bootstrap.WebdMemoryTokenSecret)
 	}
 	return nil
 }
