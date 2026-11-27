@@ -1,6 +1,6 @@
 {
   "name": "slot-instance-scoping",
-  "description": "A slot is per INSTANCE, not per type. The session runs as owner-1@example.com, who owns company 4210 and not 4299; the same tool with the same permission resolves allowed for the owned one and denied for the other. It also covers the `owner` leg of the composed permission (slot_grant_<perm>->interact + owner) — the arm that lets a requester with existing standing through with no grant and no approval, which is what keeps approval volume proportional to what the AGENT adds rather than to what the human could already do. Two turns, because the owner_ref tuple the second turn chains through is JIT-written from the first turn's response.",
+  "description": "A slot is per INSTANCE, not per type. The session runs as owner-1@example.com, who owns company 4210 and not 4299; the same tool with the same permission resolves allowed for the owned one and denied for the other. It also covers the `owner` leg of the composed permission (slot_grant_<perm> + slot_grant_<perm>->interact + owner) — the arm that lets a requester with existing standing through with no grant and no approval, which is what keeps approval volume proportional to what the AGENT adds rather than to what the human could already do. Two turns, because the owner_ref tuple the second turn chains through is JIT-written from the first turn's response.",
 
   "agentDir": "../testdata/agent-centerdot-companies",
   "agentClass": "centerdot-companies",

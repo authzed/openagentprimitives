@@ -31,6 +31,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/controllers/goals"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	goalsqlite "github.com/authzed/openagentprimitives/pkg/memory/goals/sqlite"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalconsent"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/infoleakagetaint"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/parkedprompt"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/sessionobservation"
@@ -69,6 +70,22 @@ func (c consentHTTP) CommitGoalConsent(ctx context.Context, entry memory.Entry) 
 	c.server.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent {
 		return &statusError{code: response.Code}
+	}
+	return nil
+}
+
+// CheckGoalConsent is the goal server's pre-write decision check, over HTTP.
+func (c consentHTTP) CheckGoalConsent(ctx context.Context, request memory.Entry, decider string, approved bool) error {
+	raw, err := json.Marshal(goalconsent.Check{Request: request, Decider: decider, Approved: approved})
+	if err != nil {
+		return err
+	}
+	r := httptest.NewRequest(http.MethodPost, "/goals/decision/check", bytes.NewReader(raw)).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+c.token)
+	response := httptest.NewRecorder()
+	c.server.ServeHTTP(response, r)
+	if response.Code != http.StatusNoContent {
+		return fmt.Errorf("%w: %s", &statusError{code: response.Code}, strings.TrimSpace(response.Body.String()))
 	}
 	return nil
 }
@@ -475,6 +492,10 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	require.Equal(t, 200, status)
 	status, _ = f.callSession(t, "foreign-token", scheduled.Name, domain.Request{Operation: "authorize_execution"})
 	require.Equal(t, 401, status)
+	// A private run's decisions keep component-only ingress.
+	status, ingress := decisionIngress(t, f.s, "channelsd", "team", scheduled.Name)
+	require.Equal(t, 200, status)
+	assert.False(t, ingress.Group, "a private goal's run is not a group run")
 	dispatcher.DeliveryMemory = provenance.NewSigningMemory(f.mem, signer)
 	reply := channelevents.OutboundUserMessagePayload{Text: "Stand up and stretch!"}
 	reply.Delivery, err = channelevents.NewDeliveryOperation(string(scheduled.UID), "approved-reply", reply)
@@ -495,6 +516,14 @@ func productionConsentLaunchAndRevocation(t *testing.T, inPlan, recurring, unatt
 	require.Equal(t, 200, status)
 	require.Equal(t, "accepted", accepted.Run.Reply.State)
 	require.NoError(t, accepted.Run.Reply.Receipt.Validate(accepted.Run.Reply.Intent))
+	// reply_publish_failed is an execution-root operation that only moves a
+	// handed-off reply; a confirmed private reply cannot be marked failed.
+	status, _ = f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "reply_publish_failed", Reply: &reply})
+	require.Equal(t, 409, status)
+	status, _ = f.callSession(t, "foreign-token", scheduled.Name, domain.Request{Operation: "reply_publish_failed", Reply: &reply})
+	require.Equal(t, 401, status)
+	status, _ = f.callSession(t, "token", "session", domain.Request{Operation: "reply_publish_failed", Reply: &reply})
+	require.NotEqual(t, 200, status, "management sessions cannot mark a run's reply")
 	proposal := domain.RunProposal{RequestID: "result", Status: "reported_success", Summary: "Private reminder published", Evidence: []string{"tool-call:reminder"}}
 	status, result := f.callSession(t, "root-token", scheduled.Name, domain.Request{Operation: "report_execution_result", Proposal: proposal})
 	require.Equal(t, 200, status)

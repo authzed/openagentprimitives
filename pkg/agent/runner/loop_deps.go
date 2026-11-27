@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/llm"
 	"github.com/authzed/openagentprimitives/pkg/agent/modality"
 	"github.com/authzed/openagentprimitives/pkg/agent/runner/approval/summarizer"
@@ -746,7 +747,7 @@ type Loop struct {
 	// Session-only does not weaken enforcement downstream of the approval — the
 	// grant it produces is still written, still carries a mandatory expiry, is
 	// still scoped to the session, is still revocable, and the tool-call Check
-	// still resolves slot_grant_<perm>->interact + owner. The only thing it
+	// still resolves slot_grant_<perm> + slot_grant_<perm>->interact + owner. The only thing it
 	// drops is asking "did the approver already hold it" first, which is
 	// unanswerable for a type SpiceDB has no tuples for in the first place — a
 	// git repository's permissions live at the forge, not in SpiceDB.
@@ -831,6 +832,32 @@ type Loop struct {
 	PlanGateRequirePlan bool
 
 	PlanApprovalDeriver func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error)
+
+	// PlanGateBindsStanding wires the plan gate's BindStanding to this
+	// runner's approval bind path, so a phase the goal server approves under a
+	// group goal's standing plan gets its slots bound with the standing plan's
+	// approver as delegator. Set only for group goal runs; everywhere else a
+	// goal_group_standing authority is denied for want of a binder.
+	PlanGateBindsStanding bool
+
+	// GroupGoalRun marks a session running a GROUP goal's occurrence. Such a
+	// run acts as its own session (agentsession:<ns>/<name>) for tool-call
+	// authorization in every subject mode: nobody started it, and a member
+	// speaking in its thread must not become its principal. Its delivery tools
+	// hold execute through the run tuple the dispatcher writes for it.
+	GroupGoalRun bool
+
+	// GroupRunReport records this group run's result with the goal server
+	// (report_execution_result). The runner uses it itself, only when an
+	// approval the run raised expires undecided: the run reports blocked and
+	// concludes (see concludeGroupRunBlocked). Nil outside group goal runs.
+	GroupRunReport func(context.Context, goals.RunProposal) error
+
+	// groupRunExpired is the first approval this group run raised that reached
+	// its deadline undecided. Set from the dispatch goroutine awaiting it, read
+	// by the loop once that turn's tool results are recorded.
+	groupRunExpiredMu sync.Mutex
+	groupRunExpired   *expiredApproval
 
 	// planGateFrozen is the frozen plan currently in force, set when the agent
 	// declares phases. Guarded because select_phase and the gate read it from
@@ -1100,6 +1127,18 @@ type Loop struct {
 	// is frozen at the initiator or empty. Attribution for display must not
 	// inherit an authorization mode's gating.
 	lastInboundAuthor identity.Subject
+
+	// turnRef is the channelsd InboundRef of the inbound that started the
+	// current turn (see TurnRef). Atomic because the goals client reads it
+	// from tool goroutines while the loop goroutine advances it.
+	turnRef atomic.Pointer[string]
+	// turnStartPending marks that the next drainInbox opens a new turn, so its
+	// first human inbound sets turnRef. Loop goroutine only.
+	turnStartPending bool
+	// turnOpener is the author of the inbound that opened the current turn;
+	// a mid-turn drain advances turnRef only when every human in it is this
+	// person. Empty when unknown. Loop goroutine only.
+	turnOpener identity.Subject
 
 	// speakerProfileMu guards the four speakerProfile* fields below together —
 	// one cohesive piece of per-turn memoization state, read and written as a unit

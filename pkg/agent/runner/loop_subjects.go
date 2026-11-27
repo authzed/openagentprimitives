@@ -1,9 +1,11 @@
 package runner
 
 import (
+	"log/slog"
 	"strings"
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	"github.com/authzed/openagentprimitives/pkg/authz"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds/slack"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
@@ -30,6 +32,15 @@ import (
 // only sanctioned bypass is AgentClass.spec.authz.toolCalls.mode="disabled".
 func (l *Loop) ResolveAuthSubjects(sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alpha1.AgentClass) {
 	if l.AuthzCli == nil {
+		return
+	}
+	if l.GroupGoalRun && sess != nil && sess.Spec.GoalExecution != nil {
+		// A group goal run acts as itself, always. groupGoalRunSubjectMode is
+		// no mode advanceRequester advances, so a member's turn in the run's
+		// thread leaves the principal where it is.
+		l.authSubjectMode = groupGoalRunSubjectMode
+		l.authSubject = sessionSelfSubject(sess)
+		l.authSubjects = nil
 		return
 	}
 	mode := class.Spec.GetAuthz().GetToolCalls().Subject
@@ -82,6 +93,10 @@ func (l *Loop) ResolveAuthSubjects(sess *spiceboxv1alpha1.AgentSession, class *s
 	}
 }
 
+// groupGoalRunSubjectMode is the subject mode of a group goal run: the run
+// session itself, never advanced by a turn's author.
+const groupGoalRunSubjectMode = "groupGoalRun"
+
 // serviceSubjectFor returns the non-human subject this session acts as, or ""
 // when it has none.
 //
@@ -103,8 +118,11 @@ func (l *Loop) ResolveAuthSubjects(sess *spiceboxv1alpha1.AgentSession, class *s
 // ALLOWED anything. An agentsession subject is already admitted where a
 // non-human principal should be able to hold authority — resource
 // `slot_grant_<perm>` relations are agentsession-typed (authz.SlotGrantRelation)
-// — so the existing grant mechanism starts working for these sessions with no
-// new schema.
+// — and the composed slot permission carries a direct `slot_grant_<perm>` leg
+// (guardian/schema slotPermissionExpr) alongside the member leg, so a grant
+// naming this session authorizes the session itself. No new relation types:
+// the member leg alone never could, because agentsession#interact holds people,
+// not the session.
 //
 // It grants nothing by itself. Standing still requires somebody to write a
 // slot grant naming this session, which is the same deliberate act the service
@@ -139,7 +157,21 @@ func serviceSubjectFor(sess *spiceboxv1alpha1.AgentSession, class *spiceboxv1alp
 		return identity.CanonicalUserID{}
 	}
 	if declared := spiceboxv1alpha1.AuthzServiceSubject(sess); !declared.IsZero() {
-		return declared
+		// Only a `service:` subject may override. The annotation is not
+		// validated at admission, and a slot grant authorizes the session it
+		// names DIRECTLY (guardian/schema slotPermissionExpr), so an
+		// annotation naming another session — or a user — would borrow that
+		// principal's standing. Anything else is treated as unset: the
+		// session acts as itself, and an agentsession principal comes from
+		// sessionSelfSubject and nowhere else.
+		err := authz.ValidateSubject(declared.String(), authz.SubjectService)
+		if err == nil {
+			return declared
+		}
+		slog.Default().Info("ignoring authz service subject annotation: not a service subject; session acts as itself",
+			"session", sess.Namespace+"/"+sess.Name,
+			"annotation", spiceboxv1alpha1.AnnotationAuthzServiceSubject,
+			"value", declared.String(), "err", err.Error())
 	}
 	return sessionSelfSubject(sess)
 }

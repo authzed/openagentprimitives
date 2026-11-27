@@ -28,6 +28,20 @@ definition crm_company {
 }
 `
 
+// composedLine is the permission line ComposeSlots owns for a slot: the
+// granted session itself, the session's members, and — when the target
+// declares one — direct standing via owner. Spelled out once, and ending in
+// the newline, so the tests below pin the whole line rather than a prefix of
+// it: without the anchor a stray trailing leg would still pass.
+func composedLine(permission string, hasOwner bool) string {
+	rel := schema.SlotGrantRelationName(permission)
+	line := "permission " + permission + " = " + rel + " + " + rel + "->interact"
+	if hasOwner {
+		line += " + owner"
+	}
+	return line + "\n"
+}
+
 func companySlot() schema.SlotPair {
 	return schema.SlotPair{ResourceType: "crm_company", Permission: "contact_access"}
 }
@@ -49,8 +63,8 @@ func TestComposeSlots_emitsRelationAndPermissionArm(t *testing.T) {
 
 	assert.Contains(t, out, "relation "+schema.SlotGrantRelationName("contact_access")+": agentsession",
 		"the grant relation lives on the resource, pointing at the session")
-	assert.Contains(t, out, "permission contact_access = "+schema.SlotGrantRelationName("contact_access")+"->interact + owner",
-		"the composer owns the permission line: session members, plus anyone with direct standing")
+	assert.Contains(t, out, composedLine("contact_access", true),
+		"the composer owns the permission line: the granted session, its members, plus anyone with direct standing")
 }
 
 // Byte-identical re-compose must be a no-op. The composed schema is written to
@@ -85,7 +99,7 @@ func TestComposeSlots_replacesAnAuthorDeclaredPermission(t *testing.T) {
 
 	assert.NotContains(t, out, "any_user",
 		"the author's wildcard leaf must not survive: it is what the reversal exists to remove")
-	assert.Contains(t, out, "permission contact_access = "+schema.SlotGrantRelationName("contact_access")+"->interact + owner")
+	assert.Contains(t, out, composedLine("contact_access", true))
 }
 
 // THE regression this design exists to prevent. A wildcard leaf anywhere in a
@@ -148,8 +162,7 @@ func TestComposeSlots_composesOverADeadLegacyLeg(t *testing.T) {
 
 	assert.True(t, changed, "a dead grant_* leg no longer blocks composition")
 	assert.Empty(t, skipped, "and the slot is live, not reported inert")
-	assert.Contains(t, out, "permission contact_access = "+
-		schema.SlotGrantRelationName("contact_access")+"->interact + owner")
+	assert.Contains(t, out, composedLine("contact_access", true))
 	// Matched whole, not by substring: the composed relation name
 	// `slot_grant_contact_access` CONTAINS the legacy `grant_contact_access`.
 	assert.NotContains(t, out, "any_user + grant_contact_access + owner",
@@ -169,7 +182,7 @@ func TestComposeSlots_takesOverOnceTheLegacyLegIsRemoved(t *testing.T) {
 
 	assert.True(t, changed)
 	assert.Empty(t, skipped)
-	assert.Contains(t, out, "permission contact_access = "+schema.SlotGrantRelationName("contact_access")+"->interact + owner")
+	assert.Contains(t, out, composedLine("contact_access", true))
 	assert.NotContains(t, out, "any_user", "and the wildcard goes with it")
 }
 
@@ -199,8 +212,8 @@ func TestComposeSlots_OnePermissionsGrantCannotSatisfyAnother(t *testing.T) {
 	writeRel := schema.SlotGrantRelationName("write")
 	require.NotEqual(t, readRel, writeRel, "the relation must distinguish the permission")
 
-	assert.Contains(t, out, "permission read = "+readRel+"->interact + owner")
-	assert.Contains(t, out, "permission write = "+writeRel+"->interact + owner")
+	assert.Contains(t, out, composedLine("read", true))
+	assert.Contains(t, out, composedLine("write", true))
 	assert.NotContains(t, out, "permission write = "+readRel+"->",
 		"a read grant must not satisfy write")
 	assert.NotContains(t, out, "permission read = "+writeRel+"->",
@@ -222,7 +235,7 @@ func TestComposeSlots_omitsOwnerLegWhenNotDeclared(t *testing.T) {
 	assert.True(t, changed)
 	assert.Empty(t, skipped)
 
-	assert.Contains(t, out, "permission read = "+schema.SlotGrantRelationName("read")+"->interact")
+	assert.Contains(t, out, composedLine("read", false))
 	assert.NotContains(t, out, "owner", "widget declares no owner relation; the leg must not be emitted")
 }
 
@@ -240,7 +253,7 @@ func TestComposeSlots_keepsOwnerLegWhenDeclared(t *testing.T) {
 	assert.True(t, changed)
 	assert.Empty(t, skipped)
 
-	assert.Contains(t, out, "permission read = "+schema.SlotGrantRelationName("read")+"->interact + owner")
+	assert.Contains(t, out, composedLine("read", true))
 }
 
 // The composer must produce PARSEABLE schema when it creates a permission line
@@ -312,4 +325,68 @@ definition gadget {
 		[]schema.SlotPair{{ResourceType: "gadget", Permission: "read"}})
 	require.NoError(t, err, "a slot on an ordinary permission is unaffected by the memory rule")
 	assert.True(t, changed)
+}
+
+// The session a grant NAMES holds the permission itself, alongside the humans
+// reachable through it. A session acting in its own right — a group goal run,
+// a userless session — is checked as `agentsession:<ns>/<name>`, and
+// agentsession#interact never contains the session, so without the direct leg
+// a grant written for that session authorized nobody at all.
+//
+// The leg is the bare relation and nothing else: `slot_grant_<p>` admits only
+// `agentsession` subjects (no subject set), so it names exactly the granted
+// session — never a child, a parent, or a member of either.
+func TestComposeSlots_grantedSessionHoldsThePermissionDirectly(t *testing.T) {
+	rel := schema.SlotGrantRelationName("contact_access")
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "owner declared: direct leg + member leg + owner leg",
+			src:  slotBaseSchema,
+			want: "permission contact_access = " + rel + " + " + rel + "->interact + owner",
+		},
+		{
+			name: "no owner declared: direct leg + member leg only",
+			src: strings.NewReplacer(
+				"    relation owner: user\n    permission contact_access = owner",
+				"    relation viewer: user\n    permission contact_access = viewer",
+			).Replace(slotBaseSchema),
+			want: "permission contact_access = " + rel + " + " + rel + "->interact\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, changed, _, err := schema.ComposeSlots(tc.src, []schema.SlotPair{companySlot()})
+			require.NoError(t, err)
+			assert.True(t, changed)
+			assert.Contains(t, out, tc.want)
+		})
+	}
+}
+
+// The composer OWNS the line, so a schema composed by an earlier release —
+// without the direct leg — is upgraded in place on the next reconcile, and
+// the upgraded form is then a fixed point. Without the upgrade a live cluster
+// would keep the old line forever, since nothing else rewrites it.
+func TestComposeSlots_upgradesAnOldComposedLineThenIsAFixedPoint(t *testing.T) {
+	rel := schema.SlotGrantRelationName("contact_access")
+	current, _, _, err := schema.ComposeSlots(slotBaseSchema, []schema.SlotPair{companySlot()})
+	require.NoError(t, err)
+
+	old := strings.Replace(current,
+		"permission contact_access = "+rel+" + "+rel+"->interact + owner",
+		"permission contact_access = "+rel+"->interact + owner", 1)
+	require.NotEqual(t, current, old, "fixture: the old form must differ from the current one")
+
+	upgraded, changed, _, err := schema.ComposeSlots(old, []schema.SlotPair{companySlot()})
+	require.NoError(t, err)
+	assert.True(t, changed, "recomposing an old composed schema must report a change")
+	assert.Equal(t, current, upgraded, "and must land on exactly the current form")
+
+	again, changedAgain, _, err := schema.ComposeSlots(upgraded, []schema.SlotPair{companySlot()})
+	require.NoError(t, err)
+	assert.False(t, changedAgain, "the upgraded form must be a fixed point")
+	assert.Equal(t, upgraded, again)
 }

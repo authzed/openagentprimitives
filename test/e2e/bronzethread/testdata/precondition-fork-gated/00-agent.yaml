@@ -80,7 +80,7 @@ spec:
         relations:
           - {name: owner, subjectType: user}
         permissions:
-          # ComposeSlots rewrites this to slot_grant_checkout->interact + owner
+          # ComposeSlots rewrites this to slot_grant_checkout + slot_grant_checkout->interact + owner
           # because the AgentClass declares git_commit as an authz slot.
           - {name: checkout, expr: owner, title: "Check out this commit's code"}
   subcommands:

@@ -72,3 +72,41 @@ func TestReplyIntentReceiptAndWorkerFence(t *testing.T) {
 		})
 	}
 }
+
+// TestHandOffReplyIsGroupOnly: the unconfirmed hand-off skips receiver
+// confirmation, so the store refuses it for a private goal whatever the
+// caller asks; that reply can still take the confirmed path.
+func TestHandOffReplyIsGroupOnly(t *testing.T) {
+	for _, fixture := range durableFixtures() {
+		t.Run(fixture.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := fixture.new(t)
+			ledger := store.(goals.OccurrenceStore)
+			replies := store.(goals.ReplyStore)
+			svc, _ := executionService(store)
+			g := approveExecution(t, svc, actor(), "handoff")
+			o, err := ledger.Schedule(ctx, g)
+			require.NoError(t, err)
+			now := executionNow.Add(2 * time.Minute)
+			o, err = ledger.Claim(ctx, goals.ClaimRequest{ID: o.ID, Worker: "first", Now: now, Lease: time.Minute, OwnerLimit: 1, ClassLimit: 1})
+			require.NoError(t, err)
+			o, err = ledger.Attach(ctx, o, "root-uid", now)
+			require.NoError(t, err)
+			p := channelevents.OutboundUserMessagePayload{Text: "Stretch"}
+			p.Delivery, err = channelevents.NewDeliveryOperation("root-uid", "call", p)
+			require.NoError(t, err)
+			pin := g.Execution.Terms.Destination
+			intent := delivery.Intent{Session: channelevents.SessionRef{Namespace: o.Domain.Namespace, Name: o.SessionName}, Payload: p, Destination: delivery.Destination{Kind: "browser", ChannelUID: pin.ChannelUID, BindingDigest: pin.BindingDigest, Recipient: o.Domain.Owner}, CreatedAt: now}
+			_, err = replies.HandOffReply(ctx, o, goals.RunReply{Intent: intent}, now)
+			require.ErrorIs(t, err, goals.ErrDenied)
+			current, err := ledger.Occurrence(ctx, o.ID)
+			require.NoError(t, err)
+			require.Nil(t, current.Reply, "a refused hand-off records nothing")
+			prepared, err := replies.PrepareReply(ctx, o, goals.RunReply{Intent: intent}, now)
+			require.NoError(t, err)
+			require.Equal(t, goals.ReplyPrepared, prepared.Reply.State)
+			_, err = replies.HandOffReply(ctx, o, goals.RunReply{Intent: intent}, now)
+			require.ErrorIs(t, err, goals.ErrDenied, "a prepared private reply cannot switch to the unconfirmed path")
+		})
+	}
+}

@@ -10,7 +10,7 @@
 # `external` is satisfied by a slot grant and by nothing else. Approving the
 # plan-gate card writes `extrepo_repo:<url>#slot_grant_push@agentsession:<ns>/
 # <name>`, and the check reads that RELATION directly. It deliberately does not
-# read the composed `slot_grant_push->interact + owner` permission: that union
+# read the composed `slot_grant_push + slot_grant_push->interact + owner` permission: that union
 # cannot distinguish an approval from ambient ownership, and reading it let a
 # repo owner authorize an irreversible push nobody had seen.
 #
@@ -97,7 +97,7 @@ spec:
         relations:
           - {name: owner, subjectType: user}
         permissions:
-          # ComposeSlots rewrites this to slot_grant_push->interact + owner
+          # ComposeSlots rewrites this to slot_grant_push + slot_grant_push->interact + owner
           # because the AgentClass below declares extrepo_repo as an authz
           # slot.
           #

@@ -100,6 +100,14 @@ type OccurrenceStore interface {
 	Finish(context.Context, Occurrence, OccurrenceState, time.Time) (Occurrence, error)
 }
 
+// ConsentRunStore reports the work a consent still governs.
+type ConsentRunStore interface {
+	// UnsettledUnder counts goal id's occurrences bound to the consent digest
+	// that can still start or are in flight at now: queued and unexpired,
+	// claimed, running, or of unknown outcome.
+	UnsettledUnder(ctx context.Context, d Domain, id, digest string, now time.Time) (int, error)
+}
+
 // QueuedSweeper records work that can no longer launch without reserving
 // capacity or pretending a session existed. The transaction must serialize with Claim.
 type QueuedSweeper interface {
@@ -131,11 +139,25 @@ const (
 	// RunSessionNameTaken: a session the dispatcher did not create already holds
 	// the occurrence's reserved name, so this occurrence can never launch.
 	RunSessionNameTaken RunReason = "session_name_taken"
+	// The three group-goal reasons end a run that could never start because
+	// what its approved terms pin no longer exists or no longer qualifies. Each
+	// is definitive (a transient read failure is retried, not recorded), so the
+	// occurrence stops holding capacity and the next one is not blocked behind
+	// a retry loop.
+	//
+	// RunGroupChannelGone: the pinned Channel was deleted or recreated.
+	RunGroupChannelGone RunReason = "group_channel_gone"
+	// RunGroupNotHostable: the Channel's kind no longer hosts group goals, its
+	// membership is no longer current, the group's member ref no longer
+	// resolves, or the class's owner ceiling would now own the run.
+	RunGroupNotHostable RunReason = "group_not_hostable"
+	// RunIdentityChanged: the class's AgentIdentity was deleted or recreated.
+	RunIdentityChanged RunReason = "identity_changed"
 )
 
 func (r RunReason) Valid() bool {
 	switch r {
-	case RunMissed, RunSessionEnded, RunSessionFailed, RunInfrastructureFailed, RunDurationExpired, RunConsentExpired, RunCancelled, RunPaused, RunSuperseded, RunAuthorityDenied, RunSessionMissing, RunSessionNameTaken:
+	case RunMissed, RunSessionEnded, RunSessionFailed, RunInfrastructureFailed, RunDurationExpired, RunConsentExpired, RunCancelled, RunPaused, RunSuperseded, RunAuthorityDenied, RunSessionMissing, RunSessionNameTaken, RunGroupChannelGone, RunGroupNotHostable, RunIdentityChanged:
 		return true
 	}
 	return false

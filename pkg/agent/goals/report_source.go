@@ -143,6 +143,7 @@ func (a *ReportSource) Verify(ctx context.Context, raw json.RawMessage) (session
 	if err != nil {
 		return sessionevents.Input{}, err
 	}
+	g, _ = g.ForConsent(o.ConsentDigest)
 	permitted := false
 	if g.Execution != nil {
 		for _, op := range g.Execution.Terms.AllowedOperations {

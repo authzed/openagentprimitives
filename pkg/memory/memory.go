@@ -56,6 +56,12 @@ type Turn struct {
 	// Model is the uniform display id of the model that actually served the
 	// turn, "<provider>/<served-model>". Empty on user turns.
 	Model string `json:"model,omitempty"`
+	// InboundRef is channelsd's per-inbound ref on an "inbox" item, matching
+	// the goal_actor attestation recorded for the same message, carried onto
+	// the "user" turn the runner places for it. The runner reads it to name
+	// the inbound that started its turn, including after a restart mid-turn.
+	// omitempty for the same digest reason as Via.
+	InboundRef string `json:"inboundRef,omitempty"`
 }
 
 // ContentBlock mirrors the LLM provider-neutral block shape so the runner

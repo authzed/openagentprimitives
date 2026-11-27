@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,15 @@ func (a *authority) WriteRelationships(_ context.Context, rels []authz.Relation)
 	return nil
 }
 func (a *authority) DeleteRelationships(context.Context, []authz.Relation) error { return nil }
+func (a *authority) ListUserSubjects(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+func (a *authority) LookupResourceIDs(_ context.Context, typ, perm string, _ identity.CanonicalUserID) ([]string, bool, error) {
+	return nil, false, fmt.Errorf("unexpected lookup %s#%s on a private goal", typ, perm)
+}
+func (a *authority) CheckSubjectOnResource(_ context.Context, typ, id, perm, subjType, _ string, _ bool) (bool, error) {
+	return false, fmt.Errorf("unexpected subject check %s:%s#%s@%s on a private goal", typ, id, perm, subjType)
+}
 func (a *authority) GrantSlots(context.Context, string, string, []authz.SlotBinding, time.Time) error {
 	a.grants++
 	return nil
@@ -262,4 +272,25 @@ func TestRestoringRegistry(t *testing.T) {
 	w := httptest.NewRecorder()
 	f.s.ServeHTTP(w, r)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// A conflict is answered 409 with its own message. The runner rebuilds the
+// sentinel from that message (httpclient.GoalConflict), so a second reply
+// after a hand-off must still name itself however it was wrapped on the way.
+func TestFailAnswersAConflictWithItsOwnMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		handedOff bool
+	}{
+		{name: "a second reply after a hand-off: 409 naming the hand-off", err: fmt.Errorf("prepare reply for run: %w", core.ErrReplyHandedOff), handedOff: true},
+		{name: "a run that is no longer current: 409 that does not", err: fmt.Errorf("prepare reply for run: %w", core.ErrConflict)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			(&Server{}).fail(w, httptest.NewRequest(http.MethodPost, "/goals/team/run", nil), tc.err)
+			assert.Equal(t, http.StatusConflict, w.Code)
+			assert.Equal(t, tc.handedOff, strings.Contains(w.Body.String(), core.ErrReplyHandedOff.Error()), w.Body.String())
+		})
+	}
 }

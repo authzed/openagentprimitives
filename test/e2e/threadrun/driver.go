@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -184,6 +185,7 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 		HoldToolsFromAssembly:         toolCatalog.HeldFromAssembly(),
 		FilterOfferedTools:            toolCatalog.Filter(),
 		ReplaceAssembledTool:          metaCanner.Replacer(),
+		WithGoalExecution:             b.Goals != nil && b.Goals.Execution,
 	})
 
 	// Canned outputs for the tools whose disposition is ReplayOutput. Keyed by
@@ -369,6 +371,8 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	seedUserIdentities(t, h, b)
 
 	startAutoApprover(t, h, b)
+	setGoalAudience(t, h, b)
+	awaitGoalDecisions := startGoalDecisions(t, h, b)
 
 	tr := registerTranscript(t, h, b)
 
@@ -429,7 +433,14 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 	// than a per-bundle hook, and for the no-op it is for every other bundle.
 	workshopSessionBound := false
 	for i, turn := range b.UserTurns {
-		h.SendUserMessage(turn.Text, e2e.InThread("bt-"+b.Name), e2e.WithAttachments(bundleAttachments(t, dir, i, turn)...))
+		sendOpts := []e2e.SendOption{e2e.InThread("bt-" + b.Name), e2e.WithAttachments(bundleAttachments(t, dir, i, turn)...)}
+		if turn.User != "" {
+			sendOpts = append(sendOpts, e2e.AsUser(turn.User))
+		}
+		if b.Goals != nil && len(b.Goals.Conversation) > 0 {
+			sendOpts = append(sendOpts, e2e.WithExternal(b.Goals.Conversation))
+		}
+		h.SendUserMessage(turn.Text, sendOpts...)
 		// Contains and NotContains are positional and run on the SAME reply, so a
 		// turn asserting both awaits its reply once and checks presence + absence
 		// together. A turn with neither is not awaited (some turns produce no
@@ -446,6 +457,9 @@ func Run(t *testing.T, dir string, b bt.Bundle) *e2e.Harness {
 		}
 		bindWorkshopSessionOnce(t, h, &workshopSessionBound)
 	}
+
+	awaitGoalDecisions()
+	checkGoalRuns(t, h, b)
 
 	checkTranscriptConsumed(t, b, tr)
 	// The phase barrier runs FIRST among the state checks: for a bundle whose
@@ -1170,15 +1184,16 @@ func registerTranscript(t *testing.T, h *e2e.Harness, b bt.Bundle) *transcript {
 		}).ReplyFn(func() []e2e.ReplyPart { return renderReplyParts(t, i, parts, vars) })
 	}
 
-	// One trailing rule for the loop's own epilogue.
+	// One trailing rule for a call the transcript did not describe.
 	//
-	// After agent_work_complete the runner asks the model once more, handing it
-	// a "session complete" tool result — it is checking for further work, not
-	// continuing the conversation. That call belongs to the loop, not to the
-	// authored transcript, and in a MIDDLE turn it is invisible because the next
-	// turn's step absorbs it. On the LAST turn there is no next step, so whether
-	// it lands before or after the assertions decides the run: bundles passed
-	// alone and failed in company, with "no rule matched … rules pending: 0".
+	// It was added for an "epilogue": a runner resumed after agent_work_complete
+	// used to hand the model that tool's "session complete" result and ask once
+	// more. Whether it did depended on whether some wake landed after the runner
+	// reached Idle, so on the LAST turn bundles passed alone and failed in
+	// company, with "no rule matched … rules pending: 0". The runner no longer
+	// takes that turn (resumedWithNothingToDo), so an authored step for it would
+	// now go unconsumed and be taken by the next session's first request — do
+	// not script one.
 	//
 	// Repeating and last, so every authored step is still matched first and in
 	// order — this only catches what the bundle did not describe.
@@ -1403,7 +1418,35 @@ func renderReplyParts(t *testing.T, idx int, in []parsedPart, vars map[string]st
 }
 
 // placeholderRe matches a {{name}} interpolation in a tool argument.
-var placeholderRe = regexp.MustCompile(`\{\{([A-Za-z0-9_]+)\}\}`)
+//
+// Two built-in forms need no capture. {{now+90s}} (s, m or h; + or -) is the
+// match-time UTC clock, whole seconds, RFC 3339: a goal's dueAt must be in the
+// future when the call is made, so no literal a bundle could carry stays
+// valid. {{user:a@example.com}} is that person's canonical user id, the way a
+// goal's managers are named, so a bundle spells people as its fixtures do.
+var placeholderRe = regexp.MustCompile(`\{\{([A-Za-z0-9_]+|now[+-][0-9]+[smh]|user:[^{}]+)\}\}`)
+
+// intPlaceholderRe matches an argument that is exactly {{int:name}}.
+var intPlaceholderRe = regexp.MustCompile(`^\{\{int:([A-Za-z0-9_]+)\}\}$`)
+
+// builtinPlaceholder resolves the capture-free placeholder forms.
+func builtinPlaceholder(name string) (string, bool, error) {
+	switch {
+	case strings.HasPrefix(name, "now+") || strings.HasPrefix(name, "now-"):
+		d, err := time.ParseDuration(name[len("now"):])
+		if err != nil {
+			return "", true, err
+		}
+		return time.Now().UTC().Add(d).Truncate(time.Second).Format(time.RFC3339), true, nil
+	case strings.HasPrefix(name, "user:"):
+		c, err := identity.EmailReference(identity.Email(strings.TrimPrefix(name, "user:"))).Canonical()
+		if err != nil {
+			return "", true, err
+		}
+		return c.String(), true, nil
+	}
+	return "", false, nil
+}
 
 // substituteArgs walks the decoded args and interpolates captured values into
 // every string it finds, at any depth.
@@ -1413,8 +1456,29 @@ func substituteArgs(t *testing.T, idx int, args map[string]any, vars map[string]
 	walk = func(v any) any {
 		switch x := v.(type) {
 		case string:
+			// {{int:name}} as the WHOLE argument binds the captured value as a
+			// JSON number, for an integer field (a goal's revision) whose value
+			// only the run knows. Explicit, so an id that happens to be all
+			// digits is never retyped.
+			if sub := intPlaceholderRe.FindStringSubmatch(x); sub != nil {
+				val, ok := vars[sub[1]]
+				if !assert.True(t, ok, "llm step %d: %s is not bound; no earlier step captured it", idx, x) {
+					return x
+				}
+				n, err := strconv.ParseInt(val, 10, 64)
+				if !assert.NoError(t, err, "llm step %d: %s bound %q, not an integer", idx, x, val) {
+					return x
+				}
+				return n
+			}
 			return placeholderRe.ReplaceAllStringFunc(x, func(m string) string {
 				name := placeholderRe.FindStringSubmatch(m)[1]
+				if val, builtin, err := builtinPlaceholder(name); builtin {
+					if !assert.NoError(t, err, "llm step %d: %s", idx, m) {
+						return m
+					}
+					return val
+				}
 				val, ok := vars[name]
 				if !assert.True(t, ok,
 					"llm step %d: %s is not bound; no earlier step captured it", idx, m) {

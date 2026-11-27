@@ -286,6 +286,11 @@ type Bundle struct {
 	// raises a warning naming what stopped running.
 	MetaToolReplies map[string]MetaToolReply `json:"metaToolReplies,omitempty"`
 
+	// Goals carries what a goal-execution scenario needs: the runtime that
+	// schedules and runs occurrences, the group a conversation belongs to, and
+	// the explicit clicks on its cards. See goals.go.
+	Goals *Goals `json:"goals,omitempty"`
+
 	// LLM is the model's side, POSITIONAL: the nth Send gets the nth entry.
 	LLM []LLMStep `json:"llm"`
 
@@ -369,6 +374,10 @@ func (b Bundle) Validate() error {
 	}
 
 	if err := b.validateSeeds(); err != nil {
+		return err
+	}
+
+	if err := b.validateGoals(); err != nil {
 		return err
 	}
 
@@ -978,6 +987,10 @@ type Assertions struct {
 	// label). Asserting the handle form here matches nothing and fails with a
 	// message naming what did arrive.
 	ArtifactsDelivered []string `json:"artifactsDelivered,omitempty"`
+
+	// GoalRuns asserts on the durable record of every goal occurrence the run
+	// executed, in due order. See goals.go.
+	GoalRuns []GoalRunAssertion `json:"goalRuns,omitempty"`
 }
 
 // SeedUserPreference is one saved preference value written into a user's own

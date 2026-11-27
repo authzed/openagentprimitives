@@ -9,6 +9,8 @@ import (
 
 	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
+	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/fake"
+	_ "github.com/authzed/openagentprimitives/pkg/channels/channelkinds/slack"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,4 +129,104 @@ func TestShippedGoalGateFailsClosed(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, goals.IsSessionName(name), out.Value(), "the shipped name clause and goals.IsSessionName agree on %q", name)
 	}
+}
+
+// TestGoalRunAnchorWriteBack: channelsd's relay writes the thread a kind
+// opened on first post back into spec.outputChannel. A group run (started by no
+// one) is validated by its group, not its binding bytes, so exactly that one
+// write, by channelsd, as the kind defines it, is admitted; nothing else in
+// the spec is, and a private run keeps the whole spec immutable.
+func TestGoalRunAnchorWriteBack(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddToScheme(scheme))
+	const channelsd = "system:serviceaccount:system:spicebox-channelsd"
+	h := &Handler{Decoder: admission.NewDecoder(scheme), OperatorSubject: "system:serviceaccount:system:operator", ChannelsdSubject: channelsd}
+	binding := func(kind string) *v1.ChannelBinding {
+		return &v1.ChannelBinding{Name: "team-chat", Kind: kind, Key: "channel:C1", External: map[string]string{"channel_id": "C1"}, Capabilities: []string{"text"}, NATSSubjectPrefix: "ap.session.team.goal-1"}
+	}
+	run := func(kind string) v1.AgentSession {
+		return v1.AgentSession{Spec: v1.AgentSessionSpec{Class: "assistant", GoalExecution: &v1.GoalExecutionReference{GoalID: "goal", OccurrenceID: "occurrence"}, InputChannel: binding(kind), OutputChannel: binding(kind)}}
+	}
+	group := run("slack")
+	private := run("slack")
+	private.Annotations = map[string]string{v1.AnnotationStartedByCanonicalID: "user:alice"}
+	writeBack := func(s *v1.AgentSession) {
+		s.Spec.OutputChannel.Key = "thread:C1:111.222"
+		s.Spec.OutputChannel.External["thread_ts"] = "111.222"
+		s.Spec.OutputChannel.External["permalink"] = "https://example.slack.com/archives/C1/p111222"
+	}
+	anchored := func() v1.AgentSession { s := *group.DeepCopy(); writeBack(&s); return s }()
+	for _, tc := range []struct {
+		name    string
+		old     v1.AgentSession
+		user    string
+		mutate  func(*v1.AgentSession)
+		allowed bool
+	}{
+		{"group run: channelsd's first anchor write-back admitted", group, channelsd, writeBack, true},
+		{"group run: first write-back without a permalink admitted", group, channelsd, func(s *v1.AgentSession) {
+			writeBack(s)
+			delete(s.Spec.OutputChannel.External, "permalink")
+		}, true},
+		{"group run: key and thread disagree refused", group, channelsd, func(s *v1.AgentSession) {
+			writeBack(s)
+			s.Spec.OutputChannel.Key = "thread:C9:999.999"
+		}, false},
+		{"group run: arbitrary key with a thread refused", group, channelsd, func(s *v1.AgentSession) {
+			writeBack(s)
+			s.Spec.OutputChannel.Key = "dm:U1"
+		}, false},
+		{"group run: channel_id changed refused", group, channelsd, func(s *v1.AgentSession) {
+			writeBack(s)
+			s.Spec.OutputChannel.External["channel_id"] = "C2"
+			s.Spec.OutputChannel.Key = "thread:C2:111.222"
+		}, false},
+		{"group run: second anchor rewrite refused", anchored, channelsd, func(s *v1.AgentSession) {
+			s.Spec.OutputChannel.Key = "thread:C1:333.444"
+			s.Spec.OutputChannel.External["thread_ts"] = "333.444"
+		}, false},
+		{"group run: write-back plus another spec change refused", group, channelsd, func(s *v1.AgentSession) {
+			writeBack(s)
+			s.Spec.Class = "other"
+		}, false},
+		{"group run: input binding rewrite refused", group, channelsd, func(s *v1.AgentSession) {
+			writeBack(s)
+			s.Spec.InputChannel = s.Spec.OutputChannel.DeepCopy()
+		}, false},
+		{"group run: output moved to another Channel refused", group, channelsd, func(s *v1.AgentSession) {
+			writeBack(s)
+			s.Spec.OutputChannel.Name = "elsewhere"
+		}, false},
+		{"group run: an extra External field refused", group, channelsd, func(s *v1.AgentSession) {
+			writeBack(s)
+			s.Spec.OutputChannel.External["team_id"] = "T9"
+		}, false},
+		{"group run: the same write by anyone but channelsd refused", group, "system:serviceaccount:team:session-runner-sa", writeBack, false},
+		{"group run on a kind that writes no anchor: refused", run("fake"), channelsd, func(s *v1.AgentSession) {
+			s.Spec.OutputChannel.Key = "thread:C1:111.222"
+		}, false},
+		{"private run: write-back refused (spec stays immutable)", private, channelsd, writeBack, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := tc.old.DeepCopy()
+			tc.mutate(sess)
+			raw, err := json.Marshal(sess)
+			require.NoError(t, err)
+			old, err := json.Marshal(tc.old)
+			require.NoError(t, err)
+			request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{Operation: admissionv1.Update, UserInfo: authv1.UserInfo{Username: tc.user}, Object: runtime.RawExtension{Raw: raw}, OldObject: runtime.RawExtension{Raw: old}}}
+			assert.Equal(t, tc.allowed, h.Handle(context.Background(), request).Allowed)
+		})
+	}
+	t.Run("no channelsd subject configured: the write-back is refused", func(t *testing.T) {
+		unconfigured := &Handler{Decoder: admission.NewDecoder(scheme), OperatorSubject: h.OperatorSubject}
+		sess := group.DeepCopy()
+		writeBack(sess)
+		raw, err := json.Marshal(sess)
+		require.NoError(t, err)
+		old, err := json.Marshal(group)
+		require.NoError(t, err)
+		request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{Operation: admissionv1.Update, UserInfo: authv1.UserInfo{Username: channelsd}, Object: runtime.RawExtension{Raw: raw}, OldObject: runtime.RawExtension{Raw: old}}}
+		assert.False(t, unconfigured.Handle(context.Background(), request).Allowed)
+	})
 }

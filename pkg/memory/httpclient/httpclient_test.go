@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/platform/preferences"
 )
@@ -358,4 +360,20 @@ func TestClientNon2xxErrors(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "500")
 	})
+}
+
+// TestStatusCodeExposesARefusalsStatus: a goal server's 409 is recoverable
+// from the error so the runner can rebuild the conflict; a non-HTTP error has
+// no status.
+func TestStatusCodeExposesARefusalsStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "goal conflict", http.StatusConflict)
+	}))
+	t.Cleanup(srv.Close)
+	_, err := New(srv.URL, "tok").Goals(context.Background(), "team", "run", goals.Request{Operation: "prepare_reply"})
+	code, ok := StatusCode(err)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusConflict, code)
+	_, ok = StatusCode(fmt.Errorf("plain"))
+	assert.False(t, ok, "a non-HTTP error has no status")
 }

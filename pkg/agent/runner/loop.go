@@ -285,6 +285,9 @@ func (l *Loop) Run(ctx context.Context) error {
 			if err := l.Memory.Append(ctx, t); err != nil {
 				return l.fail(ctx, spiceboxv1alpha1.ReasonAgentSessionMemoryDown, fmt.Sprintf("append initial prompt: %v", err))
 			}
+			// The opening prompt starts this turn; inbounds drained below
+			// (its own attachments, or anything that raced it) are mid-turn.
+			l.startInitialPromptTurn()
 			if !t.Author.Empty() {
 				// Turn 0 IS an inbound human message but never passes through
 				// drainInbox, which sets this same field. Without it,
@@ -327,6 +330,17 @@ func (l *Loop) Run(ctx context.Context) error {
 	// reply before the runner came back up). drainInbox places them as
 	// real "user" turns at runner-assigned indices; the runner is the
 	// sole writer of user/assistant turns.
+	//
+	// On a resumed session at rest these inbounds are what woke it, so the
+	// first one starts the turn. A session restarted mid-turn resumes that
+	// turn instead, and this drain is a mid-turn one. On a cold start turn 0
+	// already opened the turn.
+	restingAtStart := hadInitialPrompt && transcriptAtRest(prior)
+	if restingAtStart {
+		l.startTurnOnNextDrain()
+	} else if hadInitialPrompt {
+		l.resumeTurnState(prior)
+	}
 	if placed, drained, derr := l.drainInbox(ctx, nextIndex); derr != nil {
 		return l.fail(ctx, spiceboxv1alpha1.ReasonAgentSessionMemoryDown, fmt.Sprintf("drain inbox: %v", derr))
 	} else {
@@ -560,6 +574,12 @@ func (l *Loop) Run(ctx context.Context) error {
 				l.fireSessionEnd(ctx, "idle")
 				return l.idleWithWakeRecheck(ctx, reason)
 			}
+		}
+		// What the resume park drains starts a turn only if the session was at
+		// rest; after a mid-turn restart (an await that idled out) it is a
+		// reply within the turn.
+		if restingAtStart {
+			l.startTurnOnNextDrain()
 		}
 		if placed, drained, derr := l.drainInbox(ctx, nextIndex); derr != nil {
 			return l.fail(ctx, spiceboxv1alpha1.ReasonAgentSessionMemoryDown, fmt.Sprintf("drain inbox after park: %v", derr))
@@ -1149,6 +1169,13 @@ func (l *Loop) Run(ctx context.Context) error {
 			return nil
 		}
 
+		// A group goal run whose approval expired undecided reports blocked
+		// and concludes now, ahead of any terminal tool in the same turn: the
+		// expiry is the run's outcome, and its tool results are recorded above.
+		if expired, ok := l.takeGroupRunApprovalExpired(); ok {
+			return l.concludeGroupRunBlocked(ctx, expired)
+		}
+
 		if terminal {
 			// Channel-attached IdleExit: an await_user_message / ask_parent TTL, context cancelled,
 			// or the PreResponse share-denied yield respond_to_user routes here as
@@ -1191,6 +1218,10 @@ func (l *Loop) Run(ctx context.Context) error {
 				// more to do: drain the held inbox and continue the loop instead
 				// of parking Idle (which would strand the message until an
 				// external wake). Empty queue → the normal Idle park below.
+				//
+				// The agent declared its work complete, so the queued inbounds
+				// open a new turn rather than continuing the finished one.
+				l.startTurnOnNextDrain()
 				placed, drained, derr := l.drainHeldAtYield(ctx, nextIndex)
 				if derr != nil {
 					// Don't drop the failure silently: the message stays held as an

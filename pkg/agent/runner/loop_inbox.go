@@ -42,6 +42,9 @@ func (l *Loop) drainInbox(ctx context.Context, nextIndex int) (placed []memory.T
 	// session's first message — that arrives as spec.Prompt and is placed as
 	// turn 0 by Run (where the runner drives the cold-start flow). drainInbox
 	// therefore replays every inbox turn verbatim.
+	// Advance the turn's originating-inbound ref for this batch (see
+	// noteDrainForTurn) before placing it.
+	l.noteDrainForTurn(inbox)
 	for _, it := range inbox {
 		// The raw inbox turn is ALWAYS marked inbox_done below (preserved in
 		// memory for audit; never re-drained), and only after the real user turn
@@ -53,6 +56,9 @@ func (l *Loop) drainInbox(ctx context.Context, nextIndex int) (placed []memory.T
 			CreatedAt: time.Now().UTC(),
 			Author:    it.Author,
 			Via:       it.Via,
+			// Kept on the placed turn so a runner restarted mid-turn can
+			// recover which inbound opened it (resumeTurnState).
+			InboundRef: it.InboundRef,
 		}
 		if aerr := l.Memory.Append(ctx, real); aerr != nil {
 			return placed, nextIndex, fmt.Errorf("drain inbox: append user turn: %w", aerr)

@@ -18,6 +18,9 @@ const (
 	OwnerSourceStarter       OwnerSource = "starter"
 	OwnerSourcePermission    OwnerSource = "permission"
 	OwnerSourceOutputChannel OwnerSource = "outputChannel"
+	// OwnerSourceGoal: a group goal's run session, owned by that goal's
+	// managers (agent_goal:<id>#manage). The goal decides, not the Channel.
+	OwnerSourceGoal OwnerSource = "goal"
 )
 
 // ResolveOwnerSubject decides the SpiceDB subject that owns a session, and
@@ -101,6 +104,35 @@ func ResolveOwnerSubject(identityMode string, policy *ChannelOwnerPolicy, starte
 		return outputGroupRef, OwnerSourceOutputChannel, nil
 	}
 	return "", "", fmt.Errorf("owner: no resolvable owner (no starter, no explicit, no ownerless source)")
+}
+
+// ResolveGoalRunOwner decides the owner of a goal run session whose goal names
+// its owners (a group goal's run: goalOwnerRef is agent_goal:<id>#manage).
+//
+// The goal outranks every Channel-policy source — an explicit owner, a
+// starter, an ownerless permission, the output channel's membership — none of
+// which is consulted: the run's approvers are the goal's managers whatever the
+// Channel says. The class's ownerCeiling, the admin's decision, is still
+// applied ahead of it, so the answer can name another source (a fixed pin) or
+// none (starterOnly: a run has no starting user). Neither is a valid owner for
+// a group run: group-goal opt-in and dispatch refuse a class with such a
+// ceiling, and the operator writes a run owner only when the source is
+// OwnerSourceGoal, writing nothing (fail closed) otherwise. Passthrough is
+// refused outright: a goal run has no starter to act as.
+func ResolveGoalRunOwner(identityMode, goalOwnerRef string, ceiling *OwnerCeiling) (string, OwnerSource, error) {
+	if identityMode == IdentityModeUserPassthrough {
+		return "", "", fmt.Errorf("owner: a goal run has no starting user to pass through")
+	}
+	if ceiling != nil && ceiling.Fixed != "" {
+		return ceiling.Fixed, OwnerSourceCeiling, nil
+	}
+	if ceiling != nil && ceiling.StarterOnly {
+		return "", "", fmt.Errorf("owner: ownerCeiling is starterOnly and a goal run has no starting user")
+	}
+	if goalOwnerRef == "" {
+		return "", "", fmt.Errorf("owner: goal run has no goal owner")
+	}
+	return goalOwnerRef, OwnerSourceGoal, nil
 }
 
 // OwnerMayComeFromOutputChannel reports whether a class with this ownerCeiling

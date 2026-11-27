@@ -261,7 +261,26 @@ func (l *slackListener) buildHomeInputForUser(ctx context.Context, slackUserID s
 		}
 	}
 
+	card.Goals = l.loadHomeGoals(ctx, slackUserID, bareCanonical, classNS, className)
+
 	return appHomeViewInput{Agent: &card, ExternalBaseURL: externalBaseURL}, nil
+}
+
+// loadHomeGoals lists the group goals of THIS agent's class that the viewer
+// can see, for the goals section. nil (no section) without a goals client or a
+// canonical viewer; a failed list renders a couldn't-load notice rather than
+// reading as "no goals".
+func (l *slackListener) loadHomeGoals(ctx context.Context, slackUserID string, viewer identity.CanonicalUserID, ns, class string) *appHomeGoals {
+	if l.goals == nil || viewer.IsZero() {
+		return nil
+	}
+	rows, total, err := l.goals.ListForViewer(ctx, viewer, ns, class, appHomeGoalLimit)
+	if err != nil {
+		log.FromContext(ctx).Info("app_home: goals ListForViewer failed; page shows couldn't-load state",
+			"user", slackUserID, "namespace", ns, "class", class, "err", err.Error())
+		return &appHomeGoals{LoadFailed: true}
+	}
+	return &appHomeGoals{Rows: rows, Total: total}
 }
 
 // credentialNamesForClass returns the full credential-name set the

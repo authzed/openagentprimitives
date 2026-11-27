@@ -1617,7 +1617,19 @@ func run(cfg *config) error {
 
 	env := capability.RunnerEnv{
 		GoalsCaller: func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
-			return memHTTP.Goals(ctx, ns, name, req)
+			// Stamped here, never by the tool: the turn's originating inbound
+			// is runner state, not something the model may choose. Before the
+			// Loop exists there is no turn, and an empty ref is refused.
+			req.TurnRef = ""
+			if l := loopRef.Load(); l != nil {
+				req.TurnRef = l.TurnRef()
+			}
+			resp, err := memHTTP.Goals(ctx, ns, name, req)
+			// The goal server answers ErrConflict with 409. Rebuild it so a
+			// tool can tell a domain refusal from a transport failure, and
+			// respond_to_user's one-reply-per-run refusal (ErrReplyHandedOff)
+			// from every other conflict.
+			return resp, httpclient.GoalConflict(err)
 		},
 		NATSPublish:      pubFn,
 		EnvelopeSigner:   envSigner,
@@ -1993,6 +2005,10 @@ func run(cfg *config) error {
 		Logger:       logr.FromSlogHandler(slog.Default().Handler()),
 	})
 	mergedTools := assembled.Tools
+	// groupGoalRun: this session runs a group goal, so a phase its standing
+	// plan covers is approved by the goal server and bound here (the plan
+	// gate's BindStanding), with the plan's approving manager as delegator.
+	groupGoalRun := false
 	if sess.Spec.GoalExecution != nil {
 		authority, err := memHTTP.Goals(rootCtx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
 		if err != nil {
@@ -2001,6 +2017,7 @@ func run(cfg *config) error {
 		if authority.ExecutionTerms == nil {
 			return fmt.Errorf("goal execution terms unavailable")
 		}
+		groupGoalRun = authority.ExecutionTerms.Group != nil
 		mergedTools = meta.BoundedGoalToolsForTerms(mergedTools, sess.Spec.GoalExecution.ConsentDigest, *authority.ExecutionTerms, func(ctx context.Context) error {
 			_, err := memHTTP.Goals(ctx, ns, name, goalmodel.Request{Operation: "authorize_execution"})
 			return err
@@ -2329,6 +2346,19 @@ func run(cfg *config) error {
 			return runner.GoalPlanApprovalDeriver(func(ctx context.Context, req goalmodel.Request) (goalmodel.Response, error) {
 				return memHTTP.Goals(ctx, ns, name, req)
 			})
+		}(),
+		PlanGateBindsStanding: groupGoalRun,
+		GroupGoalRun:          groupGoalRun,
+		// A group run reports blocked itself when an approval it raised
+		// expires undecided; nil for every other session.
+		GroupRunReport: func() func(context.Context, goalmodel.RunProposal) error {
+			if !groupGoalRun {
+				return nil
+			}
+			return func(ctx context.Context, p goalmodel.RunProposal) error {
+				_, err := memHTTP.Goals(ctx, ns, name, goalmodel.Request{Operation: "report_execution_result", Proposal: p})
+				return err
+			}
 		}(),
 
 		// Live CR pointers, so the loop can dispatch autofill and

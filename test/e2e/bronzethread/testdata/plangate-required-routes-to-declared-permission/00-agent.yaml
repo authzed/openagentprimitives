@@ -84,7 +84,7 @@ spec:
           - {name: owner, subjectType: user}
           - {name: maintainer_ref, subjectType: user}
         permissions:
-          # ComposeSlots rewrites this to slot_grant_push->interact + owner
+          # ComposeSlots rewrites this to slot_grant_push + slot_grant_push->interact + owner
           # because the AgentClass below declares maintrepo_repo as an authz
           # slot.
           #

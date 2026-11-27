@@ -35,6 +35,9 @@ func (settleGoalValidator) ValidateGoalSession(context.Context, *spiceboxv1alpha
 func (settleGoalValidator) ConstrainGoalSettings(context.Context, *spiceboxv1alpha1.AgentSession, *spiceboxv1alpha1.EffectiveSettings) error {
 	return nil
 }
+func (settleGoalValidator) GoalSessionOwners(context.Context, *spiceboxv1alpha1.AgentSession) (GoalRunOwners, error) {
+	return GoalRunOwners{}, nil
+}
 
 func TestReconcileIdleGoalSessionPollsForDispatcherVerdict(t *testing.T) {
 	const sleepAfter = 10 * time.Minute

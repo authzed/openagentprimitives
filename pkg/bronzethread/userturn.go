@@ -43,7 +43,11 @@ type BundleAttachment struct {
 // would be all risk and no benefit, and a fixture edited only to satisfy a
 // schema is a fixture nobody re-reads.
 type UserTurn struct {
-	Text        string             `json:"text"`
+	Text string `json:"text"`
+	// User is who sends this turn. Empty is the bundle's DefaultUser. A
+	// conversation two people speak in — a group goal created by one member
+	// and approved by another — sets it per turn.
+	User        string             `json:"user,omitempty"`
 	Attachments []BundleAttachment `json:"attachments,omitempty"`
 }
 

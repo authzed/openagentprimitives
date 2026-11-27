@@ -80,7 +80,7 @@ func (c Checker) check(ctx context.Context, p authz.Permission, in authz.Inputs)
 		// to a human.
 		//
 		// The grant leg is checked SPECIFICALLY, not the composed permission.
-		// That permission is `slot_grant_<p>->interact + owner`, which unions two
+		// That permission is `slot_grant_<p> + slot_grant_<p>->interact + owner`, which unions
 		// very different claims: one Check cannot tell "a human approved this
 		// instance for this session" from "the requester happens to own it".
 		// Consulting it was tried and reverted — it let ambient ownership

@@ -52,6 +52,7 @@ func (d *Dispatcher) publishReportedObservation(ctx context.Context, o domain.Oc
 	if d.EventIngester == nil || d.EventIngester.Store == nil {
 		return fmt.Errorf("goal observation ingress unavailable")
 	}
+	// The report stream is the goal's own, whatever consent the run had.
 	g, err := d.Service.Store.Get(ctx, o.Domain, o.GoalID)
 	if err != nil {
 		return err

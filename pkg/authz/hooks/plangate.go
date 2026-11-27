@@ -13,6 +13,7 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/permsurface"
 	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
 )
 
@@ -93,6 +94,16 @@ type PlanGateDeps struct {
 	// It returns nil when human approval is required. Successful derivation is
 	// recorded and folded before use; an error cannot clear the phase.
 	DeriveApproval func(context.Context, plangate.Plan, int) (*plangateaudit.ApprovalAuthority, error)
+
+	// BindStanding writes the slot grants for a phase approved under a
+	// goal_group_standing authority, through the same bind path a human
+	// approval uses, with the authority's approver as delegator. It is called
+	// with the exact record the gate wrote, after that record is durably
+	// folded; an error denies the call. Nil for every session that is not a
+	// group goal run — a goal_group_standing authority without it is denied
+	// before anything is recorded, because an approval nothing can bind would
+	// clear the phase while granting none of the resources it names.
+	BindStanding func(context.Context, plangateaudit.Content, identity.Principal) error
 
 	// ActivePhase is the fallback index used when Records is nil.
 	ActivePhase int
@@ -379,6 +390,10 @@ func (h *PlanGate) Eval(ctx context.Context, in pipeline.Input) pipeline.Decisio
 							if h.deps.Recorder == nil || authority.Kind == "" || authority.Reference == "" || authority.DecisionRef == "" || authority.OccurrenceID == "" || authority.SessionUID == "" {
 								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: incomplete standing approval authority"}
 							}
+							binds := authority.Kind == plangateaudit.AuthorityGoalGroupStanding
+							if binds && (authority.Approver == "" || h.deps.BindStanding == nil) {
+								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: standing approval could not bind: no approver or no binder for a group standing authority"}
+							}
 							approval := plangate.PhaseAuthorityRecord(approvalPlan, activePhase, h.deps.SlotStanding)
 							approval.Event = plangateaudit.EventPhaseApproved
 							approval.PlanDigest = approvalDigest
@@ -390,6 +405,17 @@ func (h *PlanGate) Eval(ctx context.Context, in pipeline.Input) pipeline.Decisio
 							state, ok, err := h.foldOnce()
 							if err != nil || !ok || state.Doubtful || !state.PhaseApproved(activePhase) {
 								return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: standing approval was not durably established"}
+							}
+							if binds {
+								// The approver's canonical id, as the server checked it. RawSubject
+								// carries it verbatim: nothing here re-derives who they are.
+								approver := identity.RawSubject("user:" + authority.Approver)
+								if err := h.deps.BindStanding(ctx, approval, approver); err != nil {
+									h.logf("plan_gate: a standing approval was recorded but its slots could not be bound; denying the call",
+										"session", in.Session.String(), "tool", in.Tool.Name, "phase", activePhase,
+										"occurrence", authority.OccurrenceID, "err", err.Error())
+									return pipeline.Decision{Verdict: pipeline.Deny, Reason: "plan gate: standing approval could not bind: " + err.Error()}
+								}
 							}
 							// Continue through the normal per-call gates and budgets.
 						} else {
@@ -1443,3 +1469,8 @@ func argsMapOf(in pipeline.Input) map[string]any {
 	}
 	return unwrapEnvelope(m)
 }
+
+// BindsStandingForTest reports whether a BindStanding binder is wired — the
+// seam between the runner's group-goal flag and this hook, invisible from
+// either side alone (see ApproversForTest).
+func (h *PlanGate) BindsStandingForTest() bool { return h.deps.BindStanding != nil }

@@ -13,7 +13,7 @@
 #   read         a SLOTTABLE permission. AgentClass dossier-pool-e2e declares
 #                `dossier/read` in spec.authz.slots, so the guardian's
 #                ComposeSlots OWNS this line: it is rewritten at compose time
-#                into `slot_grant_read->interact + owner`, and the
+#                into `slot_grant_read + slot_grant_read->interact + owner`, and the
 #                `relation slot_grant_read: agentsession with expiration` it
 #                needs is injected alongside. That relation is what a session's
 #                slot grant is written on, and what pools.ForSession reads back.
@@ -80,13 +80,13 @@ spec:
             expr: audience + owner_ref
           # COMPOSER-OWNED. dossier-pool-e2e declares dossier/read as a slot, so
           # ComposeSlots replaces this expression with
-          # `slot_grant_read->interact + owner`. What is written here is only
+          # `slot_grant_read + slot_grant_read->interact + owner`. What is written here is only
           # what the type means with no session in the picture.
           - name: read
             expr: owner_ref
           # COMPOSER-OWNED, same as `read`: dossier-pool-write-e2e declares
           # dossier/write_memory, so this becomes
-          # `slot_grant_write_memory->interact + owner`. Written out here
+          # `slot_grant_write_memory + slot_grant_write_memory->interact + owner`. Written out here
           # rather than left for the composer to create (it would) so the
           # fragment names every permission the type has, and so a composition
           # that stopped running leaves a schema that is obviously uncomposed

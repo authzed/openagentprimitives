@@ -136,6 +136,75 @@ You can pause or cancel the goal to stop future work. Changes to the goal or its
 schedule require renewed authorization. Delivery also stops if your access or
 the agent's approved configuration changes.
 
+## Group goals
+
+A group goal belongs to a multi-person conversation, such as a Slack channel,
+instead of one person. Anyone in the group can see its goals, and the agent runs
+them on a schedule and posts the results into the group.
+
+Your administrator opts an agent in with `spec.capabilities.goals.groups: true`.
+The conversation's channel kind must also host group goals; in a kind that does
+not, the agent cannot create one. Group goals require the agent to run with
+`identityMode: agent`; other identity modes are refused.
+
+### Members and managers
+
+Each group goal has its own managers. Whoever creates a goal is its first
+manager, and managers can add others. A manager who leaves the group stops being
+a manager. When no manager is left in the group, platform administrators act as
+the fallback.
+
+- **Members** can create goals, list them, and pause them.
+- **Managers** can also approve, resume, renew and remove a goal.
+
+### Standing plans
+
+A manager approves a goal once with a standing plan, and that approval covers
+each later run whose own plan asks for no more. A standing plan names concrete
+resources only, never a wildcard, and allows at most one resource per slot type
+per run.
+
+- A run that stays within the standing plan is covered, and is approved
+  automatically.
+- A run that needs more posts an approval card to the group. Only a manager can
+  decide it, and the decision covers that run only. If nobody answers the card,
+  the run ends `blocked`.
+
+Each run is its own session and posts into the group. Members can see and talk
+in the run's thread, but only managers can approve what it asks for.
+
+While a run holds access to a resource its approved plan names, everyone in the
+group counts as able to see that resource. This matters for the check that stops
+an agent from posting something to people who could not otherwise see it: for a
+group run, posting about those resources into the group passes that check. This
+is deliberate. The manager who approved the plan approved posting about those
+resources into this group. The access ends when the run's access to the resource
+expires or is removed, and it never reaches anyone outside the group.
+
+### Renewal
+
+Consent lasts at most 90 days. The agent offers renewal 72 hours before expiry.
+A manager renews with the previous terms prefilled. Once consent expires, the
+goal is blocked and does not run until a manager renews it.
+
+### App Home
+
+In Slack, the App Home lists the group goals you can see. Each goal has **View
+plan** and **Pause**. **Resume**, **Renew** and **Remove** open a confirmation
+modal, and appear for managers, when they apply.
+
+Resume and Renew are approvals: the modal shows the goal and the plan you would
+approve, and submitting it is the decision. If the plan changes between opening
+the modal and submitting it, nothing is approved, and you are asked to reopen
+it.
+
+### Hosting group goals on another kind
+
+A kind that hosts multi-person conversations supports group goals by
+implementing `channelkinds.GroupGoalHost`. The goal packages contain no
+kind-specific code, and a test (`pkg/agent/goals/genericity_test.go`) keeps it
+that way.
+
 ## Reviewing a session
 
 A scheduled session opens with a short explanation, such as:

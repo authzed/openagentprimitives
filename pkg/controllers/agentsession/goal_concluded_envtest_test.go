@@ -60,6 +60,11 @@ func (s *stubGoalValidator) ConstrainGoalSettings(ctx context.Context, sess *spi
 	return s.ValidateGoalSession(ctx, sess)
 }
 
+// GoalSessionOwners: these sessions are private-goal shaped (channel-policy owners).
+func (s *stubGoalValidator) GoalSessionOwners(context.Context, *spiceboxv1alpha1.AgentSession) (agentsession.GoalRunOwners, error) {
+	return agentsession.GoalRunOwners{}, nil
+}
+
 func goalSession(name, class string) *spiceboxv1alpha1.AgentSession {
 	sess := validSession(name, class)
 	sess.Spec.GoalExecution = &spiceboxv1alpha1.GoalExecutionReference{

@@ -137,3 +137,20 @@ func TestUserPreferenceConfirmRegistered(t *testing.T) {
 	assert.Equal(t, channelinteractions.ResurfaceCached, c.Resurface)
 	require.NoError(t, c.Validate(), "the registered row must be well-formed")
 }
+
+// A group goal's consent is decided by whoever manages that goal at click
+// time (the request names agent_goal:<id>#manage as its resource), on a card
+// posted in the conversation the goal belongs to — not DM'd to one owner, and
+// never folded into a private plan card.
+func TestGoalGroupExecutionConsentRegistered(t *testing.T) {
+	c, ok := channelinteractions.Get(GoalGroupExecutionConsent)
+	require.True(t, ok, "importing this package registers goal_group_execution_consent")
+	assert.Equal(t, "goal_group_execution_consent", c.Name)
+	assert.Equal(t, channelinteractions.DecideResourceOwners, c.Deciders, "the deciders are the goal's managers, named by the request's resource")
+	assert.NotEqual(t, channelinteractions.SurfaceDMOnly, c.Surface, "posted in the requesting conversation, not DM-only")
+	assert.True(t, c.ChannelDecisionOnly, "a typed CLI approver cannot consent for a group")
+	assert.False(t, c.PlanConsent, "never included in a private plan card")
+	assert.Equal(t, channelinteractions.ResurfaceCached, c.Resurface, "the signed card is replayed verbatim")
+	assert.Empty(t, c.Park, "the requesting session is not parked on it")
+	require.NoError(t, c.Validate())
+}

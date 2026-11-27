@@ -8,6 +8,7 @@ import (
 	v1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelkinds"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/goalactor"
 	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,8 +28,10 @@ func TestGoalActorWrittenBeforeAcceptedTurnAndWake(t *testing.T) {
 			class.Spec.Capabilities = map[string]apiext.JSON{"goals": {Raw: []byte(`{}`)}}
 			require.NoError(t, k8s.Update(ctx, &class))
 			calls := 0
-			p.RecordGoalActor = func(_ context.Context, s *v1.AgentSession, c *v1.AgentClass, u identity.CanonicalUserID) error {
+			var recordedRef string
+			p.RecordGoalActor = func(_ context.Context, s *v1.AgentSession, c *v1.AgentClass, u identity.CanonicalUserID, inboundRef string) error {
 				calls++
+				recordedRef = inboundRef
 				assert.Empty(t, mem.appends)
 				assert.Empty(t, nats.subjects)
 				assert.Equal(t, sess.Name, s.Name)
@@ -39,7 +42,7 @@ func TestGoalActorWrittenBeforeAcceptedTurnAndWake(t *testing.T) {
 				}
 				return nil
 			}
-			d, err := p.Deliver(ctx, channelkinds.InboundEvent{Channel: ch, ExternalIDs: channelkinds.ExternalIdentity{Kind: "slack", ExternalID: "U1", Email: "a@example.com"}, ChannelKey: "thread:C1:1", MessageText: "Remember my goal"})
+			d, err := p.Deliver(ctx, channelkinds.InboundEvent{Channel: ch, ExternalIDs: channelkinds.ExternalIdentity{Kind: "fake", ExternalID: "U1", Email: "a@example.com"}, ChannelKey: "thread:C1:1", MessageText: "Remember my goal"})
 			require.Equal(t, 1, calls)
 			if fail {
 				require.Error(t, err)
@@ -49,8 +52,13 @@ func TestGoalActorWrittenBeforeAcceptedTurnAndWake(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, channelkinds.OutcomeRouted, d.Outcome)
-				assert.Len(t, mem.appends, 1)
+				require.Len(t, mem.appends, 1)
 				assert.NotEmpty(t, nats.subjects)
+				// The attestation and the inbox item the runner drains carry
+				// the same per-inbound ref, so the runner can name the
+				// attestation that started its turn.
+				assert.NotEmpty(t, recordedRef)
+				assert.Equal(t, recordedRef, mem.appends[0].turn.InboundRef)
 			}
 		})
 	}
@@ -82,8 +90,11 @@ func TestOpeningViewActorAttestation(t *testing.T) {
 				p.Authz = nil
 			}
 			calls := 0
-			p.RecordGoalActor = func(_ context.Context, _ *v1.AgentSession, _ *v1.AgentClass, u identity.CanonicalUserID) error {
+			p.RecordGoalActor = func(_ context.Context, _ *v1.AgentSession, _ *v1.AgentClass, u identity.CanonicalUserID, inboundRef string) error {
 				calls++
+				// The opening prompt is the runner's turn 0, which no inbox
+				// item carries; it is named by the fixed initial-prompt ref.
+				assert.Equal(t, goalactor.InitialPromptRef, inboundRef)
 				assert.Equal(t, canonOf("alice@example.com"), u.String())
 				if mode == "write error" {
 					return errors.New("memory unavailable")
@@ -115,4 +126,31 @@ func TestOpeningViewActorAttestation(t *testing.T) {
 			assert.Empty(t, p.NATS.(*fakeNATS).subjects, "attestation must not wake the runner")
 		})
 	}
+}
+
+// Each inbound gets its own ref: two messages in one session must be
+// distinguishable, or a turn could select a later speaker's attestation.
+func TestGoalActorRefIsPerInbound(t *testing.T) {
+	ch := newChannel("c1")
+	sess := existingSession(t, "c1-abc", "", v1.AgentSessionPhaseRunning)
+	p, _, mem, _, k8s := newPipeline(t, ch, sess)
+	ctx := context.Background()
+	var class v1.AgentClass
+	require.NoError(t, k8s.Get(ctx, client.ObjectKey{Namespace: "default", Name: "ac1"}, &class))
+	class.Spec.Capabilities = map[string]apiext.JSON{"goals": {Raw: []byte(`{}`)}}
+	require.NoError(t, k8s.Update(ctx, &class))
+	var refs []string
+	p.RecordGoalActor = func(_ context.Context, _ *v1.AgentSession, _ *v1.AgentClass, _ identity.CanonicalUserID, inboundRef string) error {
+		refs = append(refs, inboundRef)
+		return nil
+	}
+	for _, text := range []string{"first", "second"} {
+		_, err := p.Deliver(ctx, channelkinds.InboundEvent{Channel: ch, ExternalIDs: channelkinds.ExternalIdentity{Kind: "fake", ExternalID: "U1", Email: "a@example.com"}, ChannelKey: "thread:C1:1", MessageText: text})
+		require.NoError(t, err)
+	}
+	require.Len(t, refs, 2)
+	require.Len(t, mem.appends, 2)
+	assert.NotEqual(t, refs[0], refs[1])
+	assert.Equal(t, refs[0], mem.appends[0].turn.InboundRef)
+	assert.Equal(t, refs[1], mem.appends[1].turn.InboundRef)
 }

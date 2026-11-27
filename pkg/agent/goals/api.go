@@ -3,7 +3,9 @@ package goals
 import (
 	"time"
 
+	"github.com/authzed/openagentprimitives/pkg/authz/plangate"
 	"github.com/authzed/openagentprimitives/pkg/channels/channelevents"
+	"github.com/authzed/openagentprimitives/pkg/memory"
 	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
 )
 
@@ -26,6 +28,15 @@ type Request struct {
 	Execution    ExecutionRequest                          `json:"execution,omitempty"`
 	List         ListRequest                               `json:"list,omitempty"`
 	ID           string                                    `json:"id,omitempty"`
+	// Scope selects whose goals a request addresses: "" or "private" (the
+	// verified human's own) or "group" (the members of this conversation).
+	// The owning group itself is always resolved server-side from the
+	// session's binding, never from this field.
+	Scope string `json:"scope,omitempty"`
+	// TurnRef names the inbound that started the caller's current turn. It
+	// only selects which signed attestation to consult; the server never
+	// takes it as evidence of who spoke.
+	TurnRef string `json:"turnRef,omitempty"`
 }
 
 type Response struct {
@@ -88,4 +99,56 @@ func (r Response) ReadDependencies() []Source {
 		}
 	}
 	return sources
+}
+
+// RunDecisionIngressCheck asks the goal server, as channelsd, whether a
+// decision on Session may arrive on the session's ordinary inbound subject.
+type RunDecisionIngressCheck struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// RunDecisionIngress answers RunDecisionIngressCheck. Group is true only for
+// the live run of a group-owned goal, read from its occurrence.
+type RunDecisionIngress struct {
+	Group bool `json:"group"`
+}
+
+// ManageRequest is channelsd's call to the goal server's management API on
+// behalf of a person a channel kind has verified (Viewer, canonical). It is
+// accepted only with channelsd's own token: Viewer is channelsd's word.
+type ManageRequest struct {
+	Operation string `json:"operation"`
+	Viewer    string `json:"viewer"`
+	Namespace string `json:"namespace"`
+	// Class narrows a list to one AgentClass's goals.
+	Class string `json:"class,omitempty"`
+	// Goal names one goal, "agent_goal:<id>", for plan and act.
+	Goal string `json:"goal,omitempty"`
+	// Action is the act to take, and on a plan read the act the plan is
+	// shown for (resume, renew), so the read shows what that act approves.
+	Action string `json:"action,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+	// Digest is, on a resume or renew act, the ManageResponse.Digest of the
+	// plan read the viewer was shown. It is not authority, only a binding:
+	// the act is refused (ErrPlanChanged) unless what it would approve still
+	// has that digest.
+	Digest string `json:"digest,omitempty"`
+}
+
+// ManageResponse answers a ManageRequest.
+type ManageResponse struct {
+	Goals []GoalSummary  `json:"goals,omitempty"`
+	Total int            `json:"total,omitempty"`
+	Plan  *plangate.Plan `json:"plan,omitempty"`
+	// Title is the goal's title, on a plan read, for the surface to show
+	// beside the plan; the server supplies it, not the surface's own view.
+	Title string `json:"title,omitempty"`
+	// Digest binds a plan read for resume or renew to what that act would
+	// approve; the surface hands it back on the act (ManageRequest.Digest).
+	Digest string `json:"digest,omitempty"`
+	// Approval is the operator-signed consent request an act (resume, renew)
+	// leaves for the viewer to decide: channelsd records the viewer's
+	// decision on it exactly as for a consent card, and commits it.
+	Approval *memory.Entry `json:"approval,omitempty"`
 }

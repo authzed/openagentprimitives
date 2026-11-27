@@ -239,36 +239,55 @@ func (l *slackListener) handleHomePrefSave(ctx context.Context, cb slackapi.Inte
 // mirrors buildHomeInputForUser's own derivation (app_home.go) so a
 // preference read and a preference write key on exactly the same identity.
 func (l *slackListener) clickerBareCanonical(ctx context.Context, slackUserID string) (string, error) {
+	cid, err := l.clickerCanonical(ctx, slackUserID)
+	if err != nil {
+		return "", err
+	}
+	return cid.String(), nil
+}
+
+// clickerCanonical is clickerBareCanonical as the typed id, for the goal
+// actions (app_home_goals_interaction.go), which key on the same identity.
+func (l *slackListener) clickerCanonical(ctx context.Context, slackUserID string) (identity.CanonicalUserID, error) {
 	canonical, err := l.resolveCanonicalForSlackUser(ctx, slackUserID)
 	if err != nil {
-		return "", fmt.Errorf("resolve clicker canonical: %w", err)
+		return identity.CanonicalUserID{}, fmt.Errorf("resolve clicker canonical: %w", err)
 	}
 	bare, err := identity.Subject(canonical).CanonicalUserID()
 	if err != nil {
-		return "", fmt.Errorf("clicker canonical has no bare user id: %w", err)
+		return identity.CanonicalUserID{}, fmt.Errorf("clicker canonical has no bare user id: %w", err)
 	}
-	return bare.String(), nil
+	return bare, nil
 }
 
 // republishHomeTab re-publishes the Home tab for slackUserID, mirroring
 // handleAppHomeOpened's own build+publish sequence (app_home.go), so the tab
-// always reflects the operator's authoritative state right after a
-// preference edit — whether that edit succeeded or failed. Best-effort: a
-// failure here only logs; the click's own success/failure has already been
-// decided independently by the caller.
+// always reflects the operator's authoritative state right after an edit —
+// whether that edit succeeded or failed. Best-effort: a failure here only
+// logs; the click's own success/failure has already been decided
+// independently by the caller.
 func (l *slackListener) republishHomeTab(ctx context.Context, slackUserID string) {
+	l.republishHomeTabWithNotice(ctx, slackUserID, "")
+}
+
+// republishHomeTabWithNotice is republishHomeTab with a one-shot notice at the
+// top of the tab — how a goal action tells the clicker its outcome, since an
+// App Home click has no response_url or channel to answer in. The notice
+// survives a failed input build: it renders over the empty state too.
+func (l *slackListener) republishHomeTabWithNotice(ctx context.Context, slackUserID, notice string) {
 	logger := log.FromContext(ctx)
 	in, err := l.buildHomeInputForUser(ctx, slackUserID)
 	if err != nil {
-		logger.Info("app_home: republish after pref click: build input failed",
+		logger.Info("app_home: republish: build input failed",
 			"user", slackUserID, "err", err.Error())
 		in = appHomeViewInput{}
 	}
+	in.Notice = notice
 	view := buildAppHomeView(in)
 	req := slackapi.PublishViewContextRequest{UserID: slackUserID, View: view}
 	if _, err := l.api.PublishViewContext(ctx, req); err != nil {
-		logger.Info("app_home: republish after pref click: views.publish failed",
-			"user", slackUserID, "err", err.Error())
+		logger.Info("app_home: republish: views.publish failed",
+			"user", slackUserID, "notice", notice, "err", err.Error())
 	}
 }
 

@@ -353,3 +353,24 @@ func (c *Client) LookupPersonalizableClasses(ctx context.Context,
 	}
 	return out, nil
 }
+
+// maxLookupResourceIDs bounds LookupResourceIDs: it backs a management list
+// that is rendered whole, so it must not stream without end.
+const maxLookupResourceIDs = 1000
+
+// LookupResourceIDs lists the objects of resType on which the user holds
+// permission, fully consistent (the answer gates what a management surface
+// shows and acts on). truncated reports the stream reached its bound, so ids
+// may be a prefix. A CONDITIONAL answer is an error, never a grant: no goal
+// permission is caveated, so one means the schema changed under the caller.
+func (c *Client) LookupResourceIDs(ctx context.Context, resType, permission string, canonicalID identity.CanonicalUserID) ([]string, bool, error) {
+	ids, conditional, truncated, err := c.lookupResources(ctx, resType, permission, canonicalID,
+		consistencyFor(true), maxLookupResourceIDs, resType+"#"+permission)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(conditional) > 0 {
+		return nil, false, fmt.Errorf("lookup %s#%s for user:%s: %d results need caveat context this lookup does not supply", resType, permission, canonicalID, len(conditional))
+	}
+	return ids, truncated, nil
+}

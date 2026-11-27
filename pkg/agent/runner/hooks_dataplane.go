@@ -9,6 +9,8 @@ import (
 	"github.com/authzed/openagentprimitives/pkg/authz/hooks"
 	"github.com/authzed/openagentprimitives/pkg/authz/toolguard"
 	"github.com/authzed/openagentprimitives/pkg/authz/trifecta"
+	"github.com/authzed/openagentprimitives/pkg/memory/kinds/plangateaudit"
+	"github.com/authzed/openagentprimitives/pkg/platform/identity"
 	"github.com/authzed/openagentprimitives/pkg/platform/pipeline"
 )
 
@@ -63,6 +65,10 @@ func init() {
 		if sp, ok := l.SlotBinder.(authz.SlotPinner); ok {
 			slotPinner = sp
 		}
+		var bindStanding func(context.Context, plangateaudit.Content, identity.Principal) error
+		if l.PlanGateBindsStanding {
+			bindStanding = newRunnerHost(l, hostSession{Namespace: l.SessionKey.Namespace, Name: l.SessionKey.Name, Class: l.AgentName}).bindApprovedPhase
+		}
 		return []pipeline.Hook{hooks.NewPlanGate(hooks.PlanGateDeps{
 			Mode:        l.PlanGateMode,
 			RequirePlan: l.PlanGateRequirePlan,
@@ -104,6 +110,7 @@ func init() {
 			CurrentPlan:    l.ActiveFrozenPlanNow,
 			Records:        l.PlanGateRecords,
 			DeriveApproval: l.PlanApprovalDeriver,
+			BindStanding:   bindStanding,
 			Recorder:       planGateRecorder{l: l},
 			Logger:         slog.Default(),
 			// Advisory: used only to render a slot MOVE on the card. The MovePin

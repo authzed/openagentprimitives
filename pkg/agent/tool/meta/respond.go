@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/authzed/openagentprimitives/pkg/agent/goals"
 	"github.com/authzed/openagentprimitives/pkg/agent/session/state/deliveries"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool"
 	"github.com/authzed/openagentprimitives/pkg/agent/tool/sandbox"
@@ -39,13 +40,20 @@ const defaultMaxAttachments = 10
 type RespondConfig struct {
 	// AcceptReply, when set, commits a durable transport acceptance before the
 	// live notification. Bounded goal replies require this path; publication
-	// alone is not their delivery evidence.
-	AcceptReply       func(context.Context, channelevents.OutboundUserMessagePayload) (delivery.Receipt, error)
-	Capabilities      []string // {"text","markdown","asset:text/html",...}
-	ChannelKind       string   // "fake", "slack", etc.
-	NATSPublish       func(ctx context.Context, subject string, payload []byte) error
-	NATSSubjectPrefix string // e.g., "ap.session.default.foo"
-	AppendSystemNote  func(ctx context.Context, content map[string]any) error
+	// alone is not their delivery evidence. A nil receipt with a nil error is
+	// an unconfirmed hand-off (a group goal on a transport without a delivery
+	// receiver): the envelope is published once for the relay to post, and
+	// the result says delivery is not confirmed.
+	AcceptReply func(context.Context, channelevents.OutboundUserMessagePayload) (*delivery.Receipt, error)
+	// ReplyPublishFailed, when set, records that a handed-off reply (AcceptReply
+	// returned no receipt) could not be published, so the run's record says
+	// publish_failed instead of a hand-off the relay never received.
+	ReplyPublishFailed func(context.Context, channelevents.OutboundUserMessagePayload) error
+	Capabilities       []string // {"text","markdown","asset:text/html",...}
+	ChannelKind        string   // "fake", "slack", etc.
+	NATSPublish        func(ctx context.Context, subject string, payload []byte) error
+	NATSSubjectPrefix  string // e.g., "ap.session.default.foo"
+	AppendSystemNote   func(ctx context.Context, content map[string]any) error
 
 	// EnvelopeSigner signs every envelope respond_to_user publishes with the
 	// session's identity key. Nil-safe: a nil signer leaves the envelope
@@ -401,18 +409,31 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 		}
 	}
 	var receipt *delivery.Receipt
+	handedOff := false
 	if t.cfg.AcceptReply != nil {
 		if payload.Delivery == nil {
 			return tool.Result{Trusted: true}, errors.New("durable reply identity unavailable")
 		}
 		accepted, err := t.cfg.AcceptReply(ctx, payload)
-		if err != nil {
-			return tool.Result{Trusted: true, IsError: true, Content: "Private reply acceptance is unconfirmed: " + err.Error() + ". Do not blindly resend."}, nil
+		switch {
+		case errors.Is(err, goals.ErrReplyHandedOff):
+			// Only this conflict means a reply went out. Any other one (the
+			// run is no longer current, its approval is no longer bound) sent
+			// nothing, and falls to the unconfirmed text below.
+			return tool.Result{Trusted: true, IsError: true, Content: "A reply for this run was already handed off for posting; a goal run sends one reply. Do not send another."}, nil
+		case errors.Is(err, ErrGoalReplyPublishFailed):
+			return tool.Result{Trusted: true, IsError: true, Content: "This run's reply was handed off earlier but could not be published, so nothing was posted; the run records it as publish_failed. Do not resend."}, nil
+		case err != nil:
+			return tool.Result{Trusted: true, IsError: true, Content: "Goal reply acceptance is unconfirmed: " + err.Error() + ". Do not blindly resend."}, nil
 		}
-		if accepted.OperationID != payload.Delivery.ID || accepted.SessionUID != payload.Delivery.SessionUID || accepted.PayloadDigest != payload.Delivery.PayloadDigest || accepted.Transport == "" || accepted.Reference == "" || accepted.AcceptedAt.IsZero() {
-			return tool.Result{Trusted: true}, delivery.ErrConflict
+		if accepted == nil {
+			handedOff = true
+		} else {
+			if accepted.OperationID != payload.Delivery.ID || accepted.SessionUID != payload.Delivery.SessionUID || accepted.PayloadDigest != payload.Delivery.PayloadDigest || accepted.Transport == "" || accepted.Reference == "" || accepted.AcceptedAt.IsZero() {
+				return tool.Result{Trusted: true}, delivery.ErrConflict
+			}
+			receipt = accepted
 		}
-		receipt = &accepted
 	}
 	logger.Info("respond_to_user: publishing user_message envelope",
 		"session", sess.Namespace+"/"+sess.Name, "toolUseID", toolUseID, "textLen", len(outText), "attachments", len(attachments), "components", len(in.Blocks) > 0)
@@ -424,6 +445,9 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 		channelevents.KindUserMessage,
 		payload,
 	); err != nil {
+		if handedOff {
+			return t.handOffPublishFailed(ctx, sess, payload, err), nil
+		}
 		if receipt == nil {
 			return tool.Result{Content: fmt.Sprintf("publish failed: %v", err), IsError: true, Trusted: true}, nil
 		}
@@ -502,7 +526,31 @@ func (t *respondTool) Execute(ctx context.Context, args json.RawMessage, sess *t
 	if receipt != nil {
 		return tool.Result{Content: "Private reply accepted by " + receipt.Transport + ". Receipt: " + receipt.Reference + ". This does not prove the user read it.", Trusted: true}, nil
 	}
+	if handedOff {
+		return tool.Result{Content: "Reply handed to the channel for posting. This transport gives no delivery receipt, so delivery is not confirmed; do not resend it.", Trusted: true}, nil
+	}
 	return tool.Result{Content: "delivered", IsError: false, Terminal: false, Trusted: true}, nil
+}
+
+// handOffPublishFailed handles a goal reply that was handed off for posting
+// but whose envelope never reached the relay. Nothing was posted, so the
+// run's record moves to publish_failed rather than staying an unconfirmed
+// hand-off; both the failure and any failure to record it are logged.
+func (t *respondTool) handOffPublishFailed(ctx context.Context, sess *tool.SessionContext, payload channelevents.OutboundUserMessagePayload, publishErr error) tool.Result {
+	logger := log.FromContext(ctx)
+	logger.Info("respond_to_user: goal reply handed off but not published; nothing was posted",
+		"session", sess.Namespace+"/"+sess.Name, "operation", payload.Delivery.ID, "err", publishErr.Error())
+	recorded := "the run records the reply as publish_failed"
+	if t.cfg.ReplyPublishFailed == nil {
+		recorded = "the run could not record it, so its reply record still reads unconfirmed"
+		logger.Info("respond_to_user: no publish-failure recorder; goal reply record left unconfirmed",
+			"session", sess.Namespace+"/"+sess.Name, "operation", payload.Delivery.ID)
+	} else if err := t.cfg.ReplyPublishFailed(ctx, payload); err != nil {
+		recorded = "recording that failed too, so its reply record may still read unconfirmed"
+		logger.Info("respond_to_user: recording goal reply publish failure failed",
+			"session", sess.Namespace+"/"+sess.Name, "operation", payload.Delivery.ID, "err", err.Error())
+	}
+	return tool.Result{IsError: true, Trusted: true, Content: fmt.Sprintf("publish failed: %v. The reply was handed off for posting but never reached the channel, so nothing was posted; %s. Do not resend.", publishErr, recorded)}
 }
 
 // resolveAttachments fetches each ArtifactRender CR by name in

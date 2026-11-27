@@ -532,6 +532,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Key/Tier for anything to read. Same set is reused at RunAll below.
 	schemaBaseline := append(gatherChannelKindFragments(), toolkitFrags...)
 	sessionLinks := registry.SessionRelationLinks()
+	// Every registered kind's group member set, unioned into
+	// agent_goal_domain#member_group so a group goal can be owned by that kind's
+	// conversation members. Same registry, same reconcile, as sessionLinks.
+	goalGroupLinks := registry.GroupMemberLinks()
 
 	accepted, conflictRejected := guardianschema.PartitionCompatibleFragments(schemaBaseline, candidates)
 	// Carries the accepted fragments' identity (Key/Tier) through rather than
@@ -794,7 +798,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// doc), so the controller no longer computes disallowed types or injects
 	// disallow relations into the schema.
 	runStart := time.Now()
-	res, runErr := guardianschema.RunAll(ctx, r.SchemaIO, fragments, schemaBaseline, pairs, slots, sessionLinks...)
+	res, runErr := guardianschema.RunAll(ctx, r.SchemaIO, fragments, schemaBaseline, pairs, slots, goalGroupLinks, sessionLinks...)
 	r.lastWrite = time.Now()
 	logger.Info("guardian.asg: schema.RunAll completed",
 		"duration", time.Since(runStart).String(),

@@ -2,6 +2,7 @@ package schema_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/authz/guardian/schema"
+	authzschema "github.com/authzed/openagentprimitives/pkg/authz/spicedb/schema"
 )
 
 // baseSchema is the "pre-slice-2" schema text — what we expect to find
@@ -309,7 +311,7 @@ func TestRunAll_OneBadFragmentFreezesWholeCompose(t *testing.T) {
 
 	io := &fakeSchemaIO{}
 	_, err := schema.RunAll(context.Background(), io,
-		identify(goodFrag, badFrag), nil, pairs, nil)
+		identify(goodFrag, badFrag), nil, pairs, nil, nil)
 	require.Error(t, err, "one bad fragment in the batch must fail RunAll for the WHOLE batch — this is the bug the controller-level isolation fixes")
 	assert.Equal(t, 0, io.writes, "no write should have happened; the freeze is total, not partial")
 }
@@ -349,7 +351,7 @@ func TestRunAll_DoesNotWriteWhenValidationFails(t *testing.T) {
 	slots := []schema.SlotPair{schema.GadgetViewerSlot()}
 
 	io := &fakeSchemaIO{}
-	_, err := schema.RunAll(context.Background(), io, frags, nil, nil, slots)
+	_, err := schema.RunAll(context.Background(), io, frags, nil, nil, slots, nil)
 	require.Error(t, err, "RunAll must surface the validation failure")
 	assert.Contains(t, err.Error(), "grant/slot composition produced invalid schema",
 		"must be the post-surgery gate, not merely any validateCompiled failure")
@@ -459,13 +461,13 @@ func TestRunAll_WritesAndIdempotent(t *testing.T) {
 	pairs := []schema.GrantPair{{ResourceType: "doc", Permission: "read"}}
 	io := &fakeSchemaIO{}
 
-	res, err := schema.RunAll(context.Background(), io, identify(fragment), nil, pairs, nil)
+	res, err := schema.RunAll(context.Background(), io, identify(fragment), nil, pairs, nil, nil)
 	require.NoError(t, err, "RunAll pass1")
 	assert.True(t, res.Changed, "pass1: Changed=true")
 	assert.Equal(t, 1, io.writes, "pass1: writes=1")
 	assert.Contains(t, io.current, "grant_read_doc", "pass1: schema contains grant_read_doc")
 
-	res, err = schema.RunAll(context.Background(), io, identify(fragment), nil, pairs, nil)
+	res, err = schema.RunAll(context.Background(), io, identify(fragment), nil, pairs, nil, nil)
 	require.NoError(t, err, "RunAll pass2")
 	assert.False(t, res.Changed, "pass2: Changed=false on identical inputs")
 	assert.Equal(t, 1, io.writes, "pass2: no additional write")
@@ -499,7 +501,7 @@ func TestRunAll_ConvergesAgainstCanonicalizedLiveSchema(t *testing.T) {
 
 	for pass := 1; pass <= 10; pass++ {
 		res, err := schema.RunAll(context.Background(), io,
-			identify(fragment), nil, pairs, nil)
+			identify(fragment), nil, pairs, nil, nil)
 		require.NoErrorf(t, err, "RunAll pass %d", pass)
 		if pass == 1 {
 			assert.True(t, res.Changed, "pass 1 must write: the live schema starts empty")
@@ -529,7 +531,7 @@ func TestRunAll_SurfaceSkippedPairs(t *testing.T) {
 		{ResourceType: "doc", Permission: "writelock"}, // skipped: no such permission
 	}
 	io := &fakeSchemaIO{}
-	res, err := schema.RunAll(context.Background(), io, identify(fragment), nil, pairs, nil)
+	res, err := schema.RunAll(context.Background(), io, identify(fragment), nil, pairs, nil, nil)
 	require.NoError(t, err, "RunAll")
 	require.Len(t, res.SkippedPairs, 2, "SkippedPairs count")
 	assert.Contains(t, io.current, "grant_read_doc", "schema contains valid grant")
@@ -675,3 +677,142 @@ func TestCompose_NoLinksIsNoOp(t *testing.T) {
 // The composer scaffold injects grant pairs ONLY — it emits no disallow
 // surface (no tool_action, disallowed_tool or is_disallowed_<rt>). Hard-deny is
 // enforced at Layer 2 by the runner's Scope hook over the session_scope doc.
+
+// goalGroupScaffold is the production scaffold plus a slack_channel
+// definition standing in for the Slack kind's fragment, so a composed
+// slack_channel#member link resolves to a declared type.
+var goalGroupScaffold = authzschema.Schema + `
+definition slack_channel {
+    relation member: user
+}
+`
+
+// relationTypesIn returns the subject-type entries of `relation <rel>:` inside
+// the named definition block — scoped to the block so an identically named
+// relation elsewhere (agentsession#owner) cannot satisfy the assertion.
+func relationTypesIn(t *testing.T, src, def, rel string) []string {
+	t.Helper()
+	start := strings.Index(src, "definition "+def+" {")
+	require.GreaterOrEqual(t, start, 0, "definition %q present", def)
+	end := strings.Index(src[start:], "\n}")
+	require.Greater(t, end, 0, "definition %q closes", def)
+	block := src[start : start+end]
+	prefix := "relation " + rel + ":"
+	for _, line := range strings.Split(block, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		var out []string
+		for _, part := range strings.Split(strings.TrimPrefix(trimmed, prefix), "|") {
+			if p := strings.TrimSpace(part); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	t.Fatalf("relation %q not found in definition %q", rel, def)
+	return nil
+}
+
+func countOf(items []string, want string) int {
+	n := 0
+	for _, it := range items {
+		if it == want {
+			n++
+		}
+	}
+	return n
+}
+
+// A registered kind's group member link flows into agent_goal_domain's
+// member_group, exactly once, and nowhere it does not belong: owner stays a
+// single user (a private goal's owner is never a group).
+func TestComposeGoalGroupLinks_AddsEachLinkOnceAndLeavesOwnerAlone(t *testing.T) {
+	links := []string{"group#member", "slack_channel#member"}
+	out, changed, err := schema.ComposeGoalGroupLinks(goalGroupScaffold, links)
+	require.NoError(t, err)
+	assert.True(t, changed, "slack_channel#member is new, so the text changed")
+
+	got := relationTypesIn(t, out, "agent_goal_domain", "member_group")
+	for _, l := range links {
+		assert.Equal(t, 1, countOf(got, l), "member_group holds %q exactly once: %v", l, got)
+	}
+	assert.Equal(t, []string{"user"}, relationTypesIn(t, out, "agent_goal_domain", "owner"),
+		"owner is untouched")
+	require.NoError(t, schema.ValidateComposedSchema(out), "the composed text is a valid schema")
+}
+
+// Re-composing its own output is a fixed point: same text, changed=false. The
+// guardian recomposes on every reconcile, so anything else churns the schema.
+func TestComposeGoalGroupLinks_IdempotentOnRecompose(t *testing.T) {
+	links := []string{"group#member", "slack_channel#member"}
+	pass1, _, err := schema.ComposeGoalGroupLinks(goalGroupScaffold, links)
+	require.NoError(t, err, "pass1")
+	pass2, changed, err := schema.ComposeGoalGroupLinks(pass1, links)
+	require.NoError(t, err, "pass2")
+	assert.False(t, changed, "pass2 reports no change")
+	assert.Equal(t, pass1, pass2, "pass2 output is byte-identical")
+}
+
+// Failure modes are refused at compose, not discovered at WriteSchema.
+func TestComposeGoalGroupLinks_RefusesBadInput(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		links   []string
+		wantErr string
+	}{
+		{
+			name:    "undefined link type: error names the type",
+			src:     goalGroupScaffold,
+			links:   []string{"undefined_type#member"},
+			wantErr: "undefined object type",
+		},
+		{
+			name:    "link without a relation: error, a member set needs one",
+			src:     goalGroupScaffold,
+			links:   []string{"slack_channel"},
+			wantErr: "subject set",
+		},
+		{
+			name:    "schema without agent_goal_domain: error names the definition",
+			src:     baseSchemaWithOwner,
+			links:   []string{"group#member"},
+			wantErr: "agent_goal_domain",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := schema.ComposeGoalGroupLinks(tc.src, tc.links)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// No links leaves the text exactly as it was.
+func TestComposeGoalGroupLinks_NoLinksIsNoOp(t *testing.T) {
+	out, changed, err := schema.ComposeGoalGroupLinks(goalGroupScaffold, nil)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Equal(t, goalGroupScaffold, out)
+}
+
+// RunAll is what the guardian controller calls; the goal group links it is
+// handed must land in the schema it writes.
+func TestRunAll_ComposesGoalGroupLinks(t *testing.T) {
+	slack := &spiceboxv1alpha1.SpiceDBSchemaFragment{
+		Resources: []spiceboxv1alpha1.SpiceDBResource{{
+			Name:      "slack_channel",
+			Relations: []spiceboxv1alpha1.SpiceDBRelation{{Name: "member", SubjectType: "user"}},
+		}},
+	}
+	io := &fakeSchemaIO{}
+	_, err := schema.RunAll(context.Background(), io, nil,
+		[]*spiceboxv1alpha1.SpiceDBSchemaFragment{slack}, nil, nil,
+		[]string{"group#member", "slack_channel#member"})
+	require.NoError(t, err)
+	got := relationTypesIn(t, io.current, "agent_goal_domain", "member_group")
+	assert.Equal(t, 1, countOf(got, "slack_channel#member"), "written schema carries the link: %v", got)
+}

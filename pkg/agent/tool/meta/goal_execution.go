@@ -17,9 +17,11 @@ func BoundedGoalTools(tools []tool.Tool, digest string, authorize func(context.C
 	return BoundedGoalToolsForTerms(tools, digest, goals.ExecutionTerms{AllowedOperations: []string{"respond_to_user"}}, authorize, resultCaller...)
 }
 
-// BoundedGoalToolsForTerms exposes private replies only when allowed by the
-// exact execution terms. Local plan controls and result reporting remain
-// available; the operator validates any observation against the report policy.
+// BoundedGoalToolsForTerms exposes replies only when allowed by the exact
+// execution terms. Local plan controls and result reporting remain available;
+// the operator validates any observation against the report policy. A private
+// run is narrowed to exactly those tools; a group run (terms.Group set) keeps
+// every other tool of the class's catalog, bounded by the plan gate.
 func BoundedGoalToolsForTerms(tools []tool.Tool, digest string, terms goals.ExecutionTerms, authorize func(context.Context) error, resultCaller ...GoalsCaller) []tool.Tool {
 	permittedReply := false
 	for _, op := range terms.AllowedOperations {
@@ -27,6 +29,7 @@ func BoundedGoalToolsForTerms(tools []tool.Tool, digest string, terms goals.Exec
 			permittedReply = true
 		}
 	}
+	group := terms.Group != nil
 	var bounded []tool.Tool
 	for _, candidate := range tools {
 		switch candidate.Name() {
@@ -37,6 +40,15 @@ func BoundedGoalToolsForTerms(tools []tool.Tool, digest string, terms goals.Exec
 			bounded = append(bounded, &goalReport{Tool: candidate, digest: digest, authorize: authorize})
 		case "update_plan", "select_phase", "complete_phase", "agent_work_complete":
 			bounded = append(bounded, candidate)
+		default:
+			// A group run keeps the class's catalog: the plan gate and the
+			// standing plan bound its use. Only a private run is narrowed.
+			// Goal management never rides along: a run executes a goal, it
+			// does not create, change, approve or discover goals (the goal
+			// server refuses those from any run as well). Reads stay.
+			if group && !isGoalManagementTool(candidate.Name()) {
+				bounded = append(bounded, candidate)
+			}
 		}
 	}
 	if len(resultCaller) == 1 && resultCaller[0] != nil {
@@ -114,4 +126,10 @@ func (t *goalResultTool) Execute(ctx context.Context, raw json.RawMessage, sess 
 		return tool.Result{IsError: true, Content: err.Error()}, nil
 	}
 	return tool.Result{Content: "Goal result proposal recorded. This is the agent's report, not verified delivery or durable goal completion.", Trusted: true}, nil
+}
+
+// isGoalManagementTool reports whether a goal tool manages rather than reads
+// goals: the writes plus the discovery family.
+func isGoalManagementTool(name string) bool {
+	return IsGoalWrite(name) || name == "get_goal_discovery_policy" || name == "get_goal_discovery_proposal"
 }

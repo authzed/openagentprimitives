@@ -98,6 +98,10 @@ const (
 	// saving a user preference. The session is parked until the addressee decides.
 	UserPreferenceConfirm = "user_preference_confirm"
 	GoalExecutionConsent  = "goal_execution_consent"
+	// GoalGroupExecutionConsent asks a group goal's managers to approve its
+	// standing plan. Posted in the conversation the goal belongs to; any
+	// holder of manage on agent_goal:<id> at click time may decide.
+	GoalGroupExecutionConsent = "goal_group_execution_consent"
 )
 
 // registerPrompts registers every prompt category. Kept out of init for the
@@ -105,6 +109,13 @@ const (
 // back, which an init cannot do.
 func registerPrompts() {
 	channelinteractions.Register(channelinteractions.Category{Name: GoalExecutionConsent, PlanConsent: true, ChannelDecisionOnly: true, Tone: channelinteractions.TonePrivacy, Deciders: channelinteractions.DecideRequester, Resurface: channelinteractions.ResurfaceCached, Surface: channelinteractions.SurfaceDMOnly})
+	// DecideResourceOwners is the load-bearing row: the card's Resources name
+	// agent_goal:<id>#manage, so only that goal's live managers (or a platform
+	// admin stepping in) may decide. Not a PlanConsent: a group consent is
+	// never folded into one person's private plan card. Surface is the
+	// default (in the conversation), not DM-only: the deciders are whoever
+	// manages the goal, not one named owner.
+	channelinteractions.Register(channelinteractions.Category{Name: GoalGroupExecutionConsent, ChannelDecisionOnly: true, Tone: channelinteractions.TonePrivacy, Deciders: channelinteractions.DecideResourceOwners, Resurface: channelinteractions.ResurfaceCached})
 	channelinteractions.Register(channelinteractions.Category{
 		Name: PlanPhase, IncludesConsents: true,
 		Park: v1alpha1.AgentSessionPhaseAwaitingDecision,

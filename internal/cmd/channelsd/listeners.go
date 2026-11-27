@@ -48,6 +48,7 @@ type channelManager struct {
 	mem                   pipeline.Memory
 	restartMem            pkgmemory.Memory                       // v2 facade for restart shortcut (channel_msg_ref / turn queries)
 	preferences           channelkinds.PreferencesClient         // first-party preferences client for App Home
+	goals                 channelkinds.GoalsClient               // first-party group goal management for a kind's home view; set before listeners start
 	personalizableClasses channelkinds.PersonalizableClassLookup // "classes this user has interacted with" for App Home's preferences section
 	pipe                  channelkinds.InboundPipeline
 	wd                    *statusWatchdog
@@ -263,6 +264,7 @@ func (m *channelManager) buildListenerDepsLocked(ch *spiceboxv1alpha1.Channel, s
 		ExternalBaseURL:       m.externalBaseURL,
 		Memory:                m.restartMem,
 		Preferences:           m.preferences,
+		Goals:                 m.goals,
 		PersonalizableClasses: m.personalizableClasses,
 	}
 }
