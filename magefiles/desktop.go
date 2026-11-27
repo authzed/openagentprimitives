@@ -569,6 +569,10 @@ func desktopBuildRootfsInDocker(cloudImgPath, k3sImagesPath, fstabLine, authoriz
 // Desktop:App — .app assembly + ad-hoc dev signing
 // ---------------------------------------------------------------------------
 
+// lsregisterPath is macOS's LaunchServices registration tool. It is not on
+// PATH, so it is addressed by its fixed framework location.
+const lsregisterPath = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
 // Devapp builds the LOCAL-DEVELOPMENT desktop app: identical to App, but the
 // image bake also includes the language/agent toolchain overlays (go, node,
 // claude) whose `:dev` tags exist on no registry. Use this to run codebot (or
@@ -675,6 +679,15 @@ func (Desktop) App() error {
 	fmt.Println("==> desktop:app: codesign --verify --strict")
 	if err := sh.RunV("codesign", "--verify", "--strict", "--verbose=2", appPath); err != nil {
 		return fmt.Errorf("desktop:app: codesign verify: %w", err)
+	}
+
+	// Register the freshly signed bundle with LaunchServices so oap:// links
+	// (CFBundleURLTypes in Info.plist) open THIS build straight away, without
+	// first launching it from Finder. A failure here leaves a perfectly good
+	// app, so it is reported rather than failing the build.
+	fmt.Println("==> desktop:app: register oap.app with LaunchServices (oap:// links)")
+	if err := sh.RunV(lsregisterPath, "-f", appPath); err != nil {
+		fmt.Printf("desktop:app: WARNING: lsregister failed (%v); oap:// links may open a different OAP Desktop until this app is launched once\n", err)
 	}
 
 	fmt.Printf("desktop:app: done -> %s\n", appPath)

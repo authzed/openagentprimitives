@@ -1,0 +1,18 @@
+/* The relay-animated OAP mark, shared by the setup page (index.html) and the
+   install-progress page (installing.html). Served by setupui.Server at
+   /relay.css; relay.js builds the SVG these rules style.
+
+   `svg.mark` is the plain mark in currentColor; the relay band paths sit on
+   top and are only driven (and only visible) while body[data-working] is set.
+   Motion for indication only: an idle mark is static. */
+:root {
+  /* Relay hues = the admin chart series (teal, blue, red, magenta, violet). */
+  --relay-1: #72b1ad; --relay-2: #78d0ed; --relay-3: #f0566d; --relay-4: #a5318a; --relay-5: #ad96f3;
+}
+svg.mark { display: block; overflow: visible; flex: none; }
+svg.mark .ink { fill: currentColor; }
+svg.mark .seg { fill: none; stroke-width: 12; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+svg.mark .seg.t { stroke-linecap: butt; }
+svg.mark .band { opacity: 0; transition: opacity 240ms ease-out; }
+body[data-working] svg.mark.working .band { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { svg.mark .band { display: none; } }

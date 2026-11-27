@@ -26,6 +26,7 @@ import (
 	"github.com/authzed/openagentprimitives/cmd/oap/internal/kube"
 	spiceboxv1alpha1 "github.com/authzed/openagentprimitives/pkg/apis/v1alpha1"
 	"github.com/authzed/openagentprimitives/pkg/platform/oap"
+	"github.com/authzed/openagentprimitives/pkg/platform/oap/instance"
 )
 
 type desktopGraphFixtureOptions struct {
@@ -221,4 +222,35 @@ func TestInstallOapFromPathNeverLogsChildSecretAnswer(t *testing.T) {
 		stored = secret.StringData["token"] // controller-runtime fake does not run the apiserver's stringData conversion
 	}
 	assert.Equal(t, secretValue, stored)
+}
+
+func TestInstallOapBundleStampsProvenance(t *testing.T) {
+	data := packedDesktopGraph(t, desktopGraphFixtureOptions{childManifest: desktopGraphQuestion("    default: theatrical")})
+	fileDigest, err := oap.Digest(data)
+	require.NoError(t, err)
+	const ref = "ghcr.io/example/agents/coordinator:1.0.0"
+	const ociDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	cases := []struct {
+		name string
+		src  bundleSource
+		want instance.OapSource
+	}{
+		{name: "file picker: file kind, bundle digest, no ref", src: bundleSource{}, want: instance.OapSource{SourceKind: "file", Digest: fileDigest}},
+		{name: "install link: registry kind, link ref, OCI digest", src: bundleSource{Ref: ref, Digest: ociDigest}, want: instance.OapSource{SourceKind: "registry", Ref: ref, Digest: ociDigest}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(desktopGraphScheme(t)).Build()
+			_, err := installOapBundle(context.Background(), noNodesBundle(c), io.Discard, data, "default", tc.src)
+			require.NoError(t, err)
+			var root spiceboxv1alpha1.AgentClass
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "test-coordinator"}, &root))
+			got, err := instance.ParseOapSource(root.GetAnnotations()[instance.AnnotationOapSource])
+			require.NoError(t, err)
+			assert.Equal(t, tc.want.SourceKind, got.SourceKind)
+			assert.Equal(t, tc.want.Ref, got.Ref)
+			assert.Equal(t, tc.want.Digest, got.Digest)
+		})
+	}
 }

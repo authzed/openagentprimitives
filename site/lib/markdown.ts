@@ -109,6 +109,10 @@ function prose(text: string, ctx: MarkdownContext): string {
       .replace(/<ScreenshotSeries\b([^>]*?)\/>/g, (_, attrs: string) =>
         series(attr(attrs, "name") ?? "", ctx),
       )
+      .replace(/<InstallInDesktop\b([^>]*?)\/>/g, (_, attrs: string) => {
+        const image = attr(attrs, "image") ?? "";
+        return `[Install in OAP Desktop](oap://install/agent?v=1&ref=${encodeURIComponent(image)}) or \`oap agent install ${image}\``;
+      })
       .replace(
         /<Coverage level="([^"]*)" \/>/g,
         (_, level: string) => `(coverage: ${COVERAGE_LABELS[level] ?? level})`,
