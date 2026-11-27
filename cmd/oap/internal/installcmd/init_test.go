@@ -106,7 +106,7 @@ func TestRunInit_DispatchesToWizard(t *testing.T) {
 			false /*skipBuild*/, false /*skipInstall*/, 2*time.Minute, manifests.Tags{},
 			"" /*pinningMode*/, cloud.KeyLocal, true /*allowNonLocal*/, WebdRoutingOpts{},
 			wizard, false /*defaults*/, "" /*imagePullSecret*/, false /*mirrorDeps*/, false /*createRegistry*/, false /*noIdp*/, false, /*noMonitoring*/
-			settingscmd.DefaultModelOpts{}, "" /*artifactStoreURL*/, "" /*extEndpoint*/, "" /*extToken*/, false /*extInsecure*/, accept)
+			settingscmd.DefaultModelOpts{}, "" /*artifactStoreURL*/, "" /*extEndpoint*/, "" /*extToken*/, false /*extInsecure*/, accept, nil /*overlays*/)
 	}
 
 	// --wizard dispatches to the orchestrator exactly once; the linear phases run not at all.
@@ -164,7 +164,7 @@ func TestRunInit_WizardPathSkipsPreflightRoutingRefusal(t *testing.T) {
 			false /*skipBuild*/, false /*skipInstall*/, 2*time.Minute, tags,
 			"" /*pinningMode*/, cloud.KeyGKE, false /*allowNonLocal*/, WebdRoutingOpts{},
 			wizard, false /*defaults*/, "" /*imagePullSecret*/, false /*mirrorDeps*/, false /*createRegistry*/, false /*noIdp*/, false, /*noMonitoring*/
-			settingscmd.DefaultModelOpts{}, "" /*artifactStoreURL*/, "" /*extEndpoint*/, "" /*extToken*/, false /*extInsecure*/, accept)
+			settingscmd.DefaultModelOpts{}, "" /*artifactStoreURL*/, "" /*extEndpoint*/, "" /*extToken*/, false /*extInsecure*/, accept, nil /*overlays*/)
 	}
 
 	// --accept-existing on gke with no routing flags reaches the wizard dispatch

@@ -9,9 +9,11 @@ import (
 
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
+	"sigs.k8s.io/yaml"
 
 	"github.com/authzed/openagentprimitives/pkg/platform/cloud"
 	"github.com/authzed/openagentprimitives/pkg/platform/manifests"
+	"github.com/authzed/openagentprimitives/pkg/platform/manifests/overlay"
 )
 
 // processBaseBytes applies the render's image substitution and memory-token
@@ -204,10 +206,21 @@ func WriteOverlay(cfg RenderConfig) error {
 	if err != nil {
 		return err
 	}
+	if err := writeUserOverlays(cfg); err != nil {
+		return err
+	}
 
 	// Every workload waits for the Secrets the bootstrap Job mints (or the user
-	// provides) instead of starting without them: see requiredSecretsPatch.
-	required, requiredEmitted, err := requiredSecretsPatch(cfg, append([][]byte{install, channelsd, nats}, components...)...)
+	// provides) instead of starting without them: see requiredSecretsPatch. The
+	// patch is derived from the workloads as the user's overlays leave them,
+	// because that is what kustomize applies it to: an overlay can add an
+	// optional reference the patch must cover, or remove one it must no longer
+	// restate.
+	workloads, err := withUserOverlays(cfg, append([][]byte{install, channelsd, nats}, components...))
+	if err != nil {
+		return err
+	}
+	required, requiredEmitted, err := requiredSecretsPatch(cfg, workloads...)
 	if err != nil {
 		return fmt.Errorf("render required-secrets patch: %w", err)
 	}
@@ -283,10 +296,19 @@ func renderKustomization(cfg RenderConfig, requiredSecrets bool) ([]byte, error)
 		"kind: Kustomization\n" +
 		resources +
 		patches
-	if names := enabledComponentNames(cfg); len(names) > 0 {
+	var components []string
+	for _, n := range enabledComponentNames(cfg) {
+		components = append(components, "components/"+n)
+	}
+	// User overlays come after oap's own components so they can patch those
+	// too; oap's `patches:` above still apply last, as on `oap install`.
+	for i, dir := range cfg.Overlays {
+		components = append(components, userOverlayPath(i, dir))
+	}
+	if len(components) > 0 {
 		k += "components:\n"
-		for _, n := range names {
-			k += "  - components/" + n + "\n"
+		for _, c := range components {
+			k += "  - " + c + "\n"
 		}
 	}
 	return []byte(k), nil
@@ -303,4 +325,86 @@ func buildOverlay(dir string) ([]byte, error) {
 		return nil, fmt.Errorf("kustomize build %s: %w", dir, err)
 	}
 	return res.AsYaml()
+}
+
+// userOverlaysDir holds copies of the --overlay directories inside the render
+// output, so the output stays self-contained for a GitOps controller that only
+// sees the committed directory.
+const userOverlaysDir = "overlays"
+
+// userOverlayPath is overlay i's directory relative to the output root. The
+// index keeps two overlays with the same basename apart and records the
+// application order in the path itself.
+func userOverlayPath(i int, dir string) string {
+	return fmt.Sprintf("%s/%02d-%s", userOverlaysDir, i, filepath.Base(filepath.Clean(dir)))
+}
+
+// writeUserOverlays replaces OutputDir/overlays with copies of cfg.Overlays.
+// Replacing rather than merging is what keeps the output a pure function of the
+// flags: an overlay dropped from the command line must not linger on disk. An
+// overlay that lives inside that directory is refused, since replacing it would
+// delete the source.
+func writeUserOverlays(cfg RenderConfig) error {
+	root := filepath.Join(cfg.OutputDir, userOverlaysDir)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	for _, dir := range cfg.Overlays {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		if rel, err := filepath.Rel(absRoot, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("overlay %s is inside %s, which render regenerates; keep overlays outside the output directory", dir, root)
+		}
+	}
+	if err := os.RemoveAll(root); err != nil {
+		return err
+	}
+	for i, dir := range cfg.Overlays {
+		if err := os.CopyFS(filepath.Join(cfg.OutputDir, userOverlayPath(i, dir)), os.DirFS(dir)); err != nil {
+			return fmt.Errorf("copy overlay %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// withUserOverlays returns bundles as cfg's --overlay Components leave them,
+// document by document, for the passes that must see what the final build
+// sees. With no overlays it returns bundles untouched.
+func withUserOverlays(cfg RenderConfig, bundles [][]byte) ([][]byte, error) {
+	if len(cfg.Overlays) == 0 {
+		return bundles, nil
+	}
+	set := cfg.overlaySet
+	if set == nil {
+		base, err := renderOverlayBase(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if set, err = overlay.Load(base, cfg.Overlays); err != nil {
+			return nil, err
+		}
+	}
+	out := make([][]byte, 0, len(bundles))
+	for _, bundle := range bundles {
+		docs, err := manifests.Split(bundle)
+		if err != nil {
+			return nil, fmt.Errorf("parse bundle: %w", err)
+		}
+		rendered := make([][]byte, 0, len(docs))
+		for _, d := range docs {
+			if err := set.Apply(d); err != nil {
+				return nil, err
+			}
+			y, err := yaml.Marshal(d.Object)
+			if err != nil {
+				return nil, fmt.Errorf("marshal %s %s: %w", d.GetKind(), d.GetName(), err)
+			}
+			rendered = append(rendered, y)
+		}
+		out = append(out, bytes.Join(rendered, []byte("---\n")))
+	}
+	return out, nil
 }

@@ -44,7 +44,7 @@ func TestSpiceDBDatabaseJob_ReinstallAgainstAPIServer(t *testing.T) {
 	current, doc, err := buildSpiceDBDatabaseJob(installCreateDBDeadlineSeconds, nil)
 	require.NoError(t, err)
 	apply := func(doc []byte) error {
-		return applyManifestGroups(ctx, dyn, [][]byte{doc}, "", nil, nil, nil)
+		return applyManifestGroups(ctx, dyn, [][]byte{doc}, nil, "", nil, nil, nil)
 	}
 	installed := map[string]string{kube.InstalledByAnnotation: kube.InstalledByValue}
 	jobNames := func(t *testing.T) []string {

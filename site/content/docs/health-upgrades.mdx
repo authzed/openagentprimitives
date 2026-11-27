@@ -39,6 +39,9 @@ oap install --builder-starters user:$(oap identity canonical-id you@example.com)
 [Agent Builder](/docs/agent-builder-install). The starter list replaces what was there, so pass the full list on every
 upgrade.
 
+A re-install resets anything changed by hand on the cluster to the bundled value. Keep cluster-specific changes, such
+as a raised memory limit, in [overlays](/docs/install-overlays) and pass them with `--overlay` on every upgrade.
+
 <Callout kind="tip" title="Fail loud, not silent">
   The platform is deliberately fail-closed about its own configuration — a missing artifact store, an
   unrecognized cluster kind, or an unset required backend crash-loops the component rather than starting in a
