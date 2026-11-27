@@ -213,6 +213,91 @@ func TestDecideRenewal(t *testing.T) {
 	require.NoError(t, f.svc.Dispatchable(t.Context(), decided), "the renewed approval dispatches")
 }
 
+// A goal keeps one earlier approval beside the one in force. A second renewal
+// approved while a run is still bound to the first approval would drop it and
+// strand that run, so it is refused until the run has finished.
+func TestSecondRenewalWaitsForRunsUnderTheEarlierApproval(t *testing.T) {
+	ctx := t.Context()
+	f := newRenewalFixture(t)
+	g := f.approved(t)
+	first := g.Execution.Digest
+	*f.clock = g.Execution.Terms.DueAt.Add(time.Second)
+	_, err := f.store.Schedule(ctx, g)
+	require.NoError(t, err)
+	due, err := f.store.Due(ctx, *f.clock, 10)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	running, err := f.store.Claim(ctx, goals.ClaimRequest{ID: due[0].ID, Worker: "operator", Now: *f.clock, Lease: time.Minute, OwnerLimit: 1, ClassLimit: 4})
+	require.NoError(t, err)
+
+	approveRenewal := func(requestID string) (goals.Goal, string, error) {
+		t.Helper()
+		pending, err := f.svc.RequestRenewal(ctx, f.alice.Domain, g.ID, renewalHost, *f.clock)
+		require.NoError(t, err)
+		digest := pending.PendingRenewal.Digest
+		decided, err := f.svc.DecideExecution(ctx, f.alice.Domain, g.ID, goals.ExecutionDecision{RequestID: requestID, Digest: digest, Owner: "bob", Approved: true, Witness: "test-witness"})
+		return decided, digest, err
+	}
+	governed := func(msg string) {
+		t.Helper()
+		stored, err := f.store.Get(ctx, g.Domain, g.ID)
+		require.NoError(t, err)
+		view, ok := stored.ForConsent(first)
+		require.True(t, ok, msg)
+		assert.NoError(t, f.svc.DispatchOccurrence(ctx, view, running), msg)
+	}
+
+	renewed, _, err := approveRenewal("renewal-1")
+	require.NoError(t, err, "nothing is bound to an earlier approval yet")
+	_, err = f.store.Schedule(ctx, renewed)
+	require.NoError(t, err)
+	governed("the first renewal keeps the approval the run started under")
+
+	pending, err := f.svc.RequestRenewal(ctx, f.alice.Domain, g.ID, renewalHost, *f.clock)
+	require.NoError(t, err, "a second renewal may be asked for")
+	second := goals.ExecutionDecision{RequestID: "renewal-2", Digest: pending.PendingRenewal.Digest, Owner: "bob", Approved: true, Witness: "test-witness"}
+	require.ErrorIs(t, f.svc.CheckDecision(ctx, f.alice.Domain, g.ID, second.Digest, "bob", true), goals.ErrConflict, "refused before any decision is recorded")
+	_, err = f.svc.DecideExecution(ctx, f.alice.Domain, g.ID, second)
+	require.ErrorIs(t, err, goals.ErrConflict, "a run is still bound to the first approval")
+	governed("the refused renewal left the running occurrence governed")
+	require.NoError(t, f.svc.CheckDecision(ctx, f.alice.Domain, g.ID, second.Digest, "bob", false), "declining drops nothing, so it is not refused")
+
+	_, err = f.store.Finish(ctx, running, goals.OccurrenceCancelled, *f.clock)
+	require.NoError(t, err)
+	decided, err := f.svc.DecideExecution(ctx, f.alice.Domain, g.ID, second)
+	require.NoError(t, err, "approved once nothing runs under the first approval")
+	assert.Equal(t, second.Digest, decided.Execution.Digest)
+	assert.Equal(t, renewed.Execution.Digest, decided.PriorExecution.Digest)
+}
+
+// Once the earlier approval has run out nothing can run under it, so it no
+// longer holds a second renewal back.
+func TestSecondRenewalIsNotHeldByAnExpiredEarlierApproval(t *testing.T) {
+	ctx := t.Context()
+	f := newRenewalFixture(t)
+	g := f.approved(t)
+	*f.clock = g.Execution.Terms.DueAt.Add(time.Second)
+	_, err := f.store.Schedule(ctx, g)
+	require.NoError(t, err)
+	due, err := f.store.Due(ctx, *f.clock, 10)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	_, err = f.store.Claim(ctx, goals.ClaimRequest{ID: due[0].ID, Worker: "operator", Now: *f.clock, Lease: time.Minute, OwnerLimit: 1, ClassLimit: 4})
+	require.NoError(t, err)
+
+	pending, err := f.svc.RequestRenewal(ctx, f.alice.Domain, g.ID, renewalHost, *f.clock)
+	require.NoError(t, err)
+	renewed, err := f.svc.DecideExecution(ctx, f.alice.Domain, g.ID, goals.ExecutionDecision{RequestID: "renewal-1", Digest: pending.PendingRenewal.Digest, Owner: "bob", Approved: true, Witness: "test-witness"})
+	require.NoError(t, err)
+
+	*f.clock = g.Execution.Terms.ExpiresAt.Add(time.Second)
+	require.True(t, goals.ApprovalInForce(renewed, *f.clock), "the renewal outlasts the approval it renewed")
+	pending, err = f.svc.RequestRenewal(ctx, f.alice.Domain, g.ID, renewalHost, *f.clock)
+	require.NoError(t, err)
+	_, err = f.svc.DecideExecution(ctx, f.alice.Domain, g.ID, goals.ExecutionDecision{RequestID: "renewal-2", Digest: pending.PendingRenewal.Digest, Owner: "bob", Approved: true, Witness: "test-witness"})
+	require.NoError(t, err, "the claimed run's approval has expired: it cannot run, and holds nothing back")
+}
+
 func TestManagerChangesKeepTheApprovalDispatchable(t *testing.T) {
 	f := newRenewalFixture(t)
 	g := f.approved(t)

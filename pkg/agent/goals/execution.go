@@ -471,6 +471,11 @@ func (s *Service) CheckDecision(ctx context.Context, d Domain, id, digest, decid
 		return err
 	}
 	if approved {
+		if renewal {
+			if err := s.priorSettled(ctx, g); err != nil {
+				return err
+			}
+		}
 		return s.validateExecution(ctx, view, c.Terms, decider)
 	}
 	return nil
@@ -509,6 +514,11 @@ func (s *Service) DecideExecution(ctx context.Context, d Domain, id string, deci
 		return Goal{}, ErrConflict
 	}
 	if decision.Approved {
+		if renewal {
+			if err := s.priorSettled(ctx, g); err != nil {
+				return Goal{}, err
+			}
+		}
 		if err := s.validateExecution(ctx, view, c.Terms, decision.Owner); err != nil {
 			return Goal{}, err
 		}
@@ -564,6 +574,10 @@ func (s *Service) DecideExecution(ctx context.Context, d Domain, id string, deci
 // rebound to it when it is scheduled (OccurrenceStore.Schedule). Declined,
 // the decided renewal stays pending-and-decided so the same approval is not
 // asked again, and the approval in force runs on to its expiry.
+//
+// A goal keeps one PriorExecution, so approving a renewal drops the one it
+// already holds. The caller refuses an approval while that one still governs
+// a run (priorSettled).
 func (s *Service) decideRenewal(ctx context.Context, g Goal, c *ExecutionConsent, decision ExecutionDecision, h string) (Goal, error) {
 	store, ok := s.Store.(InPlaceStore)
 	if !ok {
@@ -609,6 +623,40 @@ func (s *Service) decideRenewal(ctx context.Context, g Goal, c *ExecutionConsent
 		}
 	}
 	return accepted, nil
+}
+
+// priorSettled refuses to approve a renewal of g while a run can still start
+// or is in flight under the approval g's last renewal replaced
+// (PriorExecution). Approving would replace PriorExecution, and that run,
+// bound to a consent the goal no longer holds (ForConsent), would be denied
+// and superseded mid-flight. The renewal stays pending and can be approved
+// once the run has finished or the earlier approval has run out, after which
+// nothing can run under it.
+//
+// The runs bound to PriorExecution only ever shrink — nothing new is
+// scheduled under a replaced approval — so a check that passes here still
+// holds when the decision commits.
+func (s *Service) priorSettled(ctx context.Context, g Goal) error {
+	p := g.PriorExecution
+	if p == nil || !s.now().Before(p.Terms.ExpiresAt) {
+		return nil
+	}
+	if _, durable := s.Store.(OccurrenceStore); !durable {
+		// No run ledger: no run is bound to anything.
+		return nil
+	}
+	store, ok := s.Store.(ConsentRunStore)
+	if !ok {
+		return fmt.Errorf("%w: this store cannot tell whether the earlier approval still governs a run", ErrDenied)
+	}
+	n, err := store.UnsettledUnder(ctx, g.Domain, g.ID, p.Digest, s.now())
+	if err != nil {
+		return fmt.Errorf("goal %s: counting runs under its earlier approval: %w", g.ID, err)
+	}
+	if n > 0 {
+		return fmt.Errorf("%w: goal %s: a run under the approval its last renewal replaced has not finished; approve this renewal once it has", ErrConflict, g.ID)
+	}
+	return nil
 }
 
 func (s *Service) Dispatchable(ctx context.Context, g Goal) error {

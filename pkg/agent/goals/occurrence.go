@@ -100,6 +100,14 @@ type OccurrenceStore interface {
 	Finish(context.Context, Occurrence, OccurrenceState, time.Time) (Occurrence, error)
 }
 
+// ConsentRunStore reports the work a consent still governs.
+type ConsentRunStore interface {
+	// UnsettledUnder counts goal id's occurrences bound to the consent digest
+	// that can still start or are in flight at now: queued and unexpired,
+	// claimed, running, or of unknown outcome.
+	UnsettledUnder(ctx context.Context, d Domain, id, digest string, now time.Time) (int, error)
+}
+
 // QueuedSweeper records work that can no longer launch without reserving
 // capacity or pretending a session existed. The transaction must serialize with Claim.
 type QueuedSweeper interface {

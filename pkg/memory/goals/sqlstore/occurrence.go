@@ -289,6 +289,17 @@ func (s *Store) occurrenceAt(ctx context.Context, tx *sql.Tx, g goals.Goal, due 
 	return o, err == nil, err
 }
 
+var _ goals.ConsentRunStore = (*Store)(nil)
+
+// UnsettledUnder implements goals.ConsentRunStore. A queued occurrence past
+// its window can no longer start (Claim refuses it) and is not counted, swept
+// or not.
+func (s *Store) UnsettledUnder(ctx context.Context, d goals.Domain, id, digest string, now time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, s.query(`SELECT COUNT(*) FROM oap_goal_occurrences WHERE domain=? AND goal_id=? AND consent_digest=? AND ((state='queued' AND expires_at>?) OR state IN ('claimed','running','unknown'))`), d.ID(), id, digest, now.UnixNano()).Scan(&n)
+	return n, err
+}
+
 // Due selects one head per owner before the next head, so a prolific owner's
 // backlog cannot consume an entire batch. Claimed work is included for recovery
 // even after consent expiry; authority is rechecked before any new activation.
